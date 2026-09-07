@@ -17,6 +17,7 @@ interface Props {
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
+  onBlockedAction?: (message: string) => void;
   onCancelInstall: () => void;
   onInstall: (backend: string) => void;
   onSelect: (backend: string, build: string) => void;
@@ -25,7 +26,7 @@ interface Props {
 
 export default function RuntimeBackendList({
   t, locale, visibleRows, device, activeBackend, activeBuild, serverRunning, prBusy, bundleBusy, cancelBusy,
-  onCancelInstall, onInstall, onSelect, onUninstall,
+  onBlockedAction, onCancelInstall, onInstall, onSelect, onUninstall,
 }: Props) {
   return (
     <div className="runtime-list space-y-3.5">
@@ -34,12 +35,14 @@ export default function RuntimeBackendList({
         const info = row.latest;
         const newestInstalled = !!info && row.installed.some((item) => item.build === info.build);
         const rowAction = runtimeRowAction({ busy: row.busy, newestInstalled });
+        const backendName = t(`ui.${row.label}`, { id: row.backend });
+        const installBlockedReason = serverRunning ? t("ui.stopBeforeRuntime") : prBusy ? t("ui.installingPr") : bundleBusy ? t("ui.runtimeBundleWorking") : !info ? t("ui.noLatestResolved") : null;
         return (
           <section key={row.backend} className="min-w-0 rounded-xl border border-slate-700 app-bg-muted p-4" aria-labelledby={`runtime-${row.backend}`} aria-busy={row.busy}>
             <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <h3 id={`runtime-${row.backend}`} className="text-sm font-semibold text-slate-100">{t(`ui.${row.label}`, { id: row.backend })}</h3>
+                  <h3 id={`runtime-${row.backend}`} className="text-sm font-semibold text-slate-100">{backendName}</h3>
                   <span className={`rounded px-2 py-0.5 text-[11px] ${state.cls}`}>{state.label}</span>
                   {device && <span className={`rounded px-2 py-0.5 text-[11px] ${fitClassOf(fitOf(device, row.backend))}`}>{fitLabelOf(locale, fitOf(device, row.backend))}</span>}
                 </div>
@@ -48,7 +51,22 @@ export default function RuntimeBackendList({
               {rowAction === "cancel" ? (
                 <button type="button" onClick={onCancelInstall} disabled={cancelBusy} className="app-button app-button--danger app-button--sm shrink-0">{cancelBusy ? t("ui.cancelling") : t("ui.cancelInstall")}</button>
               ) : rowAction === "install" ? (
-                <button type="button" onClick={() => onInstall(row.backend)} disabled={!info || serverRunning || prBusy || bundleBusy} title={serverRunning ? t("ui.stopBeforeRuntime") : prBusy ? t("ui.installingPr") : bundleBusy ? t("ui.runtimeBundleWorking") : !info ? t("ui.noLatestResolved") : undefined} className="app-button app-button--primary app-button--sm shrink-0">{info ? t("ui.installBuild", { build: buildNumber(info.build) }) : t("ui.installLatest")}</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (installBlockedReason) {
+                      onBlockedAction?.(installBlockedReason);
+                      return;
+                    }
+                    onInstall(row.backend);
+                  }}
+                  aria-disabled={installBlockedReason ? "true" : undefined}
+                  title={installBlockedReason ?? undefined}
+                  aria-label={`${info ? t("ui.installBuild", { build: buildNumber(info.build) }) : t("ui.installLatest")}: ${backendName}`}
+                  className={`app-button app-button--primary app-button--sm shrink-0 ${installBlockedReason ? "opacity-80" : ""}`}
+                >
+                  {info ? t("ui.installBuild", { build: buildNumber(info.build) }) : t("ui.installLatest")}
+                </button>
               ) : null}
             </div>
             <div className={`runtime-latest-slot mt-2 text-[11px] ${info ? "text-slate-500" : "text-red-400"}`}>
@@ -70,9 +88,11 @@ export default function RuntimeBackendList({
             </div>
 
             {row.installed.length > 0 && (
-              <div className="mt-3 flex min-w-0 flex-wrap gap-2.5" role="list" aria-label={t("ui.installedBuilds", { label: t(`ui.${row.label}`, { id: row.backend }) })}>
+              <div className="mt-3 flex min-w-0 flex-wrap gap-2.5" role="list" aria-label={t("ui.installedBuilds", { label: backendName })}>
                 {row.installed.map((item) => {
                   const isActive = activeBackend === row.backend && activeBuild === item.build;
+                  const selectBlockedReason = serverRunning ? t("ui.stopBeforeSelect") : prBusy ? t("ui.installingPr") : null;
+                  const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : null;
                   return (
                     <div key={item.build} role="listitem" className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${isActive ? "app-border-success bg-emerald-950/40" : "border-slate-700 app-bg-muted"}`} title={normalizeDisplayPath(item.dir)}>
                       <span className="text-slate-200" title={item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build}>{item.source ? `${t("ui.runtimePrBuild", { pr: item.source.pull_request })} · ${item.source.commit.slice(0, 7)} · ` : ""}{formatRuntimeVersion(item.build, item.version)}</span>
@@ -81,8 +101,39 @@ export default function RuntimeBackendList({
                         <span className="rounded bg-emerald-800 px-1.5 py-0.5 text-[10px] text-emerald-200">{t("ui.active")}</span>
                       ) : (
                         <>
-                          <button type="button" onClick={() => onSelect(row.backend, item.build)} disabled={serverRunning || prBusy} title={serverRunning ? t("ui.stopBeforeSelect") : prBusy ? t("ui.installingPr") : undefined} className="app-button app-button--secondary app-button--sm">{t("ui.makeActive")}</button>
-                          <button type="button" onClick={() => onUninstall(row.backend, item.build)} disabled={row.busy || serverRunning || prBusy} title={serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : undefined} className="app-button app-button--danger app-button--sm">{t("panel.remove")}</button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (selectBlockedReason) {
+                                onBlockedAction?.(selectBlockedReason);
+                                return;
+                              }
+                              onSelect(row.backend, item.build);
+                            }}
+                            aria-disabled={selectBlockedReason ? "true" : undefined}
+                            title={selectBlockedReason ?? undefined}
+                            aria-label={`${t("ui.makeActive")}: ${backendName} ${item.build}`}
+                            className={`app-button app-button--secondary app-button--sm ${selectBlockedReason ? "opacity-80" : ""}`}
+                          >
+                            {t("ui.makeActive")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (uninstallBlockedReason) {
+                                onBlockedAction?.(uninstallBlockedReason);
+                                return;
+                              }
+                              onUninstall(row.backend, item.build);
+                            }}
+                            disabled={row.busy}
+                            aria-disabled={uninstallBlockedReason ? "true" : undefined}
+                            title={uninstallBlockedReason ?? undefined}
+                            aria-label={`${t("panel.remove")}: ${backendName} ${item.build}`}
+                            className={`app-button app-button--danger app-button--sm ${uninstallBlockedReason ? "opacity-80" : ""}`}
+                          >
+                            {t("panel.remove")}
+                          </button>
                         </>
                       )}
                     </div>

@@ -21,6 +21,9 @@ export interface CustomSelectProps<T extends string | number = string> {
   ariaLabel?: string;
   ariaLabelledBy?: string;
   ariaDescribedBy?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  "aria-describedby"?: string;
   size?: "sm" | "md";
 }
 
@@ -45,8 +48,14 @@ export function CustomSelect<T extends string | number = string>({
   ariaLabel,
   ariaLabelledBy,
   ariaDescribedBy,
+  "aria-label": ariaLabelKebab,
+  "aria-labelledby": ariaLabelledByKebab,
+  "aria-describedby": ariaDescribedByKebab,
   size = "md",
 }: CustomSelectProps<T>) {
+  const effectiveAriaLabel = ariaLabel ?? ariaLabelKebab;
+  const effectiveAriaLabelledBy = ariaLabelledBy ?? ariaLabelledByKebab;
+  const effectiveAriaDescribedBy = ariaDescribedBy ?? ariaDescribedByKebab;
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -226,9 +235,9 @@ export function CustomSelect<T extends string | number = string>({
         aria-expanded={isOpen}
         aria-controls={listboxId}
         aria-activedescendant={isOpen && highlightedIndex >= 0 ? `${listboxId}-option-${highlightedIndex}` : undefined}
-        aria-label={ariaLabel}
-        aria-labelledby={ariaLabelledBy}
-        aria-describedby={ariaDescribedBy}
+        aria-label={effectiveAriaLabel}
+        aria-labelledby={effectiveAriaLabelledBy}
+        aria-describedby={effectiveAriaDescribedBy}
         disabled={disabled}
         onClick={() => !disabled && setIsOpen((prev) => !prev)}
         className={`app-custom-select-trigger ${
@@ -246,6 +255,8 @@ export function CustomSelect<T extends string | number = string>({
           fill="none"
           viewBox="0 0 20 20"
           stroke="currentColor"
+          aria-hidden="true"
+          focusable="false"
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m6 8 4 4 4-4" />
         </svg>
@@ -256,7 +267,8 @@ export function CustomSelect<T extends string | number = string>({
           ref={menuRef}
           id={listboxId}
           role="listbox"
-          aria-label={ariaLabel}
+          aria-label={effectiveAriaLabel}
+          aria-labelledby={effectiveAriaLabelledBy}
           className={`app-custom-dropdown-menu ${menuClassName}`}
           style={{
             top: menuPosition.top,

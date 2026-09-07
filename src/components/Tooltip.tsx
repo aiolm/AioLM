@@ -1,4 +1,5 @@
 import type { TuningTooltip } from "../panels/tuningFields";
+import { useI18n } from "../i18n";
 
 interface TooltipProps {
   content: TuningTooltip | string;
@@ -12,18 +13,19 @@ interface TooltipProps {
  * in the DOM for screen readers and appears on hover/focus, so the first
  * redesign stage does not need global popover state or a portal.
  */
-export default function Tooltip({ content, label = "Show help", id }: TooltipProps) {
+export default function Tooltip({ content, label, id }: TooltipProps) {
+  const { t } = useI18n();
   const title = typeof content === "string" ? undefined : content.title;
   const description = typeof content === "string" ? content : content.description;
   const tooltipId = id ? `${id}-tooltip` : undefined;
+  const resolvedLabel = label ?? t("common.help");
   return (
     <span className="app-tooltip" data-tooltip>
       <button
         type="button"
         className="app-tooltip-trigger"
-        aria-label={label}
+        aria-label={resolvedLabel}
         aria-describedby={tooltipId}
-        title={description}
       >
         <span aria-hidden="true">?</span>
       </button>

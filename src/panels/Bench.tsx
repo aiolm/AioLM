@@ -127,6 +127,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
               inputMode="numeric"
               value={itersDraft}
               disabled={phase !== "idle"}
+              aria-describedby="bench-iters-hint"
               onChange={(event) => {
                 setItersDraft(event.target.value);
                 setItersDirty(true);
@@ -140,6 +141,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
               onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
               className="app-input w-24 text-center"
             />
+            <span id="bench-iters-hint" className="sr-only">1 - 100</span>
           </div>
           {phase === "running" || phase === "canceling" ? (
             <button
@@ -220,7 +222,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
 
         {effectiveArgs.length > 0 && <details className="mt-4 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
           <summary className="cursor-pointer text-xs font-medium" style={{ color: "var(--board-ink)" }}>{t("panel.effectiveArgs")}</summary>
-          <code className="mt-2.5 block whitespace-pre-wrap break-all rounded p-2.5 font-mono text-xs" style={{ background: "var(--board-mono-bg)", color: "var(--board-mono-ink)" }}>{effectiveArgs.map((arg) => JSON.stringify(normalizeDisplayText(arg))).join(" ")}</code>
+          <code tabIndex={0} aria-label={t("panel.effectiveArgs")} className="mt-2.5 block max-h-48 overflow-auto whitespace-pre-wrap break-all rounded p-2.5 font-mono text-xs" style={{ background: "var(--board-mono-bg)", color: "var(--board-mono-ink)" }}>{effectiveArgs.map((arg) => JSON.stringify(normalizeDisplayText(arg))).join(" ")}</code>
         </details>}
         {history.length > 0 && <section className="mt-4 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }} aria-labelledby="benchmark-history-heading">
           <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="benchmark-history-heading" className="app-section-title">{t("ui.benchHistory", { count: history.length })}</h2><button type="button" onClick={() => downloadText("llama-board-benchmarks.csv", benchmarkCsv(history), "text/csv") } className="app-button app-button--secondary app-button--sm">{t("ui.benchExportCsv")}</button></div>

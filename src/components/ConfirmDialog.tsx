@@ -29,15 +29,18 @@ export default function ConfirmDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const invokerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open && !dialog.open) {
+      invokerRef.current = document.activeElement as HTMLElement | null;
       dialog.showModal();
       window.requestAnimationFrame(() => cancelRef.current?.focus());
     } else if (!open && dialog.open) {
       dialog.close();
+      window.requestAnimationFrame(() => invokerRef.current?.focus?.());
     }
   }, [open]);
 
@@ -47,6 +50,7 @@ export default function ConfirmDialog({
       className="app-confirm-dialog"
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
+      aria-busy={busy || undefined}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onCancel();

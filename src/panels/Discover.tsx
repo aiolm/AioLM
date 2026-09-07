@@ -164,13 +164,13 @@ export default function DiscoverPanel({ store, active = true }: { store: AppStor
       <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(18rem,0.85fr)_minmax(24rem,1.15fr)]">
         <section className="min-h-0 overflow-auto rounded-xl border" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }} aria-label={t("extra.searchResults")}>
           <div className="sticky top-0 z-10 border-b px-4 py-2.5 text-xs font-semibold" style={{ borderColor: "var(--board-border)", background: "var(--board-surface-muted)", color: "var(--board-faint)" }}>{t("extra.searchResults")} {results.length ? `(${results.length})` : ""}</div>
-          {searching && <div className="p-6 text-center text-sm" style={{ color: "var(--board-muted)" }}>{t("extra.searching")}</div>}
+          {searching && <div className="p-6 text-center text-sm" style={{ color: "var(--board-muted)" }} role="status">{t("extra.searching")}</div>}
           {!searching && results.length === 0 && <div className="p-6 text-center text-xs leading-relaxed" style={{ color: "var(--board-faint)" }}>{t("ui.searchHint")}</div>}
           <div role="list">
             {results.map((model) => (
-              <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} className={`block w-full border-b px-4 py-3 text-left last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${selected?.id === model.id ? "" : "hover:bg-[var(--board-surface-muted)]"}`} style={{ borderColor: "var(--board-border)", background: selected?.id === model.id ? "var(--board-accent-soft)" : undefined }}>
+              <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={`block w-full border-b px-4 py-3 text-left last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${selected?.id === model.id ? "" : "hover:bg-[var(--board-surface-muted)]"}`} style={{ borderColor: "var(--board-border)", background: selected?.id === model.id ? "var(--board-accent-soft)" : undefined }}>
                 <div className="truncate text-sm font-medium" style={{ color: "var(--board-ink)" }}>{model.id}</div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums" style={{ color: "var(--board-faint)" }}><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span>♥ {formatCount(locale, model.likes)}</span>{model.gated && <span style={{ color: "var(--board-warning)" }}>{t("panel.gated")}</span>}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums" style={{ color: "var(--board-faint)" }}><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span><span aria-hidden="true">♥ </span><span className="sr-only">{t("panel.likes")} </span>{formatCount(locale, model.likes)}</span>{model.gated && <span style={{ color: "var(--board-warning)" }}>{t("panel.gated")}</span>}</div>
                 {model.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{model.tags.slice(0, 4).map((tag) => <span key={tag} className="rounded-full border px-1.5 py-0.5 text-[10px]" style={{ borderColor: "var(--board-border)", background: "var(--board-surface-muted)", color: "var(--board-faint)" }}>{tag}</span>)}</div>}
               </button></div>
             ))}
@@ -181,15 +181,33 @@ export default function DiscoverPanel({ store, active = true }: { store: AppStor
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed" style={{ color: "var(--board-faint)" }}>{t("extra.selectRepository")}</div>}
           {selected && <>
             <div className="sticky top-0 z-10 border-b px-4 py-3" style={{ borderColor: "var(--board-border)", background: "var(--board-surface-muted)" }}><div className="truncate text-sm font-semibold" style={{ color: "var(--board-ink)" }}>{selected.id}</div><div className="mt-1 text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.repoFileHint")} · {selected.pipeline_tag || "llama.cpp"}</div></div>
-            {loadingFiles && <div className="p-6 text-center text-sm" style={{ color: "var(--board-muted)" }}>{t("extra.readingFiles")}</div>}
+            {loadingFiles && <div className="p-6 text-center text-sm" style={{ color: "var(--board-muted)" }} role="status">{t("extra.readingFiles")}</div>}
             {!loadingFiles && files?.length === 0 && <div className="p-6 text-center text-xs" style={{ color: "var(--board-faint)" }}>{t("extra.noFiles")}</div>}
             {!loadingFiles && files && files.length > 0 && <div role="list">
               {files.map((file) => {
                 const activeDownload = downloading === file.path;
                 const displayFilePath = normalizeDisplayPath(file.path);
+                const canDownload = ["stopped", "failed", "crashed"].includes(store.status.state);
+                const downloadActionLabel = activeDownload ? `${t("extra.downloading")}…` : file.is_mmproj ? t("extra.downloadProjector") : t("extra.download");
                 return <div key={file.path} role="listitem" className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 last:border-0" style={{ borderColor: "var(--board-border)" }}>
                   <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium" style={{ color: "var(--board-ink)" }} title={displayFilePath}>{displayFilePath}</div><div className="mt-1 flex flex-wrap gap-2 text-xs" style={{ color: "var(--board-faint)" }}><span>{formatBytes(file.size_bytes)}</span><span>{file.is_mmproj ? t("ui.visionProjector") : quantLabel(file.path)}</span>{file.oid && <span title={file.oid}>{t("ui.checksumMetadata")}</span>}</div></div>
-                  <button type="button" onClick={() => void download(file)} disabled={!!downloading || !["stopped", "failed", "crashed"].includes(store.status.state)} title={!["stopped", "failed", "crashed"].includes(store.status.state) ? t("ui.stopBeforeDownload") : undefined} className="app-button app-button--primary app-button--sm shrink-0">{activeDownload ? `${t("extra.downloading")}…` : file.is_mmproj ? t("extra.downloadProjector") : t("extra.download")}</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!canDownload) {
+                        setError(t("ui.stopBeforeDownload"));
+                        return;
+                      }
+                      void download(file);
+                    }}
+                    disabled={!!downloading}
+                    aria-disabled={!canDownload ? "true" : undefined}
+                    title={!canDownload ? t("ui.stopBeforeDownload") : undefined}
+                    aria-label={`${downloadActionLabel}: ${displayFilePath}`}
+                    className={`app-button app-button--primary app-button--sm shrink-0 ${!canDownload ? "opacity-80" : ""}`}
+                  >
+                    {downloadActionLabel}
+                  </button>
                 </div>;
               })}
             </div>}

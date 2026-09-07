@@ -83,7 +83,7 @@ function PageShell<T extends string>({
       <div
         className="app-page-content"
         id={panelId}
-        role="tabpanel"
+        role="region"
         aria-labelledby={`${scope}-section-${active}`}
         tabIndex={-1}
       >

@@ -246,7 +246,16 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => loadProject(null)} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
-          <label className="app-button app-button--secondary app-button--sm cursor-pointer">{t("panel.importJson")}<input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importSelected(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label>
+          <label className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--board-focus)]">
+            {t("panel.importJson")}
+            <input
+              type="file"
+              accept="application/json,.json"
+              aria-label={t("panel.importJson")}
+              className="sr-only"
+              onChange={(event) => { void importSelected(event.target.files?.[0]); event.currentTarget.value = ""; }}
+            />
+          </label>
         </div>
       </div>
       <div className="app-panel-feedback-layer" aria-live="polite">
@@ -271,7 +280,7 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
           <div className="px-2 py-2 text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} action={{ label: t("panel.newProject"), onClick: () => loadProject(null) }} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} className="min-w-0 flex-1 px-2.5 py-1.5 text-left"><span className="block truncate text-xs font-medium" style={{ color: "var(--board-ink)" }}>{project.name}</span><span className="mt-0.5 block truncate text-xs" style={{ color: "var(--board-faint)" }}>{normalizeDisplayPath(project.config.active_model).split(/[\\/]/).pop() || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-[10px] font-medium" style={{ borderColor: "var(--tone-success-border)", background: "var(--tone-success-bg)", color: "var(--tone-success-ink)" }}>{t("ui.active")}</span>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--board-focus)]"><span className="block truncate text-xs font-medium" style={{ color: "var(--board-ink)" }}>{project.name}</span><span className="mt-0.5 block truncate text-xs" style={{ color: "var(--board-faint)" }}>{normalizeDisplayPath(project.config.active_model).split(/[\\/]/).pop() || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-[10px] font-medium" style={{ borderColor: "var(--tone-success-border)", background: "var(--tone-success-bg)", color: "var(--tone-success-ink)" }}>{t("ui.active")}</span>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>

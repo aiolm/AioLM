@@ -135,7 +135,7 @@ export default function TuningNavigation({
               ref={(el) => { categoryRefs.current[index] = el; }}
               type="button"
               className={`tuning-category-link ${isActive ? "is-active" : ""}`}
-              aria-current={isActive ? "page" : undefined}
+              aria-current={isActive ? "true" : undefined}
               aria-controls={TUNING_CONTENT_PANEL_ID}
               tabIndex={isActive ? 0 : -1}
               title={t(`extra.${category.descriptionKey}` as never) || category.description}

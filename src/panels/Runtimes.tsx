@@ -128,6 +128,7 @@ export default function RuntimesPanel({ store, active = true }: { store: AppStor
         prBusy={rt.prBusy}
         bundleBusy={rt.bundleBusy}
         cancelBusy={rt.cancelBusy}
+        onBlockedAction={(msg) => rt.setFailure(msg)}
         onCancelInstall={() => void rt.cancelInstall()}
         onInstall={(backend) => void rt.install(backend)}
         onSelect={(backend, build) => void rt.select(backend, build)}

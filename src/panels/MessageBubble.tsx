@@ -57,7 +57,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
         <div className="whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse" style={{ color: "var(--board-faint)" }}>{text("thinking")}</span> : "")}</div>
         {message.interrupted && <div className="mt-2 text-xs" style={{ color: "var(--board-warning)" }} role="status">{text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs" style={{ color: "var(--board-danger)" }} role="alert">{text("partialFailed")}</div>}
-        {message.role === "assistant" && message.content && <button type="button" onClick={() => onCopy(index, message.content)} className="app-button app-button--secondary app-button--sm mt-2.5 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100" aria-label={text("copy")}>{copied ? text("copied") : text("copy")}</button>}
+        {message.role === "assistant" && message.content && <button type="button" onClick={() => onCopy(index, message.content)} className="app-button app-button--secondary app-button--sm mt-2.5 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={copied ? text("copied") : text("copy")}>{copied ? text("copied") : text("copy")}</button>}
       </div>
     </div>
   );

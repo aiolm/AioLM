@@ -379,6 +379,7 @@
   gap: 3px;
   pointer-events: none;
   opacity: 0;
+  visibility: hidden;
   transform: translateY(-2px);
   border: 1px solid var(--board-border-strong);
   border-radius: var(--board-radius-sm);
@@ -389,12 +390,13 @@
   font-size: 11px;
   font-weight: 400;
   line-height: 1.4;
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
 }
 .app-tooltip:hover .app-tooltip-popover,
 .app-tooltip:focus-within .app-tooltip-popover {
   pointer-events: auto;
   opacity: 1;
+  visibility: visible;
   transform: translateY(0);
 }
 .app-tooltip-title { color: var(--board-ink); font-weight: 650; }

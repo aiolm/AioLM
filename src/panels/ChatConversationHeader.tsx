@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ChatThread } from "../chatHistory";
 import type { ChatTextKey } from "../chatI18n";
 
@@ -15,10 +16,24 @@ interface ChatConversationHeaderProps {
 export default function ChatConversationHeader({
   threadPanelOpen, setThreadPanelOpen, activeThread, headerSubtitle, activeProjectName, phase, onUpdateThread, ct,
 }: ChatConversationHeaderProps) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const summaryRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (detailsRef.current?.open && !detailsRef.current.contains(event.target as Node)) {
+        detailsRef.current.open = false;
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   return (
     <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2">
         <button
+          id="chat-thread-toggle-button"
           type="button"
           onClick={() => setThreadPanelOpen((current) => !current)}
           className="app-button app-button--secondary app-button--sm sm:hidden"
@@ -32,8 +47,19 @@ export default function ChatConversationHeader({
           <p className="truncate text-xs tabular-nums" style={{ color: "var(--board-faint)" }}>{headerSubtitle}{activeProjectName ? ` · ${activeProjectName}` : ""}</p>
         </div>
       </div>
-      <details className="relative shrink-0">
-        <summary className="app-button app-button--secondary app-button--sm cursor-pointer list-none">
+      <details
+        ref={detailsRef}
+        className="relative shrink-0"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && detailsRef.current?.open) {
+            event.preventDefault();
+            event.stopPropagation();
+            detailsRef.current.open = false;
+            summaryRef.current?.focus();
+          }
+        }}
+      >
+        <summary ref={summaryRef} className="app-button app-button--secondary app-button--sm cursor-pointer list-none">
           {ct("conversationSettings")}
         </summary>
         <div className="absolute right-0 z-30 mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-xl border p-4 shadow-xl space-y-3" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>

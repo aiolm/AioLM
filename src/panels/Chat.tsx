@@ -147,6 +147,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
       <div className="relative flex min-h-0 flex-1 gap-4">
         <ChatThreadSidebar
           open={threadPanelOpen}
+          onClose={() => setThreadPanelOpen(() => false)}
           activeThreadId={workspace.activeThreadId}
           threadCount={workspace.threads.length}
           threadQuery={threadQuery}

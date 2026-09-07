@@ -384,10 +384,15 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
                 type="button"
                 aria-current={isSelected ? "true" : undefined}
                 aria-label={t("ui.selectModelNamed", { name: model.name })}
-                disabled={serverRunning}
-                title={serverRunning ? t("ui.useRowAction") : undefined}
-                onClick={() => void selectModel(model)}
-                className="min-w-0 flex-1 rounded-lg px-3 py-2 text-left hover:bg-[var(--board-surface-muted)] disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--board-focus)]"
+                aria-disabled={serverRunning ? "true" : undefined}
+                onClick={() => {
+                  if (serverRunning) {
+                    notify(t("ui.useRowAction"));
+                    return;
+                  }
+                  void selectModel(model);
+                }}
+                className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning ? "cursor-default opacity-80" : "hover:bg-[var(--board-surface-muted)]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--board-focus)]`}
                 style={{ background: isSelected ? "transparent" : undefined }}
               >
                 <span className="block truncate text-sm font-medium" style={{ color: "var(--board-ink)" }}>{model.name}</span>
@@ -397,10 +402,10 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
                 <span className="shrink-0 text-xs tabular-nums" style={{ color: "var(--board-faint)" }}>{model.size_mb.toFixed(0)} MB</span>
                 {model.is_vision && <span className="rounded-full border px-1.5 py-0.5 text-[10px] font-medium" style={{ borderColor: "var(--board-border)", background: "var(--board-surface-muted)", color: "var(--board-muted)" }}>{t("ui.visionTag")}</span>}
                 {isSelected && <span className="rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: "var(--tone-success-bg)", color: "var(--tone-success-ink)", border: "1px solid var(--tone-success-border)" }}>{t("ui.activeTag")}</span>}
-                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} className="app-button app-button--secondary app-button--sm shrink-0">{cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}</button>}
-                <button type="button" onClick={() => void copyPath(model.path)} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
-                <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} className="app-button app-button--ghost app-button--sm shrink-0" style={{ color: "var(--board-danger)" }}>{t("panel.delete")}</button>
-                <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={running || store.busy} className="app-button app-button--primary app-button--sm shrink-0">{actionLabel}</button>
+                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${model.name}`} className="app-button app-button--secondary app-button--sm shrink-0">{cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}</button>}
+                <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
+                <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0" style={{ color: "var(--board-danger)" }}>{t("panel.delete")}</button>
+                <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={running || store.busy} aria-label={`${actionLabel}: ${model.name}`} className="app-button app-button--primary app-button--sm shrink-0">{actionLabel}</button>
               </div>
             </div>
           );

@@ -104,7 +104,7 @@ export default function TuningSliderField({
           onPointerUp={commit}
           onKeyDown={commitOnEnter}
           disabled={disabled}
-          aria-label={`${resolvedLabel} slider`}
+          aria-label={resolvedLabel}
           aria-describedby={hintId}
           className="tuning-slider-field__range"
         />

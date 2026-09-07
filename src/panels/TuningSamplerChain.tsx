@@ -110,23 +110,14 @@ export default function TuningSamplerChain({
           {draft.map((sampler, index) => (
             <div
               key={sampler}
-              role="listitem"
+              role="group"
+              aria-label={sampler}
               className={`tuning-sampler-chip ${draggedIndex === index ? "is-dragging" : ""}`}
               draggable={!disabled}
               onDragStart={() => setDraggedIndex(index)}
               onDragOver={(event) => event.preventDefault()}
               onDrop={() => drop(index)}
               onDragEnd={() => setDraggedIndex(null)}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                  event.preventDefault();
-                  move(index, -1);
-                } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                  event.preventDefault();
-                  move(index, 1);
-                }
-              }}
-              tabIndex={disabled ? -1 : 0}
               data-sampler={sampler}
               data-testid={`sampler-chip-${sampler}`}
             >

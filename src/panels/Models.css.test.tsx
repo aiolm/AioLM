@@ -115,7 +115,7 @@ describe("ModelsPanel CSS cascade", () => {
       children: createElement(ModelsPanel, { store: storeFor(cfg) }),
     }));
 
-    const startButton = await screen.findByRole("button", { name: "Start" });
+    const startButton = await screen.findByRole("button", { name: /^Start/ });
     expect(startButton).toHaveClass("app-button--primary");
     expect(startButton.className).not.toMatch(/hover:app-bg-accent-solid/);
   });

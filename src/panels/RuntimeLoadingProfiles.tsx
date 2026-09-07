@@ -26,7 +26,13 @@ export default function RuntimeLoadingProfiles({
           <p className="app-section-hint">{t("ui.loadingProfilesHint")}</p>
         </div>
         <div className="flex min-w-[16rem] max-w-full gap-2">
-          <input value={profileName} onChange={(event) => onProfileNameChange(event.target.value)} placeholder={t("ui.profileNamePlaceholder")} className="app-input min-w-0 flex-1" />
+          <input
+            value={profileName}
+            onChange={(event) => onProfileNameChange(event.target.value)}
+            placeholder={t("ui.profileNamePlaceholder")}
+            aria-label={t("ui.profileNamePlaceholder")}
+            className="app-input min-w-0 flex-1"
+          />
           <button type="button" onClick={onSave} disabled={!canSave || serverRunning} title={serverRunning ? t("ui.serverRunningHint") : undefined} className="app-button app-button--secondary app-button--sm shrink-0">{t("ui.saveCurrent")}</button>
         </div>
       </div>
@@ -42,7 +48,16 @@ export default function RuntimeLoadingProfiles({
               <button type="button" onClick={() => onRemove(profile)} className="app-icon-button app-icon-button--danger" aria-label={`${t("panel.delete")}: ${profile.name}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button>
             </div>
             <div className="mt-2.5 flex gap-2">
-              <button type="button" onClick={() => onApply(profile)} disabled={serverRunning} title={serverRunning ? t("ui.stopBeforeProfile") : undefined} className="app-button app-button--primary app-button--sm">{t("ui.applyProfile")}</button>
+              <button
+                type="button"
+                onClick={() => onApply(profile)}
+                disabled={serverRunning}
+                title={serverRunning ? t("ui.stopBeforeProfile") : undefined}
+                aria-label={`${t("ui.applyProfile")}: ${profile.name}`}
+                className="app-button app-button--primary app-button--sm"
+              >
+                {t("ui.applyProfile")}
+              </button>
               <span className="self-center text-[10px] text-slate-600">flash-attn: {profile.flash_attn}</span>
             </div>
           </div>
