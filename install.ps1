@@ -91,6 +91,7 @@ try {
         throw "Installer SHA-256 mismatch. Expected $expectedDigest but received $actualDigest."
     }
     Write-Host "==> SHA-256 verified: $actualDigest"
+    Unblock-File -LiteralPath $installerPath
 
     if ($DryRun) {
         Write-Host "==> Dry run complete: $installerPath"
