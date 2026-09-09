@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ChatHistoryMessage, ChatWorkspace } from "../chatHistory";
 
 /**
@@ -140,17 +140,15 @@ function renderPanel() {
   return render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ChatPanel, { store }) }));
 }
 
-/** Streams `parts` as separate SSE-style deltas, pausing between them so each one lands as its own rAF-scheduled commit (mirrors real server chunking + useChatSend's throttled repaint). */
-function respondWithThrottledDeltas(parts: string[]) {
-  mocked.chatStream.mockImplementationOnce(async (_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: (delta: { content?: string }) => void) => {
-    let full = "";
-    for (const part of parts) {
-      full += part;
-      onDelta({ content: part });
-      await new Promise((resolve) => setTimeout(resolve, 60));
-    }
-    return full;
+/** Let each rendered delta acknowledge the next one instead of racing CI timers. */
+function controlledStream() {
+  let emit!: (delta: { content?: string }) => void;
+  let finish!: (text: string) => void;
+  mocked.chatStream.mockImplementationOnce((_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: typeof emit) => {
+    emit = onDelta;
+    return new Promise<string>((resolve) => { finish = resolve; });
   });
+  return { emit: (content: string) => emit({ content }), finish: (text: string) => finish(text) };
 }
 
 describe("ChatPanel streaming re-render isolation (P1-7)", () => {
@@ -167,9 +165,11 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     const seededIndexes = new Set(bubbleRenderSpy.mock.calls.map((call) => call[0] as number));
     expect(seededIndexes.size).toBe(SEED_MESSAGE_COUNT);
 
-    respondWithThrottledDeltas(["Hello ", "there ", "friend."]);
+    const stream = controlledStream();
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Hi" } });
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalled());
+    act(() => stream.emit("Hello "));
 
     // Wait for the first streaming tick to land, then start measuring: this
     // excludes the one-time idle->thinking->streaming phase transitions (which
@@ -178,6 +178,9 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello"));
     bubbleRenderSpy.mockClear();
 
+    act(() => stream.emit("there "));
+    await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello there"));
+    act(() => stream.emit("friend."));
     await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello there friend."));
 
     const callsDuringTicks = bubbleRenderSpy.mock.calls.map((call) => call[0] as number);
@@ -186,5 +189,6 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
 
     const newBubbleCalls = callsDuringTicks.filter((index) => index === NEW_ASSISTANT_INDEX);
     expect(newBubbleCalls.length).toBeGreaterThanOrEqual(2);
+    await act(async () => stream.finish("Hello there friend."));
   });
 });
