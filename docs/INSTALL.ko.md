@@ -5,13 +5,13 @@
 ## 원라이너 설치 (Windows)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 `cmd.exe`, Git Bash 등 PowerShell을 실행할 수 있는 모든 셸에서 동일합니다.
 
 ```bash
-powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 ## 옵션
@@ -20,10 +20,10 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-j
 $env:LLAMA_BOARD_INSTALLER = "msi"   # 기본: nsis
 $env:LLAMA_BOARD_RELEASE = "v0.1.5"  # 특정 태그
 $env:LLAMA_BOARD_DRY_RUN = "1"       # 검증만, 설치 안 함
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
-원라이너는 선택한 릴리스에 포함된 `install.ps1` 사본을 다운로드합니다. 현재 원본: <https://github.com/joowon-jang/llama-board/blob/main/install.ps1>
+원라이너는 선택한 릴리스에 포함된 `install.ps1` 사본을 다운로드합니다. 현재 원본: <https://github.com/llama-board/llama-board/blob/main/install.ps1>
 
 ## 다운로드 검증
 
@@ -36,7 +36,9 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 # 서명된 릴리스는 Valid, 미서명 파일은 NotSigned가 나옵니다.
 ```
 
-릴리스 페이지: <https://github.com/joowon-jang/llama-board/releases/latest>
+릴리스 페이지: <https://github.com/llama-board/llama-board/releases/latest>
+
+마이그레이션 안내: 데스크톱 식별자는 중립값으로 변경되었습니다. 업그레이드할 때 기존 %APPDATA%\llama-board 설정·런타임 디렉터리를 유지하고, 새 설치에서는 Models에서 모델 디렉터리를 선택하세요. 제거해도 이 사용자 데이터는 삭제되지 않습니다.
 
 ## 코드 서명 정책
 

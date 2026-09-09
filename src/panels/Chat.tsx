@@ -16,19 +16,59 @@ import ChatThreadSidebar from "./ChatThreadSidebar";
 import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
+import { SESSION_STATUS_CHANGED_EVENT } from "../sessionUtils";
 
-export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void }) {
+export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
   const ct = (key: ChatTextKey) => t(`chat.${key}`);
   const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
   const [input, setInput] = useState("");
   const [copied, setCopied] = useState<number | null>(null);
   const [activeProjectName, setActiveProjectName] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState("default");
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
 
-  const serverOn = isServerRunning(store.status.state);
-  const visionReady = serverOn && !!store.status.mmproj;
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    let refreshing = false;
+    const refreshSessions = () => {
+      if (refreshing) return;
+      refreshing = true;
+      void api.sessionList().then(api.normalizeSessionList).then((items) => {
+        if (!cancelled) {
+          setSessions(items.filter((item) => item.id !== "default"));
+          setSessionsLoaded(true);
+        }
+      }).catch(() => {
+        if (!cancelled) {
+          setSessionsLoaded(true);
+        }
+      }).finally(() => { refreshing = false; });
+    };
+    refreshSessions();
+    const interval = window.setInterval(refreshSessions, 3000);
+    window.addEventListener(SESSION_STATUS_CHANGED_EVENT, refreshSessions);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener(SESSION_STATUS_CHANGED_EVENT, refreshSessions);
+    };
+  }, [active]);
+
+  const selectedSession = selectedSessionId === "default" ? null : sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const selectedSessionAvailable = selectedSessionId === "default" || selectedSession !== null;
+
+  useEffect(() => {
+    if (sessionsLoaded && !selectedSessionAvailable) setSelectedSessionId("default");
+  }, [sessionsLoaded, selectedSessionAvailable]);
+
+  const selectedStatus = selectedSession ?? store.status;
+  const serverOn = isServerRunning(selectedStatus.state);
+  const visionReady = serverOn && !!selectedStatus.mmproj;
 
   const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addImage, addDocument, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, setError: (message) => setError(message) });
   const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools({ setError: (message) => setError(message) });
@@ -52,10 +92,10 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
   } = useChatThreads({ phase, requireIdle, onSwitchThread: resetComposer });
 
-  const baseUrl = serverOn && store.status.url ? store.status.url : null;
-  const apiKey = serverOn ? store.status.api_key ?? "" : "";
+  const baseUrl = serverOn && selectedStatus.url ? selectedStatus.url : null;
+  const apiKey = serverOn ? selectedStatus.api_key ?? "" : "";
   const configuredModel = store.cfg?.active_model ?? "";
-  const model = (serverOn ? store.status.model : "") || configuredModel;
+  const model = (serverOn ? selectedStatus.model : "") || (selectedSessionId === "default" ? configuredModel : "");
 
   const {
     setError, error, contextWarning, contextSources, aborting, pendingToolCall, metrics, streamingDraft,
@@ -99,8 +139,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
 
   const displayModel = normalizeDisplayPath(model);
-  const displayStatusModel = normalizeDisplayPath(store.status.model ?? "");
-  const headerSubtitle = model ? `${displayModel.split(/[\\/]/).pop()}${configuredModel && store.status.model && configuredModel !== store.status.model ? ` · ${displayStatusModel.split(/[\\/]/).pop()}` : ""}` : t("chat.newConversation");
+  const displayStatusModel = normalizeDisplayPath(selectedStatus.model ?? "");
+  const headerSubtitle = model ? `${displayModel.split(/[\\/]/).pop()}${selectedSessionId === "default" && configuredModel && selectedStatus.model && configuredModel !== selectedStatus.model ? ` · ${displayStatusModel.split(/[\\/]/).pop()}` : ""}` : t("chat.newConversation");
   const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
@@ -125,6 +165,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [t, setError]);
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "Enter" && !event.shiftKey && (preferences?.chat.enterToSend ?? true)) {
       event.preventDefault();
       void send(false, undefined, canSend);
@@ -141,6 +182,13 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         activeProjectName={activeProjectName}
         phase={phase}
         onUpdateThread={updateActiveThread}
+        sessionLabel={t("ui.sessionsTitle")}
+        sessionOptions={[
+          { id: "default", label: t("ui.defaultSession") },
+          ...sessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${session.state}`, disabled: session.state !== "running" })),
+        ]}
+        selectedSessionId={selectedSessionId}
+        onSelectSession={setSelectedSessionId}
         ct={ct}
       />
 
@@ -164,7 +212,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             scrollRef={scrollRef}
             onScrollAtBottomChange={(atBottom) => { atBottomRef.current = atBottom; }}
             disabled={disabled}
-            status={store.status}
+            status={selectedStatus}
             model={model}
             serverOn={serverOn}
             msgs={msgs}

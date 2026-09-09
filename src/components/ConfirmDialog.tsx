@@ -8,6 +8,7 @@ type ConfirmDialogProps = {
   confirmLabel?: string;
   cancelLabel?: string;
   busy?: boolean;
+  tone?: "primary" | "danger";
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -19,6 +20,7 @@ export default function ConfirmDialog({
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   busy = false,
+  tone = "danger",
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -57,8 +59,13 @@ export default function ConfirmDialog({
       }}
       onKeyDown={(event) => {
         if (event.key !== "Tab") return;
-        const first = cancelRef.current;
-        const last = confirmRef.current;
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+        const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )).filter((element) => !element.hasAttribute("hidden"));
+        const first = focusable[0];
+        const last = focusable.at(-1);
         if (!first || !last) return;
         if (event.shiftKey && document.activeElement === first) {
           event.preventDefault();
@@ -78,7 +85,7 @@ export default function ConfirmDialog({
         <div id={descriptionId} className="app-confirm-dialog__description">{description}</div>
         <div className="app-confirm-dialog__actions">
           <button type="button" ref={cancelRef} className="app-button app-button--secondary" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
-          <button type="button" ref={confirmRef} className="app-button app-button--danger" disabled={busy} onClick={onConfirm}>{busy ? `${confirmLabel.replace(/^Remove\s+/i, "Removing ").replace(/^Delete\s+/i, "Deleting ").replace(/^Restart\s+/i, "Restarting ")}…` : confirmLabel}</button>
+          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy} onClick={onConfirm}>{busy ? `${confirmLabel.replace(/^Remove\s+/i, "Removing ").replace(/^Delete\s+/i, "Deleting ").replace(/^Restart\s+/i, "Restarting ")}…` : confirmLabel}</button>
         </div>
       </div>
     </dialog>

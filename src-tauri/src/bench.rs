@@ -3,7 +3,7 @@ use crate::config::{AppConfig, APP_MANAGED_SERVER_ARGS};
 use crate::runtime;
 use serde::Serialize;
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -21,11 +21,31 @@ pub struct BenchRow {
     pub tps: f64,
 }
 
+/// Whether a benchmark ran to completion or was cut short. `rows` always
+/// holds whatever was parsed from the process's output up to that point —
+/// cancelling a run, or the process exiting non-zero or timing out partway
+/// through, never discards rows that already printed.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BenchStatus {
+    Complete,
+    Partial,
+    Cancelled,
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct BenchResult {
     pub rows: Vec<BenchRow>,
     pub args: Vec<String>,
+    pub status: BenchStatus,
+    /// Why the run is `Partial`/`Cancelled`; absent when `Complete`.
+    pub message: Option<String>,
 }
+
+/// Callback invoked on the benchmark's worker thread each time a new row is
+/// parsed from the process's live output, so a caller can stream progress to
+/// the frontend before the run finishes.
+pub type BenchProgress = Arc<dyn Fn(&BenchRow) + Send + Sync>;
 
 pub fn bench_bin(cfg: &AppConfig) -> Result<String, String> {
     if !cfg.active_backend.is_empty() || !cfg.active_build.is_empty() {
@@ -150,7 +170,7 @@ pub fn terminate_pid(pid: u32) {
     #[cfg(windows)]
     {
         let pid = pid.to_string();
-        let _ = Command::new("taskkill")
+        let _ = crate::procutil::std_command("taskkill")
             .args(["/PID", &pid, "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -158,7 +178,7 @@ pub fn terminate_pid(pid: u32) {
     }
     #[cfg(not(windows))]
     {
-        let _ = Command::new("kill")
+        let _ = crate::procutil::std_command("kill")
             .args(["-TERM", &pid.to_string()])
             .status();
     }
@@ -168,7 +188,7 @@ fn terminate(child: &mut Child) {
     #[cfg(windows)]
     {
         let pid = child.id().to_string();
-        let killed_tree = Command::new("taskkill")
+        let killed_tree = crate::procutil::std_command("taskkill")
             .args(["/PID", &pid, "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -205,6 +225,54 @@ fn bounded_output<R: std::io::Read>(reader: R) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Drain stdout line by line as it arrives (rather than blocking until EOF
+/// like `bounded_output`) so a caller can see rows as soon as llama-bench
+/// prints them, not only once the whole run finishes or is killed. Every
+/// complete line is appended to the same bounded buffer `bounded_output`
+/// would have produced; after each one, `parse` is re-run against everything
+/// seen so far and any row past what was already reported is handed to
+/// `progress`. Re-parsing on every line is O(lines^2), which is irrelevant
+/// here: a benchmark run prints at most a few dozen rows.
+fn stream_stdout<R: std::io::Read>(
+    reader: R,
+    progress: Option<BenchProgress>,
+) -> std::io::Result<Vec<u8>> {
+    let mut reader = std::io::BufReader::new(reader);
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut known_rows = 0usize;
+    loop {
+        let mut line = Vec::new();
+        if std::io::BufRead::read_until(&mut reader, b'\n', &mut line)? == 0 {
+            break;
+        }
+        if buffer.len() < MAX_BENCH_OUTPUT_BYTES {
+            let remaining = MAX_BENCH_OUTPUT_BYTES - buffer.len();
+            let take = remaining.min(line.len());
+            buffer.extend_from_slice(&line[..take]);
+        }
+        if let Some(progress) = &progress {
+            let rows = parse(&String::from_utf8_lossy(&buffer));
+            if rows.len() > known_rows {
+                for row in &rows[known_rows..] {
+                    progress(row);
+                }
+                known_rows = rows.len();
+            }
+        }
+    }
+    Ok(buffer)
+}
+
+/// How a benchmark process's run ended. Distinct from `BenchStatus`: this is
+/// what actually happened to the process; `run` turns it into the row-aware
+/// status the frontend sees, deciding along the way whether "no full exit"
+/// still counts as usable (some rows captured) or as a hard failure (none).
+enum ProcessOutcome {
+    Exited(std::process::ExitStatus),
+    TimedOut,
+    Cancelled,
+}
+
 fn run_process(
     bin: &str,
     args: &[String],
@@ -212,8 +280,9 @@ fn run_process(
     cancel: Arc<AtomicBool>,
     timeout: Duration,
     active_pid: Option<Arc<Mutex<Option<u32>>>>,
-) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>), String> {
-    let mut command = Command::new(bin);
+    progress: Option<BenchProgress>,
+) -> Result<(ProcessOutcome, Vec<u8>, Vec<u8>), String> {
+    let mut command = crate::procutil::std_command(bin);
     command
         .env_clear()
         .envs(environment.iter().map(|(name, value)| (name, value)));
@@ -245,20 +314,17 @@ fn run_process(
             return Err("benchmark stderr pipe was not available".into());
         }
     };
-    let mut stdout_reader = Some(thread::spawn(move || bounded_output(stdout)));
+    let mut stdout_reader = Some(thread::spawn(move || stream_stdout(stdout, progress)));
     let mut stderr_reader = Some(thread::spawn(move || bounded_output(stderr)));
 
     let deadline = Instant::now() + timeout;
-    let status = loop {
+    let outcome = loop {
         if cancel.load(Ordering::Acquire) {
             terminate(&mut child);
-            let _ = join_pipe(&mut stdout_reader);
-            let _ = join_pipe(&mut stderr_reader);
-            clear_active_pid(&active_pid);
-            return Err("benchmark cancelled".into());
+            break ProcessOutcome::Cancelled;
         }
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => break ProcessOutcome::Exited(status),
             Ok(None) => {}
             Err(error) => {
                 terminate(&mut child);
@@ -270,13 +336,7 @@ fn run_process(
         }
         if Instant::now() >= deadline {
             terminate(&mut child);
-            let _ = join_pipe(&mut stdout_reader);
-            let _ = join_pipe(&mut stderr_reader);
-            clear_active_pid(&active_pid);
-            return Err(format!(
-                "benchmark timed out after {} seconds",
-                timeout.as_secs()
-            ));
+            break ProcessOutcome::TimedOut;
         }
         thread::sleep(Duration::from_millis(100));
     };
@@ -284,7 +344,7 @@ fn run_process(
     let stdout = join_pipe(&mut stdout_reader)?;
     let stderr = join_pipe(&mut stderr_reader)?;
     clear_active_pid(&active_pid);
-    Ok((status, stdout, stderr))
+    Ok((outcome, stdout, stderr))
 }
 
 fn clear_active_pid(active_pid: &Option<Arc<Mutex<Option<u32>>>>) {
@@ -415,7 +475,7 @@ pub fn build_args(cfg: &AppConfig) -> Vec<String> {
         }
         index += 1;
     }
-    args
+    crate::tuning_defaults::filter_args(cfg, args)
 }
 
 fn app_managed_option_consumes_next(args: &[String], index: usize) -> bool {
@@ -444,6 +504,20 @@ pub fn run(
     cancel: Arc<AtomicBool>,
     active_pid: Option<Arc<Mutex<Option<u32>>>>,
 ) -> Result<BenchResult, String> {
+    run_with_progress(cfg, cancel, active_pid, None)
+}
+
+/// Same as [`run`], but invokes `progress` on the worker thread for every row
+/// parsed from llama-bench's output as it streams in, before the run itself
+/// finishes. `run` is kept as a separate, simpler entry point so every
+/// existing caller and test that has no frontend event loop to feed stays
+/// unchanged.
+pub fn run_with_progress(
+    cfg: &AppConfig,
+    cancel: Arc<AtomicBool>,
+    active_pid: Option<Arc<Mutex<Option<u32>>>>,
+    progress: Option<BenchProgress>,
+) -> Result<BenchResult, String> {
     let bin = bench_bin(cfg)?;
     let args = build_args(cfg);
     let environment = if cfg.active_backend.is_empty() && cfg.active_build.is_empty() {
@@ -451,30 +525,78 @@ pub fn run(
     } else {
         runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?
     };
-    let (status, stdout, stderr) = run_process(
+    let timeout = Duration::from_secs(30 * 60);
+    let (outcome, stdout, stderr) = run_process(
         &bin,
         &args,
         &environment,
         cancel,
-        Duration::from_secs(30 * 60),
+        timeout,
         active_pid,
+        progress,
     )?;
     let stdout = String::from_utf8_lossy(&stdout);
     let stderr = String::from_utf8_lossy(&stderr);
-    if !status.success() {
-        return Err(format!(
-            "llama-bench exited with {status}: {}",
-            stderr.trim()
-        ));
-    }
     let rows = parse(&stdout);
-    if rows.is_empty() {
-        return Err(format!(
-            "no benchmark rows parsed. stderr: {}",
-            stderr.trim()
-        ));
+    classify_outcome(outcome, args, rows, stderr.trim(), timeout)
+}
+
+/// Turn a finished process's outcome plus whatever rows were parsed from its
+/// output into the `BenchResult`/error contract the frontend sees. Pulled out
+/// of `run_with_progress` so it can be unit-tested against a real
+/// `ProcessOutcome` (built from an actual short-lived child's exit status)
+/// without needing a real llama-bench binary to drive the whole pipeline.
+fn classify_outcome(
+    outcome: ProcessOutcome,
+    args: Vec<String>,
+    rows: Vec<BenchRow>,
+    stderr: &str,
+    timeout: Duration,
+) -> Result<BenchResult, String> {
+    let incomplete_reason = match &outcome {
+        ProcessOutcome::Exited(status) if status.success() => None,
+        ProcessOutcome::Exited(status) => {
+            Some(format!("llama-bench exited with {status}: {stderr}"))
+        }
+        ProcessOutcome::TimedOut => Some(format!(
+            "benchmark timed out after {} seconds",
+            timeout.as_secs()
+        )),
+        ProcessOutcome::Cancelled => Some("benchmark cancelled".to_string()),
+    };
+
+    match incomplete_reason {
+        None => {
+            if rows.is_empty() {
+                return Err(format!("no benchmark rows parsed. stderr: {stderr}"));
+            }
+            Ok(BenchResult {
+                rows,
+                args,
+                status: BenchStatus::Complete,
+                message: None,
+            })
+        }
+        Some(reason) => {
+            if rows.is_empty() {
+                // Nothing usable was ever produced; preserve the original
+                // plain-error contract for what used to be indistinguishable
+                // failure modes (bad args, missing model, immediate crash).
+                return Err(reason);
+            }
+            let status = if matches!(outcome, ProcessOutcome::Cancelled) {
+                BenchStatus::Cancelled
+            } else {
+                BenchStatus::Partial
+            };
+            Ok(BenchResult {
+                rows,
+                args,
+                status,
+                message: Some(reason),
+            })
+        }
     }
-    Ok(BenchResult { rows, args })
 }
 
 #[cfg(test)]
@@ -560,21 +682,22 @@ mod tests {
                 ],
             )
         };
-        let (status, stdout, _stderr) = run_process(
+        let (outcome, stdout, _stderr) = run_process(
             bin,
             &args,
             &runtime::child_environment(),
             Arc::new(AtomicBool::new(false)),
             Duration::from_secs(10),
             None,
+            None,
         )
         .expect("flooding child should complete");
-        assert!(status.success());
+        assert!(matches!(outcome, ProcessOutcome::Exited(status) if status.success()));
         assert!(stdout.len() > 100_000);
     }
 
     #[test]
-    fn process_cancel_terminates_sleeping_child() {
+    fn process_cancel_terminates_sleeping_child_and_reports_cancelled_not_an_error() {
         let (bin, args) = if cfg!(windows) {
             (
                 "cmd",
@@ -594,12 +717,16 @@ mod tests {
                 child_cancel,
                 Duration::from_secs(10),
                 None,
+                None,
             )
         });
         std::thread::sleep(Duration::from_millis(200));
         cancel.store(true, Ordering::Release);
-        let result = handle.join().expect("benchmark worker should join");
-        assert_eq!(result, Err("benchmark cancelled".to_string()));
+        let (outcome, _stdout, _stderr) = handle
+            .join()
+            .expect("benchmark worker should join")
+            .expect("cancellation is a normal outcome, not a spawn/pipe failure");
+        assert!(matches!(outcome, ProcessOutcome::Cancelled));
     }
 
     #[test]
@@ -607,5 +734,138 @@ mod tests {
         let input = vec![b'x'; MAX_BENCH_OUTPUT_BYTES + 128];
         let output = bounded_output(std::io::Cursor::new(input)).expect("reader should succeed");
         assert_eq!(output.len(), MAX_BENCH_OUTPUT_BYTES);
+    }
+
+    fn row(tps: f64) -> BenchRow {
+        BenchRow {
+            test: "prompt".into(),
+            size: "512".into(),
+            batch: "2048".into(),
+            tps,
+        }
+    }
+
+    fn exit_status(code: i32) -> std::process::ExitStatus {
+        if cfg!(windows) {
+            std::process::Command::new("cmd")
+                .args(["/C", "exit", &code.to_string()])
+                .status()
+        } else {
+            std::process::Command::new("sh")
+                .args(["-c", &format!("exit {code}")])
+                .status()
+        }
+        .expect("spawn a trivial child to obtain a real ExitStatus")
+    }
+
+    #[test]
+    fn classify_outcome_reports_complete_only_on_a_successful_exit_with_rows() {
+        let result = classify_outcome(
+            ProcessOutcome::Exited(exit_status(0)),
+            vec!["--model".into()],
+            vec![row(100.0)],
+            "",
+            Duration::from_secs(60),
+        )
+        .expect("a successful exit with rows must not error");
+        assert_eq!(result.status, BenchStatus::Complete);
+        assert!(result.message.is_none());
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn classify_outcome_keeps_the_legacy_plain_error_when_nothing_was_ever_parsed() {
+        let error = classify_outcome(
+            ProcessOutcome::Exited(exit_status(0)),
+            vec![],
+            vec![],
+            "unexpected argument",
+            Duration::from_secs(60),
+        )
+        .unwrap_err();
+        assert!(error.contains("no benchmark rows parsed"));
+
+        let error = classify_outcome(
+            ProcessOutcome::Exited(exit_status(1)),
+            vec![],
+            vec![],
+            "fatal error",
+            Duration::from_secs(60),
+        )
+        .unwrap_err();
+        assert!(error.contains("llama-bench exited with"));
+
+        let error = classify_outcome(
+            ProcessOutcome::Cancelled,
+            vec![],
+            vec![],
+            "",
+            Duration::from_secs(60),
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"));
+    }
+
+    #[test]
+    fn classify_outcome_returns_partial_rows_and_status_on_nonzero_exit() {
+        let result = classify_outcome(
+            ProcessOutcome::Exited(exit_status(1)),
+            vec!["--model".into()],
+            vec![row(50.0), row(60.0)],
+            "crashed mid-run",
+            Duration::from_secs(60),
+        )
+        .expect("rows captured before a crash must still come back as Ok");
+        assert_eq!(result.status, BenchStatus::Partial);
+        assert_eq!(result.rows.len(), 2);
+        assert!(result.message.unwrap().contains("crashed mid-run"));
+    }
+
+    #[test]
+    fn classify_outcome_returns_cancelled_rows_and_status_on_cancellation() {
+        let result = classify_outcome(
+            ProcessOutcome::Cancelled,
+            vec!["--model".into()],
+            vec![row(75.0)],
+            "",
+            Duration::from_secs(60),
+        )
+        .expect("a cancelled run with rows must still come back as Ok");
+        assert_eq!(result.status, BenchStatus::Cancelled);
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.message.is_some());
+    }
+
+    #[test]
+    fn classify_outcome_returns_partial_on_timeout_with_rows() {
+        let result = classify_outcome(
+            ProcessOutcome::TimedOut,
+            vec![],
+            vec![row(10.0)],
+            "",
+            Duration::from_secs(1800),
+        )
+        .expect("rows captured before a timeout must still come back as Ok");
+        assert_eq!(result.status, BenchStatus::Partial);
+        assert!(result.message.unwrap().contains("1800"));
+    }
+
+    #[test]
+    fn stream_stdout_reports_each_new_row_as_it_arrives_and_still_returns_full_bytes() {
+        let text = "n_prompt,build_commit,avg_ts,n_gen,n_batch\n\
+                     512,abc,100.0,0,2048\n\
+                     0,abc,50.0,128,2048\n";
+        let seen: Arc<Mutex<Vec<BenchRow>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let progress: BenchProgress = Arc::new(move |row: &BenchRow| {
+            sink.lock().unwrap().push(row.clone());
+        });
+        let bytes = stream_stdout(std::io::Cursor::new(text.as_bytes()), Some(progress))
+            .expect("reading from an in-memory cursor cannot fail");
+        assert_eq!(bytes, text.as_bytes());
+        let reported = seen.lock().unwrap();
+        assert_eq!(reported.len(), 2);
+        assert!((reported[0].tps - 100.0).abs() < 0.001);
+        assert!((reported[1].tps - 50.0).abs() < 0.001);
     }
 }

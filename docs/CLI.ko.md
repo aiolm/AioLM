@@ -2,7 +2,7 @@
 
 > **언어:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
 
-개발 중 `llama-board-cli.exe`는 `src-tauri/target/release/llama-board-cli.exe`에 생성됩니다. 패키지 빌드에서는 Tauri 리소스로 포함되므로 설치 후 앱의 리소스 디렉터리에서 찾을 수 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
+개발 중 `llama-board-cli.exe`는 `.codex-target/release/llama-board-cli.exe`에 생성됩니다. 패키지 빌드에서는 Tauri 리소스로 포함되므로 설치 후 앱의 리소스 디렉터리에서 찾을 수 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
 
 ```powershell
 ./llama-board-cli.exe --help

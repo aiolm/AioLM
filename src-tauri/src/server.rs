@@ -4,7 +4,9 @@ use crate::runtime;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -44,10 +46,12 @@ pub struct ServerState {
     pub redaction_secret: String,
     pub model: String,
     pub mmproj: String,
+    pub draft_model: String,
     pub lifecycle: Lifecycle,
     pub last_error: Option<String>,
     pub last_activity_at: Instant,
     pub active_requests: u32,
+    launch_generation: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -100,6 +104,16 @@ pub fn estimate_memory(cfg: &AppConfig, model: &str, mmproj: &str) -> MemoryEsti
     }
 }
 
+/// A stopped server has no loaded model. Estimate the selected model then;
+/// while live, retain the identity of the model that is actually loaded.
+pub fn estimate_status_memory(cfg: &AppConfig, state: &ServerState) -> MemoryEstimate {
+    if state.lifecycle.blocks_resource_change() && !state.model.is_empty() {
+        estimate_memory(cfg, &state.model, &state.mmproj)
+    } else {
+        estimate_memory(cfg, &cfg.active_model, &cfg.mmproj)
+    }
+}
+
 impl ServerState {
     pub fn new() -> Self {
         Self {
@@ -109,10 +123,12 @@ impl ServerState {
             redaction_secret: String::new(),
             model: String::new(),
             mmproj: String::new(),
+            draft_model: String::new(),
             lifecycle: Lifecycle::Stopped,
             last_error: None,
             last_activity_at: Instant::now(),
             active_requests: 0,
+            launch_generation: 0,
         }
     }
 }
@@ -124,6 +140,21 @@ impl Default for ServerState {
 }
 
 impl ServerState {
+    pub fn begin_launch(&mut self) -> u64 {
+        self.launch_generation = self.launch_generation.wrapping_add(1);
+        self.lifecycle = Lifecycle::Starting;
+        self.launch_generation
+    }
+
+    pub fn cancel_launch(&mut self) {
+        self.launch_generation = self.launch_generation.wrapping_add(1);
+        self.lifecycle = Lifecycle::Stopped;
+    }
+
+    pub fn is_current_launch(&self, generation: u64) -> bool {
+        self.launch_generation == generation
+    }
+
     pub fn attach_starting(
         &mut self,
         child: Child,
@@ -131,6 +162,7 @@ impl ServerState {
         api_key: String,
         model: String,
         mmproj: String,
+        draft_model: String,
     ) {
         self.child = Some(child);
         self.url = url;
@@ -138,6 +170,7 @@ impl ServerState {
         self.api_key = api_key;
         self.model = model;
         self.mmproj = mmproj;
+        self.draft_model = draft_model;
         self.lifecycle = Lifecycle::Starting;
         self.last_error = None;
         self.last_activity_at = Instant::now();
@@ -257,7 +290,24 @@ pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
     Err("llama-server was not found on PATH or in the WinGet package directory".into())
 }
 
-pub fn build_args(cfg: &AppConfig, _api_key: &str) -> Vec<String> {
+/// Build the llama-server command line with no GPU placement resolved,
+/// exactly as before GPU placement existed. Kept as the public entry point
+/// so every existing caller and test is unaffected; the launch validation path
+/// resolves a real `gpu::ResolvedGpu` against runtime-reported devices and
+/// passes it to [`build_args_with_gpu`] before spawning.
+pub fn build_args(cfg: &AppConfig, api_key: &str) -> Vec<String> {
+    build_args_with_gpu(cfg, api_key, &crate::gpu::ResolvedGpu::default())
+}
+
+/// Build the llama-server command line, including GPU placement flags
+/// already resolved to backend-specific device names (see `gpu::resolve`).
+/// `build_args` remains the pure, hardware-independent entry point for
+/// everything else; production launch paths pass their validated mapping here.
+pub fn build_args_with_gpu(
+    cfg: &AppConfig,
+    _api_key: &str,
+    gpu: &crate::gpu::ResolvedGpu,
+) -> Vec<String> {
     let mut args = vec![
         "--model".into(),
         cfg.active_model.clone(),
@@ -282,6 +332,28 @@ pub fn build_args(cfg: &AppConfig, _api_key: &str) -> Vec<String> {
         "--flash-attn".into(),
         cfg.flash_attn.clone(),
     ];
+    if let Some(devices) = &gpu.device_flag {
+        args.push("--device".into());
+        args.push(devices.clone());
+    }
+    if let Some(index) = gpu.main_gpu_index {
+        args.push("--main-gpu".into());
+        args.push(index.to_string());
+    }
+    if let Some(mode) = gpu.split_mode {
+        args.push("--split-mode".into());
+        args.push(mode.into());
+    }
+    if !gpu.tensor_split.is_empty() {
+        args.push("--tensor-split".into());
+        args.push(
+            gpu.tensor_split
+                .iter()
+                .map(f32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
     if !cfg.mmproj.trim().is_empty() {
         args.push("--mmproj".into());
         args.push(cfg.mmproj.clone());
@@ -326,7 +398,7 @@ pub fn build_args(cfg: &AppConfig, _api_key: &str) -> Vec<String> {
         args.push("--threads".into());
         args.push(cfg.threads.to_string());
     }
-    if cfg.spec_type != "none" && !cfg.spec_type.trim().is_empty() {
+    if crate::tuning_defaults::speculative_enabled(cfg) {
         args.push("--spec-type".into());
         args.push(cfg.spec_type.clone());
         if cfg.spec_draft_n_max != 3 {
@@ -349,9 +421,17 @@ pub fn build_args(cfg: &AppConfig, _api_key: &str) -> Vec<String> {
             args.push("--spec-draft-ngl".into());
             args.push(cfg.spec_draft_ngl.clone());
         }
+        // The free-text field is the long-standing way to pin the draft
+        // model's device and always wins when set; the stable-id-based
+        // `gpu.draft_gpu_id` (already resolved to the same kind of value by
+        // `gpu::resolve`) is only a fallback for a session that configured
+        // GPU placement structurally instead.
         if !cfg.spec_draft_device.trim().is_empty() {
             args.push("--spec-draft-device".into());
             args.push(cfg.spec_draft_device.clone());
+        } else if let Some(device) = &gpu.draft_device {
+            args.push("--spec-draft-device".into());
+            args.push(device.clone());
         }
         if !cfg.spec_draft_model.trim().is_empty() {
             args.push("--spec-draft-model".into());
@@ -398,7 +478,7 @@ pub fn build_args(cfg: &AppConfig, _api_key: &str) -> Vec<String> {
         args.push("--no-webui".into());
     }
     append_unmanaged_server_args(&mut args, &cfg.server_args);
-    args
+    crate::tuning_defaults::filter_args(cfg, args)
 }
 
 /// Keep legacy/current raw config values from creating a second copy of an
@@ -491,24 +571,27 @@ pub fn spawn(
     cfg: &AppConfig,
     api_key: &str,
     ring: &Arc<ErrBuf>,
+    resolved_gpu: &crate::gpu::ResolvedGpu,
 ) -> Result<(Child, String, Option<PathBuf>), String> {
     let bin = server_bin(cfg)?;
-    let api_key_file = create_api_key_file(api_key)?;
-    let mut args = build_args(cfg, api_key);
-    if let Some(path) = api_key_file.as_ref() {
-        args.push("--api-key-file".into());
-        args.push(path.to_string_lossy().into_owned());
-    }
-    ring.set_secret(api_key);
-    let mut command = Command::new(&bin);
-    // A PR runtime is user-selected third-party code. Keep its environment
-    // consistent with probes and benchmarks, and never hand it inherited
-    // credentials or unrelated application state.
+    // Resolve fallible environment setup before creating a credential file.
+    // Keep early environment-setup errors outside the credential lifetime.
     let environment = if cfg.active_backend.is_empty() && cfg.active_build.is_empty() {
         runtime::child_environment()
     } else {
         runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?
     };
+    let api_key_file = create_api_key_file(api_key)?;
+    let mut args = build_args_with_gpu(cfg, api_key, resolved_gpu);
+    if let Some(path) = api_key_file.as_ref() {
+        args.push("--api-key-file".into());
+        args.push(path.to_string_lossy().into_owned());
+    }
+    ring.set_secret(api_key);
+    let mut command = crate::procutil::std_command(&bin);
+    // A PR runtime is user-selected third-party code. Keep its environment
+    // consistent with probes and benchmarks, and never hand it inherited
+    // credentials or unrelated application state.
     command.env_clear().envs(environment).args(&args);
     let mut child = command
         .stdout(Stdio::null())
@@ -516,7 +599,7 @@ pub fn spawn(
         .spawn()
         .map_err(|e| {
             cleanup_api_key_file(api_key_file.as_deref());
-            format!("failed to spawn llama-server: {e}")
+            crate::procutil::spawn_error(Path::new(&bin), &e)
         })?;
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
@@ -625,7 +708,7 @@ fn process_has_socket_inode(pid: u32, inodes: &std::collections::HashSet<u64>) -
 fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     let pid = pid.to_string();
     let port_filter = format!("-iTCP:{port}");
-    let Ok(output) = Command::new("lsof")
+    let Ok(output) = crate::procutil::std_command("lsof")
         .args([
             "-nP",
             "-a",
@@ -659,7 +742,10 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
 fn listener_owned_by_child(pid: u32, port: u16) -> bool {
     #[cfg(windows)]
     {
-        let Ok(output) = Command::new("netstat").args(["-ano", "-p", "tcp"]).output() else {
+        let Ok(output) = crate::procutil::std_command("netstat")
+            .args(["-ano", "-p", "tcp"])
+            .output()
+        else {
             return false;
         };
         let text = String::from_utf8_lossy(&output.stdout);
@@ -678,7 +764,7 @@ fn listener_owned_by_child(pid: u32, port: u16) -> bool {
     }
 }
 
-fn port_from_url(url: &str) -> Option<u16> {
+pub(crate) fn port_from_url(url: &str) -> Option<u16> {
     reqwest::Url::parse(url).ok()?.port()
 }
 
@@ -821,7 +907,7 @@ fn terminate(child: &mut Child) {
     #[cfg(windows)]
     {
         let pid = child.id().to_string();
-        let killed_tree = Command::new("taskkill")
+        let killed_tree = crate::procutil::std_command("taskkill")
             .args(["/PID", &pid, "/T", "/F"])
             .status()
             .map(|status| status.success())
@@ -848,6 +934,55 @@ pub fn kill(child: &mut Option<Child>, err: Option<Arc<ErrBuf>>) {
     }
 }
 
+/// Detect a `Ready` session whose child has already exited (crashed, was
+/// killed out of band, or could not even be inspected) and move it to
+/// `Crashed` with a diagnostic. Shared by the legacy single-session status
+/// command and the session registry (`session::build_status`) so both agree
+/// on what "the process died" means instead of drifting apart.
+pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
+    if state.lifecycle != Lifecycle::Ready {
+        return;
+    }
+    let exited = match state.child.as_mut() {
+        Some(child) => match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                let tail = err.tail();
+                kill(&mut state.child, Some(err.clone()));
+                state.api_key.clear();
+                state.redaction_secret.clear();
+                state.mmproj.clear();
+                state.lifecycle = Lifecycle::Crashed;
+                state.last_error = Some(if tail.trim().is_empty() {
+                    format!("failed to inspect server process: {error}")
+                } else {
+                    format!("failed to inspect server process: {error}. {}", tail.trim())
+                });
+                None
+            }
+        },
+        None => Some(std::process::ExitStatus::default()),
+    };
+    let Some(status) = exited else {
+        return;
+    };
+    state.child = None;
+    state.api_key.clear();
+    state.redaction_secret.clear();
+    state.mmproj.clear();
+    state.lifecycle = Lifecycle::Crashed;
+    let tail = err.tail();
+    let code = status
+        .code()
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "signal".into());
+    state.last_error = Some(if tail.trim().is_empty() {
+        format!("llama-server exited unexpectedly ({code})")
+    } else {
+        format!("llama-server exited unexpectedly ({code}). {}", tail.trim())
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -867,6 +1002,77 @@ mod tests {
             .windows(2)
             .any(|pair| pair == ["--reasoning-effort", "xhigh"]));
         assert!(args.iter().any(|arg| arg == "--jinja"));
+    }
+
+    #[test]
+    fn build_args_omits_gpu_placement_flags_when_unresolved() {
+        let cfg = AppConfig {
+            active_model: "model.gguf".into(),
+            ..AppConfig::default()
+        };
+        let args = build_args(&cfg, "token");
+        for flag in ["--device", "--main-gpu", "--split-mode", "--tensor-split"] {
+            assert!(
+                !args.iter().any(|arg| arg == flag),
+                "{flag} must stay out when not configured"
+            );
+        }
+    }
+
+    #[test]
+    fn build_args_with_gpu_emits_every_resolved_placement_flag() {
+        let cfg = AppConfig {
+            active_model: "model.gguf".into(),
+            ..AppConfig::default()
+        };
+        let resolved = crate::gpu::ResolvedGpu {
+            device_flag: Some("CUDA0,CUDA1".into()),
+            main_gpu_index: Some(1),
+            split_mode: Some("row"),
+            tensor_split: vec![0.6, 0.4],
+            draft_device: Some("CUDA1".into()),
+        };
+        let args = build_args_with_gpu(&cfg, "token", &resolved);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--device", "CUDA0,CUDA1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--main-gpu", "1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--split-mode", "row"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--tensor-split", "0.6,0.4"]));
+        // No speculative decoding was configured, so the resolved draft
+        // device must not leak into a --spec-draft-device flag on its own.
+        assert!(!args.iter().any(|arg| arg == "--spec-draft-device"));
+    }
+
+    #[test]
+    fn explicit_spec_draft_device_wins_over_resolved_gpu_draft_device() {
+        let cfg = AppConfig {
+            active_model: "model.gguf".into(),
+            spec_type: "draft".into(),
+            spec_draft_model: "draft.gguf".into(),
+            spec_draft_device: "Vulkan5".into(),
+            ..AppConfig::default()
+        };
+        let resolved = crate::gpu::ResolvedGpu {
+            draft_device: Some("CUDA1".into()),
+            ..crate::gpu::ResolvedGpu::default()
+        };
+        let args = build_args_with_gpu(&cfg, "token", &resolved);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--spec-draft-device", "Vulkan5"]));
+        assert!(!args.iter().any(|arg| arg == "CUDA1"));
+
+        let cfg_without_explicit_device = AppConfig {
+            spec_draft_device: String::new(),
+            ..cfg
+        };
+        let args = build_args_with_gpu(&cfg_without_explicit_device, "token", &resolved);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--spec-draft-device", "CUDA1"]));
     }
 
     #[test]
@@ -1023,6 +1229,18 @@ mod tests {
     }
 
     #[test]
+    fn stopping_invalidates_the_in_flight_launch_generation() {
+        let mut state = ServerState::default();
+        let launch = state.begin_launch();
+        assert!(state.is_current_launch(launch));
+
+        state.cancel_launch();
+
+        assert!(!state.is_current_launch(launch));
+        assert_eq!(state.lifecycle, Lifecycle::Stopped);
+    }
+
+    #[test]
     fn memory_estimate_accounts_for_model_projector_adapters_and_slots() {
         let root = std::env::temp_dir().join(format!("llama-board-memory-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create memory fixture");
@@ -1050,6 +1268,38 @@ mod tests {
         assert!(estimate.kv_mb > 0);
         assert!(estimate.total_mb > estimate.model_mb);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn status_memory_uses_selected_model_when_stopped_and_loaded_model_when_running() {
+        let root = std::env::temp_dir().join(format!(
+            "llama-board-status-memory-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let selected = root.join("selected.gguf");
+        let loaded = root.join("loaded.gguf");
+        std::fs::File::create(&selected)
+            .unwrap()
+            .set_len(16 * 1024 * 1024)
+            .unwrap();
+        std::fs::File::create(&loaded)
+            .unwrap()
+            .set_len(8 * 1024 * 1024)
+            .unwrap();
+        let cfg = AppConfig {
+            active_model: selected.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let mut state = ServerState::default();
+        assert_eq!(estimate_status_memory(&cfg, &state).model_mb, 16);
+        assert_eq!(estimate_status_memory(&cfg, &state).source, "filesystem");
+        state.model = loaded.to_string_lossy().into_owned();
+        state.lifecycle = Lifecycle::Ready;
+        assert_eq!(estimate_status_memory(&cfg, &state).model_mb, 8);
+        state.lifecycle = Lifecycle::Stopped;
+        assert_eq!(estimate_status_memory(&cfg, &state).model_mb, 16);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1208,6 +1458,7 @@ mod tests {
             "token".to_string(),
             "model.gguf".to_string(),
             "mmproj.gguf".to_string(),
+            "draft.gguf".to_string(),
         );
         assert_eq!(state.lifecycle, Lifecycle::Starting);
         assert!(state.child.is_some());
@@ -1233,6 +1484,7 @@ mod tests {
             "http://127.0.0.1:59999/v1".to_string(),
             "token".to_string(),
             "model.gguf".to_string(),
+            String::new(),
             String::new(),
         );
         let err = Arc::new(ErrBuf::default());

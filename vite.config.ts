@@ -14,6 +14,7 @@ export default defineConfig(async () => ({
     hmr: host
       ? { protocol: "ws", host, port: 1421 }
       : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    // Generated HTML and runtime/build trees must not reload an active dev session.
+    watch: { ignored: ["**/src-tauri/**", "**/.codex-target/**", "**/coverage/**"] },
   },
 }));

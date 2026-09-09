@@ -71,6 +71,8 @@ vi.mock("../api", () => ({
   mcpListServers: vi.fn(),
   mcpListTools: vi.fn(),
   mcpCallTool: vi.fn(),
+  sessionList: vi.fn(async () => []),
+  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
 }));
 
 import ChatPanel from "./Chat";

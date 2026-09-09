@@ -6,6 +6,7 @@ import type { UnifiedKey, TranslationVars } from "../i18nUnified";
 import { clampNumber } from "./tuningValidation";
 import { chatOptionValue, tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type ChatOptionField } from "./tuningFields";
 import TuningSliderField from "./TuningSliderField";
+import TuningDefaultField from "./TuningDefaultField";
 
 interface Props {
   cfg: AppConfig;
@@ -33,7 +34,7 @@ export default function TuningChatOptionField({
     ? (chatOptionSelectModes[field.key] === "custom" || !field.options.some((option) => String(option.value) === draft) ? "custom" : draft)
     : null;
   return (
-    <div className="flex min-w-0 flex-col gap-1.5">
+    <TuningDefaultField fieldKey={field.key} label={label} request><div className="flex min-w-0 flex-col gap-1.5">
       {field.options && <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <label htmlFor={inputId} className="truncate text-sm text-slate-300">{label}</label>
@@ -103,6 +104,6 @@ export default function TuningChatOptionField({
         />
       )}
       <span className="text-xs text-slate-500">{hint}</span>
-    </div>
+    </div></TuningDefaultField>
   );
 }

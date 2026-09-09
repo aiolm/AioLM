@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import ConfirmDialog from "./ConfirmDialog";
 import { I18nProvider } from "../i18n";
@@ -50,5 +50,30 @@ describe("ConfirmDialog accessibility", () => {
     expect(dialogs[0]).toHaveAccessibleDescription("This removes the selected runtime.");
     expect(dialogs[1]).toHaveAccessibleName("Build pull request");
     expect(dialogs[1]).toHaveAccessibleDescription("This compiles code from the selected commit.");
+  });
+
+  it("keeps keyboard focus inside structured dialog content", async () => {
+    render(createElement(
+      I18nProvider,
+      {
+        initialLocale: "en",
+        children: createElement(ConfirmDialog, {
+          open: true,
+          title: "Review source",
+          description: createElement("a", { href: "#source" }, "Open source"),
+          confirmLabel: "Continue",
+          onConfirm: () => undefined,
+          onCancel: () => undefined,
+        }),
+      },
+    ));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = screen.getByRole("button", { name: "Continue" });
+    const sourceLink = screen.getByRole("link", { name: "Open source" });
+
+    confirm.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+
+    expect(sourceLink).toHaveFocus();
   });
 });

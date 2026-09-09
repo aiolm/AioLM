@@ -2,6 +2,7 @@ import type { AppConfig } from "../api";
 import Tooltip from "../components/Tooltip";
 import { useI18n } from "../i18n";
 import TuningSliderField from "./TuningSliderField";
+import TuningDefaultField from "./TuningDefaultField";
 import { tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type NumericField, type NumericKey } from "./tuningFields";
 
 interface NumericFieldGridProps {
@@ -25,8 +26,7 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
         const hint = tuningFieldHint(t, field);
         const tooltip = tuningFieldTooltip(t, field);
         return (
-          <TuningSliderField
-            key={field.key}
+          <TuningDefaultField key={field.key} fieldKey={field.key} label={label}><TuningSliderField
             id={inputId}
             label={label}
             min={field.min}
@@ -41,7 +41,7 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
             valueMeta={<span className={`shrink-0 text-[10px] ${field.server ? "text-amber-400" : "text-emerald-400"}`}>
               {field.server ? t("extra.serverSide") : t("extra.perRequest")}
             </span>}
-          />
+          /></TuningDefaultField>
         );
       })}
     </>

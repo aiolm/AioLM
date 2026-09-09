@@ -5,13 +5,13 @@
 ## One-line install (Windows)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 Works from `cmd.exe`, Git Bash, or any shell that can start PowerShell:
 
 ```bash
-powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 ## Options
@@ -20,10 +20,10 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-j
 $env:LLAMA_BOARD_INSTALLER = "msi"   # default: nsis
 $env:LLAMA_BOARD_RELEASE = "v0.1.5"  # specific tag
 $env:LLAMA_BOARD_DRY_RUN = "1"       # verify only, don't install
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
-The one-line command downloads the `install.ps1` copy included in the selected release. Current source: <https://github.com/joowon-jang/llama-board/blob/main/install.ps1>
+The one-line command downloads the `install.ps1` copy included in the selected release. Current source: <https://github.com/llama-board/llama-board/blob/main/install.ps1>
 
 ## Verify download
 
@@ -36,7 +36,9 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 # Expect Valid for signed releases; NotSigned means the asset is unsigned.
 ```
 
-Release page: <https://github.com/joowon-jang/llama-board/releases/latest>
+Release page: <https://github.com/llama-board/llama-board/releases/latest>
+
+Migration note: the desktop identifier is now neutral. Keep the existing %APPDATA%\llama-board configuration/runtime directory when upgrading, and choose a model directory in Models on a fresh install; uninstall does not remove that user data.
 
 ## Code signing policy
 

@@ -2,7 +2,7 @@
 
 > **语言:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
 
-开发时，`llama-board-cli.exe` 会生成在 `src-tauri/target/release/llama-board-cli.exe`。打包版本会将它作为 Tauri 资源包含；安装后请在应用的资源目录中查找。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
+开发时，`llama-board-cli.exe` 会生成在 `.codex-target/release/llama-board-cli.exe`。打包版本会将它作为 Tauri 资源包含；安装后请在应用的资源目录中查找。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
 
 ```powershell
 ./llama-board-cli.exe --help

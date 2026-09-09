@@ -3,6 +3,7 @@ import Tooltip from "../components/Tooltip";
 import { CustomSelect } from "../components/ThemeSwitcher";
 import type { UnifiedKey, TranslationVars } from "../i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
+import TuningDefaultField from "./TuningDefaultField";
 import { MTP_FIELDS, SERVER_TEXT_FIELDS, tuningFieldTooltip, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import { SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "./tuningValidation";
 
@@ -45,7 +46,7 @@ export default function TuningSpeculativeSection({
             </div>
             <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
           </div>
-          <CustomSelect
+          <TuningDefaultField fieldKey="spec_type" label={t("ui.specTypeLabel")} hideLabel><CustomSelect
             id="tuning-spec-type"
             value={serverSelectValue("spec_type")}
             options={[
@@ -70,7 +71,7 @@ export default function TuningSpeculativeSection({
               />
             )}
           </div>
-          <span className="text-xs text-slate-500">{t("ui.specTypeHint")}</span>
+          </TuningDefaultField><span className="text-xs text-slate-500">{t("ui.specTypeHint")}</span>
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
@@ -80,7 +81,7 @@ export default function TuningSpeculativeSection({
             </div>
             <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
           </div>
-          <CustomSelect
+          <TuningDefaultField fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")} hideLabel><CustomSelect
             id="tuning-spec-draft-ngl"
             value={serverSelectValue("spec_draft_ngl")}
             options={[
@@ -106,7 +107,7 @@ export default function TuningSpeculativeSection({
               />
             )}
           </div>
-          <span className="text-xs text-slate-500">{t("ui.specDraftNglHint")}</span>
+          </TuningDefaultField><span className="text-xs text-slate-500">{t("ui.specDraftNglHint")}</span>
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">

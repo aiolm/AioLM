@@ -3,6 +3,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import Switch from "../components/Switch";
 import TabNav, { type TabNavItem } from "../components/TabNav";
 import { CustomSelect } from "../components/ThemeSwitcher";
+import { isNativeRuntimeAvailable } from "../api";
 import { localeOptions, useI18n } from "../i18n";
 import { clearChatWorkspace } from "../chatHistory";
 import { clearDocumentIndex } from "../documentIndex";
@@ -121,7 +122,9 @@ export default function SettingsPanel({ preferences, update, reset }: Props) {
         {section === "server" && <>
           <h3>{t("settings.server")}</h3>
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
-          <Row id="settings-auto-stop" label={t("settings.autoStop")} description={t("settings.autoStopDesc")}>{bool("settings-auto-stop", preferences.server.autoStopOnExit, (value) => patch({ server: { ...preferences.server, autoStopOnExit: value } }))}</Row>
+          {isNativeRuntimeAvailable()
+            ? <div className="settings-note"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>
+            : <Row id="settings-auto-stop" label={t("settings.autoStop")} description={t("settings.autoStopDesc")}>{bool("settings-auto-stop", preferences.server.autoStopOnExit, (value) => patch({ server: { ...preferences.server, autoStopOnExit: value } }))}</Row>}
           <Row id="settings-polling" label={t("settings.polling")} description={t("settings.pollingDesc")}>
             <CustomSelect id="settings-polling" value={preferences.server.pollIntervalMs} options={[{ value: 500, label: "500 ms" }, { value: 1000, label: "1 s" }, { value: 2000, label: "2 s" }, { value: 5000, label: "5 s" }]} onChange={(pollIntervalMs) => patch({ server: { ...preferences.server, pollIntervalMs } })} triggerClassName="w-[180px]" />
           </Row>

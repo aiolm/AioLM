@@ -7,7 +7,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
 
 .app-page-shell {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -36,7 +36,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
 
 .app-side-link {
   width: 100%;
-  min-height: 30px;
+  min-height: 34px;
   border: 1px solid transparent;
   border-radius: var(--board-radius-sm);
   background: transparent;
@@ -111,7 +111,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  grid-template-columns: 172px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
 }
 .tuning-navigation {
   display: flex;
@@ -134,13 +134,13 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
   padding: 2px;
 }
 .tuning-mode-tab {
-  min-height: 27px;
+  min-height: 32px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--board-faint);
   padding: 4px 5px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 650;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
@@ -159,13 +159,13 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
 }
 .tuning-navigation__search input {
   width: 100%;
-  height: 30px;
+  height: 36px;
   border: 1px solid var(--board-border-strong);
   border-radius: var(--board-radius-sm);
   background: var(--board-input);
   color: var(--board-ink);
   padding: 0 26px 0 26px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .tuning-navigation__search input:focus { border-color: var(--board-focus) !important; }
 .tuning-navigation__search-icon {
@@ -206,7 +206,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
 .tuning-category-link {
   display: flex;
   min-width: 0;
-  min-height: 32px;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
@@ -216,7 +216,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
   color: var(--board-muted);
   padding: 6px 8px;
   text-align: left;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
@@ -238,7 +238,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 14px 18px 28px;
+  padding: 20px 24px 32px;
 }
 .tuning-category-heading {
   display: flex;
@@ -259,4 +259,7 @@ html[data-density="compact"] .app-loadbar { height: 32px; min-height: 32px; }
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+  padding-inline: 24px !important;
+  padding-top: 24px !important;
+  padding-bottom: 32px !important;
 }

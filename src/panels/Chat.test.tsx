@@ -5,6 +5,7 @@ import ChatPanel from "./Chat";
 import { I18nProvider } from "../i18n";
 import * as api from "../api";
 import type { AppStore } from "../store";
+import { SESSION_STATUS_CHANGED_EVENT } from "../sessionUtils";
 
 vi.mock("../api", () => ({
   pickDocument: vi.fn(),
@@ -18,6 +19,8 @@ vi.mock("../api", () => ({
   mcpListServers: vi.fn(),
   mcpListTools: vi.fn(),
   mcpCallTool: vi.fn(),
+  sessionList: vi.fn(async () => []),
+  normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
 }));
 
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -126,6 +129,40 @@ describe("ChatPanel document context warning", () => {
     mocked.serverActivity.mockResolvedValue(undefined);
     // Every request embeds one vector per input string; the content does not matter for ranking here.
     mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1]));
+  });
+
+  it("lets the user target a running independent session", async () => {
+    mocked.sessionList.mockResolvedValue([{
+      id: "vision-session",
+      name: "Vision",
+      state: "running",
+      url: "http://127.0.0.1:8091",
+      api_key: "session-key",
+      model: "C:/models/vision.gguf",
+      port: 8091,
+    }]);
+    mocked.normalizeSessionList.mockImplementation((value: unknown) => value);
+
+    renderPanel();
+
+    const selector = await screen.findByLabelText("Loaded sessions");
+    expect(selector).toHaveTextContent("Vision · 8091 · running");
+    fireEvent.change(selector, { target: { value: "vision-session" } });
+    expect(selector).toHaveValue("vision-session");
+  });
+
+  it("refreshes independent session state while chat remains open", async () => {
+    mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "running", port: 8092, url: "http://127.0.0.1:8092", api_key: "key", model: "worker.gguf" }]);
+    mocked.normalizeSessionList.mockImplementation((value: unknown) => value);
+    renderPanel();
+
+    const selector = await screen.findByLabelText("Loaded sessions");
+    expect(selector).toHaveTextContent("Worker · 8092 · running");
+
+    mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "crashed", port: 8092, model: "worker.gguf" }]);
+    window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
+
+    await waitFor(() => expect(selector).toHaveTextContent("Worker · 8092 · crashed"));
   });
 
   it("warns in the DOM when an attached document exceeds the 64-chunk search limit", async () => {

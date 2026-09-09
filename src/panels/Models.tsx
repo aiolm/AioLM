@@ -6,10 +6,11 @@ import { projectorChangeAllowed } from "./visionState";
 import ConfirmDialog from "../components/ConfirmDialog";
 import FeedbackBanner from "../components/FeedbackBanner";
 import { useI18n } from "../i18n";
-import { isServerRunning, normalizeDisplayPath } from "../lifecycleUtils";
+import { isLifecycleCancellation, isServerBusy, isServerRunning, normalizeDisplayPath } from "../lifecycleUtils";
 import { shouldConfirmDestructive } from "../preferences";
 import { buildNumber } from "../runtimeUtils";
 import { useFlashMessage } from "../useFlashMessage";
+import { activeProfilesPatch } from "../modelProfiles";
 
 
 export default function ModelsPanel({ store, focus = "library" }: { store: AppStore; focus?: "library" | "lora" }) {
@@ -94,7 +95,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
   const selected = cfg?.active_model ?? "";
-  const serverRunning = isServerRunning(store.status.state);
+  const serverRunning = isServerBusy(store.status.state);
 
   const refreshServerAdapters = useCallback(async () => {
     if (!isServerRunning(store.status.state) || !store.status.url || !store.status.api_key) {
@@ -157,7 +158,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
 
   const selectModel = async (model: api.GgufModel) => {
     try {
-      await store.updateConfig({ active_model: model.path });
+      await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
       // 모델 선택은 저장/서버 시작 알림을 표시하지 않는다.
     } catch (error) {
       notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -192,24 +193,15 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
     }
   };
 
-  const start = async () => {
-    try {
-      await store.start();
-      notify(t("panel.serverStarted"));
-    } catch (error) {
-      notify(`${t("panel.startFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
   const performSelectAndStart = async (model: api.GgufModel) => {
     const switching = serverRunning && selected !== model.path;
     try {
       if (switching) await store.stop();
-      const next = await store.updateConfig({ active_model: model.path });
+      const next = await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
       await store.start(next);
       notify(switching ? `${t("panel.restartServer")}: ${model.name}` : `${t("panel.serverStarted")}: ${model.name}`);
     } catch (error) {
-      notify(`${t("panel.startFailed")}: ${error instanceof Error ? error.message : String(error)}`);
+      notify(isLifecycleCancellation(error) ? t("ui.taskCancelled") : `${t("panel.startFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -279,8 +271,8 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
       </div>
 
       {focus !== "lora" && <>
-      <div className="models-folder-actions flex min-w-0 flex-nowrap items-center gap-2.5 overflow-x-auto">
-        <label htmlFor="models-dir" className="shrink-0 text-sm text-slate-400">{t("panel.modelsDirectory")}</label>
+      <div className="models-folder-actions grid min-w-0 grid-cols-2 items-center gap-2.5 sm:grid-cols-[auto_minmax(12rem,1fr)_auto_auto_auto]">
+        <label htmlFor="models-dir" className="col-span-2 text-sm text-slate-400 sm:col-span-1">{t("panel.modelsDirectory")}</label>
         <input
           id="models-dir"
           value={normalizeDisplayPath(dir)}
@@ -289,8 +281,8 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
             if (!folderDirty) return;
             setDir(normalizeDisplayPath(dir));
           }}
-          className="app-input min-w-0 flex-1"
-          placeholder="C:\\Users\\you\\.lmstudio\\models"
+          className="app-input col-span-2 min-w-0 sm:col-span-1"
+          placeholder="models"
         />
         <button type="button" onClick={() => void browse()} disabled={scanning} className="app-button app-button--secondary shrink-0">{t("panel.browse")}</button>
         <button type="button" onClick={() => { const displayPath = normalizeDisplayPath(dir); setDir(displayPath); void store.updateConfig({ models_dir: displayPath }).then(() => { setFolderDirty(false); setFolderSaved(true); requestedScanDirRef.current = displayPath; setScanRequest((current) => current + 1); }).catch((error) => notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`)); }} disabled={!folderDirty || scanning} className="app-button app-button--secondary shrink-0">{t("panel.saveFolder")}</button>
@@ -311,8 +303,8 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
               {store.status.lifecycle ? <>{t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds}s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 })}{store.status.lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
             </div>
           </div>
-          <div className="models-header-actions flex min-w-0 w-full flex-wrap flex-nowrap items-center gap-2 overflow-x-auto lg:ml-auto lg:w-auto lg:justify-end" data-testid="models-header-actions">
-            {serverRunning ? <div className="flex flex-wrap items-center gap-2"><button type="button" onClick={() => void api.unloadModel().then(() => notify(t("ui.unloadedOk"))).catch((error) => notify(`${t("ui.unloadFailed")}: ${error instanceof Error ? error.message : String(error)}`))} disabled={store.busy} className="app-button app-button--secondary app-button--sm">{t("ui.unloadModel")}</button><button type="button" onClick={() => void store.stop()} disabled={store.busy} className="app-button app-button--danger app-button--sm">{t("panel.stopServer")}</button></div> : <button type="button" onClick={() => void start()} disabled={!selected || store.busy} className="app-button app-button--primary">{t("panel.startServer")}</button>}
+          <div className="models-header-actions flex min-w-0 w-full flex-wrap items-center gap-2 lg:ml-auto lg:w-auto lg:justify-end" data-testid="models-header-actions">
+            {serverRunning && <button type="button" onClick={() => void api.unloadModel().then(() => notify(t("ui.unloadedOk"))).catch((error) => notify(`${t("ui.unloadFailed")}: ${error instanceof Error ? error.message : String(error)}`))} disabled={store.busy} className="app-button app-button--secondary app-button--sm">{t("ui.unloadModel")}</button>}
           </div>
         </div>
         {(store.status.state === "failed" || store.status.state === "crashed") && store.status.error && (

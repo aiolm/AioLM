@@ -2,7 +2,7 @@
 
 > **言語:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
 
-開発中の `llama-board-cli.exe` は `src-tauri/target/release/llama-board-cli.exe` に生成されます。パッケージ版では Tauri リソースとして含まれるため、インストール後はアプリのリソースディレクトリにあります。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
+開発中の `llama-board-cli.exe` は `.codex-target/release/llama-board-cli.exe` に生成されます。パッケージ版では Tauri リソースとして含まれるため、インストール後はアプリのリソースディレクトリにあります。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
 
 ```powershell
 ./llama-board-cli.exe --help

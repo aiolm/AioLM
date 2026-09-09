@@ -1,5 +1,6 @@
 import type { UnifiedKey, TranslationVars } from "../i18nUnified";
 import { normalizeDisplayPathLines } from "../lifecycleUtils";
+import TuningRawDefaults from "./TuningRawDefaults";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -80,6 +81,7 @@ export default function TuningEscapeSection({
           </div>
         </div>
       </div>
+      <TuningRawDefaults />
     </section>
   );
 }

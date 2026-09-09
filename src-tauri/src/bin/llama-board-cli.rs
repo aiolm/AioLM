@@ -562,7 +562,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
     }
     let mut cfg = config::load_result()?;
     cfg.normalize();
-    validate_launch_config(&mut cfg).await?;
+    let resolved_gpu = validate_launch_config(&mut cfg).await?;
     if cfg.active_model.trim().is_empty() {
         return Err("active_model is empty; select a GGUF model first".into());
     }
@@ -570,7 +570,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         return Err(format!("active model does not exist: {}", cfg.active_model));
     }
     let bin = server::server_bin(&cfg)?;
-    let args = server::build_args(&cfg, "");
+    let args = server::build_args_with_gpu(&cfg, "", &resolved_gpu);
     let environment = if cfg.active_backend.is_empty() && cfg.active_build.is_empty() {
         runtime::child_environment()
     } else {
@@ -766,6 +766,7 @@ fn apply_config_override(
         }
         _ => return Err(format!("unsupported config field: {key}")),
     }
+    cfg.runtime_defaults.retain(|field| field != key);
     cfg.normalize();
     cfg.validate()
 }
@@ -799,7 +800,13 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
     } else {
         root.join(requested)
     };
-    let safe = deletable_model_path(root, &candidate, &cfg.active_model, &cfg.mmproj)?;
+    let safe = deletable_model_path(
+        root,
+        &candidate,
+        &cfg.active_model,
+        &cfg.mmproj,
+        &cfg.spec_draft_model,
+    )?;
     if cfg.lora_adapters.iter().any(|adapter| {
         adapter.enabled
             && fs::canonicalize(&adapter.path)

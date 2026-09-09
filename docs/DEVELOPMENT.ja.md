@@ -16,7 +16,7 @@
 ## クローンと実行
 
 ```bash
-git clone https://github.com/joowon-jang/llama-board.git
+git clone https://github.com/llama-board/llama-board.git
 cd llama-board
 npm install
 npm run tauri -- dev
@@ -46,14 +46,14 @@ PowerShell:
 cd src-tauri
 $env:LLAMA_BOARD_SMOKE = "1"
 $env:LLAMA_BOARD_SMOKE_MODEL = "C:\path\to\model.gguf"
-cargo test --test smoke -- --nocapture
+cargo test --test smoke -- --ignored --nocapture --test-threads=1
 ```
 
 Bash / Git Bash:
 
 ```bash
 cd src-tauri
-LLAMA_BOARD_SMOKE=1 LLAMA_BOARD_SMOKE_MODEL='C:/path/to/model.gguf' cargo test --test smoke -- --nocapture
+LLAMA_BOARD_SMOKE=1 LLAMA_BOARD_SMOKE_MODEL='C:/path/to/model.gguf' cargo test --test smoke -- --ignored --nocapture --test-threads=1
 ```
 
 `npm test` は `test:run-direct-tests` + `test:direct` + `test:coverage`（`vitest run --coverage`）を実行します。
@@ -62,5 +62,5 @@ LLAMA_BOARD_SMOKE=1 LLAMA_BOARD_SMOKE_MODEL='C:/path/to/model.gguf' cargo test -
 
 ```bash
 npm run package:tauri
-# -> src-tauri/target/release/bundle/nsis/ , .../msi/
+# -> .codex-target/release/bundle/nsis/ , .../msi/
 ```

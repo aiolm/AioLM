@@ -29,6 +29,7 @@ export function isNativeRuntimeAvailable(): boolean {
 }
 
 export interface AppConfig {
+  runtime_defaults?: string[];
   config_version: number;
   models_dir: string;
   port: number;
@@ -70,6 +71,10 @@ export interface AppConfig {
   request_timeout_seconds: number;
   sleep_idle_seconds: number;
   lora_adapters: LoraAdapterConfig[];
+  /** Added by the multi-session config schema; optional for older app builds. */
+  stop_existing_sessions_on_load?: boolean;
+  sessions?: SessionDefinition[];
+  gpu?: GpuPlacement;
 }
 
 export interface LoraAdapterConfig {
@@ -154,6 +159,8 @@ export interface GpuDevice {
   driver?: string;
   pci_id?: string;
   integrated: boolean;
+  /** Stable physical-device id; never use the transient array index as a key. */
+  stable_id?: string;
 }
 
 export interface DeviceProfile {
@@ -289,6 +296,7 @@ export interface RuntimeCapabilities {
   devices: string[];
   diagnostics: string[];
   bench_available?: boolean;
+  supports_dflash?: boolean;
 }
 
 export interface BenchRow {
@@ -301,6 +309,66 @@ export interface BenchRow {
 export interface BenchResult {
   rows: BenchRow[];
   args: string[];
+  /** Newer backends return a terminal state and any diagnostic. */
+  status?: "complete" | "partial" | "cancelled";
+  message?: string | null;
+}
+
+export type BenchmarkRunState = "complete" | "partial" | "cancelled" | "crashed" | "failed" | "running";
+
+/** A saved server session is a primary model plus optional sidecars. */
+export interface SessionModels {
+  primary_model: string;
+  mmproj: string;
+  draft_model: string;
+}
+
+export type SplitMode = "none" | "layer" | "row";
+
+export interface GpuPlacement {
+  gpu_ids: string[];
+  main_gpu?: string | null;
+  split_mode: SplitMode;
+  tensor_split: number[];
+  draft_gpu_id?: string | null;
+}
+
+export interface SessionDefinition {
+  id: string;
+  name: string;
+  models: SessionModels;
+  gpu: GpuPlacement;
+  enabled: boolean;
+}
+
+export interface SessionStatus {
+  id: string;
+  name: string;
+  state: ServerState;
+  url?: string;
+  /** The backend may provide this directly; the UI also derives it from url. */
+  port?: number;
+  model?: string;
+  mmproj?: string;
+  draft_model?: string;
+  api_key?: string;
+  pid?: number;
+  active_requests?: number;
+  idle_seconds?: number;
+  log_tail?: string;
+  error?: string;
+  gpu?: GpuPlacement;
+}
+
+export interface SessionListResult {
+  sessions: SessionStatus[];
+}
+
+/** One benchmark row, emitted as it is parsed from a running benchmark.
+ * Final status and args come from `runBench`'s resolved `BenchResult`, not
+ * from this stream. */
+export interface BenchmarkProgress {
+  row: BenchRow;
 }
 
 export type ServerState = "stopped" | "starting" | "running" | "stopping" | "failed" | "crashed";
@@ -487,6 +555,16 @@ export async function setServerLoraAdapters(baseUrl: string, apiKey: string, ada
 export const runBench = (cfg: AppConfig) => invoke<BenchResult>("run_bench", { cfg });
 export const benchCancel = () => invoke<void>("bench_cancel");
 
+/** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
+export const sessionList = () => invoke<SessionStatus[] | SessionListResult>("session_list");
+export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting });
+export const sessionStop = (sessionId: string) => invoke<void>("session_stop", { sessionId });
+export const sessionUnload = (sessionId: string) => invoke<void>("session_unload", { sessionId });
+
+export function normalizeSessionList(value: SessionStatus[] | SessionListResult): SessionStatus[] {
+  return Array.isArray(value) ? value : Array.isArray(value.sessions) ? value.sessions : [];
+}
+
 export const deviceProfile = () => invoke<DeviceReport>("device_profile");
 export const rtList = () => invoke<InstalledRuntime[]>("rt_list");
 export const rtLatest = (backend: string, refresh = false) => invoke<LatestInfo>("rt_latest", { backend, refresh });
@@ -540,6 +618,7 @@ export type ChatContentPart = ChatTextPart | ChatImagePart;
 export type ChatDelta = StreamDelta;
 
 export interface ChatSampling {
+  runtime_defaults?: string[];
   temperature: number;
   top_p: number;
   top_k: number;
@@ -578,12 +657,13 @@ export function buildChatRequestBody(
     model,
     messages,
     stream: true,
-    temperature: sampling.temperature,
-    top_p: sampling.top_p,
-    top_k: sampling.top_k,
+    ...(!sampling.runtime_defaults?.includes("temperature") ? { temperature: sampling.temperature } : {}),
+    ...(!sampling.runtime_defaults?.includes("top_p") ? { top_p: sampling.top_p } : {}),
+    ...(!sampling.runtime_defaults?.includes("top_k") ? { top_k: sampling.top_k } : {}),
     tools: sampling.tools?.length ? sampling.tools : undefined,
   };
-  const reasoningEffort = sampling.reasoning === "off" ? "none" : sampling.reasoning_effort;
+  const reasoningEffort = sampling.reasoning === "off" && !sampling.runtime_defaults?.includes("reasoning")
+    ? "none" : !sampling.runtime_defaults?.includes("reasoning_effort") ? sampling.reasoning_effort : undefined;
   if (reasoningEffort && reasoningEffort !== "default") {
     body.reasoning_effort = reasoningEffort;
     const chatTemplateKwargs = {
@@ -724,6 +804,11 @@ export function onRuntimeProgress(
 ): Promise<UnlistenFn> {
   if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
   return listen<DownloadProgress>("runtime-download-progress", (event) => cb(event.payload));
+}
+
+export function onBenchmarkProgress(cb: (progress: BenchmarkProgress) => void): Promise<UnlistenFn> {
+  if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
+  return listen<BenchRow>("bench-progress", (event) => cb({ row: event.payload }));
 }
 
 export function onModelDownloadProgress(

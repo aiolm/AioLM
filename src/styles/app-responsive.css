@@ -25,7 +25,7 @@
     padding-inline: 12px;
   }
   .app-status-detail { display: none; }
-  .app-loadbar { gap: 6px; padding-inline: 12px; }
+  .app-loadbar { gap: 6px; padding-inline: 12px; overflow-x: auto; }
   .app-load-metric { display: none; }
   .app-load-warning-slot { display: none; }
 }
@@ -39,9 +39,12 @@
     border-bottom: 1px solid var(--board-border);
     padding: 5px 8px;
     gap: 4px;
+    overflow-x: auto;
   }
   .app-rail .app-brand-mark { display: none; }
   .app-rail-tablist { display: flex; gap: 2px; }
+  .app-rail-link { width: auto; min-width: 40px; padding-inline: 9px; }
+  .app-rail-link .tab-label { display: none; }
   .app-rail-version { display: none; }
   .app-main-column { grid-row: 2; }
   .app-topbar { height: 38px; min-height: 38px; padding-inline: 10px; gap: 8px; }
@@ -58,7 +61,9 @@
   .settings-layout { grid-template-columns: 1fr; gap: 12px; }
   .settings-nav { position: static; display: flex; overflow-x: auto; gap: 4px; }
   .settings-nav button { flex: 0 0 auto; }
-  .settings-row { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding-inline: 12px; }
+  .settings-row { grid-template-columns: 1fr; gap: 10px; padding: 14px 12px; }
+  .settings-control { justify-content: flex-start; }
+  .settings-custom-trigger { width: min(100%, 20rem); min-width: 0; }
   .chat-composer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .chat-composer-actions textarea { grid-column: 1 / -1; width: 100%; }
   .chat-composer-actions .app-button--primary,
@@ -95,4 +100,20 @@
   .tuning-redesign__content > .tuning-panel-scroll { padding: 12px 10px 24px; }
   .tuning-category-heading { align-items: flex-start; flex-direction: column; gap: 2px; margin-bottom: 10px; }
   .tuning-category-heading p { text-align: left; }
+}
+
+@media (max-width: 640px) {
+  .app-page-scroll { padding: 16px 14px 28px !important; }
+}
+
+@media (max-width: 900px) {
+  .app-task-strip { margin-inline: 12px; }
+  .app-task-strip__item { min-width: 160px; }
+}
+
+@media (max-width: 640px) {
+  .app-task-strip { align-items: stretch; flex-direction: column; gap: 6px; margin: 8px 10px 0; padding: 7px 8px; }
+  .app-task-strip__heading { justify-content: space-between; }
+  .app-task-strip__list { width: 100%; }
+  .app-task-strip__item { min-width: 160px; }
 }

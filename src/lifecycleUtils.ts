@@ -43,6 +43,11 @@ export function lifecycleErrorMessage(action: "start" | "stop", error: unknown):
   return `${prefix}: ${hint}${detail ? ` (${detail})` : ""}`;
 }
 
+export function isLifecycleCancellation(error: unknown): boolean {
+  const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return text.includes("cancelled") || text.includes("canceled");
+}
+
 export function nextPollDelay(baseMs: number, failures: number): number {
   const safeBase = Math.max(250, baseMs);
   return Math.min(10_000, safeBase * 2 ** Math.min(4, Math.max(0, failures)));
@@ -77,8 +82,9 @@ export function createErrorId(now = Date.now()): string {
   return `LB-${now.toString(36).toUpperCase()}`;
 }
 
-export function benchmarkFingerprint(value: { model: string; backend: string; build: string; ctx: number; ngl: number; threads: number; parallel: number; iters: number }): string {
-  return [value.model, value.backend, value.build, value.ctx, value.ngl, value.threads, value.parallel, value.iters].join("|");
+export function benchmarkFingerprint(value: { model: string; backend: string; build: string; ctx: number; ngl: number; threads: number; parallel: number; iters: number; runtimeDefaults?: string[] }): string {
+  const base = [value.model, value.backend, value.build, value.ctx, value.ngl, value.threads, value.parallel, value.iters].join("|");
+  return value.runtimeDefaults?.length ? `${base}|defaults=${[...value.runtimeDefaults].sort().join(",")}` : base;
 }
 
 export interface PerformanceMetrics {
@@ -180,6 +186,8 @@ export interface BenchmarkMetric {
 }
 
 export interface BenchmarkRecord {
+  /** Numeric fields retain their saved manual values; these keys were inherited instead. */
+  runtimeDefaults?: string[];
   schemaVersion: number;
   id: string;
   /** Configuration key used to spot reruns of the same setup. */
@@ -196,6 +204,9 @@ export interface BenchmarkRecord {
   iters: number;
   device?: BenchmarkDevice;
   rows: BenchmarkMetric[];
+  /** Terminal state is optional so records written by older builds remain valid. */
+  status?: "complete" | "partial" | "cancelled" | "crashed" | "failed";
+  error?: string;
 }
 
 /** Normalizes llama-bench output into the stored metric shape. */
@@ -219,7 +230,10 @@ export function benchmarkCsv(records: BenchmarkRecord[]): string {
         record.device?.cpu ?? "", record.device?.cpuThreads ?? "", record.device?.gpu ?? "",
         record.device?.gpuVendor ?? "", record.device?.gpuVramMb ?? "",
         record.model, record.backend, record.build, record.runtimeVersion ?? "",
-        record.ctx, record.ngl, record.threads, record.parallel, record.iters,
+        record.runtimeDefaults?.includes("ctx_size") ? "default" : record.ctx,
+        record.runtimeDefaults?.includes("ngl") ? "default" : record.ngl,
+        record.runtimeDefaults?.includes("threads") ? "default" : record.threads,
+        record.runtimeDefaults?.includes("parallel") ? "default" : record.parallel, record.iters,
         row.test, row.size, row.batch, row.value, row.unit,
       ].map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","));
     }

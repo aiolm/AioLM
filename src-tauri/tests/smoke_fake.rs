@@ -88,8 +88,13 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
 
     let ring = Arc::new(ErrBuf::default());
     let api_key = "fake-smoke-token";
-    let (child, url, api_key_file) = server::spawn(&cfg, api_key, &ring)
-        .unwrap_or_else(|e| panic!("spawn failed: {e}\nstderr: {}", ring.tail()));
+    let (child, url, api_key_file) = server::spawn(
+        &cfg,
+        api_key,
+        &ring,
+        &llama_board_lib::gpu::ResolvedGpu::default(),
+    )
+    .unwrap_or_else(|e| panic!("spawn failed: {e}\nstderr: {}", ring.tail()));
     let shared = Arc::new(Mutex::new(server::ServerState::default()));
     shared.lock().expect("server state lock").attach_starting(
         child,
@@ -97,6 +102,7 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         api_key.to_string(),
         cfg.active_model.clone(),
         cfg.mmproj.clone(),
+        cfg.spec_draft_model.clone(),
     );
 
     let rt = tokio::runtime::Builder::new_current_thread()

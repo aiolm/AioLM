@@ -27,11 +27,7 @@ function fileName(project: ProjectPreset): string {
   return `${project.name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "llama-board-project"}.json`;
 }
 
-function inputValue(value: unknown): string {
-  return typeof value === "string" ? value : String(value ?? "");
-}
-
-export default function ProjectsPanel({ store }: { store: AppStore }) {
+export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore; onOpenTuning?: () => void }) {
   const { t } = useI18n();
 
   const [projects, setProjects] = useState<ProjectPreset[]>(readProjects);
@@ -39,18 +35,7 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
-  const [model, setModel] = useState("");
-  const [backend, setBackend] = useState("");
-  const [build, setBuild] = useState("");
-  const [mmproj, setMmproj] = useState("");
-  const [ctxSize, setCtxSize] = useState("4096");
-  const [ngl, setNgl] = useState("0");
-  const [threads, setThreads] = useState("0");
-  const [temperature, setTemperature] = useState("0.8");
-  const [topP, setTopP] = useState("0.95");
-  const [topK, setTopK] = useState("40");
-  const [serverArgs, setServerArgs] = useState("");
-  const [chatOptions, setChatOptions] = useState("{}");
+  const [configSnapshot, setConfigSnapshot] = useState<AppConfig | null>(store.cfg);
   const [toolIds, setToolIds] = useState("");
   const [documentPaths, setDocumentPaths] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -70,19 +55,7 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
       setName("");
       setDescription("");
       setSystemPrompt("You are a helpful assistant.");
-      const current = cfg;
-      setModel(current?.active_model ?? "");
-      setBackend(current?.active_backend ?? "");
-      setBuild(current?.active_build ?? "");
-      setMmproj(current?.mmproj ?? "");
-      setCtxSize(inputValue(current?.ctx_size ?? 4096));
-      setNgl(inputValue(current?.ngl ?? 0));
-      setThreads(inputValue(current?.threads ?? 0));
-      setTemperature(inputValue(current?.temperature ?? 0.8));
-      setTopP(inputValue(current?.top_p ?? 0.95));
-      setTopK(inputValue(current?.top_k ?? 40));
-      setServerArgs((current?.server_args ?? []).join("\n"));
-      setChatOptions(JSON.stringify(current?.chat_options ?? {}, null, 2));
+      setConfigSnapshot(cfg ? structuredClone(cfg) : null);
       setToolIds("");
       setDocumentPaths("");
       return;
@@ -91,18 +64,7 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
     setName(project.name);
     setDescription(project.description);
     setSystemPrompt(project.systemPrompt);
-    setModel(project.config.active_model);
-    setBackend(project.config.active_backend);
-    setBuild(project.config.active_build);
-    setMmproj(project.config.mmproj);
-    setCtxSize(inputValue(project.config.ctx_size));
-    setNgl(inputValue(project.config.ngl));
-    setThreads(inputValue(project.config.threads));
-    setTemperature(inputValue(project.config.temperature));
-    setTopP(inputValue(project.config.top_p));
-    setTopK(inputValue(project.config.top_k));
-    setServerArgs(project.config.server_args.join("\n"));
-    setChatOptions(JSON.stringify(project.config.chat_options, null, 2));
+    setConfigSnapshot(cfg ? { ...cfg, ...structuredClone(project.config) } : null);
     setToolIds(project.toolIds.join("\n"));
     setDocumentPaths(project.documentBindings.map((document) => document.path).join("\n"));
   };
@@ -124,37 +86,9 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
     return () => window.removeEventListener(PROJECTS_CHANGED_EVENT, refresh);
   }, []);
 
-  const parseNumber = (raw: string, label: string): number => {
-    const value = Number(raw);
-    if (!Number.isFinite(value)) throw new Error(t("ui.mustBeNumber", { label }));
-    return value;
-  };
-
   const buildConfig = (): AppConfig => {
-    if (!cfg) throw new Error(t("ui.configLoading"));
-    let parsedChatOptions: AppConfig["chat_options"];
-    try {
-      const parsed: unknown = JSON.parse(chatOptions || "{}");
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(t("ui.chatJsonObject"));
-      parsedChatOptions = parsed as AppConfig["chat_options"];
-    } catch (cause) {
-      throw new Error(cause instanceof Error ? cause.message : t("ui.chatJsonInvalid"));
-    }
-    return {
-      ...cfg,
-      active_model: model.trim(),
-      active_backend: backend.trim(),
-      active_build: build.trim(),
-      mmproj: mmproj.trim(),
-      ctx_size: parseNumber(ctxSize, t("ui.fieldContext")),
-      ngl: parseNumber(ngl, t("ui.fieldGpuLayers")),
-      threads: parseNumber(threads, t("ui.fieldThreads")),
-      temperature: parseNumber(temperature, t("ui.fieldTemperature")),
-      top_p: parseNumber(topP, t("ui.fieldTopP")),
-      top_k: parseNumber(topK, t("ui.fieldTopK")),
-      server_args: serverArgs.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
-      chat_options: parsedChatOptions,
-    };
+    if (!configSnapshot && !cfg) throw new Error(t("ui.configLoading"));
+    return structuredClone(configSnapshot ?? cfg!);
   };
 
   const save = () => {
@@ -262,11 +196,6 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
         {error && <FeedbackBanner tone="error" title={t("panel.projectActionFailed")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
         {notice && <FeedbackBanner tone="success" title={t("panel.done")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
       </div>
-      <div className="mb-4 grid gap-3 sm:grid-cols-3" role="group" aria-label={t("panel.ariaProjectScope")}>
-        <div className="flex flex-col justify-center rounded-lg border p-3.5" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}><div className="app-eyebrow" style={{ fontSize: "10px" }}>{t("panel.savedWorkspaces")}</div><div className="mt-1 text-sm font-semibold" style={{ color: "var(--board-ink)" }}>{projects.length}</div></div>
-        <div className="flex flex-col justify-center rounded-lg border p-3.5" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}><div className="app-eyebrow" style={{ fontSize: "10px" }}>{t("panel.runtimeProfile")}</div><div className="mt-1 text-xs" style={{ color: "var(--board-muted)" }}>{[t("ui.fieldModelPath"), t("ui.fieldBackend"), t("ui.fieldContext"), t("ui.fieldGpuLayers")].join(" · ")}</div></div>
-        <div className="flex flex-col justify-center rounded-lg border p-3.5" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}><div className="app-eyebrow" style={{ fontSize: "10px" }}>{t("panel.chatWorkspace")}</div><div className="mt-1 text-xs" style={{ color: "var(--board-muted)" }}>{[t("ui.fieldSystemPrompt"), t("section.sampling"), t("ui.fieldDocuments").split(" ·")[0], t("ui.fieldToolIds").split(" ·")[0]].join(" · ")}</div></div>
-      </div>
       <ConfirmDialog
         open={pendingDelete !== null}
         title={t("ui.deleteProjectTitle")}
@@ -275,11 +204,11 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
         onConfirm={() => { if (pendingDelete) confirmRemove(pendingDelete); }}
         onCancel={() => setPendingDelete(null)}
       />
-      <div className="grid min-h-0 gap-4 lg:grid-cols-[minmax(14rem,0.65fr)_minmax(0,1.35fr)]">
-        <aside className="min-h-0 rounded-xl border p-3" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+      <div className="grid shrink-0 items-start gap-4 lg:grid-cols-[minmax(14rem,0.65fr)_minmax(0,1.35fr)]">
+        <aside className="min-w-0 rounded-xl border p-3" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
           <div className="px-2 py-2 text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
-            {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} action={{ label: t("panel.newProject"), onClick: () => loadProject(null) }} />}
+            {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
             {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--board-focus)]"><span className="block truncate text-xs font-medium" style={{ color: "var(--board-ink)" }}>{project.name}</span><span className="mt-0.5 block truncate text-xs" style={{ color: "var(--board-faint)" }}>{normalizeDisplayPath(project.config.active_model).split(/[\\/]/).pop() || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-[10px] font-medium" style={{ borderColor: "var(--tone-success-border)", background: "var(--tone-success-bg)", color: "var(--tone-success-ink)" }}>{t("ui.active")}</span>}</div>)}
           </div>
         </aside>
@@ -289,26 +218,28 @@ export default function ProjectsPanel({ store }: { store: AppStore }) {
             <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
           </div>
           <label className="mt-3 block text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldSystemPrompt")}<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={4} className="app-textarea mt-1" /></label>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldModelPath")}<input value={normalizeDisplayPath(model)} onChange={(event) => setModel(event.target.value)} placeholder="C:\\models\\model.gguf" className="app-input mt-1 font-mono text-xs" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldBackend")}<input value={backend} onChange={(event) => setBackend(event.target.value)} placeholder="vulkan" className="app-input mt-1" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldBuild")}<input value={build} onChange={(event) => setBuild(event.target.value)} placeholder="bXXXX" className="app-input mt-1 font-mono text-xs" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldProjector")}<input value={normalizeDisplayPath(mmproj)} onChange={(event) => setMmproj(event.target.value)} placeholder={t("panel.optionalSidecar")} className="app-input mt-1 text-xs" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldContext")}<input value={ctxSize} onChange={(event) => setCtxSize(event.target.value)} inputMode="numeric" className="app-input mt-1" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldGpuLayers")}<input value={ngl} onChange={(event) => setNgl(event.target.value)} inputMode="numeric" className="app-input mt-1" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldThreads")}<input value={threads} onChange={(event) => setThreads(event.target.value)} inputMode="numeric" className="app-input mt-1" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldTemperature")}<input value={temperature} onChange={(event) => setTemperature(event.target.value)} inputMode="decimal" className="app-input mt-1" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldTopP")}<input value={topP} onChange={(event) => setTopP(event.target.value)} inputMode="decimal" className="app-input mt-1" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldTopK")}<input value={topK} onChange={(event) => setTopK(event.target.value)} inputMode="numeric" className="app-input mt-1" /></label>
-          </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-4">
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldServerArgs")}<textarea value={normalizeDisplayPathLines(serverArgs)} onChange={(event) => setServerArgs(event.target.value)} rows={5} className="app-textarea mt-1 app-mono text-xs" /></label>
-            <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldChatJson")}<textarea value={chatOptions} onChange={(event) => setChatOptions(event.target.value)} rows={5} spellCheck={false} className="app-textarea mt-1 app-mono text-xs" /></label>
+          <section className="project-config-snapshot">
+            <h3>{t("ui.projectSavedSetup")}</h3>
+            <p>{t("ui.projectSnapshotHint")}</p>
+            <dl>
+              <div><dt>{t("ui.fieldModelPath")}</dt><dd title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? "")}>{normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? "").split(/[\\/]/).pop() || t("load.noModel")}</dd></div>
+              <div><dt>{t("ui.fieldBackend")}</dt><dd>{(configSnapshot ?? cfg)?.active_backend || "PATH"} · {(configSnapshot ?? cfg)?.active_build || "system"}</dd></div>
+              <div><dt>{t("ui.fieldContext")}</dt><dd>{(configSnapshot ?? cfg)?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : (configSnapshot ?? cfg)?.ctx_size.toLocaleString()}</dd></div>
+            </dl>
+            <div className="profile-snapshot-actions">
+              <button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={() => { setConfigSnapshot(structuredClone(cfg)); setNotice(t("ui.projectSnapshotCaptured")); }}>{t("ui.useCurrentSetup")}</button>
+              {onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
+            </div>
+          </section>
+          <div className="mt-6 border-t pt-5" style={{ borderColor: "var(--board-border)" }}>
+            <h4 className="app-section-title">{t("panel.chatWorkspace")}</h4>
+            <div className="mt-3 grid gap-4 md:grid-cols-2">
             <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldToolIds")}<textarea value={toolIds} onChange={(event) => setToolIds(event.target.value)} rows={5} placeholder="server-id:tool-name" className="app-textarea mt-1 app-mono text-xs" /></label>
             <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.fieldDocuments")}<textarea value={normalizeDisplayPathLines(documentPaths)} onChange={(event) => setDocumentPaths(event.target.value)} rows={5} placeholder="C:\\docs\\project.md" className="app-textarea mt-1 app-mono text-xs" /></label>
+            </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2.5">
-            <button type="button" onClick={save} disabled={!name.trim()} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm">{selected ? t("panel.updateProject") : t("panel.saveProject")}</button>
+            <button type="button" onClick={save} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm">{selected ? t("panel.updateProject") : t("panel.saveProject")}</button>
             {selected && <><button type="button" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--primary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
           </div>
           <p className="mt-3 text-xs leading-relaxed" style={{ color: "var(--board-faint)" }}>{t("ui.projectsFooter")}</p>

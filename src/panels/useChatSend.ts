@@ -5,6 +5,7 @@ import { buildMultimodalContent, capMaxTokens, estimateChatTokens, MAX_SEARCHABL
 import type { ChatHistoryMessage, ChatThread } from "../chatHistory";
 import { QWEN38_DEFAULTS } from "./qwenDefaults";
 import { getActiveModelProfile } from "../modelProfiles";
+import { usesRuntimeDefault } from "../tuningDefaults";
 import type { AppPreferences } from "../preferences";
 import { deriveTokensPerSecond } from "../lifecycleUtils";
 import type { StreamUsage } from "../sse";
@@ -127,17 +128,19 @@ export function useChatSend({
         role: "user",
         content: images.length ? buildMultimodalContent(requestContent, images) : requestContent,
       };
-      const activeProfile = !historyOverride && store.cfg ? getActiveModelProfile(store.cfg, model) : null;
+      const activeProfile = !historyOverride && store.cfg ? getActiveModelProfile(store.cfg) : null;
       const rawHistory = historyOverride ?? (retry && failed ? failed.history : [
         { role: "system" as const, content: activeThread?.systemPrompt.trim() || activeProfile?.system_prompt.trim() || "You are a helpful assistant." },
         ...msgs.map(toChatMessage),
         userMessage,
       ]);
       const contextSize = Math.max(512, store.cfg?.ctx_size ?? 4096);
+      const runtimeContext = store.cfg ? usesRuntimeDefault(store.cfg, "ctx_size") : false;
       const maxContextTokens = Math.max(256, Math.floor(contextSize * 0.75));
-      const bounded = toolFollowup ? { messages: rawHistory, trimmed: false } : trimChatHistory(rawHistory, maxContextTokens);
+      // When the runtime owns context sizing, the old manual number is not a valid limit.
+      const bounded = toolFollowup || runtimeContext ? { messages: rawHistory, trimmed: false } : trimChatHistory(rawHistory, maxContextTokens);
       const promptTokens = estimateChatTokens(bounded.messages);
-      const chatOptions = capMaxTokens(store.cfg?.chat_options ?? {}, promptTokens, contextSize);
+      const chatOptions = runtimeContext ? (store.cfg?.chat_options ?? {}) : capMaxTokens(store.cfg?.chat_options ?? {}, promptTokens, contextSize);
       const warnings = [
         documentTruncationRef.current ? `Only the first ${MAX_SEARCHABLE_DOCUMENT_CHUNKS} document chunks were searched; the rest of the attached document(s) were not included.` : null,
         bounded.trimmed ? "Older messages were omitted from this request to stay within the configured context window." : null,
@@ -161,6 +164,7 @@ export function useChatSend({
       assistantAppended = true;
       const sampling = {
         temperature: store.cfg?.temperature ?? QWEN38_DEFAULTS.temperature,
+        runtime_defaults: store.cfg?.runtime_defaults,
         top_p: store.cfg?.top_p ?? QWEN38_DEFAULTS.top_p,
         top_k: store.cfg?.top_k ?? QWEN38_DEFAULTS.top_k,
         reasoning: store.cfg?.reasoning ?? QWEN38_DEFAULTS.reasoning,

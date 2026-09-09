@@ -103,3 +103,47 @@ export const QWEN38_SERVER_ARGS = [
   "q8_0",
   "--spec-draft-backend-sampling",
 ] as const;
+
+/**
+ * Model-specific tuning profiles are deliberately opt-in. A profile must
+ * match the model filename before any values are written, so a remembered
+ * Qwen preset can never silently overwrite settings for another model.
+ */
+export interface ModelTuningProfile {
+  id: string;
+  name: string;
+  matcher: RegExp;
+  runtimeMatcher?: RegExp;
+  defaults: typeof QWEN38_DEFAULTS;
+  serverArgs: readonly string[];
+  chatOptions: AppConfig["chat_options"];
+}
+
+export const MODEL_TUNING_PROFILES: readonly ModelTuningProfile[] = [
+  {
+    id: "qwen3.8-dflash2",
+    name: "Qwen3.8 DFlash2",
+    matcher: /qwen3(?:[._-]?8)/i,
+    runtimeMatcher: /pr27342/i,
+    defaults: { ...QWEN38_DEFAULTS, ...QWEN38_DFLASH2_DEFAULTS },
+    serverArgs: QWEN38_SERVER_ARGS,
+    chatOptions: QWEN38_CHAT_OPTIONS,
+  },
+  {
+    id: "qwen3.8-long-context",
+    name: "Qwen3.8 long-context",
+    matcher: /qwen3(?:[._-]?8)/i,
+    defaults: QWEN38_DEFAULTS,
+    serverArgs: QWEN38_SERVER_ARGS,
+    chatOptions: QWEN38_CHAT_OPTIONS,
+  },
+];
+
+function modelFileName(modelPath: string): string {
+  return modelPath.trim().split(/[\\/]/).pop() ?? modelPath.trim();
+}
+
+export function findModelTuningProfile(modelPath: string, runtimeBuild = ""): ModelTuningProfile | undefined {
+  const fileName = modelFileName(modelPath);
+  return MODEL_TUNING_PROFILES.find((profile) => profile.matcher.test(fileName) && (!profile.runtimeMatcher || profile.runtimeMatcher.test(runtimeBuild)));
+}

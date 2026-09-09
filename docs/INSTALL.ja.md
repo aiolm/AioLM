@@ -5,13 +5,13 @@
 ## ワンライナーインストール (Windows)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 `cmd.exe`、Git Bash など PowerShell を起動できるすべてのシェルで同様です。
 
 ```bash
-powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 ## オプション
@@ -20,10 +20,10 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-j
 $env:LLAMA_BOARD_INSTALLER = "msi"   # 既定: nsis
 $env:LLAMA_BOARD_RELEASE = "v0.1.5"  # 特定タグ
 $env:LLAMA_BOARD_DRY_RUN = "1"       # 検証のみ
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
-ワンライナーは選択したリリースに含まれる `install.ps1` のコピーをダウンロードします。現在のソース: <https://github.com/joowon-jang/llama-board/blob/main/install.ps1>
+ワンライナーは選択したリリースに含まれる `install.ps1` のコピーをダウンロードします。現在のソース: <https://github.com/llama-board/llama-board/blob/main/install.ps1>
 
 ## ダウンロード検証
 
@@ -36,7 +36,9 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 # 署名済みリリースは Valid、未署名ファイルは NotSigned です。
 ```
 
-リリースページ: <https://github.com/joowon-jang/llama-board/releases/latest>
+リリースページ: <https://github.com/llama-board/llama-board/releases/latest>
+
+移行メモ: デスクトップ識別子は中立的な値に変更されました。アップグレード時は既存の %APPDATA%\llama-board 設定・ランタイムディレクトリを保持し、新規インストールでは Models でモデルディレクトリを選択してください。アンインストールしてもこのユーザーデータは削除されません。
 
 ## Linux / macOS (予定)
 

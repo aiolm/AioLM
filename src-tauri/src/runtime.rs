@@ -365,6 +365,7 @@ pub struct RuntimeCapabilities {
     pub state: String,
     pub version: String,
     pub flags: Vec<String>,
+    pub supports_dflash: bool,
     pub devices: Vec<String>,
     pub diagnostics: Vec<String>,
     #[serde(default)]
@@ -782,7 +783,16 @@ pub fn validate_runtime_identifiers(backend: &str, build: &str) -> Result<(), St
             .parse::<u64>()
             .map(|number| number > 0)
             .unwrap_or(false);
-    if !valid_release_build && !valid_pull_request_build {
+    // Local compatibility builds must not masquerade as an official release
+    // or overwrite it. No hyphens: the directory's first '-' separates backend.
+    let valid_local_build = build.strip_prefix("local_").is_some_and(|name| {
+        !name.is_empty()
+            && name.len() <= 48
+            && name
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || value == '_')
+    });
+    if !valid_release_build && !valid_pull_request_build && !valid_local_build {
         return Err(format!("invalid runtime build identifier: {build}"));
     }
     if backend.contains(['/', '\\']) || build.contains(['/', '\\']) {
@@ -1155,6 +1165,27 @@ pub fn child_environment_for_runtime(
     Ok(environment)
 }
 
+/// Complete an already-installed vendor runtime from a compatible local SDK.
+/// Release archives for Windows ROCm may intentionally omit BLAS DLLs and
+/// kernel data, while llama-board requires managed runtimes to remain usable
+/// after the launching shell (and its SDK PATH) disappears.
+pub async fn repair_runtime_dependencies(
+    backend: &str,
+    build: &str,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
+    if !matches!(backend, "cuda" | "rocm") {
+        return Ok(());
+    }
+    let destination = runtime_dir(backend, build)?;
+    let backend = backend.to_string();
+    tokio::task::spawn_blocking(move || {
+        copy_backend_runtime_dependencies(&backend, &destination, &cancel)
+    })
+    .await
+    .map_err(|error| format!("runtime dependency repair task failed: {error}"))?
+}
+
 /// Keep the source-build environment small enough that a CMake configure does
 /// not inherit credentials or unrelated application state, and large enough
 /// that the same PR builds on someone else's PC.
@@ -1388,7 +1419,7 @@ fn merge_visual_studio_environment(environment: &mut Vec<(OsString, OsString)>, 
     if vcvarsall.is_file() {
         let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe"));
         let command_line = format!("call \"{}\" x64 >nul && set", vcvarsall.display());
-        if let Ok(output) = std::process::Command::new(comspec)
+        if let Ok(output) = crate::procutil::std_command(comspec)
             .env_clear()
             .envs(child_environment())
             .args(["/d", "/s", "/c", &command_line])
@@ -2278,7 +2309,7 @@ async fn finish_build_reader(
 async fn terminate_probe(child: &mut tokio::process::Child) {
     #[cfg(windows)]
     if let Some(pid) = child.id() {
-        let _ = Command::new("taskkill")
+        let _ = crate::procutil::tokio_command("taskkill")
             .env_clear()
             .envs(child_environment())
             .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -2331,7 +2362,7 @@ fn active_build_pids() -> &'static Mutex<Vec<u32>> {
 fn terminate_build_pid_sync(pid: u32) {
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
+        let _ = crate::procutil::std_command("taskkill")
             .env_clear()
             .envs(child_environment())
             .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -2394,7 +2425,7 @@ async fn terminate_build_child(child: &mut tokio::process::Child) {
     }
     #[cfg(windows)]
     if let Some(pid) = child.id() {
-        let _ = Command::new("taskkill")
+        let _ = crate::procutil::tokio_command("taskkill")
             .env_clear()
             .envs(child_environment())
             .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -2470,8 +2501,9 @@ async fn run_probe_with_cancel_and_environment(
     cancel: Option<&Arc<AtomicBool>>,
     environment: &[(OsString, OsString)],
 ) -> ProbeCommand {
-    let mut command = Command::new(binary);
+    let mut command = crate::procutil::tokio_command(binary);
     command
+        .kill_on_drop(true)
         .env_clear()
         .envs(environment.iter().map(|(name, value)| (name, value)));
     let mut child = match command
@@ -2606,6 +2638,26 @@ fn classify_preflight(version: bool, help: bool, devices: bool, bench: bool) -> 
 }
 
 pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, String> {
+    probe_with_cancel(backend, build, None).await
+}
+
+pub async fn probe_cancellable(
+    backend: &str,
+    build: &str,
+    cancel: &Arc<AtomicBool>,
+) -> Result<RuntimeCapabilities, String> {
+    probe_with_cancel(backend, build, Some(cancel)).await
+}
+
+async fn probe_with_cancel(
+    backend: &str,
+    build: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<RuntimeCapabilities, String> {
+    let cancelled = || cancel.is_some_and(|flag| flag.load(Ordering::Acquire));
+    if cancelled() {
+        return Err("server start cancelled".into());
+    }
     let (resolved_backend, resolved_build, binary) = if backend.is_empty() && build.is_empty() {
         let binary = which::which(server_executable_name())
             .map_err(|_| "no llama-server executable was found on PATH".to_string())?;
@@ -2623,6 +2675,7 @@ pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, St
             state: "not installed".into(),
             version: String::new(),
             flags: Vec::new(),
+            supports_dflash: false,
             devices: Vec::new(),
             diagnostics: vec!["llama-server executable is missing".into()],
             bench_available: false,
@@ -2649,10 +2702,13 @@ pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, St
         &binary,
         &["--version"],
         PROBE_TIMEOUT,
-        None,
+        cancel,
         &environment,
     )
     .await;
+    if cancelled() {
+        return Err("server start cancelled".into());
+    }
     // Backfill the manifest for runtimes installed before it existed, so the
     // list stops showing a bare build tag once the user probes them.
     if version.success && !backend.is_empty() && !build.is_empty() {
@@ -2666,18 +2722,24 @@ pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, St
         &binary,
         &["--help"],
         PROBE_TIMEOUT,
-        None,
+        cancel,
         &environment,
     )
     .await;
+    if cancelled() {
+        return Err("server start cancelled".into());
+    }
     let devices = run_probe_with_cancel_and_environment(
         &binary,
         &["--list-devices"],
         PROBE_TIMEOUT,
-        None,
+        cancel,
         &environment,
     )
     .await;
+    if cancelled() {
+        return Err("server start cancelled".into());
+    }
     let bench_binary = if backend.is_empty() && build.is_empty() {
         which::which(bench_executable_name()).ok().or_else(|| {
             binary
@@ -2694,7 +2756,7 @@ pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, St
                 &path,
                 &["--help"],
                 PROBE_TIMEOUT,
-                None,
+                cancel,
                 &environment,
             )
             .await
@@ -2713,6 +2775,9 @@ pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, St
             diagnostic: Some("llama-bench executable was not found on PATH".into()),
         },
     };
+    if cancelled() {
+        return Err("server start cancelled".into());
+    }
     let mut diagnostics = Vec::new();
     if let Some(error) = dependency_error.as_ref() {
         diagnostics.push(error.clone());
@@ -2739,10 +2804,16 @@ pub async fn probe(backend: &str, build: &str) -> Result<RuntimeCapabilities, St
         state: state.into(),
         version: version.text.chars().take(4096).collect(),
         flags: probe_flags(&help.text),
+        supports_dflash: help_supports_dflash(&help.text),
         devices: probe_devices(&devices.text),
         diagnostics,
         bench_available: bench.success,
     })
+}
+
+fn help_supports_dflash(help: &str) -> bool {
+    help.split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
+        .any(|token| token == "draft-dflash")
 }
 
 pub fn system_server_fallback(local_app_data: &str) -> PathBuf {
@@ -4364,6 +4435,22 @@ pub async fn install_with(
             .map_err(|error| format!("runtime extraction task failed: {error}"))??;
         }
 
+        // Upstream Windows ROCm archives can omit redistributable BLAS DLLs
+        // and architecture kernel data. Package them from the detected local
+        // SDK before the isolated preflight, just as source-built runtimes do.
+        let dependency_backend = backend.to_string();
+        let dependency_staging = staging.clone();
+        let dependency_cancel = cancel.clone();
+        tokio::task::spawn_blocking(move || {
+            copy_backend_runtime_dependencies(
+                &dependency_backend,
+                &dependency_staging,
+                &dependency_cancel,
+            )
+        })
+        .await
+        .map_err(|error| format!("runtime dependency packaging task failed: {error}"))??;
+
         if cancel.load(Ordering::Acquire) {
             return Err("runtime install cancelled".to_string());
         }
@@ -5196,6 +5283,10 @@ fn source_build_configure_args(
             "Ninja".to_string(),
             "-DCMAKE_C_COMPILER=clang".to_string(),
             "-DCMAKE_CXX_COMPILER=clang++".to_string(),
+            // Windows HIP peer copies can corrupt multi-GPU inference.
+            // Validated on two gfx1201 devices; host-mediated copies retain
+            // GPU compute without depending on driver peer-memory support.
+            "-DGGML_CUDA_NO_PEER_COPY=ON".to_string(),
         ];
         toolchain.append(&mut args);
         args = toolchain;
@@ -5455,7 +5546,7 @@ async fn run_cmake_command(
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     let deadline = cmake_phase_timeout(phase);
-    let mut command = Command::new(cmake);
+    let mut command = crate::procutil::tokio_command(cmake);
     configure_build_process_group(&mut command);
     command
         .env_clear()
@@ -6183,6 +6274,17 @@ async fn preflight_staged_runtime(
                 .unwrap_or_else(|| "probe returned a non-success status".into());
             return Err(format!(
                 "staged runtime preflight failed for {label}: {diagnostic}"
+            ));
+        }
+        if args == ["--list-devices"]
+            && result
+                .text
+                .lines()
+                .map(str::trim)
+                .all(|line| line.is_empty() || line == "Available devices:" || line == "(none)")
+        {
+            return Err(format!(
+                "staged runtime preflight failed for {label}: runtime reported no accelerator devices"
             ));
         }
         if args == ["--version"] {
@@ -7118,6 +7220,30 @@ mod tests {
             .any(|pair| pair[0] == "-G" && pair[1] == "Ninja"));
         assert!(args.iter().any(|arg| arg == "-DCMAKE_C_COMPILER=clang"));
         assert!(args.iter().any(|arg| arg == "-DCMAKE_CXX_COMPILER=clang++"));
+        assert!(args.iter().any(|arg| arg == "-DGGML_CUDA_NO_PEER_COPY=ON"));
+    }
+
+    #[test]
+    fn local_builds_are_distinct_and_cannot_escape_the_runtime_directory() {
+        assert!(validate_runtime_identifiers("rocm", "local_b10840_nop2p").is_ok());
+        for build in ["local_", "local_../b10840", "local_x-y", "local_x\\y"] {
+            assert!(
+                validate_runtime_identifiers("rocm", build).is_err(),
+                "{build}"
+            );
+        }
+        let local = runtime_dir("rocm", "local_b10840_nop2p").unwrap();
+        assert_eq!(local.file_name().unwrap(), "local_b10840_nop2p-rocm");
+        assert_ne!(local, runtime_dir("rocm", "b10840").unwrap());
+    }
+
+    #[test]
+    fn dflash_support_is_probed_from_exact_help_tokens_not_a_build_name() {
+        assert!(help_supports_dflash(
+            "--spec-type [none,draft-simple,draft-dflash]"
+        ));
+        assert!(!help_supports_dflash("--spec-type [none,draft-simple]"));
+        assert!(!help_supports_dflash("--draft-dflash-option"));
     }
 
     #[test]
@@ -7490,6 +7616,15 @@ mod tests {
         // A retry budget worth having, but not one that turns a genuinely
         // locked file into a thread that never finishes.
         const { assert!(CLEANUP_ATTEMPTS >= 2 && CLEANUP_ATTEMPTS <= 8) };
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_runtime_probe_returns_before_resolving_the_runtime() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let error = probe_cancellable("invalid backend", "invalid build", &cancel)
+            .await
+            .expect_err("a cancelled start must not launch another probe process");
+        assert_eq!(error, "server start cancelled");
     }
 
     fn pull_request_json(

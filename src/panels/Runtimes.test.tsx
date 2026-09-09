@@ -106,6 +106,21 @@ async function startPullRequestBuild() {
 }
 
 describe("RuntimesPanel pull-request builds", () => {
+  it("automatically probes a selected runtime and never offers OS identities while pending", async () => {
+    mocked.rtList.mockResolvedValue([]);
+    mocked.rtLatest.mockResolvedValue(null);
+    mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
+    mocked.deviceProfile.mockResolvedValue(NVIDIA_REPORT);
+    let finish!: (value: api.RuntimeCapabilities) => void;
+    mocked.rtProbe.mockImplementation(() => new Promise<api.RuntimeCapabilities>((resolve) => { finish = resolve; }));
+    const configured = { ...store, cfg: { active_backend: "cuda", active_build: "b10638" } } as AppStore;
+    render(<I18nProvider initialLocale="en"><RuntimesPanel store={configured} /></I18nProvider>);
+    await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledWith("cuda", "b10638"));
+    expect(screen.queryByRole("checkbox", { name: /Test GPU/ })).not.toBeInTheDocument();
+    await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: [], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
+    expect(await screen.findByRole("checkbox", { name: /CUDA1.*Test GPU/ })).toBeEnabled();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();

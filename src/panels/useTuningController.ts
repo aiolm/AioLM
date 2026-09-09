@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppConfig } from "../api";
 import type { AppStore } from "../store";
-import { QWEN38_CHAT_OPTIONS, QWEN38_DEFAULTS, QWEN38_SERVER_ARGS } from "./qwenDefaults";
+import { findModelTuningProfile } from "./qwenDefaults";
 import { isKnownSelectValue, parseChatOptions, parseServerArgs, SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "./tuningValidation";
 import { draftStillCurrent } from "./tuningAsync";
 import { projectorChangeAllowed } from "./visionState";
@@ -11,6 +11,7 @@ import { normalizeDisplayPath, validateTuningRelations } from "../lifecycleUtils
 import { useFlashMessage } from "../useFlashMessage";
 import type { ChatOptionField, NumericField, NumericKey, ServerTextKey } from "./tuningFields";
 import { normalizeSamplerChain } from "./TuningSamplerChain";
+import { resetAllTuning, resetTuningField, usesRuntimeDefault } from "../tuningDefaults";
 import {
   commitChatOptionField, commitNumericField, performApplyRestart,
   SERVER_FIELD_LABEL_KEYS, SERVER_TEXT_LABEL_KEYS, serverPathKeys, type TuningPhase,
@@ -27,10 +28,13 @@ export type { TuningPhase } from "./tuningControllerHelpers";
  * because that guarantee crosses a hook boundary TypeScript can't see through,
  * not because these code paths are expected to run before the config loads.
  */
-export function useTuningController(store: AppStore, applyRequest: number) {
+export function useTuningController(store: AppStore) {
   const { locale, t } = useI18n();
   const cfg = store.cfg;
+  const modelProfileName = cfg ? findModelTuningProfile(cfg.active_model, cfg.active_build)?.name ?? null : null;
   const [phase, setPhase] = useState<TuningPhase>("idle");
+  const [resetting, setResetting] = useState(false);
+  const [defaultsRevision, setDefaultsRevision] = useState(0);
   const [flash, notify, dismissFlash] = useFlashMessage();
   const [serverArgsDraft, setServerArgsDraft] = useState("");
   const [chatOptionsDraft, setChatOptionsDraft] = useState("{}");
@@ -48,8 +52,6 @@ export function useTuningController(store: AppStore, applyRequest: number) {
   const serverArgsDraftRef = useRef("");
   const chatOptionsDraftRef = useRef("{}");
   const applyLockRef = useRef(false);
-  const applyRestartRef = useRef<(() => Promise<void>) | null>(null);
-  const handledApplyRequestRef = useRef(0);
 
   useEffect(() => {
     if (!cfg) return;
@@ -65,41 +67,15 @@ export function useTuningController(store: AppStore, applyRequest: number) {
     }
   }, [cfg, serverArgsDirty, chatOptionsDirty]);
 
-  useEffect(() => {
-    if (!cfg) return;
-    setServerTextDrafts((current) => {
-      const next = { ...current };
-      for (const key of [
-        "spec_type",
-        "spec_draft_ngl",
-        "spec_draft_device",
-        "spec_draft_model",
-        "reasoning_budget_message",
-        "mmproj",
-        "cache_type_k",
-        "cache_type_v",
-      ] as const) {
-        if (!(key in next)) next[key] = cfg[key];
-      }
-      return next;
-    });
-  }, [cfg]);
-
-  useEffect(() => {
-    if (applyRequest <= 0 || handledApplyRequestRef.current === applyRequest || !applyRestartRef.current) return;
-    handledApplyRequestRef.current = applyRequest;
-    void applyRestartRef.current();
-  }, [applyRequest, cfg]);
-
   const projectorEditable = projectorChangeAllowed(store.status.state);
-  const configMutationsDisabled = phase === "applying" || store.busy;
+  const configMutationsDisabled = phase === "applying" || store.busy || resetting;
   const relationWarnings = cfg ? validateTuningRelations({
-    ctxSize: cfg.ctx_size,
-    parallel: cfg.parallel,
-    ngl: cfg.ngl,
-    temperature: cfg.temperature,
+    ctxSize: usesRuntimeDefault(cfg, "ctx_size") ? NaN : cfg.ctx_size,
+    parallel: usesRuntimeDefault(cfg, "parallel") ? NaN : cfg.parallel,
+    ngl: usesRuntimeDefault(cfg, "ngl") ? NaN : cfg.ngl,
+    temperature: usesRuntimeDefault(cfg, "temperature") ? NaN : cfg.temperature,
     dynatempRange: Number(cfg.chat_options?.dynatemp_range ?? 0),
-    topP: cfg.top_p,
+    topP: usesRuntimeDefault(cfg, "top_p") ? NaN : cfg.top_p,
     minP: Number(cfg.chat_options?.min_p ?? 0),
   }) : [];
 
@@ -265,8 +241,13 @@ export function useTuningController(store: AppStore, applyRequest: number) {
 
   const resetDefaults = () => {
     if (applyLockRef.current || !cfg) return;
-    const serverArgs = QWEN38_SERVER_ARGS.join("\n");
-    const chatOptions = JSON.stringify(QWEN38_CHAT_OPTIONS, null, 2);
+    const profile = findModelTuningProfile(cfg.active_model, cfg.active_build);
+    if (!profile) {
+      notify(t("ui.profileMismatch"));
+      return;
+    }
+    const serverArgs = profile.serverArgs.join("\n");
+    const chatOptions = JSON.stringify(profile.chatOptions, null, 2);
     serverArgsDraftRef.current = serverArgs;
     chatOptionsDraftRef.current = chatOptions;
     setServerArgsDraft(serverArgs);
@@ -275,13 +256,13 @@ export function useTuningController(store: AppStore, applyRequest: number) {
     setChatOptionsDirty(false);
     setAdvancedError(null);
     setServerTextDrafts({});
-    void savePatch({ ...QWEN38_DEFAULTS, mmproj: cfg.mmproj, server_args: [...QWEN38_SERVER_ARGS], chat_options: QWEN38_CHAT_OPTIONS }, t("ui.saveFailedFor", { label: t("ui.loadQwenProfile") }));
+    void savePatch({ ...profile.defaults, mmproj: cfg.mmproj, server_args: [...profile.serverArgs], chat_options: profile.chatOptions }, t("ui.saveFailedFor", { label: profile.name }));
     setPhase("dirty");
-    notify(t("extra.defaultsLoaded"));
+    notify(t("ui.profileAppliedFor", { profile: profile.name, model: normalizeDisplayPath(cfg.active_model).split(/[\\/]/).pop() ?? cfg.active_model }));
   };
 
   const applyRestart = async () => {
-    if (phase === "applying" || store.busy || !cfg) return;
+    if (applyLockRef.current || configMutationsDisabled || !cfg) return;
     if (store.status.state !== "running") {
       setPhase("idle");
       notify(t("extra.savedNextStart"));
@@ -295,10 +276,47 @@ export function useTuningController(store: AppStore, applyRequest: number) {
     }
   };
 
-  applyRestartRef.current = applyRestart;
+
+  const resetRuntimeDefaults = async (key?: string) => {
+    if (applyLockRef.current || configMutationsDisabled || !cfg) return;
+    applyLockRef.current = true;
+    setResetting(true);
+    try {
+      const saved = await store.updateConfig((current) => key ? resetTuningField(current, key) : resetAllTuning());
+      // Clear only the reset field's drafts. Unrelated unsaved text remains intact.
+      const withoutKey = <T extends Record<string, unknown>>(drafts: T): T => {
+        if (!key) return {} as T;
+        const next = { ...drafts }; delete next[key]; return next;
+      };
+      setNumericDrafts(withoutKey);
+      setServerTextDrafts(withoutKey);
+      setChatOptionDrafts(withoutKey);
+      setChatOptionSelectModes(withoutKey);
+      if (!key) setDefaultsRevision((value) => value + 1);
+      if (!key || !serverArgsDirty) {
+        const text = saved.server_args.join("\n");
+        serverArgsDraftRef.current = text; setServerArgsDraft(text); setServerArgsDirty(false);
+      }
+      if (!key || !chatOptionsDirty) {
+        const text = JSON.stringify(saved.chat_options, null, 2);
+        chatOptionsDraftRef.current = text; setChatOptionsDraft(text); setChatOptionsDirty(false);
+      }
+      setAdvancedError(null);
+      // Even a request reset can remove a raw server-side sampling override.
+      setPhase("dirty");
+      setChangedServerFields((fields) => [...new Set([...fields, key ?? t("ui.runtimeDefaultsTitle")])]);
+      notify(t("ui.runtimeDefaultsSaved"));
+    } catch (error) {
+      setPhase("failed");
+      notify(t("ui.runtimeDefaultsFailed") + ": " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      applyLockRef.current = false;
+      setResetting(false);
+    }
+  };
 
   return {
-    cfg, locale, phase, setPhase, flash, notify, dismissFlash,
+    cfg, locale, phase, setPhase, flash, notify, dismissFlash, modelProfileName, resetRuntimeDefaults, defaultsRevision,
     serverArgsDraft, setServerArgsDraft, chatOptionsDraft, setChatOptionsDraft,
     serverArgsDirty, setServerArgsDirty, chatOptionsDirty, setChatOptionsDirty,
     advancedError, setAdvancedError,

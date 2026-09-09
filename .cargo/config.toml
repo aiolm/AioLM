@@ -1,0 +1,3 @@
+[build]
+# Shared repository-relative output location for Cargo, Tauri and packaging.
+target-dir = ".codex-target"

@@ -5,13 +5,13 @@
 ## 一行安装 (Windows)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 在 `cmd.exe`、Git Bash 或任何可启动 PowerShell 的终端中均可使用。
 
 ```bash
-powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 ## 选项
@@ -20,10 +20,10 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-j
 $env:LLAMA_BOARD_INSTALLER = "msi"   # 默认: nsis
 $env:LLAMA_BOARD_RELEASE = "v0.1.5"  # 指定标签
 $env:LLAMA_BOARD_DRY_RUN = "1"       # 仅验证
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
-单行命令会下载所选发布版本中包含的 `install.ps1` 副本。当前源码: <https://github.com/joowon-jang/llama-board/blob/main/install.ps1>
+单行命令会下载所选发布版本中包含的 `install.ps1` 副本。当前源码: <https://github.com/llama-board/llama-board/blob/main/install.ps1>
 
 ## 验证下载
 
@@ -36,7 +36,9 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 # 已签名版本应为 Valid；未签名文件会显示 NotSigned。
 ```
 
-发布页面: <https://github.com/joowon-jang/llama-board/releases/latest>
+发布页面: <https://github.com/llama-board/llama-board/releases/latest>
+
+迁移说明：桌面标识符已改为中性值。升级时请保留现有的 %APPDATA%\llama-board 配置和运行时目录；全新安装时请在 Models 中选择模型目录。卸载不会删除这些用户数据。
 
 ## Linux / macOS (计划中)
 

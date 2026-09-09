@@ -47,6 +47,7 @@ export const SERVER_TEXT_LABEL_KEYS: Record<ServerTextKey, UiTextKey> = {
 
 export function serverConfigSnapshot(cfg: AppConfig): Partial<AppConfig> {
   return {
+    runtime_defaults: [...(cfg.runtime_defaults ?? [])],
     active_backend: cfg.active_backend,
     ctx_size: cfg.ctx_size,
     batch_size: cfg.batch_size,

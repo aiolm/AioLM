@@ -13,7 +13,7 @@
       product-version="${version}"
       file-version="${version}"
       original-filename="${file.name}">
-      <authenticode-sign description="llama-board Windows installer" description-url="https://github.com/joowon-jang/llama-board" />
+      <authenticode-sign description="llama-board Windows installer" description-url="https://github.com/llama-board/llama-board" />
     </pe-file>
     <msi-file path="llama-board_${version}_x64_en-US.msi" subject="llama-board">
       <authenticode-sign />

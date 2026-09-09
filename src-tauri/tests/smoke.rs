@@ -4,8 +4,12 @@
 //!
 //! Run:
 //!   $env:LLAMA_BOARD_SMOKE = "1"
-//!   $env:LLAMA_BOARD_SMOKE_MODEL = "C:\Users\joojoo\.lmstudio\models\lmstudio-community\Qwen3.8-27B-GGUF\Qwen3.8-27B-Q4_K_M.gguf"
-//!   cd src-tauri && cargo test --test smoke
+//!   $env:LLAMA_BOARD_SMOKE_MODEL = "C:\path\to\model.gguf"
+//!   cd src-tauri && cargo test --test smoke -- --ignored --nocapture --test-threads=1
+//! Optional: LLAMA_BOARD_SMOKE_BACKEND/BUILD select a managed runtime;
+//! DEVICE selects runtime device names; PORT permits concurrent isolated runs;
+//! MMPROJ tests image input; SPEC_TYPE/DRAFT test a draft head;
+//! CANCEL_LOAD=1 tests interruption before readiness. These do not change saved settings.
 use std::sync::{Arc, Mutex};
 
 use llama_board_lib::{server, AppConfig, ErrBuf};
@@ -13,11 +17,86 @@ use llama_board_lib::{server, AppConfig, ErrBuf};
 fn cfg_with(model: &str) -> AppConfig {
     AppConfig {
         active_model: model.to_string(),
-        port: 18081,
+        active_backend: std::env::var("LLAMA_BOARD_SMOKE_BACKEND").unwrap_or_default(),
+        active_build: std::env::var("LLAMA_BOARD_SMOKE_BUILD").unwrap_or_default(),
+        mmproj: std::env::var("LLAMA_BOARD_SMOKE_MMPROJ").unwrap_or_default(),
+        spec_type: std::env::var("LLAMA_BOARD_SMOKE_SPEC_TYPE").unwrap_or_else(|_| "none".into()),
+        spec_draft_model: std::env::var("LLAMA_BOARD_SMOKE_DRAFT").unwrap_or_default(),
+        port: std::env::var("LLAMA_BOARD_SMOKE_PORT")
+            .map(|value| value.parse().expect("valid smoke port"))
+            .unwrap_or(18081),
         ngl: 999,
         ctx_size: 4096,
         flash_attn: "on".into(),
         ..AppConfig::default()
+    }
+}
+
+#[test]
+#[ignore = "loads a real model; set LLAMA_BOARD_SMOKE=1 and run explicitly"]
+fn smoke_real_benchmark_cancel_keeps_progress() {
+    use llama_board_lib::bench;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    assert_eq!(std::env::var("LLAMA_BOARD_SMOKE").as_deref(), Ok("1"));
+    let model = std::env::var("LLAMA_BOARD_SMOKE_MODEL").expect("set smoke model");
+    let mut cfg = cfg_with(&model);
+    cfg.iters = 1;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let callback_cancel = cancel.clone();
+    let rows = Arc::new(Mutex::new(Vec::new()));
+    let callback_rows = rows.clone();
+    let progress: bench::BenchProgress = Arc::new(move |row| {
+        callback_rows.lock().unwrap().push(row.clone());
+        callback_cancel.store(true, Ordering::Release);
+    });
+    let timeout_cancel = cancel.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let watchdog = std::thread::spawn(move || {
+        if finished
+            .recv_timeout(std::time::Duration::from_secs(90))
+            .is_err()
+        {
+            timeout_cancel.store(true, Ordering::Release);
+        }
+    });
+    let result = bench::run_with_progress(&cfg, cancel, None, Some(progress));
+    let _ = done.send(());
+    watchdog.join().unwrap();
+    let result = result.expect("benchmark returned partial results");
+    assert_eq!(result.status, bench::BenchStatus::Cancelled);
+    assert!(
+        !rows.lock().unwrap().is_empty(),
+        "no live progress before cancellation"
+    );
+    assert!(
+        !result.rows.is_empty(),
+        "cancellation discarded completed rows"
+    );
+    println!(
+        "[smoke] cancelled benchmark retained {} rows",
+        result.rows.len()
+    );
+}
+
+// Keep cleanup armed across every assertion and network error, including panic.
+struct SmokeGuard {
+    state: Arc<Mutex<server::ServerState>>,
+    key_file: Option<std::path::PathBuf>,
+}
+
+struct SmokeLog(std::path::PathBuf);
+
+impl Drop for SmokeLog {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+impl Drop for SmokeGuard {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        server::kill(&mut state.child, None);
+        server::cleanup_api_key_file(self.key_file.as_deref());
     }
 }
 
@@ -28,16 +107,56 @@ fn cfg_with(model: &str) -> AppConfig {
 #[test]
 #[ignore = "downloads/loads a multi-GB model; set LLAMA_BOARD_SMOKE=1 and run with --ignored"]
 fn smoke_real_server_and_chat() {
-    if std::env::var_os("LLAMA_BOARD_SMOKE").is_none() {
-        eprintln!("[SMOKE SKIP] Set LLAMA_BOARD_SMOKE=1 and LLAMA_BOARD_SMOKE_MODEL to run the real-server smoke test.");
-        return;
-    }
+    assert_eq!(
+        std::env::var("LLAMA_BOARD_SMOKE").as_deref(),
+        Ok("1"),
+        "set LLAMA_BOARD_SMOKE=1 for the explicitly requested live test"
+    );
     let model = std::env::var("LLAMA_BOARD_SMOKE_MODEL").expect("set LLAMA_BOARD_SMOKE_MODEL");
-    let cfg = cfg_with(&model);
+    let mut cfg = cfg_with(&model);
+    let log = SmokeLog(
+        std::env::temp_dir().join(format!("llama-board-smoke-{}.log", uuid::Uuid::new_v4())),
+    );
+    let log_path = &log.0;
+    cfg.server_args.extend([
+        "--log-file".into(),
+        log_path.to_string_lossy().into_owned(),
+        "--verbosity".into(),
+        "4".into(),
+    ]);
+    cfg.reasoning = "off".into();
 
     let ring = Arc::new(ErrBuf::default());
     let api_key = "smoke-token";
-    let (child, url, api_key_file) = match server::spawn(&cfg, api_key, &ring) {
+    let mut resolved_gpu = llama_board_lib::gpu::ResolvedGpu {
+        device_flag: std::env::var("LLAMA_BOARD_SMOKE_DEVICE").ok(),
+        main_gpu_index: std::env::var("LLAMA_BOARD_SMOKE_MAIN_INDEX")
+            .ok()
+            .map(|value| value.parse().expect("main GPU index")),
+        split_mode: std::env::var("LLAMA_BOARD_SMOKE_MAIN_INDEX")
+            .ok()
+            .map(|_| "none"),
+        ..Default::default()
+    };
+    if std::env::var("LLAMA_BOARD_SMOKE_VALIDATE_PLACEMENT").as_deref() == Ok("1") {
+        cfg.gpu.gpu_ids = resolved_gpu
+            .device_flag
+            .as_deref()
+            .expect("set smoke device")
+            .split(',')
+            .map(|name| format!("runtime:{}:{name}", cfg.active_backend))
+            .collect();
+        cfg.gpu.main_gpu = cfg.gpu.gpu_ids.first().cloned();
+        let validation_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        resolved_gpu = validation_runtime
+            .block_on(llama_board_lib::validate_launch_config(&mut cfg))
+            .expect("application launch configuration validation");
+        assert_eq!(resolved_gpu.main_gpu_index, Some(0));
+    }
+    let (child, url, api_key_file) = match server::spawn(&cfg, api_key, &ring, &resolved_gpu) {
         Ok(v) => v,
         Err(e) => panic!("spawn failed: {e}\nstderr: {}", ring.tail()),
     };
@@ -48,7 +167,30 @@ fn smoke_real_server_and_chat() {
         api_key.to_string(),
         model.clone(),
         cfg.mmproj.clone(),
+        cfg.spec_draft_model.clone(),
     );
+    let _guard = SmokeGuard {
+        state: shared.clone(),
+        key_file: api_key_file.clone(),
+    };
+    if std::env::var("LLAMA_BOARD_SMOKE_CANCEL_LOAD").as_deref() == Ok("1") {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(_guard);
+        assert!(
+            shared.lock().unwrap().child.is_none(),
+            "cancelled load retained a process"
+        );
+        assert!(
+            std::net::TcpStream::connect_timeout(
+                &format!("127.0.0.1:{}", cfg.port).parse().unwrap(),
+                std::time::Duration::from_secs(1)
+            )
+            .is_err(),
+            "cancelled load retained a listener"
+        );
+        println!("[smoke] loading cancelled; process and port released");
+        return;
+    }
     println!("[smoke] spawned, url={url} — waiting for /health…");
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -64,10 +206,21 @@ fn smoke_real_server_and_chat() {
     println!("[smoke] server is READY");
 
     let base = url.replace("/v1", "");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .unwrap();
+    let content = if cfg.mmproj.is_empty() {
+        serde_json::json!("Reply with exactly: OK")
+    } else {
+        serde_json::json!([
+            {"type":"text","text":"Describe this image briefly."},
+            {"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6LZkAAAAASUVORK5CYII="}}
+        ])
+    };
     let body = serde_json::json!({
         "model": "smoke",
-        "messages": [{"role":"user","content":"Reply with exactly: OK"}],
+        "messages": [{"role":"user","content":content}],
         "stream": true,
         "max_tokens": 16,
         "temperature": 0.0
@@ -86,18 +239,61 @@ fn smoke_real_server_and_chat() {
     let got = rt.block_on(async {
         let mut buf = Vec::new();
         let mut stream = resp;
-        while let Ok(Some(chunk)) = stream.chunk().await {
+        while let Some(chunk) = stream.chunk().await.expect("SSE stream failed") {
             buf.extend_from_slice(&chunk);
         }
         String::from_utf8_lossy(&buf).to_string()
     });
-    println!("[smoke] streamed response ({} bytes):\n{}", got.len(), got);
+    println!("[smoke] completed streaming response ({} bytes)", got.len());
     assert!(!got.is_empty(), "no SSE data received");
     assert!(got.contains("data:"), "expected SSE 'data:' frames");
+    let log_bytes = std::fs::read(log_path).expect("read full runtime log");
+    let tail = String::from_utf8_lossy(&log_bytes);
+    for line in tail.lines().filter(|line| {
+        line.contains("offload") || line.contains("buffer size") || line.contains("eval time")
+    }) {
+        println!("[smoke] {line}");
+    }
+    if let Ok(device) = std::env::var("LLAMA_BOARD_SMOKE_DEVICE") {
+        for name in device.split(',') {
+            assert!(
+                tail.contains(name),
+                "selected GPU {name} absent from runtime log"
+            );
+        }
+        assert!(
+            tail.contains("offloaded") && !tail.contains("offloaded 0/"),
+            "GPU offload not confirmed"
+        );
+    }
+    assert!(got.contains("[DONE]"), "stream did not complete: {got}");
+    let mut answer = String::new();
+    for data in got.lines().filter_map(|line| line.strip_prefix("data: ")) {
+        if data == "[DONE]" {
+            continue;
+        }
+        let frame: serde_json::Value = serde_json::from_str(data).expect("valid SSE JSON");
+        assert!(frame.get("error").is_none(), "runtime error frame: {frame}");
+        if let Some(text) = frame["choices"][0]["delta"]["content"].as_str() {
+            answer.push_str(text);
+        }
+    }
+    assert!(!answer.trim().is_empty(), "stream contained no answer");
+    if cfg.mmproj.is_empty() {
+        assert_eq!(answer.trim(), "OK", "model did not follow the smoke prompt");
+    }
 
     server::kill(
         &mut shared.lock().expect("server state lock").child,
         Some(ring.clone()),
     );
-    println!("[smoke] killed server. ring tail: {}", ring.tail().trim());
+    assert!(
+        std::net::TcpStream::connect_timeout(
+            &format!("127.0.0.1:{}", cfg.port).parse().unwrap(),
+            std::time::Duration::from_secs(1)
+        )
+        .is_err(),
+        "server port still open after shutdown"
+    );
+    println!("[smoke] killed server; port released");
 }

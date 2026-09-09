@@ -117,6 +117,35 @@
 .developer-section-action, .developer-section-status { flex: 0 0 auto; }
 .tuning-preset-bar { min-height: 32px; overflow-x: auto; scrollbar-width: thin; gap: 8px; }
 
+.session-list-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: var(--board-radius-md);
+  color: var(--board-ink);
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.session-list-row:hover { background: var(--board-surface-muted); border-color: var(--board-border); }
+.session-list-row.is-selected { background: var(--board-accent-soft); border-color: var(--board-border-accent); }
+.session-state {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--board-muted);
+  background: var(--board-surface-muted);
+}
+.session-state--running { color: var(--board-success); background: var(--tone-success-bg); }
+.session-state--starting, .session-state--stopping { color: var(--board-warning); background: var(--tone-warning-bg); }
+.session-state--failed, .session-state--crashed { color: var(--board-danger); background: var(--tone-error-bg); }
+
 /* List rows — refined */
 .app-list-row {
   border: 1px solid transparent;

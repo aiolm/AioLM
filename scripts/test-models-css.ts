@@ -50,4 +50,14 @@ assert.match(appComponentsCss, /@layer components\s*\{\s*\.app-input\s*\{/);
 assert.match(appResponsiveCss, /grid-template-rows:\s*48px minmax\(0, 1fr\)/);
 assert.match(appResponsiveCss, /padding:\s*5px 8px/);
 
-console.log("Models.tsx and shared CSS cascade regressions passed");
+// The outer page owns vertical scrolling. The stacked project grid must keep
+// its intrinsic height so the saved-project list cannot collapse on narrow windows.
+const projectsTsx = readFileSync(new URL("../src/panels/Projects.tsx", import.meta.url), "utf8");
+assert.match(projectsTsx, /className="grid shrink-0 items-start gap-4 lg:grid-cols-/);
+assert.doesNotMatch(projectsTsx, /<aside className="min-h-0/);
+
+const viteConfig = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");
+assert.ok(viteConfig.includes('"**/.codex-target/**"'), "runtime builds must not trigger dev reloads");
+assert.ok(viteConfig.includes('"**/coverage/**"'), "coverage reports must not trigger dev reloads");
+
+console.log("Models.tsx, Projects.tsx and shared CSS cascade regressions passed");

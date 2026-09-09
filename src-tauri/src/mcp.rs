@@ -7,7 +7,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 const MCP_FILE: &str = "mcp-servers.json";
@@ -206,7 +207,7 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
     if !server.enabled {
         return Err("MCP server is disabled".into());
     }
-    let mut command = Command::new(&server.command);
+    let mut command = crate::procutil::tokio_command(&server.command);
     command
         .args(&server.args)
         .env_clear()
@@ -226,7 +227,11 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
         .stdout
         .take()
         .ok_or_else(|| "MCP server stdout was not captured".to_string())?;
-    if let Some(mut stderr) = child.stderr.take() {
+    // Drained but discarded: an MCP server's stderr is diagnostic chatter,
+    // not protocol traffic. The handle is still retained and joined in
+    // `close_session` so the reader task cannot outlive the session it
+    // belongs to.
+    let stderr_drain = child.stderr.take().map(|mut stderr| {
         tokio::spawn(async move {
             let mut buffer = [0_u8; 4096];
             loop {
@@ -235,12 +240,13 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
                     Ok(_) => {}
                 }
             }
-        });
-    }
+        })
+    });
     let mut session = McpSession {
         child,
         stdin,
         stdout: BufReader::new(stdout),
+        stderr_drain,
     };
     send_message(
         &mut session.stdin,
@@ -262,6 +268,7 @@ struct McpSession {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    stderr_drain: Option<JoinHandle<()>>,
 }
 
 async fn send_message(
@@ -349,22 +356,21 @@ async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<V
 async fn close_session(mut session: McpSession) {
     #[cfg(windows)]
     {
-        let Some(pid) = session.child.id() else {
-            let _ = session.child.kill().await;
-            let _ = session.child.wait().await;
-            return;
-        };
-        let killed_tree = tokio::task::spawn_blocking(move || {
-            let pid = pid.to_string();
-            std::process::Command::new("taskkill")
-                .args(["/PID", &pid, "/T", "/F"])
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false)
-        })
-        .await
-        .unwrap_or(false);
-        if !killed_tree {
+        if let Some(pid) = session.child.id() {
+            let killed_tree = tokio::task::spawn_blocking(move || {
+                let pid = pid.to_string();
+                crate::procutil::std_command("taskkill")
+                    .args(["/PID", &pid, "/T", "/F"])
+                    .status()
+                    .map(|status| status.success())
+                    .unwrap_or(false)
+            })
+            .await
+            .unwrap_or(false);
+            if !killed_tree {
+                let _ = session.child.kill().await;
+            }
+        } else {
             let _ = session.child.kill().await;
         }
     }
@@ -373,6 +379,12 @@ async fn close_session(mut session: McpSession) {
         let _ = session.child.kill().await;
     }
     let _ = session.child.wait().await;
+    // The child's stdio pipes close on exit, which lets this reader task
+    // finish on its own; joining it here guarantees the task is gone before
+    // the session is considered closed instead of leaking it indefinitely.
+    if let Some(drain) = session.stderr_drain.take() {
+        let _ = drain.await;
+    }
 }
 
 pub async fn list(app: AppHandle) -> Result<Vec<McpServer>, String> {

@@ -214,7 +214,7 @@ jobs:
         run: |
           $assetDir = "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
-          $files = @(Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse -File | Where-Object {
+          $files = @(Get-ChildItem -Path ".codex-target/release/bundle" -Recurse -File | Where-Object {
             $_.Name -like "llama-board_*_x64-setup.exe" -or $_.Name -like "llama-board_*_x64_en-US.msi"
           })
           if ($files.Count -ne 2) { throw "Expected exactly one NSIS and one MSI installer asset, found $($files.Count)" }
@@ -358,7 +358,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ needs.prepare.outputs.target_sha }}
           body: |
-            Code signing policy: https://github.com/joowon-jang/llama-board/blob/main/CODE_SIGNING_POLICY.md
+            Code signing policy: https://github.com/llama-board/llama-board/blob/main/CODE_SIGNING_POLICY.md
             Signing mode: ${{ steps.signing.outputs.mode }}
             ${{ steps.signpath.outputs.signing-request-web-url && format('SignPath signing request: {0}', steps.signpath.outputs.signing-request-web-url) || '' }}
             ${{ steps.signing.outputs.mode == 'unsigned' && 'This release is unsigned because SignPath is not configured. Verify the SHA-256 checksum before installing.' || '' }}

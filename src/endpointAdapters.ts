@@ -313,13 +313,14 @@ export function buildNativeChatRequestBody(
     input,
     stream: true,
     store: true,
-    temperature: sampling.temperature,
-    top_p: sampling.top_p,
-    top_k: sampling.top_k,
+    ...(!sampling.runtime_defaults?.includes("temperature") ? { temperature: sampling.temperature } : {}),
+    ...(!sampling.runtime_defaults?.includes("top_p") ? { top_p: sampling.top_p } : {}),
+    ...(!sampling.runtime_defaults?.includes("top_k") ? { top_k: sampling.top_k } : {}),
     system_prompt: system && typeof system.content === "string" ? system.content : undefined,
     previous_response_id: previousResponseId,
   };
-  const reasoning = sampling.reasoning === "off" ? "off" : sampling.reasoning_effort;
+  const reasoning = sampling.reasoning === "off" && !sampling.runtime_defaults?.includes("reasoning")
+    ? "off" : !sampling.runtime_defaults?.includes("reasoning_effort") ? sampling.reasoning_effort : undefined;
   if (reasoning && reasoning !== "default") body.reasoning = reasoning as NativeChatRequestBody["reasoning"];
   return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined)) as NativeChatRequestBody;
 }
@@ -344,9 +345,9 @@ export function buildAnthropicMessagesRequestBody(
     max_tokens: requestedMaxTokens,
     stream: true,
     system: system && typeof system.content === "string" ? system.content : undefined,
-    temperature: sampling.temperature,
-    top_p: sampling.top_p,
-    top_k: sampling.top_k,
+    ...(!sampling.runtime_defaults?.includes("temperature") ? { temperature: sampling.temperature } : {}),
+    ...(!sampling.runtime_defaults?.includes("top_p") ? { top_p: sampling.top_p } : {}),
+    ...(!sampling.runtime_defaults?.includes("top_k") ? { top_k: sampling.top_k } : {}),
     tools: tools.length ? tools : undefined,
   };
   return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined)) as AnthropicMessagesRequestBody;

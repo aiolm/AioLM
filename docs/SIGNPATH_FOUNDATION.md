@@ -7,7 +7,7 @@ This repository contains the project-side changes needed to apply for SignPath F
 | Foundation condition | Repository evidence |
 | --- | --- |
 | Open-source license | [MIT LICENSE](../LICENSE) and [NOTICE](../NOTICE) |
-| Released and documented product | [GitHub Releases](https://github.com/joowon-jang/llama-board/releases), [README](../README.md), and [Install guide](INSTALL.md) |
+| Released and documented product | [GitHub Releases](https://github.com/llama-board/llama-board/releases), [README](../README.md), and [Install guide](INSTALL.md) |
 | Source/build ownership | Public source repository and [release workflow](../.github/workflows/release.yml) |
 | Code signing policy | [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md), linked from the home/download pages |
 | Privacy policy | [PRIVACY.md](../PRIVACY.md) |
@@ -20,7 +20,7 @@ This repository contains the project-side changes needed to apply for SignPath F
 
 1. Apply at [SignPath Foundation](https://signpath.org/apply.html) and provide the repository URL, MIT license, existing Windows release, active maintenance, and the project policy/privacy links.
 2. In SignPath, add the predefined `GitHub.com` Trusted Build System to the organization and link it to the project. Install the SignPath GitHub App for this repository when requested by the connector setup.
-3. Create a project named `llama-board` with repository URL `https://github.com/joowon-jang/llama-board`.
+3. Create a project named `llama-board` with repository URL `https://github.com/llama-board/llama-board`.
 4. Add the committed XML file as an artifact configuration and use its slug for the `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` repository variable.
 5. Create a `release-signing` policy using the SignPath Foundation certificate. Enable Trusted Build System verification and origin verification, restrict the release policy to `main`, enable the approval process, and add the Approver listed in [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md).
 6. Create a SignPath API token for a submitter/CI user with permission to submit requests for this project and policy. Store it only as the GitHub Actions secret `SIGNPATH_API_TOKEN`.
@@ -45,14 +45,14 @@ Use the following facts in the application:
 
 ```text
 Project: llama-board
-Repository: https://github.com/joowon-jang/llama-board
+Repository: https://github.com/llama-board/llama-board
 License: MIT
 Platform: Windows x64 (NSIS and MSI installers)
 Purpose: Open-source local-first desktop manager for llama.cpp runtimes, models, chat, and benchmarks
 Signing artifacts: Project-built NSIS/MSI installers and install.ps1
 Build system: GitHub Actions on GitHub-hosted runners
 Release approval: Manual approval through SignPath release-signing policy
-Policy: https://github.com/joowon-jang/llama-board/blob/main/CODE_SIGNING_POLICY.md
-Privacy: https://github.com/joowon-jang/llama-board/blob/main/PRIVACY.md
+Policy: https://github.com/llama-board/llama-board/blob/main/CODE_SIGNING_POLICY.md
+Privacy: https://github.com/llama-board/llama-board/blob/main/PRIVACY.md
 ```
 

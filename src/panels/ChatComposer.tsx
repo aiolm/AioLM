@@ -55,7 +55,9 @@ export default function ChatComposer({
         </div>
       )}
 
-      <div className="chat-mcp-tools mt-2.5 rounded-lg border p-3" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+      <details className="chat-mcp-tools mt-2.5 rounded-lg border" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+        <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium" style={{ color: "var(--board-ink)" }}>{ct("loadMcpTools")} <span className="ml-1 font-normal" style={{ color: "var(--board-faint)" }}>{mcpDefinitions.length ? `· ${mcpDefinitions.length}` : `· ${ct("mcpOptional")}`}</span></summary>
+        <div className="border-t p-3" style={{ borderColor: "var(--board-border)" }}>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={refreshMcpTools} disabled={disabled || phase !== "idle" || loadingMcpTools} className="app-button app-button--secondary app-button--sm">{loadingMcpTools ? ct("loadingMcpTools") : ct("loadMcpTools")}</button>
           <span className="text-[11px]" style={{ color: "var(--board-faint)" }}>{mcpDefinitions.length ? `${mcpDefinitions.length} tools · ${ct("mcpApproval")}` : ct("mcpOptional")}</span>
@@ -65,7 +67,8 @@ export default function ChatComposer({
             <div className="flex flex-wrap gap-x-3 gap-y-1.5">{mcpCatalog.map((entry) => { const key = `${entry.serverId}:${entry.tool.name}`; const checked = selectedMcpTools.includes(key); return <label key={key} className="flex max-w-full items-center gap-1.5 text-[11px]" style={{ color: "var(--board-muted)" }}><input type="checkbox" checked={checked} onChange={() => toggleMcpTool(key)} disabled={phase !== "idle"} style={{ accentColor: "var(--board-accent-solid)" }} /><span className="max-w-52 truncate" title={`${entry.serverName}: ${entry.tool.name}`}>{entry.serverName} · {entry.tool.name}</span></label>; })}</div>
           </div>
         )}
-      </div>
+        </div>
+      </details>
 
       <div className="chat-pending-tool-slot">
         {pendingToolCall && <div className="rounded-lg border p-3.5 text-xs shadow-xl" style={{ borderColor: "var(--tone-warning-border)", background: "var(--tone-warning-bg)", color: "var(--tone-warning-ink)" }} role="alert"><div className="font-semibold">{ct("mcpApprovalRequired")}</div><p className="mt-1"><span style={{ color: "var(--board-ink)" }}>{pendingToolCall.serverName}</span> <span className="opacity-40">·</span> <code className="rounded px-1 py-0.5 font-mono text-[11px]" style={{ background: "var(--board-mono-bg)", color: "var(--board-mono-ink)" }}>{pendingToolCall.toolName}</code></p><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded p-2.5 font-mono text-[11px]" style={{ background: "rgb(0 0 0 / 18%)", color: "inherit" }}>{JSON.stringify(pendingToolCall.argumentsValue, null, 2)}</pre><div className="mt-3 flex gap-2"><button type="button" onClick={onApproveTool} className="app-button app-button--primary app-button--sm">{ct("approveTool")}</button><button type="button" onClick={onRejectTool} className="app-button app-button--secondary app-button--sm">{ct("rejectTool")}</button></div></div>}

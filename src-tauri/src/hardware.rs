@@ -53,11 +53,20 @@ pub struct GpuDevice {
     pub name: String,
     pub vram_mb: Option<u64>,
     pub driver: Option<String>,
-    /// Lower-case `vendor:device`, e.g. `1002:7551`.
+    /// Lower-case `vendor:device`, e.g. `1002:7551`. Identifies the *chipset*,
+    /// not the physical card: two identical cards installed side by side
+    /// share the same `pci_id`.
     pub pci_id: Option<String>,
     /// Integrated parts share system memory and are a poor fit for the
     /// vendor-specific compute runtimes even when the vendor matches.
     pub integrated: bool,
+    /// Identifies this specific physical device, stable across app restarts
+    /// (and, on the platforms above, across reboots), so a config that pins a
+    /// GPU by id keeps pointing at the same card even when a second, chipset-
+    /// identical card is also installed. Never derived from this process's
+    /// own enumeration order — see each `detect_gpus` for how it is built.
+    #[serde(default)]
+    pub stable_id: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -328,6 +337,14 @@ mod windows_detect {
                 name: description,
                 vram_mb,
                 driver: read_string(&adapter, "DriverVersion"),
+                // `subkey` is the display class's own persistent per-adapter
+                // instance key (e.g. "0000", "0001"), assigned by Windows
+                // when the driver is installed and read back unchanged on
+                // every later boot — unlike this loop's `index`, it is not
+                // recomputed by our own enumeration, so it survives across
+                // detection calls and distinguishes two installed cards that
+                // share a chipset (and therefore a `pci_id`).
+                stable_id: format!("{}#{subkey}", pci_id.as_deref().unwrap_or("unknown")),
                 pci_id,
             });
         }
@@ -389,12 +406,26 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
             .and_then(|value| value.parse::<u64>().ok())
             .map(|bytes| bytes / (1024 * 1024));
         let label = read("product_name").unwrap_or_else(|| format!("PCI {vendor_raw}"));
+        // `device` is a symlink into /sys/bus/pci/devices/<bus-address>; the
+        // link target's file name is the card's real PCI bus/slot/function
+        // address (e.g. "0000:03:00.0"), which is unique per physical card
+        // even when two installed cards share a chipset and therefore a
+        // `pci_id`. Fall back to the sysfs card slot name (still stable
+        // across detection calls, just not tied to the physical slot) when
+        // the symlink cannot be read.
+        let bus_address = std::fs::read_link(&device).ok().and_then(|target| {
+            target
+                .file_name()
+                .map(|value| value.to_string_lossy().into_owned())
+        });
+        let stable_id = bus_address.unwrap_or_else(|| name.clone());
         gpus.push(GpuDevice {
             vendor: GpuVendor::from_pci(vendor_id),
             integrated: looks_integrated(&label, vram_mb),
             name: label,
             vram_mb,
             driver: None,
+            stable_id,
             pci_id: Some(format!("{:04x}:{device_hex}", vendor_id)),
         });
     }
@@ -414,6 +445,9 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
                 driver: None,
                 pci_id: None,
                 integrated: true,
+                // Apple silicon exposes exactly one system GPU; there is
+                // never a second card to disambiguate from.
+                stable_id: "apple-gpu-0".into(),
             }],
             "macos-arch".into(),
         )
@@ -463,6 +497,7 @@ mod tests {
             driver: None,
             pci_id: None,
             integrated,
+            stable_id: format!("test-{name}"),
         }
     }
 
@@ -547,5 +582,51 @@ mod tests {
         };
         let value = fingerprint("windows", "x86_64", &cpu, &[]);
         assert!(value.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// Two installed cards with an identical chipset share a `name`/`pci_id`
+    /// (they are, after all, the same product), so anything keying off those
+    /// fields alone cannot tell them apart. `stable_id` must still let a
+    /// config pin one specific card.
+    #[test]
+    fn duplicate_chipset_gpus_are_distinguished_by_stable_id_not_pci_id_or_index() {
+        let first = GpuDevice {
+            vendor: GpuVendor::Nvidia,
+            name: "NVIDIA GeForce RTX 4090".into(),
+            vram_mb: Some(24564),
+            driver: Some("floor-driver".into()),
+            pci_id: Some("10de:2684".into()),
+            integrated: false,
+            stable_id: "10de:2684#0000".into(),
+        };
+        let second = GpuDevice {
+            stable_id: "10de:2684#0001".into(),
+            ..first.clone()
+        };
+        assert_eq!(first.pci_id, second.pci_id, "same chipset, by construction");
+        assert_eq!(first.name, second.name, "same chipset, by construction");
+        assert_ne!(
+            first.stable_id, second.stable_id,
+            "duplicate chipset cards must still resolve to distinct stable ids"
+        );
+
+        let profile = DeviceProfile {
+            schema_version: DEVICE_PROFILE_SCHEMA,
+            os: "windows".into(),
+            arch: "x86_64".into(),
+            cpu: CpuInfo {
+                name: "CPU".into(),
+                logical_cores: 16,
+            },
+            gpus: vec![first.clone(), second.clone()],
+            detection: "test".into(),
+            fingerprint: String::new(),
+        };
+        // Looking a card up by its stable id must return that exact card,
+        // never merely "a card with this pci_id" (there are two).
+        let find = |id: &str| profile.gpus.iter().find(|gpu| gpu.stable_id == id);
+        assert_eq!(find("10de:2684#0000"), Some(&first));
+        assert_eq!(find("10de:2684#0001"), Some(&second));
+        assert_eq!(find("10de:2684#missing"), None);
     }
 }

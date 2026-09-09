@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { BENCHMARK_RECORD_SCHEMA, benchmarkCsv, benchmarkMetrics, classifyLifecycleError, configExport, deriveTokensPerSecond, isServerBusy, isServerRunning, lifecycleErrorMessage, nextPollDelay, normalizeDisplayPath, normalizeDisplayPathLines, normalizeDisplayText, parseConfigExport, shouldPoll } from "../src/lifecycleUtils.ts";
+import { BENCHMARK_RECORD_SCHEMA, benchmarkCsv, benchmarkMetrics, classifyLifecycleError, configExport, deriveTokensPerSecond, isLifecycleCancellation, isServerBusy, isServerRunning, lifecycleErrorMessage, nextPollDelay, normalizeDisplayPath, normalizeDisplayPathLines, normalizeDisplayText, parseConfigExport, shouldPoll } from "../src/lifecycleUtils.ts";
 
 assert.equal(isServerRunning("running"), true);
 for (const state of ["starting", "stopping", "stopped", "failed", "crashed", ""]) {
@@ -16,6 +16,8 @@ assert.equal(classifyLifecycleError(new Error("address already in use")), "port"
 assert.equal(classifyLifecycleError(new Error("out of memory")), "memory");
 assert.equal(classifyLifecycleError(new Error("startup timeout")), "timeout");
 assert.match(lifecycleErrorMessage("start", new Error("port bind failed")), /port/i);
+assert.equal(isLifecycleCancellation(new Error("server start cancelled")), true);
+assert.equal(isLifecycleCancellation(new Error("server failed to load")), false);
 assert.equal(nextPollDelay(1000, 0), 1000);
 assert.equal(nextPollDelay(1000, 5), 10000);
 assert.equal(shouldPoll("hidden"), false);

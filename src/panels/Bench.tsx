@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import type { AppStore } from "../store";
 import { parseNumericInput } from "./tuningValidation";
 import { useI18n } from "../i18n";
 import { benchmarkCsv, benchmarkFingerprint, benchmarkMetrics, BENCHMARK_RECORD_SCHEMA, isServerRunning, normalizeDisplayPath, normalizeDisplayText, type BenchmarkDevice, type BenchmarkRecord } from "../lifecycleUtils";
+import { finishTask, registerTask, updateTask } from "../taskRegistry";
 
 const BENCH_HISTORY_KEY = "llama-board-benchmark-history.v1";
 
@@ -39,6 +40,14 @@ function downloadText(name: string, text: string, type: string) {
   const anchor = document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click(); URL.revokeObjectURL(url);
 }
 
+function benchmarkStatusLabel(status: api.BenchmarkRunState, t: ReturnType<typeof useI18n>["t"]): string {
+  if (status === "cancelled") return t("ui.benchStateCancelled");
+  if (status === "crashed" || status === "partial") return t("ui.benchStateCrashed");
+  if (status === "failed") return t("ui.benchStateFailed");
+  if (status === "running") return t("ui.benchStreaming");
+  return t("ui.benchStateCompleted");
+}
+
 export default function BenchPanel({ store }: { store: AppStore }) {
   const { t } = useI18n();
   const cfg = store.cfg;
@@ -52,6 +61,11 @@ export default function BenchPanel({ store }: { store: AppStore }) {
   const [itersDirty, setItersDirty] = useState(false);
   const [history, setHistory] = useState<BenchmarkRecord[]>(readHistory);
   const [device, setDevice] = useState<api.DeviceReport | null>(null);
+  const [runStatus, setRunStatus] = useState<api.BenchmarkRunState | null>(null);
+  const rowsRef = useRef<api.BenchRow[]>([]);
+  const runCfgRef = useRef<api.AppConfig | null>(null);
+  const cancelRequestedRef = useRef(false);
+  const runActiveRef = useRef(false);
 
   useEffect(() => {
     void api.deviceProfile().then(setDevice).catch(() => setDevice(null));
@@ -61,10 +75,49 @@ export default function BenchPanel({ store }: { store: AppStore }) {
     if (configuredIters !== undefined && !itersDirty) setItersDraft(String(configuredIters));
   }, [configuredIters, itersDirty]);
 
+  useEffect(() => {
+    if (typeof api.onBenchmarkProgress !== "function") return undefined;
+    let mounted = true;
+    let unlisten: (() => void) | null = null;
+    void api.onBenchmarkProgress((progress) => {
+      if (!mounted || !runActiveRef.current) return;
+      const duplicate = rowsRef.current.some((row) => row.test === progress.row.test && row.size === progress.row.size && row.batch === progress.row.batch && row.tps === progress.row.tps);
+      if (!duplicate) {
+        rowsRef.current = [...rowsRef.current, progress.row];
+        setRows(rowsRef.current);
+      }
+      updateTask("benchmark-active", { phase: t("ui.benchStreaming"), received: rowsRef.current.length });
+    }).then((nextUnlisten) => {
+      if (mounted) unlisten = nextUnlisten;
+      else nextUnlisten();
+    }).catch(() => {
+      // Browser preview and older desktop builds do not expose benchmark events.
+    });
+    return () => { mounted = false; unlisten?.(); };
+  }, [t]);
+
   const serverRunning = isServerRunning(store.status.state);
   const model = cfg?.active_model ?? "";
   const displayModel = normalizeDisplayPath(model);
   const canRun = !!cfg && !!model && phase === "idle" && !serverRunning && !store.busy;
+
+  const saveRecord = (runCfg: api.AppConfig, resultRows: api.BenchRow[], status: BenchmarkRecord["status"], message?: string | null) => {
+    const record: BenchmarkRecord = {
+      schemaVersion: BENCHMARK_RECORD_SCHEMA,
+      id: `bench-${Date.now().toString(36)}`,
+      device: toBenchmarkDevice(device),
+      runtimeDefaults: [...(runCfg.runtime_defaults ?? [])],
+      fingerprint: benchmarkFingerprint({ model: runCfg.active_model, backend: runCfg.active_backend, build: runCfg.active_build, ctx: runCfg.ctx_size, ngl: runCfg.ngl, threads: runCfg.threads, parallel: runCfg.parallel, iters: runCfg.iters, runtimeDefaults: runCfg.runtime_defaults }),
+      createdAt: Date.now(), model: runCfg.active_model, backend: runCfg.active_backend, build: runCfg.active_build, ctx: runCfg.ctx_size, ngl: runCfg.ngl, threads: runCfg.threads, parallel: runCfg.parallel, iters: runCfg.iters,
+      rows: benchmarkMetrics(resultRows), status, error: message ?? undefined,
+    };
+    // Persist before touching component state: the benchmark promise may
+    // finish after its panel was unmounted by a section/tab change.
+    const current = readHistory();
+    const next = [record, ...current].slice(0, 20);
+    try { localStorage.setItem(BENCH_HISTORY_KEY, JSON.stringify(next)); } catch { /* optional */ }
+    setHistory(next);
+  };
 
   const run = async () => {
     if (!cfg) return;
@@ -72,32 +125,41 @@ export default function BenchPanel({ store }: { store: AppStore }) {
     setInfo(null);
     setRows([]);
     setEffectiveArgs([]);
+    rowsRef.current = [];
+    cancelRequestedRef.current = false;
+    setRunStatus("running");
     setPhase("running");
+    const taskId = registerTask({ id: "benchmark-active", kind: "benchmark", label: t("panel.benchmark"), phase: t("ui.benchStreaming"), received: 0, interruptible: false, cancel: api.benchCancel });
     try {
       const parsed = parseNumericInput(itersDraft, 1);
       const iters = Math.min(100, Math.max(1, parsed ?? cfg.iters));
       setItersDraft(String(iters));
       setItersDirty(false);
       const runCfg = { ...cfg, iters };
+      runCfgRef.current = runCfg;
+      runActiveRef.current = true;
       const result = await api.runBench(runCfg);
-      setRows(result.rows);
-      setEffectiveArgs(result.args);
-      const record: BenchmarkRecord = {
-        schemaVersion: BENCHMARK_RECORD_SCHEMA,
-        id: `bench-${Date.now().toString(36)}`,
-        device: toBenchmarkDevice(device),
-        fingerprint: benchmarkFingerprint({ model, backend: runCfg.active_backend, build: runCfg.active_build, ctx: runCfg.ctx_size, ngl: runCfg.ngl, threads: runCfg.threads, parallel: runCfg.parallel, iters }),
-        createdAt: Date.now(), model, backend: runCfg.active_backend, build: runCfg.active_build, ctx: runCfg.ctx_size, ngl: runCfg.ngl, threads: runCfg.threads, parallel: runCfg.parallel, iters,
-        rows: benchmarkMetrics(result.rows),
-      };
-      const nextHistory = [record, ...history].slice(0, 20);
-      setHistory(nextHistory);
-      try { localStorage.setItem(BENCH_HISTORY_KEY, JSON.stringify(nextHistory)); } catch { /* optional */ }
+      const resultRows = result.rows?.length ? result.rows : rowsRef.current;
+      setRows(resultRows);
+      rowsRef.current = resultRows;
+      setEffectiveArgs(result.args ?? []);
+      const resultStatus = result.status ?? "complete";
+      const displayStatus: BenchmarkRecord["status"] = resultStatus === "partial" ? "partial" : resultStatus === "cancelled" ? "cancelled" : "complete";
+      setRunStatus(resultStatus);
+      if (result.message) setInfo(result.message);
+      saveRecord(runCfg, resultRows, displayStatus, result.message);
+      finishTask(taskId, displayStatus === "cancelled" ? "cancelled" : displayStatus === "partial" ? "crashed" : "completed", result.message ?? undefined);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
-      if (message.toLowerCase().includes("cancel")) setInfo(t("ui.benchCancelled"));
+      const cancelled = cancelRequestedRef.current || message.toLowerCase().includes("cancel");
+      const displayStatus: BenchmarkRecord["status"] = cancelled ? "cancelled" : "crashed";
+      setRunStatus(cancelled ? "cancelled" : "crashed");
+      if (cancelled) setInfo(t("ui.benchCancelled"));
       else setError(message);
+      if (runCfgRef.current) saveRecord(runCfgRef.current, rowsRef.current, displayStatus, message);
+      finishTask(taskId, cancelled ? "cancelled" : "crashed", message);
     } finally {
+      runActiveRef.current = false;
       setPhase("idle");
       void store.refreshStatus();
     }
@@ -105,7 +167,9 @@ export default function BenchPanel({ store }: { store: AppStore }) {
 
   const cancel = async () => {
     if (phase !== "running") return;
+    cancelRequestedRef.current = true;
     setPhase("canceling");
+    updateTask("benchmark-active", { state: "cancelling", phase: t("ui.benchCancelRequested") });
     setInfo(t("ui.benchCancelRequested"));
     try {
       await api.benchCancel();
@@ -175,6 +239,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
               {phase === "canceling" ? t("common.wait") : t("status.working")}
             </div>
           )}
+          {phase === "idle" && runStatus && <div className="mt-2 text-xs font-medium" style={{ color: runStatus === "complete" ? "var(--board-success)" : runStatus === "cancelled" ? "var(--board-warning)" : "var(--board-danger)" }} role="status" aria-live="polite">{benchmarkStatusLabel(runStatus, t)}</div>}
         </div>
       </div>
 
@@ -216,7 +281,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
           </div>
         )}
 
-        {rows.length === 0 && !error && phase === "idle" && (
+        {rows.length === 0 && !error && phase === "idle" && !runStatus && (
           <div className="p-6 text-center text-xs" style={{ color: "var(--board-faint)" }}>{t("panel.benchmarkEmpty")}</div>
         )}
 
@@ -226,7 +291,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
         </details>}
         {history.length > 0 && <section className="mt-4 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }} aria-labelledby="benchmark-history-heading">
           <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="benchmark-history-heading" className="app-section-title">{t("ui.benchHistory", { count: history.length })}</h2><button type="button" onClick={() => downloadText("llama-board-benchmarks.csv", benchmarkCsv(history), "text/csv") } className="app-button app-button--secondary app-button--sm">{t("ui.benchExportCsv")}</button></div>
-          <div className="mt-2.5 space-y-1.5">{history.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums" style={{ color: "var(--board-faint)" }}><span>{new Date(record.createdAt).toLocaleString()} · {normalizeDisplayPath(record.model).split(/[\\/]/).pop()}</span><span>{record.rows.map((row) => `${row.test}: ${row.value.toFixed(1)} ${row.unit}`).join(" · ")}</span></div>)}</div>
+          <div className="mt-2.5 space-y-1.5">{history.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums" style={{ color: "var(--board-faint)" }}><span>{new Date(record.createdAt).toLocaleString()} · {normalizeDisplayPath(record.model).split(/[\\/]/).pop()} · {benchmarkStatusLabel(record.status === "partial" ? "crashed" : record.status ?? "complete", t)}</span><span>{record.rows.length > 0 ? record.rows.map((row) => `${row.test}: ${row.value.toFixed(1)} ${row.unit}`).join(" · ") : record.error ?? "—"}</span></div>)}</div>
         </section>}
       </div>
     </div>

@@ -3,7 +3,14 @@ import * as api from "../api";
 import type { Locale } from "../i18nCatalog";
 import { canBuildPrBackend, isInstallCancellation } from "../runtimeUtils";
 import { translate } from "../i18nUnified";
+import { finishTask, registerTask } from "../taskRegistry";
 import type { BackendRow } from "./runtimesHelpers";
+
+const RUNTIME_TASK_ID = "runtime-operation";
+
+function beginRuntimeTask(label: string, phase: string, cancel = api.rtCancel): string {
+  return registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: false, cancel });
+}
 
 interface CommonDeps {
   locale: Locale;
@@ -35,14 +42,18 @@ export async function runInstall(
     return;
   }
   setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true } : item));
+  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"));
   try {
     await api.rtInstall(backend, info.build);
     deps.flashT(translate(deps.locale, "ui.installedOk", { backend, build: info.build }));
     await refresh();
+    finishTask(taskId, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isInstallCancellation(message)) deps.flashT(translate(deps.locale, "ui.installCancelled"));
+    const cancelled = isInstallCancellation(message);
+    if (cancelled) deps.flashT(translate(deps.locale, "ui.installCancelled"));
     else deps.setFailure(`${translate(deps.locale, "ui.installFailed")}: ${message}`);
+    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
   } finally {
     setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: false, progress: null } : item));
   }
@@ -82,6 +93,7 @@ export async function runExportRuntime(
   deps.setFailure(null);
   setBundleBusy(true);
   setBundleProgress(null);
+  const taskId = beginRuntimeTask(translate(deps.locale, "ui.exportRuntime"), translate(deps.locale, "ui.runtimeBundleWorking"));
   try {
     const info = await api.rtExport(backend, build);
     deps.flashT(translate(deps.locale, "ui.runtimeBundleExported", {
@@ -90,13 +102,16 @@ export async function runExportRuntime(
       path: info.path,
       sha: info.archive_sha256,
     }));
+    finishTask(taskId, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message === "runtime export cancelled" || isInstallCancellation(message)) {
+    const cancelled = message === "runtime export cancelled" || isInstallCancellation(message);
+    if (cancelled) {
       deps.flashT(translate(deps.locale, "ui.runtimeBundleCancelled"));
     } else {
       deps.setFailure(translate(deps.locale, "ui.runtimeBundleExportFailed") + ": " + message);
     }
+    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
   } finally {
     setBundleBusy(false);
     setBundleProgress(null);
@@ -119,17 +134,21 @@ export async function runImportRuntime(
   deps.setFailure(null);
   setBundleBusy(true);
   setBundleProgress(null);
+  const taskId = beginRuntimeTask(translate(deps.locale, "ui.importRuntimeBundle"), translate(deps.locale, "ui.runtimeBundleWorking"));
   try {
     const installed = await api.rtImport();
     deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: installed.backend, build: installed.build }));
     await refresh(true);
+    finishTask(taskId, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message === "runtime import cancelled" || isInstallCancellation(message)) {
+    const cancelled = message === "runtime import cancelled" || isInstallCancellation(message);
+    if (cancelled) {
       deps.flashT(translate(deps.locale, "ui.runtimeBundleCancelled"));
     } else {
       deps.setFailure(translate(deps.locale, "ui.runtimeBundleImportFailed") + ": " + message);
     }
+    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
   } finally {
     setBundleBusy(false);
     setBundleProgress(null);
@@ -221,6 +240,7 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
   state.setPrBusy(true);
   state.setActivePrBackend(backend);
   state.setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true, progress: null } : item));
+  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"));
   try {
     const installed = await api.rtInstallPr(backend, source, preview.commit);
     // A PR keeps one directory, so a rebuild swaps the bytes behind a row
@@ -231,10 +251,13 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
       : translate(deps.locale, "ui.installedPrOk", { backend, pr: installed.source?.pull_request ?? source }));
     state.setPrSource("");
     await state.refresh();
+    finishTask(taskId, "completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (isInstallCancellation(message)) deps.flashT(translate(deps.locale, "ui.installCancelled"));
+    const cancelled = isInstallCancellation(message);
+    if (cancelled) deps.flashT(translate(deps.locale, "ui.installCancelled"));
     else deps.setFailure(`${translate(deps.locale, "ui.installFailed")}: ${message}`);
+    finishTask(taskId, cancelled ? "cancelled" : "failed", message);
   } finally {
     state.prInstallInFlight.current = false;
     state.setPrBusy(false);

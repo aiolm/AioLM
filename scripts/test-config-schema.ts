@@ -12,3 +12,11 @@ assert.ok(rustFields.length > 0, "Rust AppConfig schema was not found");
 assert.ok(tsFields.length > 0, "TypeScript AppConfig schema was not found");
 assert.deepEqual(tsFields, rustFields, "Rust and TypeScript AppConfig fields drifted");
 console.log(`config schema parity passed (${rustFields.length} fields)`);
+
+for (const filename of ["tauri.conf.json", "tauri-cli-build.conf.json"]) {
+  const config = JSON.parse(readFileSync(new URL(`../src-tauri/${filename}`, import.meta.url), "utf8"));
+  const connect = config.app.security.csp.split(";").find((part: string) => part.trim().startsWith("connect-src "));
+  assert.ok(connect?.includes("http://127.0.0.1:*"), `${filename} must allow custom local session ports`);
+  assert.ok(connect?.includes("http://localhost:*"), `${filename} must allow localhost session ports`);
+  assert.ok(!connect?.split(/\s+/).includes("*"), `${filename} must not permit arbitrary origins`);
+}

@@ -13,19 +13,23 @@
 - 项目、Hugging Face Discover、开发者/MCP 网关
 - 服务器/采样调优
 
+在调优页面使用 **重置全部调优** 删除所有覆盖值（包括服务器参数与聊天 JSON），也可通过每个参数的 **恢复默认值** 单独重置。使用的是所选 llama.cpp 运行时与模型的默认值，而非固定推荐预设。通过 **自定义值** 可重新输入，配置也会保存默认值使用状态。模型文件、适配器、GPU 分配、运行时及已保存配置保持不变。服务器设置重启后生效，默认上下文大小与显存用量可能因运行时和模型而异。
+
 ## 平台支持
 
 目前支持 Windows x64。**计划支持 Linux（包括 NVIDIA DGX）和 macOS**。Linux/macOS 将使用 `curl | tar`，Windows 使用 `NSIS`/`MSI`。完成 SignPath Foundation 接入并获得手动批准后，Windows 发布安装程序会由 GitHub 托管的 CI 使用 Authenticode 签名；请验证发布的签名和 SHA-256 校验和。
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/joowon-jang/llama-board/releases) 获取最新版本。
+从 [GitHub Releases](https://github.com/llama-board/llama-board/releases) 获取最新版本。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 高级安装选项、验证、开发环境和 CLI 用法请参见 [docs/INSTALL.zh.md](docs/INSTALL.zh.md)、[docs/DEVELOPMENT.zh.md](docs/DEVELOPMENT.zh.md) 和 [docs/CLI.zh.md](docs/CLI.zh.md)。
+
+首次启动时不会预填模型目录，请在 Models 中选择本地 GGUF 目录。配置和已管理的运行时保存在标准 `%APPDATA%\llama-board\` 目录中。从使用旧桌面标识符的版本升级时，请不要删除这个共享配置目录。
 
 ## 代码签名政策 (Code signing policy)
 

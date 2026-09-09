@@ -283,18 +283,20 @@ function tuningFieldSuffix(key: string): string {
   return key.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
 }
 
+type FieldTranslator = (key: import("../i18nUnified").UnifiedKey, vars?: import("../i18nUnified").TranslationVars) => string;
+
 function translateFieldKey(
-  t: (key: any, vars?: any) => string,
+  t: FieldTranslator,
   key: string,
   fallback: string,
 ): string {
-  const translated = t(key as never);
+  const translated = t(key as import("../i18nUnified").UnifiedKey);
   // i18n returns the key itself when missing; fallback to hardcoded English
   return translated === key || translated.startsWith("extra.") || translated.startsWith("panel.") ? fallback : translated;
 }
 
 export function tuningFieldLabel(
-  t: (key: any, vars?: any) => string,
+  t: FieldTranslator,
   field: { key: string; label: string },
 ): string {
   const suffix = tuningFieldSuffix(field.key);
@@ -302,7 +304,7 @@ export function tuningFieldLabel(
 }
 
 export function tuningFieldHint(
-  t: (key: any, vars?: any) => string,
+  t: FieldTranslator,
   field: { key: string; hint?: string },
 ): string {
   const suffix = tuningFieldSuffix(field.key);
@@ -311,7 +313,7 @@ export function tuningFieldHint(
 }
 
 export function tuningFieldTooltip(
-  t: (key: any, vars?: any) => string,
+  t: FieldTranslator,
   field: { key: string; tooltip: TuningTooltip },
 ): TuningTooltip {
   const suffix = tuningFieldSuffix(field.key);

@@ -10,11 +10,16 @@ interface ChatConversationHeaderProps {
   activeProjectName: string | null;
   phase: "idle" | "thinking" | "streaming";
   onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt">>) => void;
+  sessionLabel: string;
+  sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
+  selectedSessionId: string;
+  onSelectSession: (id: string) => void;
   ct: (key: ChatTextKey) => string;
 }
 
 export default function ChatConversationHeader({
-  threadPanelOpen, setThreadPanelOpen, activeThread, headerSubtitle, activeProjectName, phase, onUpdateThread, ct,
+  threadPanelOpen, setThreadPanelOpen, activeThread, headerSubtitle, activeProjectName, phase, onUpdateThread,
+  sessionLabel, sessionOptions, selectedSessionId, onSelectSession, ct,
 }: ChatConversationHeaderProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
@@ -30,7 +35,7 @@ export default function ChatConversationHeader({
   }, []);
 
   return (
-    <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
+    <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       <div className="flex min-w-0 items-center gap-2">
         <button
           id="chat-thread-toggle-button"
@@ -47,6 +52,11 @@ export default function ChatConversationHeader({
           <p className="truncate text-xs tabular-nums" style={{ color: "var(--board-faint)" }}>{headerSubtitle}{activeProjectName ? ` · ${activeProjectName}` : ""}</p>
         </div>
       </div>
+      <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:shrink-0">
+        <label className="sr-only" htmlFor="chat-session-target">{sessionLabel}</label>
+        <select id="chat-session-target" className="app-select min-w-0 flex-1 sm:max-w-52" value={selectedSessionId} disabled={phase !== "idle"} onChange={(event) => onSelectSession(event.target.value)}>
+          {sessionOptions.map((option) => <option key={option.id} value={option.id} disabled={option.disabled}>{option.label}</option>)}
+        </select>
       <details
         ref={detailsRef}
         className="relative shrink-0"
@@ -88,6 +98,7 @@ export default function ChatConversationHeader({
           <p className="text-[11px] leading-relaxed" style={{ color: "var(--board-faint)" }}>{ct("savedLocallyDescription")}</p>
         </div>
       </details>
+      </div>
     </div>
   );
 }

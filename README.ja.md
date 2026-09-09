@@ -13,19 +13,23 @@
 - プロジェクト、Hugging Face Discover、開発者/MCP ゲートウェイ
 - サーバー/サンプリングチューニング
 
+調整画面の **すべての調整をリセット** でサーバー引数とチャット JSON を含む指定値を削除でき、各項目の **既定値に戻す** で個別に戻せます。推奨プリセットの固定値ではなく、選択した llama.cpp ランタイム・モデルの既定値を使います。**値を指定** で再入力でき、既定値の使用状態もプロファイルに保存されます。モデルファイル、アダプター、GPU 配置、ランタイム、保存済みプロファイルは維持されます。サーバー設定は再起動後に反映され、コンテキストとメモリ使用量が変わる場合があります。
+
 ## プラットフォーム対応
 
 現在は Windows x64 をサポートしています。**Linux（NVIDIA DGX を含む）および macOS 対応を予定**しています。Linux/macOS は `curl | tar`、Windows は `NSIS`/`MSI` を使用します。Windows リリースインストーラーは SignPath Foundation のオンボーディングと手動承認後、GitHub ホスト型 CI から Authenticode で署名されます。公開された署名と SHA-256 チェックサムを確認してください。
 
 ## ダウンロード
 
-最新リリースは [GitHub Releases](https://github.com/joowon-jang/llama-board/releases) から取得してください。
+最新リリースは [GitHub Releases](https://github.com/llama-board/llama-board/releases) から取得してください。
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/llama-board/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
 高度なインストールオプション、検証、開発環境、CLI の使い方は [docs/INSTALL.ja.md](docs/INSTALL.ja.md)、[docs/DEVELOPMENT.ja.md](docs/DEVELOPMENT.ja.md)、[docs/CLI.ja.md](docs/CLI.ja.md) を参照してください。
+
+初回起動時はモデルディレクトリを未設定のままにし、Models で GGUF ディレクトリを選択します。設定と管理ランタイムは標準の `%APPDATA%\llama-board\` に保存されます。以前のデスクトップ識別子を使用するビルドから更新する場合は、この共有設定ディレクトリを削除しないでください。
 
 ## コード署名ポリシー (Code signing policy)
 

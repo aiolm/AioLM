@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-const CURRENT_CONFIG_VERSION: u32 = 8;
+const CURRENT_CONFIG_VERSION: u32 = 10;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
@@ -83,7 +83,22 @@ pub(crate) const APP_MANAGED_SERVER_ARGS: &[&str] = &[
     "--reasoning-budget-message",
     "--reasoning-preserve",
     "--no-reasoning-preserve",
+    "--device",
+    "-dev",
+    "--main-gpu",
+    "-mg",
+    "--split-mode",
+    "-sm",
+    "--tensor-split",
+    "-ts",
 ];
+
+/// Upper bound on GPU ids / tensor-split ratios accepted anywhere in a GPU
+/// placement. Far above any real machine's GPU count; it exists only to keep
+/// a malformed config from building an unbounded command line.
+const MAX_GPU_IDS: usize = 32;
+/// Upper bound on persisted session definitions.
+const MAX_SESSIONS: usize = 64;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LoraAdapterConfig {
@@ -102,9 +117,205 @@ fn default_lora_enabled() -> bool {
     true
 }
 
+/// How llama.cpp should spread a model's layers across multiple GPUs.
+/// Mirrors llama.cpp's `--split-mode` values; `None` omits the flag entirely
+/// so the runtime's own default applies.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitMode {
+    #[default]
+    None,
+    Layer,
+    Row,
+}
+
+impl SplitMode {
+    pub fn as_flag_value(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Layer => Some("layer"),
+            Self::Row => Some("row"),
+        }
+    }
+}
+
+/// Structured GPU placement for one server session.
+///
+/// Every field is empty/`None` by default, which reproduces today's behavior
+/// exactly: no `--device`, `--main-gpu`, `--split-mode`, `--tensor-split`, or
+/// draft-device flag is ever emitted, and llama.cpp picks its own defaults.
+///
+/// GPU references use the *stable* id from `hardware::GpuDevice::stable_id`,
+/// never a raw enumeration index or a bare PCI vendor:device id, so a saved
+/// session keeps pointing at the same physical card across reboots and
+/// driver reinstalls even when two installed cards share a chipset. Turning
+/// a stable id into the backend-specific device name llama.cpp expects
+/// (e.g. `CUDA0`) happens at launch time against freshly detected hardware
+/// (see `gpu::resolve`), not here.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct GpuPlacement {
+    /// Stable GPU ids to expose to the backend, in `--device` order.
+    pub gpu_ids: Vec<String>,
+    /// Stable id of the GPU that should receive `--main-gpu`. When set, it
+    /// must also appear in `gpu_ids`.
+    pub main_gpu: Option<String>,
+    #[serde(default)]
+    pub split_mode: SplitMode,
+    /// Per-device offload ratios for `--tensor-split`, aligned with `gpu_ids`.
+    pub tensor_split: Vec<f32>,
+    /// Stable id of the GPU the speculative draft model should run on. Only
+    /// used when the legacy free-text `spec_draft_device` field is empty.
+    pub draft_gpu_id: Option<String>,
+}
+
+impl GpuPlacement {
+    pub fn is_empty(&self) -> bool {
+        self.gpu_ids.is_empty()
+            && self.main_gpu.is_none()
+            && self.split_mode == SplitMode::None
+            && self.tensor_split.is_empty()
+            && self.draft_gpu_id.is_none()
+    }
+
+    fn normalize(&mut self) {
+        for id in &mut self.gpu_ids {
+            *id = id.trim().to_string();
+        }
+        self.gpu_ids.retain(|id| !id.is_empty());
+        self.gpu_ids.truncate(MAX_GPU_IDS);
+        self.main_gpu = self
+            .main_gpu
+            .take()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        self.draft_gpu_id = self
+            .draft_gpu_id
+            .take()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
+        self.tensor_split.truncate(MAX_GPU_IDS);
+        for value in &mut self.tensor_split {
+            if !value.is_finite() || *value < 0.0 {
+                *value = 0.0;
+            }
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        for id in self
+            .gpu_ids
+            .iter()
+            .chain(self.main_gpu.iter())
+            .chain(self.draft_gpu_id.iter())
+        {
+            if id.is_empty() || id.len() > 256 || id.contains('\0') {
+                return Err("GPU id is invalid or too long".into());
+            }
+        }
+        if self.gpu_ids.len() > MAX_GPU_IDS {
+            return Err(format!("too many GPU ids configured (max {MAX_GPU_IDS})"));
+        }
+        if self.tensor_split.len() > MAX_GPU_IDS {
+            return Err(format!(
+                "too many tensor-split values configured (max {MAX_GPU_IDS})"
+            ));
+        }
+        for value in &self.tensor_split {
+            if !value.is_finite() || *value < 0.0 {
+                return Err("tensor-split values must be finite and non-negative".into());
+            }
+        }
+        if let Some(main_gpu) = &self.main_gpu {
+            if !self.gpu_ids.is_empty() && !self.gpu_ids.iter().any(|id| id == main_gpu) {
+                return Err(format!(
+                    "main_gpu '{main_gpu}' must be one of the selected gpu_ids"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The model bundle one session launches: a required primary model plus the
+/// two optional companions llama-server supports alongside it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct SessionModels {
+    pub primary_model: String,
+    pub mmproj: String,
+    pub draft_model: String,
+}
+
+/// A saved session bundle the user can launch later. `AppConfig::sessions`
+/// persists these; the running process for each lives only in memory (see
+/// `session.rs`), keyed by `id`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct SessionDefinition {
+    pub id: String,
+    pub name: String,
+    pub models: SessionModels,
+    pub gpu: GpuPlacement,
+    pub enabled: bool,
+}
+
+impl Default for SessionDefinition {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            models: SessionModels::default(),
+            gpu: GpuPlacement::default(),
+            enabled: true,
+        }
+    }
+}
+
+fn valid_session_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && !value.chars().any(|c| c.is_control())
+}
+
+impl SessionDefinition {
+    fn normalize(&mut self) {
+        self.id = self.id.trim().to_string();
+        self.name = self.name.trim().to_string();
+        self.models.primary_model = self.models.primary_model.trim().to_string();
+        self.models.mmproj = self.models.mmproj.trim().to_string();
+        self.models.draft_model = self.models.draft_model.trim().to_string();
+        self.gpu.normalize();
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if !valid_session_id(&self.id) {
+            return Err("session id must be a non-empty string up to 128 characters".into());
+        }
+        if self.name.len() > 200 {
+            return Err(format!("session '{}' name is too long", self.id));
+        }
+        for (label, value) in [
+            ("primary model", &self.models.primary_model),
+            ("mmproj", &self.models.mmproj),
+            ("draft model", &self.models.draft_model),
+        ] {
+            if value.len() > 32_768 || value.contains('\0') {
+                return Err(format!(
+                    "session '{}' {label} path is invalid or too long",
+                    self.id
+                ));
+            }
+        }
+        self.gpu
+            .validate()
+            .map_err(|error| format!("session '{}': {error}", self.id))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct AppConfig {
+    /// Tuning overrides omitted from launch arguments / requests (runtime-owned defaults).
+    pub runtime_defaults: Vec<String>,
     #[serde(default = "default_config_version")]
     pub config_version: u32,
     pub models_dir: String,
@@ -174,6 +385,17 @@ pub struct AppConfig {
     pub sleep_idle_seconds: i64,
     #[serde(default)]
     pub lora_adapters: Vec<LoraAdapterConfig>,
+    /// Whether starting a session stops every other running session first.
+    /// Defaults to `true` (relying on the container-level `#[serde(default)]`
+    /// above, deliberately with no field-level override) so a config file
+    /// written before multi-session support existed keeps behaving like the
+    /// single-server app it was saved from.
+    pub stop_existing_sessions_on_load: bool,
+    /// Saved session bundles the user can launch later. See `session.rs` for
+    /// the in-memory registry of processes actually running.
+    pub sessions: Vec<SessionDefinition>,
+    /// Structured GPU placement for the default/single-session launch path.
+    pub gpu: GpuPlacement,
 }
 
 fn default_iters() -> u32 {
@@ -227,9 +449,10 @@ fn home_dir() -> PathBuf {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            runtime_defaults: Vec::new(),
             config_version: CURRENT_CONFIG_VERSION,
             models_dir: home_dir()
-                .join(".lmstudio")
+                .join(".llama-board")
                 .join("models")
                 .to_string_lossy()
                 .into_owned(),
@@ -272,6 +495,9 @@ impl Default for AppConfig {
             request_timeout_seconds: default_request_timeout_seconds(),
             sleep_idle_seconds: default_sleep_idle_seconds(),
             lora_adapters: Vec::new(),
+            stop_existing_sessions_on_load: true,
+            sessions: Vec::new(),
+            gpu: GpuPlacement::default(),
         }
     }
 }
@@ -365,9 +591,27 @@ impl AppConfig {
         if !matches!(self.flash_attn.as_str(), "auto" | "on" | "off") {
             self.flash_attn = "auto".into();
         }
+        for session in &mut self.sessions {
+            session.normalize();
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            self.sessions
+                .retain(|session| seen.insert(session.id.clone()));
+        }
+        self.sessions.truncate(MAX_SESSIONS);
+        self.gpu.normalize();
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.runtime_defaults.len() > 128
+            || self
+                .runtime_defaults
+                .iter()
+                .any(|key| !crate::tuning_defaults::is_known(key))
+        {
+            return Err("invalid runtime_defaults tuning keys".into());
+        }
         if self.config_version > CURRENT_CONFIG_VERSION {
             return Err(format!(
                 "config schema {} is newer than this app supports (current {})",
@@ -453,6 +697,19 @@ impl AppConfig {
                 "advanced chat options are too large (max {MAX_CHAT_OPTIONS_BYTES} bytes)"
             ));
         }
+        if self.sessions.len() > MAX_SESSIONS {
+            return Err(format!("too many saved sessions (max {MAX_SESSIONS})"));
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            for session in &self.sessions {
+                session.validate()?;
+                if !seen.insert(session.id.as_str()) {
+                    return Err(format!("duplicate session id: {}", session.id));
+                }
+            }
+        }
+        self.gpu.validate()?;
         Ok(())
     }
 }
@@ -642,7 +899,12 @@ fn migrate_with_presence(
                 cfg.iters = default_iters();
             }
         }
-        2..=7 => {}
+        // Sessions/GPU-placement (v9) and batch/cache typed fields (v8) have
+        // no field-level serde default that diverges from their plain Rust
+        // type default, so a config written before either existed migrates
+        // for free through the container-level `#[serde(default)]` on
+        // `AppConfig` itself; no per-field repair is needed here.
+        2..=9 => {}
         CURRENT_CONFIG_VERSION => {}
         _ => unreachable!("future config versions are rejected above"),
     }
@@ -885,6 +1147,10 @@ mod tests {
     #[test]
     fn defaults_are_model_neutral() {
         let cfg = AppConfig::default();
+        assert!(cfg
+            .models_dir
+            .replace('\\', "/")
+            .ends_with("/.llama-board/models"));
         assert_eq!(cfg.ngl, 0);
         assert_eq!(cfg.ctx_size, 4096);
         assert_eq!(cfg.batch_size, 2048);
@@ -1095,5 +1361,148 @@ mod tests {
         let migrated = migrate_value(explicit).expect("explicit typed values win");
         assert_eq!(migrated.batch_size, 2048);
         assert_eq!(migrated.keep, 12);
+    }
+
+    #[test]
+    fn v8_config_migrates_without_panicking_and_defaults_the_session_policy() {
+        // A config saved before multi-session support existed carries
+        // config_version 8 and has never heard of `stop_existing_sessions_on_load`,
+        // `sessions`, or `gpu`. The version match must not treat 8 as "future"
+        // now that CURRENT_CONFIG_VERSION is 9 (see the v7 regression above
+        // for why this class of bug is easy to reintroduce).
+        let v8 = serde_json::json!({ "config_version": 8, "models_dir": "models" });
+        let migrated = migrate_value(v8).expect("v8 config migrates without panicking");
+        assert_eq!(migrated.config_version, CURRENT_CONFIG_VERSION);
+        assert!(
+            migrated.stop_existing_sessions_on_load,
+            "policy must default true for backwards compatibility"
+        );
+        assert!(migrated.sessions.is_empty());
+        assert!(migrated.gpu.is_empty());
+    }
+
+    #[test]
+    fn stop_existing_sessions_on_load_defaults_true_when_field_is_absent() {
+        let migrated = migrate_value(serde_json::json!({})).expect("empty config migrates");
+        assert!(migrated.stop_existing_sessions_on_load);
+        // An explicit `false` must still be honored, i.e. this is a default,
+        // not a value pinned by migration.
+        let explicit =
+            migrate_value(serde_json::json!({ "stop_existing_sessions_on_load": false }))
+                .expect("explicit policy value migrates");
+        assert!(!explicit.stop_existing_sessions_on_load);
+    }
+
+    #[test]
+    fn gpu_placement_flags_are_app_managed() {
+        for name in [
+            "--device",
+            "-dev",
+            "--main-gpu",
+            "-mg",
+            "--split-mode",
+            "-sm",
+            "--tensor-split",
+            "-ts",
+        ] {
+            let cfg = AppConfig {
+                server_args: vec![name.into(), "value".into()],
+                ..AppConfig::default()
+            };
+            assert!(cfg.validate().is_err(), "{name} should be app-managed");
+        }
+    }
+
+    #[test]
+    fn gpu_placement_normalizes_blank_ids_and_rejects_non_finite_tensor_split() {
+        let mut gpu = GpuPlacement {
+            gpu_ids: vec!["  ".into(), " gpu-a ".into()],
+            main_gpu: Some("  ".into()),
+            draft_gpu_id: Some(" gpu-b ".into()),
+            tensor_split: vec![f32::NAN, -1.0, 0.5],
+            ..GpuPlacement::default()
+        };
+        gpu.normalize();
+        assert_eq!(gpu.gpu_ids, vec!["gpu-a".to_string()]);
+        assert_eq!(gpu.main_gpu, None);
+        assert_eq!(gpu.draft_gpu_id, Some("gpu-b".to_string()));
+        assert_eq!(gpu.tensor_split, vec![0.0, 0.0, 0.5]);
+
+        let invalid = GpuPlacement {
+            tensor_split: vec![f32::INFINITY],
+            ..GpuPlacement::default()
+        };
+        assert!(invalid.validate().is_err());
+        assert!(GpuPlacement::default().validate().is_ok());
+    }
+
+    #[test]
+    fn gpu_placement_requires_main_gpu_to_be_one_of_the_selected_gpu_ids() {
+        let mismatched = GpuPlacement {
+            gpu_ids: vec!["gpu-a".into()],
+            main_gpu: Some("gpu-b".into()),
+            ..GpuPlacement::default()
+        };
+        assert!(mismatched.validate().is_err());
+
+        let matching = GpuPlacement {
+            gpu_ids: vec!["gpu-a".into(), "gpu-b".into()],
+            main_gpu: Some("gpu-b".into()),
+            ..GpuPlacement::default()
+        };
+        assert!(matching.validate().is_ok());
+
+        // Empty gpu_ids (the default/single-GPU path) places no constraint on
+        // main_gpu, and an unrelated draft GPU placement stays independent.
+        let no_ids = GpuPlacement {
+            main_gpu: Some("gpu-a".into()),
+            draft_gpu_id: Some("gpu-z".into()),
+            ..GpuPlacement::default()
+        };
+        assert!(no_ids.validate().is_ok());
+    }
+
+    #[test]
+    fn session_definitions_validate_ids_and_reject_duplicates() {
+        let mut cfg = AppConfig {
+            sessions: vec![
+                SessionDefinition {
+                    id: "s1".into(),
+                    models: SessionModels {
+                        primary_model: "model.gguf".into(),
+                        ..SessionModels::default()
+                    },
+                    ..SessionDefinition::default()
+                },
+                SessionDefinition {
+                    id: "s2".into(),
+                    ..SessionDefinition::default()
+                },
+            ],
+            ..AppConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+
+        cfg.sessions[1].id = "s1".into();
+        assert!(cfg.validate().unwrap_err().contains("duplicate session id"));
+
+        let mut blank_id = AppConfig::default();
+        blank_id.sessions.push(SessionDefinition::default());
+        assert!(blank_id.validate().is_err());
+    }
+
+    #[test]
+    fn normalize_deduplicates_and_bounds_session_definitions() {
+        let mut cfg = AppConfig::default();
+        for _ in 0..(MAX_SESSIONS + 5) {
+            cfg.sessions.push(SessionDefinition {
+                id: "dup".into(),
+                ..SessionDefinition::default()
+            });
+        }
+        cfg.normalize();
+        // Every pushed session shares the id "dup", so dedup collapses them
+        // to one entry well before the MAX_SESSIONS truncation would matter.
+        assert_eq!(cfg.sessions.len(), 1);
     }
 }

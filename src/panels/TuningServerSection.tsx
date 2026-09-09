@@ -1,9 +1,9 @@
-import type { ReactNode } from "react";
 import type { AppConfig } from "../api";
 import Tooltip from "../components/Tooltip";
 import { CustomSelect } from "../components/ThemeSwitcher";
 import type { UnifiedKey, TranslationVars } from "../i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
+import TuningDefaultField from "./TuningDefaultField";
 import { SERVER_FIELDS, SERVER_TEXT_FIELDS, tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import TuningSpeculativeSection from "./TuningSpeculativeSection";
 
@@ -21,7 +21,6 @@ interface Props {
   projectorEditable: boolean;
   serverSelectValue: (key: "spec_type" | "spec_draft_ngl") => string;
   selectServerText: (key: "spec_type" | "spec_draft_ngl", value: string) => void;
-  applyRow: ReactNode;
   /** Advanced-only nested controls are omitted from the Quick view. */
   showAdvanced?: boolean;
   /** Field-level category slicing supplied by TuningPanel. */
@@ -35,7 +34,7 @@ interface Props {
 export default function TuningServerSection({
   t, cfg, disabled, numericDrafts, onNumericChange, onNumericCommit, updateFlash,
   serverTextValue, onServerTextChange, commitServerText, projectorEditable,
-  serverSelectValue, selectServerText, applyRow, showAdvanced = true,
+  serverSelectValue, selectServerText, showAdvanced = true,
   fields = SERVER_FIELDS, showFlashAttention = true, showProjector = true,
   showSpeculative = true, showCacheTypes = true,
 }: Props) {
@@ -46,8 +45,6 @@ export default function TuningServerSection({
   const cacheFields = [cacheKeyField, cacheValueField].filter((field): field is NonNullable<typeof field> => Boolean(field));
   return (
     <section className="tuning-section tuning-section--server min-w-0 rounded-xl border border-slate-700 app-bg-muted p-4">
-      <h2 className="mb-1 text-sm font-semibold text-slate-200">{t("section.serverMemory")}</h2>
-      <p className="mb-4 text-xs text-slate-500">{t("ui.serverMemoryHint")}</p>
       {fields.length > 0 && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><NumericFieldGrid fields={fields} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} /></div>}
       {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 sm:max-w-[calc(50%-0.5rem)]">
         <div className="flex items-center justify-between gap-2">
@@ -57,7 +54,7 @@ export default function TuningServerSection({
           </div>
           <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
         </div>
-        <CustomSelect
+        <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")} hideLabel><CustomSelect
           id="tuning-flash-attn"
           value={cfg.flash_attn === "on" || cfg.flash_attn === "off" ? cfg.flash_attn : "auto"}
           options={[
@@ -68,7 +65,7 @@ export default function TuningServerSection({
           onChange={updateFlash}
           disabled={disabled}
           className="w-full"
-        />
+        /></TuningDefaultField>
         <span className="text-xs text-slate-500">{t("ui.flashAttentionHint")}</span>
       </div>}
 
@@ -86,7 +83,7 @@ export default function TuningServerSection({
                   <label htmlFor={inputId} className="truncate text-sm text-slate-300">{label}</label>
                   <Tooltip content={tooltip} label={`Help for ${label}`} id={`${inputId}-help`} />
                 </div>
-                <CustomSelect
+                <TuningDefaultField fieldKey={field.key} label={label} hideLabel><CustomSelect
                   id={inputId}
                   value={field.options?.includes(value) ? value : (field.options?.[0] ?? value)}
                   options={(field.options ?? []).map((option) => ({ value: option, label: option }))}
@@ -96,7 +93,7 @@ export default function TuningServerSection({
                   }}
                   disabled={disabled}
                   className="w-full"
-                />
+                /></TuningDefaultField>
                 <span className="text-xs text-slate-500">{hint}</span>
               </div>
             );
@@ -142,7 +139,6 @@ export default function TuningServerSection({
           />}
         </>
       )}
-      {applyRow}
     </section>
   );
 }

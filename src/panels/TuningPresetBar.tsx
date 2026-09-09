@@ -16,21 +16,22 @@ interface Props {
   busy: boolean;
   pendingBulkChange: PendingBulkChange | null;
   setPendingBulkChange: (value: PendingBulkChange | null) => void;
-  applyRestart: () => void;
   applyPreset: (name: "CPU" | "Balanced" | "Max GPU") => void;
   resetDefaults: () => void;
+  profileLabel?: string;
+  onResetAll: () => void;
 }
 
 export default function TuningPresetBar({
   t, phase, flash, dismissFlash, changedServerFields, relationWarnings, busy,
-  pendingBulkChange, setPendingBulkChange, applyRestart, applyPreset, resetDefaults,
+  pendingBulkChange, setPendingBulkChange, applyPreset, resetDefaults, profileLabel, onResetAll,
 }: Props) {
   return (
     <>
       <div className="app-panel-feedback-layer" aria-live="polite">
         {flash && <FeedbackBanner tone={phase === "failed" ? "error" : "info"} onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
         {phase === "dirty" && changedServerFields.length > 0 && (
-          <FeedbackBanner tone="warning" title={t("ui.serverSettingsChangedCount", { count: changedServerFields.length })} action={{ label: t("extra.applyRestart"), onClick: applyRestart }}>
+          <FeedbackBanner tone="warning" title={t("ui.serverSettingsChangedCount", { count: changedServerFields.length })}>
             {changedServerFields.join(" · ")} · {t("extra.conversationsRemainSaved")}
           </FeedbackBanner>
         )}
@@ -42,7 +43,9 @@ export default function TuningPresetBar({
       </div>
 
       <div className="tuning-preset-bar mb-4 flex shrink-0 flex-wrap items-center gap-2.5">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("extra.tuningPresets")}</span>
+        <details className="tuning-presets-menu">
+        <summary className="app-button app-button--secondary">{t("extra.tuningPresets")}</summary>
+        <div className="tuning-presets-options">
         {(["CPU", "Balanced", "Max GPU"] as const).map((name) => (
           <button
             key={name}
@@ -59,7 +62,7 @@ export default function TuningPresetBar({
             {name}
           </button>
         ))}
-        <button
+        {profileLabel && <button
           type="button"
           onClick={() => setPendingBulkChange({
             title: t("ui.loadProfileTitle"),
@@ -70,13 +73,16 @@ export default function TuningPresetBar({
           disabled={phase === "applying" || busy}
           className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400 app-bg-muted disabled:opacity-40"
         >
-          {t("ui.loadQwenProfile")}
-        </button>
+          {profileLabel}
+        </button>}
+        </div>
+        </details>
         {phase === "idle" && <StatusBadge label={t("extra.saved")} tone="success" />}
         {phase === "dirty" && <StatusBadge label={t("extra.restartRequired")} tone="warning" />}
         {phase === "applying" && <StatusBadge label={t("extra.applying")} tone="neutral" />}
         {phase === "failed" && <StatusBadge label={t("extra.applyFailed")} tone="danger" />}
         {phase === "dirty" && <span className="text-xs text-amber-300">{t("extra.previousValues")}</span>}
+        <button type="button" disabled={busy || phase === "applying"} onClick={onResetAll} title={t("ui.runtimeDefaultsHint")} className="app-button app-button--ghost tuning-reset-all">{t("ui.runtimeDefaultsResetAll")}</button>
       </div>
       <ConfirmDialog
         open={pendingBulkChange !== null}
@@ -84,6 +90,7 @@ export default function TuningPresetBar({
         description={pendingBulkChange?.description ?? ""}
         confirmLabel={pendingBulkChange?.confirmLabel ?? t("common.confirm")}
         cancelLabel={t("common.cancel")}
+        tone="primary"
         onConfirm={() => { pendingBulkChange?.run(); setPendingBulkChange(null); }}
         onCancel={() => setPendingBulkChange(null)}
       />

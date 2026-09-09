@@ -1,234 +1,156 @@
-import { useEffect, useMemo, useState } from "react";
+import { useRef, useState } from "react";
+import type { AppConfig } from "../api";
 import type { AppStore } from "../store";
-import ConfirmDialog from "../components/ConfirmDialog";
-import {
-  createModelProfile,
-  createServerProfile,
-  deleteModelProfile,
-  deleteServerProfile,
-  duplicateModelProfile,
-  duplicateServerProfile,
-  loadProfiles,
-  modelProfilePatch,
-  saveModelProfile,
-  saveProfileSelection,
-  saveServerProfile,
-  serverProfilePatch,
-  type ModelProfile,
-  type ServerProfile,
-} from "../modelProfiles";
 import { useI18n } from "../i18n";
-import { ModelProfileCard, ServerProfileCard } from "./ExecutionProfileCards";
+import ConfirmDialog from "../components/ConfirmDialog";
+import FeedbackBanner from "../components/FeedbackBanner";
+import { isServerBusy } from "../lifecycleUtils";
+import {
+  createModelProfile, createServerProfile, deleteModelProfile, deleteServerProfile,
+  duplicateModelProfile, duplicateServerProfile, loadProfiles, modelProfilePatch,
+  profileDirtyFields, saveModelProfile, saveProfileSelection, saveServerProfile, serverProfilePatch,
+} from "../modelProfiles";
+import { REQUEST_DEFAULT_KEYS } from "../tuningDefaults";
+import RuntimeLoadingProfiles from "./RuntimeLoadingProfiles";
 
-type Props = { store: AppStore; modelPath: string };
+type Props = { store: AppStore; modelPath: string; onOpenTuning?: () => void };
+type Kind = "server" | "model";
 
-export default function ExecutionProfiles({ store, modelPath }: Props) {
-  const cfg = store.cfg;
+/** Presets capture the canonical tuning form; they never host a second editor. */
+export default function ExecutionProfiles(props: Props) {
+  if (!props.store.cfg) return null;
+  return <ProfileManager key={props.modelPath} {...props} cfg={props.store.cfg} />;
+}
+
+function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: AppConfig }) {
   const { t } = useI18n();
-  // Profile data is synchronous local state. Hydrate it in the initial render
-  // so the profile section has its final geometry before the model list paints.
-  const [initialProfiles] = useState(() => cfg && modelPath ? loadProfiles(cfg, modelPath) : null);
-  const initialServer = initialProfiles?.server.find((item) => item.id === initialProfiles.activeServerId) ?? initialProfiles?.server[0];
-  const initialModel = initialProfiles?.model.find((item) => item.id === initialProfiles.activeModelId) ?? initialProfiles?.model[0];
-  const [serverProfiles, setServerProfiles] = useState<ServerProfile[]>(() => initialProfiles?.server ?? []);
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>(() => initialProfiles?.model ?? []);
-  const [serverId, setServerId] = useState(() => initialProfiles?.activeServerId ?? "");
-  const [modelId, setModelId] = useState(() => initialProfiles?.activeModelId ?? "");
-  const [serverDraft, setServerDraft] = useState<ServerProfile | null>(() => initialServer ? structuredClone(initialServer) : null);
-  const [modelDraft, setModelDraft] = useState<ModelProfile | null>(() => initialModel ? structuredClone(initialModel) : null);
-  const [serverOpen, setServerOpen] = useState(true);
-  const [modelOpen, setModelOpen] = useState(true);
-  const [editingName, setEditingName] = useState<"server" | "model" | null>(null);
+  const [profiles, setProfiles] = useState(() => loadProfiles(cfg, modelPath));
+  const [serverId, setServerId] = useState(profiles.activeServerId);
+  const [modelId, setModelId] = useState(profiles.activeModelId);
   const [nameDraft, setNameDraft] = useState("");
-  const [jsonError, setJsonError] = useState<string | null>(null);
-  const [confirm, setConfirm] = useState<"server" | "model" | null>(null);
+  const [editing, setEditing] = useState<{ kind: Kind; action: "create" | "rename" } | null>(null);
+  const [pending, setPending] = useState<{ kind: Kind; action: "save" | "delete" } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const inFlight = useRef(false);
+  const server = profiles.server.find((item) => item.id === serverId) ?? profiles.server[0];
+  const model = profiles.model.find((item) => item.id === modelId) ?? profiles.model[0];
+  const disabled = store.busy || applying || store.status.state === "starting" || store.status.state === "stopping";
 
-  useEffect(() => {
-    if (!cfg || !modelPath) return;
-    const loaded = loadProfiles(cfg, modelPath);
-    setServerProfiles(loaded.server);
-    setModelProfiles(loaded.model);
-    setServerId(loaded.activeServerId);
-    setModelId(loaded.activeModelId);
-  }, [cfg, modelPath]);
-
-  const server = serverProfiles.find((item) => item.id === serverId) ?? serverProfiles[0];
-  const model = modelProfiles.find((item) => item.id === modelId) ?? modelProfiles[0];
-
-  useEffect(() => {
-    setServerDraft(structuredClone(server));
-  }, [server]);
-
-  useEffect(() => {
-    setModelDraft(structuredClone(model));
-  }, [model]);
-
-  const serverDirty = useMemo(
-    () => JSON.stringify(serverDraft) !== JSON.stringify(server),
-    [serverDraft, server],
-  );
-  const modelDirty = useMemo(
-    () => JSON.stringify(modelDraft) !== JSON.stringify(model),
-    [modelDraft, model],
-  );
-
-  if (!cfg || !server || !model || !serverDraft || !modelDraft) return null;
-
-  const saveServer = () => {
-    setServerProfiles((items) => items.map((item) => item.id === server.id ? serverDraft : item));
-    saveServerProfile(serverDraft);
-    setNotice(t("ui.profileServerSaved"));
+  const refresh = () => setProfiles(loadProfiles(cfg, modelPath));
+  const select = (kind: Kind, id: string) => {
+    // Choosing a preset previews it. Only Load changes config or future model selection.
+    if (kind === "server") setServerId(id); else setModelId(id);
+    setEditing(null);
+    setNotice(null);
   };
-  const saveModel = () => {
-    setModelProfiles((items) => items.map((item) => item.id === model.id ? modelDraft : item));
-    saveModelProfile(modelDraft);
-    setNotice(t("ui.profileModelSaved"));
-  };
-  const newServer = () => {
-    const next = createServerProfile(cfg, t("ui.profileServerName", { count: serverProfiles.length + 1 }));
-    setServerProfiles((items) => [...items, next]);
-    saveServerProfile(next);
-    setServerId(next.id);
-    saveProfileSelection(next.id, modelPath, model.id);
-  };
-  const newModel = () => {
-    const next = createModelProfile(cfg, modelPath, t("ui.profileModelName", { count: modelProfiles.length + 1 }));
-    setModelProfiles((items) => [...items, next]);
-    saveModelProfile(next);
-    setModelId(next.id);
-    saveProfileSelection(server.id, modelPath, next.id);
-  };
-  const rename = (kind: "server" | "model") => {
-    const value = nameDraft.trim();
-    if (!value) return;
+  const capture = (kind: Kind, name: string, id?: string) => {
     if (kind === "server") {
-      const next = { ...server, name: value };
-      setServerProfiles((items) => items.map((item) => item.id === server.id ? next : item));
+      const next = { ...createServerProfile(cfg, name), ...(id ? { id } : {}) };
       saveServerProfile(next);
+      setServerId(next.id);
+      saveProfileSelection(next.id, modelPath, profiles.activeModelId);
     } else {
-      const next = { ...model, name: value };
-      setModelProfiles((items) => items.map((item) => item.id === model.id ? next : item));
+      const next = { ...createModelProfile(cfg, name), ...(id ? { id } : {}), system_prompt: model.system_prompt };
       saveModelProfile(next);
+      setModelId(next.id);
+      saveProfileSelection(profiles.activeServerId, modelPath, next.id);
     }
-    setEditingName(null);
+    refresh();
+    setNotice(t(kind === "server" ? "ui.profileServerSaved" : "ui.profileModelSaved"));
   };
-  const duplicateServerActive = () => {
-    const next = duplicateServerProfile(server);
-    setServerProfiles((items) => [...items, next]);
-    setServerId(next.id);
-    saveProfileSelection(next.id, modelPath, model.id);
-  };
-  const duplicateModelActive = () => {
-    const next = duplicateModelProfile(model);
-    setModelProfiles((items) => [...items, next]);
-    setModelId(next.id);
-    saveProfileSelection(server.id, modelPath, next.id);
-  };
-  const confirmDelete = () => {
-    if (confirm === "server" && serverProfiles.length > 1) {
-      deleteServerProfile(server.id);
-      const next = serverProfiles.filter((item) => item.id !== server.id);
-      setServerProfiles(next);
-      setServerId(next[0].id);
+  const saveName = () => {
+    if (!editing || !nameDraft.trim()) return;
+    const { kind, action } = editing;
+    if (action === "create") capture(kind, nameDraft.trim());
+    else {
+      if (kind === "server") saveServerProfile({ ...server, name: nameDraft.trim() });
+      else saveModelProfile({ ...model, name: nameDraft.trim() });
+      refresh();
     }
-    if (confirm === "model" && modelProfiles.length > 1) {
-      deleteModelProfile(modelPath, model.id);
-      const next = modelProfiles.filter((item) => item.id !== model.id);
-      setModelProfiles(next);
-      setModelId(next[0].id);
-    }
-    setConfirm(null);
+    setEditing(null);
   };
-  const apply = async () => {
+  const apply = async (kind: Kind) => {
+    if (disabled || inFlight.current) return;
+    inFlight.current = true;
+    setApplying(true);
+    setError(null);
     try {
-      await store.updateConfig({ ...serverProfilePatch(serverDraft), ...modelProfilePatch(modelDraft) });
-      saveServer();
-      saveModel();
+      await store.updateConfig((current) => ({
+        ...(kind === "server" ? serverProfilePatch(server) : modelProfilePatch(model)),
+        runtime_defaults: [
+          ...(current.runtime_defaults ?? []).filter((key) => REQUEST_DEFAULT_KEYS.includes(key) === (kind === "server")),
+          ...((kind === "server" ? server : model).runtime_defaults ?? []),
+        ],
+      }));
+      saveProfileSelection(kind === "server" ? server.id : profiles.activeServerId, modelPath, kind === "model" ? model.id : profiles.activeModelId);
+      refresh();
       setNotice(t("ui.profileAppliedNotice"));
-    } catch (error) {
-      setNotice(t("ui.profileApplyFailedNotice", { message: error instanceof Error ? error.message : String(error) }));
+    } catch (cause) {
+      setError(t("ui.profileApplyFailedNotice", { message: cause instanceof Error ? cause.message : String(cause) }));
+    } finally { inFlight.current = false; setApplying(false); }
+  };
+  const confirm = () => {
+    if (!pending) return;
+    const { kind, action } = pending;
+    const profile = kind === "server" ? server : model;
+    if (action === "save") capture(kind, profile.name, profile.id);
+    else {
+      if (kind === "server") deleteServerProfile(server.id);
+      else deleteModelProfile(model.id);
+      refresh();
     }
-  };
-  const editName = (kind: "server" | "model") => {
-    setEditingName(kind);
-    setNameDraft(kind === "server" ? server.name : model.name);
+    setPending(null);
   };
 
-  return (
-    <section className="execution-profiles-section mt-3 min-w-0 rounded-none border-t border-indigo-700 pt-3 sm:pt-4" data-testid="execution-profiles-section" aria-labelledby="execution-profiles-heading">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h2 id="execution-profiles-heading" className="text-sm font-semibold text-slate-100">{t("ui.executionProfiles")}</h2>
-          <p className="mt-0.5 text-xs text-slate-400">{t("ui.executionProfilesHint")}</p>
-        </div>
-        <span className="shrink-0 text-xs text-slate-400">{serverDirty || modelDirty ? t("ui.profileChanged") : t("ui.profileApplied")}</span>
-      </div>
-
-      <div className="execution-profiles-grid mt-3 grid min-w-0 items-start gap-3 xl:grid-cols-2" data-testid="execution-profiles-grid">
-        <ServerProfileCard
-          t={t}
-          server={server}
-          serverDraft={serverDraft}
-          setServerDraft={setServerDraft}
-          serverProfiles={serverProfiles}
-          serverOpen={serverOpen}
-          setServerOpen={setServerOpen}
-          editingName={editingName === "server"}
-          nameDraft={nameDraft}
-          setNameDraft={setNameDraft}
-          onRename={() => (editingName === "server" ? rename("server") : editName("server"))}
-          onSelect={(nextId) => { setServerId(nextId); saveProfileSelection(nextId, modelPath, model.id); }}
-          onNew={newServer}
-          onDuplicate={duplicateServerActive}
-          onDeleteRequest={() => setConfirm("server")}
-        />
-
-        <ModelProfileCard
-          t={t}
-          model={model}
-          modelDraft={modelDraft}
-          setModelDraft={setModelDraft}
-          modelProfiles={modelProfiles}
-          modelOpen={modelOpen}
-          setModelOpen={setModelOpen}
-          editingName={editingName === "model"}
-          nameDraft={nameDraft}
-          setNameDraft={setNameDraft}
-          onRename={() => (editingName === "model" ? rename("model") : editName("model"))}
-          onSelect={(nextId) => { setModelId(nextId); saveProfileSelection(server.id, modelPath, nextId); }}
-          onNew={newModel}
-          onDuplicate={duplicateModelActive}
-          onDeleteRequest={() => setConfirm("model")}
-          jsonError={jsonError}
-          setJsonError={setJsonError}
-        />
-      </div>
-
-      {(serverDirty || modelDirty) && (
-        <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t app-border-accent pt-3">
-          <span className="text-xs text-amber-200">{serverDirty ? t("ui.profileServerSettingsChanged") : t("ui.profileModelSettingsChanged")}</span>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="app-button app-button--secondary" onClick={() => {
-              setServerDraft(structuredClone(server));
-              setModelDraft(structuredClone(model));
-            }}>
-              {t("ui.undoProfileChanges")}
-            </button>
-            <button type="button" className="app-button app-button--primary" onClick={() => void apply()}>{t("ui.applyProfiles")}</button>
+  return <section className="profiles-page" data-testid="execution-profiles-section">
+    <header className="workspace-page-heading">
+      <div><h2>{t("ui.executionProfiles")}</h2><p>{t("ui.profilesSingleEditorHint")}</p></div>
+      {onOpenTuning && <button type="button" onClick={onOpenTuning} className="app-button app-button--secondary">{t("ui.editTuning")}</button>}
+    </header>
+    {error && <FeedbackBanner tone="error" onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
+    {notice && <FeedbackBanner tone="success" onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
+    <div className="profile-snapshot-grid">
+      {(["server", "model"] as const).map((kind) => {
+        const profile = kind === "server" ? server : model;
+        const items = kind === "server" ? profiles.server : profiles.model;
+        const blocked = disabled;
+        const differs = profileDirtyFields(profile, cfg).length > 0;
+        return <section className="profile-snapshot" key={kind}>
+          <h3>{t(kind === "server" ? "ui.serverProfile" : "ui.modelTuningProfile")}</h3>
+          <p className="profile-snapshot-hint">{t(kind === "server" ? "ui.serverSnapshotHint" : "ui.modelSnapshotHint")}</p>
+          <p className="profile-model-name">{kind === "server" ? `${server.backend} · ${server.build || "PATH"}` : t("ui.sharedAcrossModels")}</p>
+          <label htmlFor={`${kind}-snapshot-picker`} className="sr-only">{t(kind === "server" ? "ui.selectServerProfile" : "ui.selectModelProfile")}</label>
+          <select id={`${kind}-snapshot-picker`} value={profile.id} disabled={blocked} className="app-input app-select" onChange={(event) => select(kind, event.target.value)}>
+            {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <span className="profile-snapshot-status">{t(differs ? "ui.profileDiffers" : "ui.profileMatches")}</span>
+          <div className="profile-snapshot-actions">
+            <button type="button" disabled={blocked} className="app-button app-button--primary" onClick={() => void apply(kind)}>{t("ui.loadSavedProfile")}</button>
+            <button type="button" disabled={blocked || !differs} className="app-button app-button--secondary" onClick={() => setPending({ kind, action: "save" })}>{t("ui.saveCurrent")}</button>
           </div>
-        </div>
-      )}
-
-      {notice && <div className="mt-2 text-xs text-slate-300" role="status">{notice}</div>}
-      <ConfirmDialog
-        open={confirm !== null}
-        title={t("ui.profileDeleteTitle")}
-        description={t("ui.profileDeleteBody")}
-        confirmLabel={t("ui.deleteProfile")}
-        onConfirm={confirmDelete}
-        onCancel={() => setConfirm(null)}
-      />
-    </section>
-  );
+          <div className="profile-snapshot-actions">
+            <button type="button" disabled={blocked} className="app-button app-button--ghost app-button--sm" onClick={() => { setEditing({ kind, action: "create" }); setNameDraft(""); }}>{t("ui.newProfile")}</button>
+            <details className="profile-manage">
+              <summary className="app-button app-button--ghost app-button--sm">{t("ui.manageProfile")}</summary>
+              <div className="profile-snapshot-actions">
+                <button type="button" disabled={blocked} className="app-button app-button--secondary app-button--sm" onClick={() => { setEditing({ kind, action: "rename" }); setNameDraft(profile.name); }}>{t("ui.renameProfile")}</button>
+                <button type="button" disabled={blocked} className="app-button app-button--secondary app-button--sm" onClick={() => { select(kind, kind === "server" ? duplicateServerProfile(server).id : duplicateModelProfile(model).id); refresh(); }}>{t("ui.duplicateProfile")}</button>
+                <button type="button" disabled={blocked || items.length <= 1} className="app-button app-button--danger app-button--sm" onClick={() => setPending({ kind, action: "delete" })}>{t("ui.deleteProfile")}</button>
+              </div>
+            </details>
+          </div>
+          {editing?.kind === kind && <form className="profile-name-form" onSubmit={(event) => { event.preventDefault(); saveName(); }}>
+            <label htmlFor={`${kind}-snapshot-name`}>{t("ui.profileNamePlaceholder")}</label>
+            <input id={`${kind}-snapshot-name`} className="app-input" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} required maxLength={120} />
+            <div className="profile-snapshot-actions"><button type="submit" disabled={blocked || !nameDraft.trim()} className="app-button app-button--primary">{t("ui.saveProfile")}</button><button type="button" onClick={() => setEditing(null)} className="app-button app-button--secondary">{t("common.cancel")}</button></div>
+          </form>}
+          {kind === "model" && <details className="profile-default-prompt"><summary>{t("ui.modelDefaultPrompt")}</summary><label htmlFor="profile-default-prompt" className="sr-only">{t("ui.modelDefaultPrompt")}</label><textarea id="profile-default-prompt" key={model.id} defaultValue={model.system_prompt} disabled={blocked} rows={3} className="app-textarea" onBlur={(event) => { if (event.target.value !== model.system_prompt) { saveModelProfile({ ...model, system_prompt: event.target.value }); refresh(); setNotice(t("ui.profileModelSaved")); } }} /><p>{t("ui.modelDefaultPromptHint")}</p></details>}
+        </section>;
+      })}
+    </div>
+    <RuntimeLoadingProfiles store={store} disabled={disabled || isServerBusy(store.status.state)} />
+    <ConfirmDialog open={pending !== null} title={t(pending?.action === "save" ? "ui.replaceProfileTitle" : "ui.profileDeleteTitle")} description={t(pending?.action === "save" ? "ui.replaceProfileBody" : "ui.profileDeleteBody")} confirmLabel={t(pending?.action === "save" ? "ui.saveCurrent" : "ui.deleteProfile")} tone={pending?.action === "save" ? "primary" : "danger"} busy={disabled} onConfirm={confirm} onCancel={() => setPending(null)} />
+  </section>;
 }

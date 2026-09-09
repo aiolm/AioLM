@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import { createConfigSaveQueue, type ConfigPatch } from "./configSaveQueue";
-import { lifecycleErrorMessage, nextPollDelay, shouldAutoStart, shouldPoll, withTimeout } from "./lifecycleUtils";
+import { isLifecycleCancellation, lifecycleErrorMessage, nextPollDelay, shouldAutoStart, shouldPoll, withTimeout } from "./lifecycleUtils";
 import { normalizeAppConfig, normalizeConfigPatch } from "./storeConfig";
+import { withManualOverrides } from "./tuningDefaults";
 
 export interface AppStore {
   cfg: api.AppConfig | null;
@@ -100,7 +101,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     }
     const save = saveConfigQueue.current;
     if (!save) throw new Error("Configuration save queue is unavailable.");
-    const saved = await save(normalizeConfigPatch(patch));
+    const saved = await save(normalizeConfigPatch((current) => withManualOverrides(current, typeof patch === "function" ? patch(current) : patch)));
     setActionError(null);
     return saved;
   }, []);
@@ -115,18 +116,27 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     const current = cfgOverride ?? cfgRef.current;
     if (!current) throw new Error("Configuration is still loading.");
     setBusy(true); setActionError(null); setStatus({ state: "starting" }); operationInFlight.current = true; statusGeneration.current += 1;
+    const generation = statusGeneration.current;
     try {
       const url = await withTimeout(api.startServer(current), START_TIMEOUT_MS, "Server start timed out after 120 seconds.");
       await refreshStatus();
       return url;
     } catch (error) {
-      setStatus({ state: "failed", error: lifecycleErrorMessage("start", error) });
-      setActionError(lifecycleErrorMessage("start", error));
+      if (generation !== statusGeneration.current) throw error;
+      if (isLifecycleCancellation(error)) {
+        setStatus({ state: "stopped" });
+        setActionError(null);
+      } else {
+        setStatus({ state: "failed", error: lifecycleErrorMessage("start", error) });
+        setActionError(lifecycleErrorMessage("start", error));
+      }
       throw error;
     } finally {
-      operationInFlight.current = false;
-      await refreshStatus();
-      setBusy(false);
+      if (generation === statusGeneration.current) {
+        operationInFlight.current = false;
+        await refreshStatus();
+        if (generation === statusGeneration.current) setBusy(false);
+      }
     }
   }, [refreshStatus, status.state, status.url]);
 
@@ -135,17 +145,24 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       const error = new Error("Native desktop runtime is unavailable. Run the packaged desktop app instead of the browser preview.");
       setActionError(error.message); throw error;
     }
-    if (operationInFlight.current || status.state === "stopping" || status.state === "stopped") return;
+    const cancellingStart = operationInFlight.current && status.state === "starting";
+    if ((operationInFlight.current && !cancellingStart) || status.state === "stopping" || status.state === "stopped") return;
     setBusy(true); setActionError(null); setStatus((current) => ({ ...current, state: "stopping" })); operationInFlight.current = true; statusGeneration.current += 1;
+    const generation = statusGeneration.current;
     try {
       await withTimeout(api.stopServer(), STOP_TIMEOUT_MS, "Server stop timed out after 20 seconds.");
-      setStatus({ state: "stopped" });
+      if (generation === statusGeneration.current) setStatus({ state: "stopped" });
     } catch (error) {
+      if (generation !== statusGeneration.current) throw error;
       setStatus((current) => ({ ...current, state: "failed", error: lifecycleErrorMessage("stop", error) }));
       setActionError(lifecycleErrorMessage("stop", error));
       throw error;
     } finally {
-      operationInFlight.current = false; await refreshStatus(); setBusy(false);
+      if (generation === statusGeneration.current) {
+        operationInFlight.current = false;
+        await refreshStatus();
+        if (generation === statusGeneration.current) setBusy(false);
+      }
     }
   }, [refreshStatus, status.state]);
 

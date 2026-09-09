@@ -4,11 +4,15 @@ pub mod bench;
 pub mod config;
 mod discover;
 mod gateway;
+pub mod gpu;
 pub mod hardware;
 mod mcp;
 pub mod models;
+mod procutil;
 pub mod runtime;
 pub mod server;
+pub mod session;
+pub mod tuning_defaults;
 
 pub use config::AppConfig;
 pub use server::ErrBuf;
@@ -49,6 +53,8 @@ struct AppState {
     selected_image: Mutex<Option<PathBuf>>,
     selected_document: Mutex<Option<PathBuf>>,
     exiting: Arc<AtomicBool>,
+    /// Every session besides the default one above. See `session.rs`.
+    sessions: Arc<session::SessionManager>,
 }
 
 struct RuntimeBusyGuard {
@@ -208,7 +214,20 @@ async fn delete_model(state: State<'_, AppState>, path: String) -> Result<(), St
         Path::new(&path),
         &cfg.active_model,
         &cfg.mmproj,
+        &cfg.spec_draft_model,
     )?;
+    for entry in state.sessions.entries() {
+        let server = entry
+            .state
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        if session_uses_model_file(&server, &candidate) {
+            return Err(format!(
+                "stop session '{}' before deleting a model it is using",
+                entry.display_name()
+            ));
+        }
+    }
     if cfg.lora_adapters.iter().any(|adapter| {
         adapter.enabled
             && fs::canonicalize(&adapter.path)
@@ -218,6 +237,15 @@ async fn delete_model(state: State<'_, AppState>, path: String) -> Result<(), St
         return Err("select another configuration before deleting an enabled LoRA adapter".into());
     }
     remove_verified_file(&candidate, &candidate)
+}
+
+fn session_uses_model_file(server: &server::ServerState, candidate: &Path) -> bool {
+    server.lifecycle.blocks_resource_change()
+        && [&server.model, &server.mmproj, &server.draft_model]
+            .into_iter()
+            .filter(|path| !path.trim().is_empty())
+            .filter_map(|path| fs::canonicalize(path).ok())
+            .any(|path| path == candidate)
 }
 
 #[tauri::command]
@@ -384,6 +412,7 @@ fn ensure_deletable_model_path(
     path: &Path,
     active_model: &str,
     active_mmproj: &str,
+    active_draft: &str,
 ) -> Result<PathBuf, String> {
     let root = fs::canonicalize(models_root)
         .map_err(|error| format!("cannot resolve models root: {error}"))?;
@@ -405,14 +434,14 @@ fn ensure_deletable_model_path(
     ) {
         return Err("only GGUF and mmproj files can be deleted".into());
     }
-    for active in [active_model, active_mmproj] {
+    for active in [active_model, active_mmproj, active_draft] {
         if active.is_empty() {
             continue;
         }
         if let Ok(active_path) = fs::canonicalize(active) {
             if active_path == candidate {
                 return Err(
-                    "select another model/projector before deleting the active file".into(),
+                    "select another model/projector/draft before deleting the active file".into(),
                 );
             }
         }
@@ -426,8 +455,9 @@ pub fn deletable_model_path(
     path: &Path,
     active_model: &str,
     active_mmproj: &str,
+    active_draft: &str,
 ) -> Result<PathBuf, String> {
-    ensure_deletable_model_path(models_root, path, active_model, active_mmproj)
+    ensure_deletable_model_path(models_root, path, active_model, active_mmproj, active_draft)
 }
 
 fn xml_text(value: &str) -> String {
@@ -771,18 +801,27 @@ fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
     for adapter in cfg.lora_adapters.iter().filter(|adapter| adapter.enabled) {
         validate_adapter_file(&adapter.path, "LoRA adapter", &["gguf"])?;
     }
-    if cfg.spec_type == "draft-dflash" && cfg.active_build != runtime::DFLASH2_PR_BUILD {
-        return Err(
-            "DFlash2 requires the llama.cpp PR #27342 runtime. Import or install pr27342 first, then select it before starting the server.".into(),
-        );
-    }
-    if cfg.spec_type == "draft-dflash" {
-        if cfg.spec_draft_model.trim().is_empty() {
+    if tuning_defaults::speculative_enabled(cfg) && !cfg.spec_draft_model.trim().is_empty() {
+        validate_adapter_file(&cfg.spec_draft_model, "draft model", &["gguf"])?;
+        let draft_name = Path::new(&cfg.spec_draft_model)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if draft_name.contains("dflash") && cfg.spec_type != "draft-dflash" {
             return Err(
-                "DFlash2 requires a draft model. Set the draft model GGUF path in Tuning before starting the server.".into(),
+                "a DFlash draft model requires speculative type 'draft-dflash' and a runtime supporting DFlash"
+                    .into(),
             );
         }
-        validate_adapter_file(&cfg.spec_draft_model, "draft model", &["gguf"])?;
+    }
+    if tuning_defaults::speculative_enabled(cfg)
+        && cfg.spec_type == "draft-dflash"
+        && cfg.spec_draft_model.trim().is_empty()
+    {
+        return Err(
+            "DFlash2 requires a draft model. Set the draft model GGUF path in Tuning before starting the server.".into(),
+        );
     }
     if !cfg.active_backend.is_empty() {
         runtime::validate_runtime_identifiers(&cfg.active_backend, &cfg.active_build)?;
@@ -790,13 +829,41 @@ fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn validate_launch_config(cfg: &mut config::AppConfig) -> Result<(), String> {
+pub async fn validate_launch_config(
+    cfg: &mut config::AppConfig,
+) -> Result<gpu::ResolvedGpu, String> {
+    validate_launch_config_with_cancel(cfg, None).await
+}
+
+async fn validate_launch_config_with_cancel(
+    cfg: &mut config::AppConfig,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<gpu::ResolvedGpu, String> {
     validate_start_config(cfg)?;
     if !cfg.active_backend.is_empty() {
-        let capabilities = runtime::probe(&cfg.active_backend, &cfg.active_build).await?;
+        let repair_cancel = cancel
+            .cloned()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        runtime::repair_runtime_dependencies(&cfg.active_backend, &cfg.active_build, repair_cancel)
+            .await?;
+        let capabilities = match cancel {
+            Some(cancel) => {
+                runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, cancel).await?
+            }
+            None => runtime::probe(&cfg.active_backend, &cfg.active_build).await?,
+        };
         validate_runtime_adapter_capabilities(cfg, &capabilities)?;
+        gpu::validate_safe_auto_placement(&cfg.gpu, &cfg.active_backend, &capabilities.devices)?;
+        let resolved = gpu::resolve_with_runtime_devices(
+            &cfg.gpu,
+            &cfg.active_backend,
+            &hardware::detect(),
+            &capabilities.devices,
+        )?;
+        gpu::validate_known_rocm_peer_issue(cfg, &resolved, &capabilities.devices)?;
+        return Ok(resolved);
     }
-    Ok(())
+    gpu::resolve(&cfg.gpu, &cfg.active_backend, &hardware::detect())
 }
 
 fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result<(), String> {
@@ -846,6 +913,12 @@ fn validate_runtime_adapter_capabilities(
             }
         ));
     }
+    if tuning_defaults::speculative_enabled(cfg)
+        && cfg.spec_type == "draft-dflash"
+        && !capabilities.supports_dflash
+    {
+        return Err("the selected runtime does not advertise draft-dflash support. Select a current DFlash-capable release, compatibility build, or PR #27342 runtime.".into());
+    }
     if !cfg.mmproj.trim().is_empty() && !runtime_has_flag(capabilities, &["--mmproj", "-mm"]) {
         return Err("selected runtime does not expose an mmproj/projector flag".into());
     }
@@ -865,12 +938,23 @@ fn validate_runtime_adapter_capabilities(
     Ok(())
 }
 
-#[tauri::command]
-async fn start_server(
-    state: State<'_, AppState>,
+/// Launch one session's llama-server process onto `target`/`err` and wait for
+/// it to become ready. Shared by the legacy `start_server` command (the
+/// default session: `persist = true` writes the config file, `abort_gateway
+/// = true` tears down the Anthropic gateway that proxies it) and
+/// `session_start` (an extra session: never persisted, no gateway to abort).
+/// Every lock scope and exit-mid-start check below is copied verbatim from
+/// `start_server`'s original single-session body, just parameterized over
+/// which `ServerState`/`ErrBuf` to drive.
+async fn start_on_target(
+    state: &AppState,
+    target: &Arc<Mutex<server::ServerState>>,
+    err: &Arc<server::ErrBuf>,
     cfg: config::AppConfig,
+    persist: bool,
+    abort_gateway: bool,
+    launch_cancel: &Arc<AtomicBool>,
 ) -> Result<String, String> {
-    let _operation = state.operation.lock().await;
     if state.runtime_busy.load(Ordering::Acquire) {
         return Err(
             "a runtime operation is in progress; wait for it to finish before starting the server"
@@ -880,38 +964,91 @@ async fn start_server(
     if state.exiting.load(Ordering::Acquire) {
         return Err("application is exiting".into());
     }
-    let mut next = cfg;
-    validate_launch_config(&mut next).await?;
-    let saved = {
-        let _config_write = state.config_write.lock().await;
-        config::save(&next)?
-    };
-    abort_gateway_now(&state);
-
-    {
-        let mut server = state
-            .server
+    if launch_cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+    let launch_generation = {
+        let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        server.lifecycle = server::Lifecycle::Starting;
+        let generation = server.begin_launch();
         server.last_error = None;
         server.url.clear();
         server.api_key.clear();
         server.redaction_secret.clear();
         server.model.clear();
         server.mmproj.clear();
-        server::kill(&mut server.child, Some(state.err.clone()));
+        server.draft_model.clear();
+        server::kill(&mut server.child, Some(err.clone()));
+        generation
+    };
+    err.clear();
+
+    let mut next = cfg;
+    let resolved_gpu =
+        match validate_launch_config_with_cancel(&mut next, Some(launch_cancel)).await {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                let mut server = target
+                    .lock()
+                    .map_err(|_| "server state lock was poisoned".to_string())?;
+                if !server.is_current_launch(launch_generation) {
+                    return Err("server start cancelled".into());
+                }
+                server.lifecycle = server::Lifecycle::Failed;
+                server.last_error = Some(error.clone());
+                return Err(error);
+            }
+        };
+    {
+        let server = target
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        if !server.is_current_launch(launch_generation) {
+            return Err("server start cancelled".into());
+        }
     }
-    state.err.clear();
+    let saved = if persist {
+        let _config_write = state.config_write.lock().await;
+        match config::save(&next) {
+            Ok(saved) => saved,
+            Err(error) => {
+                let mut server = target
+                    .lock()
+                    .map_err(|_| "server state lock was poisoned".to_string())?;
+                if !server.is_current_launch(launch_generation) {
+                    return Err("server start cancelled".into());
+                }
+                server.lifecycle = server::Lifecycle::Failed;
+                server.last_error = Some(error.clone());
+                return Err(error);
+            }
+        }
+    } else {
+        next
+    };
+    {
+        let server = target
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        if !server.is_current_launch(launch_generation) {
+            return Err("server start cancelled".into());
+        }
+    }
+    if abort_gateway {
+        abort_gateway_now(state);
+    }
 
     let api_key = format!("lb-{}", Uuid::new_v4().simple());
-    let (child, url, api_key_file) = match server::spawn(&saved, &api_key, &state.err) {
+    let (child, url, api_key_file) = match server::spawn(&saved, &api_key, err, &resolved_gpu) {
         Ok(value) => value,
         Err(error) => {
-            let mut server = state
-                .server
+            let mut server = target
                 .lock()
                 .map_err(|_| "server state lock was poisoned".to_string())?;
+            if !server.is_current_launch(launch_generation) {
+                return Err("server start cancelled".into());
+            }
             server.lifecycle = if state.exiting.load(Ordering::Acquire) {
                 server::Lifecycle::Stopped
             } else {
@@ -923,13 +1060,12 @@ async fn start_server(
     };
 
     {
-        let mut server = state
-            .server
+        let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        if state.exiting.load(Ordering::Acquire) {
+        if !server.is_current_launch(launch_generation) || state.exiting.load(Ordering::Acquire) {
             let mut orphan = Some(child);
-            server::kill(&mut orphan, Some(state.err.clone()));
+            server::kill(&mut orphan, Some(err.clone()));
             server::cleanup_api_key_file(api_key_file.as_deref());
             server.lifecycle = server::Lifecycle::Stopped;
             server.url.clear();
@@ -937,7 +1073,12 @@ async fn start_server(
             server.redaction_secret.clear();
             server.model.clear();
             server.mmproj.clear();
-            return Err("application is exiting".into());
+            server.draft_model.clear();
+            return Err(if state.exiting.load(Ordering::Acquire) {
+                "application is exiting".into()
+            } else {
+                "server start cancelled".into()
+            });
         }
         server.attach_starting(
             child,
@@ -945,24 +1086,34 @@ async fn start_server(
             api_key.clone(),
             saved.active_model.clone(),
             saved.mmproj.clone(),
+            if tuning_defaults::speculative_enabled(&saved) {
+                saved.spec_draft_model.clone()
+            } else {
+                String::new()
+            },
         );
     }
 
-    match server::wait_ready(state.server.clone(), &url, &api_key, 120, &state.err).await {
+    match server::wait_ready(target.clone(), &url, &api_key, 120, err).await {
         Ok(()) => {
-            let mut server = state
-                .server
+            let mut server = target
                 .lock()
                 .map_err(|_| "server state lock was poisoned".to_string())?;
-            if state.exiting.load(Ordering::Acquire) {
-                server::kill(&mut server.child, Some(state.err.clone()));
+            if !server.is_current_launch(launch_generation) || state.exiting.load(Ordering::Acquire)
+            {
+                server::kill(&mut server.child, Some(err.clone()));
                 server::cleanup_api_key_file(api_key_file.as_deref());
                 server.url.clear();
                 server.api_key.clear();
                 server.redaction_secret.clear();
                 server.mmproj.clear();
+                server.draft_model.clear();
                 server.lifecycle = server::Lifecycle::Stopped;
-                return Err("application is exiting".into());
+                return Err(if state.exiting.load(Ordering::Acquire) {
+                    "application is exiting".into()
+                } else {
+                    "server start cancelled".into()
+                });
             }
             server.lifecycle = server::Lifecycle::Ready;
             server.last_error = None;
@@ -971,15 +1122,19 @@ async fn start_server(
             Ok(url)
         }
         Err(error) => {
-            let mut server = state
-                .server
+            let mut server = target
                 .lock()
                 .map_err(|_| "server state lock was poisoned".to_string())?;
+            if !server.is_current_launch(launch_generation) {
+                server::cleanup_api_key_file(api_key_file.as_deref());
+                return Err("server start cancelled".into());
+            }
             server::kill(&mut server.child, None);
             server::cleanup_api_key_file(api_key_file.as_deref());
             server.url = url;
             server.api_key.clear();
             server.mmproj.clear();
+            server.draft_model.clear();
             server.lifecycle = if state.exiting.load(Ordering::Acquire) {
                 server.url.clear();
                 server::Lifecycle::Stopped
@@ -993,34 +1148,88 @@ async fn start_server(
 }
 
 #[tauri::command]
-async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
+async fn start_server(
+    state: State<'_, AppState>,
+    cfg: config::AppConfig,
+) -> Result<String, String> {
+    let pending = state
+        .sessions
+        .begin_pending_start(session::DEFAULT_SESSION_ID)?;
+    let launch_cancel = pending.cancel_flag();
     let _operation = state.operation.lock().await;
-    let gateway = state
-        .gateway
-        .lock()
-        .map_err(|_| "gateway state lock was poisoned".to_string())?
-        .take();
-    if let Some(gateway) = gateway {
-        gateway::stop(gateway).await;
+    if launch_cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
     }
-    {
+    if cfg.stop_existing_sessions_on_load {
+        let ids = state.sessions.ids();
+        for id in session::ids_to_stop_for_policy(&ids, session::DEFAULT_SESSION_ID) {
+            stop_session_by_id(&state, &id).await?;
+        }
+    }
+    let target = state.server.clone();
+    let err = state.err.clone();
+    start_on_target(&state, &target, &err, cfg, true, true, &launch_cancel).await
+}
+
+/// Tear down one session's process and reset it to `Stopped`. Shared by the
+/// legacy `stop_server` command (the default session, which also owns the
+/// Anthropic gateway proxying it) and `session_stop`/`session_unload` (an
+/// extra session, which never has a gateway of its own).
+fn stop_target(server: &mut server::ServerState, err: &Arc<server::ErrBuf>) {
+    server.lifecycle = server::Lifecycle::Stopping;
+    server::kill(&mut server.child, Some(err.clone()));
+    server.cancel_launch();
+    server.url.clear();
+    server.api_key.clear();
+    server.redaction_secret.clear();
+    server.model.clear();
+    server.mmproj.clear();
+    server.draft_model.clear();
+    server.last_error = None;
+    server.active_requests = 0;
+    server.touch_activity();
+}
+
+/// Stop the default session or one tracked extra session by id. Stopping an
+/// id nothing is tracked under is a no-op success: it is already stopped as
+/// far as any caller can observe.
+async fn stop_session_by_id(state: &AppState, id: &str) -> Result<(), String> {
+    // A policy-driven stop must also invalidate starts queued behind the
+    // operation lock, otherwise they could launch after the replacement.
+    state.sessions.cancel_pending_start(id);
+    if id == session::DEFAULT_SESSION_ID {
+        let gateway = state
+            .gateway
+            .lock()
+            .map_err(|_| "gateway state lock was poisoned".to_string())?
+            .take();
+        if let Some(gateway) = gateway {
+            gateway::stop(gateway).await;
+        }
         let mut server = state
             .server
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        server.lifecycle = server::Lifecycle::Stopping;
-        server::kill(&mut server.child, Some(state.err.clone()));
-        server.url.clear();
-        server.api_key.clear();
-        server.redaction_secret.clear();
-        server.model.clear();
-        server.mmproj.clear();
-        server.last_error = None;
-        server.active_requests = 0;
-        server.touch_activity();
-        server.lifecycle = server::Lifecycle::Stopped;
+        stop_target(&mut server, &state.err);
+        return Ok(());
     }
+    let Some(entry) = state.sessions.get(id) else {
+        return Ok(());
+    };
+    let mut server = entry
+        .state
+        .lock()
+        .map_err(|_| "server state lock was poisoned".to_string())?;
+    stop_target(&mut server, &entry.err);
     Ok(())
+}
+
+#[tauri::command]
+async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .sessions
+        .cancel_pending_start(session::DEFAULT_SESSION_ID);
+    stop_session_by_id(&state, session::DEFAULT_SESSION_ID).await
 }
 
 #[tauri::command]
@@ -1028,6 +1237,171 @@ async fn unload_model(state: State<'_, AppState>) -> Result<(), String> {
     // llama-server is configured as a single-model process in this app. A
     // safe unload tears down the process instead of claiming the model remains resident.
     stop_server(state).await
+}
+
+fn session_ports_excluding(state: &AppState, exclude_id: &str) -> Vec<u16> {
+    let mut ports = state.sessions.claimed_ports_excluding(exclude_id);
+    if exclude_id != session::DEFAULT_SESSION_ID {
+        if let Ok(server) = state.server.lock() {
+            if server.lifecycle != server::Lifecycle::Stopped {
+                if let Some(port) = server::port_from_url(&server.url) {
+                    ports.push(port);
+                }
+            }
+        }
+    }
+    ports
+}
+
+/// Load one session's model bundle, honoring the "stop existing sessions on
+/// load" policy (`stop_existing` overrides the persisted default for this
+/// call only). `session_id` may be `"default"`/empty to (re)start the
+/// legacy single session, an existing tracked id to restart it in place, or
+/// a new id (typically a UUID the frontend generates) to start an
+/// additional session alongside whatever is already running.
+#[tauri::command]
+async fn session_start(
+    state: State<'_, AppState>,
+    session_id: String,
+    cfg: config::AppConfig,
+    stop_existing: Option<bool>,
+) -> Result<session::SessionStatus, String> {
+    let id = {
+        let trimmed = session_id.trim();
+        if trimmed.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
+    let pending = state.sessions.begin_pending_start(&id)?;
+    let launch_cancel = pending.cancel_flag();
+    let _operation = state.operation.lock().await;
+    if launch_cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+    let policy = match stop_existing {
+        Some(explicit) => explicit,
+        None => config::load_result()?.stop_existing_sessions_on_load,
+    };
+    let name = Path::new(cfg.active_model.trim())
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| id.clone());
+
+    if policy {
+        let mut all_ids = state.sessions.ids();
+        all_ids.push(session::DEFAULT_SESSION_ID.to_string());
+        for other in session::ids_to_stop_for_policy(&all_ids, &id) {
+            stop_session_by_id(&state, &other).await?;
+        }
+    }
+    if launch_cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+
+    if id == session::DEFAULT_SESSION_ID {
+        let target = state.server.clone();
+        let err = state.err.clone();
+        start_on_target(&state, &target, &err, cfg, true, true, &launch_cancel).await?;
+        let mut server = target
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        return Ok(session::build_status(
+            session::DEFAULT_SESSION_ID,
+            "default",
+            &mut server,
+            &err,
+        ));
+    }
+
+    let entry = state.sessions.get_or_create(&id, &name)?;
+    *entry
+        .name
+        .lock()
+        .map_err(|_| "session name lock was poisoned".to_string())? = name.clone();
+    let mut launch_cfg = cfg;
+    launch_cfg.port =
+        session::effective_port(launch_cfg.port, &session_ports_excluding(&state, &id))?;
+
+    start_on_target(
+        &state,
+        &entry.state,
+        &entry.err,
+        launch_cfg,
+        false,
+        false,
+        &launch_cancel,
+    )
+    .await?;
+    let mut server = entry
+        .state
+        .lock()
+        .map_err(|_| "server state lock was poisoned".to_string())?;
+    Ok(session::build_status(&id, &name, &mut server, &entry.err))
+}
+
+#[tauri::command]
+async fn session_stop(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let id = session_id.trim();
+    let id = if id.is_empty() {
+        session::DEFAULT_SESSION_ID
+    } else {
+        id
+    };
+    state.sessions.cancel_pending_start(id);
+    stop_session_by_id(&state, id).await
+}
+
+/// Like `session_stop`, but also forgets a non-default session's tracking
+/// entry entirely, freeing its id and port. The default session has no
+/// separate "forgotten" state — it always exists as the one legacy slot.
+#[tauri::command]
+async fn session_unload(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let id = session_id.trim();
+    let id = if id.is_empty() {
+        session::DEFAULT_SESSION_ID
+    } else {
+        id
+    };
+    state.sessions.cancel_pending_start(id);
+    stop_session_by_id(&state, id).await?;
+    if id != session::DEFAULT_SESSION_ID {
+        state.sessions.forget(id);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn session_list(state: State<'_, AppState>) -> Result<Vec<session::SessionStatus>, String> {
+    let mut out = Vec::new();
+    {
+        let mut server = state
+            .server
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        out.push(session::build_status(
+            session::DEFAULT_SESSION_ID,
+            "default",
+            &mut server,
+            &state.err,
+        ));
+    }
+    for entry in state.sessions.entries() {
+        let name = entry.display_name();
+        let mut server = entry
+            .state
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        out.push(session::build_status(
+            &entry.id,
+            &name,
+            &mut server,
+            &entry.err,
+        ));
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -1144,7 +1518,7 @@ async fn unload_idle_server(state: &AppState) -> bool {
         if server.lifecycle != server::Lifecycle::Ready
             || gateway_running
             || gateway_active > 0
-            || !server.auto_unload_due(cfg.sleep_idle_seconds)
+            || !server.auto_unload_due(tuning_defaults::app_idle_timeout(&cfg))
         {
             return false;
         }
@@ -1195,45 +1569,7 @@ fn server_status(state: State<'_, AppState>) -> Result<serde_json::Value, String
         .server
         .lock()
         .map_err(|_| "server state lock was poisoned".to_string())?;
-    if server.lifecycle == server::Lifecycle::Ready {
-        let exited = match server.child.as_mut() {
-            Some(child) => match child.try_wait() {
-                Ok(status) => status,
-                Err(error) => {
-                    let tail = state.err.tail();
-                    server::kill(&mut server.child, Some(state.err.clone()));
-                    server.api_key.clear();
-                    server.redaction_secret.clear();
-                    server.mmproj.clear();
-                    server.lifecycle = server::Lifecycle::Crashed;
-                    server.last_error = Some(if tail.trim().is_empty() {
-                        format!("failed to inspect server process: {error}")
-                    } else {
-                        format!("failed to inspect server process: {error}. {}", tail.trim())
-                    });
-                    None
-                }
-            },
-            None => Some(std::process::ExitStatus::default()),
-        };
-        if let Some(status) = exited {
-            server.child = None;
-            server.api_key.clear();
-            server.redaction_secret.clear();
-            server.mmproj.clear();
-            server.lifecycle = server::Lifecycle::Crashed;
-            let tail = state.err.tail();
-            let code = status
-                .code()
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "signal".into());
-            server.last_error = Some(if tail.trim().is_empty() {
-                format!("llama-server exited unexpectedly ({code})")
-            } else {
-                format!("llama-server exited unexpectedly ({code}). {}", tail.trim())
-            });
-        }
-    }
+    server::reap_if_exited(&mut server, &state.err);
 
     let mut response = serde_json::Map::new();
     response.insert("state".into(), server.lifecycle.as_str().into());
@@ -1267,18 +1603,24 @@ fn server_status(state: State<'_, AppState>) -> Result<serde_json::Value, String
     if let Ok(cfg) = config::load_result() {
         response.insert(
             "memory".into(),
-            serde_json::to_value(server::estimate_memory(&cfg, &server.model, &server.mmproj))
-                .unwrap_or(serde_json::Value::Null),
+            if tuning_defaults::inherited(&cfg, "ctx_size")
+                || tuning_defaults::inherited(&cfg, "parallel")
+            {
+                serde_json::Value::Null
+            } else {
+                serde_json::to_value(server::estimate_status_memory(&cfg, &server))
+                    .unwrap_or(serde_json::Value::Null)
+            },
         );
         response.insert(
             "lifecycle".into(),
             serde_json::json!({
-                "sleep_idle_seconds": cfg.sleep_idle_seconds,
+                "sleep_idle_seconds": tuning_defaults::app_idle_timeout(&cfg),
                 "request_timeout_seconds": cfg.request_timeout_seconds,
-                "parallel": cfg.parallel,
+                "parallel": if tuning_defaults::inherited(&cfg, "parallel") { 0 } else { cfg.parallel },
                 "active_requests": server.active_requests,
                 "idle_seconds": server.idle_seconds(),
-                "auto_unload_due": server.auto_unload_due(cfg.sleep_idle_seconds),
+                "auto_unload_due": server.auto_unload_due(tuning_defaults::app_idle_timeout(&cfg)),
                 "effective_model": if server.model.is_empty() { serde_json::Value::Null } else { server.model.clone().into() },
                 "effective_backend": if cfg.active_backend.is_empty() { serde_json::Value::Null } else { cfg.active_backend.into() },
             }),
@@ -1292,6 +1634,7 @@ fn server_status(state: State<'_, AppState>) -> Result<serde_json::Value, String
 
 #[tauri::command]
 async fn run_bench(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     mut cfg: config::AppConfig,
 ) -> Result<bench::BenchResult, String> {
@@ -1313,9 +1656,15 @@ async fn run_bench(
     state.bench_cancel.store(false, Ordering::Release);
     let cancel = state.bench_cancel.clone();
     let active_pid = state.bench_pid.clone();
-    let result = tokio::task::spawn_blocking(move || bench::run(&cfg, cancel, Some(active_pid)))
-        .await
-        .map_err(|error| format!("benchmark task failed: {error}"))?;
+    let progress_app = app.clone();
+    let progress: bench::BenchProgress = Arc::new(move |row: &bench::BenchRow| {
+        let _ = progress_app.emit("bench-progress", row.clone());
+    });
+    let result = tokio::task::spawn_blocking(move || {
+        bench::run_with_progress(&cfg, cancel, Some(active_pid), Some(progress))
+    })
+    .await
+    .map_err(|error| format!("benchmark task failed: {error}"))?;
     state.bench_cancel.store(false, Ordering::Release);
     result
 }
@@ -1620,6 +1969,21 @@ async fn rt_select(
     if !server.is_file() || !bench.is_file() {
         return Err("the selected runtime is not installed completely".into());
     }
+    runtime::repair_runtime_dependencies(&backend, &build, Arc::new(AtomicBool::new(false)))
+        .await?;
+    let capabilities = runtime::probe(&backend, &build).await?;
+    if capabilities.state != "available" {
+        let details = capabilities.diagnostics.join("; ");
+        return Err(format!(
+            "the selected runtime failed preflight ({}): {}",
+            capabilities.state,
+            if details.is_empty() {
+                "no diagnostics"
+            } else {
+                &details
+            }
+        ));
+    }
     let _config_write = state.config_write.lock().await;
     let mut cfg = config::load_result()?;
     cfg.active_backend = backend;
@@ -1649,6 +2013,7 @@ pub fn run() {
             selected_image: Mutex::new(None),
             selected_document: Mutex::new(None),
             exiting: Arc::new(AtomicBool::new(false)),
+            sessions: Arc::new(session::SessionManager::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -1674,6 +2039,10 @@ pub fn run() {
             start_server,
             stop_server,
             unload_model,
+            session_list,
+            session_start,
+            session_stop,
+            session_unload,
             start_anthropic_gateway,
             stop_anthropic_gateway,
             anthropic_gateway_status,
@@ -1712,6 +2081,7 @@ pub fn run() {
                 state.bench_cancel.store(true, Ordering::Release);
                 state.runtime_cancel.store(true, Ordering::Release);
                 state.discover_cancel.store(true, Ordering::Release);
+                state.sessions.cancel_all_pending_starts();
                 // A window close can end the async build future before it
                 // observes runtime_cancel. Kill the tracked CMake process
                 // trees while the app is still alive so Ninja/compilers do not
@@ -1729,10 +2099,23 @@ pub fn run() {
                     }
                 }
                 if let Ok(mut server) = state.server.lock() {
+                    server.cancel_launch();
                     server::kill(&mut server.child, Some(state.err.clone()));
                     server.lifecycle = server::Lifecycle::Stopped;
                     server.api_key.clear();
                     server.redaction_secret.clear();
+                }
+                // Every additional session started alongside the default one
+                // is its own untracked-by-the-OS process tree; nothing else
+                // in the app kills these once the window is gone.
+                for entry in state.sessions.entries() {
+                    if let Ok(mut server) = entry.state.lock() {
+                        server.cancel_launch();
+                        server::kill(&mut server.child, Some(entry.err.clone()));
+                        server.lifecycle = server::Lifecycle::Stopped;
+                        server.api_key.clear();
+                        server.redaction_secret.clear();
+                    }
                 }
             }
         }
@@ -1887,14 +2270,65 @@ mod tests {
         fs::create_dir_all(model.parent().unwrap()).expect("create nested model root");
         fs::write(&model, b"model").expect("write model");
         let canonical = model.canonicalize().expect("canonicalize model");
-        assert!(ensure_deletable_model_path(&root, &model, "", "").is_ok());
+        assert!(ensure_deletable_model_path(&root, &model, "", "", "").is_ok());
         assert!(
-            ensure_deletable_model_path(&root, &model, &canonical.to_string_lossy(), "").is_err()
+            ensure_deletable_model_path(&root, &model, &canonical.to_string_lossy(), "", "")
+                .is_err()
         );
-        assert!(ensure_deletable_model_path(&root, Path::new("outside.gguf"), "", "").is_err());
-        assert!(ensure_deletable_model_path(&root, Path::new("nested/model.txt"), "", "").is_err());
+        assert!(
+            ensure_deletable_model_path(&root, &model, "", "", &canonical.to_string_lossy())
+                .is_err()
+        );
+        assert!(
+            super::deletable_model_path(&root, &model, "", "", &canonical.to_string_lossy())
+                .is_err()
+        );
+        assert!(ensure_deletable_model_path(&root, Path::new("outside.gguf"), "", "", "").is_err());
+        assert!(
+            ensure_deletable_model_path(&root, Path::new("nested/model.txt"), "", "", "").is_err()
+        );
         assert!(super::remove_verified_file(&canonical, &canonical).is_ok());
         assert!(!model.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_model_role_in_a_running_session_blocks_file_deletion() {
+        let root = std::env::temp_dir().join(format!(
+            "llama-board-session-delete-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create model root");
+        let primary = root.join("primary.gguf");
+        let projector = root.join("mmproj.gguf");
+        let draft = root.join("draft.gguf");
+        for path in [&primary, &projector, &draft] {
+            fs::write(path, b"model").expect("write model fixture");
+        }
+        let mut server = crate::server::ServerState::default();
+        server.lifecycle = crate::server::Lifecycle::Ready;
+        server.model = primary.to_string_lossy().into_owned();
+        server.mmproj = projector.to_string_lossy().into_owned();
+        server.draft_model = draft.to_string_lossy().into_owned();
+
+        assert!(super::session_uses_model_file(
+            &server,
+            &primary.canonicalize().unwrap()
+        ));
+        assert!(super::session_uses_model_file(
+            &server,
+            &projector.canonicalize().unwrap()
+        ));
+        assert!(super::session_uses_model_file(
+            &server,
+            &draft.canonicalize().unwrap()
+        ));
+
+        server.lifecycle = crate::server::Lifecycle::Stopped;
+        assert!(!super::session_uses_model_file(
+            &server,
+            &primary.canonicalize().unwrap()
+        ));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1944,7 +2378,7 @@ mod tests {
         };
         assert!(validate_start_config(&mut dflash_cfg)
             .unwrap_err()
-            .contains("PR #27342"));
+            .contains("draft model"));
         dflash_cfg.active_backend = "cpu".into();
         dflash_cfg.active_build = "pr27342".into();
         assert!(validate_start_config(&mut dflash_cfg)
@@ -1954,6 +2388,21 @@ mod tests {
         fs::write(&draft, b"draft model fixture").expect("write draft model fixture");
         dflash_cfg.spec_draft_model = draft.to_string_lossy().into_owned();
         assert!(validate_start_config(&mut dflash_cfg).is_ok());
+
+        let mut mismatched_cfg = config::AppConfig {
+            active_model: model.to_string_lossy().into_owned(),
+            spec_type: "draft-mtp".into(),
+            spec_draft_model: root
+                .join("Qwen3.8-27B-DFlash2-Q4_K_M.gguf")
+                .to_string_lossy()
+                .into_owned(),
+            ..config::AppConfig::default()
+        };
+        fs::write(&mismatched_cfg.spec_draft_model, b"draft model fixture")
+            .expect("write mismatched draft fixture");
+        let error = validate_start_config(&mut mismatched_cfg)
+            .expect_err("DFlash model cannot be launched as MTP");
+        assert!(error.contains("draft-dflash"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1975,6 +2424,7 @@ mod tests {
             state: "available".into(),
             version: "test".into(),
             flags: vec!["--mmproj".into(), "--lora".into()],
+            supports_dflash: false,
             devices: vec![],
             diagnostics: vec![],
             bench_available: true,
@@ -1984,5 +2434,17 @@ mod tests {
             .contains("lora-scaled"));
         capabilities.flags.push("--lora-scaled=PATH SCALE".into());
         assert!(validate_runtime_adapter_capabilities(&cfg, &capabilities).is_ok());
+        let mut dflash_cfg = config::AppConfig {
+            spec_type: "draft-dflash".into(),
+            ..Default::default()
+        };
+        assert!(
+            validate_runtime_adapter_capabilities(&dflash_cfg, &capabilities)
+                .unwrap_err()
+                .contains("draft-dflash")
+        );
+        capabilities.supports_dflash = true;
+        dflash_cfg.active_build = "local_b10840_nop2p".into();
+        assert!(validate_runtime_adapter_capabilities(&dflash_cfg, &capabilities).is_ok());
     }
 }

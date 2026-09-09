@@ -175,6 +175,7 @@ mod tests {
             driver: None,
             pci_id: None,
             integrated,
+            stable_id: format!("test-{name}"),
         }
     }
 

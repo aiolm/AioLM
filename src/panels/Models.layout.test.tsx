@@ -74,4 +74,19 @@ describe("ModelsPanel layout", () => {
     expect(screen.getByTestId("models-list")).toHaveClass("models-model-list");
     expect(screen.getByTestId("models-header-actions")).toHaveClass("min-w-0", "w-full", "flex-wrap");
   });
+
+  it("leaves server lifecycle controls to the app toolbar", () => {
+    const startingStore = {
+      ...store,
+      status: { state: "starting" },
+      busy: true,
+    } as AppStore;
+    render(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ModelsPanel, { store: startingStore }),
+    }));
+
+    expect(screen.queryByRole("button", { name: "Stop server" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unload model" })).toBeDisabled();
+  });
 });
