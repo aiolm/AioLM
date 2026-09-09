@@ -1,6 +1,6 @@
 [package]
 name = "llama-board"
-version = "0.1.5"
+version = "0.1.6"
 default-run = "llama-board"
 description = "llama-board: Tauri desktop GUI for llama.cpp"
 authors = ["llama-board contributors"]
