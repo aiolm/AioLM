@@ -1,4 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render as renderUI, screen } from "@testing-library/react";
+import type { ReactElement } from 'react';
+import { I18nProvider } from '../i18n';
 import { describe, expect, it, vi } from "vitest";
 import type * as api from "../api";
 import type { UnifiedKey } from "../i18nUnified";
@@ -22,6 +24,7 @@ const device = {
 } as api.DeviceReport;
 
 const t = (key: UnifiedKey) => key;
+const render = (element: ReactElement) => renderUI(element, { wrapper: ({ children }) => <I18nProvider initialLocale="en">{children}</I18nProvider> });
 
 describe("RuntimeGpuAssignment", () => {
   it("preserves unsaved ratios when another panel saves the placement", () => {

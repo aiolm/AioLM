@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createChatThread, loadChatWorkspace, loadChatWorkspaceAsync, mergeHydratedWorkspace, saveChatWorkspaceAsync, threadMatchesQuery, titleFromMessage, type ChatHistoryMessage, type ChatThread, type ChatWorkspace } from "../chatHistory";
 import { removeDocumentVectorsForPaths } from "../documentIndex";
 import { shouldConfirmDestructive } from "../preferences";
+import { trackInitialRead } from "../initialLayout";
 
 type Msg = ChatHistoryMessage;
 
@@ -39,7 +40,7 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
 
   useEffect(() => {
     let cancelled = false;
-    void loadChatWorkspaceAsync().then((persisted) => {
+    void trackInitialRead(loadChatWorkspaceAsync).then((persisted) => {
       if (cancelled) return;
       const merged = mergeHydratedWorkspace(persisted, workspaceRef.current, initialWorkspaceRef.current);
       const localMessagesChanged = JSON.stringify(msgsRef.current) !== JSON.stringify(initialMsgsRef.current);

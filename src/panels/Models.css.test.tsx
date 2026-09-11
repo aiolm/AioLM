@@ -139,18 +139,25 @@ describe("ModelsPanel CSS cascade", () => {
     localStorage.clear();
   });
 
-
-  it("gives the scan-error retry button only the app-* danger class, not a conflicting Tailwind bg-red-900 utility", async () => {
-    mocked.listModels.mockRejectedValue(new Error("scan failed"));
+  it("keeps loaded models visible after a rescan fails and retries from the error banner", async () => {
+    const model = { name: "kept.gguf", path: "C:/models/kept.gguf", size_mb: 100, is_vision: false };
+    mocked.listModels.mockReset().mockResolvedValueOnce({ models: [model], truncated: false })
+      .mockRejectedValueOnce(new Error("scan failed"))
+      .mockResolvedValueOnce({ models: [model], truncated: false });
     const cfg = { ...baseCfg, models_dir: "C:/models" };
     render(createElement(I18nProvider, {
       initialLocale: "en",
       children: createElement(ModelsPanel, { store: storeFor(cfg) }),
     }));
 
+    await screen.findByText("kept.gguf");
+    fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     const retryButton = await screen.findByRole("button", { name: "Retry" });
-    expect(retryButton).toHaveClass("app-button");
-    expect(retryButton.className).not.toMatch(/(^|\s)bg-red-900(\s|$)/);
+    expect(screen.getByText("kept.gguf")).toBeInTheDocument();
+    fireEvent.click(retryButton);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument());
+    expect(mocked.listModels).toHaveBeenCalledTimes(3);
+    expect(screen.getByText("kept.gguf")).toBeInTheDocument();
   });
 
   it("gives the LoRA add button an explicit hover class instead of the unsupported hover:app-bg-accent-solid variant", async () => {

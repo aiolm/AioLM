@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nProvider } from "./i18n";
 import { createTestStore } from "./testing/appStore";
 import type { AppStore } from "./store";
 import App from "./App";
+import { registerTask, removeTask } from "./taskRegistry";
 
 let store: AppStore;
 vi.mock("./store", () => ({ useAppStore: () => store }));
@@ -19,8 +20,25 @@ vi.mock("./panels/Bench", () => ({ default: () => <input aria-label="Benchmark r
 
 describe("Workspace navigation", () => {
   beforeEach(() => { localStorage.clear(); store = createTestStore(); });
+  afterEach(() => { act(() => removeTask("blocked-navigation")); vi.restoreAllMocks(); });
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
-  const mainTab = (name: string) => screen.getByRole("tab", { name });
+  const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
+
+  it("applies the task leave guard to sidebar, header and panel shortcuts", async () => {
+    mount();
+    fireEvent.click(mainTab("Projects"));
+    await screen.findByText("Project parameters");
+    act(() => { registerTask({id:"blocked-navigation",kind:"other",label:"Saving work",interruptible:false}); });
+    const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
+    fireEvent.click(mainTab("Library"));
+    fireEvent.click(screen.getByRole("button",{name:"model.gguf"}));
+    fireEvent.click(screen.getByText("Project parameters"));
+    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("Project draft")).toBeVisible();
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByText("Project parameters"));
+    expect(await screen.findByText("Parameter form")).toBeVisible();
+  });
 
   it("keeps projects beside conversations and retains the conversation draft", async () => {
     mount();
@@ -32,18 +50,16 @@ describe("Workspace navigation", () => {
     expect(store.start).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
     fireEvent.click(mainTab("Chat"));
-    fireEvent.click(mainTab("Conversations"));
     expect(screen.getByLabelText("Conversation draft")).toHaveValue("Keep this");
     fireEvent.click(mainTab("Projects"));
     expect(screen.getByLabelText("Project draft")).toHaveValue("New workspace");
   });
 
-  it("keeps four model sections and routes the global model picker back to the library", async () => {
+  it("exposes all fifteen destinations and routes the global model picker back to the library", async () => {
     mount();
-    fireEvent.click(mainTab("Models"));
+    fireEvent.click(mainTab("Library"));
     await screen.findByText("Model library");
-    const sections = document.querySelector('.app-side-tablist')!;
-    expect(within(sections as HTMLElement).getAllByRole("tab")).toHaveLength(4);
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(15);
     fireEvent.click(mainTab("Runtimes"));
     await screen.findByText("Saved runtime settings");
     fireEvent.click(screen.getByRole("button", { name: "model.gguf" }));
@@ -57,14 +73,14 @@ describe("Workspace navigation", () => {
     expect(stop).toBeEnabled();
     fireEvent.click(stop);
     expect(store.stop).toHaveBeenCalledOnce();
-    fireEvent.click(mainTab("Models"));
+    fireEvent.click(mainTab("Library"));
     await screen.findByText("Model library");
     expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
   });
 
   it("keeps benchmark state when changing tuning sections", async () => {
     mount();
-    fireEvent.click(mainTab("Tuning"));
+    fireEvent.click(mainTab("Parameters"));
     fireEvent.click(mainTab("Benchmark"));
     fireEvent.change(await screen.findByLabelText("Benchmark result"), { target: { value: "completed 24 t/s" } });
     fireEvent.click(mainTab("Execution profiles"));

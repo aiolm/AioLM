@@ -3,20 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.png" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preload" as="image" href="/brand/aio-monogram.png" />
     <meta name="description" content="Local llama.cpp runtime manager and chat client" />
-    <script>
-      (() => {
-        const stored = localStorage.getItem("AioLM-theme") || (() => { try { return JSON.parse(localStorage.getItem("AioLM-preferences") || "null")?.values?.theme; } catch { return null; } })();
-        const mode = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
-        const resolved = mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : mode === "dark" ? "dark" : "light";
-        document.documentElement.dataset.theme = resolved;
-        document.documentElement.style.colorScheme = resolved;
-        const language = navigator.language.toLowerCase();
-        document.documentElement.lang = language.startsWith("ko") ? "ko" : language.startsWith("ja") ? "ja" : language.startsWith("zh") ? "zh" : "en";
-      })();
-    </script>
-    <title>AioLM</title>
+<title>AioLM — All-In-One LM</title>
   </head>
 
   <body>

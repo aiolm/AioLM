@@ -40,7 +40,7 @@ export function fitLabelOf(locale: Locale, fit: api.BackendFit): string {
 }
 
 export function fitClassOf(fit: api.BackendFit): string {
-  return fit === "recommended" ? "bg-emerald-900/60 text-emerald-300" : fit === "compatible" ? "app-bg-elevated text-slate-300" : "app-bg-muted text-slate-500";
+  return fit === "recommended" ? "bg-success-soft/60 text-success" : fit === "compatible" ? "app-bg-elevated text-ink" : "app-bg-muted text-muted";
 }
 
 // Policy reasons arrive as keys so the backend never ships display strings.
@@ -51,9 +51,9 @@ export function reasonText(locale: Locale, suitability?: api.BackendSuitability)
 }
 
 export function stateOf(locale: Locale, row: BackendRow, activeBackend: string, activeBuild: string): { label: string; cls: string } {
-  if (row.busy) return { label: translate(locale, "ui.runtimeInstalling"), cls: "bg-amber-900/60 text-amber-300" };
+  if (row.busy) return { label: translate(locale, "ui.runtimeInstalling"), cls: "bg-warning-soft/60 text-warning" };
   const active = activeBackend === row.backend && activeBuild !== "";
-  if (row.installed.length === 0) return { label: active ? translate(locale, "ui.runtimeActiveSystem") : translate(locale, "ui.none"), cls: "app-bg-muted text-slate-400" };
-  if (row.latest && row.installed.some((item) => item.build === row.latest?.build)) return { label: active ? translate(locale, "ui.runtimeActiveUpToDate") : translate(locale, "ui.runtimeUpToDate"), cls: "bg-emerald-900/60 text-emerald-300" };
-  return { label: active ? translate(locale, "ui.active") : row.latest ? translate(locale, "ui.runtimeUpdateAvailable") : translate(locale, "ui.runtimeInstalled"), cls: active ? "bg-emerald-900/60 text-emerald-300" : "app-bg-elevated text-slate-200" };
+  if (row.installed.length === 0) return { label: active ? translate(locale, "ui.runtimeActiveSystem") : translate(locale, "ui.none"), cls: "app-bg-muted text-muted" };
+  if (row.latest && row.installed.some((item) => item.build === row.latest?.build)) return { label: active ? translate(locale, "ui.runtimeActiveUpToDate") : translate(locale, "ui.runtimeUpToDate"), cls: "bg-success-soft/60 text-success" };
+  return { label: active ? translate(locale, "ui.active") : row.latest ? translate(locale, "ui.runtimeUpdateAvailable") : translate(locale, "ui.runtimeInstalled"), cls: active ? "bg-success-soft/60 text-success" : "app-bg-elevated text-ink" };
 }

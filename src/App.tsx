@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import StableLabel from "./components/StableLabel";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { applyTheme, persistThemeMode, subscribeToSystemTheme } from "./theme";
 import "./App.css";
 
@@ -9,8 +10,10 @@ import FeedbackBanner from "./components/FeedbackBanner";
 import TaskStrip from "./components/TaskStrip";
 import { useTasks, type AppTask } from "./taskRegistry";
 import { PanelBoundary } from "./components/ErrorBoundary";
-import { BoardMark, ChatIcon, DeveloperIcon, ModelsIcon, SettingsIcon, TuningIcon } from "./components/AppIcons";
-import TabNav, { type TabNavItem } from "./components/TabNav";
+import { AioMark } from "./components/AppIcons";
+import { navigationGroups, navigationText, type ViewId } from "./navigation";
+import InitialSurface from "./components/InitialSurface";
+import { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator } from "./components/PanelFeedback";
 
 import { useI18n } from "./i18n";
 import { buildNumber } from "./runtimeUtils";
@@ -31,30 +34,14 @@ const TuningPanel = lazy(() => import("./panels/Tuning"));
 const SettingsPanel = lazy(() => import("./panels/Settings"));
 const ProfilesPanel = lazy(() => import("./panels/ExecutionProfiles"));
 
-type Tab = "chat" | "models" | "tuning" | "developer" | "settings";
-type ModelsSection = "library" | "sessions" | "discover" | "runtimes";
-type TuningSection = "controls" | "profiles" | "benchmark" | "lora";
-type ChatSection = "conversations" | "projects";
-type DeveloperSection = "api" | "gateways" | "mcp" | "diagnostics";
-
 function PanelLoading() {
   const { t } = useI18n();
   return <div className="app-page-scroll panel-loading" role="status" aria-label={t("extra.loading")}><span className="panel-spinner" aria-hidden="true" /></div>;
 }
 
 function LazyPanel({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<PanelLoading />}>{children}</Suspense>;
+  return <Suspense fallback={<PanelLoading />}><InitialSurface>{children}</InitialSurface></Suspense>;
 }
-
-/** Load on first visit, then retain drafts and active work across navigation. */
-function VisitedPanel({ active, children, id, labelledBy }: { active: boolean; children: React.ReactNode; id?: string; labelledBy?: string }) {
-  const [visited, setVisited] = useState(active);
-  useEffect(() => { if (active) setVisited(true); }, [active]);
-  return <div id={id} role={labelledBy ? "tabpanel" : undefined} aria-labelledby={labelledBy} hidden={!active} className="app-workspace-content h-full">
-    {(visited || active) && children}
-  </div>;
-}
-
 
 /** A task blocks a tab change only while it is active and registered as
  * unable to survive navigation (`interruptible: false`); see taskRegistry.ts. */
@@ -68,84 +55,31 @@ function shortModel(path: string | undefined, emptyLabel: string): string {
   return displayPath.split(/[\\/]/).pop() || displayPath;
 }
 
-function PageShell<T extends string>({
-  scope,
-  items,
-  active,
-  onSelect,
-  title,
-  children,
-}: {
-  /** Namespaces the tab/panel ids so several shells can coexist in the DOM. */
-  scope: string;
-  items: TabNavItem<T>[];
-  active: T;
-  onSelect: (section: T) => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  const panelId = `${scope}-section-panel`;
-  return (
-    <div className="app-page-shell">
-      <div className="app-side-nav">
-        <div className="app-side-label" aria-hidden="true">{title}</div>
-        <TabNav
-          items={items}
-          active={active}
-          onSelect={onSelect}
-          label={title}
-          orientation="vertical"
-          tabId={(id) => `${scope}-section-${id}`}
-          panelId={() => panelId}
-          className="app-side-tablist"
-          tabClassName={(isActive) => `app-side-link ${isActive ? "is-active" : ""}`}
-        />
-      </div>
-      <div
-        className="app-page-content"
-        id={panelId}
-        role="tabpanel"
-        aria-labelledby={`${scope}-section-${active}`}
-        tabIndex={-1}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => loadPreferences());
   const store = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
   const { t, locale, setLocale } = useI18n();
-  const [tab, setTab] = useState<Tab>("chat");
-  const [modelsSection, setModelsSection] = useState<ModelsSection>("library");
-  const [tuningSection, setTuningSection] = useState<TuningSection>("controls");
-  const [chatSection, setChatSection] = useState<ChatSection>("conversations");
-
-  const [developerSection, setDeveloperSection] = useState<DeveloperSection>("api");
-  const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["chat"]));
+  const [view, setView] = useState<ViewId>("chat");
+  const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
+  const [developerSection, setDeveloperSection] = useState<"api" | "gateways" | "diagnostics">("api");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDialogElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const tasks = useTasks();
-  const tabs: TabNavItem<Tab>[] = [
-    { id: "chat", label: t("tab.chat"), icon: <ChatIcon /> },
-    { id: "models", label: t("tab.models"), icon: <ModelsIcon /> },
-    { id: "tuning", label: t("tab.tuning"), icon: <TuningIcon /> },
-    { id: "developer", label: t("tab.developer"), icon: <DeveloperIcon /> },
-    { id: "settings", label: t("tab.settings"), icon: <SettingsIcon /> },
-  ];
-  const modelSections: TabNavItem<ModelsSection>[] = [
-    { id: "library", label: t("section.library") }, { id: "discover", label: t("section.discover") }, { id: "sessions", label: t("ui.sessionsTitle") }, { id: "runtimes", label: t("section.runtimes") },
-  ];
-  const tuningSections: TabNavItem<TuningSection>[] = [
-    { id: "controls", label: t("ui.tuningControls") }, { id: "profiles", label: t("ui.executionProfiles") },
-    { id: "benchmark", label: t("section.benchmark") }, { id: "lora", label: t("section.lora") },
-  ];
-  const chatSections: TabNavItem<ChatSection>[] = [
-    { id: "conversations", label: t("chat.conversations") }, { id: "projects", label: t("section.projects") },
-  ];
-  const developerSections: TabNavItem<DeveloperSection>[] = [
-    { id: "api", label: t("section.api") }, { id: "gateways", label: t("section.gateways") }, { id: "mcp", label: t("section.mcp") }, { id: "diagnostics", label: t("section.diagnostics") },
-  ];
+  const copy = navigationText[locale];
+  const entries = navigationGroups.flatMap(group => group.items);
+  useEffect(() => {
+    const dialog = menuRef.current;
+    if (menuOpen && dialog && !dialog.open) dialog.showModal();
+    if (!menuOpen && dialog?.open) { dialog.close(); menuButton.current?.focus(); }
+  }, [menuOpen]);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(min-width: 960px)");
+    const close = () => { if (media.matches) setMenuOpen(false); };
+    media.addEventListener?.("change", close);
+    return () => media.removeEventListener?.("change", close);
+  }, []);
   const serverBusy = store.busy || store.status.state === "starting" || store.status.state === "stopping";
   const serverState = store.status.state;
   const stopServer = store.stop;
@@ -195,19 +129,20 @@ export default function App() {
     setLocale(next.locale);
   };
 
-  const selectTab = (next: Tab): boolean => {
+  const navigate = (next: ViewId): boolean => {
     const blocking = findTaskBlockingTabLeave(tasks);
-    if (blocking && next !== tab && !window.confirm(t("ui.taskLeaveConfirm", { task: blocking.label }))) return false;
-    setMountedTabs((current) => current.has(next) ? current : new Set([...current, next]));
-    setTab(next);
+    if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: blocking.label }))) return false;
+    window.dispatchEvent(new Event("aiolm:navigate"));
+    setVisited(current => current.has(next) ? current : new Set([...current, next]));
+    if (next === "api" || next === "gateways" || next === "diagnostics") setDeveloperSection(next);
+    setView(next);
+    setMenuOpen(false);
     return true;
   };
-
-  const openModels = () => { if (selectTab("models")) setModelsSection("library"); };
-  const openDiagnostics = () => { if (selectTab("developer")) setDeveloperSection("diagnostics"); };
-  const openTuning = () => { if (selectTab("tuning")) setTuningSection("controls"); };
-  const openProfiles = () => { if (selectTab("tuning")) setTuningSection("profiles"); };
-
+  const openModels = () => { navigate("models"); };
+  const openDiagnostics = () => { navigate("diagnostics"); };
+  const openTuning = () => { navigate("tuning"); };
+  const openProfiles = () => { navigate("profiles"); };
   const toggleServer = async () => {
     try {
       if (serverState === "running" || serverState === "starting") await store.stop();
@@ -217,149 +152,67 @@ export default function App() {
     }
   };
 
-  const statusTone = serverState === "running" ? "is-ready" : serverState === "failed" || serverState === "crashed" ? "is-error" : "is-idle";
-  const statusDetail = serverState === "running"
-    ? `${store.status.active_requests ?? 0} ${t("load.requests")}`
-    : "";
-  const contextTitle = tab === "models"
-    ? modelSections.find((item) => item.id === modelsSection)?.label ?? t("tab.models")
-    : tab === "developer"
-      ? developerSections.find((item) => item.id === developerSection)?.label ?? t("tab.developer")
-      : tab === "chat" ? t("tab.chat") : tab === "tuning" ? t("tab.tuning") : t("tab.settings");
+  const title = t(entries.find(item => item.id === view)!.label);
+  const showDeveloper = view === "api" || view === "gateways" || view === "diagnostics";
   const backendLabel = store.cfg?.active_backend
     ? `${store.cfg.active_backend}${store.cfg.active_build ? ` · ${buildNumber(store.cfg.active_build)}` : ""}`
     : t("load.pathRuntime");
 
-  return (
-    <div className="app-shell">
-      <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
 
-      <nav className="app-rail" aria-label={t("app.primary")}>
-        <span className="app-brand-mark" aria-hidden="true"><BoardMark /></span>
-        <TabNav
-          items={tabs}
-          active={tab}
-          onSelect={selectTab}
-          label={t("app.primary")}
-          orientation="vertical"
-          tabId={(id) => `tab-${id}`}
-          panelId={(id) => `panel-${id}`}
-          className="app-rail-tablist"
-          tabClassName={(isActive) => `app-rail-link ${isActive ? "is-active" : ""}`}
-          tabTitle={(id) => tabs.find((item) => item.id === id)?.label}
-        />
-        <div className="app-rail-version" aria-hidden="true">0.1.6</div>
-      </nav>
-
-      <div className="app-main-column">
-        <header className="app-topbar">
-          <h1 className="app-context-title">{contextTitle}</h1>
-          <div className="app-status-bar">
-            <span className={`app-status-chip ${statusTone}`} role="status" aria-live="polite">
-              <span className="app-status-dot" aria-hidden="true" />
-              {serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}
-            </span>
-            <span className="app-status-detail">{statusDetail}</span>
-            <button type="button" onClick={() => void toggleServer()} disabled={!store.cfg || (serverBusy && serverState !== "starting") || (!store.cfg.active_model && serverState !== "running" && serverState !== "starting")} className={`app-server-button ${serverState === "running" || serverState === "starting" ? "is-stop" : "is-start"}`}>
-              {serverState === "running" || serverState === "starting" ? t("action.stop") : serverBusy ? t("status.working") : t("action.start")}
-            </button>
-          </div>
-        </header>
-
-        <div className="app-loadbar">
-          <span className="app-load-label">{t("load.label")}</span>
-          <button type="button" className="app-load-select app-load-model" onClick={openModels} title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")}>
-            {shortModel(store.cfg?.active_model, t("load.noModel"))}
-          </button>
-          <button type="button" className="app-load-select app-load-backend" onClick={() => { if (selectTab("models")) setModelsSection("runtimes"); }}>
-            {backendLabel}
-          </button>
-          <span className="app-load-metric app-load-metric--memory" aria-hidden={!store.status.memory}><b>mem</b> {store.status.memory ? `${store.status.memory.total_mb.toLocaleString()} MB` : "—"}</span>
-          <span className="app-load-spacer" />
-          <span className="app-load-warning-slot">
-            {store.actionError && <span className="app-load-warning" title={normalizeDisplayText(store.actionError)}>● {t("load.failed")}</span>}
-          </span>
-          {tab !== "tuning" && <button type="button" className="app-apply-button" onClick={openTuning}>
-            {t("ui.tuningControls")}
-          </button>}
+  const brand = <div className="aiolm-brand"><AioMark /><div><strong>AioLM</strong><span>All-In-One LM</span></div></div>;
+  const navigation = <nav aria-label={t("app.primary")} className="aiolm-navigation">
+    {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group">
+      <h2>{copy[group.id]}</h2>
+      {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="aiolm-nav-link" onClick={() => navigate(item.id)}>
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{t(item.label)}</span>
+      </button>)}
+    </section>)}
+  </nav>;
+  const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={t(entries.find(item => item.id === id)!.label)} className="app-panel-host" data-view={id}>
+    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
+  </section>;
+  return <PanelFeedbackProvider><div className="app-shell" onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
+    <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
+    <aside className="aiolm-sidebar">{brand}{navigation}<div className="aiolm-sidebar-footer">{copy.local}<span>v0.1.6</span></div></aside>
+    <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setMenuOpen(false); }}>
+      <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}>×</button></div>{navigation}</div>
+    </dialog>
+    <div className="app-main-column">
+      <header className="aiolm-header">
+        <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
+        <div className="aiolm-runtime-context"><button type="button" className="aiolm-context-model" title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")} onClick={openModels}>{shortModel(store.cfg?.active_model, t("load.noModel"))}</button><button type="button" className="aiolm-context-runtime" onClick={() => navigate("runtimes")}>{backendLabel}</button></div>
+        <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span><button type="button" className={"app-button app-button--" + (serverState === "running" || serverState === "starting" ? "secondary" : "primary")} disabled={!store.cfg || (serverBusy && serverState !== "starting") || (!store.cfg.active_model && serverState !== "running" && serverState !== "starting")} onClick={() => void toggleServer()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : serverBusy ? t("status.working") : t("action.start")} labels={[t("action.stop"), t("status.working"), t("action.start")]} /></button></div>
+      </header>
+      <div className="app-main-area">
+        <details className="app-activity">
+          <summary><span>{t("ui.taskStripTitle")}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span><PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} /></summary>
+          <div className="app-activity-content">
+        <div className="app-feedback-layer" aria-live="polite">
+          {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
+          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "")}</FeedbackBanner>}
         </div>
-
-        <div className="app-main-area">
-          <div className="app-feedback-layer" aria-live="polite">
-            {store.bootState === "native-unavailable" && (tab !== "chat" || chatSection !== "conversations") && (
-              <FeedbackBanner tone="warning" title={t("native.unavailable")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }}>
-                {t("native.message")}
-              </FeedbackBanner>
-            )}
-            {hasError && store.bootState !== "native-unavailable" && (
-              <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors} action={store.status.state === "failed" || store.status.state === "crashed" ? { label: t("native.openDiagnostics"), onClick: openDiagnostics } : undefined}>
-                {store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error}
-              </FeedbackBanner>
-            )}
+        <TaskStrip />
+        <PanelFeedbackOutlet />
           </div>
-          <TaskStrip />
-
-          <main id="main-content" className="app-main" tabIndex={-1}>
-          {mountedTabs.has("chat") && (
-            <section id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden={tab !== "chat"} className="app-panel-host">
-              <TabNav items={chatSections} active={chatSection} onSelect={setChatSection} label={t("tab.chat")} tabId={(id) => `chat-workspace-${id}`} panelId={(id) => `chat-workspace-panel-${id}`} className="app-workspace-tabs" tabClassName={(active) => active ? "is-active" : ""} />
-              <div id="chat-workspace-panel-conversations" role="tabpanel" aria-labelledby="chat-workspace-conversations" hidden={chatSection !== "conversations"} className="app-workspace-content">
-              {store.bootState === "native-unavailable" ? (
-                <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }} /></div>
-              ) : <PanelBoundary label="Chat"><LazyPanel><ChatPanel store={store} preferences={preferences} onOpenModels={openModels} onOpenDiagnostics={openDiagnostics} active={tab === "chat" && chatSection === "conversations"} /></LazyPanel></PanelBoundary>}
-              </div>
-              <VisitedPanel id="chat-workspace-panel-projects" labelledBy="chat-workspace-projects" active={chatSection === "projects"}>
-                <PanelBoundary label={t("section.projects")}><LazyPanel>{store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />}</LazyPanel></PanelBoundary>
-              </VisitedPanel>
-            </section>
-          )}
-
-          {mountedTabs.has("models") && (
-            <section id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden={tab !== "models"} className="app-panel-host">
-              <PageShell scope="models" items={modelSections} active={modelsSection} onSelect={setModelsSection} title={t("section.models")}>
-                <PanelBoundary label={t("section.models")}><LazyPanel>
-                  <VisitedPanel active={modelsSection === "library"}><ModelsPanel store={store} focus="library" /></VisitedPanel>
-                  <VisitedPanel active={modelsSection === "sessions"}>
-                    <SessionsPanel store={store} active={tab === "models" && modelsSection === "sessions"} />
-                  </VisitedPanel>
-                  <VisitedPanel active={modelsSection === "discover"}><DiscoverPanel store={store} active={tab === "models" && modelsSection === "discover"} /></VisitedPanel>
-                  <VisitedPanel active={modelsSection === "runtimes"}>
-                    <RuntimesPanel store={store} active={tab === "models" && modelsSection === "runtimes"} onOpenProfiles={openProfiles} />
-                  </VisitedPanel>
-                </LazyPanel></PanelBoundary>
-              </PageShell>
-            </section>
-          )}
-
-          {mountedTabs.has("tuning") && (
-            <section id="panel-tuning" role="tabpanel" aria-labelledby="tab-tuning" hidden={tab !== "tuning"} className="app-panel-host">
-              <TabNav items={tuningSections} active={tuningSection} onSelect={setTuningSection} label={t("tab.tuning")} tabId={(id) => `tuning-workspace-${id}`} panelId={(id) => `tuning-workspace-panel-${id}`} className="app-workspace-tabs" tabClassName={(active) => active ? "is-active" : ""} />
-              {tuningSections.map(({ id }) => <VisitedPanel key={id} id={`tuning-workspace-panel-${id}`} labelledBy={`tuning-workspace-${id}`} active={tuningSection === id}>
-                <PanelBoundary label={t("section.tuning")}><LazyPanel>
-                  {id === "controls" && <TuningPanel store={store} />}
-                  {id === "profiles" && <div className="app-page-scroll p-4"><ProfilesPanel store={store} modelPath={store.cfg?.active_model ?? ""} onOpenTuning={openTuning} /></div>}
-                  {id === "benchmark" && <BenchPanel store={store} />}
-                  {id === "lora" && <ModelsPanel store={store} focus="lora" />}
-                </LazyPanel></PanelBoundary>
-              </VisitedPanel>)}
-            </section>
-          )}
-
-          {mountedTabs.has("developer") && (
-            <section id="panel-developer" role="tabpanel" aria-labelledby="tab-developer" hidden={tab !== "developer"} className="app-panel-host">
-              <PageShell scope="developer" items={developerSections} active={developerSection} onSelect={setDeveloperSection} title={t("section.developer")}>
-                <PanelBoundary label={t("section.developer")}><LazyPanel>{developerSection === "mcp" ? <McpPanel store={store} /> : <DeveloperPanel store={store} section={developerSection} />}</LazyPanel></PanelBoundary>
-              </PageShell>
-            </section>
-          )}
-          {mountedTabs.has("settings") && (
-            <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden={tab !== "settings"} className="app-panel-host">
-              <PanelBoundary label={t("section.settings")}><LazyPanel><SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} /></LazyPanel></PanelBoundary>
-            </section>
-          )}
-          </main>
-        </div>
+        </details>
+        <main id="main-content" className="app-main" tabIndex={-1}>
+          {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onOpenDiagnostics={openDiagnostics} />)}
+          {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
+          {panel("models", <ModelsPanel store={store} focus="library" />)}
+          {panel("discover", <DiscoverPanel store={store} active={view === "discover"} />)}
+          {panel("lora", <ModelsPanel store={store} focus="lora" />)}
+          {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
+          {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} />)}
+          {panel("tuning", <TuningPanel store={store} />)}
+          {panel("profiles", <div className="app-page-scroll"><ProfilesPanel store={store} modelPath={store.cfg?.active_model ?? ""} onOpenTuning={openTuning} /></div>)}
+          {panel("benchmark", <BenchPanel store={store} />)}
+          <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
+            <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
+          </section>
+          {panel("mcp", <McpPanel store={store} />)}
+          {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} />)}
+        </main>
       </div>
     </div>
-  );
+  </div></PanelFeedbackProvider>;
 }

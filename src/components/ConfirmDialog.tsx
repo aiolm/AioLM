@@ -85,7 +85,7 @@ export default function ConfirmDialog({
         <div id={descriptionId} className="app-confirm-dialog__description">{description}</div>
         <div className="app-confirm-dialog__actions">
           <button type="button" ref={cancelRef} className="app-button app-button--secondary" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
-          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy} onClick={onConfirm}>{busy ? `${confirmLabel.replace(/^Remove\s+/i, "Removing ").replace(/^Delete\s+/i, "Deleting ").replace(/^Restart\s+/i, "Restarting ")}…` : confirmLabel}</button>
+          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy} onClick={onConfirm}>{busy ? `${confirmLabel.replace(/^Remove\s+/i, "Removing ").replace(/^Delete\s+/i, "Deleting ").replace(/^Restart\s+/i, "Restarting ")}` : confirmLabel}</button>
         </div>
       </div>
     </dialog>

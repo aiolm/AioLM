@@ -72,7 +72,6 @@ export function useRuntimesController(store: AppStore, active: boolean) {
   }, [activeBackend, activeBuild, t]);
 
   useEffect(() => {
-    setCapabilities(null);
     if (active && activeBackend && activeBuild) void probe();
     else setProbeBusy(false);
     return () => { probeGeneration.current += 1; };

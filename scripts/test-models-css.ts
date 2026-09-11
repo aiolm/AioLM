@@ -7,21 +7,9 @@ import { readFileSync } from "node:fs";
 
 const modelsTsx = readFileSync(new URL("../src/panels/Models.tsx", import.meta.url), "utf8");
 const appPanelsCss = readFileSync(new URL("../src/styles/app-panels.css", import.meta.url), "utf8");
-const indexCss = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
-const appComponentsCss = readFileSync(new URL("../src/styles/app-components.css", import.meta.url), "utf8");
-const appResponsiveCss = readFileSync(new URL("../src/styles/app-responsive.css", import.meta.url), "utf8");
 
-const retryButtonMatch = modelsTsx.match(/onClick=\{\(\) => void scan\(\)\} className="([^"]*)">\{t\("panel\.retry"\)\}/);
-assert.ok(retryButtonMatch, "could not locate the retry button in Models.tsx");
-const retryClassName = retryButtonMatch[1];
-assert.ok(
-  !/\bbg-red-900\b/.test(retryClassName),
-  "Models.tsx retry button should not pair Tailwind's bg-red-900 with app-* classes",
-);
-assert.ok(
-  retryClassName.includes("app-button"),
-  "Models.tsx retry button should use the shared app-button variant",
-);
+// Rescan failure, retained records and retry are exercised in Models.css.test.tsx.
+// The error action now belongs to FeedbackBanner; do not pin its markup here.
 
 assert.ok(
   !modelsTsx.includes("hover:app-bg-accent-solid"),
@@ -41,19 +29,13 @@ assert.ok(
   "app-panels.css should not contain literal hover:app-* strings",
 );
 
-// Shared theme and layout rules must keep the responsive utility overrides and
-// light-mode semantic colors intact as the design system evolves.
-assert.match(indexCss, /--color-amber-950:\s*var\(--tone-warning-bg\)/);
-assert.match(indexCss, /--color-emerald-950:\s*var\(--tone-success-bg\)/);
-assert.match(indexCss, /--color-red-950:\s*var\(--tone-error-bg\)/);
-assert.match(appComponentsCss, /@layer components\s*\{\s*\.app-input\s*\{/);
-assert.match(appResponsiveCss, /grid-template-rows:\s*48px minmax\(0, 1fr\)/);
-assert.match(appResponsiveCss, /padding:\s*5px 8px/);
+// Theme contrast, control reachability and overflow are verified in the
+// rendered viewport matrix; do not freeze the old palette or pixel values here.
 
 // The outer page owns vertical scrolling. The stacked project grid must keep
 // its intrinsic height so the saved-project list cannot collapse on narrow windows.
 const projectsTsx = readFileSync(new URL("../src/panels/Projects.tsx", import.meta.url), "utf8");
-assert.match(projectsTsx, /className="grid shrink-0 items-start gap-4 lg:grid-cols-/);
+assert.match(projectsTsx, /className="[^"]*\bgrid\b[^"]*\bshrink-0\b[^"]*"/);
 assert.doesNotMatch(projectsTsx, /<aside className="min-h-0/);
 
 const viteConfig = readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8");

@@ -17,6 +17,7 @@ import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
 import { SESSION_STATUS_CHANGED_EVENT } from "../sessionUtils";
+import { titleFromMessage } from "../chatHistory";
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -146,8 +147,9 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element || !atBottomRef.current) return;
-    window.requestAnimationFrame(() => element.scrollTo({ top: element.scrollHeight, behavior: phase === "idle" ? "smooth" : "auto" }));
+    if (!element || !atBottomRef.current || (msgs.length === 0 && phase === "idle")) return;
+    const frame = window.requestAnimationFrame(() => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
+    return () => window.cancelAnimationFrame(frame);
   }, [msgs, phase]);
 
   // Stable identity (not the inline `ct` closure) so MessageBubble's memo bailout
@@ -164,16 +166,26 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     })();
   }, [t, setError]);
 
+  const sendMessage = () => {
+    if (!canSend) return;
+    // Resolve the full automatic title with the user's action, before retrieval
+    // or generation can finish and resize the conversation heading later.
+    if (activeThread?.title === "New conversation" && input.trim()) {
+      updateActiveThread({ title: titleFromMessage(input) });
+    }
+    void send(false, undefined, canSend);
+  };
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Enter" && !event.shiftKey && (preferences?.chat.enterToSend ?? true)) {
       event.preventDefault();
-      void send(false, undefined, canSend);
+      sendMessage();
     }
   };
 
   return (
-    <div className="app-page-scroll relative flex h-full min-h-0 flex-col p-3 sm:p-4">
+    <div className="app-page-scroll chat-page">
       <ChatConversationHeader
         threadPanelOpen={threadPanelOpen}
         setThreadPanelOpen={setThreadPanelOpen}
@@ -192,7 +204,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         ct={ct}
       />
 
-      <div className="relative flex min-h-0 flex-1 gap-4">
+      <div className="chat-layout">
         <ChatThreadSidebar
           open={threadPanelOpen}
           onClose={() => setThreadPanelOpen(() => false)}
@@ -207,7 +219,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           ct={ct}
         />
 
-        <div className="relative flex min-w-0 min-h-0 flex-1 flex-col">
+        <div className="chat-conversation">
           <ChatMessageLog
             scrollRef={scrollRef}
             onScrollAtBottomChange={(atBottom) => { atBottomRef.current = atBottom; }}
@@ -258,7 +270,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             onAddImage={() => void addImage()}
             onStop={stop}
             aborting={aborting}
-            onSend={() => void send(false, undefined, canSend)}
+            onSend={sendMessage}
             canSend={canSend}
             model={model}
             displayModel={displayModel}

@@ -1,3 +1,4 @@
+import StableLabel from "../components/StableLabel";
 import type { RefObject } from "react";
 import type * as api from "../api";
 import type { ChatHistoryMessage } from "../chatHistory";
@@ -46,9 +47,9 @@ export default function ChatMessageLog({
         const element = event.currentTarget;
         onScrollAtBottomChange(element.scrollTop + element.clientHeight >= element.scrollHeight - 80);
       }}
-      className="min-h-0 flex-1 space-y-4 overflow-auto px-1 py-2"
+      className="chat-message-log"
     >
-      {disabled && (
+      {disabled && msgs.length === 0 && (
         <div className="app-chat-blocked mx-auto mt-10 max-w-xl">
           <div className="app-empty-icon" aria-hidden="true">
             {isFailed ? (
@@ -61,7 +62,7 @@ export default function ChatMessageLog({
           <p>{isFailed ? ct("blockedFailedDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}</p>
           <div className="app-empty-actions">
             {!model && onOpenModels && <button type="button" className="app-button app-button--primary" onClick={onOpenModels}>{ct("openModels")}</button>}
-            {model && !serverOn && !isFailed && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}>{starting || status.state === "starting" ? ct("startingServer") : ct("startServer")}</button>}
+            {model && !serverOn && !isFailed && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={starting || status.state === "starting" ? ct("startingServer") : ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
             {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
           </div>
         </div>
@@ -69,11 +70,11 @@ export default function ChatMessageLog({
 
       {!disabled && msgs.length === 0 && (
         <div className="mx-auto mt-12 max-w-md px-4 text-center">
-          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl border" style={{ borderColor: "var(--board-border)", background: "var(--board-surface-muted)", color: "var(--board-faint)" }} aria-hidden="true">
+          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl border ui-border-color-border ui-background-surface-muted ui-color-faint"  aria-hidden="true">
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 5.5a1.6 1.6 0 0 1 1.6-1.6h7.8a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6H8.3L5.8 14V12.5A1.6 1.6 0 0 1 4.5 11V5.5Z" /><path d="M7 7.2h6M7 9.7h3.5" strokeWidth="1.2" /></svg>
           </div>
-          <h3 className="text-sm font-semibold" style={{ color: "var(--board-ink)" }}>{ct("newConversationTitle")}</h3>
-          <p className="mt-1.5 text-xs leading-relaxed" style={{ color: "var(--board-muted)" }}>{ct("newConversationDescription")}</p>
+          <h3 className="text-sm font-semibold ui-color-ink" >{ct("newConversationTitle")}</h3>
+          <p className="mt-1.5 text-xs leading-relaxed ui-color-muted" >{ct("newConversationDescription")}</p>
         </div>
       )}
 
@@ -91,7 +92,7 @@ export default function ChatMessageLog({
         />
       ))}
 
-      {error && <div className="rounded-lg border p-3 text-xs leading-relaxed" style={{ borderColor: "var(--tone-error-border)", background: "var(--tone-error-bg)", color: "var(--tone-error-ink)" }} role="alert">
+      {error && <div className="rounded-lg border p-3 text-xs leading-relaxed ui-border-color-error-border ui-background-error-bg ui-color-error-ink"  role="alert">
         <div className="mb-1 text-xs font-semibold">{ct("requestFailed")}</div>
         <div className="whitespace-pre-wrap break-words opacity-90">{normalizeDisplayText(error)}</div>
         {canRetry && <button type="button" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger mt-2.5 app-button--sm">{ct("retry")}</button>}

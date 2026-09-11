@@ -76,20 +76,6 @@ export function TuningIcon() {
   );
 }
 
-/** Minimal wordmark — refined LB monogram */
-export function BoardMark() {
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        fontSize: "10px",
-        fontWeight: 800,
-        letterSpacing: "-0.04em",
-        lineHeight: 1,
-        fontVariantNumeric: "tabular-nums",
-      }}
-    >
-      LB
-    </span>
-  );
+export function AioMark() {
+  return <img className="aiolm-mark" src="/brand/aio-monogram.png" alt="" aria-hidden="true" width="36" height="36" />;
 }

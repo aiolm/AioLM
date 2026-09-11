@@ -10,11 +10,7 @@ interface TooltipProps {
   id?: string;
 }
 
-/**
- * Small, CSS-only tooltip used by dense tuning controls.  The content remains
- * in the DOM for screen readers and appears on hover/focus, so the first
- * redesign stage does not need global popover state or a portal.
- */
+/** A viewport-positioned help popover, also associated with its control for AT. */
 export default function Tooltip({ content, label, id }: TooltipProps) {
   const { t } = useI18n();
   const title = typeof content === "string" ? undefined : content.title;
@@ -42,11 +38,17 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
 
   useEffect(() => {
     if (!open) return;
+    const dismiss = () => setOpen(false);
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };
+    window.addEventListener("aiolm:navigate", dismiss);
+    window.addEventListener("keydown", onKeyDown);
     updatePosition();
     const frame = window.requestAnimationFrame(updatePosition);
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, { capture: true, passive: true });
     return () => {
+      window.removeEventListener("aiolm:navigate", dismiss);
+      window.removeEventListener("keydown", onKeyDown);
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
@@ -74,7 +76,11 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
         onBlur={() => setOpen(false)}
         onClick={() => setOpen((value) => !value)}
       >
-        <span aria-hidden="true">?</span>
+        <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.7-2.5 2-2.5 4" />
+          <circle cx="12" cy="16.5" r=".9" fill="currentColor" stroke="none" />
+        </svg>
       </button>
       {popover}
     </span>

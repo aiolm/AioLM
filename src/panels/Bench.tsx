@@ -1,3 +1,5 @@
+import PanelFeedback from "../components/PanelFeedback";
+import StableLabel from "../components/StableLabel";
 import { useEffect, useRef, useState } from "react";
 import * as api from "../api";
 import type { AppStore } from "../store";
@@ -6,7 +8,7 @@ import { useI18n } from "../i18n";
 import { benchmarkCsv, benchmarkFingerprint, benchmarkMetrics, BENCHMARK_RECORD_SCHEMA, isServerRunning, normalizeDisplayPath, normalizeDisplayText, type BenchmarkDevice, type BenchmarkRecord } from "../lifecycleUtils";
 import { finishTask, registerTask, updateTask } from "../taskRegistry";
 
-const BENCH_HISTORY_KEY = "llama-board-benchmark-history.v1";
+const BENCH_HISTORY_KEY = "aiolm-benchmark-history.v1";
 
 function readHistory(): BenchmarkRecord[] {
   try {
@@ -181,10 +183,10 @@ export default function BenchPanel({ store }: { store: AppStore }) {
 
   return (
     <div className="app-page-scroll relative flex h-full min-h-0 flex-col p-4">
-      <div className="rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+      <div className="rounded-xl border p-4 ui-border-color-border ui-background-panel" >
         <div className="flex min-w-0 flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1">
-            <label htmlFor="bench-iters" className="text-xs" style={{ color: "var(--board-muted)" }}>{t("panel.iterations")}</label>
+            <label htmlFor="bench-iters" className="text-xs ui-color-muted" >{t("panel.iterations")}</label>
             <input
               id="bench-iters"
               type="text"
@@ -214,7 +216,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
               disabled={phase === "canceling"}
               className="bench-run-button app-button app-button--danger app-button--md"
             >
-              {phase === "canceling" ? t("panel.canceling") : t("panel.cancelBenchmark")}
+              <StableLabel value={phase === "canceling" ? t("panel.canceling") : t("panel.cancelBenchmark")} labels={[t("panel.benchmark"), t("panel.canceling"), t("panel.cancelBenchmark")]} />
             </button>
           ) : (
             <button
@@ -224,43 +226,43 @@ export default function BenchPanel({ store }: { store: AppStore }) {
               title={serverRunning ? t("panel.serverRunningBenchmark") : !model ? t("panel.noModelBenchmark") : undefined}
               className="bench-run-button app-button app-button--primary app-button--md"
             >
-              {t("panel.benchmark")}
+              <StableLabel value={t("panel.benchmark")} labels={[t("panel.benchmark"), t("panel.canceling"), t("panel.cancelBenchmark")]} />
             </button>
           )}
-          <span className="bench-model-label min-w-0 break-words text-xs tabular-nums" style={{ color: "var(--board-faint)" }}>
+          <span className="bench-model-label min-w-0 break-words text-xs tabular-nums ui-color-faint" >
             {model ? displayModel : t("panel.noModelBenchmark")}
-            {serverRunning ? ` · ${t("panel.serverRunningBenchmark")}` : ""}
           </span>
         </div>
         <div className="bench-phase-slot mt-3">
           {phase !== "idle" && (
-            <div className="flex items-center gap-2 text-xs font-medium" style={{ color: "var(--board-warning)" }} role="status" aria-live="polite">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "var(--board-warning)" }} aria-hidden="true" />
+            <div className="flex items-center gap-2 text-xs font-medium ui-color-warning"  role="status" aria-live="polite">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full ui-background-warning"  aria-hidden="true" />
               {phase === "canceling" ? t("common.wait") : t("status.working")}
             </div>
           )}
-          {phase === "idle" && runStatus && <div className="mt-2 text-xs font-medium" style={{ color: runStatus === "complete" ? "var(--board-success)" : runStatus === "cancelled" ? "var(--board-warning)" : "var(--board-danger)" }} role="status" aria-live="polite">{benchmarkStatusLabel(runStatus, t)}</div>}
+          {phase === "idle" && runStatus && <div className={["mt-2 text-xs font-medium", (runStatus === "complete" ? "ui-color-success" : (runStatus === "cancelled" ? "ui-color-warning" : "ui-color-danger"))].filter(Boolean).join(" ")}  role="status" aria-live="polite">{benchmarkStatusLabel(runStatus, t)}</div>}
         </div>
       </div>
 
-      <div className="bench-info-slot mt-3">
-        {info && <div className="rounded-lg border px-3 py-2 text-xs leading-relaxed" style={{ borderColor: "var(--tone-warning-border)", background: "var(--tone-warning-bg)", color: "var(--tone-warning-ink)" }} role="status">{info}</div>}
-      </div>
+      <PanelFeedback>
+        {serverRunning && <div role="status">{t("panel.serverRunningBenchmark")}</div>}
+        {info && <div className="rounded-lg border px-3 py-2 text-xs leading-relaxed ui-border-color-warning-border ui-background-warning-bg ui-color-warning-ink"  role="status">{info}</div>}
+      </PanelFeedback>
 
-      <div className="mt-4 min-h-0 flex-1 overflow-auto">
+      <div className="mt-4 min-h-0 flex-1 overflow-auto" tabIndex={0} role="region" aria-label={t("panel.benchmarkResults")}>
         {error && (
-          <div className="rounded-lg border p-3 text-xs leading-relaxed" style={{ borderColor: "var(--tone-error-border)", background: "var(--tone-error-bg)", color: "var(--tone-error-ink)" }} role="alert">
+          <div className="rounded-lg border p-3 text-xs leading-relaxed ui-border-color-error-border ui-background-error-bg ui-color-error-ink"  role="alert">
             <div className="mb-1 font-semibold">{t("error.wrong")}</div>
             <pre className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</pre>
           </div>
         )}
 
         {rows.length > 0 && (
-          <div className="overflow-x-auto rounded-lg border" style={{ borderColor: "var(--board-border)" }}>
+          <div className="overflow-x-auto rounded-lg border ui-border-color-border" >
             <table className="w-full min-w-[34rem] table-fixed border-collapse text-sm">
               <caption className="sr-only">{t("panel.benchmarkResults")}</caption>
               <thead>
-                <tr className="border-b text-left text-xs" style={{ borderColor: "var(--board-border)", color: "var(--board-faint)" }}>
+                <tr className="border-b text-left text-xs ui-border-color-border ui-color-faint" >
                   <th scope="col" className="w-[40%] px-4 py-2.5 font-medium">{t("ui.benchColumnTest")}</th>
                   <th scope="col" className="w-[20%] px-4 py-2.5 font-medium">{t("ui.benchColumnSize")}</th>
                   <th scope="col" className="w-[20%] px-4 py-2.5 font-medium">{t("ui.benchColumnBatch")}</th>
@@ -269,11 +271,11 @@ export default function BenchPanel({ store }: { store: AppStore }) {
               </thead>
               <tbody>
                 {rows.map((row, index) => (
-                  <tr key={`${row.test}-${index}`} className="border-b last:border-0" style={{ borderColor: "var(--board-border)" }}>
-                    <td className="px-4 py-2.5 font-mono text-xs" style={{ color: "var(--board-ink)" }}>{row.test}</td>
-                    <td className="px-4 py-2.5 text-xs tabular-nums" style={{ color: "var(--board-muted)" }}>{row.size}</td>
-                    <td className="px-4 py-2.5 text-xs tabular-nums" style={{ color: "var(--board-muted)" }}>{row.batch}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-xs font-semibold tabular-nums" style={{ color: "var(--board-success)" }}>{row.tps.toFixed(1)}</td>
+                  <tr key={`${row.test}-${index}`} className="border-b last:border-0 ui-border-color-border" >
+                    <td className="px-4 py-2.5 font-mono text-xs ui-color-ink" >{row.test}</td>
+                    <td className="px-4 py-2.5 text-xs tabular-nums ui-color-muted" >{row.size}</td>
+                    <td className="px-4 py-2.5 text-xs tabular-nums ui-color-muted" >{row.batch}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs font-semibold tabular-nums ui-color-success" >{row.tps.toFixed(1)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -282,16 +284,16 @@ export default function BenchPanel({ store }: { store: AppStore }) {
         )}
 
         {rows.length === 0 && !error && phase === "idle" && !runStatus && (
-          <div className="p-6 text-center text-xs" style={{ color: "var(--board-faint)" }}>{t("panel.benchmarkEmpty")}</div>
+          <div className="p-6 text-center text-xs ui-color-faint" >{t("panel.benchmarkEmpty")}</div>
         )}
 
-        {effectiveArgs.length > 0 && <details className="mt-4 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
-          <summary className="cursor-pointer text-xs font-medium" style={{ color: "var(--board-ink)" }}>{t("panel.effectiveArgs")}</summary>
-          <code tabIndex={0} aria-label={t("panel.effectiveArgs")} className="mt-2.5 block max-h-48 overflow-auto whitespace-pre-wrap break-all rounded p-2.5 font-mono text-xs" style={{ background: "var(--board-mono-bg)", color: "var(--board-mono-ink)" }}>{effectiveArgs.map((arg) => JSON.stringify(normalizeDisplayText(arg))).join(" ")}</code>
+        {effectiveArgs.length > 0 && <details className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
+          <summary className="cursor-pointer text-xs font-medium ui-color-ink" >{t("panel.effectiveArgs")}</summary>
+          <code tabIndex={0} aria-label={t("panel.effectiveArgs")} className="mt-2.5 block max-h-48 overflow-auto whitespace-pre-wrap break-all rounded p-2.5 font-mono text-xs ui-background-mono-bg ui-color-mono-ink" >{effectiveArgs.map((arg) => JSON.stringify(normalizeDisplayText(arg))).join(" ")}</code>
         </details>}
-        {history.length > 0 && <section className="mt-4 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }} aria-labelledby="benchmark-history-heading">
-          <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="benchmark-history-heading" className="app-section-title">{t("ui.benchHistory", { count: history.length })}</h2><button type="button" onClick={() => downloadText("llama-board-benchmarks.csv", benchmarkCsv(history), "text/csv") } className="app-button app-button--secondary app-button--sm">{t("ui.benchExportCsv")}</button></div>
-          <div className="mt-2.5 space-y-1.5">{history.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums" style={{ color: "var(--board-faint)" }}><span>{new Date(record.createdAt).toLocaleString()} · {normalizeDisplayPath(record.model).split(/[\\/]/).pop()} · {benchmarkStatusLabel(record.status === "partial" ? "crashed" : record.status ?? "complete", t)}</span><span>{record.rows.length > 0 ? record.rows.map((row) => `${row.test}: ${row.value.toFixed(1)} ${row.unit}`).join(" · ") : record.error ?? "—"}</span></div>)}</div>
+        {history.length > 0 && <section className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="benchmark-history-heading">
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="benchmark-history-heading" className="app-section-title">{t("ui.benchHistory", { count: history.length })}</h2><button type="button" onClick={() => downloadText("aiolm-benchmarks.csv", benchmarkCsv(history), "text/csv") } className="app-button app-button--secondary app-button--sm">{t("ui.benchExportCsv")}</button></div>
+          <div className="mt-2.5 space-y-1.5">{history.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums ui-color-faint" ><span>{new Date(record.createdAt).toLocaleString()} · {normalizeDisplayPath(record.model).split(/[\\/]/).pop()} · {benchmarkStatusLabel(record.status === "partial" ? "crashed" : record.status ?? "complete", t)}</span><span>{record.rows.length > 0 ? record.rows.map((row) => `${row.test}: ${row.value.toFixed(1)} ${row.unit}`).join(" · ") : record.error ?? "—"}</span></div>)}</div>
         </section>}
       </div>
     </div>

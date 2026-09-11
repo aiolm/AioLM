@@ -1,3 +1,5 @@
+import PanelFeedback from "../components/PanelFeedback";
+import { CustomSelect } from "../components/ThemeSwitcher";
 import { useRef, useState } from "react";
 import type { AppConfig } from "../api";
 import type { AppStore } from "../store";
@@ -109,8 +111,10 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
       <div><h2>{t("ui.executionProfiles")}</h2><p>{t("ui.profilesSingleEditorHint")}</p></div>
       {onOpenTuning && <button type="button" onClick={onOpenTuning} className="app-button app-button--secondary">{t("ui.editTuning")}</button>}
     </header>
-    {error && <FeedbackBanner tone="error" onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
-    {notice && <FeedbackBanner tone="success" onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
+    <PanelFeedback>
+      {error && <FeedbackBanner tone="error" onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
+      {notice && <FeedbackBanner tone="success" onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
+    </PanelFeedback>
     <div className="profile-snapshot-grid">
       {(["server", "model"] as const).map((kind) => {
         const profile = kind === "server" ? server : model;
@@ -122,9 +126,7 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
           <p className="profile-snapshot-hint">{t(kind === "server" ? "ui.serverSnapshotHint" : "ui.modelSnapshotHint")}</p>
           <p className="profile-model-name">{kind === "server" ? `${server.backend} · ${server.build || "PATH"}` : t("ui.sharedAcrossModels")}</p>
           <label htmlFor={`${kind}-snapshot-picker`} className="sr-only">{t(kind === "server" ? "ui.selectServerProfile" : "ui.selectModelProfile")}</label>
-          <select id={`${kind}-snapshot-picker`} value={profile.id} disabled={blocked} className="app-input app-select" onChange={(event) => select(kind, event.target.value)}>
-            {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
+          <CustomSelect id={`${kind}-snapshot-picker`} value={profile.id} disabled={blocked} className="w-full" onChange={(value) => select(kind, value)} options={items.map(item => ({ value: item.id, label: item.name }))} />
           <span className="profile-snapshot-status">{t(differs ? "ui.profileDiffers" : "ui.profileMatches")}</span>
           <div className="profile-snapshot-actions">
             <button type="button" disabled={blocked} className="app-button app-button--primary" onClick={() => void apply(kind)}>{t("ui.loadSavedProfile")}</button>

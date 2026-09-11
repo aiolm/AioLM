@@ -11,14 +11,21 @@ const OPTIONS = [
 
 function renderSelect(onChange = vi.fn()) {
   render(<CustomSelect id="theme" value="light" options={OPTIONS} onChange={onChange} ariaLabel="Theme" />);
-  // The sr-only native <select> also resolves to role "combobox" with the same
-  // accessible name; the visible trigger button is the one under test.
-  const trigger = screen.getAllByRole("combobox", { name: "Theme" }).find((el) => el.tagName === "BUTTON");
+  const trigger = screen.getByRole("combobox", { name: "Theme" });
   if (!trigger) throw new Error("CustomSelect trigger button not found.");
   return { onChange, trigger };
 }
 
 describe("CustomSelect", () => {
+  it("keeps complete long labels in the trigger and options and serializes the value", () => {
+    const label = "긴 프로필 이름 Japanese 中文 Long profile name ".repeat(12);
+    const { container } = render(<form><CustomSelect name="profile" value="saved" options={[{ value: "saved", label }]} onChange={() => undefined} ariaLabel="Saved profile" /></form>);
+    const trigger = screen.getByRole("combobox", { name: "Saved profile" });
+    expect(trigger.textContent).toBe(label);
+    expect(new FormData(container.querySelector("form")!).get("profile")).toBe("saved");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("option").textContent).toBe(label);
+  });
   it("links the trigger to the listbox and to the highlighted option", () => {
     const { trigger } = renderSelect();
     expect(trigger).not.toHaveAttribute("aria-activedescendant");

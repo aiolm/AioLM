@@ -1,52 +1,11 @@
-html, body {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-body:not(.is-keyboard-nav) *:focus,
-body:not(.is-keyboard-nav) *:focus-visible,
-:focus:not(:focus-visible) {
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-body.is-keyboard-nav *:focus-visible {
-  outline: 2px solid var(--board-focus) !important;
-  outline-offset: 2px !important;
-}
-
-.panel-loading {
-  display: flex;
-  width: 100%;
-  height: 100%;
-  min-height: 100%;
-  flex: 1 1 auto;
-  align-items: center;
-  justify-content: center;
-}
-
-.panel-spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--board-border);
-  border-top-color: var(--board-accent);
-  border-radius: 50%;
-  animation: panel-spin 0.7s linear infinite;
-}
-
-@keyframes panel-spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes app-feedback-appear {
-  from { opacity: 0; transform: translateY(-3px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes app-shimmer {
-  0% { opacity: 0.5; }
-  50% { opacity: 1; }
-  100% { opacity: 0.5; }
-}
+/* Shared application states. */
+.panel-loading { display: flex; height: 100%; min-height: 160px; align-items: center; justify-content: center; gap: 12px; color: var(--ui-muted); }
+.panel-spinner { display: block; width: 48px; height: 6px; border-radius: 4px; background: var(--ui-accent-soft); animation: app-shimmer 1.2s ease-in-out infinite; }
+@keyframes app-shimmer { 50% { opacity: .35; } }
+@keyframes app-feedback-appear { from { opacity: 0; } to { opacity: 1; } }
+.app-page-scroll { padding: var(--ui-page-padding); }
+.app-section-title { color: var(--ui-ink); font-size: 16px; font-weight: 600; line-height: 1.4; }
+.app-section-hint { color: var(--ui-muted); font-size: 13px; line-height: 1.65; margin-top: 4px; }
+.app-eyebrow { font-size: 12px; font-weight: 600; color: var(--ui-muted); }
+.app-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.app-runtime-empty { display: grid; place-items: center; height: 100%; }

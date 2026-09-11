@@ -100,9 +100,12 @@ export function CustomSelect<T extends string | number = string>({
     }
     if (isOpen) {
       document.addEventListener("pointerdown", handleClickOutside);
+      window.addEventListener("aiolm:navigate", closeMenu);
     }
+    function closeMenu() { setIsOpen(false); }
     return () => {
       document.removeEventListener("pointerdown", handleClickOutside);
+      window.removeEventListener("aiolm:navigate", closeMenu);
     };
   }, [isOpen]);
 
@@ -210,22 +213,7 @@ export function CustomSelect<T extends string | number = string>({
       className={`app-custom-select-container relative inline-block text-left ${className}`}
       onKeyDown={handleKeyDown}
     >
-      <select
-        id={id ? `${id}-native` : undefined}
-        name={name}
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-        disabled={disabled}
-        aria-hidden="true"
-        tabIndex={-1}
-        className="sr-only"
-      >
-        {options.map((opt) => (
-          <option key={String(opt.value)} value={opt.value} disabled={opt.disabled}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+      {name && <input type="hidden" name={name} value={value} disabled={disabled} />}
       <button
         ref={triggerRef}
         id={id}
@@ -244,13 +232,13 @@ export function CustomSelect<T extends string | number = string>({
           isSm ? "app-custom-select-trigger--sm" : "app-custom-select-trigger--md"
         } ${triggerClassName}`}
       >
-        <span className="truncate flex items-center gap-1.5 min-w-0">
+        <span className="app-text-wrap flex items-center gap-1.5 min-w-0">
           {selected?.icon}
-          <span className="truncate">{selected?.label ?? String(value)}</span>
+          <span className="app-text-wrap">{selected?.label ?? String(value)}</span>
         </span>
         <svg
-          className={`shrink-0 text-slate-400 transition-transform duration-150 ${isSm ? "h-3 w-3" : "h-3.5 w-3.5"} ${
-            isOpen ? "rotate-180 text-slate-200" : ""
+          className={`shrink-0 text-muted transition-transform duration-150 ${isSm ? "h-3 w-3" : "h-3.5 w-3.5"} ${
+            isOpen ? "rotate-180 text-ink" : ""
           }`}
           fill="none"
           viewBox="0 0 20 20"
@@ -269,14 +257,8 @@ export function CustomSelect<T extends string | number = string>({
           role="listbox"
           aria-label={effectiveAriaLabel}
           aria-labelledby={effectiveAriaLabelledBy}
-          className={`app-custom-dropdown-menu ${menuClassName}`}
-          style={{
-            top: menuPosition.top,
-            left: menuPosition.left,
-            width: menuPosition.width,
-            maxHeight: menuPosition.maxHeight,
-            transform: menuPosition.opensAbove ? "translateY(-100%)" : undefined,
-          }}
+          className={[`app-custom-dropdown-menu ${menuClassName}`, (menuPosition.opensAbove ? "ui-transform-translateY-100" : "")].filter(Boolean).join(" ")}
+          style={{ top: menuPosition.top, left: menuPosition.left, width: menuPosition.width, maxHeight: menuPosition.maxHeight }}
         >
           {options.map((opt, index) => {
             const isSelected = opt.value === value;
@@ -296,9 +278,9 @@ export function CustomSelect<T extends string | number = string>({
                 }}
                 className={`app-custom-dropdown-item ${isSelected || isHighlighted ? "is-selected" : ""} ${opt.disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
               >
-                <span className="truncate flex items-center gap-2 min-w-0">
+                <span className="app-text-wrap flex items-center gap-2 min-w-0">
                   {opt.icon}
-                  <span className="truncate">{opt.label}</span>
+                  <span className="app-text-wrap">{opt.label}</span>
                 </span>
                 {isSelected && (
                   <svg className="app-custom-dropdown-check h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">

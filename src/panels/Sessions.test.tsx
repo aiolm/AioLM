@@ -61,6 +61,14 @@ describe("SessionsPanel editing", () => {
     mocked.sessionStart.mockResolvedValue({ id: "work", name: "Work session", state: "running" });
   });
 
+  it("hides Windows extended path prefixes in runtime probe errors", async () => {
+    mocked.rtProbe.mockRejectedValueOnce(new Error(String.raw`Runtime not found: \\?\C:\runtime\llama-server.exe`));
+    renderPanel({ ...cfg, active_backend: "rocm", active_build: "b10840" });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(String.raw`Runtime not found: C:\runtime\llama-server.exe`);
+    expect(alert.textContent).not.toContain("\\\\?\\");
+  });
+
   it("never substitutes OS GPU numbers when a managed runtime probe fails and can retry", async () => {
     mocked.rtProbe.mockRejectedValueOnce(new Error("Runtime probe timed out"));
     renderPanel({ ...cfg, active_backend: "rocm", active_build: "b10840" });

@@ -1,10 +1,19 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { trackInitialRead } from "./initialLayout.ts";
+
+const layoutReads = new Set([
+  "get_config", "server_status", "session_list", "list_models", "device_profile",
+  "rt_list", "rt_latest", "rt_probe", "mcp_list_servers", "mcp_list_tools",
+  "anthropic_gateway_status", "hf_search_models", "hf_model_files", "read_document_binding",
+]);
 
 const NATIVE_RUNTIME_ERROR = "Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.";
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
-  return tauriInvoke<T>(command, args);
+  return layoutReads.has(command)
+    ? trackInitialRead(() => tauriInvoke<T>(command, args))
+    : tauriInvoke<T>(command, args);
 }
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { SseParser, type StreamDelta } from "./sse.ts";
@@ -444,7 +453,8 @@ export const mcpListTools = (id: string) => invoke<McpTool[]>("mcp_list_tools", 
 export const mcpCallTool = (id: string, name: string, argumentsValue: Record<string, unknown>) =>
   invoke<unknown>("mcp_call_tool", { id, name, arguments: argumentsValue });
 
-export async function localModels(baseUrl: string, apiKey: string): Promise<LocalModelInfo[]> {
+export const localModels = (baseUrl: string, apiKey: string) => trackInitialRead(() => readLocalModels(baseUrl, apiKey));
+async function readLocalModels(baseUrl: string, apiKey: string): Promise<LocalModelInfo[]> {
   if (!baseUrl || !apiKey) throw new Error("The local server is not ready.");
   const url = baseUrl.replace(/\/v1\/?$/, "") + "/v1/models";
   const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
@@ -454,7 +464,8 @@ export async function localModels(baseUrl: string, apiKey: string): Promise<Loca
   return Array.isArray(parsed.data) ? parsed.data : [];
 }
 
-export async function nativeModels(baseUrl: string, apiKey: string): Promise<LocalModelInfo[]> {
+export const nativeModels = (baseUrl: string, apiKey: string) => trackInitialRead(() => readNativeModels(baseUrl, apiKey));
+async function readNativeModels(baseUrl: string, apiKey: string): Promise<LocalModelInfo[]> {
   if (!baseUrl || !apiKey) throw new Error("The local server is not ready.");
   const response = await fetch(`${baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "")}/api/v1/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -527,7 +538,8 @@ export async function readBoundedResponseText(response: Response, maxChars = 1 *
   }
 }
 
-export async function listServerLoraAdapters(baseUrl: string, apiKey: string): Promise<ServerLoraAdapter[]> {
+export const listServerLoraAdapters = (baseUrl: string, apiKey: string) => trackInitialRead(() => readServerLoraAdapters(baseUrl, apiKey));
+async function readServerLoraAdapters(baseUrl: string, apiKey: string): Promise<ServerLoraAdapter[]> {
   const response = await fetch(`${baseUrl.replace(/\/$/, "").replace(/\/v1$/, "")}/lora-adapters`, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });

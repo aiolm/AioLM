@@ -1,3 +1,5 @@
+import PanelFeedback from "../components/PanelFeedback";
+import StableLabel from "../components/StableLabel";
 import type { AppStore } from "../store";
 import ConfirmDialog from "../components/ConfirmDialog";
 import FeedbackBanner from "../components/FeedbackBanner";
@@ -31,7 +33,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
 
   return (
     <div className="app-page-scroll relative flex h-full min-h-0 flex-col p-4">
-      <p className="mb-4 break-words text-sm text-slate-400">{t("ui.runtimesIntro")}</p>
+      <p className="mb-4 break-words text-sm text-muted">{t("ui.runtimesIntro")}</p>
 
       <RuntimeDeviceCard
         t={t}
@@ -41,15 +43,15 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
         hiddenCount={hiddenCount}
         onToggleShowAll={rt.toggleShowAll}
       />
-      <div className="app-panel-feedback-layer" aria-live="polite">
+      <PanelFeedback>
         {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
-        {rt.loadError && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-800 bg-red-950/50 px-3.5 py-2.5 text-sm text-red-200" role="alert"><span className="min-w-0 flex-1 break-words">{t("ui.runtimeLookupFailed")}: {rt.loadError}</span><button type="button" onClick={() => void rt.refresh()} className="app-button app-button--danger app-button--sm">{t("panel.retry")}</button></div>}
-      </div>
+        {rt.loadError && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-error-line bg-error-soft/50 px-3.5 py-2.5 text-sm text-error" role="alert"><span className="min-w-0 flex-1 break-words">{t("ui.runtimeLookupFailed")}: {normalizeDisplayText(rt.loadError)}</span><button type="button" onClick={() => void rt.refresh()} className="app-button app-button--danger app-button--sm">{t("panel.retry")}</button></div>}
+      </PanelFeedback>
 
       <div className="runtime-refresh-row mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="runtime-flash-slot min-w-0 flex-1">
-          {rt.flash && <div className="w-full break-words rounded-lg border border-indigo-800 bg-indigo-950/50 px-3.5 py-2.5 text-sm text-indigo-200" role="status" aria-live="polite">{normalizeDisplayText(rt.flash)}</div>}
-        </div>
+        <PanelFeedback>
+          {rt.flash && <div className="w-full break-words rounded-lg border border-accent-line bg-accent-soft/50 px-3.5 py-2.5 text-sm text-accent" role="status" aria-live="polite">{normalizeDisplayText(rt.flash)}</div>}
+        </PanelFeedback>
         <button type="button" onClick={() => void rt.refresh(true)} disabled={rt.runtimeBusy} className="app-button app-button--secondary app-button--sm shrink-0">{t("ui.refreshRemote")}</button>
       </div>
 
@@ -71,7 +73,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
         onUninstall={(backend, build) => void rt.uninstall(backend, build)}
       />
 
-      {managedRuntime && <div className="my-3 flex justify-end"><button type="button" onClick={() => void rt.probe()} disabled={rt.probeBusy || rt.runtimeBusy || rt.serverRunning} className="app-button app-button--secondary app-button--sm">{rt.probeBusy ? t("ui.probing") : t("ui.probeRuntime")}</button></div>}
+      {managedRuntime && <div className="my-3 flex justify-end"><button type="button" onClick={() => void rt.probe()} disabled={rt.probeBusy || rt.runtimeBusy || rt.serverRunning} className="app-button app-button--secondary app-button--sm"><StableLabel value={rt.probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button></div>}
       {store.cfg && (
         <RuntimeGpuAssignment
           t={t}
@@ -84,8 +86,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
 
       {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-button app-button--ghost app-button--sm">{t("ui.executionProfiles")}</button></p>}
 
-      <details className="runtime-advanced mb-4 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
-        <summary className="cursor-pointer text-sm font-semibold" style={{ color: "var(--board-ink)" }}>{t("settings.advanced")}</summary>
+      <details className="runtime-advanced mb-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
+        <summary className="cursor-pointer text-sm font-semibold ui-color-ink" >{t("settings.advanced")}</summary>
         <div className="mt-4">
           <RuntimeCapabilitiesCard
             t={t}

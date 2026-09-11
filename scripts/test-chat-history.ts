@@ -23,6 +23,7 @@ assert.equal(empty.threads.length, 1);
 assert.equal(empty.threads[0].id, "thread-1000");
 assert.equal(titleFromMessage("  Explain local inference\nwith details "), "Explain local inference with details");
 assert.equal(titleFromMessage(""), "New conversation");
+assert.equal(titleFromMessage("긴 대화 제목을 생략하지 않습니다. ".repeat(20)), "긴 대화 제목을 생략하지 않습니다. ".repeat(20).trim());
 
 const saved = {
   activeThreadId: "thread-2000",
@@ -80,7 +81,7 @@ assert.equal(merged.threads.some((thread) => thread.id === "thread-other"), true
 assert.equal(merged.threads.some((thread) => thread.id === "thread-deleted"), false);
 assert.equal(mergeHydratedWorkspace(persistedWorkspace, initialWorkspace, initialWorkspace).activeThreadId, "thread-persisted");
 
-store.setItem("llama-board.chat-workspace.v1", "not-json");
+store.setItem("aiolm.chat-workspace.v1", "not-json");
 assert.equal(loadChatWorkspace(store).threads.length, 1);
 
 const originalWindow = (globalThis as { window?: unknown }).window;

@@ -15,7 +15,7 @@ describe("Saved execution settings", () => {
     const saved = createServerProfile({ ...store.cfg!, ctx_size: 8192, runtime_defaults: ["ngl"] }, "Long context");
     saveServerProfile(saved);
     render(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="model.gguf" /></I18nProvider>);
-    fireEvent.change(screen.getByLabelText("Select server profile"), { target: { value: saved.id } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Select server profile" })); fireEvent.click(screen.getByRole("option", { name: saved.name }));
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(loadProfiles(store.cfg!, "model.gguf").activeServerId).toBe(initial.activeServerId);
     const card = screen.getByRole("heading", { name: "Server profile" }).closest("section")!;
@@ -57,7 +57,7 @@ describe("Saved execution settings", () => {
     saveServerProfile(saved);
     store.updateConfig = vi.fn(async () => { throw new Error("Disk full"); });
     render(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="model.gguf" /></I18nProvider>);
-    fireEvent.change(screen.getByLabelText("Select server profile"), { target: { value: saved.id } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Select server profile" })); fireEvent.click(screen.getByRole("option", { name: saved.name }));
     fireEvent.click(screen.getAllByRole("button", { name: "Load saved settings" })[0]);
     expect(await screen.findByRole("alert")).toHaveTextContent("Disk full");
     expect(loadProfiles(store.cfg!, "model.gguf").activeServerId).toBe(initial.activeServerId);
@@ -92,7 +92,7 @@ describe("Saved execution settings", () => {
     expect(saved).not.toHaveProperty("modelPath");
     Object.assign(store.cfg!, { active_model: "another.gguf" });
     view.rerender(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="another.gguf" /></I18nProvider>);
-    expect(screen.getByLabelText("Select shared model profile")).toHaveValue(saved.id);
+    expect(screen.getByRole("combobox", { name: "Select shared model profile" })).toHaveTextContent(saved.name);
     expect(screen.getByText("Available to all models")).toBeInTheDocument();
   });
 
@@ -103,7 +103,7 @@ describe("Saved execution settings", () => {
     saveModelProfile(shared);
     Object.assign(store.cfg!, { active_model: "b.gguf" });
     render(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="b.gguf" /></I18nProvider>);
-    fireEvent.change(screen.getByLabelText("Select shared model profile"), { target: { value: shared.id } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Select shared model profile" })); fireEvent.click(screen.getByRole("option", { name: shared.name }));
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(loadProfiles(store.cfg!, "b.gguf").activeModelId).toBe(initial.activeModelId);
     const card = screen.getByRole("heading", { name: "Shared model profile" }).closest("section")!;

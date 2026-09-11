@@ -1,191 +1,55 @@
 @import "tailwindcss";
-
-/* Tailwind v4 theme — maps utility palette to board tokens.
-   Single-accent system: slate = neutral, all accent hues = ochre.
-   Do not add new hues here — use board-* tokens directly. */
 @theme {
-  --color-slate-950: var(--board-input);
-  --color-slate-900: var(--board-panel);
-  --color-slate-800: var(--board-border);
-  --color-slate-700: var(--board-border-strong);
-  --color-slate-600: var(--board-muted-deep);
-  --color-slate-500: var(--board-faint);
-  --color-slate-400: var(--board-muted);
-  --color-slate-300: #ded9d3;
-  --color-slate-200: #f0ece8;
-  --color-slate-100: var(--board-ink);
-
-  /* All accent utilities converge to ochre */
-  --color-indigo-600: var(--board-accent-solid);
-  --color-indigo-500: var(--board-accent);
-  --color-indigo-950: var(--board-accent-soft);
-  --color-indigo-200: var(--board-accent);
-  --color-indigo-300: var(--board-accent);
-  --color-indigo-700: var(--board-border-accent);
-  --color-indigo-800: var(--board-border-accent);
-
-  --color-cyan-950: var(--board-accent-soft);
-  --color-cyan-900: var(--board-border-accent);
-  --color-cyan-200: var(--board-accent);
-  --color-cyan-300: var(--board-accent);
-
-  --color-fuchsia-950: var(--board-accent-soft);
-  --color-fuchsia-900: var(--board-border-accent);
-  --color-fuchsia-600: var(--board-accent-solid);
-  --color-fuchsia-500: var(--board-accent-solid);
-  --color-fuchsia-200: var(--board-accent);
-  --color-fuchsia-300: var(--board-accent);
-  --color-fuchsia-700: var(--board-border-accent);
-
-  --color-purple-900: var(--board-accent-soft);
-  --color-purple-700: var(--board-accent-soft);
-  --color-purple-100: var(--board-accent);
-  --color-purple-300: var(--board-accent);
-
-  --color-emerald-950: var(--tone-success-bg);
-  --color-emerald-900: var(--tone-success-bg);
-  --color-emerald-800: var(--tone-success-border);
-  --color-emerald-700: var(--tone-success-border);
-  --color-emerald-500: var(--board-success);
-  --color-emerald-200: var(--tone-success-ink);
-  --color-emerald-300: var(--tone-success-ink);
-  --color-emerald-400: var(--tone-success-ink);
-
-  --color-red-950: var(--tone-error-bg);
-  --color-red-900: var(--tone-error-bg);
-  --color-red-800: var(--tone-error-border);
-  --color-red-700: var(--board-danger-strong);
-  --color-red-500: var(--board-danger-strong);
-  --color-red-200: var(--tone-error-ink);
-  --color-red-300: var(--tone-error-ink);
-  --color-red-400: var(--tone-error-ink);
-
-  --color-amber-950: var(--tone-warning-bg);
-  --color-amber-900: var(--tone-warning-bg);
-  --color-amber-800: var(--tone-warning-border);
-  --color-amber-700: var(--tone-warning-border);
-  --color-amber-600: var(--tone-warning-border);
-  --color-amber-500: var(--board-accent-solid);
-  --color-amber-200: var(--tone-warning-ink);
-  --color-amber-300: var(--tone-warning-ink);
-  --color-amber-400: var(--tone-warning-ink);
+ --color-ink: var(--ui-ink); --color-muted: var(--ui-muted); --color-faint: var(--ui-faint);
+ --color-canvas: var(--ui-bg); --color-surface: var(--ui-panel); --color-subtle: var(--ui-surface-muted);
+ --color-line: var(--ui-border); --color-line-strong: var(--ui-border-strong);
+ --color-accent: var(--ui-accent); --color-accent-soft: var(--ui-accent-soft); --color-accent-line: var(--ui-border-accent);
+ --color-success: var(--tone-success-ink); --color-success-soft: var(--tone-success-bg); --color-success-line: var(--tone-success-border);
+ --color-error: var(--tone-error-ink); --color-error-soft: var(--tone-error-bg); --color-error-line: var(--tone-error-border);
+ --color-warning: var(--tone-warning-ink); --color-warning-soft: var(--tone-warning-bg); --color-warning-line: var(--tone-warning-border);
+ --font-sans: "Pretendard Variable", "Segoe UI Variable", "Malgun Gothic", sans-serif;
+ --font-mono: "Cascadia Code", Consolas, monospace;
 }
-
-:root {
-  color-scheme: light dark;
-  font-family: "Inter", "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  font-feature-settings: "cv02", "cv03", "cv06";
+@font-face { font-family: "Pretendard Variable"; src: url("/fonts/PretendardVariable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+@layer base {
+ :root { font-family: var(--font-sans); font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+ *, *::before, *::after { box-sizing: border-box; }
+ html, body, #root { height: 100%; min-width: 0; margin: 0; }
+ body { background: var(--ui-bg); color: var(--ui-ink); font-size: 14px; line-height: 1.5; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; accent-color: var(--ui-accent-solid); }
+ button, input, select, textarea { font: inherit; }
+ button, summary { cursor: pointer; }
+ button:disabled { cursor: not-allowed; opacity: .5; }
+ button { transition: background 160ms ease, color 160ms ease, border-color 160ms ease; }
+ :focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 3px; }
+ :focus:not(:focus-visible) { outline: none; }
+ h1, h2, h3, h4, p { margin: 0; }
+ h1 { font-size: 24px; font-weight: 650; line-height: 1.25; }
+ h2 { font-size: 20px; font-weight: 650; }
+ h3 { font-size: 16px; font-weight: 600; }
+ img, svg { max-width: 100%; }
+ input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { min-width: 0; border: 1px solid var(--ui-border-strong); border-radius: 8px; background: var(--ui-input); color: var(--ui-ink); padding: 8px 12px; }
+ input::placeholder, textarea::placeholder { color: var(--ui-faint); opacity: 1; }
+ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex-shrink: 0; }
+ input[type="range"] { width: 100%; }
+ textarea { resize: vertical; }
+ select { min-height: var(--ui-control); }
+ code, pre { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+ pre { background: var(--ui-mono-bg); color: var(--ui-mono-ink); }
+ a { color: var(--ui-accent); }
+ * { scrollbar-width: thin; scrollbar-color: var(--ui-border-strong) transparent; }
 }
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  height: 100%;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-}
-
-body {
-  overflow: hidden;
-  background: var(--board-bg);
-  color: var(--board-ink);
-  font-size: 13px;
-  line-height: 1.5;
-  letter-spacing: -0.01em;
-}
-
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
-
-img,
-svg,
-video,
-canvas {
-  display: block;
-  max-width: 100%;
-}
-
-img[width][height],
-video[width][height],
-canvas[width][height] {
-  height: auto;
-}
-
-button:disabled {
-  cursor: not-allowed;
-}
-
-/* Subtle, consistent scrollbar */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--board-border-strong) transparent;
-}
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--board-border-strong);
-  border-radius: 999px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--board-faint);
-}
-
-.app-nav-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: var(--board-border-strong) transparent;
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-}
-.app-nav-scroll::-webkit-scrollbar {
-  height: 3px;
-}
-.app-nav-scroll::-webkit-scrollbar-thumb {
-  background: var(--board-border-strong);
-  border-radius: 999px;
-}
-
-body:not(.is-keyboard-nav) *:focus,
-body:not(.is-keyboard-nav) *:focus-visible,
-:focus:not(:focus-visible) {
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-body.is-keyboard-nav *:focus-visible {
-  outline: 2px solid var(--board-focus) !important;
-  outline-offset: 2px !important;
-}
-
-[hidden] {
-  display: none !important;
-}
-
+[hidden] { display: none !important; }
+.app-text-wrap { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.stable-label { display: grid; min-width: 0; position: relative; }
+.stable-label > span { grid-area: 1 / 1; }
+.stable-label-size { visibility: hidden; pointer-events: none; user-select: none; }
+.stable-label-size.is-current { visibility: visible; }
+.stable-label-size::after { content: attr(data-label); }
+.initial-surface, .initial-surface-content { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; }
+.initial-surface-content[data-ready="false"], .initial-surface-content[data-ready="false"] * { visibility: hidden !important; }
+.initial-surface-content > .app-page-scroll { height: 100%; }
+.surface-loading { position: absolute; inset: 0; display: grid; place-items: center; background: var(--ui-bg); }
+.app-reduce-motion *, .app-reduce-motion *::before, .app-reduce-motion *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-  }
+ *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; scroll-behavior: auto !important; }
 }

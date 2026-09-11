@@ -1,139 +1,40 @@
-/* ── Board Design Tokens — Technical Instrument ──
-   Single accent (ochre) + warm neutral. All other hues derive from these.
-   Dark is the default; light overrides below. */
-
-:root,
+/* AioLM: shared semantic colors, dimensions and type. */
+:root, :root[data-theme="light"] {
+ color-scheme: light;
+ --ui-bg: #f5f7fc; --ui-surface: #fff; --ui-sidebar: #f1f5fc; --ui-panel: #fff; --ui-panel-raised: #f9fafc; --ui-input: #fff; --ui-surface-muted: #edf1fa;
+ --ui-ink: #202630; --ui-muted: #515e70; --ui-faint: #606c7e; --ui-muted-deep: #515e70;
+ --ui-border: #dce2eb; --ui-border-strong: #a4afbf; --ui-border-strongest: #77869c;
+ --ui-accent: #3254c8; --ui-accent-solid: #2856d9; --ui-accent-solid-hover: #244bc3; --ui-accent-soft: #eaf0ff; --ui-border-accent: #a8bbea; --ui-focus: #3254c8;
+ --ui-nav-fill: linear-gradient(110deg, #e2f5fc, #e9edff 60%, #f0e9fc);
+ --ui-overlay: rgb(19 29 48 / 38%); --ui-mono-bg: #f1f3f7; --ui-mono-ink: #303c50;
+ --tone-info-bg: #edf3ff; --tone-info-border: #b8cef6; --tone-info-ink: #315f9f;
+ --tone-success-bg: #eaf6f0; --tone-success-border: #a6d6bf; --tone-success-ink: #216447;
+ --tone-warning-bg: #fff5e4; --tone-warning-border: #e2c690; --tone-warning-ink: #815715;
+ --tone-error-bg: #f8f2f5; --tone-error-border: #e3d3db; --tone-error-ink: #8a465d;
+ --tone-neutral-bg: #eef1f5; --tone-neutral-ink: #515e70;
+ --ui-danger-solid: #885366; --ui-danger-solid-hover: #754557; --ui-danger-hover: #f0e4ea;
+ --ui-elev-1: 0 1px 2px rgb(25 40 70 / 5%); --ui-elev-2: 0 16px 48px rgb(25 40 70 / 16%);
+ --ui-radius-sm: 6px; --ui-radius-md: 8px; --ui-radius-lg: 12px; --ui-radius-xl: 16px; --ui-radius-pill: 999px;
+ --ui-success: var(--tone-success-ink); --ui-warning: var(--tone-warning-ink); --ui-danger: var(--tone-error-ink); --ui-danger-strong: var(--tone-error-ink);
+ --ui-success-solid: #287350; --ui-border-success: var(--tone-success-border); --ui-bg-success: var(--tone-success-bg); --ui-bg-danger-strong: var(--ui-danger-solid);
+ --ui-bg-elevated: var(--ui-surface-muted); --ui-bg-elevated-strong: var(--ui-border); --ui-secondary-hover: var(--ui-surface-muted);
+}
+/* Geometry is independent of theme so responsive/density rules have one cascade. */
+:root { --brand-cyan: #18c9ed; --brand-blue: #2856d9; --brand-violet: #7345df; --brand-gradient: linear-gradient(115deg, #18c9ed, #2856d9 50%, #a158e9); --ui-action-fill: linear-gradient(115deg, #2856d9, #6440ce); --ui-action-hover: linear-gradient(115deg, #244bc3, #5534b8); --ui-control: 36px; --ui-page-padding: 16px; --ui-row-space: 12px; }
 :root[data-theme="dark"] {
-  color-scheme: dark;
-  --board-bg: #0e0e0d;
-  --board-surface: #171412;
-  --board-sidebar: #12100f;
-  --board-panel: #1c1a18;
-  --board-panel-raised: #23211e;
-  --board-input: #0f0e0d;
-  --board-surface-muted: #1e1c1a;
-  --board-border: #2c2824;
-  --board-border-strong: #3d3832;
-  --board-border-strongest: #5a5550;
-  --board-ink: #f1ece4;
-  --board-muted: #b8b0a3;
-  --board-faint: #8f8780;
-  --board-muted-deep: #a8a09a;
-
-  --board-accent: #d6a15a;
-  --board-accent-soft: #261e14;
-  --board-accent-solid: #a67a2e;
-  --board-accent-solid-hover: #8a6526;
-  --board-border-accent: #6b4d1f;
-  --board-focus: #d6a15a;
-  --board-overlay: rgb(10 8 6 / 68%);
-
-  --board-success: #7ec8a0;
-  --board-success-solid: #2f5a42;
-  --board-warning: #d8b86a;
-  --board-danger: #e0a090;
-  --board-danger-strong: #c96a5a;
-  --board-danger-solid: #8c3a2e;
-  --board-danger-solid-hover: #6e2e24;
-  --board-bg-elevated: #2a2724;
-  --board-bg-elevated-strong: #3a3632;
-  --board-border-success: #2e4a3d;
-  --board-bg-danger-strong: #7a3d32;
-  --board-bg-success: #2a4a3a;
-  --board-secondary-hover: #2a2724;
-
-  --board-mono-bg: #0c0b0a;
-  --board-mono-ink: #e6ddd2;
-
-  /* Elevation & radius — only 2 levels */
-  --board-elev-1: 0 1px 2px rgb(0 0 0 / 30%), 0 1px 1px rgb(0 0 0 / 20%);
-  --board-elev-2: 0 8px 24px rgb(0 0 0 / 40%), 0 4px 8px rgb(0 0 0 / 30%);
-  --board-radius-sm: 6px;
-  --board-radius-md: 8px;
-  --board-radius-lg: 12px;
-  --board-radius-xl: 16px;
-  --board-radius-pill: 999px;
-
-  /* Tone surfaces — info now uses accent, warning is distinct amber, error red */
-  --tone-info-bg: #201a12;
-  --tone-info-border: #5a3f18;
-  --tone-info-ink: #e8c9a0;
-  --tone-success-bg: #131a16;
-  --tone-success-border: #2e4a3d;
-  --tone-success-ink: #8ec0a0;
-  --tone-warning-bg: #201d12;
-  --tone-warning-border: #5a4a24;
-  --tone-warning-ink: #d8c08a;
-  --tone-error-bg: #1f1513;
-  --tone-error-border: #5a3026;
-  --tone-error-ink: #df9a8a;
-  --tone-neutral-bg: #23211e;
-  --tone-neutral-ink: #c8c0b6;
+ color-scheme: dark;
+ --ui-bg: #111622; --ui-surface: #1a2231; --ui-sidebar: #141c2b; --ui-panel: #1a2231; --ui-panel-raised: #222c3e; --ui-input: #141c2a; --ui-surface-muted: #263247;
+ --ui-ink: #edf0f6; --ui-muted: #b4bfce; --ui-faint: #a0aec1; --ui-muted-deep: #b4bfce;
+ --ui-border: #344052; --ui-border-strong: #60718b; --ui-border-strongest: #8292aa;
+ --ui-accent: #adc2ff; --ui-accent-solid: #2856d9; --ui-accent-solid-hover: #244bc3; --ui-accent-soft: #27344f; --ui-border-accent: #617bb3; --ui-focus: #93c5fd;
+ --ui-nav-fill: linear-gradient(110deg, #173745, #263553 60%, #352b50);
+ --ui-overlay: rgb(5 9 18 / 65%); --ui-mono-bg: #15191f; --ui-mono-ink: #c5d4ec;
+ --tone-info-bg: #222f46; --tone-info-border: #405879; --tone-info-ink: #adc7ef;
+ --tone-success-bg: #1d322a; --tone-success-border: #365e4c; --tone-success-ink: #8dd4b1;
+ --tone-warning-bg: #38301f; --tone-warning-border: #695936; --tone-warning-ink: #e4c389;
+ --tone-error-bg: #302632; --tone-error-border: #634454; --tone-error-ink: #dfafc0;
+ --ui-danger-hover: #403040;
+ --tone-neutral-bg: #282e38; --tone-neutral-ink: #b4bfce;
+ --ui-elev-1: 0 1px 2px rgb(0 0 0 / 12%); --ui-elev-2: 0 16px 48px rgb(0 0 0 / 35%);
 }
-
-:root[data-theme="light"] {
-  color-scheme: light;
-  --board-bg: #f7f3ef;
-  --board-surface: #ffffff;
-  --board-sidebar: #f0ebe6;
-  --board-panel: #ffffff;
-  --board-panel-raised: #faf8f6;
-  --board-input: #ffffff;
-  --board-surface-muted: #f2eeea;
-  --board-border: #ddd6cf;
-  --board-border-strong: #c2b8ad;
-  --board-border-strongest: #9a9188;
-  --board-ink: #1a160f;
-  --board-muted: #6b5f52;
-  --board-faint: #716356;
-  --board-muted-deep: #6b5f52;
-
-  --board-accent: #8c5a12;
-  --board-accent-soft: #fdf1dc;
-  --board-accent-solid: #9d671f;
-  --board-accent-solid-hover: #7d5219;
-  --board-border-accent: #d9c3a3;
-  --board-focus: #8c5a12;
-  --board-overlay: rgb(40 30 20 / 32%);
-
-  --board-success: #1e5a3a;
-  --board-success-solid: #2d6b4a;
-  --board-warning: #7a5a14;
-  --board-danger: #8c2c1c;
-  --board-danger-strong: #8c2c1c;
-  --board-danger-solid: #9c3d2e;
-  --board-danger-solid-hover: #7e3125;
-  --board-bg-elevated: #ede9e4;
-  --board-bg-elevated-strong: #ddd8d2;
-  --board-border-success: #b8d0c0;
-  --board-bg-danger-strong: #c96a5a;
-  --board-bg-success: #2a5a42;
-  --board-secondary-hover: #ede9e4;
-
-  --board-mono-bg: #f5f1ec;
-  --board-mono-ink: #2e281f;
-
-  --board-elev-1: 0 1px 2px rgb(28 22 15 / 8%), 0 1px 1px rgb(28 22 15 / 6%);
-  --board-elev-2: 0 12px 32px rgb(28 22 15 / 12%), 0 4px 12px rgb(28 22 15 / 8%);
-
-  /* Light tone — keep same hues, lighter */
-  --tone-info-bg: #fdf6ec;
-  --tone-info-border: #d9c3a3;
-  --tone-info-ink: #5a3f14;
-  --tone-success-bg: #eef5f0;
-  --tone-success-border: #b8d0c0;
-  --tone-success-ink: #1e4a32;
-  --tone-warning-bg: #fdf8ec;
-  --tone-warning-border: #d9c9a6;
-  --tone-warning-ink: #5a4a14;
-  --tone-error-bg: #fdf2ef;
-  --tone-error-border: #e0b0a8;
-  --tone-error-ink: #6e2214;
-  --tone-neutral-bg: #ede9e4;
-  --tone-neutral-ink: #3d352e;
-
-  /* Tailwind remap overrides for light — only where var flip isn't enough */
-  --color-slate-100: #1a160f;
-  --color-slate-200: #1a160f;
-  --color-slate-300: #3d352e;
-}
+:root[data-density="compact"] { --ui-control: 32px; --ui-page-padding: 12px; --ui-row-space: 8px; }

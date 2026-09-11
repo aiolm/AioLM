@@ -146,9 +146,24 @@ describe("ChatPanel document context warning", () => {
     renderPanel();
 
     const selector = await screen.findByLabelText("Loaded sessions");
+    fireEvent.click(selector); await screen.findByRole("option", { name: "Vision · 8091 · running" });
+    fireEvent.click(screen.getByRole("option", { name: "Vision · 8091 · running" }));
     expect(selector).toHaveTextContent("Vision · 8091 · running");
-    fireEvent.change(selector, { target: { value: "vision-session" } });
-    expect(selector).toHaveValue("vision-session");
+  });
+
+  it("sets the full conversation title before asynchronous request preparation finishes", async () => {
+    let release!: () => void;
+    mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    renderPanel();
+    await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
+    const title = "A complete conversation title that must not resize the heading after generation. ".repeat(5).trim();
+    respondWithText("Done.");
+    await sendMessage(title);
+    expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    release();
+    await screen.findByText("Done.");
+    expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
   });
 
   it("refreshes independent session state while chat remains open", async () => {
@@ -157,12 +172,12 @@ describe("ChatPanel document context warning", () => {
     renderPanel();
 
     const selector = await screen.findByLabelText("Loaded sessions");
-    expect(selector).toHaveTextContent("Worker · 8092 · running");
+    fireEvent.click(selector); await screen.findByRole("option", { name: "Worker · 8092 · running" });
 
     mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "crashed", port: 8092, model: "worker.gguf" }]);
     window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
 
-    await waitFor(() => expect(selector).toHaveTextContent("Worker · 8092 · crashed"));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · crashed" })).toHaveAttribute("aria-disabled", "true"));
   });
 
   it("warns in the DOM when an attached document exceeds the 64-chunk search limit", async () => {

@@ -1,3 +1,5 @@
+import { normalizeDisplayText } from "../lifecycleUtils";
+import StableLabel from "./StableLabel";
 import { useState } from "react";
 import { useI18n } from "../i18n";
 import { updateTask, useTasks, type AppTask } from "../taskRegistry";
@@ -45,16 +47,16 @@ export default function TaskStrip() {
           return (
             <div key={task.id} className={`app-task-strip__item app-task-strip__item--${task.state}`} data-task-id={task.id}>
               <div className="app-task-strip__copy">
-                <span className="app-task-strip__label">{task.label}</span>
-                <span className="app-task-strip__status">{statusLabel(task, t)}{task.detail ? ` · ${task.detail}` : ""}</span>
+                <span className="app-task-strip__label">{normalizeDisplayText(task.label)}</span>
+                <span className="app-task-strip__status">{normalizeDisplayText(statusLabel(task, t))}{task.detail ? ` · ${normalizeDisplayText(task.detail)}` : ""}</span>
               </div>
-              {progress !== undefined && <div className="app-task-strip__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} aria-label={task.label}><span style={{ width: `${progress}%` }} /></div>}
-              {activeTask && task.cancel && <button type="button" className="app-task-strip__cancel" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}>{task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")}</button>}
+              {progress !== undefined && <div className="app-task-strip__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} aria-label={normalizeDisplayText(task.label)}><span style={{ width: `${progress}%` }} /></div>}
+              {activeTask && task.cancel && <button type="button" className="app-task-strip__cancel" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
             </div>
           );
         })}
       </div>
-      {cancelError && <span className="app-task-strip__error" role="alert">{cancelError}</span>}
+      {cancelError && <span className="app-task-strip__error" role="alert">{normalizeDisplayText(cancelError)}</span>}
     </aside>
   );
 }

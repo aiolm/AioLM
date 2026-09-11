@@ -13,7 +13,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error("llama-board render error", error, info.componentStack);
+    console.error("aiolm render error", error, info.componentStack);
   }
 
   private recover = () => {

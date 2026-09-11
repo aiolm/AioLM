@@ -1,4 +1,5 @@
-import { cloneElement, isValidElement, useState, type ReactNode } from "react";
+import { normalizeDisplayText } from "../lifecycleUtils";
+import { cloneElement, createContext, isValidElement, useContext, useState, type ReactNode } from "react";
 import ConfirmDialog from "../components/ConfirmDialog";
 import Switch from "../components/Switch";
 import TabNav, { type TabNavItem } from "../components/TabNav";
@@ -12,8 +13,17 @@ import { defaultPreferences, exportPreferences, importPreferences, type AppPrefe
 interface Props { preferences: AppPreferences; update: (patch: Partial<AppPreferences>) => void; reset: () => void; }
 
 type Section = "general" | "appearance" | "chat" | "server" | "advanced";
+const SearchContext = createContext("");
+const searchText = {
+  en: { label: "Search settings", empty: "No settings match your search." },
+  ko: { label: "설정 검색", empty: "검색어에 맞는 설정이 없습니다." },
+  ja: { label: "設定を検索", empty: "一致する設定はありません。" },
+  zh: { label: "搜索设置", empty: "没有匹配的设置。" },
+};
 
 function Row({ id, label, description, children }: { id: string; label: string; description: string; children: ReactNode }) {
+  const query = useContext(SearchContext);
+  if (query && !`${label} ${description}`.toLocaleLowerCase().includes(query)) return null;
   const labelId = `${id}-label`;
   const descriptionId = `${id}-description`;
   const control = isValidElement<{ "aria-describedby"?: string; "aria-labelledby"?: string }>(children)
@@ -25,6 +35,9 @@ function Row({ id, label, description, children }: { id: string; label: string; 
 export default function SettingsPanel({ preferences, update, reset }: Props) {
   const { t, locale, setLocale } = useI18n();
   const [section, setSection] = useState<Section>("general");
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const search = searchText[locale];
   const [confirmReset, setConfirmReset] = useState(false);
   const [ioError, setIoError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
@@ -64,7 +77,7 @@ export default function SettingsPanel({ preferences, update, reset }: Props) {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "llama-board-settings.json";
+    anchor.download = "aiolm-settings.json";
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -82,21 +95,23 @@ export default function SettingsPanel({ preferences, update, reset }: Props) {
 
 
   return <div className="app-page-scroll settings-page">
-    <div className="settings-header"><div><div className="app-eyebrow">llama-board</div><h2>{t("settings.title")}</h2><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined}>{saveState === "saved" ? <span className="app-status-badge app-status-badge--success">{t("common.saved")}</span> : "—"}</span></div>
+    <div className="settings-header"><div><div className="app-eyebrow">AioLM</div><h2>{t("settings.title")}</h2><p>{t("settings.subtitle")}</p></div><span className={`settings-save-slot ${saveState === "saved" ? "" : "is-empty"}`} role={saveState === "saved" ? "status" : undefined} aria-live={saveState === "saved" ? "polite" : undefined}>{saveState === "saved" ? <span className="app-status-badge app-status-badge--success">{t("common.saved")}</span> : "—"}</span></div>
     <div className="settings-layout">
+      <input type="search" className="app-input settings-search" aria-label={search.label} placeholder={search.label} value={query} onChange={event => setQuery(event.target.value)} />
       <TabNav
         items={sections}
         active={section}
         onSelect={setSection}
         label={t("settings.title")}
-        orientation="vertical"
+        orientation="horizontal"
         tabId={(id) => `settings-tab-${id}`}
         panelId={() => "settings-tabpanel"}
         className="settings-nav"
         tabClassName={(isActive) => (isActive ? "is-active" : "")}
       />
-      <section className="settings-content" role="tabpanel" id="settings-tabpanel" aria-labelledby={`settings-tab-${section}`} tabIndex={-1}>
-        {section === "general" && <>
+      <SearchContext.Provider value={normalizedQuery}>
+      <section className={`settings-content${normalizedQuery ? " is-searching" : ""}`} role="tabpanel" id="settings-tabpanel" aria-labelledby={normalizedQuery ? undefined : `settings-tab-${section}`} aria-label={normalizedQuery ? search.label : undefined} tabIndex={-1}>
+        {(normalizedQuery || section === "general") && <>
           <h3>{t("settings.general")}</h3>
           <Row id="settings-language" label={t("settings.language")} description={t("settings.languageDesc")}>
             <CustomSelect id="settings-language" value={locale} options={localeOptions} onChange={(next) => { setLocale(next); patch({ locale: next }); }} triggerClassName="w-[180px]" />
@@ -105,21 +120,21 @@ export default function SettingsPanel({ preferences, update, reset }: Props) {
             <CustomSelect id="settings-density" value={preferences.appearance.density} options={[{ value: "comfortable", label: t("settings.comfortable") }, { value: "compact", label: t("settings.compact") }]} onChange={(density) => patch({ appearance: { ...preferences.appearance, density } })} triggerClassName="w-[180px]" />
           </Row>
         </>}
-        {section === "appearance" && <>
+        {(normalizedQuery || section === "appearance") && <>
           <h3>{t("settings.appearance")}</h3>
           <Row id="settings-reduce-motion" label={t("settings.reduceMotion")} description={t("settings.reduceMotionDesc")}>{bool("settings-reduce-motion", preferences.appearance.reduceMotion, (value) => patch({ appearance: { ...preferences.appearance, reduceMotion: value } }))}</Row>
           <Row id="settings-theme" label={t("settings.theme")} description={t("settings.themeDesc")}>
             <CustomSelect id="settings-theme" value={preferences.theme} options={[{ value: "light", label: t("theme.light") }, { value: "dark", label: t("theme.dark") }, { value: "system", label: t("theme.system") }]} onChange={(theme) => patch({ theme })} triggerClassName="w-[180px]" />
           </Row>
         </>}
-        {section === "chat" && <>
+        {(normalizedQuery || section === "chat") && <>
           <h3>{t("settings.chat")}</h3>
           <Row id="settings-enter-to-send" label={t("settings.enterToSend")} description={t("settings.enterToSendDesc")}>{bool("settings-enter-to-send", preferences.chat.enterToSend, (value) => toggle("enterToSend", value))}</Row>
           <Row id="settings-timestamps" label={t("settings.timestamps")} description={t("settings.timestampsDesc")}>{bool("settings-timestamps", preferences.chat.showTimestamps, (value) => toggle("showTimestamps", value))}</Row>
           <Row id="settings-stream" label={t("settings.stream")} description={t("settings.streamDesc")}>{bool("settings-stream", preferences.chat.streamResponses, (value) => toggle("streamResponses", value))}</Row>
           <Row id="settings-compact-messages" label={t("settings.compactMessages")} description={t("settings.compactMessagesDesc")}>{bool("settings-compact-messages", preferences.chat.compactMessages, (value) => toggle("compactMessages", value))}</Row>
         </>}
-        {section === "server" && <>
+        {(normalizedQuery || section === "server") && <>
           <h3>{t("settings.server")}</h3>
           <Row id="settings-auto-start" label={t("settings.autoStart")} description={t("settings.autoStartDesc")}>{bool("settings-auto-start", preferences.server.autoStart, (value) => patch({ server: { ...preferences.server, autoStart: value } }))}</Row>
           {isNativeRuntimeAvailable()
@@ -129,18 +144,20 @@ export default function SettingsPanel({ preferences, update, reset }: Props) {
             <CustomSelect id="settings-polling" value={preferences.server.pollIntervalMs} options={[{ value: 500, label: "500 ms" }, { value: 1000, label: "1 s" }, { value: 2000, label: "2 s" }, { value: 5000, label: "5 s" }]} onChange={(pollIntervalMs) => patch({ server: { ...preferences.server, pollIntervalMs } })} triggerClassName="w-[180px]" />
           </Row>
         </>}
-        {section === "advanced" && <>
+        {(normalizedQuery || section === "advanced") && <>
           <h3>{t("settings.advanced")}</h3>
           <Row id="settings-developer-mode" label={t("settings.developerMode")} description={t("settings.developerModeDesc")}>{bool("settings-developer-mode", preferences.advanced.developerMode, (value) => patch({ advanced: { ...preferences.advanced, developerMode: value } }))}</Row>
           <Row id="settings-confirm-destructive" label={t("settings.confirmDestructive")} description={t("settings.confirmDestructiveDesc")}>{bool("settings-confirm-destructive", preferences.advanced.confirmDestructiveActions, (value) => patch({ advanced: { ...preferences.advanced, confirmDestructiveActions: value } }))}</Row>
           <div className="settings-danger"><strong>{t("settings.reset")}</strong><p>{t("settings.resetDesc")}</p><button type="button" className="app-button app-button--danger" onClick={() => setConfirmReset(true)}>{t("settings.resetAction")}</button></div>
-          {ioError && <div className="settings-danger" role="alert"><strong>{ioError}</strong></div>}
+          {ioError && <div className="settings-danger" role="alert"><strong>{normalizeDisplayText(ioError)}</strong></div>}
           <div className="settings-note"><strong>{t("settings.backupTitle")}</strong><p>{t("settings.backupDescription")}</p><div className="mt-3 flex flex-wrap gap-2.5"><button type="button" className="app-button app-button--secondary" onClick={downloadExport}>{t("settings.export")}</button><label className="app-button app-button--secondary cursor-pointer">{t("settings.import")}
 <input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><button type="button" className="app-button app-button--secondary" onClick={() => update({ chat: defaultPreferences().chat })}>{t("settings.resetChat")}</button><button type="button" className="app-button app-button--secondary" onClick={() => update({ server: defaultPreferences().server })}>{t("settings.resetServer")}</button><button type="button" className="app-button app-button--secondary" onClick={() => update({ appearance: defaultPreferences().appearance, theme: defaultPreferences().theme })}>{t("settings.resetAppearance")}</button><button type="button" className="app-button app-button--secondary" onClick={() => update({ advanced: defaultPreferences().advanced })}>{t("settings.resetAdvanced")}</button></div></div>
           <div className="settings-danger"><strong>{t("ui.wipeDataTitle")}</strong><p>{t("ui.wipeDataDescription")}</p><button type="button" className="app-button app-button--danger" disabled={wiping} onClick={() => setConfirmWipe(true)}>{t("ui.wipeDataAction")}</button></div>
           <div className="settings-note"><strong>{t("settings.nativeTitle")}</strong><p>{t("settings.nativeMessage")}</p></div>
         </>}
       </section>
+      {normalizedQuery && <p className="settings-no-results" role="status">{search.empty}</p>}
+      </SearchContext.Provider>
     </div>
     <div className="settings-wipe-slot">
       {wipeNotice && <div className="settings-note" role="status"><strong>{wipeNotice}</strong></div>}

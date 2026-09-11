@@ -2,6 +2,7 @@ import { normalizeDisplayText } from "./lifecycleUtils";
 import React, { useEffect, useState, type ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import { migrateBrowserStorage, type MigratedPath } from "./storageMigration";
+import InitialSurface, { SurfaceLoading } from "./components/InitialSurface";
 import "./index.css";
 import "./App.css";
 
@@ -28,17 +29,18 @@ function Bootstrap() {
    await migrateBrowserStorage(paths);
    const [{ default: App }, { default: ErrorBoundary }, { I18nProvider }, { loadPreferences }, { applyTheme }] = await Promise.all([
     import("./App"), import("./components/ErrorBoundary"), import("./i18n"), import("./preferences"), import("./theme"),
+    document.fonts.load('14px "Pretendard Variable"'),
    ]);
    const preferences = loadPreferences();
    applyTheme(preferences.theme);
    document.documentElement.lang = preferences.locale;
    document.documentElement.dataset.density = preferences.appearance.density;
    document.documentElement.classList.toggle("app-reduce-motion", preferences.appearance.reduceMotion);
-   if (!cancelled) setContent(<React.StrictMode><I18nProvider initialLocale={preferences.locale}><ErrorBoundary label="AioLM"><App /></ErrorBoundary></I18nProvider></React.StrictMode>);
+   if (!cancelled) setContent(<React.StrictMode><I18nProvider initialLocale={preferences.locale}><ErrorBoundary label="AioLM"><InitialSurface><App /></InitialSurface></ErrorBoundary></I18nProvider></React.StrictMode>);
   };
   void start().catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause)); });
   return () => { cancelled = true; };
  }, [attempt]);
- return content ?? (error ? <div className="app-runtime-empty"><div className="app-empty-state"><div className="app-eyebrow">AioLM · All-In-One LM</div><h1>{text.failed}</h1><p role="alert">{normalizeDisplayText(error)}</p><p>{text.preserved}</p><div className="app-empty-actions"><button className="app-button app-button--primary" onClick={() => { setError(""); setAttempt(n => n + 1); }}>{text.retry}</button></div></div></div> : <div role="status">{text.loading}</div>);
+ return content ?? (error ? <div className="app-runtime-empty"><div className="app-empty-state"><div className="app-eyebrow">AioLM · All-In-One LM</div><h1>{text.failed}</h1><p role="alert">{normalizeDisplayText(error)}</p><p>{text.preserved}</p><div className="app-empty-actions"><button className="app-button app-button--primary" onClick={() => { setError(""); setAttempt(n => n + 1); }}>{text.retry}</button></div></div></div> : <SurfaceLoading />);
 }
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(<Bootstrap />);

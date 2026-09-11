@@ -1,9 +1,11 @@
+import { CustomSelect } from "../components/ThemeSwitcher";
+import StableLabel from "../components/StableLabel";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api";
 import type { AppStore } from "../store";
 import { useI18n } from "../i18n";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { normalizeDisplayPath } from "../lifecycleUtils";
+import { normalizeDisplayPath, normalizeDisplayText } from "../lifecycleUtils";
 import { finishTask, registerTask, updateTask } from "../taskRegistry";
 import {
   DEFAULT_SESSION_ID,
@@ -439,7 +441,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   return (
     <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4 p-4 pb-8" data-testid="sessions-panel">
-      <section className="rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+      <section className="rounded-xl border p-4 ui-border-color-border ui-background-panel" >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="app-section-title">{t("ui.sessionsTitle")}</h2>
@@ -447,78 +449,78 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           </div>
           <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg}>{t("ui.newSession")}</button>
         </div>
-        <label className="mt-4 flex items-start gap-2 text-xs" style={{ color: "var(--board-muted)" }}>
+        <label className="mt-4 flex items-start gap-2 text-xs ui-color-muted" >
           <input type="checkbox" checked={stopExisting} onChange={(event) => { const next = event.target.checked; setStopExisting(next); void persist(definitions, next).catch((error) => setFailure(errorText(error))); }} />
-          <span><span className="font-medium" style={{ color: "var(--board-ink)" }}>{t("ui.sessionStopExisting")}</span><span className="block mt-0.5">{t("ui.sessionStopExistingHint")}</span></span>
+          <span><span className="font-medium ui-color-ink" >{t("ui.sessionStopExisting")}</span><span className="block mt-0.5">{t("ui.sessionStopExistingHint")}</span></span>
         </label>
       </section>
 
-      {(notice || failure) && <div className="rounded-lg border px-3 py-2 text-xs" role={failure ? "alert" : "status"} style={{ borderColor: failure ? "var(--tone-error-border)" : "var(--tone-info-border)", background: failure ? "var(--tone-error-bg)" : "var(--tone-info-bg)", color: failure ? "var(--tone-error-ink)" : "var(--tone-info-ink)" }}>{failure ?? notice}</div>}
+      {(notice || failure) && <div className={["rounded-lg border px-3 py-2 text-xs", (failure ? "ui-border-color-error-border" : "ui-border-color-info-border"), (failure ? "ui-background-error-bg" : "ui-background-info-bg"), (failure ? "ui-color-error-ink" : "ui-color-info-ink")].filter(Boolean).join(" ")} role={failure ? "alert" : "status"} >{normalizeDisplayText(failure ?? notice ?? "")}</div>}
 
-      <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(15rem,0.7fr)_minmax(0,1.5fr)]">
-        <section className="min-w-0 rounded-xl border p-3" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }} aria-label={t("ui.sessionsTitle")}>
-          <div className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.16em]" style={{ color: "var(--board-faint)" }}>{t("ui.sessionsTitle")}</div>
+      <div className="grid min-h-0 gap-4 app-master-detail">
+        <section className="min-w-0 rounded-xl border p-3 ui-border-color-border ui-background-panel"  aria-label={t("ui.sessionsTitle")}>
+          <div className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.16em] ui-color-faint" >{t("ui.sessionsTitle")}</div>
           <div className="space-y-1.5">
             {allDefinitions.map((definition) => {
               const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
               const rowState = rowStatus?.state ?? "stopped";
               return (
                 <button key={definition.id} type="button" onClick={() => selectDefinition(definition)} className={`session-list-row ${selectedId === definition.id ? "is-selected" : ""}`} aria-pressed={selectedId === definition.id}>
-                  <span className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-medium">{definition.name || definition.id}</span><span className="mt-0.5 block truncate text-[11px]" style={{ color: "var(--board-faint)" }}>{modelLabel(definition.models.primary_model, t("ui.sessionNoModel"))}</span></span>
-                  <span className={`session-state session-state--${rowState}`}>{statusCopy(rowState, t)}</span>
+                  <span className="min-w-0 flex-1 text-left"><span className="block app-text-wrap text-sm font-medium">{definition.name || definition.id}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{modelLabel(definition.models.primary_model, t("ui.sessionNoModel"))}</span></span>
+                  <span className={`session-state session-state--${rowState}`}><StableLabel value={statusCopy(rowState, t)} labels={(["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => statusCopy(state, t))} /></span>
                 </button>
               );
             })}
-            {allDefinitions.length === 1 && <div className="px-1 py-3 text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.sessionEmpty")}</div>}
+            {allDefinitions.length === 1 && <div className="px-1 py-3 text-xs ui-color-faint" >{t("ui.sessionEmpty")}</div>}
           </div>
         </section>
 
         {currentDefinition ? (
-          <section className="min-w-0 rounded-xl border p-4" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+          <section className="min-w-0 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0"><div className="app-eyebrow">{currentDefinition.id === DEFAULT_SESSION_ID ? t("ui.defaultSession") : t("ui.sessionName")}</div><h3 className="mt-1 truncate text-lg font-semibold" style={{ color: "var(--board-ink)" }}>{currentDefinition.name || currentDefinition.id}</h3></div>
-              <div className="flex flex-wrap items-center gap-2 text-xs" style={{ color: "var(--board-muted)" }}><span className={`session-state session-state--${status?.state ?? "stopped"}`}>{statusCopy(status?.state ?? "stopped", t)}</span>{status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status, currentDefinition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}</div>
+              <div className="min-w-0"><div className="app-eyebrow">{currentDefinition.id === DEFAULT_SESSION_ID ? t("ui.defaultSession") : t("ui.sessionName")}</div><h3 className="mt-1 app-text-wrap text-lg font-semibold ui-color-ink" >{currentDefinition.name || currentDefinition.id}</h3></div>
+              <div className="flex flex-wrap items-center gap-2 text-xs ui-color-muted" ><span className={`session-state session-state--${status?.state ?? "stopped"}`}>{statusCopy(status?.state ?? "stopped", t)}</span>{status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status, currentDefinition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}</div>
             </div>
 
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <label className="text-xs md:col-span-2" style={{ color: "var(--board-muted)" }}>{t("ui.sessionPrimary")}<input className="app-input mt-1" value={currentDefinition.models.primary_model} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ primary_model: event.target.value })} placeholder={t("ui.sessionNoModel")} /></label>
-              <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.sessionMmproj")}<input className="app-input mt-1" value={currentDefinition.models.mmproj} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ mmproj: event.target.value })} placeholder={t("panel.optionalSidecar")} /></label>
-              <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.sessionDraft")}<input className="app-input mt-1" value={currentDefinition.models.draft_model} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ draft_model: event.target.value })} placeholder={t("ui.specDraftModelPlaceholder")} /></label>
+            <div className="mt-4 grid gap-3 app-form-grid">
+              <label className="app-field-full text-xs ui-color-muted" >{t("ui.sessionPrimary")}<input className="app-input mt-1" value={currentDefinition.models.primary_model} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ primary_model: event.target.value })} placeholder={t("ui.sessionNoModel")} /></label>
+              <label className="text-xs ui-color-muted" >{t("ui.sessionMmproj")}<input className="app-input mt-1" value={currentDefinition.models.mmproj} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ mmproj: event.target.value })} placeholder={t("panel.optionalSidecar")} /></label>
+              <label className="text-xs ui-color-muted" >{t("ui.sessionDraft")}<input className="app-input mt-1" value={currentDefinition.models.draft_model} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ draft_model: event.target.value })} placeholder={t("ui.specDraftModelPlaceholder")} /></label>
             </div>
 
-            {currentDefinition.id !== DEFAULT_SESSION_ID && <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]"><label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.sessionName")}<input className="app-input mt-1" value={currentDefinition.name} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label><label className="flex items-end gap-2 pb-2 text-xs" style={{ color: "var(--board-muted)" }}><input type="checkbox" checked={currentDefinition.enabled} onChange={(event) => updateEditing({ enabled: event.target.checked })} />{t("ui.sessionEnabled")}</label></div>}
+            {currentDefinition.id !== DEFAULT_SESSION_ID && <div className="mt-3 grid gap-3 app-form-grid"><label className="text-xs ui-color-muted" >{t("ui.sessionName")}<input className="app-input mt-1" value={currentDefinition.name} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label><label className="flex items-end gap-2 pb-2 text-xs ui-color-muted" ><input type="checkbox" checked={currentDefinition.enabled} onChange={(event) => updateEditing({ enabled: event.target.checked })} />{t("ui.sessionEnabled")}</label></div>}
 
             <div className="mt-4">
-              <button type="button" className="app-button app-button--secondary app-button--sm" disabled={probeBusy} onClick={() => setProbeAttempt((value) => value + 1)}>{probeBusy ? t("ui.probing") : t("ui.probeRuntime")}</button>
-              {probeError && <p role="alert" className="mt-2 break-words text-xs" style={{ color: "var(--tone-error-ink)" }}>{probeError}</p>}
+              <button type="button" className="app-button app-button--secondary app-button--sm" disabled={probeBusy} onClick={() => setProbeAttempt((value) => value + 1)}><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button>
+              {probeError && <p role="alert" className="mt-2 break-words text-xs ui-color-error-ink" >{normalizeDisplayText(probeError)}</p>}
             </div>
-            <fieldset disabled={probeBusy || probeError !== null} className="mt-3 min-w-0 rounded-lg border p-3" aria-label={t("ui.gpuAssignment")} style={{ borderColor: "var(--board-border)", background: "var(--board-surface)" }}>
-              <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-semibold" style={{ color: "var(--board-ink)" }}>{t("ui.gpuAssignment")}</h4><p className="mt-0.5 text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.gpuRuntimeIdentityHint")}</p></div><span className="text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.gpuSelectedCount", { count: selectedGpuIds.size })}</span></div>
-              {!probeBusy && !probeError && devices.length === 0 && <div className="mt-3 rounded border px-3 py-2 text-xs" style={{ borderColor: "var(--tone-warning-border)", background: "var(--tone-warning-bg)", color: "var(--tone-warning-ink)" }}>{t("ui.gpuNoDetected")}</div>}
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <fieldset disabled={probeBusy || probeError !== null} className="mt-3 min-w-0 rounded-lg border p-3 ui-border-color-border ui-background-surface" aria-label={t("ui.gpuAssignment")} >
+              <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-semibold ui-color-ink" >{t("ui.gpuAssignment")}</h4><p className="mt-0.5 text-xs ui-color-faint" >{t("ui.gpuRuntimeIdentityHint")}</p></div><span className="text-xs ui-color-faint" >{t("ui.gpuSelectedCount", { count: selectedGpuIds.size })}</span></div>
+              {!probeBusy && !probeError && devices.length === 0 && <div className="mt-3 rounded border px-3 py-2 text-xs ui-border-color-warning-border ui-background-warning-bg ui-color-warning-ink" >{t("ui.gpuNoDetected")}</div>}
+              <div className="mt-3 grid gap-2 app-form-grid">
                 {devices.map((gpu, index) => {
                   const id = gpu.stable_id;
-                  return <label key={id ?? `gpu-${index}`} className={`flex min-w-0 items-start gap-2 rounded border px-2.5 py-2 text-xs ${id && selectedGpuIds.has(id) ? "app-border-accent" : ""}`} style={{ borderColor: id && selectedGpuIds.has(id) ? "var(--board-accent)" : "var(--board-border)", color: "var(--board-muted)" }}><input type="checkbox" checked={Boolean(id && selectedGpuIds.has(id))} disabled={!id} onChange={(event) => { if (!id) return; if (event.target.checked) setTensorSplitDrafts((current) => id in current ? current : { ...current, [id]: "1" }); updateGpu(toggleGpuSelection(currentPlacement, id, devices)); }} /><span className="min-w-0"><span className="block truncate" style={{ color: "var(--board-ink)" }}>{gpuDeviceLabel(gpu, index)}</span><span className="block truncate" title={id ?? t("ui.gpuStableId")}>{gpu.vendor}{gpu.vram_mb ? ` · ${Math.round(gpu.vram_mb)} MB` : ""}</span></span></label>;
+                  return <label key={id ?? `gpu-${index}`} className={[`flex min-w-0 items-start gap-2 rounded border px-2.5 py-2 text-xs ${id && selectedGpuIds.has(id) ? "app-border-accent" : ""}`, (id && selectedGpuIds.has(id) ? "ui-border-color-accent" : "ui-border-color-border"), "ui-color-muted"].filter(Boolean).join(" ")} ><input type="checkbox" checked={Boolean(id && selectedGpuIds.has(id))} disabled={!id} onChange={(event) => { if (!id) return; if (event.target.checked) setTensorSplitDrafts((current) => id in current ? current : { ...current, [id]: "1" }); updateGpu(toggleGpuSelection(currentPlacement, id, devices)); }} /><span className="min-w-0"><span className="block app-text-wrap ui-color-ink" >{gpuDeviceLabel(gpu, index)}</span><span className="block app-text-wrap" title={id ?? t("ui.gpuStableId")}>{gpu.vendor}{gpu.vram_mb ? ` · ${Math.round(gpu.vram_mb)} MB` : ""}</span></span></label>;
                 })}
               </div>
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
-                <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.gpuMain")}<select className="app-select mt-1 w-full" value={currentPlacement.main_gpu ?? ""} onChange={(event) => updateGpu({ main_gpu: event.target.value || null })}><option value="">{t("ui.gpuAny")}</option>{devices.filter((gpu) => gpu.stable_id && selectedGpuIds.has(gpu.stable_id)).map((gpu) => <option key={gpu.stable_id} value={gpu.stable_id}>{gpuDeviceLabel(gpu, devices.indexOf(gpu))}</option>)}</select></label>
-                <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.gpuDraft")}<select className="app-select mt-1 w-full" value={currentPlacement.draft_gpu_id ?? ""} onChange={(event) => updateGpu({ draft_gpu_id: event.target.value || null })}><option value="">{t("ui.gpuAny")}</option>{devices.filter((gpu) => gpu.stable_id).map((gpu) => <option key={gpu.stable_id} value={gpu.stable_id}>{gpuDeviceLabel(gpu, devices.indexOf(gpu))}</option>)}</select></label>
-                <label className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.gpuSplitMode")}<select className="app-select mt-1 w-full" value={currentPlacement.split_mode} onChange={(event) => updateGpu({ split_mode: event.target.value as api.SplitMode })}><option value="none">{t("ui.gpuSplitNone")}</option><option value="layer">{t("ui.gpuSplitLayer")}</option><option value="row">{t("ui.gpuSplitRow")}</option></select></label>
+              <div className="mt-3 grid gap-3 app-form-grid">
+                <label className="text-xs ui-color-muted" >{t("ui.gpuMain")}<CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuMain")} value={currentPlacement.main_gpu ?? ""} onChange={value => updateGpu({ main_gpu: value || null })} options={[{ value: "", label: t("ui.gpuAny") }, ...devices.filter(gpu => gpu.stable_id && selectedGpuIds.has(gpu.stable_id)).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, devices.indexOf(gpu)) }))]} /></label>
+                <label className="text-xs ui-color-muted" >{t("ui.gpuDraft")}<CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuDraft")} value={currentPlacement.draft_gpu_id ?? ""} onChange={value => updateGpu({ draft_gpu_id: value || null })} options={[{ value: "", label: t("ui.gpuAny") }, ...devices.filter(gpu => gpu.stable_id).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, devices.indexOf(gpu)) }))]} /></label>
+                <label className="text-xs ui-color-muted" >{t("ui.gpuSplitMode")}<CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuSplitMode")} value={currentPlacement.split_mode} onChange={value => updateGpu({ split_mode: value as api.SplitMode })} options={[{ value: "none", label: t("ui.gpuSplitNone") }, { value: "layer", label: t("ui.gpuSplitLayer") }, { value: "row", label: t("ui.gpuSplitRow") }]} /></label>
               </div>
-              {currentPlacement.gpu_ids.length > 1 && <fieldset className="mt-3 min-w-0"><legend className="text-xs" style={{ color: "var(--board-muted)" }}>{t("ui.gpuTensorSplit")}</legend><label className="mt-1 flex items-center gap-2 text-xs" style={{ color: "var(--board-muted)" }}><input type="checkbox" checked={customTensorSplit} onChange={(event) => { setCustomTensorSplit(event.target.checked); updateGpu({ tensor_split: [] }); }} />{t("ui.gpuCustomTensorSplit")}</label>{customTensorSplit && <><div className="mt-2 grid gap-2 sm:grid-cols-2">{currentPlacement.gpu_ids.map((id) => { const gpu = devices.find((item) => item.stable_id === id); return <label key={id} className="grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-2 text-xs" style={{ color: "var(--board-faint)" }}><span className="truncate">{gpu ? gpuDeviceLabel(gpu, devices.indexOf(gpu)) : id}</span><input aria-label={`${t("ui.gpuTensorSplit")} ${id}`} className="app-input w-full font-mono" inputMode="decimal" value={tensorSplitDrafts[id] ?? "1"} onChange={(event) => { if (!editing && selectedId === DEFAULT_SESSION_ID) setEditing({ ...defaultDefinition, gpu: cloneGpuPlacement(defaultDefinition.gpu) }); setTensorSplitDrafts((current) => ({ ...current, [id]: event.target.value })); }} /></label>; })}</div><span className="mt-1 block text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.gpuTensorSplitHint")}</span></>}</fieldset>}
-              {missing.length > 0 && <div className="mt-3 rounded border px-3 py-2 text-xs" role="alert" style={{ borderColor: "var(--tone-error-border)", background: "var(--tone-error-bg)", color: "var(--tone-error-ink)" }}><strong>{t("ui.gpuMissingWarning")}</strong><span className="ml-1">{t("ui.gpuMissing", { ids: missing.join(", ") })}</span></div>}
+              {currentPlacement.gpu_ids.length > 1 && <fieldset className="mt-3 min-w-0"><legend className="text-xs ui-color-muted" >{t("ui.gpuTensorSplit")}</legend><label className="mt-1 flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={customTensorSplit} onChange={(event) => { setCustomTensorSplit(event.target.checked); updateGpu({ tensor_split: [] }); }} />{t("ui.gpuCustomTensorSplit")}</label>{customTensorSplit && <><div className="mt-2 grid gap-2 app-form-grid">{currentPlacement.gpu_ids.map((id) => { const gpu = devices.find((item) => item.stable_id === id); return <label key={id} className="grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-2 text-xs ui-color-faint" ><span className="app-text-wrap">{gpu ? gpuDeviceLabel(gpu, devices.indexOf(gpu)) : id}</span><input aria-label={`${t("ui.gpuTensorSplit")} ${id}`} className="app-input w-full font-mono" inputMode="decimal" value={tensorSplitDrafts[id] ?? "1"} onChange={(event) => { if (!editing && selectedId === DEFAULT_SESSION_ID) setEditing({ ...defaultDefinition, gpu: cloneGpuPlacement(defaultDefinition.gpu) }); setTensorSplitDrafts((current) => ({ ...current, [id]: event.target.value })); }} /></label>; })}</div><span className="mt-1 block text-xs ui-color-faint" >{t("ui.gpuTensorSplitHint")}</span></>}</fieldset>}
+              {missing.length > 0 && <div className="mt-3 rounded border px-3 py-2 text-xs ui-border-color-error-border ui-background-error-bg ui-color-error-ink" role="alert" ><strong>{t("ui.gpuMissingWarning")}</strong><span className="ml-1">{t("ui.gpuMissing", { ids: missing.join(", ") })}</span></div>}
             </fieldset>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {(currentDefinition.id !== DEFAULT_SESSION_ID || editing?.id === DEFAULT_SESSION_ID) && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void saveDefinition()} disabled={busyId !== null}>{t("ui.saveSession")}</button>}
               {busyId === currentDefinition.id ? <button type="button" className="app-button app-button--danger app-button--sm" onClick={() => void cancelLoad(currentDefinition.id)}>{t("common.cancel")}</button> : status?.state === "running" || status?.state === "starting" ? <><button type="button" className="app-button app-button--danger app-button--sm" onClick={() => void stop(currentDefinition.id)} disabled={busyId !== null}>{t("ui.sessionStop")}</button><button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void stop(currentDefinition.id, true)} disabled={busyId !== null}>{t("ui.sessionUnload")}</button></> : <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void load(currentDefinition)} disabled={busyId !== null || !currentDefinition.enabled || !currentDefinition.models.primary_model.trim()}>{t("ui.sessionStart")}</button>}
               {currentDefinition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void remove(currentDefinition)} disabled={busyId !== null}>{t("ui.sessionDelete")}</button>}
-              {status?.pid && <span className="ml-auto text-xs" style={{ color: "var(--board-faint)" }}>{t("ui.sessionPidLabel", { pid: status.pid })}{status.active_requests !== undefined ? ` · ${t("ui.sessionRequestsLabel", { count: status.active_requests })}` : ""}</span>}
+              {status?.pid && <span className="ml-auto text-xs ui-color-faint" >{t("ui.sessionPidLabel", { pid: status.pid })}{status.active_requests !== undefined ? ` · ${t("ui.sessionRequestsLabel", { count: status.active_requests })}` : ""}</span>}
             </div>
-            {(status?.error || status?.log_tail) && <details className="mt-3 rounded border p-2 text-xs" style={{ borderColor: "var(--tone-error-border)", background: "var(--tone-error-bg)", color: "var(--tone-error-ink)" }}><summary className="cursor-pointer">{t("ui.sessionStatus")}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{status.error ?? status.log_tail}</pre></details>}
+            {(status?.error || status?.log_tail) && <details className="mt-3 rounded border p-2 text-xs ui-border-color-error-border ui-background-error-bg ui-color-error-ink" ><summary className="cursor-pointer">{t("ui.sessionStatus")}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{normalizeDisplayText(status.error ?? status.log_tail ?? "")}</pre></details>}
           </section>
-        ) : <section className="rounded-xl border p-4 text-sm" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)", color: "var(--board-faint)" }}>{t("ui.sessionEmpty")}</section>}
+        ) : <section className="rounded-xl border p-4 text-sm ui-border-color-border ui-background-panel ui-color-faint" >{t("ui.sessionEmpty")}</section>}
       </div>
       <ConfirmDialog open={pendingNavigation !== null} title={t("ui.gpuUnsaved")} description={t("ui.sessionUnsavedSwitchHint")} confirmLabel={t("ui.undoProfileChanges")} tone="danger" onConfirm={() => { const next = pendingNavigation; setPendingNavigation(null); if (next?.kind === "select") performSelection(next.definition); else if (next?.kind === "new") addDefinition(); }} onCancel={() => setPendingNavigation(null)} />
     </div>

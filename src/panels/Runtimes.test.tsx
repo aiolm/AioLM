@@ -89,17 +89,17 @@ function confirmDialogOpen() {
 /** Step one: type a PR and open the confirmation dialog. */
 async function reviewPullRequest(expectedBackend = "cuda") {
   const picker = await screen.findByLabelText("Backend to build");
-  await waitFor(() => expect(picker).toHaveValue(expectedBackend));
+  await waitFor(() => expect(picker).toHaveTextContent(expectedBackend === "cpu" ? "CPU-only" : "CUDA (NVIDIA)"));
   const input = await screen.findByLabelText("PR number or URL");
   fireEvent.change(input, { target: { value: "27342" } });
-  fireEvent.click(screen.getByRole("button", { name: "Review PR…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review PR" }));
   await waitFor(() => expect(confirmDialogOpen()).toBe(true));
 }
 
 /** Both steps: review, then confirm, so the build actually starts. */
 async function startPullRequestBuild() {
   const picker = await screen.findByLabelText("Backend to build");
-  await waitFor(() => expect(picker).toHaveValue("cuda"));
+  await waitFor(() => expect(picker).toHaveTextContent("CUDA (NVIDIA)"));
   await reviewPullRequest();
   fireEvent.click(screen.getByRole("button", { name: "Build this commit" }));
   await waitFor(() => expect(mocked.rtInstallPr).toHaveBeenCalledWith("cuda", "27342", PREVIEW.commit));
@@ -173,7 +173,7 @@ describe("RuntimesPanel pull-request builds", () => {
     fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
     // Both the section and the row button reflect the in-flight cancel.
-    const cancelling = await screen.findAllByRole("button", { name: "Cancelling…" });
+    const cancelling = await screen.findAllByRole("button", { name: "Cancelling" });
     expect(cancelling).toHaveLength(2);
     for (const button of cancelling) expect(button).toBeDisabled();
     fireEvent.click(cancelling[0]);
@@ -185,13 +185,12 @@ describe("RuntimesPanel pull-request builds", () => {
   it("offers PR builds for supported source backends and marks unsupported ones", async () => {
     renderPanel();
     const picker = await screen.findByLabelText("Backend to build");
-    const option = (backend: string) => Array.from((picker as HTMLSelectElement).options).find((item) => item.value === backend)!;
-    for (const backend of ["cpu", "vulkan", "cuda", "rocm"]) {
-      expect(option(backend).disabled, backend).toBe(false);
+    fireEvent.click(picker);
+    for (const backend of ["CPU-only", "Vulkan", "CUDA (NVIDIA)", "ROCm (AMD)"]) {
+      expect(screen.getByRole("option", { name: backend })).toHaveAttribute("aria-disabled", "false");
     }
-    for (const backend of ["sycl", "openvino"]) {
-      expect(option(backend).disabled, backend).toBe(true);
-      expect(option(backend).textContent, backend).toContain("not buildable here");
+    for (const backend of ["SYCL", "OpenVINO"]) {
+      expect(screen.getByRole("option", { name: new RegExp(backend + ".*not buildable here") })).toHaveAttribute("aria-disabled", "true");
     }
     expect(mocked.rtInstallPr).not.toHaveBeenCalled();
   });
@@ -262,7 +261,7 @@ describe("RuntimesPanel pull-request builds", () => {
     renderPanel();
     const input = await screen.findByLabelText("PR number or URL");
     fireEvent.change(input, { target: { value: "27342" } });
-    fireEvent.click(screen.getByRole("button", { name: "Review PR…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review PR" }));
     await screen.findByText(/Could not resolve that pull request/);
     expect(confirmDialogOpen()).toBe(false);
     expect(mocked.rtInstallPr).not.toHaveBeenCalled();
@@ -316,7 +315,7 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(screen.getByText(/embedded web UI is disabled/)).toBeInTheDocument();
     expect(screen.getByText(/BoringSSL, libcurl and OpenSSL support are off/)).toBeInTheDocument();
     // The backend is cuda here, so the architecture policy is disclosed too.
-    expect(screen.getByText(/LLAMA_BOARD_CUDA_ARCHITECTURES/)).toBeInTheDocument();
+    expect(screen.getByText(/AIOLM_CUDA_ARCHITECTURES/)).toBeInTheDocument();
     // And so is the fact that one PR keeps one directory.
     expect(screen.getByText(/Installs as pr27342-cuda/)).toBeInTheDocument();
   });
@@ -324,12 +323,12 @@ describe("RuntimesPanel pull-request builds", () => {
   it("hides the CUDA architecture note for a backend that has no CUDA kernels", async () => {
     renderPanel();
     const picker = await screen.findByLabelText("Backend to build");
-    fireEvent.change(picker, { target: { value: "cpu" } });
+    fireEvent.click(picker); fireEvent.click(screen.getByRole("option", { name: "CPU-only" }));
     const input = await screen.findByLabelText("PR number or URL");
     fireEvent.change(input, { target: { value: "27342" } });
-    fireEvent.click(screen.getByRole("button", { name: "Review PR…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review PR" }));
     await waitFor(() => expect(confirmDialogOpen()).toBe(true));
-    expect(screen.queryByText(/LLAMA_BOARD_CUDA_ARCHITECTURES/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/AIOLM_CUDA_ARCHITECTURES/)).not.toBeInTheDocument();
     expect(screen.getByText(/Installs as pr27342-cpu/)).toBeInTheDocument();
   });
 
@@ -348,10 +347,11 @@ describe("RuntimesPanel pull-request builds", () => {
     });
     expect(screen.getAllByText("Building")).toHaveLength(2);
 
-    // The picker is disabled during a build in the real UI. Dispatching the
-    // change directly still verifies that a stale picker value cannot switch
-    // the progress banner away from the backend that was confirmed.
-    fireEvent.change(await screen.findByLabelText("Backend to build"), { target: { value: "cpu" } });
+    // A build locks the picker; progress stays bound to its confirmed backend.
+    const lockedPicker = await screen.findByLabelText("Backend to build");
+    expect(lockedPicker).toBeDisabled();
+    fireEvent.keyDown(lockedPicker, { key: "ArrowDown" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getAllByText("Building")).toHaveLength(2);
 
     // App models tab navigation by keeping the panel mounted and toggling its
@@ -372,7 +372,7 @@ describe("RuntimesPanel pull-request builds", () => {
   it("uses the picker value that was selected before confirmation", async () => {
     renderPanel();
     const picker = await screen.findByLabelText("Backend to build");
-    fireEvent.change(picker, { target: { value: "cpu" } });
+    fireEvent.click(picker); fireEvent.click(screen.getByRole("option", { name: "CPU-only" }));
     await reviewPullRequest("cpu");
     fireEvent.click(screen.getByRole("button", { name: "Build this commit" }));
     await waitFor(() => expect(mocked.rtInstallPr).toHaveBeenCalledWith("cpu", "27342", PREVIEW.commit));
@@ -381,7 +381,7 @@ describe("RuntimesPanel pull-request builds", () => {
   it("keeps the reviewed backend when the picker changes before confirmation", async () => {
     renderPanel();
     await reviewPullRequest();
-    fireEvent.change(await screen.findByLabelText("Backend to build"), { target: { value: "cpu" } });
+    fireEvent.click(await screen.findByLabelText("Backend to build")); fireEvent.click(screen.getByRole("option", { name: "CPU-only" }));
     fireEvent.click(screen.getByRole("button", { name: "Build this commit" }));
     await waitFor(() => expect(mocked.rtInstallPr).toHaveBeenCalledWith("cuda", "27342", PREVIEW.commit));
   });
@@ -425,7 +425,7 @@ describe("RuntimesPanel pull-request builds", () => {
     // A cancelled build is not a failure banner, and it must leave the panel
     // ready for another attempt rather than stuck busy.
     await waitFor(() => expect(confirmDialogOpen()).toBe(false));
-    expect(await screen.findByRole("button", { name: "Review PR…" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Review PR" })).toBeEnabled();
   });
 
   it("surfaces a build failure without clearing the typed pull request", async () => {

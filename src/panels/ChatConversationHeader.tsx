@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatThread } from "../chatHistory";
 import type { ChatTextKey } from "../chatI18n";
+import { CustomSelect } from "../components/ThemeSwitcher";
 
 interface ChatConversationHeaderProps {
   threadPanelOpen: boolean;
@@ -35,28 +36,26 @@ export default function ChatConversationHeader({
   }, []);
 
   return (
-    <div className="mb-3 flex min-w-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+    <div className="chat-conversation-heading">
       <div className="flex min-w-0 items-center gap-2">
         <button
           id="chat-thread-toggle-button"
           type="button"
           onClick={() => setThreadPanelOpen((current) => !current)}
-          className="app-button app-button--secondary app-button--sm sm:hidden"
+          className="chat-thread-toggle app-button app-button--secondary app-button--sm"
           aria-expanded={threadPanelOpen}
           aria-controls="chat-thread-panel"
         >
           {ct("conversations")}
         </button>
-        <div className="min-w-0">
-          <h2 className="truncate text-[13px] font-semibold" style={{ color: "var(--board-ink)" }}>{activeThread?.title ?? ct("newConversation")}</h2>
-          <p className="truncate text-xs tabular-nums" style={{ color: "var(--board-faint)" }}>{headerSubtitle}{activeProjectName ? ` · ${activeProjectName}` : ""}</p>
+        <div className="chat-conversation-title">
+          <h2 tabIndex={0} className="app-text-wrap text-sm font-semibold ui-color-ink" >{activeThread?.title ?? ct("newConversation")}</h2>
+          <p tabIndex={0} className="app-text-wrap text-xs tabular-nums ui-color-faint" >{headerSubtitle}{activeProjectName ? ` · ${activeProjectName}` : ""}</p>
         </div>
       </div>
-      <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:shrink-0">
+      <div className="chat-heading-controls">
         <label className="sr-only" htmlFor="chat-session-target">{sessionLabel}</label>
-        <select id="chat-session-target" className="app-select min-w-0 flex-1 sm:max-w-52" value={selectedSessionId} disabled={phase !== "idle"} onChange={(event) => onSelectSession(event.target.value)}>
-          {sessionOptions.map((option) => <option key={option.id} value={option.id} disabled={option.disabled}>{option.label}</option>)}
-        </select>
+        <CustomSelect id="chat-session-target" className="chat-session-picker" value={selectedSessionId} disabled={phase !== "idle"} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
       <details
         ref={detailsRef}
         className="relative shrink-0"
@@ -72,9 +71,9 @@ export default function ChatConversationHeader({
         <summary ref={summaryRef} className="app-button app-button--secondary app-button--sm cursor-pointer list-none">
           {ct("conversationSettings")}
         </summary>
-        <div className="absolute right-0 z-30 mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-xl border p-4 shadow-xl space-y-3" style={{ borderColor: "var(--board-border)", background: "var(--board-panel)" }}>
+        <div className="absolute right-0 z-30 mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-xl border p-4 shadow-xl space-y-3 ui-border-color-border ui-background-panel" >
           <div>
-            <label className="block text-xs font-medium" style={{ color: "var(--board-ink)" }} htmlFor="chat-thread-title">{ct("title")}</label>
+            <label className="block text-xs font-medium ui-color-ink"  htmlFor="chat-thread-title">{ct("title")}</label>
             <input
               id="chat-thread-title"
               value={activeThread?.title ?? ""}
@@ -84,7 +83,7 @@ export default function ChatConversationHeader({
             />
           </div>
           <div>
-            <label className="block text-xs font-medium" style={{ color: "var(--board-ink)" }} htmlFor="chat-system-prompt">{ct("systemPrompt")}</label>
+            <label className="block text-xs font-medium ui-color-ink"  htmlFor="chat-system-prompt">{ct("systemPrompt")}</label>
             <textarea
               id="chat-system-prompt"
               value={activeThread?.systemPrompt ?? ""}
@@ -95,7 +94,7 @@ export default function ChatConversationHeader({
               placeholder={ct("systemPromptPlaceholder")}
             />
           </div>
-          <p className="text-[11px] leading-relaxed" style={{ color: "var(--board-faint)" }}>{ct("savedLocallyDescription")}</p>
+          <p className="text-xs leading-relaxed ui-color-faint" >{ct("savedLocallyDescription")}</p>
         </div>
       </details>
       </div>
