@@ -4,7 +4,7 @@
 //! optional vision projector and an optional speculative draft model, each
 //! with its own port, child process, API key, and lifecycle. The legacy
 //! single-server `start_server`/`stop_server`/`server_status`/`unload_model`
-//! commands in `lib.rs` keep operating on exactly one session —
+//! commands in `commands/server.rs` keep operating on exactly one session —
 //! `DEFAULT_SESSION_ID` — completely unchanged, so existing frontend code and
 //! tests see no behavior change. This module tracks any *additional*
 //! sessions started alongside it, keyed by a caller-chosen (typically UUID)
@@ -47,7 +47,7 @@ impl SessionEntry {
 }
 
 /// Tracks every non-default session. The default session's `ServerState`
-/// lives directly on `AppState` in `lib.rs`, exactly as it did before
+/// lives directly on `AppState` in `state.rs`, exactly as it did before
 /// multi-session support existed; this registry only holds the extra ones.
 #[derive(Default)]
 pub struct SessionManager {
