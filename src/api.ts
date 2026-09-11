@@ -97,6 +97,7 @@ export interface GgufModel {
   path: string;
   size_mb: number;
   is_vision: boolean;
+  shards?: { files: string[]; total: number; missing: number[] };
 }
 
 export interface ModelScanResult {
@@ -432,7 +433,7 @@ export const getConfig = () => invoke<AppConfig>("get_config");
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
 
 export const listModels = (modelsDir: string) => invoke<ModelScanResult>("list_models", { modelsDir });
-export const deleteModel = (path: string) => invoke<void>("delete_model", { path });
+export const deleteModel = (path: string, paths?: string[]) => invoke<void>("delete_model", { path, ...(paths ? { paths } : {}) });
 export const pickModelsDir = () => invoke<string | null>("pick_models_dir");
 export const pickLoraAdapter = () => invoke<string | null>("pick_lora_adapter");
 export const hfSearchModels = (query: string, limit = 20) => invoke<HfModel[]>("hf_search_models", { query, limit });

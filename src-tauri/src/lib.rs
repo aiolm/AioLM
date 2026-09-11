@@ -198,7 +198,11 @@ fn remove_verified_file(path: &Path, expected: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn delete_model(state: State<'_, AppState>, path: String) -> Result<(), String> {
+async fn delete_model(
+    state: State<'_, AppState>,
+    path: String,
+    paths: Option<Vec<String>>,
+) -> Result<(), String> {
     let _operation = state.operation.lock().await;
     if state
         .server
@@ -210,34 +214,51 @@ async fn delete_model(state: State<'_, AppState>, path: String) -> Result<(), St
         return Err("stop the server before deleting a model".into());
     }
     let cfg = config::load_result()?;
-    let candidate = ensure_deletable_model_path(
-        Path::new(&cfg.models_dir),
-        Path::new(&path),
-        &cfg.active_model,
-        &cfg.mmproj,
-        &cfg.spec_draft_model,
-    )?;
-    for entry in state.sessions.entries() {
-        let server = entry
-            .state
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?;
-        if session_uses_model_file(&server, &candidate) {
-            return Err(format!(
-                "stop session '{}' before deleting a model it is using",
-                entry.display_name()
-            ));
+    let requested = paths.unwrap_or_else(|| vec![path.clone()]);
+    if requested.is_empty() || requested.len() > 10_000 || !requested.contains(&path) {
+        return Err("invalid model file selection".into());
+    }
+    let mut candidates = Vec::new();
+    // Validate the entire selection before removing any shard. This preserves
+    // configured models and running sessions even when they reference a later part.
+    for requested_path in requested {
+        let candidate = ensure_deletable_model_path(
+            Path::new(&cfg.models_dir),
+            Path::new(&requested_path),
+            &cfg.active_model,
+            &cfg.mmproj,
+            &cfg.spec_draft_model,
+        )?;
+        for entry in state.sessions.entries() {
+            let server = entry
+                .state
+                .lock()
+                .map_err(|_| "server state lock was poisoned".to_string())?;
+            if session_uses_model_file(&server, &candidate) {
+                return Err(format!(
+                    "stop session '{}' before deleting a model it is using",
+                    entry.display_name()
+                ));
+            }
+        }
+        if cfg.lora_adapters.iter().any(|adapter| {
+            adapter.enabled
+                && fs::canonicalize(&adapter.path)
+                    .ok()
+                    .is_some_and(|adapter_path| adapter_path == candidate)
+        }) {
+            return Err(
+                "select another configuration before deleting an enabled LoRA adapter".into(),
+            );
+        }
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
         }
     }
-    if cfg.lora_adapters.iter().any(|adapter| {
-        adapter.enabled
-            && fs::canonicalize(&adapter.path)
-                .ok()
-                .is_some_and(|adapter_path| adapter_path == candidate)
-    }) {
-        return Err("select another configuration before deleting an enabled LoRA adapter".into());
+    for candidate in candidates {
+        remove_verified_file(&candidate, &candidate)?;
     }
-    remove_verified_file(&candidate, &candidate)
+    Ok(())
 }
 
 fn session_uses_model_file(server: &server::ServerState, candidate: &Path) -> bool {

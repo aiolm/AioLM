@@ -157,6 +157,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
   };
 
   const selectModel = async (model: api.GgufModel) => {
+    if (model.shards?.missing.length) return;
     try {
       await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
       // 모델 선택은 저장/서버 시작 알림을 표시하지 않는다.
@@ -166,6 +167,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
   };
 
   const setProjector = async (model: api.GgufModel) => {
+    if (model.shards?.missing.length) return;
     if (!projectorChangeAllowed(store.status.state)) {
       notify(t("ui.stopBeforeProjector"));
       return;
@@ -206,6 +208,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
   };
 
   const selectAndStart = async (model: api.GgufModel) => {
+    if (model.shards?.missing.length) return;
     const switching = serverRunning && selected !== model.path;
     if (switching && shouldConfirmDestructive()) {
       setPendingConfirm({
@@ -236,7 +239,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
     const remove = async () => {
       setPendingConfirm(null);
       try {
-        await api.deleteModel(model.path);
+        await api.deleteModel(model.path, model.shards?.files);
         notify(t("ui.deletedModelNamed", { name: model.name }));
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -247,7 +250,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
     if (!shouldConfirmDestructive()) { void remove(); return; }
     setPendingConfirm({
       title: t("ui.deleteModelTitle"),
-      description: t("ui.deleteModelBody", { name: model.name }),
+      description: model.shards ? t("ui.deleteSplitModelBody", { name: model.name, count: model.shards.files.length }) : t("ui.deleteModelBody", { name: model.name }),
       confirmLabel: t("ui.deleteModelAction"),
       onConfirm: () => void remove(),
     });
@@ -372,7 +375,8 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
           </div>
         )}
         {visible.map((model) => {
-          const isSelected = model.path === selected;
+          const incomplete = !!model.shards?.missing.length;
+          const isSelected = model.path === selected || !!model.shards?.files.includes(selected);
           const running = serverRunning && isSelected;
           const actionLabel = running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
           return (
@@ -386,6 +390,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
                 type="button"
                 aria-current={isSelected ? "true" : undefined}
                 aria-label={t("ui.selectModelNamed", { name: model.name })}
+                disabled={incomplete}
                 aria-disabled={serverRunning ? "true" : undefined}
                 onClick={() => {
                   if (serverRunning) {
@@ -398,16 +403,17 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
 
               >
                 <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{model.name}</span>
+                {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
                 <span className="block app-text-wrap text-xs ui-color-faint"  title={normalizeDisplayPath(model.path)}>{normalizeDisplayPath(model.path)}</span>
               </button>
               <div className="models-model-actions flex min-w-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto px-1">
                 <span className="shrink-0 text-xs tabular-nums ui-color-faint" >{model.size_mb.toFixed(0)} MB</span>
                 {model.is_vision && <span className="rounded-full border px-1.5 py-0.5 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{t("ui.visionTag")}</span>}
                 {isSelected && <span className="rounded-full px-2 py-0.5 text-xs font-medium ui-background-success-bg ui-color-success-ink ui-border-1px-solid-var-tone-success-border" >{t("ui.activeTag")}</span>}
-                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${model.name}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
+                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${model.name}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
                 <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
                 <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0 ui-color-danger" >{t("panel.delete")}</button>
-                <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={running || store.busy} aria-label={`${actionLabel}: ${model.name}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
+                <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy} aria-label={`${actionLabel}: ${model.name}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
               </div>
             </div>
           );

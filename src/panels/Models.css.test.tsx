@@ -139,6 +139,36 @@ describe("ModelsPanel CSS cascade", () => {
     localStorage.clear();
   });
 
+  it("selects the first shard and confirms deletion of the complete file set", async () => {
+    const files = ["C:/models/large-00001-of-00002.gguf", "C:/models/large-00002-of-00002.gguf"];
+    const model = { name: "large.gguf", path: files[0], size_mb: 300, is_vision: false, shards: { files, total: 2, missing: [] } };
+    mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
+    mocked.deleteModel.mockReset().mockResolvedValue(undefined);
+    const cfg = { ...baseCfg, models_dir: "C:/models" };
+    const store = storeFor(cfg);
+    store.updateConfig = vi.fn().mockResolvedValue(cfg);
+    render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
+    expect(await screen.findByText("Split model · 2 files")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByText("300 MB")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select large.gguf" }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ active_model: files[0] })));
+    fireEvent.click(screen.getByRole("button", { name: "Delete: large.gguf" }));
+    expect(await screen.findByText("All 2 files belonging to large.gguf will be permanently removed. This cannot be undone.")).toBeInTheDocument();
+    expect(mocked.deleteModel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Delete model" }));
+    await waitFor(() => expect(mocked.deleteModel).toHaveBeenCalledWith(files[0], files));
+  });
+
+  it("shows incomplete shards without allowing selection or launch", async () => {
+    const path = "C:/models/partial-00002-of-00003.gguf";
+    mocked.listModels.mockReset().mockResolvedValue({ models: [{ name: "partial.gguf", path, size_mb: 100, is_vision: false, shards: { files: [path], total: 3, missing: [1, 3] } }], truncated: false });
+    render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models" }) }) }));
+    expect(await screen.findByText("Incomplete model · 2 of 3 files missing")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Select partial.gguf" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start: partial.gguf" })).toBeDisabled();
+  });
+
   it("keeps loaded models visible after a rescan fails and retries from the error banner", async () => {
     const model = { name: "kept.gguf", path: "C:/models/kept.gguf", size_mb: 100, is_vision: false };
     mocked.listModels.mockReset().mockResolvedValueOnce({ models: [model], truncated: false })
