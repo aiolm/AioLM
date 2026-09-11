@@ -17,12 +17,9 @@ Guides, technical reference, and policies for the current AioLM implementation.
 - [Server options](reference/server-options.md): tuning controls and runtime option behavior.
 - [Data migration](reference/migration.md): storage migration and compatibility.
 
-- [SignPath Foundation setup](guides/signpath.md): signing integration and release setup.
-
 ## Repository policies
 
 - Security: [English](SECURITY.md) · [한국어](policies/security.ko.md) · [日本語](policies/security.ja.md) · [中文](policies/security.zh.md).
-- [Code signing policy](policies/code-signing.md).
 - [Privacy policy](policies/privacy.md).
 - [License](../LICENSE) and [third-party notices](../NOTICE).
 
@@ -34,9 +31,9 @@ LICENSE, NOTICE           Repository license and third-party notices
 docs/
   README.md               Documentation index
   SECURITY.md             Canonical security policy
-  guides/                 Installation, CLI, development, signing setup, translated overviews
+  guides/                 Installation, CLI, development, translated overviews
   reference/              Architecture, server options, migration behavior
-  policies/               Signing, privacy, and security translations
+  policies/               Privacy and security translations
 ```
 
 Keep each topic in one document per language. The `.ko.md`, `.ja.md`, and `.zh.md`

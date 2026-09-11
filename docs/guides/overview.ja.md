@@ -19,7 +19,7 @@
 
 ## プラットフォーム対応
 
-現在は Windows x64 をサポートしています。**Linux（NVIDIA DGX を含む）および macOS 対応を予定**しています。Linux/macOS は `curl | tar`、Windows は `NSIS`/`MSI` を使用します。Windows リリースインストーラーは SignPath Foundation のオンボーディングと手動承認後、GitHub ホスト型 CI から Authenticode で署名されます。公開された署名と SHA-256 チェックサムを確認してください。
+現在は Windows x64 をサポートしています。**Linux（NVIDIA DGX を含む）および macOS 対応を予定**しています。Linux/macOS は `curl | tar`、Windows は `NSIS`/`MSI` を使用します。Windows インストーラーは GitHub ホスト型 CI でビルドし、未署名のファイルと SHA-256 チェックサムを配布します。
 
 ## ダウンロード
 
@@ -29,13 +29,9 @@
 
 既存データの移行と互換性は[移行ガイド](../reference/migration.md)を参照してください。
 
-## コード署名ポリシー (Code signing policy)
+## セキュリティとプライバシー
 
-[code-signing.md](../policies/code-signing.md) と [privacy.md](../policies/privacy.md) で、署名範囲、役割、リリース承認、プライバシー、アンインストール方針を確認できます。
-
-## セキュリティ
-
-[security.ja.md](../policies/security.ja.md) を参照してください。
+[セキュリティポリシー](../policies/security.ja.md)と[プライバシーポリシー](../policies/privacy.md)を参照してください。
 
 ## ライセンス
 

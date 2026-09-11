@@ -27,13 +27,13 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 
 ## 验证下载
 
+发布的安装程序未签名。请将 SHA-256 值与同一版本的 `checksums.txt` 进行比较。
+
 ```powershell
 $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
 # 对 MSI 使用 "./AioLM_*_x64_en-US.msi"。
 (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 # 与同一版本的 checksums.txt 对比
-(Get-AuthenticodeSignature -LiteralPath $installer.FullName).Status
-# 已签名版本应为 Valid；未签名文件会显示 NotSigned。
 ```
 
 发布页面: <https://github.com/llama-board/llama-board/releases/latest>

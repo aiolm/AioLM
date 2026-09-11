@@ -27,22 +27,18 @@ The one-line command downloads the `install.ps1` copy included in the selected r
 
 ## Verify download
 
+Release installers are unsigned. Compare the SHA-256 value with `checksums.txt` from the same release.
+
 ```powershell
 $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
 # For MSI, use "./AioLM_*_x64_en-US.msi" instead.
 (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 # Compare with checksums.txt from the same release
-(Get-AuthenticodeSignature -LiteralPath $installer.FullName).Status
-# Expect Valid for signed releases; NotSigned means the asset is unsigned.
 ```
 
 Release page: <https://github.com/llama-board/llama-board/releases/latest>
 
 AioLM — All-In-One LM installs separately from llama-board. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](../reference/migration.md).
-
-## Code signing policy
-
-See [code-signing.md](../policies/code-signing.md). After SignPath Foundation onboarding, release installers are submitted from GitHub-hosted CI and require manual approval before Authenticode signing. An explicitly marked bootstrap release may be unsigned before onboarding; verify `checksums.txt` and the Authenticode status before installing.
 
 ## Uninstall
 

@@ -1,6 +1,6 @@
 # Data migration and compatibility
 
-AioLM 0.1.6 is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained. The working folder, GitHub repository and SignPath service are not renamed by this change.
+AioLM 0.1.6 is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained. The working folder and GitHub repository are not renamed by this change.
 
 ## First launch on Windows
 

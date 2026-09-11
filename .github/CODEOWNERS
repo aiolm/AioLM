@@ -1,10 +1,7 @@
-# Protect the source, release workflow, SignPath configuration, and public
+# Protect the source, release workflow, and public
 # policy documents. Enable required Code Owner review in the main-branch
 # ruleset for these owners to be enforced.
 * @joowon-jang
 .github/ @joowon-jang
-.signpath/ @joowon-jang
 docs/policies/ @joowon-jang
 docs/SECURITY.md @joowon-jang
-
-

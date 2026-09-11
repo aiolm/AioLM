@@ -19,7 +19,7 @@ In Tuning, **Reset all tuning** removes all overrides, including raw server argu
 
 ## Platform support
 
-Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support is planned**. Linux/macOS will use `curl | tar`; Windows uses `NSIS`/`MSI`. Windows release installers are built on GitHub-hosted CI and are Authenticode-signed through the SignPath Foundation approval workflow after onboarding; verify the published signature and SHA-256 checksum.
+Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support is planned**. Linux/macOS will use `curl | tar`; Windows uses `NSIS`/`MSI`. Windows installers are built on GitHub-hosted CI and published unsigned with SHA-256 checksums.
 
 ## Download
 
@@ -29,15 +29,9 @@ For advanced install options, verification, development setup, and CLI usage, se
 
 For data migration and compatibility, see [the migration guide](docs/reference/migration.md).
 
-## Code signing policy
+## Security and privacy
 
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
-
-See [code-signing.md](docs/policies/code-signing.md) and [privacy.md](docs/policies/privacy.md) for the project’s signing scope, roles, release approval, privacy, and uninstall policy. Maintainers can follow the [SignPath Foundation onboarding checklist](docs/guides/signpath.md).
-
-## Security
-
-See [SECURITY.md](docs/SECURITY.md).
+See [Security](docs/SECURITY.md) and [Privacy](docs/policies/privacy.md).
 
 ## License
 

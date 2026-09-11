@@ -15,7 +15,6 @@ concurrency:
 
 env:
   RUST_BACKTRACE: "1"
-  AIOLM_ALLOW_UNSIGNED_RELEASES: ${{ vars.AIOLM_ALLOW_UNSIGNED_RELEASES || vars.LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES || 'false' }}
 
 jobs:
   prepare:
@@ -157,11 +156,7 @@ jobs:
     # Backstop against a hung verification step or NSIS/MSI packaging;
     # normal runs finish well within this.
     timeout-minutes: 60
-    # This job only builds and tests the repository's own source and
-    # collects unsigned installer assets. It never receives the SignPath
-    # API token and has no release-publish permission, so a
-    # compromised npm/cargo dependency here cannot reach signing material
-    # or the release API.
+    # Build and test with read-only access; publication is isolated below.
     permissions:
       contents: read
     steps:
@@ -209,9 +204,10 @@ jobs:
           }
       - name: Build NSIS and MSI
         run: npx tauri build --config src-tauri/tauri-package.conf.json --bundles nsis,msi
-      - name: Collect unsigned release assets
+      - name: Collect release assets
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $assetDir = "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
           $files = @(Get-ChildItem -Path ".codex-target/release/bundle" -Recurse -File | Where-Object {
@@ -220,131 +216,56 @@ jobs:
           if ($files.Count -ne 2) { throw "Expected exactly one NSIS and one MSI installer asset, found $($files.Count)" }
           foreach ($file in $files) { Copy-Item $file.FullName (Join-Path $assetDir $file.Name) -Force }
           Copy-Item "install.ps1" (Join-Path $assetDir "install.ps1") -Force
-      - name: Validate SignPath artifact configuration
+      - name: Validate release assets
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           $ErrorActionPreference = "Stop"
-          [xml]$config = Get-Content -Raw -Encoding utf8 ".signpath/artifact-configurations/windows-release.xml"
-          $root = $config.SelectSingleNode("/*[local-name()='artifact-configuration']/*[local-name()='zip-file']")
-          if ($null -eq $root) { throw "SignPath artifact configuration must use zip-file as its root artifact." }
-          $versionParameter = $config.SelectSingleNode("//*[local-name()='parameter' and @name='version']")
-          if ($null -eq $versionParameter -or $versionParameter.required -ne "true") { throw "SignPath artifact configuration must require the release version parameter." }
-          $expectedNsis = "AioLM_{0}_x64-setup.exe" -f $env:RELEASE_VERSION
-          $expectedMsi = "AioLM_{0}_x64_en-US.msi" -f $env:RELEASE_VERSION
-          $configuredPaths = @($root.SelectNodes("*[local-name()='pe-file' or local-name()='msi-file' or local-name()='powershell-file']") | ForEach-Object { $_.path })
-          if ($configuredPaths -notcontains 'AioLM_${version}_x64-setup.exe' -or $configuredPaths -notcontains 'AioLM_${version}_x64_en-US.msi' -or $configuredPaths -notcontains 'install.ps1') {
-            throw "SignPath artifact configuration does not cover the expected release assets."
+          $expectedNames = @(
+            ("AioLM_{0}_x64-setup.exe" -f $env:RELEASE_VERSION),
+            ("AioLM_{0}_x64_en-US.msi" -f $env:RELEASE_VERSION),
+            "install.ps1"
+          )
+          $assets = @(Get-ChildItem -LiteralPath "release-assets" -File)
+          if ($assets.Count -ne $expectedNames.Count) {
+            throw "Expected exactly one NSIS installer, one MSI installer, and install.ps1."
           }
-          $assetNames = @(Get-ChildItem -LiteralPath "release-assets" -File | Select-Object -ExpandProperty Name)
-          foreach ($expected in @($expectedNsis, $expectedMsi, "install.ps1")) {
-            if ($assetNames -notcontains $expected) { throw "Release asset $expected is missing." }
+          foreach ($expectedName in $expectedNames) {
+            $asset = @($assets | Where-Object { $_.Name -eq $expectedName })
+            if ($asset.Count -ne 1 -or $asset[0].Length -eq 0) {
+              throw "Release asset $expectedName is missing or empty."
+            }
           }
-      - name: Upload unsigned release assets
+      - name: Upload release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-release-assets-unsigned
+          name: windows-release-assets
           path: release-assets
           if-no-files-found: error
 
   publish:
     needs: [prepare, build]
     if: needs.prepare.outputs.should_release == 'true'
-    name: Sign or publish installers and release
+    name: Publish installers and release
     runs-on: windows-latest
-    # Backstop against a hung signing call or release publish; this job only
-    # signs (when configured) and moves already-built installers.
+    # Publish the artifacts already verified by the build job.
     timeout-minutes: 20
     environment: release-publish
-    # Only this job holds the SignPath API token and contents:write; it
-    # downloads the artifact the build job produced and never runs
-    # npm/cargo/checkout against source.
+    # Only this job can publish releases; it does not execute repository source.
     permissions:
       contents: write
       actions: read
     steps:
-      - name: Download unsigned release assets
+      - name: Download release assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: windows-release-assets-unsigned
+          name: windows-release-assets
           path: release-assets
-      - name: Check installer signing mode
-        id: signing
-        shell: pwsh
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-        run: |
-          $hasSignPathToken = -not [string]::IsNullOrWhiteSpace($env:SIGNPATH_API_TOKEN)
-          $signPathSettings = @{
-            SIGNPATH_ORGANIZATION_ID = $env:SIGNPATH_ORGANIZATION_ID
-            SIGNPATH_PROJECT_SLUG = $env:SIGNPATH_PROJECT_SLUG
-            SIGNPATH_SIGNING_POLICY_SLUG = $env:SIGNPATH_SIGNING_POLICY_SLUG
-            SIGNPATH_ARTIFACT_CONFIGURATION_SLUG = $env:SIGNPATH_ARTIFACT_CONFIGURATION_SLUG
-          }
-          $missingSettings = @($signPathSettings.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Key })
-          $hasAnySignPathSetting = $hasSignPathToken -or ($signPathSettings.Values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0
-          $allowUnsigned = $env:AIOLM_ALLOW_UNSIGNED_RELEASES -match "^(?i:1|true|yes)$"
-
-          if ($hasSignPathToken -and $missingSettings.Count -eq 0) {
-            "mode=signpath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            Write-Host "==> SignPath signing enabled."
-          } elseif ($hasAnySignPathSetting) {
-            throw "SignPath is partially configured. Add SIGNPATH_API_TOKEN plus SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG, and SIGNPATH_ARTIFACT_CONFIGURATION_SLUG."
-          } elseif ($allowUnsigned) {
-            "mode=unsigned" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            Write-Warning "SignPath is not configured; publishing an unsigned release because AIOLM_ALLOW_UNSIGNED_RELEASES is enabled."
-          } else {
-            throw "SignPath is not configured. Add SIGNPATH_API_TOKEN and the four SIGNPATH_* repository variables, or set AIOLM_ALLOW_UNSIGNED_RELEASES=true to explicitly allow an unsigned bootstrap release."
-          }
-
-      - name: Upload artifact for SignPath
-        id: upload-signpath-artifact
-        if: ${{ steps.signing.outputs.mode == 'signpath' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: aiolm-${{ needs.prepare.outputs.version }}-signpath-input
-          path: release-assets
-          if-no-files-found: error
-
-      - name: Submit signing request to SignPath
-        id: signpath
-        if: ${{ steps.signing.outputs.mode == 'signpath' }}
-        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
-          github-artifact-id: ${{ steps.upload-signpath-artifact.outputs.artifact-id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          wait-for-completion: true
-          output-artifact-directory: signed-assets
-          parameters: |
-            version: ${{ toJSON(needs.prepare.outputs.version) }}
-
-      - name: Replace release assets with SignPath output
-        if: ${{ steps.signing.outputs.mode == 'signpath' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $expectedFiles = @(Get-ChildItem -LiteralPath "release-assets" -File | Where-Object { $_.Extension -in @('.exe', '.msi', '.ps1') })
-          if ($expectedFiles.Count -lt 3) { throw "Expected NSIS, MSI, and install.ps1 release assets before signing." }
-          foreach ($file in $expectedFiles) {
-            $matches = @(Get-ChildItem -LiteralPath "signed-assets" -Recurse -File | Where-Object { $_.Name -eq $file.Name })
-            if ($matches.Count -ne 1) { throw "SignPath output did not contain exactly one signed copy of $($file.Name)." }
-            Copy-Item -LiteralPath $matches[0].FullName -Destination $file.FullName -Force
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            if ($signature.Status -ne "Valid") { throw "SignPath Authenticode verification failed for $($file.Name): $($signature.Status)" }
-          }
       - name: Generate checksums
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $assetDir = "release-assets"
           $manifest = foreach ($file in (Get-ChildItem $assetDir -File | Sort-Object Name)) {
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -358,11 +279,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ needs.prepare.outputs.target_sha }}
           body: |
-            Code signing policy: https://github.com/llama-board/llama-board/blob/main/docs/policies/code-signing.md
-            Signing mode: ${{ steps.signing.outputs.mode }}
-            ${{ steps.signpath.outputs.signing-request-web-url && format('SignPath signing request: {0}', steps.signpath.outputs.signing-request-web-url) || '' }}
-            ${{ steps.signing.outputs.mode == 'unsigned' && 'This release is unsigned because SignPath is not configured. Verify the SHA-256 checksum before installing.' || '' }}
+            Windows installers are unsigned. Verify the SHA-256 values in checksums.txt from this release.
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: release-assets/*
-

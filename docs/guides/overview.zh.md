@@ -19,7 +19,7 @@
 
 ## 平台支持
 
-目前支持 Windows x64。**计划支持 Linux（包括 NVIDIA DGX）和 macOS**。Linux/macOS 将使用 `curl | tar`，Windows 使用 `NSIS`/`MSI`。完成 SignPath Foundation 接入并获得手动批准后，Windows 发布安装程序会由 GitHub 托管的 CI 使用 Authenticode 签名；请验证发布的签名和 SHA-256 校验和。
+目前支持 Windows x64。**计划支持 Linux（包括 NVIDIA DGX）和 macOS**。Linux/macOS 将使用 `curl | tar`，Windows 使用 `NSIS`/`MSI`。Windows 安装程序由 GitHub 托管的 CI 构建，以未签名文件和 SHA-256 校验和的形式发布。
 
 ## 下载
 
@@ -29,13 +29,9 @@
 
 现有数据迁移与兼容性请参阅[迁移指南](../reference/migration.md)。
 
-## 代码签名政策 (Code signing policy)
+## 安全与隐私
 
-请参阅 [code-signing.md](../policies/code-signing.md) 和 [privacy.md](../policies/privacy.md)，了解签名范围、角色、发布审批、隐私和卸载政策。
-
-## 安全
-
-请参见 [security.zh.md](../policies/security.zh.md)。
+请参阅[安全政策](../policies/security.zh.md)和[隐私政策](../policies/privacy.md)。
 
 ## 许可证
 
