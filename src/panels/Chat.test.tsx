@@ -196,6 +196,24 @@ describe("ChatPanel document context warning", () => {
     expect(screen.queryByText(/first 64 document chunks/i)).not.toBeInTheDocument();
   });
 
+  it("keeps earlier answers in a multi-turn conversation and its saved history", async () => {
+    renderPanel();
+    await waitFor(() => expect(localStorage.getItem("llama-board.chat-workspace.v2")).not.toBeNull());
+    respondWithText("The first answer.");
+    await sendMessage("First question.");
+    await screen.findByText("The first answer.");
+    respondWithText("The second answer.");
+    await sendMessage("Second question.");
+    await screen.findByText("The second answer.");
+    expect(screen.getByText("The first answer.")).toBeInTheDocument();
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem("llama-board.chat-workspace.v2") ?? "null");
+      expect(saved.threads[0].messages.map((message: { content: string }) => message.content)).toEqual([
+        "First question.", "The first answer.", "Second question.", "The second answer.",
+      ]);
+    });
+  });
+
   it("keeps the truncation warning visible through an approved MCP tool follow-up", async () => {
     mocked.mcpListServers.mockResolvedValue([{ id: "srv1", name: "Test Server", command: "node", args: [], enabled: true }]);
     mocked.mcpListTools.mockResolvedValue([{ name: "test_tool", description: "A test tool.", input_schema: { type: "object", properties: {} } }]);
