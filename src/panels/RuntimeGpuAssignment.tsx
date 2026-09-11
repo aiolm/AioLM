@@ -3,6 +3,7 @@ import { CustomSelect } from "../components/ThemeSwitcher";
 import { useEffect, useRef, useState } from "react";
 import type * as api from "../api";
 import type { UnifiedKey, TranslationVars } from "../i18nUnified";
+import TuningOptionMetadata from './TuningOptionMetadata';
 import { cloneGpuPlacement, gpuDeviceLabel, gpuTensorSplitDrafts, parseGpuTensorSplits, toggleGpuSelection, missingGpuIds } from "../sessionUtils";
 
 interface Props {
@@ -81,6 +82,7 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
       {error && <div className="mt-3 rounded-lg border px-3 py-2 text-sm ui-border-color-error-border ui-background-error-bg ui-color-error-ink"  role="alert">{normalizeDisplayText(error)}</div>}
       {conflict && <div className="mt-3 text-sm" role="status">{t("ui.gpuExternalChange")}</div>}
       {missingGpuIds(draft, gpus).length > 0 && <p className="mt-3 text-sm" role="status">{t("ui.gpuMissingWarning")}</p>}
+      <TuningOptionMetadata fieldKey="raw-server:--device" />
       {gpus.length === 0 ? <p className="mt-3 text-sm ui-color-faint" >{t("ui.gpuNoDetected")}</p> : (
         <div className="mt-3 grid gap-2 app-form-grid">
           {gpus.map((gpu, index) => (
@@ -96,16 +98,20 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
       )}
       <div className="mt-4 grid gap-3 app-form-grid">
         <label className="text-sm ui-color-muted" >{t("ui.gpuMain")}
+          <TuningOptionMetadata fieldKey="raw-server:--main-gpu" />
           <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuMain")} value={draft.main_gpu ?? ""} disabled={disabled || selected.length === 0} onChange={value => setDraft((current) => ({ ...current, main_gpu: value || null }))} options={[{ value: "", label: t("ui.gpuAny") }, ...gpus.filter(gpu => selected.includes(gpu.stable_id)).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, gpus.indexOf(gpu)) }))]} />
         </label>
         <label className="text-sm ui-color-muted" >{t("ui.gpuDraft")}
+          <TuningOptionMetadata fieldKey="spec_draft_device" />
           <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuDraft")} value={draft.draft_gpu_id ?? ""} disabled={disabled} onChange={value => setDraft((current) => ({ ...current, draft_gpu_id: value || null }))} options={[{ value: "", label: t("ui.gpuAny") }, ...gpus.map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, gpus.indexOf(gpu)) }))]} />
         </label>
         <label className="text-sm ui-color-muted" >{t("ui.gpuSplitMode")}
-          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuSplitMode")} value={draft.split_mode} disabled={disabled} onChange={value => setDraft((current) => ({ ...current, split_mode: value as api.SplitMode }))} options={[{ value: "none", label: t("ui.gpuSplitNone") }, { value: "layer", label: t("ui.gpuSplitLayer") }, { value: "row", label: t("ui.gpuSplitRow") }]} />
+          <TuningOptionMetadata fieldKey="raw-server:--split-mode" />
+          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuSplitMode")} value={draft.split_mode} disabled={disabled} onChange={value => setDraft((current) => ({ ...current, split_mode: value as api.SplitMode }))} options={[{ value: "none", label: t("ui.gpuAny") }, { value: "single", label: t("ui.gpuSplitNone") }, { value: "layer", label: t("ui.gpuSplitLayer") }, { value: "row", label: t("ui.gpuSplitRow") }, { value: "tensor", label: "Tensor (experimental)" }]} />
         </label>
         <fieldset className="min-w-0 text-sm" disabled={disabled || selected.length < 2}>
           <legend className="ui-color-muted" >{t("ui.gpuTensorSplit")}</legend>
+          <TuningOptionMetadata fieldKey="raw-server:--tensor-split" />
           <label className="mt-1 flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={customSplit} onChange={(event) => setCustomSplit(event.target.checked)} />{t("ui.gpuCustomTensorSplit")}</label>
           {customSplit && <div className="mt-2 grid gap-2">
             {selected.map((id) => {

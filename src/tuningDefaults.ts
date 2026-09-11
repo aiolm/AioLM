@@ -1,6 +1,7 @@
 import type { AppConfig } from "./api";
 import type { JsonObject } from "./panels/tuningValidation";
 import catalog from "./tuningDefaultsCatalog.json";
+import { tuningResetValues } from './tuningResetValues';
 
 /** A reset omits overrides, so defaults follow the selected runtime and model. */
 export const RUNTIME_DEFAULT_KEYS = catalog.map((field) => field.key);
@@ -14,11 +15,16 @@ const chatAliases: Record<string, string[]> = {
   n_probs: ["n_probs", "logprobs", "top_logprobs"],
 };
 const cliAliases: Record<string, string[]> = {
+  top_n_sigma: ['--top-nsigma', '--top-n-sigma'], dynatemp_exponent: ['--dynatemp-exp'],
   typical_p: ["--typical", "--typical-p"], samplers: ["--samplers", "--sampler-seq", "--sampling-seq"],
   seed: ["--seed", "-s"], n_probs: ["--probs"],
   max_tokens: ["--predict", "--n-predict", "-n"],
   repeat_last_n: ["--repeat-last-n"], repeat_penalty: ["--repeat-penalty"],
 };
+
+export function serverAliasesForRequest(key: string): readonly string[] {
+  return catalog.find(field => field.key === key)?.args ?? cliAliases[key] ?? [`--${key.replace(/_/g, '-')}`];
+}
 
 export function removeArgs(args: readonly string[], names: readonly string[], isSwitch = false): string[] {
   const result: string[] = [];
@@ -47,12 +53,23 @@ export function removeChatOverride(options: JsonObject, key: string): JsonObject
   return next;
 }
 
-export function resetTuningField(cfg: AppConfig, key: string): Partial<AppConfig> {
+export function canonicalResetKey(key: string): string {
+  if (key.startsWith('raw-server:')) return catalog.find(field => field.args.includes(key.slice(11)))?.key ?? key;
+  if (key.startsWith('raw-chat:')) {
+    const name = key.slice(9);
+    return Object.entries(chatAliases).find(([, aliases]) => aliases.includes(name))?.[0] ?? name;
+  }
+  return key;
+}
+
+export function resetTuningField(cfg: AppConfig, key: string, values = tuningResetValues()): Partial<AppConfig> {
+  key = canonicalResetKey(key);
   if (key.startsWith("raw-server:")) return { runtime_defaults: [...(cfg.runtime_defaults ?? [])], server_args: removeArgs(cfg.server_args, [key.slice(11)]) };
   if (key.startsWith("raw-chat:")) return { runtime_defaults: [...(cfg.runtime_defaults ?? [])], chat_options: removeChatOverride(cfg.chat_options, key.slice(9)) };
   const field = catalog.find((entry) => entry.key === key);
   const names = field?.args ?? cliAliases[key] ?? [`--${key.replace(/_/g, "-")}`];
   return {
+    ...(field ? { [key]: values[key as keyof AppConfig] } : {}),
     runtime_defaults: field ? [...new Set([...(cfg.runtime_defaults ?? []), key])] : [...(cfg.runtime_defaults ?? [])],
     server_args: removeArgs(cfg.server_args, names, field?.switch),
     chat_options: removeChatOverride(cfg.chat_options, key),
@@ -61,14 +78,14 @@ export function resetTuningField(cfg: AppConfig, key: string): Partial<AppConfig
 
 export function hasChatOverride(cfg: AppConfig, key: string): boolean {
   const names = chatAliases[key] ?? [key];
-  const flags = cliAliases[key] ?? [`--${key.replace(/_/g, "-")}`];
+  const flags = serverAliasesForRequest(key);
   return names.some((name) => cfg.chat_options[name] !== undefined)
     || cfg.server_args.some((arg) => flags.includes(arg.split("=", 1)[0]));
 }
 
-export function resetAllTuning(): Partial<AppConfig> {
+export function resetAllTuning(values = tuningResetValues()): Partial<AppConfig> {
   // Paths, adapters, GPU placement, runtime, sessions and saved profiles are not tuning values.
-  return { runtime_defaults: [...RUNTIME_DEFAULT_KEYS], server_args: [], chat_options: {} };
+  return { ...values, runtime_defaults: [...RUNTIME_DEFAULT_KEYS], server_args: [], chat_options: {} };
 }
 
 /** Explicit edits opt back into an override. Run against the latest queued config. */

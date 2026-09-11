@@ -1,14 +1,22 @@
-import { useMemo, useState, type ReactNode } from "react";
+import StableLabel from "../components/StableLabel";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AppStore } from "../store";
 import { useI18n } from "../i18n";
 import { useTuningController } from "./useTuningController";
 import TuningNavigation from "./TuningNavigation";
 import TuningPresetBar from "./TuningPresetBar";
 import { TuningDefaultsContext } from "./TuningDefaultField";
+import { TuningOptionsContext } from './TuningOptionMetadata';
 import TuningServerSection from "./TuningServerSection";
 import TuningReasoningSection from "./TuningReasoningSection";
 import TuningSamplingSection from "./TuningSamplingSection";
 import TuningEscapeSection from "./TuningEscapeSection";
+import TuningServerOptions from './TuningServerOptions';
+import { useServerOptions } from './useServerOptions';
+import { tuningDisplayConfig } from './tuningResetState';
+import { serverOptionMatches } from '../serverOptions';
+import { serverOptionsText } from '../serverOptionsI18n';
+import type { ViewId } from '../navigation';
 import {
   MTP_FIELDS,
   SERVER_FIELDS,
@@ -29,6 +37,7 @@ const SECTION_TO_CATEGORY: Record<TuningSection, TuningCategoryId> = {
   sampling: "sampling",
   reasoning: "reasoning",
   escape: "advanced",
+  options: "options",
 };
 
 function categoryMatchesSearch(category: (typeof TUNING_CATEGORIES)[number], query: string, t: ReturnType<typeof useI18n>["t"]): boolean {
@@ -48,19 +57,31 @@ function visibleFields<T extends { category: TuningCategoryId; advancedOnly?: bo
 }
 
 /** Tuning panel: server-side values require restart; sampling applies next chat. */
-export default function TuningPanel({ store, section = "server" }: { store: AppStore; section?: TuningSection }) {
-  const { t } = useI18n();
-  const tuning = useTuningController(store);
-  const { cfg } = tuning;
+export default function TuningPanel({ store, section = "server", onNavigate }: { store: AppStore; section?: TuningSection; onNavigate?: (view: ViewId) => void }) {
+  const { t, locale } = useI18n();
+  const runtime = useServerOptions(store.cfg?.active_backend ?? '', store.cfg?.active_build ?? '');
+  const tuning = useTuningController(store, runtime.options);
+  const cfg = useMemo(() => tuning.cfg ? tuningDisplayConfig(tuning.cfg, runtime.options) : null, [tuning.cfg, runtime.options]);
   const [mode, setMode] = useState<TuningViewMode>("quick");
   const [activeCategory, setActiveCategory] = useState<TuningCategoryId>(SECTION_TO_CATEGORY[section]);
   const [query, setQuery] = useState("");
+  const panelRef = useRef<HTMLDivElement>(null);
+  const optionCopy = serverOptionsText[locale];
 
   const visibleCategories = useMemo(
-    () => TUNING_CATEGORIES.filter((category) => (query.trim() || category.modes.includes(mode)) && categoryMatchesSearch(category, query, t)),
-    [mode, query, t],
+    () => TUNING_CATEGORIES.map(category => category.id === 'options' ? { ...category, label: optionCopy.title, description: optionCopy.description } : category)
+      .filter((category) => (query.trim() || category.modes.includes(mode)) && (category.id === 'options'
+        ? !query.trim() || runtime.options.some(option => serverOptionMatches(option, query)) || category.label.includes(query)
+        : categoryMatchesSearch(category, query, t))),
+    [mode, query, t, optionCopy, runtime.options],
   );
   const selectedCategory = visibleCategories.find((category) => category.id === activeCategory) ?? visibleCategories[0] ?? null;
+  useEffect(() => {
+    if (!panelRef.current) return;
+    panelRef.current.scrollTop = 0;
+    const content = panelRef.current.querySelector('.tuning-panel-scroll');
+    if (content) content.scrollTop = 0;
+  }, [selectedCategory?.id]);
 
   if (!cfg) {
     return (
@@ -74,6 +95,11 @@ export default function TuningPanel({ store, section = "server" }: { store: AppS
 
   const renderSection = (category: (typeof TUNING_CATEGORIES)[number] | null): ReactNode => {
     const current = category?.section ?? null;
+    const renderOptions = (memoryOnly = false) => <TuningServerOptions cfg={cfg} runtime={runtime}
+      disabled={tuning.configMutationsDisabled} rawDirty={tuning.serverArgsDirty} onSave={tuning.saveServerOption}
+      query={memoryOnly ? '' : query} memoryOnly={memoryOnly} onNavigate={onNavigate}
+      onCategory={next => { setQuery(''); setMode('advanced'); setActiveCategory(next); }} />;
+    if (current === 'options') return renderOptions();
     if (current === "server") {
       const categoryId = category?.id ?? "runtime";
       const fieldMode = query.trim() ? "advanced" : mode;
@@ -81,7 +107,7 @@ export default function TuningPanel({ store, section = "server" }: { store: AppS
         ? visibleFields(MTP_FIELDS, categoryId, fieldMode)
         : visibleFields(SERVER_FIELDS, categoryId, fieldMode);
       return (
-        <TuningServerSection
+        <><TuningServerSection
           t={t}
           cfg={cfg}
           disabled={tuning.configMutationsDisabled}
@@ -101,7 +127,7 @@ export default function TuningPanel({ store, section = "server" }: { store: AppS
           showProjector={categoryId === "multimodal"}
           showSpeculative={categoryId === "speculative"}
           showCacheTypes={categoryId === "context"}
-        />
+        />{categoryId === 'context' && renderOptions(true)}</>
       );
     }
     if (current === "reasoning") {
@@ -172,7 +198,7 @@ export default function TuningPanel({ store, section = "server" }: { store: AppS
   };
 
   return (
-    <div className="tuning-redesign tuning-panel relative flex h-full min-h-0 flex-col" data-tuning-mode={mode} data-tuning-category={selectedCategory?.id ?? "none"}>
+    <div ref={panelRef} className="tuning-redesign tuning-panel relative flex h-full min-h-0 flex-col" data-tuning-mode={mode} data-tuning-category={selectedCategory?.id ?? "none"}>
       <div className="tuning-redesign__body">
         <TuningNavigation
           categories={visibleCategories}
@@ -211,23 +237,25 @@ export default function TuningPanel({ store, section = "server" }: { store: AppS
             />
             {selectedCategory ? (
               <div className="tuning-category-heading">
-                <h2>{t(`extra.${selectedCategory.labelKey}` as never) || selectedCategory.label}</h2>
-                <p>{t(`extra.${selectedCategory.descriptionKey}` as never) || selectedCategory.description}</p>
+                <h2>{selectedCategory.labelKey ? t(`extra.${selectedCategory.labelKey}` as never) : selectedCategory.label}</h2>
+                <p>{selectedCategory.descriptionKey ? t(`extra.${selectedCategory.descriptionKey}` as never) : selectedCategory.description}</p>
               </div>
             ) : (
               <div className="tuning-navigation__empty" role="status">{t("extra.noSettingsMatchQuery", { query })}</div>
             )}
-            <TuningDefaultsContext.Provider key={tuning.defaultsRevision} value={{ cfg, disabled: tuning.configMutationsDisabled, reset: (key) => void tuning.resetRuntimeDefaults(key) }}>
+            <TuningDefaultsContext.Provider key={tuning.defaultsRevision} value={{ cfg: tuning.cfg!, disabled: tuning.configMutationsDisabled, reset: (key) => void tuning.resetRuntimeDefaults(key) }}>
+              <TuningOptionsContext.Provider value={runtime}>
               {renderSection(selectedCategory)}
+              </TuningOptionsContext.Provider>
             </TuningDefaultsContext.Provider>
           </div>
         </div>
       </div>
       <footer className="tuning-apply-footer">
         <p>{t("ui.tuningSaveHint")}</p>
-        {(store.status.state === "running" || tuning.phase === "applying") && <button type="button" className="app-button app-button--primary" onClick={() => void tuning.applyRestart()} disabled={tuning.configMutationsDisabled || !cfg.active_model}>
-          {tuning.phase === "applying" ? t("extra.applying") : t("extra.applyRestart")}
-        </button>}
+        <button type="button" className="app-button app-button--primary" onClick={() => void tuning.applyRestart()} disabled={tuning.configMutationsDisabled || !cfg.active_model || store.status.state !== "running"}>
+          <StableLabel value={tuning.phase === "applying" ? t("extra.applying") : t("extra.applyRestart")} labels={[t("extra.applying"), t("extra.applyRestart")]} />
+        </button>
       </footer>
     </div>
   );

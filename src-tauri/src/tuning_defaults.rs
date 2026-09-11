@@ -9,6 +9,10 @@ struct Field {
     args: Vec<String>,
     #[serde(default, rename = "switch")]
     is_switch: bool,
+    #[serde(default, rename = "appDefault")]
+    app_default: bool,
+    #[serde(default, rename = "resetValue")]
+    reset_value: serde_json::Value,
 }
 
 static FIELDS: LazyLock<Vec<Field>> = LazyLock::new(|| {
@@ -18,6 +22,14 @@ static FIELDS: LazyLock<Vec<Field>> = LazyLock::new(|| {
 
 pub fn is_known(key: &str) -> bool {
     FIELDS.iter().any(|field| field.key == key)
+}
+
+pub fn app_default_u32(key: &str) -> u32 {
+    FIELDS
+        .iter()
+        .find(|field| field.key == key && field.app_default)
+        .and_then(|field| field.reset_value.as_u64())
+        .expect("app default must be numeric") as u32
 }
 
 pub fn inherited(cfg: &AppConfig, key: &str) -> bool {
@@ -49,6 +61,16 @@ pub fn filter_args(cfg: &AppConfig, args: Vec<String>) -> Vec<String> {
             if !field.is_switch && !token.contains('=') {
                 tokens.next();
             }
+            if field.app_default {
+                result.push(name.to_owned());
+                result.push(
+                    field
+                        .reset_value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| field.reset_value.to_string()),
+                );
+            }
         } else {
             result.push(token);
         }
@@ -72,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn full_reset_omits_tuning_but_preserves_model_runtime_and_gpu_arguments() {
+    fn full_reset_applies_app_defaults_and_omits_other_runtime_defaults() {
         let cfg = AppConfig {
             active_model: "model.gguf".into(),
             mmproj: "vision.gguf".into(),
@@ -90,6 +112,9 @@ mod tests {
         };
         let args = crate::server::build_args_with_gpu(&cfg, "secret", &gpu);
         for field in FIELDS.iter() {
+            if field.app_default {
+                continue;
+            }
             for alias in &field.args {
                 assert!(!args.contains(alias), "retained {alias}");
             }
@@ -104,7 +129,11 @@ mod tests {
         assert!(!args.contains(&"--spec-draft-model".into()));
         assert!(args.windows(2).any(|pair| pair == ["--host", "127.0.0.1"]));
         let bench = crate::bench::build_args(&cfg);
-        assert!(!bench.contains(&"--n-gpu-layers".into()));
+        assert!(args.windows(2).any(|pair| pair == ["--n-gpu-layers", "99"]));
+        assert!(args.windows(2).any(|pair| pair == ["--ctx-size", "4096"]));
+        assert!(bench
+            .windows(2)
+            .any(|pair| pair == ["--n-gpu-layers", "99"]));
         assert!(!bench.contains(&"--threads".into()));
         assert!(bench.contains(&"--repetitions".into()));
     }
@@ -125,10 +154,10 @@ mod tests {
         ];
         assert_eq!(
             filter_args(&cfg, args.map(String::from).to_vec()),
-            vec!["--keep", "64"]
+            vec!["--ctx-size", "4096", "--keep", "64", "--ctx-size", "4096"]
         );
         let args = crate::server::build_args(&cfg, "secret");
-        assert!(!args.contains(&"--ctx-size".into()));
+        assert!(args.windows(2).any(|pair| pair == ["--ctx-size", "4096"]));
         assert!(args.contains(&"--n-gpu-layers".into()));
     }
 
@@ -149,5 +178,28 @@ mod tests {
             .is_empty());
         cfg.runtime_defaults.push("--model".into());
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn old_manual_gpu_count_cannot_override_app_default_and_context_zero_survives() {
+        let mut cfg = AppConfig {
+            ngl: 12,
+            ctx_size: 0,
+            runtime_defaults: vec!["ngl".into()],
+            ..AppConfig::default()
+        };
+        cfg.normalize();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.ctx_size, 0);
+        assert_eq!(AppConfig::default().ngl, 99);
+        let args = crate::server::build_args(&cfg, "secret");
+        assert!(args.windows(2).any(|pair| pair == ["--n-gpu-layers", "99"]));
+        let manual = AppConfig {
+            runtime_defaults: vec![],
+            ..cfg
+        };
+        assert!(crate::server::build_args(&manual, "secret")
+            .windows(2)
+            .any(|pair| pair == ["--n-gpu-layers", "12"]));
     }
 }

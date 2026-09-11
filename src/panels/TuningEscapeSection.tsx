@@ -1,5 +1,5 @@
 import type { UnifiedKey, TranslationVars } from "../i18nUnified";
-import { normalizeDisplayPathLines } from "../lifecycleUtils";
+import { normalizeDisplayPathLines, normalizeDisplayText } from "../lifecycleUtils";
 import TuningRawDefaults from "./TuningRawDefaults";
 
 interface Props {
@@ -21,15 +21,15 @@ export default function TuningEscapeSection({
   chatOptionsDraft, onChatOptionsChange, chatOptionsDirty, onSaveChatOptions,
 }: Props) {
   return (
-    <section className="tuning-section tuning-section--escape min-w-0 rounded-xl border border-slate-700 app-bg-muted p-4 lg:col-span-2">
+    <section className="tuning-section tuning-section--escape min-w-0 rounded-xl border border-line-strong app-bg-muted p-4">
       <h2 className="app-section-title">{t("section.escape")}</h2>
       <p className="app-section-hint mb-4">{t("ui.escapeHint")}</p>
       <div className="tuning-advanced-error-slot mb-3">
-        {advancedError && <div className="break-words rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-sm text-red-200" role="alert">{advancedError}</div>}
+        {advancedError && <div className="break-words rounded-lg border border-error-line bg-error-soft/50 px-3 py-2 text-sm text-error" role="alert">{normalizeDisplayText(advancedError)}</div>}
       </div>
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      <div className="grid gap-5 app-form-grid">
         <div className="min-w-0">
-          <label htmlFor="tuning-server-args" className="text-sm font-medium text-slate-300">{t("ui.serverArgsLabel")}</label>
+          <label htmlFor="tuning-server-args" className="text-sm font-medium text-ink">{t("ui.serverArgsLabel")}</label>
           <p className="app-section-hint mb-2">{t("ui.serverArgsHint")}</p>
           <textarea
             id="tuning-server-args"
@@ -51,11 +51,11 @@ export default function TuningEscapeSection({
             >
               {t("extra.saveServerArguments")}
             </button>
-            <span className="text-xs text-amber-400">{t("ui.restartRequiredShort")}</span>
+            <span className="text-xs text-warning">{t("ui.restartRequiredShort")}</span>
           </div>
         </div>
         <div className="min-w-0">
-          <label htmlFor="tuning-chat-options" className="text-sm font-medium text-slate-300">{t("ui.chatOptionsLabel")}</label>
+          <label htmlFor="tuning-chat-options" className="text-sm font-medium text-ink">{t("ui.chatOptionsLabel")}</label>
           <p className="app-section-hint mb-2">{t("ui.chatOptionsHint")}</p>
           <textarea
             id="tuning-chat-options"
@@ -77,7 +77,7 @@ export default function TuningEscapeSection({
             >
               {t("extra.saveChatOptions")}
             </button>
-            <span className="text-xs text-emerald-400">{t("ui.nextMessageShort")}</span>
+            <span className="text-xs text-success">{t("ui.nextMessageShort")}</span>
           </div>
         </div>
       </div>

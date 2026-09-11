@@ -465,6 +465,17 @@ mod tests {
     }
 
     #[test]
+    fn explicit_single_and_tensor_modes_are_distinct_from_inheritance() {
+        assert_eq!(SplitMode::None.as_flag_value(), None);
+        assert_eq!(SplitMode::Single.as_flag_value(), Some("none"));
+        assert_eq!(SplitMode::Tensor.as_flag_value(), Some("tensor"));
+        for mode in [SplitMode::Single, SplitMode::Tensor] {
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(serde_json::from_str::<SplitMode>(&json).unwrap(), mode);
+        }
+    }
+
+    #[test]
     fn draft_gpu_id_resolves_independently_of_the_main_device_list() {
         let main = gpu(GpuVendor::Nvidia, "main-0");
         let draft = GpuDevice {

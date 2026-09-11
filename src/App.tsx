@@ -203,7 +203,7 @@ export default function App() {
           {panel("lora", <ModelsPanel store={store} focus="lora" />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
           {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} />)}
-          {panel("tuning", <TuningPanel store={store} />)}
+          {panel("tuning", <TuningPanel store={store} onNavigate={navigate} />)}
           {panel("profiles", <div className="app-page-scroll"><ProfilesPanel store={store} modelPath={store.cfg?.active_model ?? ""} onOpenTuning={openTuning} /></div>)}
           {panel("benchmark", <BenchPanel store={store} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>

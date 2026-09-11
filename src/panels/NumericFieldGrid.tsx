@@ -38,7 +38,7 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
             onCommit={(value) => onCommit(field, value)}
             disabled={disabled}
             labelExtra={<Tooltip content={tooltip} label={`Help for ${label}`} id={`${inputId}-help`} />}
-            valueMeta={<span className={`shrink-0 text-[10px] ${field.server ? "text-amber-400" : "text-emerald-400"}`}>
+            valueMeta={<span className={`shrink-0 text-xs ${field.server ? "text-warning" : "text-success"}`}>
               {field.server ? t("extra.serverSide") : t("extra.perRequest")}
             </span>}
           /></TuningDefaultField>

@@ -37,10 +37,10 @@ export default function TuningChatOptionField({
     <TuningDefaultField fieldKey={field.key} label={label} request><div className="flex min-w-0 flex-col gap-1.5">
       {field.options && <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          <label htmlFor={inputId} className="truncate text-sm text-slate-300">{label}</label>
+          <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
           <Tooltip content={tooltip} label={`Help for ${label}`} id={`${inputId}-help`} />
         </div>
-        <span className="shrink-0 text-[10px] text-emerald-400">{t("extra.perRequest")}</span>
+        <span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>
       </div>}
       {field.options ? (
         <>
@@ -82,7 +82,7 @@ export default function TuningChatOptionField({
                 onBlur={(event) => onCommit(field, event.currentTarget.value)}
                 onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
                 disabled={disabled}
-                className="w-full min-w-0 rounded-lg border border-slate-700 app-bg-muted px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                className="w-full min-w-0 rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
               />
             )}
           </div>
@@ -100,10 +100,10 @@ export default function TuningChatOptionField({
           onCommit={(value) => onCommit(field, value)}
           disabled={disabled}
           labelExtra={<Tooltip content={tooltip} label={`Help for ${label}`} id={`${inputId}-slider-help`} />}
-          valueMeta={<span className="shrink-0 text-[10px] text-emerald-400">{t("extra.perRequest")}</span>}
+          valueMeta={<span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>}
         />
       )}
-      <span className="text-xs text-slate-500">{hint}</span>
+      {field.options && <span className="text-xs text-muted">{hint}</span>}
     </div></TuningDefaultField>
   );
 }

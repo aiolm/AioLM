@@ -15,11 +15,12 @@ const cfg = {
 describe("runtime-owned tuning defaults", () => {
   it("resets all overrides without touching model files, placement, runtime or sessions", () => {
     const reset = resetAllTuning();
-    expect(Object.keys(reset).sort()).toEqual(["chat_options", "runtime_defaults", "server_args"]);
+    expect(Object.keys(reset).sort()).toEqual([...RUNTIME_DEFAULT_KEYS, "chat_options", "runtime_defaults", "server_args"].sort());
     const next = { ...cfg, ...reset };
     expect(next.runtime_defaults).toEqual(RUNTIME_DEFAULT_KEYS);
     expect(next.server_args).toEqual([]);
     expect(next.chat_options).toEqual({});
+    expect(next).toMatchObject({ ngl: 99, ctx_size: 4096, temperature: 0.8, top_p: 0.95, top_k: 40, reasoning: 'auto', reasoning_effort: 'default' });
     for (const key of ["active_model", "spec_draft_model", "mmproj", "active_backend", "active_build", "port", "gpu", "sessions"] as const) expect(next[key]).toEqual(cfg[key]);
     expect(cfg.server_args).toHaveLength(6);
   });
@@ -30,6 +31,7 @@ describe("runtime-owned tuning defaults", () => {
     expect(next.server_args).toEqual(["--seed=-1", "--mirostat-lr", "0.7", "--no-mmap"]);
     expect(next.chat_options).toEqual({ mirostat_eta: 0.4, min_p: 0.2, seed: 17 });
     expect(next.top_k).toBe(20);
+    expect(next.temperature).toBe(0.8);
   });
 
   it("removes request aliases and CLI equivalents of an advanced sampler", () => {
@@ -38,6 +40,16 @@ describe("runtime-owned tuning defaults", () => {
     expect(hasChatOverride(next, "mirostat_lr")).toBe(false);
     expect(next.chat_options.min_p).toBe(0.2);
     expect(next.server_args).toContain("--seed=-1");
+  });
+
+  it('forgets typed mirrors when a raw CLI or JSON alias is reset', () => {
+    for (const key of ['raw-server:--temp', 'raw-chat:temperature', 'raw-chat:temp']) {
+      const next = { ...cfg, ...resetTuningField(cfg, key) };
+      expect(next.temperature).toBe(0.8);
+      expect(next.runtime_defaults).toContain('temperature');
+      expect(next.server_args).not.toContain('--temp');
+      expect(next.chat_options).not.toHaveProperty('temperature');
+    }
   });
 
   it("removes equals, negative and repeated values without eating the next flag", () => {

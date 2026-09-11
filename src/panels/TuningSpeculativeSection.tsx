@@ -4,6 +4,7 @@ import { CustomSelect } from "../components/ThemeSwitcher";
 import type { UnifiedKey, TranslationVars } from "../i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
+import TuningOptionMetadata from './TuningOptionMetadata';
 import { MTP_FIELDS, SERVER_TEXT_FIELDS, tuningFieldTooltip, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import { SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "./tuningValidation";
 
@@ -34,17 +35,17 @@ export default function TuningSpeculativeSection({
     return field ? tuningFieldTooltip(t as never, field) : undefined;
   };
   return (
-    <div className="mt-5 rounded-lg border border-slate-700/80 bg-slate-900/40 p-3">
+    <div className="mt-5 rounded-lg border border-line-strong/80 bg-surface/40 p-3">
       <h3 className="app-section-title">{t("ui.specTitle")}</h3>
       <p className="app-section-hint mb-4">{t("ui.specHint")}</p>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 app-form-grid">
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <label htmlFor="tuning-spec-type" className="text-sm text-slate-300">{t("ui.specTypeLabel")}</label>
+              <label htmlFor="tuning-spec-type" className="text-sm text-ink">{t("ui.specTypeLabel")}</label>
               {tooltipFor("spec_type") && <Tooltip content={tooltipFor("spec_type")!} label={`Help for ${t("ui.specTypeLabel")}`} id="tuning-spec-type-help" />}
             </div>
-            <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
+            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <TuningDefaultField fieldKey="spec_type" label={t("ui.specTypeLabel")} hideLabel><CustomSelect
             id="tuning-spec-type"
@@ -71,15 +72,15 @@ export default function TuningSpeculativeSection({
               />
             )}
           </div>
-          </TuningDefaultField><span className="text-xs text-slate-500">{t("ui.specTypeHint")}</span>
+          </TuningDefaultField><span className="text-xs text-muted">{t("ui.specTypeHint")}</span>
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <label htmlFor="tuning-spec-draft-ngl" className="text-sm text-slate-300">{t("ui.specDraftNglLabel")}</label>
+              <label htmlFor="tuning-spec-draft-ngl" className="text-sm text-ink">{t("ui.specDraftNglLabel")}</label>
               {tooltipFor("spec_draft_ngl") && <Tooltip content={tooltipFor("spec_draft_ngl")!} label={`Help for ${t("ui.specDraftNglLabel")}`} id="tuning-spec-draft-ngl-help" />}
             </div>
-            <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
+            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <TuningDefaultField fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")} hideLabel><CustomSelect
             id="tuning-spec-draft-ngl"
@@ -107,15 +108,15 @@ export default function TuningSpeculativeSection({
               />
             )}
           </div>
-          </TuningDefaultField><span className="text-xs text-slate-500">{t("ui.specDraftNglHint")}</span>
+          </TuningDefaultField><span className="text-xs text-muted">{t("ui.specDraftNglHint")}</span>
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <label htmlFor="tuning-spec-draft-device" className="text-sm text-slate-300">{t("ui.specDraftDeviceLabel")}</label>
+              <label htmlFor="tuning-spec-draft-device" className="text-sm text-ink">{t("ui.specDraftDeviceLabel")}</label>
               {tooltipFor("spec_draft_device") && <Tooltip content={tooltipFor("spec_draft_device")!} label={`Help for ${t("ui.specDraftDeviceLabel")}`} id="tuning-spec-draft-device-help" />}
             </div>
-            <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
+            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <input
             id="tuning-spec-draft-device"
@@ -125,17 +126,18 @@ export default function TuningSpeculativeSection({
             onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
             disabled={disabled}
             placeholder={t("ui.specDraftDevicePlaceholder")}
-            className="w-full rounded-lg border border-slate-700 app-bg-muted px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
           />
-          <span className="text-xs text-slate-500">{t("ui.specDraftDeviceHint")}</span>
+          <span className="text-xs text-muted">{t("ui.specDraftDeviceHint")}</span>
+          <TuningOptionMetadata fieldKey="spec_draft_device" />
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <label htmlFor="tuning-spec-draft-model" className="text-sm text-slate-300">{t("ui.specDraftModelLabel")}</label>
+              <label htmlFor="tuning-spec-draft-model" className="text-sm text-ink">{t("ui.specDraftModelLabel")}</label>
               {tooltipFor("spec_draft_model") && <Tooltip content={tooltipFor("spec_draft_model")!} label={`Help for ${t("ui.specDraftModelLabel")}`} id="tuning-spec-draft-model-help" />}
             </div>
-            <span className="shrink-0 text-[10px] text-amber-400">{t("extra.serverSide")}</span>
+            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <input
             id="tuning-spec-draft-model"
@@ -145,12 +147,13 @@ export default function TuningSpeculativeSection({
             onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
             disabled={disabled}
             placeholder={t("ui.specDraftModelPlaceholder")}
-            className="w-full rounded-lg border border-slate-700 app-bg-muted px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
           />
-          <span className="text-xs text-slate-500">{t("ui.specDraftModelHint")}</span>
+          <span className="text-xs text-muted">{t("ui.specDraftModelHint")}</span>
+          <TuningOptionMetadata fieldKey="spec_draft_model" />
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="mt-4 grid gap-4 app-form-grid">
         <NumericFieldGrid fields={MTP_FIELDS} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} />
       </div>
     </div>

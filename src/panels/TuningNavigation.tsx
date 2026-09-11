@@ -1,3 +1,4 @@
+import StableLabel from "../components/StableLabel";
 import { useRef, type KeyboardEvent } from "react";
 import { useI18n } from "../i18n";
 import { TUNING_CONTENT_PANEL_ID, type TuningCategory, type TuningCategoryId, type TuningViewMode } from "./tuningFields";
@@ -95,7 +96,7 @@ export default function TuningNavigation({
               className={`tuning-mode-tab ${isActive ? "is-active" : ""}`}
               onClick={() => onModeChange(value)}
             >
-              {value === "quick" ? t("extra.quickMode") : t("extra.advancedMode")}
+              <StableLabel value={value === "quick" ? t("extra.quickMode") : t("extra.advancedMode")} labels={[t("extra.quickMode"), t("extra.advancedMode")]} />
             </button>
           );
         })}
@@ -125,7 +126,7 @@ export default function TuningNavigation({
         )}
       </div>
 
-      <div className="tuning-navigation__caption">{t("extra.categories")}</div>
+      <div className="sr-only">{t("extra.categories")}</div>
       <nav className="tuning-navigation__categories" aria-label={t("extra.tuningCategoriesLabel")}>
         {categories.map((category, index) => {
           const isActive = category.id === activeCategory;
@@ -138,12 +139,12 @@ export default function TuningNavigation({
               aria-current={isActive ? "true" : undefined}
               aria-controls={TUNING_CONTENT_PANEL_ID}
               tabIndex={isActive ? 0 : -1}
-              title={t(`extra.${category.descriptionKey}` as never) || category.description}
+              title={category.descriptionKey ? t(`extra.${category.descriptionKey}` as never) : category.description}
               onClick={() => onSelectCategory(category.id)}
               onKeyDown={(event) => handleCategoryKeyDown(event, index)}
               data-tuning-category={category.id}
             >
-              <span className="tuning-category-link__label">{t(`extra.${category.labelKey}` as never) || category.label}</span>
+              <span className="tuning-category-link__label">{category.labelKey ? t(`extra.${category.labelKey}` as never) : category.label}</span>
               <span className="tuning-category-link__chevron"><ChevronIcon /></span>
             </button>
           );

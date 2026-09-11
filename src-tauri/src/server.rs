@@ -477,8 +477,11 @@ pub fn build_args_with_gpu(
     ) {
         args.push("--no-webui".into());
     }
+    // Runtime-default markers apply to dedicated controls. Explicit raw/catalog
+    // overrides (e.g. --top-p) must survive even when the request control inherits.
+    let mut args = crate::tuning_defaults::filter_args(cfg, args);
     append_unmanaged_server_args(&mut args, &cfg.server_args);
-    crate::tuning_defaults::filter_args(cfg, args)
+    args
 }
 
 /// Keep legacy/current raw config values from creating a second copy of an
@@ -984,6 +987,33 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn catalog_options_reach_the_server_without_request_defaults_removing_them() {
+        let cfg = crate::config::AppConfig {
+            server_args: vec![
+                "--no-mmap".into(),
+                "--mlock".into(),
+                "--threads-batch".into(),
+                "12".into(),
+                "--top-p".into(),
+                "0.8".into(),
+                "--cache-ram".into(),
+                "-1".into(),
+            ],
+            runtime_defaults: vec!["top_p".into()],
+            cache_type_k: "iq4_nl".into(),
+            ..Default::default()
+        };
+        let mut roundtrip: crate::config::AppConfig =
+            serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        roundtrip.normalize();
+        assert_eq!(roundtrip.cache_type_k, "iq4_nl");
+        let args = super::build_args(&roundtrip, "secret");
+        assert!(args.ends_with(&cfg.server_args));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--cache-type-k", "iq4_nl"]));
+    }
     use super::*;
 
     #[test]

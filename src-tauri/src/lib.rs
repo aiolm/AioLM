@@ -2446,6 +2446,7 @@ mod tests {
             ..config::AppConfig::default()
         };
         let mut capabilities = runtime::RuntimeCapabilities {
+            server_help: String::new(),
             backend: "vulkan".into(),
             build: "test".into(),
             executable: "llama-server".into(),

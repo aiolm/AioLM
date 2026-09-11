@@ -10,7 +10,9 @@ const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
 const MAX_CHAT_OPTIONS_BYTES: usize = 262_144;
-const CACHE_TYPES: &[&str] = &["f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1"];
+const CACHE_TYPES: &[&str] = &[
+    "f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl",
+];
 
 // Keep this list in sync with tuningValidation.ts.  These are all spellings
 // of options whose value is owned by AppConfig or by the server lifecycle;
@@ -29,6 +31,7 @@ pub(crate) const APP_MANAGED_SERVER_ARGS: &[&str] = &[
     "-mm",
     "--mmproj",
     "--mmproj-url",
+    "-mmu",
     "--mmproj-auto",
     "--no-mmproj",
     "--no-mmproj-auto",
@@ -69,6 +72,7 @@ pub(crate) const APP_MANAGED_SERVER_ARGS: &[&str] = &[
     "--spec-draft-ngl",
     "--gpu-layers-draft",
     "--n-gpu-layers-draft",
+    "-ngld",
     "--spec-draft-device",
     "-devd",
     "--device-draft",
@@ -125,16 +129,21 @@ fn default_lora_enabled() -> bool {
 pub enum SplitMode {
     #[default]
     None,
+    /// Explicit --split-mode none; legacy None keeps inheriting the runtime default.
+    Single,
     Layer,
     Row,
+    Tensor,
 }
 
 impl SplitMode {
     pub fn as_flag_value(self) -> Option<&'static str> {
         match self {
             Self::None => None,
+            Self::Single => Some("none"),
             Self::Layer => Some("layer"),
             Self::Row => Some("row"),
+            Self::Tensor => Some("tensor"),
         }
     }
 }
@@ -457,8 +466,8 @@ impl Default for AppConfig {
                 .to_string_lossy()
                 .into_owned(),
             port: 8080,
-            ngl: 0,
-            ctx_size: 4096,
+            ngl: crate::tuning_defaults::app_default_u32("ngl"),
+            ctx_size: crate::tuning_defaults::app_default_u32("ctx_size"),
             batch_size: default_batch_size(),
             ubatch_size: default_ubatch_size(),
             keep: default_keep(),
@@ -508,7 +517,9 @@ impl AppConfig {
             self.port = 8080;
         }
         self.ngl = self.ngl.min(128);
-        self.ctx_size = self.ctx_size.clamp(512, 131_072);
+        if self.ctx_size != 0 {
+            self.ctx_size = self.ctx_size.clamp(512, 131_072);
+        }
         self.batch_size = self.batch_size.clamp(1, 131_072);
         self.ubatch_size = self.ubatch_size.clamp(1, self.batch_size);
         self.keep = self.keep.min(131_072);
@@ -1151,7 +1162,7 @@ mod tests {
             .models_dir
             .replace('\\', "/")
             .ends_with("/.aiolm/models"));
-        assert_eq!(cfg.ngl, 0);
+        assert_eq!(cfg.ngl, 99);
         assert_eq!(cfg.ctx_size, 4096);
         assert_eq!(cfg.batch_size, 2048);
         assert_eq!(cfg.ubatch_size, 512);

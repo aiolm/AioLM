@@ -1,5 +1,6 @@
 import PanelFeedback from "../components/PanelFeedback";
 import StableLabel from "../components/StableLabel";
+import { useMemo } from 'react';
 import type { AppStore } from "../store";
 import ConfirmDialog from "../components/ConfirmDialog";
 import FeedbackBanner from "../components/FeedbackBanner";
@@ -16,12 +17,16 @@ import RuntimeBackendList from "./RuntimeBackendList";
 import PullRequestProvenance from "./RuntimePullRequestProvenance";
 import RuntimeGpuAssignment from "./RuntimeGpuAssignment";
 import { runtimeGpuDevices } from "../sessionUtils";
+import { parseRuntimeHelp, SERVER_OPTIONS } from '../serverOptions';
+import { TuningOptionsContext } from './TuningOptionMetadata';
 
 export type { BackendRow } from "./runtimesHelpers";
 
 export default function RuntimesPanel({ store, active = true, onOpenProfiles }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void }) {
   const { t, locale } = useI18n();
   const rt = useRuntimesController(store, active);
+  const runtimeHelp = rt.capabilities?.backend === store.cfg?.active_backend && rt.capabilities?.build === store.cfg?.active_build ? rt.capabilities?.server_help ?? '' : '';
+  const runtimeOptions = useMemo(() => parseRuntimeHelp(runtimeHelp), [runtimeHelp]);
   const runtimeChoices = rt.capabilities && rt.capabilities.backend === store.cfg?.active_backend && rt.capabilities.build === store.cfg?.active_build
     ? runtimeGpuDevices(rt.capabilities.backend, rt.capabilities.devices) : [];
   const managedRuntime = !!(store.cfg?.active_backend && store.cfg?.active_build);
@@ -75,6 +80,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
 
       {managedRuntime && <div className="my-3 flex justify-end"><button type="button" onClick={() => void rt.probe()} disabled={rt.probeBusy || rt.runtimeBusy || rt.serverRunning} className="app-button app-button--secondary app-button--sm"><StableLabel value={rt.probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button></div>}
       {store.cfg && (
+        <TuningOptionsContext.Provider value={{ options: runtimeOptions.length ? runtimeOptions : SERVER_OPTIONS, verified: runtimeOptions.length > 0 }}>
         <RuntimeGpuAssignment
           t={t}
           device={assignmentDevice}
@@ -82,6 +88,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
           disabled={rt.serverRunning || rt.runtimeBusy || rt.probeBusy || (managedRuntime && !runtimeChoices.length)}
           onChange={(gpu) => store.updateConfig({ gpu }).then(() => undefined)}
         />
+        </TuningOptionsContext.Provider>
       )}
 
       {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-button app-button--ghost app-button--sm">{t("ui.executionProfiles")}</button></p>}

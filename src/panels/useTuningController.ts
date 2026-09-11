@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppConfig } from "../api";
 import type { AppStore } from "../store";
 import { findModelTuningProfile } from "./qwenDefaults";
@@ -6,12 +6,15 @@ import { isKnownSelectValue, parseChatOptions, parseServerArgs, SPEC_DRAFT_NGL_O
 import { draftStillCurrent } from "./tuningAsync";
 import { projectorChangeAllowed } from "./visionState";
 import type { ConfigPatch } from "../configSaveQueue";
+import { replaceServerOption, type OptionOccurrence, type ServerOption } from '../serverOptions';
+import { tuningResetValues } from '../tuningResetValues';
+import { serverOptionsText } from '../serverOptionsI18n';
 import { useI18n } from "../i18n";
 import { normalizeDisplayPath, validateTuningRelations } from "../lifecycleUtils";
 import { useFlashMessage } from "../useFlashMessage";
 import type { ChatOptionField, NumericField, NumericKey, ServerTextKey } from "./tuningFields";
 import { normalizeSamplerChain } from "./TuningSamplerChain";
-import { resetAllTuning, resetTuningField, usesRuntimeDefault } from "../tuningDefaults";
+import { canonicalResetKey, resetAllTuning, resetTuningField, usesRuntimeDefault } from "../tuningDefaults";
 import {
   commitChatOptionField, commitNumericField, performApplyRestart,
   SERVER_FIELD_LABEL_KEYS, SERVER_TEXT_LABEL_KEYS, serverPathKeys, type TuningPhase,
@@ -28,9 +31,10 @@ export type { TuningPhase } from "./tuningControllerHelpers";
  * because that guarantee crosses a hook boundary TypeScript can't see through,
  * not because these code paths are expected to run before the config loads.
  */
-export function useTuningController(store: AppStore) {
+export function useTuningController(store: AppStore, options: readonly ServerOption[] = []) {
   const { locale, t } = useI18n();
   const cfg = store.cfg;
+  const resetValues = useMemo(() => tuningResetValues(options), [options]);
   const modelProfileName = cfg ? findModelTuningProfile(cfg.active_model, cfg.active_build)?.name ?? null : null;
   const [phase, setPhase] = useState<TuningPhase>("idle");
   const [resetting, setResetting] = useState(false);
@@ -52,6 +56,17 @@ export function useTuningController(store: AppStore) {
   const serverArgsDraftRef = useRef("");
   const chatOptionsDraftRef = useRef("{}");
   const applyLockRef = useRef(false);
+  const clearFieldDrafts = (key?: string) => {
+    const resetKey = key ? canonicalResetKey(key) : undefined;
+    const withoutKey = <T extends Record<string, unknown>>(drafts: T): T => {
+      if (!resetKey) return {} as T;
+      const next = { ...drafts }; delete next[resetKey]; return next;
+    };
+    setNumericDrafts(withoutKey);
+    setServerTextDrafts(withoutKey);
+    setChatOptionDrafts(withoutKey);
+    setChatOptionSelectModes(withoutKey);
+  };
 
   useEffect(() => {
     if (!cfg) return;
@@ -142,7 +157,8 @@ export function useTuningController(store: AppStore) {
   };
 
   const serverTextValue = (key: ServerTextKey): string => {
-    const value = String(serverTextDrafts[key] ?? cfg?.[key] ?? "");
+    const inheritedValue = cfg && usesRuntimeDefault(cfg, key) ? resetValues[key] : cfg?.[key];
+    const value = String(serverTextDrafts[key] ?? inheritedValue ?? "");
     return serverPathKeys.has(key) ? normalizeDisplayPath(value) : value;
   };
 
@@ -206,6 +222,27 @@ export function useTuningController(store: AppStore) {
       setPhase("failed");
       setAdvancedError(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const saveServerOption = async (option: ServerOption, occurrences: OptionOccurrence[]) => {
+    if (applyLockRef.current || serverArgsDirty) throw new Error(serverOptionsText[locale].pending);
+    // Use the save queue's current config so concurrent field saves cannot erase each other.
+    if (option.flags.includes('--port')) {
+      const port = occurrences.length ? Number(occurrences[0].values[0]) : 8080;
+      if (occurrences.length > 1 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port: 1–65535');
+      await store.updateConfig({ port });
+    } else {
+      await store.updateConfig(current => {
+        const server_args = replaceServerOption(current.server_args, option, occurrences);
+        // Raw edits synchronize the three primary sampling fields in withManualOverrides.
+        // Reset must release those mirrors too, or the next chat would still send the old value.
+        const samplingKey = option.flags.includes('--temp') ? 'temperature' : option.flags.includes('--top-p') ? 'top_p' : option.flags.includes('--top-k') ? 'top_k' : undefined;
+        return occurrences.length === 0 && samplingKey ? { ...resetTuningField(current, samplingKey, resetValues), server_args } : { server_args };
+      });
+    }
+    if (occurrences.length === 0) clearFieldDrafts(`raw-server:${option.id}`);
+    setPhase('dirty');
+    setChangedServerFields(fields => fields.includes(option.id) ? fields : [...fields, option.id]);
   };
 
   const saveChatOptions = async () => {
@@ -282,16 +319,9 @@ export function useTuningController(store: AppStore) {
     applyLockRef.current = true;
     setResetting(true);
     try {
-      const saved = await store.updateConfig((current) => key ? resetTuningField(current, key) : resetAllTuning());
+      const saved = await store.updateConfig((current) => key ? resetTuningField(current, key, resetValues) : resetAllTuning(resetValues));
       // Clear only the reset field's drafts. Unrelated unsaved text remains intact.
-      const withoutKey = <T extends Record<string, unknown>>(drafts: T): T => {
-        if (!key) return {} as T;
-        const next = { ...drafts }; delete next[key]; return next;
-      };
-      setNumericDrafts(withoutKey);
-      setServerTextDrafts(withoutKey);
-      setChatOptionDrafts(withoutKey);
-      setChatOptionSelectModes(withoutKey);
+      clearFieldDrafts(key);
       if (!key) setDefaultsRevision((value) => value + 1);
       if (!key || !serverArgsDirty) {
         const text = saved.server_args.join("\n");
@@ -327,6 +357,6 @@ export function useTuningController(store: AppStore) {
     projectorEditable, configMutationsDisabled, relationWarnings, numericFieldLabel,
     commitNumeric, commitChatOption, updateFlash, updateServerText, commitServerText,
     serverTextValue, serverSelectOptions, serverSelectValue, selectServerText,
-    updateReasoningEffort, updateSamplerChain, saveServerArgs, saveChatOptions, applyPreset, resetDefaults, applyRestart,
+    updateReasoningEffort, updateSamplerChain, saveServerArgs, saveServerOption, saveChatOptions, applyPreset, resetDefaults, applyRestart,
   };
 }

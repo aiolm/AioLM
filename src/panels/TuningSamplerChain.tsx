@@ -1,3 +1,4 @@
+import { CustomSelect } from "../components/ThemeSwitcher";
 import { useEffect, useState } from "react";
 import { useI18n } from "../i18n";
 
@@ -137,17 +138,7 @@ export default function TuningSamplerChain({
 
       <div className="tuning-sampler-chain__add">
         <label htmlFor="tuning-sampler-add" className="sr-only">{t("extra.samplerChainAdd")}</label>
-        <select
-          id="tuning-sampler-add"
-          value={selectedToAdd}
-          onChange={(event) => setSelectedToAdd(event.target.value)}
-          disabled={disabled || availableOptions.length === 0}
-          className="app-input tuning-sampler-chain__select"
-          aria-label={t("extra.samplerChainAdd")}
-        >
-          <option value="">{t("extra.samplerChainAddPlaceholder")}</option>
-          {availableOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-        </select>
+        <CustomSelect id="tuning-sampler-add" value={selectedToAdd} onChange={setSelectedToAdd} disabled={disabled || availableOptions.length === 0} className="tuning-sampler-chain__select" ariaLabel={t("extra.samplerChainAdd")} options={[{ value: "", label: t("extra.samplerChainAddPlaceholder") }, ...availableOptions.map(option => ({ value: option, label: option }))]} />
         <button
           type="button"
           className="app-button app-button--secondary app-button--sm"

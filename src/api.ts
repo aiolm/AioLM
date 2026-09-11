@@ -303,6 +303,8 @@ export interface RuntimeCapabilities {
   state: "available" | "failed preflight" | "not installed" | "unsupported by this runtime build" | "unknown";
   version: string;
   flags: string[];
+  /** Exact help from the selected executable, including build-specific options. */
+  server_help?: string;
   devices: string[];
   diagnostics: string[];
   bench_available?: boolean;
@@ -333,7 +335,7 @@ export interface SessionModels {
   draft_model: string;
 }
 
-export type SplitMode = "none" | "layer" | "row";
+export type SplitMode = "none" | "single" | "layer" | "row" | "tensor";
 
 export interface GpuPlacement {
   gpu_ids: string[];

@@ -377,6 +377,7 @@ pub struct RuntimeCapabilities {
     pub state: String,
     pub version: String,
     pub flags: Vec<String>,
+    pub server_help: String,
     pub supports_dflash: bool,
     pub devices: Vec<String>,
     pub diagnostics: Vec<String>,
@@ -2687,6 +2688,7 @@ async fn probe_with_cancel(
             state: "not installed".into(),
             version: String::new(),
             flags: Vec::new(),
+            server_help: String::new(),
             supports_dflash: false,
             devices: Vec::new(),
             diagnostics: vec!["llama-server executable is missing".into()],
@@ -2816,6 +2818,11 @@ async fn probe_with_cancel(
         state: state.into(),
         version: version.text.chars().take(4096).collect(),
         flags: probe_flags(&help.text),
+        server_help: if help.success {
+            help.text.clone()
+        } else {
+            String::new()
+        },
         supports_dflash: help_supports_dflash(&help.text),
         devices: probe_devices(&devices.text),
         diagnostics,

@@ -1,5 +1,6 @@
 import type { AppConfig } from "../api";
 import { CACHE_TYPE_OPTIONS, MIROSTAT_OPTIONS } from "./tuningValidation";
+import { serverAliasesForRequest } from '../tuningDefaults';
 
 export type NumericKey =
   | "ngl" | "ctx_size" | "batch_size" | "ubatch_size" | "keep"
@@ -21,10 +22,11 @@ export type TuningCategoryId =
   | "reasoning"
   | "speculative"
   | "multimodal"
+  | "options"
   | "advanced";
 
 export type TuningViewMode = "quick" | "advanced";
-export type TuningSectionId = "server" | "sampling" | "reasoning" | "escape";
+export type TuningSectionId = "server" | "sampling" | "reasoning" | "escape" | "options";
 
 /** Shared id linking the mode tablist/category nav to the rendered section (aria-controls target). */
 export const TUNING_CONTENT_PANEL_ID = "tuning-panel-content";
@@ -147,6 +149,10 @@ export const TUNING_CATEGORIES: readonly TuningCategory[] = [
     keywords: ["vision", "image", "video", "projector", "mmproj"],
   },
   {
+    id: "options", label: "All server options", labelKey: "", description: "Search and edit every runtime option.", descriptionKey: "",
+    section: "options", modes: ["quick", "advanced"], keywords: ["all", "mmap", "mlock", "load-mode", "전체", "모든", "메모리"],
+  },
+  {
     id: "advanced",
     label: "Advanced / raw",
     labelKey: "tuningCategoryAdvanced",
@@ -163,7 +169,7 @@ export const TUNING_CATEGORY_DEFINITIONS = TUNING_CATEGORIES;
 
 export const SERVER_FIELDS: NumericField[] = [
   { key: "ngl", label: "GPU layers (ngl)", step: 1, min: 0, max: 128, server: true, hint: "0–128. 0 keeps inference on CPU.", category: "runtime", tooltip: { title: "GPU layers", description: "Number of model layers offloaded to the selected GPU." }, aliases: ["--n-gpu-layers", "--gpu-layers", "-ngl"] },
-  { key: "ctx_size", label: "Context size", step: 256, min: 512, max: 131072, server: true, hint: "512–131072 tokens. Restart required.", category: "context", tooltip: { title: "Context size", description: "Maximum prompt and generation context allocated by the server." }, aliases: ["--ctx-size", "-c"] },
+  { key: "ctx_size", label: "Context size", step: 256, min: 0, max: 131072, server: true, hint: "0 uses the model context size. Restart required.", category: "context", tooltip: { title: "Context size", description: "Maximum prompt and generation context allocated by the server." }, aliases: ["--ctx-size", "-c"] },
   { key: "batch_size", label: "Batch size", step: 64, min: 1, max: 131072, server: true, hint: "Logical prompt-processing batch. Restart required.", category: "context", tooltip: { title: "Batch size", description: "Maximum number of tokens processed together during prompt evaluation." }, aliases: ["--batch-size", "-b"], advancedOnly: true },
   { key: "ubatch_size", label: "Micro batch size", step: 64, min: 1, max: 131072, server: true, hint: "Physical micro-batch; keep it at or below batch size.", category: "context", tooltip: { title: "Micro batch size", description: "Physical batch submitted to the backend at once; smaller values reduce peak memory." }, aliases: ["--ubatch-size", "-ub"], advancedOnly: true },
   { key: "keep", label: "Keep prompt tokens", step: 1, min: 0, max: 131072, server: true, hint: "Tokens retained when context shifting. Restart required.", category: "context", tooltip: { title: "Keep prompt tokens", description: "Number of initial prompt tokens retained when the context window shifts." }, aliases: ["--keep"], advancedOnly: true },
@@ -175,10 +181,10 @@ export const SERVER_FIELDS: NumericField[] = [
 ];
 
 export const MTP_FIELDS: NumericField[] = [
-  { key: "spec_draft_n_max", label: "Draft max tokens", step: 1, min: 0, max: 64, server: true, hint: "--spec-draft-n-max. Qwen3.8 default: 5.", category: "speculative", tooltip: { title: "Draft max tokens", description: "Upper bound for tokens proposed by the speculative draft model." }, aliases: ["--spec-draft-n-max"], advancedOnly: true },
+  { key: "spec_draft_n_max", label: "Draft max tokens", step: 1, min: 0, max: 64, server: true, hint: "Maximum number of tokens proposed by the draft model.", category: "speculative", tooltip: { title: "Draft max tokens", description: "Upper bound for tokens proposed by the speculative draft model." }, aliases: ["--spec-draft-n-max"], advancedOnly: true },
   { key: "spec_draft_n_min", label: "Draft min tokens", step: 1, min: 0, max: 64, server: true, hint: "--spec-draft-n-min. Default: 0.", category: "speculative", tooltip: { title: "Draft min tokens", description: "Minimum draft proposal size before verification." }, aliases: ["--spec-draft-n-min"], advancedOnly: true },
   { key: "spec_draft_p_min", label: "Draft min probability", step: 0.01, min: 0, max: 1, server: true, hint: "--spec-draft-p-min. 0 disables the threshold.", category: "speculative", tooltip: { title: "Draft min probability", description: "Reject draft tokens below this probability threshold." }, aliases: ["--spec-draft-p-min", "--draft-p-min"], advancedOnly: true },
-  { key: "spec_draft_p_split", label: "Draft split probability", step: 0.01, min: 0, max: 1, server: true, hint: "--spec-draft-p-split. Qwen3.8 default: 0.", category: "speculative", tooltip: { title: "Draft split probability", description: "Probability used to split speculative draft work." }, aliases: ["--spec-draft-p-split", "--draft-p-split"], advancedOnly: true },
+  { key: "spec_draft_p_split", label: "Draft split probability", step: 0.01, min: 0, max: 1, server: true, hint: "Probability threshold for splitting speculative draft work.", category: "speculative", tooltip: { title: "Draft split probability", description: "Probability used to split speculative draft work." }, aliases: ["--spec-draft-p-split", "--draft-p-split"], advancedOnly: true },
 ];
 
 export const REASONING_FIELDS: NumericField[] = [
@@ -214,7 +220,7 @@ export const ADVANCED_SAMPLING_FIELDS: ChatOptionField[] = [
   { key: "max_tokens", label: "Max tokens", step: 1, min: -1, max: 131072, defaultValue: -1, hint: "−1 uses the server default / available context.", category: "sampling", tooltip: { title: "Max tokens", description: "Maximum completion tokens; sent as max_tokens on the chat request." }, aliases: ["max_tokens", "max_completion_tokens", "n_predict"], requestKey: "max_tokens", advancedOnly: true },
   { key: "n_probs", label: "Token probabilities", step: 1, min: 0, max: 100, defaultValue: 0, hint: "0 disables probability data in the response.", category: "sampling", tooltip: { title: "Token probabilities", description: "Number of token probabilities to request in the response." }, aliases: ["n_probs", "logprobs"], advancedOnly: true },
   { key: "min_keep", label: "Minimum kept tokens", step: 1, min: 0, max: 100, defaultValue: 0, hint: "0 lets samplers choose freely.", category: "sampling", tooltip: { title: "Minimum kept tokens", description: "Keep at least this many candidates through sampler stages." }, aliases: ["min_keep"], advancedOnly: true },
-  { key: "t_max_predict_ms", label: "Prediction time limit (ms)", step: 1, min: 0, max: 3600000, defaultValue: 0, hint: "0 disables the generation time limit.", category: "sampling", tooltip: { title: "Prediction time limit", description: "Stop generation after this many milliseconds; 0 disables the limit." }, aliases: ["t_max_predict_ms"], advancedOnly: true },
+  { key: "t_max_predict_ms", label: "Prediction time limit (ms)", step: 1, min: -1, max: 3600000, defaultValue: -1, hint: "-1 or 0 disables the generation time limit.", category: "sampling", tooltip: { title: "Prediction time limit", description: "Stop generation after this many milliseconds; non-positive values disable the limit." }, aliases: ["t_max_predict_ms"], advancedOnly: true },
   { key: "id_slot", label: "Slot id", step: 1, min: -1, max: 1024, defaultValue: -1, hint: "−1 lets llama-server choose an idle slot.", category: "sampling", tooltip: { title: "Slot id", description: "Pin this request to a llama-server slot; −1 selects automatically." }, aliases: ["id_slot"], advancedOnly: true },
 ];
 
@@ -269,14 +275,25 @@ export function tuningCatalogMatches(entry: TuningFieldCatalogEntry, query: stri
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return true;
   const category = categoryForTuningField(entry);
-  return [entry.key, entry.requestKey ?? "", entry.label, entry.tooltip.title, entry.tooltip.description, ...(entry.aliases ?? []), category.label, ...category.keywords]
+  return [entry.key, entry.requestKey ?? "", entry.label, entry.tooltip.title, entry.tooltip.description, ...(entry.aliases ?? []), ...serverAliasesForRequest(entry.key), category.label, ...category.keywords]
     .some((value) => value.toLocaleLowerCase().includes(normalized));
 }
 
 export const valueOf = (cfg: AppConfig, key: NumericKey): number => cfg[key] as number;
-export const chatOptionValue = (cfg: { chat_options?: Record<string, unknown> }, field: ChatOptionField): number => {
+export const chatOptionValue = (cfg: { chat_options?: Record<string, unknown>; server_args?: string[] }, field: ChatOptionField): number => {
   const value = cfg.chat_options?.[field.key];
-  return typeof value === "number" && Number.isFinite(value) ? value : field.defaultValue;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const args = cfg.server_args ?? [];
+  const flags = serverAliasesForRequest(field.key);
+  let inherited = field.defaultValue;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (!flags.includes(token.split('=', 1)[0])) continue;
+    const raw = token.includes('=') ? token.slice(token.indexOf('=') + 1) : args[index + 1];
+    const parsed = raw?.trim() ? Number(raw) : NaN;
+    if (Number.isFinite(parsed)) inherited = parsed;
+  }
+  return inherited;
 };
 
 function tuningFieldSuffix(key: string): string {

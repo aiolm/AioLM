@@ -1,3 +1,4 @@
+import PanelFeedback from "../components/PanelFeedback";
 import ConfirmDialog from "../components/ConfirmDialog";
 import FeedbackBanner from "../components/FeedbackBanner";
 import StatusBadge from "../components/StatusBadge";
@@ -28,7 +29,7 @@ export default function TuningPresetBar({
 }: Props) {
   return (
     <>
-      <div className="app-panel-feedback-layer" aria-live="polite">
+      <PanelFeedback>
         {flash && <FeedbackBanner tone={phase === "failed" ? "error" : "info"} onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
         {phase === "dirty" && changedServerFields.length > 0 && (
           <FeedbackBanner tone="warning" title={t("ui.serverSettingsChangedCount", { count: changedServerFields.length })}>
@@ -40,7 +41,7 @@ export default function TuningPresetBar({
             <ul className="list-disc space-y-1 pl-4">{relationWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
           </FeedbackBanner>
         )}
-      </div>
+      </PanelFeedback>
 
       <div className="tuning-preset-bar mb-4 flex shrink-0 flex-wrap items-center gap-2.5">
         <details className="tuning-presets-menu">
@@ -57,7 +58,7 @@ export default function TuningPresetBar({
               run: () => applyPreset(name),
             })}
             disabled={phase === "applying" || busy}
-            className="rounded-lg border border-slate-700 app-bg-muted px-3 py-1.5 text-xs text-slate-200 app-bg-elevated disabled:opacity-40"
+            className="rounded-lg border border-line-strong app-bg-muted px-3 py-1.5 text-xs text-ink app-bg-elevated disabled:opacity-40"
           >
             {name}
           </button>
@@ -71,7 +72,7 @@ export default function TuningPresetBar({
             run: resetDefaults,
           })}
           disabled={phase === "applying" || busy}
-          className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs text-slate-400 app-bg-muted disabled:opacity-40"
+          className="rounded-lg border border-line-strong px-3 py-1.5 text-xs text-muted app-bg-muted disabled:opacity-40"
         >
           {profileLabel}
         </button>}
@@ -81,7 +82,7 @@ export default function TuningPresetBar({
         {phase === "dirty" && <StatusBadge label={t("extra.restartRequired")} tone="warning" />}
         {phase === "applying" && <StatusBadge label={t("extra.applying")} tone="neutral" />}
         {phase === "failed" && <StatusBadge label={t("extra.applyFailed")} tone="danger" />}
-        {phase === "dirty" && <span className="text-xs text-amber-300">{t("extra.previousValues")}</span>}
+        {phase === "dirty" && <span className="text-xs text-warning">{t("extra.previousValues")}</span>}
         <button type="button" disabled={busy || phase === "applying"} onClick={onResetAll} title={t("ui.runtimeDefaultsHint")} className="app-button app-button--ghost tuning-reset-all">{t("ui.runtimeDefaultsResetAll")}</button>
       </div>
       <ConfirmDialog

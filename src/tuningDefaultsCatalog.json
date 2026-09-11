@@ -1,6 +1,6 @@
 [
-  { "key": "ngl", "args": ["--n-gpu-layers", "--gpu-layers", "-ngl"] },
-  { "key": "ctx_size", "args": ["--ctx-size", "-c"] },
+  { "key": "ngl", "args": ["--n-gpu-layers", "--gpu-layers", "-ngl"], "resetValue": 99, "appDefault": true },
+  { "key": "ctx_size", "args": ["--ctx-size", "-c"], "resetValue": 4096, "appDefault": true },
   { "key": "batch_size", "args": ["--batch-size", "-b"] },
   { "key": "ubatch_size", "args": ["--ubatch-size", "-ub"] },
   { "key": "keep", "args": ["--keep"] },

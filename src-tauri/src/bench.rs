@@ -395,11 +395,12 @@ fn supports_bench_option(value: &str) -> bool {
             | "--mmap"
             | "--no-mmap"
             | "--direct-io"
+            | "--load-mode"
+            | "-lm"
             | "--no-warmup"
             | "--progress"
             | "--cache-type-k"
             | "--cache-type-v"
-            | "--mlock"
     )
 }
 
@@ -451,6 +452,29 @@ pub fn build_args(cfg: &AppConfig) -> Vec<String> {
     while index < cfg.server_args.len() {
         let token = &cfg.server_args[index];
         let name = option_name(token);
+        // Server toggles take no value; llama-bench expects an explicit 0/1.
+        // Normalize both aliases and opposite switches, retaining the last choice.
+        let toggle = match name {
+            "--mmap" => Some(("--mmap", "1")),
+            "--no-mmap" => Some(("--mmap", "0")),
+            "--direct-io" | "-dio" => Some(("--direct-io", "1")),
+            "--no-direct-io" | "-ndio" => Some(("--direct-io", "0")),
+            "--kv-offload" | "-kvo" => Some(("--no-kv-offload", "0")),
+            "--no-kv-offload" | "-nkvo" => Some(("--no-kv-offload", "1")),
+            "--op-offload" => Some(("--no-op-offload", "0")),
+            "--no-op-offload" => Some(("--no-op-offload", "1")),
+            "--no-host" => Some(("--no-host", "1")),
+            _ => None,
+        };
+        if let Some((flag, value)) = toggle {
+            if let Some(position) = args.iter().position(|arg| arg == flag) {
+                args[position + 1] = value.into();
+            } else {
+                args.extend([flag.into(), value.into()]);
+            }
+            index += 1;
+            continue;
+        }
         if APP_MANAGED_SERVER_ARGS.contains(&name) {
             if app_managed_option_consumes_next(&cfg.server_args, index) {
                 index += 1;
@@ -468,7 +492,7 @@ pub fn build_args(cfg: &AppConfig) -> Vec<String> {
             && cfg
                 .server_args
                 .get(index + 1)
-                .is_some_and(|value| !value.starts_with('-'))
+                .is_some_and(|value| !value.starts_with('-') || value.parse::<f64>().is_ok())
         {
             args.push(cfg.server_args[index + 1].clone());
             index += 1;
@@ -661,6 +685,47 @@ mod tests {
         assert!(!args
             .iter()
             .any(|arg| arg == "--parallel" || arg == "--jinja"));
+    }
+
+    #[test]
+    fn benchmark_translates_server_memory_switches_to_value_options() {
+        let cfg = AppConfig {
+            server_args: vec![
+                "--mmap".into(),
+                "--no-mmap".into(),
+                "--no-direct-io".into(),
+                "--no-kv-offload".into(),
+                "--op-offload".into(),
+                "--no-host".into(),
+                "--load-mode".into(),
+                "mmap+mlock".into(),
+                "--cache-ram".into(),
+                "-1".into(),
+                "--mlock".into(),
+            ],
+            ..AppConfig::default()
+        };
+        let args = build_args(&cfg);
+        for pair in [
+            ["--mmap", "0"],
+            ["--direct-io", "0"],
+            ["--no-kv-offload", "1"],
+            ["--no-op-offload", "0"],
+            ["--no-host", "1"],
+            ["--load-mode", "mmap+mlock"],
+        ] {
+            assert!(
+                args.windows(2).any(|values| values == pair),
+                "missing {pair:?}"
+            );
+        }
+        assert_eq!(
+            args.iter().filter(|arg| arg.as_str() == "--mmap").count(),
+            1
+        );
+        assert!(!args
+            .iter()
+            .any(|arg| ["--no-mmap", "--cache-ram", "--mlock"].contains(&arg.as_str())));
     }
 
     #[test]

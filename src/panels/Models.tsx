@@ -13,6 +13,7 @@ import { shouldConfirmDestructive } from "../preferences";
 import { buildNumber } from "../runtimeUtils";
 import { useFlashMessage } from "../useFlashMessage";
 import { activeProfilesPatch } from "../modelProfiles";
+import TuningOptionMetadata from './TuningOptionMetadata';
 
 
 export default function ModelsPanel({ store, focus = "library" }: { store: AppStore; focus?: "library" | "lora" }) {
@@ -304,6 +305,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{t("panel.activeModel")}</div>
+            <TuningOptionMetadata fieldKey="raw-server:--model" />
             {selected ? <div className="app-text-wrap text-[15px] font-semibold ui-color-ink"  title={normalizeDisplayPath(selected)}>{visible.find((model) => model.path === selected)?.name ?? normalizeDisplayPath(selected).split(/[\\/]/).pop()}</div> : <div className="text-sm ui-color-faint" >{t("panel.noneSelected")}</div>}
             <div className="mt-1 break-words text-xs ui-color-muted" >{t("ui.modelsBackendLine", { backend: cfg?.active_backend || "PATH", build: cfg?.active_build ? buildNumber(cfg.active_build) : "system", port: cfg?.port ?? "—" })}</div>
             <details className="models-runtime-details mt-1">
@@ -337,6 +339,8 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
           <div>
             <h2 id="lora-heading" className="text-sm font-semibold ui-color-ink" >{t("panel.loraAdapters")}</h2>
             <p className="mt-1 text-xs ui-color-muted" >{t("ui.loraSectionHint")}</p>
+            <TuningOptionMetadata fieldKey="raw-server:--lora" />
+            <TuningOptionMetadata fieldKey="raw-server:--lora-scaled" />
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs ui-color-muted"  htmlFor="lora-scale">{t("ui.loraScale")}</label>
