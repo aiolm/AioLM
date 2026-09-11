@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufWriter};
 use uuid::Uuid;
 
 const HF_API: &str = "https://huggingface.co/api";
@@ -19,6 +19,9 @@ const MAX_QUERY_LENGTH: usize = 200;
 const MAX_API_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TREE_ENTRIES: usize = 50_000;
 const MAX_MODEL_BYTES: u64 = 512 * 1024 * 1024 * 1024;
+const DOWNLOAD_BUFFER_BYTES: usize = 1024 * 1024;
+const DOWNLOAD_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
+const DOWNLOAD_CANCELLED: &str = "model download cancelled";
 
 #[derive(Serialize, Clone, Debug)]
 pub struct HfModel {
@@ -468,6 +471,89 @@ fn emit_progress(
     );
 }
 
+/// Hash each chunk as it is written, avoiding a second read of a multi-GiB
+/// model. Buffer small network chunks and bound UI updates independently of
+/// throughput; the timer also notices cancellation while the server is silent.
+async fn receive_download<F>(
+    mut response: reqwest::Response,
+    part: &Path,
+    total: u64,
+    expected: &str,
+    cancel: &AtomicBool,
+    mut progress: F,
+) -> Result<u64, String>
+where
+    F: FnMut(&'static str, u64, u64),
+{
+    let output = create_staging_file(part).await?;
+    let mut received = 0_u64;
+    let result = async {
+        // Keep the writer inside this scope so errors close it before the
+        // staging file is removed, including on Windows.
+        let mut output = BufWriter::with_capacity(DOWNLOAD_BUFFER_BYTES, output);
+        let mut hasher = Sha256::new();
+        let mut updates = tokio::time::interval(DOWNLOAD_UPDATE_INTERVAL);
+        updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut reported = 0_u64;
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return Err(DOWNLOAD_CANCELLED.to_string());
+            }
+            let chunk = tokio::select! {
+                biased;
+                _ = updates.tick() => {
+                    if received != reported {
+                        progress("downloading", received, total);
+                        reported = received;
+                    }
+                    continue;
+                }
+                chunk = response.chunk() => chunk
+                    .map_err(|error| format!("model download stream failed: {error}"))?,
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
+            received = received.saturating_add(chunk.len() as u64);
+            if received > MAX_MODEL_BYTES || received > total {
+                return Err("model download reported an unsafe size".into());
+            }
+            output
+                .write_all(&chunk)
+                .await
+                .map_err(|error| format!("cannot write model download: {error}"))?;
+            hasher.update(&chunk);
+        }
+        output
+            .flush()
+            .await
+            .map_err(|error| format!("cannot flush model download: {error}"))?;
+        if received != total {
+            return Err(format!(
+                "model download ended at {received} bytes; expected {total}"
+            ));
+        }
+        if format!("{:x}", hasher.finalize()) != expected {
+            return Err("downloaded model checksum does not match Hugging Face metadata".into());
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err(DOWNLOAD_CANCELLED.to_string());
+        }
+        if received != reported {
+            progress("downloading", received, total);
+        }
+        Ok(received)
+    }
+    .await;
+    if let Err(error) = &result {
+        let _ = tokio::fs::remove_file(part).await;
+        if error == DOWNLOAD_CANCELLED {
+            progress("cancelled", received, total);
+        }
+    }
+    result
+}
+
 pub async fn download(
     app: AppHandle,
     repo_id: &str,
@@ -546,82 +632,17 @@ pub async fn download(
     if response_total > MAX_MODEL_BYTES {
         return Err("model download exceeds the 512 GiB safety limit".into());
     }
-    let mut output = create_staging_file(&part).await?;
-    let mut received = 0_u64;
-    let mut response = response;
-    loop {
-        let chunk = match response.chunk().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(error) => {
-                drop(output);
-                let _ = tokio::fs::remove_file(&part).await;
-                return Err(format!("model download stream failed: {error}"));
-            }
-        };
-        if cancel.load(Ordering::Acquire) {
-            drop(output);
-            let _ = tokio::fs::remove_file(&part).await;
-            emit_progress(
-                &app,
-                repo_id,
-                file_path,
-                "cancelled",
-                received,
-                response_total,
-            );
-            return Err("model download cancelled".into());
-        }
-        received = received.saturating_add(chunk.len() as u64);
-        if received > MAX_MODEL_BYTES
-            || (response_total > 0 && received > response_total.saturating_add(1024 * 1024))
-        {
-            drop(output);
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err("model download reported an unsafe size".into());
-        }
-        if let Err(error) = output.write_all(&chunk).await {
-            drop(output);
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(format!("cannot write model download: {error}"));
-        }
-        emit_progress(
-            &app,
-            repo_id,
-            file_path,
-            "downloading",
-            received,
-            response_total,
-        );
-    }
-    if let Err(error) = output.flush().await {
-        drop(output);
-        let _ = tokio::fs::remove_file(&part).await;
-        return Err(format!("cannot flush model download: {error}"));
-    }
-    drop(output);
-    if response_total > 0 && received != response_total {
-        let _ = tokio::fs::remove_file(&part).await;
-        return Err(format!(
-            "model download ended at {received} bytes; expected {response_total}"
-        ));
-    }
-    let part_for_hash = part.clone();
-    let actual = match tokio::task::spawn_blocking(move || hash_file(&part_for_hash)).await {
-        Ok(Ok(actual)) => actual,
-        Ok(Err(error)) => {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(error);
-        }
-        Err(error) => {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(format!("model checksum task failed: {error}"));
-        }
-    };
-    if actual != expected {
-        let _ = tokio::fs::remove_file(&part).await;
-        return Err("downloaded model checksum does not match Hugging Face metadata".into());
-    }
+    let received = receive_download(
+        response,
+        &part,
+        response_total,
+        &expected,
+        &cancel,
+        |phase, received, total| {
+            emit_progress(&app, repo_id, file_path, phase, received, total);
+        },
+    )
+    .await?;
     if cancel.load(Ordering::Acquire) {
         let _ = tokio::fs::remove_file(&part).await;
         emit_progress(
@@ -657,6 +678,167 @@ pub async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
+
+    async fn download_response(
+        body: Vec<u8>,
+        content_length: usize,
+        stall_after_body: bool,
+    ) -> (reqwest::Response, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind download fixture");
+        let address = listener.local_addr().expect("download fixture address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept download request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = socket.read(&mut buffer).await.expect("read request");
+                assert!(read > 0, "request ended before its headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write download headers");
+            for chunk in body.chunks(4093) {
+                socket.write_all(chunk).await.expect("write download body");
+                tokio::task::yield_now().await;
+            }
+            if stall_after_body {
+                std::future::pending::<()>().await;
+            }
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("download test client")
+            .get(format!("http://{address}/model.gguf"))
+            .send()
+            .await
+            .expect("request test download");
+        (response, server)
+    }
+
+    fn download_staging_fixture() -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("aiolm-stream-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create download fixture directory");
+        let root = root.canonicalize().expect("resolve download fixture");
+        let part = root.join("model.part");
+        (root, part)
+    }
+
+    #[tokio::test]
+    async fn download_stream_preserves_bytes_and_flushes_the_final_buffer() {
+        let body: Vec<u8> = (0..DOWNLOAD_BUFFER_BYTES * 2 + 17)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let total = body.len() as u64;
+        let expected = format!("{:x}", Sha256::digest(&body));
+        let (response, server) = download_response(body.clone(), body.len(), false).await;
+        let (root, part) = download_staging_fixture();
+        let mut updates = Vec::new();
+        let started = std::time::Instant::now();
+        let received = receive_download(
+            response,
+            &part,
+            total,
+            &expected,
+            &AtomicBool::new(false),
+            |phase, received, total| updates.push((phase, received, total)),
+        )
+        .await
+        .expect("download verified stream");
+        assert_eq!(received, total);
+        assert_eq!(fs::read(&part).expect("read complete download"), body);
+        assert_eq!(updates.last(), Some(&("downloading", total, total)));
+        let max_updates = started.elapsed().as_millis() / DOWNLOAD_UPDATE_INTERVAL.as_millis() + 2;
+        assert!(updates.len() as u128 <= max_updates);
+        server.await.expect("download server finished");
+        fs::remove_dir_all(root).expect("remove download fixture");
+    }
+
+    #[tokio::test]
+    async fn checksum_mismatch_removes_the_staged_download() {
+        let body = b"corrupted model".to_vec();
+        let total = body.len() as u64;
+        let expected = format!("{:x}", Sha256::digest(b"expected model"));
+        let (response, server) = download_response(body, total as usize, false).await;
+        let (root, part) = download_staging_fixture();
+        let error = receive_download(
+            response,
+            &part,
+            total,
+            &expected,
+            &AtomicBool::new(false),
+            |_, _, _| {},
+        )
+        .await
+        .expect_err("reject a checksum mismatch");
+        assert!(error.contains("checksum does not match"), "{error}");
+        assert!(!part.exists(), "corrupt staging file must be removed");
+        server.await.expect("download server finished");
+        fs::remove_dir_all(root).expect("remove download fixture");
+    }
+
+    #[tokio::test]
+    async fn interrupted_response_removes_the_staged_download() {
+        let (response, server) = download_response(b"partial".to_vec(), 100, false).await;
+        let (root, part) = download_staging_fixture();
+        let error = receive_download(
+            response,
+            &part,
+            100,
+            "unused digest",
+            &AtomicBool::new(false),
+            |_, _, _| {},
+        )
+        .await
+        .expect_err("reject an interrupted response");
+        assert!(error.contains("model download stream failed"), "{error}");
+        assert!(!part.exists(), "partial staging file must be removed");
+        server.await.expect("download server finished");
+        fs::remove_dir_all(root).expect("remove download fixture");
+    }
+
+    #[tokio::test]
+    async fn stalled_download_cancels_promptly_and_removes_the_staging_file() {
+        let (response, server) = download_response(b"partial".to_vec(), 100, true).await;
+        let (root, part) = download_staging_fixture();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_after_stall = cancel.clone();
+        let cancel_task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            cancel_after_stall.store(true, Ordering::Release);
+        });
+        let mut updates = Vec::new();
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            receive_download(
+                response,
+                &part,
+                100,
+                "unused digest",
+                &cancel,
+                |phase, received, total| updates.push((phase, received, total)),
+            ),
+        )
+        .await
+        .expect("cancellation must not wait for another response chunk")
+        .expect_err("cancel stalled transfer");
+        assert_eq!(error, DOWNLOAD_CANCELLED);
+        assert_eq!(updates.last(), Some(&("cancelled", 7, 100)));
+        assert!(!part.exists(), "cancelled staging file must be removed");
+        cancel_task.await.expect("cancel task finished");
+        server.abort();
+        fs::remove_dir_all(root).expect("remove download fixture");
+    }
 
     #[test]
     fn rejects_repo_and_file_traversal() {
