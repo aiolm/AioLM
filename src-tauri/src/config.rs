@@ -452,7 +452,7 @@ impl Default for AppConfig {
             runtime_defaults: Vec::new(),
             config_version: CURRENT_CONFIG_VERSION,
             models_dir: home_dir()
-                .join(".llama-board")
+                .join(".aiolm")
                 .join("models")
                 .to_string_lossy()
                 .into_owned(),
@@ -924,7 +924,7 @@ pub fn config_path() -> PathBuf {
     let root = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| home_dir().join(".config"));
-    root.join("llama-board").join("config.json")
+    root.join("aiolm").join("config.json")
 }
 
 pub fn load_result() -> Result<AppConfig, String> {
@@ -1150,7 +1150,7 @@ mod tests {
         assert!(cfg
             .models_dir
             .replace('\\', "/")
-            .ends_with("/.llama-board/models"));
+            .ends_with("/.aiolm/models"));
         assert_eq!(cfg.ngl, 0);
         assert_eq!(cfg.ctx_size, 4096);
         assert_eq!(cfg.batch_size, 2048);
@@ -1260,7 +1260,7 @@ mod tests {
 
     #[test]
     fn atomic_write_replaces_complete_content() {
-        let root = std::env::temp_dir().join(format!("llama-board-config-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("aiolm-config-{}", std::process::id()));
         fs::create_dir_all(&root).expect("temp directory");
         let path = root.join("config.json");
         atomic_write(&path, br#"{"version":1}"#).expect("first write");

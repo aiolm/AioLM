@@ -1,4 +1,4 @@
-# llama-board
+# AioLM
 
 > **언어:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 
 고급 설치 옵션, 검증, 개발 환경, CLI 사용법은 [docs/INSTALL.ko.md](docs/INSTALL.ko.md), [docs/DEVELOPMENT.ko.md](docs/DEVELOPMENT.ko.md), [docs/CLI.ko.md](docs/CLI.ko.md)를 참조하세요.
 
-첫 실행에는 모델 디렉터리를 비워 두며 Models에서 GGUF 디렉터리를 직접 선택합니다. 설정과 관리 런타임은 표준 `%APPDATA%\llama-board\`에 보관됩니다. 이전 데스크톱 식별자를 사용하던 빌드에서 업그레이드할 때 이 공용 설정 디렉터리를 삭제하지 마세요.
+AioLM — All-In-One LM은 llama-board와 별도로 설치됩니다. 첫 실행에서 기존 설정·관리 런타임·CLI 저장소·WebView 프로필을 새 `aiolm` / `com.aiolm.desktop` 경로로 복사합니다. 원본을 유지하며, 이미 존재하는 AioLM 데이터를 우선합니다. 이전 앱을 종료한 뒤 실행하고, 잠금이나 공간 부족 오류가 발생하면 문제를 해결한 뒤 재시도하세요. [이전 방식과 호환성](docs/MIGRATION.md)을 참고하세요.
 
 ## 코드 서명 정책 (Code signing policy)
 

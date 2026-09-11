@@ -1,9 +1,9 @@
 import type { DocumentChunk } from "./chatUtils";
 
-const INDEX_DB_NAME = "llama-board-document-index";
+const INDEX_DB_NAME = "aiolm-document-index";
 const INDEX_DB_VERSION = 1;
 const INDEX_STORE = "embeddings";
-const INDEX_PREFIX = "llama-board.document-index.v1.";
+const INDEX_PREFIX = "aiolm.document-index.v1.";
 const MAX_RECORDS = 256;
 const MAX_VECTOR_VALUES = 2_000_000;
 

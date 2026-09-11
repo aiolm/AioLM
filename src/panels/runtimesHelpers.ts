@@ -3,8 +3,8 @@ import type { Locale } from "../i18nCatalog";
 import type { UiTextKey } from "../uiI18n";
 import { translate } from "../i18nUnified";
 
-export const LATEST_CACHE_KEY = "llama-board.latest-runtimes.v2";
-export const SHOW_ALL_KEY = "llama-board.show-all-backends.v1";
+export const LATEST_CACHE_KEY = "aiolm.latest-runtimes.v2";
+export const SHOW_ALL_KEY = "aiolm.show-all-backends.v1";
 
 export function readShowAll(): boolean {
   try { return localStorage.getItem(SHOW_ALL_KEY) === "1"; } catch { return false; }

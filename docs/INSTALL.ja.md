@@ -17,9 +17,9 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-bo
 ## オプション
 
 ```powershell
-$env:LLAMA_BOARD_INSTALLER = "msi"   # 既定: nsis
-$env:LLAMA_BOARD_RELEASE = "v0.1.5"  # 特定タグ
-$env:LLAMA_BOARD_DRY_RUN = "1"       # 検証のみ
+$env:AIOLM_INSTALLER = "msi"   # 既定: nsis
+$env:AIOLM_RELEASE = "v0.1.5"  # 特定タグ
+$env:AIOLM_DRY_RUN = "1"       # 検証のみ
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
@@ -28,8 +28,8 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 ## ダウンロード検証
 
 ```powershell
-$installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object -First 1
-# MSI の場合は "./llama-board_*_x64_en-US.msi" を使用します。
+$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
+# MSI の場合は "./AioLM_*_x64_en-US.msi" を使用します。
 (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 # 同じリリースの checksums.txt と比較
 (Get-AuthenticodeSignature -LiteralPath $installer.FullName).Status
@@ -38,7 +38,7 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 
 リリースページ: <https://github.com/llama-board/llama-board/releases/latest>
 
-移行メモ: デスクトップ識別子は中立的な値に変更されました。アップグレード時は既存の %APPDATA%\llama-board 設定・ランタイムディレクトリを保持し、新規インストールでは Models でモデルディレクトリを選択してください。アンインストールしてもこのユーザーデータは削除されません。
+AioLM — All-In-One LMはllama-boardとは別にインストールされます。初回起動時に設定、管理ランタイム、CLIデータ、WebViewプロファイルを新しい `aiolm` / `com.aiolm.desktop` の場所へコピーします。元のデータは保持され、既存のAioLMデータが優先されます。移行前に旧アプリを終了してください。ロックや容量不足は解消後に再試行できます。[移行の詳細](MIGRATION.md)。
 
 ## Linux / macOS (予定)
 

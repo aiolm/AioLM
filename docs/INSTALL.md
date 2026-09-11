@@ -17,9 +17,9 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-bo
 ## Options
 
 ```powershell
-$env:LLAMA_BOARD_INSTALLER = "msi"   # default: nsis
-$env:LLAMA_BOARD_RELEASE = "v0.1.5"  # specific tag
-$env:LLAMA_BOARD_DRY_RUN = "1"       # verify only, don't install
+$env:AIOLM_INSTALLER = "msi"   # default: nsis
+$env:AIOLM_RELEASE = "v0.1.5"  # specific tag
+$env:AIOLM_DRY_RUN = "1"       # verify only, don't install
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
@@ -28,8 +28,8 @@ The one-line command downloads the `install.ps1` copy included in the selected r
 ## Verify download
 
 ```powershell
-$installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object -First 1
-# For MSI, use "./llama-board_*_x64_en-US.msi" instead.
+$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
+# For MSI, use "./AioLM_*_x64_en-US.msi" instead.
 (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 # Compare with checksums.txt from the same release
 (Get-AuthenticodeSignature -LiteralPath $installer.FullName).Status
@@ -38,7 +38,7 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 
 Release page: <https://github.com/llama-board/llama-board/releases/latest>
 
-Migration note: the desktop identifier is now neutral. Keep the existing %APPDATA%\llama-board configuration/runtime directory when upgrading, and choose a model directory in Models on a fresh install; uninstall does not remove that user data.
+AioLM — All-In-One LM installs separately from llama-board. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](MIGRATION.md).
 
 ## Code signing policy
 
@@ -46,7 +46,7 @@ See [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md). After SignPath Foundati
 
 ## Uninstall
 
-Open **Settings → Apps → Installed apps → llama-board → Uninstall**, or use **Control Panel → Programs and Features**. Removing the application does not automatically delete user-managed model, runtime, project, or chat data; remove those folders separately if desired.
+Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **Control Panel → Programs and Features**. Removing the application does not automatically delete user-managed model, runtime, project, or chat data; remove those folders separately if desired.
 
 ## Linux / macOS (planned)
 

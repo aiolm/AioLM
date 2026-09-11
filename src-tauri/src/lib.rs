@@ -1,6 +1,7 @@
-// llama-board backend — command handlers + managed state.
+// aiolm backend — command handlers + managed state.
 pub mod backends;
 pub mod bench;
+pub mod branding;
 pub mod config;
 mod discover;
 mod gateway;
@@ -1821,12 +1822,12 @@ async fn rt_export(
         }
     }
     runtime::validate_runtime_identifiers(&backend, &build)?;
-    let suggested_name = format!("llama-board-runtime-{backend}-{build}.zip");
+    let suggested_name = format!("aiolm-runtime-{backend}-{build}.zip");
     let path = tokio::task::spawn_blocking(move || {
         rfd::FileDialog::new()
-            .set_title("Export llama-board runtime bundle")
+            .set_title("Export aiolm runtime bundle")
             .set_file_name(&suggested_name)
-            .add_filter("llama-board runtime bundle", &["zip"])
+            .add_filter("aiolm runtime bundle", &["zip"])
             .save_file()
     })
     .await
@@ -1879,8 +1880,8 @@ async fn rt_import(
     }
     let path = tokio::task::spawn_blocking(|| {
         rfd::FileDialog::new()
-            .set_title("Import llama-board runtime bundle")
-            .add_filter("llama-board runtime bundle", &["zip"])
+            .set_title("Import aiolm runtime bundle")
+            .add_filter("aiolm runtime bundle", &["zip"])
             .pick_file()
     })
     .await
@@ -1996,8 +1997,24 @@ async fn rt_probe(backend: String, build: String) -> Result<runtime::RuntimeCapa
     runtime::probe(&backend, &build).await
 }
 
+#[tauri::command]
+fn migration_paths() -> Vec<branding::MigratedPath> {
+    branding::managed_paths()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    while let Err(error) = branding::prepare_desktop() {
+        let retry = rfd::MessageDialog::new()
+            .set_title("AioLM — Data migration")
+            .set_description(format!("{error}\n\nYour original data has been preserved. Resolve the problem and select OK to retry, or Cancel to exit."))
+            .set_buttons(rfd::MessageButtons::OkCancel)
+            .set_level(rfd::MessageLevel::Error)
+            .show();
+        if retry != rfd::MessageDialogResult::Ok {
+            return;
+        }
+    }
     let app = tauri::Builder::default()
         .manage(AppState {
             server: Arc::new(Mutex::new(server::ServerState::default())),
@@ -2016,6 +2033,7 @@ pub fn run() {
             sessions: Arc::new(session::SessionManager::new()),
         })
         .invoke_handler(tauri::generate_handler![
+            migration_paths,
             get_config,
             save_config,
             list_models,
@@ -2161,8 +2179,7 @@ mod tests {
 
     #[test]
     fn image_read_requires_the_path_returned_by_the_native_picker() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-image-path-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("aiolm-image-path-{}", std::process::id()));
         fs::create_dir_all(&root).expect("create image test directory");
         let selected = root.join("selected.png");
         let other = root.join("other.png");
@@ -2180,10 +2197,8 @@ mod tests {
 
     #[test]
     fn verified_file_open_requires_a_regular_file_and_matching_identity() {
-        let root = std::env::temp_dir().join(format!(
-            "llama-board-verified-file-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("aiolm-verified-file-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create verified file directory");
         let file_path = root.join("safe.txt");
         fs::write(&file_path, b"safe").expect("write verified file");
@@ -2198,10 +2213,8 @@ mod tests {
 
     #[test]
     fn document_read_requires_native_selection_and_text_extension() {
-        let root = std::env::temp_dir().join(format!(
-            "llama-board-document-path-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("aiolm-document-path-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create document test directory");
         let selected = root.join("selected.md");
         let other = root.join("other.md");
@@ -2240,10 +2253,8 @@ mod tests {
 
     #[test]
     fn docx_declared_uncompressed_xml_size_is_bounded() {
-        let path = std::env::temp_dir().join(format!(
-            "llama-board-docx-bomb-{}.docx",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("aiolm-docx-bomb-{}.docx", uuid::Uuid::new_v4()));
         let file = fs::File::create(&path).expect("create DOCX fixture");
         let mut archive = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
@@ -2263,8 +2274,7 @@ mod tests {
 
     #[test]
     fn model_delete_requires_root_containment_and_inactive_path() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-delete-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-delete-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create model root");
         let model = root.join("nested").join("model.gguf");
         fs::create_dir_all(model.parent().unwrap()).expect("create nested model root");
@@ -2294,10 +2304,8 @@ mod tests {
 
     #[test]
     fn every_model_role_in_a_running_session_blocks_file_deletion() {
-        let root = std::env::temp_dir().join(format!(
-            "llama-board-session-delete-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("aiolm-session-delete-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create model root");
         let primary = root.join("primary.gguf");
         let projector = root.join("mmproj.gguf");
@@ -2334,8 +2342,7 @@ mod tests {
 
     #[test]
     fn start_validation_rejects_missing_projector_and_enabled_adapter() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-adapter-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-adapter-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create adapter test directory");
         let model = root.join("model.gguf");
         fs::write(&model, b"model").expect("write model fixture");

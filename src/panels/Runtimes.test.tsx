@@ -230,7 +230,7 @@ describe("RuntimesPanel pull-request builds", () => {
     mocked.rtPrPreview.mockResolvedValue({
       ...PREVIEW,
       artifact: {
-        name: "llama-board-pr27342-cuda-win-x64.zip",
+        name: "aiolm-pr27342-cuda-win-x64.zip",
         sha256: "b".repeat(64),
         bytes: 128 * 1024 * 1024,
       },

@@ -16,11 +16,11 @@
 ## 克隆与运行
 
 ```bash
-git clone https://github.com/llama-board/llama-board.git
-cd llama-board
+git clone https://github.com/llama-board/llama-board.git aiolm
+cd aiolm
 npm install
 npm run tauri -- dev
-# 运行时：%APPDATA%/llama-board/runtimes/{build}-{backend}/
+# 运行时：%APPDATA%/aiolm/runtimes/{build}-{backend}/
 ```
 
 ## 验证
@@ -44,8 +44,8 @@ PowerShell：
 
 ```powershell
 cd src-tauri
-$env:LLAMA_BOARD_SMOKE = "1"
-$env:LLAMA_BOARD_SMOKE_MODEL = "C:\path\to\model.gguf"
+$env:AIOLM_SMOKE = "1"
+$env:AIOLM_SMOKE_MODEL = "C:\path\to\model.gguf"
 cargo test --test smoke -- --ignored --nocapture --test-threads=1
 ```
 
@@ -53,7 +53,7 @@ Bash / Git Bash：
 
 ```bash
 cd src-tauri
-LLAMA_BOARD_SMOKE=1 LLAMA_BOARD_SMOKE_MODEL='C:/path/to/model.gguf' cargo test --test smoke -- --ignored --nocapture --test-threads=1
+AIOLM_SMOKE=1 AIOLM_SMOKE_MODEL='C:/path/to/model.gguf' cargo test --test smoke -- --ignored --nocapture --test-threads=1
 ```
 
 `npm test` 会运行 `test:run-direct-tests` + `test:direct` + `test:coverage`（`vitest run --coverage`）。

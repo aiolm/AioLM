@@ -81,7 +81,7 @@ struct ApiTreeEntry {
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("llama-board/0.1")
+        .user_agent("aiolm/0.1")
         .timeout(Duration::from_secs(45))
         .build()
         .map_err(|error| format!("Hugging Face client setup failed: {error}"))
@@ -92,7 +92,7 @@ fn client() -> Result<reqwest::Client, String> {
 /// get no overall deadline and rely on the per-read timeout to catch a stall.
 fn download_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .user_agent("llama-board/0.1")
+        .user_agent("aiolm/0.1")
         .connect_timeout(Duration::from_secs(30))
         .read_timeout(Duration::from_secs(60))
         .build()
@@ -671,8 +671,7 @@ mod tests {
 
     #[test]
     fn target_is_nested_under_the_selected_models_root() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-discover-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-discover-{}", uuid::Uuid::new_v4()));
         let path = target_path(&root.to_string_lossy(), "org/model", "Q4/model.gguf")
             .expect("safe target");
         let canonical_root = root.canonicalize().expect("canonical root");
@@ -699,8 +698,7 @@ mod tests {
 
     #[test]
     fn repository_names_that_share_a_slug_get_distinct_directories() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-discover-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-discover-{}", uuid::Uuid::new_v4()));
         let first = target_path(&root.to_string_lossy(), "a--b/c", "model.gguf").unwrap();
         let second = target_path(&root.to_string_lossy(), "a/b--c", "model.gguf").unwrap();
         assert_ne!(first, second);
@@ -709,8 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn activation_is_no_replace_and_cleans_the_staging_file() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-activation-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-activation-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create activation directory");
         let root = root
             .canonicalize()
@@ -731,8 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn activation_rejects_an_existing_destination_without_overwrite() {
-        let root =
-            std::env::temp_dir().join(format!("llama-board-activation-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-activation-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create activation directory");
         let root = root
             .canonicalize()

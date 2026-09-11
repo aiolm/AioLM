@@ -54,7 +54,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const loadConfig = useCallback(async () => {
     if (!api.isNativeRuntimeAvailable()) {
       setBootState("native-unavailable");
-      setBootError("The native desktop runtime is unavailable. Run the packaged llama-board desktop app instead of the browser preview.");
+      setBootError("The native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.");
       return;
     }
     try {
@@ -108,7 +108,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
 
   const start = useCallback(async (cfgOverride?: api.AppConfig) => {
     if (!api.isNativeRuntimeAvailable()) {
-      const error = new Error("Native desktop runtime is unavailable. Run the packaged llama-board desktop app instead of the browser preview.");
+      const error = new Error("Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.");
       setActionError(error.message);
       throw error;
     }

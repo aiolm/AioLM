@@ -11,7 +11,7 @@ export interface AppPreferences {
 }
 
 interface StoredPreferences { version: 1; values: AppPreferences }
-const KEY = "llama-board-preferences";
+const KEY = "aiolm-preferences";
 
 export const defaultPreferences = (): AppPreferences => ({
   locale: detectLocale(), theme: "system",
@@ -42,8 +42,8 @@ export function loadPreferences(): AppPreferences {
   try {
     const raw = JSON.parse(window.localStorage.getItem(KEY) ?? "null") as StoredPreferences | null;
     if (raw?.version === 1) return validatePreferences(raw.values);
-    const legacyTheme = window.localStorage.getItem("llama-board-theme");
-    const legacyLocale = window.localStorage.getItem("llama-board-locale");
+    const legacyTheme = window.localStorage.getItem("aiolm-theme");
+    const legacyLocale = window.localStorage.getItem("aiolm-locale");
     return validatePreferences({
       theme: isTheme(legacyTheme) ? legacyTheme : "system",
       locale: isLocale(legacyLocale) ? legacyLocale : undefined,

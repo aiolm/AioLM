@@ -82,9 +82,9 @@ $runtimeRoot = (Resolve-Path -LiteralPath $RuntimeRoot).Path
 $outputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 $build = "pr$PullRequest"
 $rootName = "$build-$Backend"
-$packageParent = Join-Path ([System.IO.Path]::GetTempPath()) ("llama-board-pr-runtime-" + [Guid]::NewGuid().ToString('N'))
+$packageParent = Join-Path ([System.IO.Path]::GetTempPath()) ("aiolm-pr-runtime-" + [Guid]::NewGuid().ToString('N'))
 $packageRoot = Join-Path $packageParent $rootName
-$archivePath = Join-Path $outputDirectory "llama-board-$rootName-win-x64.zip"
+$archivePath = Join-Path $outputDirectory "aiolm-$rootName-win-x64.zip"
 
 try {
   New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
@@ -125,7 +125,7 @@ try {
     url = "https://github.com/ggml-org/llama.cpp/pull/$PullRequest"
   }
 
-  Write-Utf8Json (Join-Path $packageRoot 'llama-board-runtime-source.json') $source
+  Write-Utf8Json (Join-Path $packageRoot 'aiolm-runtime-source.json') $source
 
   $filesByPath = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
   Get-ChildItem -LiteralPath $packageRoot -File -Recurse | ForEach-Object {
@@ -160,7 +160,7 @@ try {
     source = $source
     files = $manifestFiles
   }
-  $manifestPath = Join-Path $packageRoot 'llama-board-runtime-bundle.json'
+  $manifestPath = Join-Path $packageRoot 'aiolm-runtime-bundle.json'
   Write-Utf8Json $manifestPath $manifest
 
   if (Test-Path -LiteralPath $archivePath) {

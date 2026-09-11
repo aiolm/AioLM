@@ -1,4 +1,4 @@
-use llama_board_lib::{
+use aiolm_lib::{
     backends, config, deletable_model_path, hardware, models, runtime, server,
     validate_launch_config,
 };
@@ -46,7 +46,7 @@ fn state_path() -> PathBuf {
     let root = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    root.join("llama-board").join("headless-state.json")
+    root.join("aiolm").join("headless-state.json")
 }
 
 fn read_state() -> Result<Option<HeadlessState>, String> {
@@ -882,7 +882,7 @@ fn doctor_value() -> Value {
 
 fn help_value() -> Value {
     json!({
-        "usage":"llama-board-cli <config|models|runtime|server|doctor> [subcommand]",
+        "usage":"aiolm-cli <config|models|runtime|server|doctor> [subcommand]",
         "commands":{
             "config get":"print persisted configuration",
             "config set <field> <value>":"change a non-secret typed configuration field",
@@ -1001,6 +1001,12 @@ async fn run(args: &[String]) -> Result<Value, String> {
 #[tokio::main]
 async fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
+    if !args.is_empty() && args[0] != "--help" && args[0] != "-h" {
+        if let Err(error) = aiolm_lib::branding::prepare_managed_data() {
+            println!("{}", json!({"ok":false,"error":error}));
+            std::process::exit(1);
+        }
+    }
     match run(&args).await {
         Ok(value) => println!(
             "{}",

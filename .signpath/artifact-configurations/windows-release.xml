@@ -8,14 +8,14 @@
   </parameters>
   <zip-file>
     <pe-file
-      path="llama-board_${version}_x64-setup.exe"
-      product-name="llama-board"
+      path="AioLM_${version}_x64-setup.exe"
+      product-name="AioLM"
       product-version="${version}"
       file-version="${version}"
       original-filename="${file.name}">
-      <authenticode-sign description="llama-board Windows installer" description-url="https://github.com/llama-board/llama-board" />
+      <authenticode-sign description="AioLM Windows installer" description-url="https://github.com/joowon-jang/llama-board" />
     </pe-file>
-    <msi-file path="llama-board_${version}_x64_en-US.msi" subject="llama-board">
+    <msi-file path="AioLM_${version}_x64_en-US.msi" subject="AioLM">
       <authenticode-sign />
     </msi-file>
     <powershell-file path="install.ps1">

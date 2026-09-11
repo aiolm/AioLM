@@ -66,18 +66,30 @@ type ErrorCache = HashMap<String, (Instant, String)>;
 /// Sidecar file recording what `llama-server --version` reported, so the UI can
 /// show a real version instead of only the `bNNNN` CI build tag. GitHub's
 /// release metadata carries the build tag alone, so this is the only source.
-const VERSION_MANIFEST: &str = "llama-board-runtime.json";
-const SOURCE_MANIFEST: &str = "llama-board-runtime-source.json";
-const RUNTIME_BUNDLE_MANIFEST: &str = "llama-board-runtime-bundle.json";
+const VERSION_MANIFEST: &str = "aiolm-runtime.json";
+const SOURCE_MANIFEST: &str = "aiolm-runtime-source.json";
+const RUNTIME_BUNDLE_MANIFEST: &str = "aiolm-runtime-bundle.json";
+
+fn compatible_manifest(root: &Path, name: &str) -> PathBuf {
+    let current = root.join(name);
+    if current.exists() {
+        current
+    } else {
+        root.join(name.replacen("aiolm-", "llama-board-", 1))
+    }
+}
 const RUNTIME_BUNDLE_FORMAT: u32 = 1;
 const LLAMA_REPOSITORY: &str = "ggml-org/llama.cpp";
 pub const DFLASH2_PR_BUILD: &str = "pr27342";
 /// GitHub releases produced by the PR runtime workflow. The release is
 /// deliberately separate from upstream llama.cpp: it contains binaries built
 /// from a reviewed PR commit, not source archives.
-const PR_ARTIFACT_REPOSITORY: &str = match option_env!("LLAMA_BOARD_PR_ARTIFACT_REPOSITORY") {
+const PR_ARTIFACT_REPOSITORY: &str = match option_env!("AIOLM_PR_ARTIFACT_REPOSITORY") {
     Some(repository) => repository,
-    None => "joowon-jang/llama-board",
+    None => match option_env!("LLAMA_BOARD_PR_ARTIFACT_REPOSITORY") {
+        Some(repository) => repository,
+        None => "joowon-jang/llama-board",
+    },
 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -283,12 +295,12 @@ fn write_source_manifest(dir: &Path, source: &RuntimeSource) -> Result<(), Strin
 }
 
 fn read_version_manifest(dir: &Path) -> Option<RuntimeVersion> {
-    let raw = fs::read_to_string(dir.join(VERSION_MANIFEST)).ok()?;
+    let raw = fs::read_to_string(compatible_manifest(dir, VERSION_MANIFEST)).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
 fn read_source_manifest(dir: &Path) -> Option<RuntimeSource> {
-    let raw = fs::read_to_string(dir.join(SOURCE_MANIFEST)).ok()?;
+    let raw = fs::read_to_string(compatible_manifest(dir, SOURCE_MANIFEST)).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
@@ -674,7 +686,7 @@ fn sweep_orphaned_work_in(download_root: &Path, runtime_root: &Path, now: System
 /// are intentionally ignored; managed runtimes and user directories are not
 /// touched by the exact-name allowlists above.
 pub fn sweep_orphaned_work() {
-    let download_root = app_data_root().join("llama-board").join("downloads");
+    let download_root = app_data_root().join("aiolm").join("downloads");
     let runtime_root = runtimes_root();
     sweep_orphaned_work_in(&download_root, &runtime_root, SystemTime::now());
 }
@@ -759,7 +771,7 @@ fn app_data_root() -> PathBuf {
 }
 
 pub fn runtimes_root() -> PathBuf {
-    app_data_root().join("llama-board").join("runtimes")
+    app_data_root().join("aiolm").join("runtimes")
 }
 
 pub fn validate_runtime_identifiers(backend: &str, build: &str) -> Result<(), String> {
@@ -963,7 +975,7 @@ const BUILD_TOOLING_ENVIRONMENT: &[&str] = &[
 ];
 
 /// The compiler environment a Visual Studio developer prompt exports. CMake
-/// finds MSVC through the registry on its own, but when llama-board itself was
+/// finds MSVC through the registry on its own, but when aiolm itself was
 /// launched from a developer prompt these describe the *selected* toolset, and
 /// dropping half of them produces a configure that mixes two.
 #[cfg(windows)]
@@ -1167,7 +1179,7 @@ pub fn child_environment_for_runtime(
 
 /// Complete an already-installed vendor runtime from a compatible local SDK.
 /// Release archives for Windows ROCm may intentionally omit BLAS DLLs and
-/// kernel data, while llama-board requires managed runtimes to remain usable
+/// kernel data, while aiolm requires managed runtimes to remain usable
 /// after the launching shell (and its SDK PATH) disappears.
 pub async fn repair_runtime_dependencies(
     backend: &str,
@@ -1626,7 +1638,7 @@ fn windows_sdk_root() -> Option<PathBuf> {
 }
 
 /// Locate Ninja in PATH or beside one of the CMake distributions that
-/// llama-board already knows how to find. Windows ROCm builds deliberately use
+/// aiolm already knows how to find. Windows ROCm builds deliberately use
 /// Ninja because CMake's Visual Studio generator sends HIP sources to cl.exe.
 fn locate_ninja() -> Option<PathBuf> {
     if let Ok(path) = which::which("ninja") {
@@ -2003,7 +2015,7 @@ fn cmake_not_found_error() -> String {
         "PATH"
     };
     format!(
-        "CMake was not found. llama-board looked in {searched}. A PR build needs CMake and a C++ toolchain: {hint}, then try again."
+        "CMake was not found. aiolm looked in {searched}. A PR build needs CMake and a C++ toolchain: {hint}, then try again."
     )
 }
 
@@ -2174,7 +2186,7 @@ fn free_space_error(
     }
     let gib = |bytes: u64| format!("{:.1} GB", bytes as f64 / GIB as f64);
     Some(format!(
-        "not enough free disk space for the {label}: it needs about {}, but only {} is free on {}. Free some space, or move the llama-board data directory to a larger drive, then try again.",
+        "not enough free disk space for the {label}: it needs about {}, but only {} is free on {}. Free some space, or move the aiolm data directory to a larger drive, then try again.",
         gib(required),
         gib(available),
         path.display()
@@ -2985,7 +2997,8 @@ fn collect_runtime_files_recursive(
             collect_runtime_files_recursive(root, &path, files, depth + 1)?;
         } else if metadata.is_file() {
             let relative = bundle_relative_path(root, &path)?;
-            if relative == RUNTIME_BUNDLE_MANIFEST {
+            if relative == RUNTIME_BUNDLE_MANIFEST || relative == "llama-board-runtime-bundle.json"
+            {
                 continue;
             }
             files.push((relative, path, metadata.len()));
@@ -3057,9 +3070,9 @@ fn validate_bundle_manifest(manifest: &RuntimeBundleManifest) -> Result<(), Stri
 }
 
 fn read_bundle_manifest(root: &Path) -> Result<RuntimeBundleManifest, String> {
-    let path = root.join(RUNTIME_BUNDLE_MANIFEST);
+    let path = compatible_manifest(root, RUNTIME_BUNDLE_MANIFEST);
     let metadata = fs::metadata(&path)
-        .map_err(|_| "runtime bundle is missing llama-board-runtime-bundle.json".to_string())?;
+        .map_err(|_| "runtime bundle is missing aiolm-runtime-bundle.json".to_string())?;
     if metadata.len() > 2 * 1024 * 1024 {
         return Err("runtime bundle manifest is too large".into());
     }
@@ -3172,7 +3185,7 @@ fn verify_optional_bundle_sidecar(archive: &Path) -> Result<(), String> {
 }
 
 /// Make a disposable export snapshot when the platform needs extra files. A
-/// runtime built by an older llama-board may contain the GPU DLLs but not the
+/// runtime built by an older aiolm may contain the GPU DLLs but not the
 /// SDK's data files, and a normal Windows target may not contain the MSVC CRT.
 /// Keeping the snapshot outside the installed directory means export never
 /// mutates or silently upgrades the runtime the user is currently using.
@@ -3611,7 +3624,7 @@ pub fn clear_api_cache() {
 
 fn http() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent("llama-board/0.2")
+        .user_agent("aiolm/0.2")
         .timeout(Duration::from_secs(30))
         .build()
         .expect("static HTTP client configuration must be valid")
@@ -3622,7 +3635,7 @@ fn http() -> reqwest::Client {
 /// stalled connection is caught by the per-read timeout instead.
 fn download_http() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent("llama-board/0.2")
+        .user_agent("aiolm/0.2")
         .connect_timeout(Duration::from_secs(30))
         .read_timeout(Duration::from_secs(60))
         .build()
@@ -3768,7 +3781,7 @@ fn pull_request_lookup_error(number: u64, status: reqwest::StatusCode, body: &st
     let detail = api_error(status, body);
     match status.as_u16() {
         404 => format!(
-            "pull request #{number} was not found in {LLAMA_REPOSITORY}. Check the number, and note that llama-board only builds pull requests from that repository - an issue number, or a PR in a fork's own repository, will not resolve. ({detail})"
+            "pull request #{number} was not found in {LLAMA_REPOSITORY}. Check the number, and note that aiolm only builds pull requests from that repository - an issue number, or a PR in a fork's own repository, will not resolve. ({detail})"
         ),
         403 | 429 => {
             if body.to_ascii_lowercase().contains("rate limit") {
@@ -3785,7 +3798,7 @@ fn pull_request_lookup_error(number: u64, status: reqwest::StatusCode, body: &st
             "pull request #{number} is not available for legal reasons. ({detail})"
         ),
         500..=599 => format!(
-            "GitHub had a server error looking up pull request #{number}; this is not something llama-board can fix, so try again shortly. ({detail})"
+            "GitHub had a server error looking up pull request #{number}; this is not something aiolm can fix, so try again shortly. ({detail})"
         ),
         _ => detail,
     }
@@ -3811,7 +3824,7 @@ struct PullRequestArtifact {
 
 fn pull_request_artifact_name(pull_request: u64, backend: &str) -> String {
     format!(
-        "llama-board-pr{pull_request}-{backend}-{}-{}.zip",
+        "aiolm-pr{pull_request}-{backend}-{}-{}.zip",
         release_platform(),
         bundle_architecture()
     )
@@ -3858,11 +3871,13 @@ async fn find_pull_request_artifact(
         return Err("prebuilt PR artifact release tag did not match the request".into());
     }
     let expected_name = pull_request_artifact_name(source.pull_request, backend);
-    let Some(asset) = release
-        .assets
-        .into_iter()
-        .find(|asset| asset.name == expected_name)
-    else {
+    let legacy_name = expected_name.replacen("aiolm-", "llama-board-", 1);
+    let mut assets = release.assets;
+    let selected = assets
+        .iter()
+        .position(|asset| asset.name == expected_name)
+        .or_else(|| assets.iter().position(|asset| asset.name == legacy_name));
+    let Some(asset) = selected.map(|index| assets.swap_remove(index)) else {
         return Ok(None);
     };
     validate_asset_file_name(&asset.name)?;
@@ -4354,7 +4369,7 @@ pub async fn install_with(
     let companions = companion_assets(build, &info.file_name).await?;
 
     let root = runtimes_root();
-    let download_root = app_data_root().join("llama-board").join("downloads");
+    let download_root = app_data_root().join("aiolm").join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     let nonce = short_nonce();
@@ -4518,7 +4533,7 @@ async fn install_pr_artifact_with(
     cancel: Arc<AtomicBool>,
 ) -> Result<InstalledRuntime, String> {
     let root = runtimes_root();
-    let download_root = app_data_root().join("llama-board").join("downloads");
+    let download_root = app_data_root().join("aiolm").join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     if let Some(error) = free_space_error(
@@ -4622,7 +4637,7 @@ pub async fn install_pr_with(
     })?;
 
     let root = runtimes_root();
-    let download_root = app_data_root().join("llama-board").join("downloads");
+    let download_root = app_data_root().join("aiolm").join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     // Checked before the first byte is downloaded. Running out of disk halfway
@@ -4708,7 +4723,7 @@ pub async fn install_pr_with(
             ArchiveCommitCheck::Matches => COMMIT_CHECK_MATCHED.to_string(),
             ArchiveCommitCheck::Unknown => {
                 return Err(format!(
-                    "{COMMIT_CHECK_UNKNOWN}: the downloaded source does not expose a recognised commit directory, so llama-board refused to build it. Retry the pull request or inspect the archive manually; no runtime was activated."
+                    "{COMMIT_CHECK_UNKNOWN}: the downloaded source does not expose a recognised commit directory, so aiolm refused to build it. Retry the pull request or inspect the archive manually; no runtime was activated."
                 ));
             }
             ArchiveCommitCheck::Mismatch(found) => {
@@ -4723,7 +4738,7 @@ pub async fn install_pr_with(
         // so a machine with no NVIDIA driver never pays for the probe.
         let architectures = if backend == "cuda" {
             cuda_architectures(
-                std::env::var(CUDA_ARCHITECTURES_OVERRIDE).ok().as_deref(),
+                crate::branding::env_var(CUDA_ARCHITECTURES_OVERRIDE).ok().as_deref(),
                 &detected_cuda_capabilities().await,
             )
         } else {
@@ -4878,7 +4893,7 @@ pub fn validate_source_build_backend(backend: &str) -> Result<(), String> {
     let reason = match backend {
         "sycl" => "the Intel oneAPI icx/icpx compiler driver and the environment that setvars installs, neither of which this build inherits",
         "openvino" => "the OpenVINO toolkit, its setupvars environment, and OpenVINO runtime libraries that are not part of the build tree",
-        _ => "a vendor toolchain and runtime libraries that llama-board cannot detect or package",
+        _ => "a vendor toolchain and runtime libraries that aiolm cannot detect or package",
     };
     Err(format!(
         "PR builds are not supported for the {backend} backend: it needs {reason}. Install a released {backend} runtime from the backend list instead, or build this PR yourself with the vendor toolchain. PR builds are supported for: {}.",
@@ -4897,7 +4912,7 @@ fn missing_host_compiler(view: &ToolchainView<'_>) -> Option<String> {
     if cfg!(windows) {
         if !(view.executable)("cl") {
             return Some(
-                "a PR build needs the Microsoft C/C++ compiler (cl.exe). Install Visual Studio Build Tools with the Desktop development with C++ workload, or open llama-board from a Visual Studio Developer Command Prompt, then try again.".to_string(),
+                "a PR build needs the Microsoft C/C++ compiler (cl.exe). Install Visual Studio Build Tools with the Desktop development with C++ workload, or open aiolm from a Visual Studio Developer Command Prompt, then try again.".to_string(),
             );
         }
     } else if !(view.executable)("cc") && !(view.executable)("gcc") && !(view.executable)("clang") {
@@ -4983,7 +4998,7 @@ fn source_build_toolchain_error(backend: &str) -> Option<String> {
     #[cfg(windows)]
     if backend == "rocm" && !windows_clang_link_environment_ready() {
         return Some(
-            "the Windows ROCm build also needs the Windows SDK import and library paths. Install the Windows 10/11 SDK through Visual Studio Build Tools with the Desktop development with C++ workload, then try again. llama-board does not need a Developer Command Prompt; it loads the paths automatically when the SDK is installed.".into(),
+            "the Windows ROCm build also needs the Windows SDK import and library paths. Install the Windows 10/11 SDK through Visual Studio Build Tools with the Desktop development with C++ workload, then try again. aiolm does not need a Developer Command Prompt; it loads the paths automatically when the SDK is installed.".into(),
         );
     }
     #[cfg(windows)]
@@ -5034,11 +5049,11 @@ pub fn validate_catalog_backend(backend: &str) -> Result<(), String> {
 ///
 /// - `LLAMA_BUILD_BORINGSSL`: BoringSSL is a `FetchContent` Git clone that
 ///   additionally needs a Go toolchain. It exists to give `llama-server` an
-///   HTTPS listener. llama-board talks to the server over loopback HTTP and
+///   HTTPS listener. aiolm talks to the server over loopback HTTP and
 ///   never sets `--ssl-key-file`, so the dependency buys nothing here.
 /// - `LLAMA_CURL` / `LLAMA_OPENSSL`: these power the server's own
 ///   download-a-model-by-URL path and need libcurl/OpenSSL development
-///   packages that most Windows PCs do not have. llama-board manages models
+///   packages that most Windows PCs do not have. aiolm manages models
 ///   itself and never asks the server to fetch one.
 ///
 /// An unknown `-D` is a warning in CMake, not an error, so setting these on a
@@ -5050,7 +5065,7 @@ const SOURCE_BUILD_OFFLINE_OPTIONS: &[&str] = &[
     "-DLLAMA_BUILD_BORINGSSL=OFF",
     "-DLLAMA_CURL=OFF",
     "-DLLAMA_OPENSSL=OFF",
-    // llama-board talks to the server's loopback API and never opens the
+    // aiolm talks to the server's loopback API and never opens the
     // server's embedded browser UI. A PR archive may still contain a full
     // tools/ui source tree, whose default CMake path runs npm (or fetches a
     // prebuilt asset from Hugging Face), so disable both paths explicitly.
@@ -5078,7 +5093,7 @@ fn build_failure_hint(log: &str) -> Option<&'static str> {
         "server certificate verification failed",
     ]) {
         return Some(
-            "this PR's build tried to download a dependency of its own. llama-board pins and verifies only the PR source archive, so a build that fetches more needs Git and working network access (including your proxy and CA bundle) on this PC. Install Git, check HTTPS_PROXY/SSL_CERT_FILE if you are behind a proxy, or install a released runtime instead.",
+            "this PR's build tried to download a dependency of its own. aiolm pins and verifies only the PR source archive, so a build that fetches more needs Git and working network access (including your proxy and CA bundle) on this PC. Install Git, check HTTPS_PROXY/SSL_CERT_FILE if you are behind a proxy, or install a released runtime instead.",
         );
     }
     if contains_any(&[
@@ -5123,7 +5138,7 @@ fn build_failure_hint(log: &str) -> Option<&'static str> {
 ///
 /// Accepts exactly what `CMAKE_CUDA_ARCHITECTURES` accepts, e.g. `89-real`, or
 /// `75-real;80-real;90-virtual`, or the word `all`.
-const CUDA_ARCHITECTURES_OVERRIDE: &str = "LLAMA_BOARD_CUDA_ARCHITECTURES";
+const CUDA_ARCHITECTURES_OVERRIDE: &str = "AIOLM_CUDA_ARCHITECTURES";
 
 /// The list used when the host's GPU generation cannot be determined.
 ///
@@ -5214,10 +5229,10 @@ async fn detected_cuda_capabilities() -> Vec<String> {
 /// What a PR build produces, stated once so the UI, the docs and the build
 /// itself cannot drift apart.
 ///
-/// llama-board builds the server and the benchmark tool, and nothing else.
+/// aiolm builds the server and the benchmark tool, and nothing else.
 /// Tests and examples are off because they roughly double the build for code
-/// llama-board never runs. The server's optional embedded web UI is **not**
-/// built here: llama-board uses the loopback API directly, so no Node
+/// aiolm never runs. The server's optional embedded web UI is **not**
+/// built here: aiolm uses the loopback API directly, so no Node
 /// toolchain is needed and no UI asset is fetched at build time - the same
 /// reason the network options in `SOURCE_BUILD_OFFLINE_OPTIONS` are off.
 pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-bench"];
@@ -6404,7 +6419,7 @@ mod tests {
 
     fn test_directory(prefix: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "llama-board-{prefix}-{}-{}",
+            "aiolm-{prefix}-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ))
@@ -6492,6 +6507,48 @@ mod tests {
     }
 
     #[test]
+    fn legacy_bundle_names_remain_verified_and_readable() {
+        let root = test_directory("legacy-bundle");
+        let runtime = root.join("pr27342-cpu");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join(server_executable_name()), b"server").unwrap();
+        fs::write(runtime.join(bench_executable_name()), b"bench").unwrap();
+        write_source_manifest(&runtime, &test_source()).unwrap();
+        fs::rename(
+            runtime.join(SOURCE_MANIFEST),
+            runtime.join("llama-board-runtime-source.json"),
+        )
+        .unwrap();
+        let manifest = test_bundle_manifest(&runtime);
+        fs::write(
+            runtime.join("llama-board-runtime-bundle.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let archive = root.join("legacy.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+        for entry in fs::read_dir(&runtime).unwrap() {
+            let entry = entry.unwrap();
+            zip.start_file(
+                format!("pr27342-cpu/{}", entry.file_name().to_string_lossy()),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            std::io::copy(&mut fs::File::open(entry.path()).unwrap(), &mut zip).unwrap();
+        }
+        zip.finish().unwrap();
+        let extracted = root.join("extracted");
+        extract(&archive, &extracted, &Arc::new(AtomicBool::new(false))).unwrap();
+        let imported = find_bundle_runtime_root(&extracted).unwrap();
+        let manifest = read_bundle_manifest(&imported).unwrap();
+        verify_bundle_files(&imported, &manifest).unwrap();
+        assert_eq!(read_source_manifest(&imported), Some(test_source()));
+        fs::write(imported.join(server_executable_name()), b"tampered").unwrap();
+        assert!(verify_bundle_files(&imported, &manifest).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn bundle_file_verification_rejects_missing_source_manifest() {
         let root = test_directory("bundle-missing-source");
         fs::create_dir_all(&root).expect("create test runtime");
@@ -6561,7 +6618,7 @@ mod tests {
     #[tokio::test]
     async fn async_download_writer_writes_chunks_without_sync_file_calls() {
         let path = std::env::temp_dir().join(format!(
-            "llama-board-runtime-download-{}-{}.part",
+            "aiolm-runtime-download-{}-{}.part",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -6762,7 +6819,7 @@ mod tests {
 
     #[test]
     fn install_cleanup_removes_partial_archive_and_staging_directory() {
-        let root = std::env::temp_dir().join(format!("llama-board-cleanup-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-cleanup-{}", Uuid::new_v4()));
         let archive = root.join("download.zip");
         let staging = root.join("staging");
         fs::create_dir_all(&staging).expect("create staging");
@@ -6777,7 +6834,7 @@ mod tests {
     #[test]
     fn orphan_sweep_removes_only_old_exactly_named_work() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-orphan-sweep-{}-{}",
+            "aiolm-orphan-sweep-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -6852,7 +6909,7 @@ mod tests {
     #[test]
     fn orphan_sweep_ignores_a_locked_directory_removal_failure() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-orphan-locked-{}-{}",
+            "aiolm-orphan-locked-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -6879,7 +6936,7 @@ mod tests {
     #[test]
     fn replacement_succeeds_when_old_backup_cleanup_fails() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-replace-{}-{}",
+            "aiolm-replace-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -7514,7 +7571,7 @@ mod tests {
         )
         .expect("cpu configures");
         // BoringSSL is a FetchContent Git clone that also needs Go; curl and
-        // OpenSSL power a download path llama-board never uses. All three are
+        // OpenSSL power a download path aiolm never uses. All three are
         // network dependencies outside the pinned source archive.
         for option in SOURCE_BUILD_OFFLINE_OPTIONS {
             assert!(args.iter().any(|arg| arg == option), "{option}");
@@ -7548,7 +7605,7 @@ mod tests {
     #[test]
     fn a_cleanup_plan_is_handed_off_instead_of_running_on_the_runtime() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-cleanup-async-{}-{}",
+            "aiolm-cleanup-async-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -7579,7 +7636,7 @@ mod tests {
     #[test]
     fn a_committed_install_keeps_its_runtime_and_still_clears_the_workspace() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-cleanup-commit-{}-{}",
+            "aiolm-cleanup-commit-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -7607,7 +7664,7 @@ mod tests {
     #[test]
     fn a_bounded_removal_gives_up_instead_of_retrying_for_ever() {
         let missing = std::env::temp_dir().join(format!(
-            "llama-board-absent-{}-{}",
+            "aiolm-absent-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -7780,7 +7837,7 @@ mod tests {
     #[test]
     fn a_source_manifest_round_trips_and_reads_older_installs() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-manifest-{}-{}",
+            "aiolm-manifest-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8022,7 +8079,7 @@ mod tests {
             assert!(available > 0);
         }
         // A path whose leaf does not exist yet still resolves, via its parent.
-        let missing = std::env::temp_dir().join(format!("llama-board-absent-{}", Uuid::new_v4()));
+        let missing = std::env::temp_dir().join(format!("aiolm-absent-{}", Uuid::new_v4()));
         assert_eq!(available_bytes(&missing).is_some(), available.is_some());
     }
 
@@ -8319,7 +8376,7 @@ mod tests {
     #[test]
     fn the_source_root_is_the_single_directory_that_holds_a_cmakelists() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-source-root-{}-{}",
+            "aiolm-source-root-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8347,7 +8404,7 @@ mod tests {
     #[test]
     fn the_built_runtime_directory_is_the_one_holding_both_binaries() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-built-{}-{}",
+            "aiolm-built-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8366,7 +8423,7 @@ mod tests {
     #[test]
     fn a_symlink_in_the_build_output_is_refused_rather_than_followed() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-symlink-{}-{}",
+            "aiolm-symlink-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8387,7 +8444,7 @@ mod tests {
     #[test]
     fn a_cancelled_copy_stops_instead_of_packaging_the_rest() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-copy-cancel-{}-{}",
+            "aiolm-copy-cancel-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8512,7 +8569,7 @@ mod tests {
     #[cfg(unix)]
     async fn spawn_marker_grandchild() -> MarkerGrandchild {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-process-group-{}-{}",
+            "aiolm-process-group-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8522,10 +8579,10 @@ mod tests {
         let mut command = Command::new("sh");
         command.args([
             "-c",
-            "(while :; do printf x >> \"$LLAMA_BOARD_MARKER\"; sleep 0.02; done) & child=$!; echo \"$child\" > \"$LLAMA_BOARD_PID\"; wait",
+            "(while :; do printf x >> \"$AIOLM_MARKER\"; sleep 0.02; done) & child=$!; echo \"$child\" > \"$AIOLM_PID\"; wait",
         ])
-        .env("LLAMA_BOARD_MARKER", &marker)
-        .env("LLAMA_BOARD_PID", &pid_file);
+        .env("AIOLM_MARKER", &marker)
+        .env("AIOLM_PID", &pid_file);
         configure_build_process_group(&mut command);
         let child = command
             .stdin(std::process::Stdio::null())
@@ -8734,7 +8791,7 @@ mod tests {
     #[test]
     fn a_listed_runtime_carries_its_recorded_provenance() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-listing-{}-{}",
+            "aiolm-listing-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8773,7 +8830,7 @@ mod tests {
     #[test]
     fn a_manifest_that_is_not_valid_json_is_ignored_rather_than_fatal() {
         let root = std::env::temp_dir().join(format!(
-            "llama-board-bad-manifest-{}-{}",
+            "aiolm-bad-manifest-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ));
@@ -8812,7 +8869,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_pr27342_rocm_bundle_round_trips_without_host_sdk() {
-        if std::env::var("LLAMA_BOARD_LIVE_BUNDLE_TEST")
+        if crate::branding::env_var("AIOLM_LIVE_BUNDLE_TEST")
             .ok()
             .as_deref()
             != Some("1")
@@ -8823,7 +8880,7 @@ mod tests {
             return;
         };
         let installed = PathBuf::from(&original_appdata)
-            .join("llama-board")
+            .join("aiolm")
             .join("runtimes")
             .join("pr27342-rocm");
         if !installed.is_dir() {
@@ -8831,7 +8888,7 @@ mod tests {
         }
         let isolated_appdata = test_directory("live-bundle-appdata");
         let isolated_runtime = isolated_appdata
-            .join("llama-board")
+            .join("aiolm")
             .join("runtimes")
             .join("pr27342-rocm");
         fs::create_dir_all(isolated_runtime.parent().expect("runtime parent"))

@@ -9,7 +9,7 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use llama_board_lib::{server, AppConfig, ErrBuf};
+use aiolm_lib::{server, AppConfig, ErrBuf};
 
 /// Copies the compiled fake-llama-server fixture into a throwaway directory
 /// under the exact file name `server::server_bin` looks up on PATH, and
@@ -48,7 +48,7 @@ mod tempfile_dir {
     impl TempDir {
         pub fn new() -> Self {
             let dir = std::env::temp_dir().join(format!(
-                "llama-board-smoke-fake-{}-{}",
+                "aiolm-smoke-fake-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -92,7 +92,7 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         &cfg,
         api_key,
         &ring,
-        &llama_board_lib::gpu::ResolvedGpu::default(),
+        &aiolm_lib::gpu::ResolvedGpu::default(),
     )
     .unwrap_or_else(|e| panic!("spawn failed: {e}\nstderr: {}", ring.tail()));
     let shared = Arc::new(Mutex::new(server::ServerState::default()));

@@ -125,7 +125,7 @@ export function normalizeAttachmentProgress(value: Partial<AttachmentProgress>):
 
 export type McpApprovalPolicy = "always-ask" | "once" | "session" | "server-tool" | "deny";
 
-const MCP_POLICY_KEY = "llama-board.mcp-approval-policy.v1";
+const MCP_POLICY_KEY = "aiolm.mcp-approval-policy.v1";
 
 export function loadMcpApprovalPolicy(): McpApprovalPolicy {
   try {

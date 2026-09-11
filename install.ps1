@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$Release = $(if ([string]::IsNullOrWhiteSpace($env:LLAMA_BOARD_RELEASE)) { "latest" } else { $env:LLAMA_BOARD_RELEASE }),
+    [string]$Release = $(if ($null -ne $env:AIOLM_RELEASE) { $env:AIOLM_RELEASE } elseif ($null -ne $env:LLAMA_BOARD_RELEASE) { $env:LLAMA_BOARD_RELEASE } else { "latest" }),
     [ValidateSet("nsis", "msi")]
-    [string]$Installer = $(if ([string]::IsNullOrWhiteSpace($env:LLAMA_BOARD_INSTALLER)) { "nsis" } else { $env:LLAMA_BOARD_INSTALLER }),
+    [string]$Installer = $(if ($null -ne $env:AIOLM_INSTALLER) { $env:AIOLM_INSTALLER } elseif ($null -ne $env:LLAMA_BOARD_INSTALLER) { $env:LLAMA_BOARD_INSTALLER } else { "nsis" }),
     [switch]$DryRun
 )
 
@@ -13,14 +13,15 @@ $ProgressPreference = "SilentlyContinue"
 $Repository = "joowon-jang/llama-board"
 $ApiHeaders = @{
     Accept = "application/vnd.github+json"
-    "User-Agent" = "llama-board-installer"
+    "User-Agent" = "aiolm-installer"
 }
 
 if ($Release -ne "latest" -and $Release -notmatch "^[A-Za-z0-9._-]+$") {
     throw "Invalid release value: $Release"
 }
 
-if (-not $DryRun -and $env:LLAMA_BOARD_DRY_RUN -match "^(?i:1|true|yes)$") {
+$dryRunSetting = if ($null -ne $env:AIOLM_DRY_RUN) { $env:AIOLM_DRY_RUN } else { $env:LLAMA_BOARD_DRY_RUN }
+if (-not $DryRun -and $dryRunSetting -match "^(?i:1|true|yes)$") {
     $DryRun = $true
 }
 
@@ -30,13 +31,13 @@ $releaseUri = if ($Release -eq "latest") {
     "https://api.github.com/repos/$Repository/releases/tags/$Release"
 }
 
-Write-Host "==> Resolving llama-board release ($Release)"
+Write-Host "==> Resolving aiolm release ($Release)"
 $releaseMetadata = Invoke-RestMethod -UseBasicParsing -Uri $releaseUri -Headers $ApiHeaders
 
 $assetPattern = if ($Installer -eq "msi") {
-    "llama-board_*_x64_en-US.msi"
+    "AioLM_*_x64_en-US.msi"
 } else {
-    "llama-board_*_x64-setup.exe"
+    "AioLM_*_x64-setup.exe"
 }
 $asset = @($releaseMetadata.assets | Where-Object { $_.name -like $assetPattern }) | Select-Object -First 1
 if ($null -eq $asset) {
@@ -78,7 +79,7 @@ if ([string]::IsNullOrWhiteSpace($expectedDigest)) {
     throw "Release asset '$($asset.name)' does not provide a SHA-256 digest and no matching hash was found in checksums.txt."
 }
 
-$tempDir = Join-Path ([IO.Path]::GetTempPath()) ("llama-board-" + [guid]::NewGuid().ToString("N"))
+$tempDir = Join-Path ([IO.Path]::GetTempPath()) ("aiolm-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 $installerPath = Join-Path $tempDir $asset.name
 
@@ -107,7 +108,7 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "Installer exited with code $($process.ExitCode)."
     }
-    Write-Host "llama-board installed successfully."
+    Write-Host "aiolm installed successfully."
 } finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }

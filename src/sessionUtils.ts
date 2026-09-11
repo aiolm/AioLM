@@ -1,7 +1,7 @@
 import type { AppConfig, GpuPlacement, GpuDevice, SessionDefinition, SessionStatus } from "./api";
 
 export const DEFAULT_SESSION_ID = "default";
-export const SESSION_STATUS_CHANGED_EVENT = "llama-board:session-status-changed";
+export const SESSION_STATUS_CHANGED_EVENT = "aiolm:session-status-changed";
 
 export function notifySessionStatusChanged(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));

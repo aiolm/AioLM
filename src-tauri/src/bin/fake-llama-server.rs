@@ -1,7 +1,7 @@
 //! Deterministic stand-in for `llama-server`, used only by
 //! `tests/smoke_fake.rs` so the process-spawn / `/health` polling / SSE
 //! streaming path in `server.rs` gets real, always-on integration coverage
-//! without needing a multi-GB model or `LLAMA_BOARD_SMOKE=1`.
+//! without needing a multi-GB model or `AIOLM_SMOKE=1`.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 

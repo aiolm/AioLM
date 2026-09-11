@@ -2,24 +2,24 @@
 
 > **Language:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
 
-During development, `llama-board-cli.exe` is built at `.codex-target/release/llama-board-cli.exe`. Packaged builds include it as a Tauri resource; locate the installed copy in the app's resource directory. Output is JSON, the server is loopback-only, and credentials are not persisted.
+During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli.exe`. Packaged builds include it as a Tauri resource; locate the installed copy in the app's resource directory. Output is JSON, the server is loopback-only, and credentials are not persisted.
 
 ```powershell
-./llama-board-cli.exe --help
-./llama-board-cli.exe config get
-./llama-board-cli.exe config set <field> <value>  # typed, non-secret only
-./llama-board-cli.exe models list
-./llama-board-cli.exe models delete <path>
-./llama-board-cli.exe runtime list  # `runtimes` is also accepted
-./llama-board-cli.exe runtime device
-./llama-board-cli.exe runtime probe <backend> <build>
-./llama-board-cli.exe server start   # loopback, no API-key auth in headless mode
-./llama-board-cli.exe server status
-./llama-board-cli.exe server logs [lines]
-./llama-board-cli.exe server stop
-./llama-board-cli.exe server unload  # alias for stop
-./llama-board-cli.exe server restart
-./llama-board-cli.exe doctor
+./aiolm-cli.exe --help
+./aiolm-cli.exe config get
+./aiolm-cli.exe config set <field> <value>  # typed, non-secret only
+./aiolm-cli.exe models list
+./aiolm-cli.exe models delete <path>
+./aiolm-cli.exe runtime list  # `runtimes` is also accepted
+./aiolm-cli.exe runtime device
+./aiolm-cli.exe runtime probe <backend> <build>
+./aiolm-cli.exe server start   # loopback, no API-key auth in headless mode
+./aiolm-cli.exe server status
+./aiolm-cli.exe server logs [lines]
+./aiolm-cli.exe server stop
+./aiolm-cli.exe server unload  # alias for stop
+./aiolm-cli.exe server restart
+./aiolm-cli.exe doctor
 ```
 
 ## First start
@@ -27,9 +27,9 @@ During development, `llama-board-cli.exe` is built at `.codex-target/release/lla
 Configure a model before starting the headless server. The server executable is resolved from the selected managed runtime or from `PATH`.
 
 ```powershell
-./llama-board-cli.exe config set models_dir "C:\Models"
-./llama-board-cli.exe config set active_model "C:\Models\model.gguf"
-./llama-board-cli.exe server start
+./aiolm-cli.exe config set models_dir "C:\Models"
+./aiolm-cli.exe config set active_model "C:\Models\model.gguf"
+./aiolm-cli.exe server start
 ```
 
 - `config set` rejects credential-like and unknown fields.

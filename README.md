@@ -1,4 +1,4 @@
-# llama-board
+# AioLM
 
 > **Language:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 
 For advanced install options, verification, development setup, and CLI usage, see [docs/INSTALL.md](docs/INSTALL.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), and [docs/CLI.md](docs/CLI.md).
 
-On first launch, the model directory is intentionally unset; choose a local GGUF directory in Models. The application keeps configuration and managed runtimes under the standard `%APPDATA%\llama-board\` location. Upgrading from a build that used the previous desktop identifier keeps this shared configuration directory; do not delete it during migration.
+AioLM — All-In-One LM installs separately from llama-board. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](docs/MIGRATION.md).
 
 ## Code signing policy
 

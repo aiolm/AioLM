@@ -60,14 +60,14 @@ describe("model profiles", () => {
   it("does not infer inheritance for an older explicit profile", () => {
     const legacy = defaultServerProfile(cfg);
     delete legacy.runtime_defaults;
-    localStorage.setItem("llama-board-model-profiles", JSON.stringify({ version: 3, server: [legacy], model: [], activeServerIds: {}, activeModelIds: {} }));
+    localStorage.setItem("aiolm-model-profiles", JSON.stringify({ version: 3, server: [legacy], model: [], activeServerIds: {}, activeModelIds: {} }));
     expect(loadProfiles({ ...cfg, runtime_defaults: ["ngl"] }, "model.gguf").server[0].runtime_defaults).toEqual([]);
   });
 
   it("creates and loads independent server and model profiles", () => {
     const server = createServerProfile(cfg, "Fast");
     const model = createModelProfile(cfg, "Creative");
-    localStorage.setItem("llama-board-model-profiles", JSON.stringify({ version: 2, server: [server], model: [model], activeServerId: server.id, activeModelIds: { "models/a.gguf": model.id } }));
+    localStorage.setItem("aiolm-model-profiles", JSON.stringify({ version: 2, server: [server], model: [model], activeServerId: server.id, activeModelIds: { "models/a.gguf": model.id } }));
     const loaded = loadProfiles(cfg, "models/a.gguf");
     expect(loaded.server[0].name).toBe("Fast");
     expect(loaded.model[0].name).toBe("Creative");
@@ -89,7 +89,7 @@ describe("model profiles", () => {
     const quality = { ...createServerProfile(cfg, "Quality"), id: "server-quality", ctx_size: 8192 };
     const modelA = { ...createModelProfile(cfg, "A"), id: "model-a" };
     const modelB = { ...createModelProfile(cfg, "B"), id: "model-b" };
-    localStorage.setItem("llama-board-model-profiles", JSON.stringify({
+    localStorage.setItem("aiolm-model-profiles", JSON.stringify({
       version: 3,
       server: [fast, quality],
       model: [modelA, modelB],

@@ -100,7 +100,7 @@ function localStorageSafe(): Storage | null {
   }
 }
 
-export function readLoadingProfiles(key = "llama-board.loading-profiles.v1"): LoadingProfile[] {
+export function readLoadingProfiles(key = "aiolm.loading-profiles.v1"): LoadingProfile[] {
   try {
     const storage = localStorageSafe();
     if (!storage) return [];
@@ -111,7 +111,7 @@ export function readLoadingProfiles(key = "llama-board.loading-profiles.v1"): Lo
   }
 }
 
-export function writeLoadingProfiles(profiles: LoadingProfile[], key = "llama-board.loading-profiles.v1"): void {
+export function writeLoadingProfiles(profiles: LoadingProfile[], key = "aiolm.loading-profiles.v1"): void {
   try {
     const storage = localStorageSafe();
     if (storage) storage.setItem(key, JSON.stringify(profiles.filter(validLoadingProfile).slice(0, 20)));

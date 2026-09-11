@@ -1,4 +1,4 @@
-# llama-board
+# AioLM
 
 > **言語:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 
 高度なインストールオプション、検証、開発環境、CLI の使い方は [docs/INSTALL.ja.md](docs/INSTALL.ja.md)、[docs/DEVELOPMENT.ja.md](docs/DEVELOPMENT.ja.md)、[docs/CLI.ja.md](docs/CLI.ja.md) を参照してください。
 
-初回起動時はモデルディレクトリを未設定のままにし、Models で GGUF ディレクトリを選択します。設定と管理ランタイムは標準の `%APPDATA%\llama-board\` に保存されます。以前のデスクトップ識別子を使用するビルドから更新する場合は、この共有設定ディレクトリを削除しないでください。
+AioLM — All-In-One LMはllama-boardとは別にインストールされます。初回起動時に設定、管理ランタイム、CLIデータ、WebViewプロファイルを新しい `aiolm` / `com.aiolm.desktop` の場所へコピーします。元のデータは保持され、既存のAioLMデータが優先されます。移行前に旧アプリを終了してください。ロックや容量不足は解消後に再試行できます。[移行の詳細](docs/MIGRATION.md)。
 
 ## コード署名ポリシー (Code signing policy)
 

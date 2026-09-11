@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "llama-board",
+  "productName": "AioLM",
   "version": "0.1.6",
-  "identifier": "com.llamaboard.desktop",
+  "identifier": "com.aiolm.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "llama-board",
+        "title": "AioLM",
         "width": 1280,
         "height": 800,
         "minWidth": 360,
@@ -27,5 +27,6 @@
     "active": false,
     "targets": [],
     "resources": []
-  }
+  },
+  "mainBinaryName": "aiolm"
 }

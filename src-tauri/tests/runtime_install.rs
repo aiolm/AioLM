@@ -2,24 +2,24 @@
 //! release, including download, SHA-256 verification, extraction, the CUDA
 //! sidecar and the staged preflight.
 //!
-//! Gated behind LLAMA_BOARD_RUNTIME_INSTALL=1 because it downloads hundreds of
+//! Gated behind AIOLM_RUNTIME_INSTALL=1 because it downloads hundreds of
 //! megabytes and writes into the real app data directory.
 //!
 //! Run:
-//!   $env:LLAMA_BOARD_RUNTIME_INSTALL = "1"
+//!   $env:AIOLM_RUNTIME_INSTALL = "1"
 //!   cd src-tauri && cargo test --test runtime_install -- --nocapture --test-threads=1
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use llama_board_lib::runtime;
+use aiolm_lib::runtime;
 
 fn enabled() -> bool {
-    std::env::var_os("LLAMA_BOARD_RUNTIME_INSTALL").is_some()
+    aiolm_lib::branding::env_var("AIOLM_RUNTIME_INSTALL").is_ok()
 }
 
 fn backends() -> Vec<String> {
-    match std::env::var("LLAMA_BOARD_RUNTIME_BACKENDS") {
+    match aiolm_lib::branding::env_var("AIOLM_RUNTIME_BACKENDS") {
         Ok(list) => list
             .split(',')
             .map(|item| item.trim().to_string())
@@ -29,15 +29,15 @@ fn backends() -> Vec<String> {
     }
 }
 
-/// Gated behind `LLAMA_BOARD_RUNTIME_INSTALL=1` and `#[ignore]`: downloads a
+/// Gated behind `AIOLM_RUNTIME_INSTALL=1` and `#[ignore]`: downloads a
 /// live GitHub release, so it must not report "passed" in the default
 /// `cargo test` gate when the env var is unset and nothing was downloaded.
 /// Invoke explicitly with `cargo test --test runtime_install -- --ignored`.
 #[test]
-#[ignore = "downloads hundreds of MB from a live GitHub release; set LLAMA_BOARD_RUNTIME_INSTALL=1 and run with --ignored"]
+#[ignore = "downloads hundreds of MB from a live GitHub release; set AIOLM_RUNTIME_INSTALL=1 and run with --ignored"]
 fn installs_each_requested_backend_end_to_end() {
     if !enabled() {
-        eprintln!("[SKIP] Set LLAMA_BOARD_RUNTIME_INSTALL=1 to run the real runtime install test.");
+        eprintln!("[SKIP] Set AIOLM_RUNTIME_INSTALL=1 to run the real runtime install test.");
         return;
     }
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -87,10 +87,10 @@ fn installs_each_requested_backend_end_to_end() {
 /// Uses a disposable app-data root, never the user's installed runtimes.
 #[cfg(windows)]
 #[test]
-#[ignore = "live download cancellation; set LLAMA_BOARD_RUNTIME_INSTALL=1 and run alone"]
+#[ignore = "live download cancellation; set AIOLM_RUNTIME_INSTALL=1 and run alone"]
 fn cancelled_download_removes_staging() {
     use std::sync::atomic::Ordering;
-    assert!(enabled(), "set LLAMA_BOARD_RUNTIME_INSTALL=1");
+    assert!(enabled(), "set AIOLM_RUNTIME_INSTALL=1");
     struct IsolatedAppData {
         original: Option<std::ffi::OsString>,
         root: std::path::PathBuf,
@@ -104,10 +104,7 @@ fn cancelled_download_removes_staging() {
             let _ = std::fs::remove_dir_all(&self.root);
         }
     }
-    let root = std::env::temp_dir().join(format!(
-        "llama-board-download-test-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let root = std::env::temp_dir().join(format!("aiolm-download-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&root).expect("create isolated app data");
     let isolated = IsolatedAppData {
         original: std::env::var_os("APPDATA"),
@@ -137,7 +134,7 @@ fn cancelled_download_removes_staging() {
         "no download bytes received: {result:?}"
     );
     assert!(result.is_err(), "cancelled download was installed");
-    let runtime_root = isolated.root.join("llama-board").join("runtimes");
+    let runtime_root = isolated.root.join("aiolm").join("runtimes");
     if runtime_root.exists() {
         assert_eq!(
             std::fs::read_dir(runtime_root).unwrap().count(),

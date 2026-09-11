@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
-const NATIVE_RUNTIME_ERROR = "Native desktop runtime is unavailable. Run the packaged llama-board desktop app instead of the browser preview.";
+const NATIVE_RUNTIME_ERROR = "Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.";
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));

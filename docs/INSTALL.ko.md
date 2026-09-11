@@ -17,9 +17,9 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/llama-bo
 ## 옵션
 
 ```powershell
-$env:LLAMA_BOARD_INSTALLER = "msi"   # 기본: nsis
-$env:LLAMA_BOARD_RELEASE = "v0.1.5"  # 특정 태그
-$env:LLAMA_BOARD_DRY_RUN = "1"       # 검증만, 설치 안 함
+$env:AIOLM_INSTALLER = "msi"   # 기본: nsis
+$env:AIOLM_RELEASE = "v0.1.5"  # 특정 태그
+$env:AIOLM_DRY_RUN = "1"       # 검증만, 설치 안 함
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
 ```
 
@@ -28,8 +28,8 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 ## 다운로드 검증
 
 ```powershell
-$installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object -First 1
-# MSI는 "./llama-board_*_x64_en-US.msi"를 사용하세요.
+$installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -First 1
+# MSI는 "./AioLM_*_x64_en-US.msi"를 사용하세요.
 (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 # 같은 릴리스의 checksums.txt와 비교
 (Get-AuthenticodeSignature -LiteralPath $installer.FullName).Status
@@ -38,7 +38,7 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 
 릴리스 페이지: <https://github.com/llama-board/llama-board/releases/latest>
 
-마이그레이션 안내: 데스크톱 식별자는 중립값으로 변경되었습니다. 업그레이드할 때 기존 %APPDATA%\llama-board 설정·런타임 디렉터리를 유지하고, 새 설치에서는 Models에서 모델 디렉터리를 선택하세요. 제거해도 이 사용자 데이터는 삭제되지 않습니다.
+AioLM — All-In-One LM은 llama-board와 별도로 설치됩니다. 첫 실행에서 기존 설정·관리 런타임·CLI 저장소·WebView 프로필을 새 `aiolm` / `com.aiolm.desktop` 경로로 복사합니다. 원본을 유지하며, 이미 존재하는 AioLM 데이터를 우선합니다. 이전 앱을 종료한 뒤 실행하고, 잠금이나 공간 부족 오류가 발생하면 문제를 해결한 뒤 재시도하세요. [이전 방식과 호환성](MIGRATION.md)을 참고하세요.
 
 ## 코드 서명 정책
 
@@ -46,7 +46,7 @@ $installer = Get-ChildItem -File "./llama-board_*_x64-setup.exe" | Select-Object
 
 ## 제거
 
-**설정 → 앱 → 설치된 앱 → llama-board → 제거**를 선택하거나 **제어판 → 프로그램 및 기능**에서 제거하세요. 앱을 제거해도 사용자가 관리하는 모델·런타임·프로젝트·채팅 데이터는 자동으로 삭제되지 않으므로, 필요하면 해당 폴더를 별도로 삭제하세요.
+**설정 → 앱 → 설치된 앱 → AioLM → 제거**를 선택하거나 **제어판 → 프로그램 및 기능**에서 제거하세요. 앱을 제거해도 사용자가 관리하는 모델·런타임·프로젝트·채팅 데이터는 자동으로 삭제되지 않으므로, 필요하면 해당 폴더를 별도로 삭제하세요.
 
 ## Linux / macOS (예정)
 

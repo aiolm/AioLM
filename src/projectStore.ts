@@ -1,9 +1,9 @@
 import type { AppConfig, LoraAdapterConfig } from "./api";
 import type { JsonObject } from "./panels/tuningValidation";
 
-export const PROJECTS_KEY = "llama-board.projects.v1";
-export const ACTIVE_PROJECT_KEY = "llama-board.active-project.v1";
-export const PROJECTS_CHANGED_EVENT = "llama-board-projects-changed";
+export const PROJECTS_KEY = "aiolm.projects.v1";
+export const ACTIVE_PROJECT_KEY = "aiolm.active-project.v1";
+export const PROJECTS_CHANGED_EVENT = "aiolm-projects-changed";
 
 export type ProjectConfigKey =
   | "active_model"
@@ -288,14 +288,14 @@ function redactExportValue(value: unknown, key = ""): unknown {
 }
 
 export function exportProject(project: ProjectPreset): string {
-  return JSON.stringify({ schema: "llama-board.project.v1", project: redactExportValue(project) }, null, 2);
+  return JSON.stringify({ schema: "aiolm.project.v1", project: redactExportValue(project) }, null, 2);
 }
 
 export function importProject(raw: string): ProjectPreset {
   const parsed: unknown = JSON.parse(raw);
   const source = parsed && typeof parsed === "object" && "project" in parsed ? (parsed as { project: unknown }).project : parsed;
   const project = normalizeProject(source);
-  if (!project) throw new Error("The selected file is not a valid llama-board project preset.");
+  if (!project) throw new Error("The selected file is not a valid aiolm project preset.");
   return { ...project, id: `project-${Date.now().toString(36)}`, updatedAt: Date.now() };
 }
 

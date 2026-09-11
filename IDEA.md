@@ -1,10 +1,10 @@
-# llama-board 제품·구현 계획
+# AioLM 제품·구현 계획
 
-이 문서는 llama-board의 현재 구조를 기준으로 사용자 요구사항, 안전성 정책, 출시 절차를 한 문서에서 추적하는 실행 계획이다. 제품은 Tauri v2 + React/TypeScript 기반의 로컬 우선 데스크톱 앱이며, llama-server·llama-bench와 관리 런타임을 GUI에서 직접 실행한다. 표준 OS 경로는 런타임 저장에 필요할 때만 사용하고, 모델·GPU·조직·사용자에 대한 임의의 기본값은 제품에 포함하지 않는다.
+이 문서는 aiolm의 현재 구조를 기준으로 사용자 요구사항, 안전성 정책, 출시 절차를 한 문서에서 추적하는 실행 계획이다. 제품은 Tauri v2 + React/TypeScript 기반의 로컬 우선 데스크톱 앱이며, llama-server·llama-bench와 관리 런타임을 GUI에서 직접 실행한다. 표준 OS 경로는 런타임 저장에 필요할 때만 사용하고, 모델·GPU·조직·사용자에 대한 임의의 기본값은 제품에 포함하지 않는다.
 
 ## 1. 제품 목표와 범위
 
-llama-board는 다음 흐름을 하나의 안전한 작업 모델로 제공한다.
+aiolm는 다음 흐름을 하나의 안전한 작업 모델로 제공한다.
 
 1. 사용자가 모델 디렉터리를 선택하고 primary GGUF를 고른다.
 2. 필요하면 같은 세션에 멀티모달 projector(mmproj)와 speculative decoding용 draft bundle을 붙인다.
@@ -12,7 +12,7 @@ llama-board는 다음 흐름을 하나의 안전한 작업 모델로 제공한�
 4. 터미널 창 없이 서버·벤치마크·런타임 설치·PR 빌드를 실행하고 진행률, 로그, 취소 결과를 GUI에 보여 준다.
 5. 모델별 튜닝 프로필을 저장하고 재현 가능한 세션으로 다시 시작한다.
 
-현재 코드에는 AppConfig(schema v9), 단일 서버의 상태/health 확인, %APPDATA%\\llama-board\\ 설정·런타임 저장, 런타임 preflight와 PR provenance, 실행 프로필(localStorage v2), 벤치마크 취소 PID 추적이 있다. 아래 계획은 이 기반을 깨지 않고 다중 세션·안전한 GPU 배치·부분 결과·중립 기본값을 완성하는 순서다. 정적 Claude 감사에서 확인된 회귀 위험은 각 단계의 acceptance gate와 명령으로 검증한다.
+현재 코드에는 AppConfig(schema v9), 단일 서버의 상태/health 확인, %APPDATA%\\aiolm\\ 설정·런타임 저장, 런타임 preflight와 PR provenance, 실행 프로필(localStorage v2), 벤치마크 취소 PID 추적이 있다. 아래 계획은 이 기반을 깨지 않고 다중 세션·안전한 GPU 배치·부분 결과·중립 기본값을 완성하는 순서다. 정적 Claude 감사에서 확인된 회귀 위험은 각 단계의 acceptance gate와 명령으로 검증한다.
 
 ## 2. 도메인 계약
 
@@ -88,9 +88,9 @@ device_profile은 GPU마다 vendor, 이름, VRAM, driver, integrated 여부와 h
 - models_dir = "", active_model = "", mmproj = "", draft model/device = "".
 - active_backend = "", active_build = "", GpuPlacement의 모든 필드는 비어 있으며 host/runtime가 선택할 때까지 강제 GPU flag를 만들지 않는다.
 - 튜닝 기본값은 llama.cpp의 안전한 공통값(ctx_size=4096, ngl=0, flash_attn=auto, threads=0, 샘플링 temperature=0.8, top_p=0.95, top_k=40)을 사용하고, 호스트 GPU에 맞춘 자동 추천은 정보로만 표시한다.
-- 설정·managed runtime은 %APPDATA%\\llama-board\\ 아래에 저장한다. Windows runtime fallback에 필요한 %LOCALAPPDATA%와 Unix/macOS의 home/XDG 경로는 OS가 제공하는 위치로만 사용한다.
+- 설정·managed runtime은 %APPDATA%\\aiolm\\ 아래에 저장한다. Windows runtime fallback에 필요한 %LOCALAPPDATA%와 Unix/macOS의 home/XDG 경로는 OS가 제공하는 위치로만 사용한다.
 - 모델 디렉터리를 자동으로 특정 사용자·개발 도구의 경로로 채우지 않는다. 첫 Models 진입에서 폴더 선택을 유도하고, CLI에서는 models_dir를 명시하게 한다.
-- Cargo authors, Tauri identifier, release/signing URL, 주석과 예제에는 개인 사용자명·조직명·개인 모델 경로를 넣지 않는다. 제품 identifier는 com.llamaboard.desktop, 공개 저장소/릴리스 참조는 https://github.com/llama-board/llama-board를 기준으로 한다.
+- Cargo authors, Tauri identifier, release/signing URL, 주석과 예제에는 개인 사용자명·조직명·개인 모델 경로를 넣지 않는다. 제품 identifier는 com.aiolm.desktop, 공개 저장소/릴리스 참조는 https://github.com/llama-board/llama-board를 기준으로 한다.
 - loopback endpoint, per-start API key, env allowlist, log redaction은 유지한다. 외부 endpoint나 사용자가 선택한 Hugging Face/PR source만 네트워크로 접근한다.
 
 ## 5. 튜닝 모드와 프로필
@@ -135,7 +135,7 @@ server-side 변경은 dirty로 표시하고 Apply & Restart 시에만 실행 중
 | E. 다중 세션 | default facade를 유지하며 session list/start/stop/unload와 conflict 확인 추가 | primary/mmproj/draft + 0/1/2 GPU acceptance 통과 |
 | F. release | identifier 변경과 shared %APPDATA% 보존, SignPath artifact 경로/URL 검증 | unsigned bootstrap 또는 SignPath signed installer smoke 통과 |
 
-identifier 변경은 앱 번들 식별자만 바꾸며 사용자 설정과 runtime을 삭제하는 migration이 아니다. 설치/업데이트 전후에 %APPDATA%\\llama-board\\config.json과 runtimes\\가 유지되는지 확인하고, 이전 uninstall entry를 함부로 지우지 않는다. release note와 설치 문서에는 “공유 설정 디렉터리를 삭제하지 말 것”과 schema backup/복구 절차를 명시한다.
+identifier 변경은 앱 번들 식별자만 바꾸며 사용자 설정과 runtime을 삭제하는 migration이 아니다. 설치/업데이트 전후에 %APPDATA%\\aiolm\\config.json과 runtimes\\가 유지되는지 확인하고, 이전 uninstall entry를 함부로 지우지 않는다. release note와 설치 문서에는 “공유 설정 디렉터리를 삭제하지 말 것”과 schema backup/복구 절차를 명시한다.
 
 ## 7. 수용 기준
 
@@ -192,8 +192,8 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```powershell
 npm run package:tauri
 cd src-tauri
-$env:LLAMA_BOARD_SMOKE = "1"
-$env:LLAMA_BOARD_SMOKE_MODEL = "C:\\path\\to\\model.gguf"
+$env:AIOLM_SMOKE = "1"
+$env:AIOLM_SMOKE_MODEL = "C:\\path\\to\\model.gguf"
 cargo test --test smoke -- --ignored --nocapture
 ```
 
@@ -235,7 +235,7 @@ cargo test --test smoke -- --ignored --nocapture
 
 실모델 결과는 위 모델·GPU·런타임 조합의 검증이며 모든 하드웨어/모델의 호환성을 보증하지 않는다. UI는 Windows Tauri/WebView2에서 스크린샷과 접근성 트리, 탭/접힘/프로브 조작을 확인했다. 모든 동적 데이터 상태 및 다른 OS의 시각 검증까지 끝났다는 의미는 아니다. 로컬 호환 런타임과 로컬 설치 파일은 서명되지 않았으며 배포 서명을 대체하지 않는다.
 
-호환 런타임 산출물은 `.codex-target/deliverables/llama-board-rocm-b10840-nop2p-gfx1201.zip`이고 SHA-256은 `8918ebb77d3ae25751c92fef8f2567434944278c40a3e8f7e0ce116e9c9e4985`다. Windows 설치 파일은 `.codex-target/release/bundle/nsis/`와 `msi/`에 생성한다. 사용자 설정/모델/기존 런타임은 삭제하지 않는다.
+호환 런타임 산출물은 `.codex-target/deliverables/aiolm-rocm-b10840-nop2p-gfx1201.zip`이고 SHA-256은 `8918ebb77d3ae25751c92fef8f2567434944278c40a3e8f7e0ce116e9c9e4985`다. Windows 설치 파일은 `.codex-target/release/bundle/nsis/`와 `msi/`에 생성한다. 사용자 설정/모델/기존 런타임은 삭제하지 않는다.
 
 최종 NSIS/MSI 생성 후 기존 사용자 설치 경로에 NSIS `/UPDATE` 설치를 실행해 exit code 0을 확인했다. 기존 실행 파일/제거 프로그램/설정은 `.codex-target/pre-update-20260909/`에 백업했다. 설정의 변경 항목은 `active_build=local_b10840_nop2p`와 기존 DFlash2 파일에 맞춘 `spec_type=draft-dflash`뿐이며, 이전 공식 ROCm/Vulkan 런타임은 보존했다. 설치된 앱에서 모델 로드 후 채팅 입력/전송/SSE 완료를 직접 실행했고 실제 `OK` 응답을 확인했다.
 

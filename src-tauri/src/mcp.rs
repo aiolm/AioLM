@@ -255,7 +255,7 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
         json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "llama-board", "version": env!("CARGO_PKG_VERSION")}
+            "clientInfo": {"name": "aiolm", "version": env!("CARGO_PKG_VERSION")}
         }),
     )
     .await?;
@@ -607,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn staged_config_replaces_existing_file_and_preserves_new_content() {
-        let root = std::env::temp_dir().join(format!("llama-board-mcp-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("aiolm-mcp-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&root)
             .await
             .expect("temp directory");

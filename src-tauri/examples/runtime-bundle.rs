@@ -1,7 +1,7 @@
 //! Developer packaging utility. Uses the same verified, cancellable bundle
 //! path as the UI. For staging exports, set APPDATA/XDG_DATA_HOME to an isolated
 //! directory; never overwrite an installed official build with a local one.
-use llama_board_lib::runtime;
+use aiolm_lib::runtime;
 use std::{
     path::Path,
     sync::{

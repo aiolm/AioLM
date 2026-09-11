@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "resources": { "../.codex-target/release/llama-board-cli.exe": "llama-board-cli.exe" }
+    "resources": []
   }
 }

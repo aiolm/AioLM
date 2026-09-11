@@ -74,7 +74,7 @@ setActiveProjectId(project.id, storage);
 assert.equal(activeProjectId(storage), project.id);
 
 const exported = exportProject(project);
-assert.match(exported, /llama-board\.project\.v1/);
+assert.match(exported, /aiolm\.project\.v1/);
 assert.doesNotMatch(exported, /api[_-]?key|password|token|secret/i);
 const secretProject = projectFromConfig(
   "Secret-free export",

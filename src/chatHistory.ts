@@ -1,9 +1,9 @@
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { storageAdapter } from "./storageAdapter.ts";
 
-export const CHAT_WORKSPACE_KEY = "llama-board.chat-workspace.v2";
-const LEGACY_CHAT_WORKSPACE_KEY = "llama-board.chat-workspace.v1";
-const CHAT_DB_NAME = "llama-board-chat";
+export const CHAT_WORKSPACE_KEY = "aiolm.chat-workspace.v2";
+const LEGACY_CHAT_WORKSPACE_KEY = "aiolm.chat-workspace.v1";
+const CHAT_DB_NAME = "aiolm-chat";
 const CHAT_DB_VERSION = 1;
 const CHAT_STORE = "workspace";
 const CHAT_RECORD_KEY = "active";

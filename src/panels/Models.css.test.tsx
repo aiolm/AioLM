@@ -82,7 +82,7 @@ function storeFor(cfg: AppConfig): AppStore {
 describe("ModelsPanel CSS cascade", () => {
   it("selects a library model with the saved Vulkan profile missing its build", async () => {
     localStorage.clear();
-    localStorage.setItem("llama-board-model-profiles", JSON.stringify({
+    localStorage.setItem("aiolm-model-profiles", JSON.stringify({
       version: 4, server: [{ id: "server-default", name: "Default", backend: "vulkan", build: "", ctx_size: 8192 }],
       model: [], activeServerIds: {},
     }));
@@ -109,7 +109,7 @@ describe("ModelsPanel CSS cascade", () => {
   it.each([false, true])("saves a valid runtime pair when selecting a library model (saved PATH profile: %s)", async (savedProfile) => {
     localStorage.clear();
     if (savedProfile) {
-      localStorage.setItem("llama-board-model-profiles", JSON.stringify({
+      localStorage.setItem("aiolm-model-profiles", JSON.stringify({
         version: 4,
         server: [{ id: "system", name: "System", backend: "PATH", build: "" }],
         model: [], activeServerIds: {},

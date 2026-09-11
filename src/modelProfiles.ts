@@ -23,7 +23,7 @@ export type ModelProfile = {
 type StoredProfiles = { version: 4; server: ServerProfile[]; model: ModelProfile[]; activeServerId: string; activeServerIds: Record<string, string>; activeModelId: string };
 type LegacyModelProfile = ModelProfile & { modelPath?: string };
 type StoredInput = Omit<Partial<StoredProfiles>, "version" | "model"> & { version?: number; model?: LegacyModelProfile[]; activeModelIds?: Record<string, string> };
-const KEY = "llama-board-model-profiles";
+const KEY = "aiolm-model-profiles";
 const makeId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 const text = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback;
 const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];

@@ -3,9 +3,9 @@ import { clearChatWorkspace, dropLegacyChatWorkspace, loadChatWorkspace, saveCha
 import { indexRecordsForChunks, removeDocumentVectorsForPaths } from "./documentIndex";
 import { defaultPreferences, savePreferences, shouldConfirmDestructive } from "./preferences";
 
-const LEGACY_KEY = "llama-board.chat-workspace.v1";
-const CURRENT_KEY = "llama-board.chat-workspace.v2";
-const INDEX_PREFIX = "llama-board.document-index.v1.";
+const LEGACY_KEY = "aiolm.chat-workspace.v1";
+const CURRENT_KEY = "aiolm.chat-workspace.v2";
+const INDEX_PREFIX = "aiolm.document-index.v1.";
 
 function workspace(id: string, title: string): ChatWorkspace {
   return {

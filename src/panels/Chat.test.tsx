@@ -198,7 +198,7 @@ describe("ChatPanel document context warning", () => {
 
   it("keeps earlier answers in a multi-turn conversation and its saved history", async () => {
     renderPanel();
-    await waitFor(() => expect(localStorage.getItem("llama-board.chat-workspace.v2")).not.toBeNull());
+    await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
     respondWithText("The first answer.");
     await sendMessage("First question.");
     await screen.findByText("The first answer.");
@@ -207,7 +207,7 @@ describe("ChatPanel document context warning", () => {
     await screen.findByText("The second answer.");
     expect(screen.getByText("The first answer.")).toBeInTheDocument();
     await waitFor(() => {
-      const saved = JSON.parse(localStorage.getItem("llama-board.chat-workspace.v2") ?? "null");
+      const saved = JSON.parse(localStorage.getItem("aiolm.chat-workspace.v2") ?? "null");
       expect(saved.threads[0].messages.map((message: { content: string }) => message.content)).toEqual([
         "First question.", "The first answer.", "Second question.", "The second answer.",
       ]);

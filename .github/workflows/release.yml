@@ -15,7 +15,7 @@ concurrency:
 
 env:
   RUST_BACKTRACE: "1"
-  LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES: ${{ vars.LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES || 'false' }}
+  AIOLM_ALLOW_UNSIGNED_RELEASES: ${{ vars.AIOLM_ALLOW_UNSIGNED_RELEASES || vars.LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES || 'false' }}
 
 jobs:
   prepare:
@@ -57,7 +57,7 @@ jobs:
               .match(/^version\s*=\s*"([^"]+)"/m)?.[1];
             const cargoLockVersion = fs
               .readFileSync("src-tauri/Cargo.lock", "utf8")
-              .match(/\[\[package\]\]\s+name\s*=\s*"llama-board"\s+version\s*=\s*"([^"]+)"/m)?.[1];
+              .match(/\[\[package\]\]\s+name\s*=\s*"aiolm"\s+version\s*=\s*"([^"]+)"/m)?.[1];
             const declaredVersions = {
               "package.json": version,
               "package-lock.json": packageLock.packages?.[""]?.version,
@@ -204,7 +204,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
           npm run lint
           if ($LASTEXITCODE -ne 0) { throw "npm run lint failed with exit code $LASTEXITCODE" }
-          if ([string]::IsNullOrWhiteSpace($env:LLAMA_BOARD_SMOKE)) {
+          if ([string]::IsNullOrWhiteSpace($env:AIOLM_SMOKE)) {
             Write-Warning "Real-model smoke test was not enabled; release verification covers unit/integration tests only."
           }
       - name: Build NSIS and MSI
@@ -215,7 +215,7 @@ jobs:
           $assetDir = "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
           $files = @(Get-ChildItem -Path ".codex-target/release/bundle" -Recurse -File | Where-Object {
-            $_.Name -like "llama-board_*_x64-setup.exe" -or $_.Name -like "llama-board_*_x64_en-US.msi"
+            $_.Name -like "AioLM_*_x64-setup.exe" -or $_.Name -like "AioLM_*_x64_en-US.msi"
           })
           if ($files.Count -ne 2) { throw "Expected exactly one NSIS and one MSI installer asset, found $($files.Count)" }
           foreach ($file in $files) { Copy-Item $file.FullName (Join-Path $assetDir $file.Name) -Force }
@@ -231,10 +231,10 @@ jobs:
           if ($null -eq $root) { throw "SignPath artifact configuration must use zip-file as its root artifact." }
           $versionParameter = $config.SelectSingleNode("//*[local-name()='parameter' and @name='version']")
           if ($null -eq $versionParameter -or $versionParameter.required -ne "true") { throw "SignPath artifact configuration must require the release version parameter." }
-          $expectedNsis = "llama-board_{0}_x64-setup.exe" -f $env:RELEASE_VERSION
-          $expectedMsi = "llama-board_{0}_x64_en-US.msi" -f $env:RELEASE_VERSION
+          $expectedNsis = "AioLM_{0}_x64-setup.exe" -f $env:RELEASE_VERSION
+          $expectedMsi = "AioLM_{0}_x64_en-US.msi" -f $env:RELEASE_VERSION
           $configuredPaths = @($root.SelectNodes("*[local-name()='pe-file' or local-name()='msi-file' or local-name()='powershell-file']") | ForEach-Object { $_.path })
-          if ($configuredPaths -notcontains 'llama-board_${version}_x64-setup.exe' -or $configuredPaths -notcontains 'llama-board_${version}_x64_en-US.msi' -or $configuredPaths -notcontains 'install.ps1') {
+          if ($configuredPaths -notcontains 'AioLM_${version}_x64-setup.exe' -or $configuredPaths -notcontains 'AioLM_${version}_x64_en-US.msi' -or $configuredPaths -notcontains 'install.ps1') {
             throw "SignPath artifact configuration does not cover the expected release assets."
           }
           $assetNames = @(Get-ChildItem -LiteralPath "release-assets" -File | Select-Object -ExpandProperty Name)
@@ -288,7 +288,7 @@ jobs:
           }
           $missingSettings = @($signPathSettings.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Key })
           $hasAnySignPathSetting = $hasSignPathToken -or ($signPathSettings.Values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0
-          $allowUnsigned = $env:LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES -match "^(?i:1|true|yes)$"
+          $allowUnsigned = $env:AIOLM_ALLOW_UNSIGNED_RELEASES -match "^(?i:1|true|yes)$"
 
           if ($hasSignPathToken -and $missingSettings.Count -eq 0) {
             "mode=signpath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -297,9 +297,9 @@ jobs:
             throw "SignPath is partially configured. Add SIGNPATH_API_TOKEN plus SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG, and SIGNPATH_ARTIFACT_CONFIGURATION_SLUG."
           } elseif ($allowUnsigned) {
             "mode=unsigned" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            Write-Warning "SignPath is not configured; publishing an unsigned release because LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES is enabled."
+            Write-Warning "SignPath is not configured; publishing an unsigned release because AIOLM_ALLOW_UNSIGNED_RELEASES is enabled."
           } else {
-            throw "SignPath is not configured. Add SIGNPATH_API_TOKEN and the four SIGNPATH_* repository variables, or set LLAMA_BOARD_ALLOW_UNSIGNED_RELEASES=true to explicitly allow an unsigned bootstrap release."
+            throw "SignPath is not configured. Add SIGNPATH_API_TOKEN and the four SIGNPATH_* repository variables, or set AIOLM_ALLOW_UNSIGNED_RELEASES=true to explicitly allow an unsigned bootstrap release."
           }
 
       - name: Upload artifact for SignPath
@@ -307,7 +307,7 @@ jobs:
         if: ${{ steps.signing.outputs.mode == 'signpath' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: llama-board-${{ needs.prepare.outputs.version }}-signpath-input
+          name: aiolm-${{ needs.prepare.outputs.version }}-signpath-input
           path: release-assets
           if-no-files-found: error
 

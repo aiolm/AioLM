@@ -541,8 +541,7 @@ fn create_api_key_file(api_key: &str) -> Result<Option<PathBuf>, String> {
     if api_key.is_empty() {
         return Ok(None);
     }
-    let path =
-        std::env::temp_dir().join(format!("llama-board-api-key-{}.txt", uuid::Uuid::new_v4()));
+    let path = std::env::temp_dir().join(format!("aiolm-api-key-{}.txt", uuid::Uuid::new_v4()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1242,7 +1241,7 @@ mod tests {
 
     #[test]
     fn memory_estimate_accounts_for_model_projector_adapters_and_slots() {
-        let root = std::env::temp_dir().join(format!("llama-board-memory-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("aiolm-memory-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create memory fixture");
         let model = root.join("model.gguf");
         let projector = root.join("mmproj.gguf");
@@ -1272,10 +1271,8 @@ mod tests {
 
     #[test]
     fn status_memory_uses_selected_model_when_stopped_and_loaded_model_when_running() {
-        let root = std::env::temp_dir().join(format!(
-            "llama-board-status-memory-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("aiolm-status-memory-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let selected = root.join("selected.gguf");
         let loaded = root.join("loaded.gguf");

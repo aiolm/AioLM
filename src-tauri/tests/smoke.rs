@@ -1,28 +1,29 @@
 //! End-to-end smoke test: spawn the real llama-server, wait for /health, run a
-//! streaming chat completion, then kill. Gated behind LLAMA_BOARD_SMOKE=1 so it
+//! streaming chat completion, then kill. Gated behind AIOLM_SMOKE=1 so it
 //! doesn't run in the default suite (it loads a multi-GB model).
 //!
 //! Run:
-//!   $env:LLAMA_BOARD_SMOKE = "1"
-//!   $env:LLAMA_BOARD_SMOKE_MODEL = "C:\path\to\model.gguf"
+//!   $env:AIOLM_SMOKE = "1"
+//!   $env:AIOLM_SMOKE_MODEL = "C:\path\to\model.gguf"
 //!   cd src-tauri && cargo test --test smoke -- --ignored --nocapture --test-threads=1
-//! Optional: LLAMA_BOARD_SMOKE_BACKEND/BUILD select a managed runtime;
+//! Optional: AIOLM_SMOKE_BACKEND/BUILD select a managed runtime;
 //! DEVICE selects runtime device names; PORT permits concurrent isolated runs;
 //! MMPROJ tests image input; SPEC_TYPE/DRAFT test a draft head;
 //! CANCEL_LOAD=1 tests interruption before readiness. These do not change saved settings.
 use std::sync::{Arc, Mutex};
 
-use llama_board_lib::{server, AppConfig, ErrBuf};
+use aiolm_lib::{server, AppConfig, ErrBuf};
 
 fn cfg_with(model: &str) -> AppConfig {
     AppConfig {
         active_model: model.to_string(),
-        active_backend: std::env::var("LLAMA_BOARD_SMOKE_BACKEND").unwrap_or_default(),
-        active_build: std::env::var("LLAMA_BOARD_SMOKE_BUILD").unwrap_or_default(),
-        mmproj: std::env::var("LLAMA_BOARD_SMOKE_MMPROJ").unwrap_or_default(),
-        spec_type: std::env::var("LLAMA_BOARD_SMOKE_SPEC_TYPE").unwrap_or_else(|_| "none".into()),
-        spec_draft_model: std::env::var("LLAMA_BOARD_SMOKE_DRAFT").unwrap_or_default(),
-        port: std::env::var("LLAMA_BOARD_SMOKE_PORT")
+        active_backend: aiolm_lib::branding::env_var("AIOLM_SMOKE_BACKEND").unwrap_or_default(),
+        active_build: aiolm_lib::branding::env_var("AIOLM_SMOKE_BUILD").unwrap_or_default(),
+        mmproj: aiolm_lib::branding::env_var("AIOLM_SMOKE_MMPROJ").unwrap_or_default(),
+        spec_type: aiolm_lib::branding::env_var("AIOLM_SMOKE_SPEC_TYPE")
+            .unwrap_or_else(|_| "none".into()),
+        spec_draft_model: aiolm_lib::branding::env_var("AIOLM_SMOKE_DRAFT").unwrap_or_default(),
+        port: aiolm_lib::branding::env_var("AIOLM_SMOKE_PORT")
             .map(|value| value.parse().expect("valid smoke port"))
             .unwrap_or(18081),
         ngl: 999,
@@ -33,12 +34,15 @@ fn cfg_with(model: &str) -> AppConfig {
 }
 
 #[test]
-#[ignore = "loads a real model; set LLAMA_BOARD_SMOKE=1 and run explicitly"]
+#[ignore = "loads a real model; set AIOLM_SMOKE=1 and run explicitly"]
 fn smoke_real_benchmark_cancel_keeps_progress() {
-    use llama_board_lib::bench;
+    use aiolm_lib::bench;
     use std::sync::atomic::{AtomicBool, Ordering};
-    assert_eq!(std::env::var("LLAMA_BOARD_SMOKE").as_deref(), Ok("1"));
-    let model = std::env::var("LLAMA_BOARD_SMOKE_MODEL").expect("set smoke model");
+    assert_eq!(
+        aiolm_lib::branding::env_var("AIOLM_SMOKE").as_deref(),
+        Ok("1")
+    );
+    let model = aiolm_lib::branding::env_var("AIOLM_SMOKE_MODEL").expect("set smoke model");
     let mut cfg = cfg_with(&model);
     cfg.iters = 1;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -100,23 +104,22 @@ impl Drop for SmokeGuard {
     }
 }
 
-/// Gated behind `LLAMA_BOARD_SMOKE=1` and `#[ignore]`: the default `cargo
+/// Gated behind `AIOLM_SMOKE=1` and `#[ignore]`: the default `cargo
 /// test` gate must not report this as "passed" when it never actually ran a
 /// server (see `tests/smoke_fake.rs` for the deterministic equivalent that
 /// always runs). Invoke explicitly with `cargo test --test smoke -- --ignored`.
 #[test]
-#[ignore = "downloads/loads a multi-GB model; set LLAMA_BOARD_SMOKE=1 and run with --ignored"]
+#[ignore = "downloads/loads a multi-GB model; set AIOLM_SMOKE=1 and run with --ignored"]
 fn smoke_real_server_and_chat() {
     assert_eq!(
-        std::env::var("LLAMA_BOARD_SMOKE").as_deref(),
+        aiolm_lib::branding::env_var("AIOLM_SMOKE").as_deref(),
         Ok("1"),
-        "set LLAMA_BOARD_SMOKE=1 for the explicitly requested live test"
+        "set AIOLM_SMOKE=1 for the explicitly requested live test"
     );
-    let model = std::env::var("LLAMA_BOARD_SMOKE_MODEL").expect("set LLAMA_BOARD_SMOKE_MODEL");
+    let model = aiolm_lib::branding::env_var("AIOLM_SMOKE_MODEL").expect("set AIOLM_SMOKE_MODEL");
     let mut cfg = cfg_with(&model);
-    let log = SmokeLog(
-        std::env::temp_dir().join(format!("llama-board-smoke-{}.log", uuid::Uuid::new_v4())),
-    );
+    let log =
+        SmokeLog(std::env::temp_dir().join(format!("aiolm-smoke-{}.log", uuid::Uuid::new_v4())));
     let log_path = &log.0;
     cfg.server_args.extend([
         "--log-file".into(),
@@ -128,17 +131,17 @@ fn smoke_real_server_and_chat() {
 
     let ring = Arc::new(ErrBuf::default());
     let api_key = "smoke-token";
-    let mut resolved_gpu = llama_board_lib::gpu::ResolvedGpu {
-        device_flag: std::env::var("LLAMA_BOARD_SMOKE_DEVICE").ok(),
-        main_gpu_index: std::env::var("LLAMA_BOARD_SMOKE_MAIN_INDEX")
+    let mut resolved_gpu = aiolm_lib::gpu::ResolvedGpu {
+        device_flag: aiolm_lib::branding::env_var("AIOLM_SMOKE_DEVICE").ok(),
+        main_gpu_index: aiolm_lib::branding::env_var("AIOLM_SMOKE_MAIN_INDEX")
             .ok()
             .map(|value| value.parse().expect("main GPU index")),
-        split_mode: std::env::var("LLAMA_BOARD_SMOKE_MAIN_INDEX")
+        split_mode: aiolm_lib::branding::env_var("AIOLM_SMOKE_MAIN_INDEX")
             .ok()
             .map(|_| "none"),
         ..Default::default()
     };
-    if std::env::var("LLAMA_BOARD_SMOKE_VALIDATE_PLACEMENT").as_deref() == Ok("1") {
+    if aiolm_lib::branding::env_var("AIOLM_SMOKE_VALIDATE_PLACEMENT").as_deref() == Ok("1") {
         cfg.gpu.gpu_ids = resolved_gpu
             .device_flag
             .as_deref()
@@ -152,7 +155,7 @@ fn smoke_real_server_and_chat() {
             .build()
             .unwrap();
         resolved_gpu = validation_runtime
-            .block_on(llama_board_lib::validate_launch_config(&mut cfg))
+            .block_on(aiolm_lib::validate_launch_config(&mut cfg))
             .expect("application launch configuration validation");
         assert_eq!(resolved_gpu.main_gpu_index, Some(0));
     }
@@ -173,7 +176,7 @@ fn smoke_real_server_and_chat() {
         state: shared.clone(),
         key_file: api_key_file.clone(),
     };
-    if std::env::var("LLAMA_BOARD_SMOKE_CANCEL_LOAD").as_deref() == Ok("1") {
+    if aiolm_lib::branding::env_var("AIOLM_SMOKE_CANCEL_LOAD").as_deref() == Ok("1") {
         std::thread::sleep(std::time::Duration::from_millis(200));
         drop(_guard);
         assert!(
@@ -254,7 +257,7 @@ fn smoke_real_server_and_chat() {
     }) {
         println!("[smoke] {line}");
     }
-    if let Ok(device) = std::env::var("LLAMA_BOARD_SMOKE_DEVICE") {
+    if let Ok(device) = aiolm_lib::branding::env_var("AIOLM_SMOKE_DEVICE") {
         for name in device.split(',') {
             assert!(
                 tail.contains(name),

@@ -4,7 +4,7 @@ export interface StorageAdapter {
   remove(key: string): Promise<void>;
 }
 
-const DB_NAME = "llama-board-storage";
+const DB_NAME = "aiolm-storage";
 const DB_VERSION = 1;
 const STORE_NAME = "values";
 

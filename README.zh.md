@@ -1,4 +1,4 @@
-# llama-board
+# AioLM
 
 > **语言:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
 
@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/
 
 高级安装选项、验证、开发环境和 CLI 用法请参见 [docs/INSTALL.zh.md](docs/INSTALL.zh.md)、[docs/DEVELOPMENT.zh.md](docs/DEVELOPMENT.zh.md) 和 [docs/CLI.zh.md](docs/CLI.zh.md)。
 
-首次启动时不会预填模型目录，请在 Models 中选择本地 GGUF 目录。配置和已管理的运行时保存在标准 `%APPDATA%\llama-board\` 目录中。从使用旧桌面标识符的版本升级时，请不要删除这个共享配置目录。
+AioLM — All-In-One LM与llama-board独立安装。首次启动会将原有设置、托管运行时、CLI数据和WebView配置复制到新的 `aiolm` / `com.aiolm.desktop` 目录。原始数据保留，已有AioLM数据优先。迁移前请关闭旧应用；解除锁定或释放磁盘空间后可重试。[迁移详情](docs/MIGRATION.md)。
 
 ## 代码签名政策 (Code signing policy)
 

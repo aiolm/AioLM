@@ -1,7 +1,7 @@
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
-const STORAGE_KEY = "llama-board-theme";
+const STORAGE_KEY = "aiolm-theme";
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 export function isThemeMode(value: string | null): value is ThemeMode {
@@ -11,7 +11,7 @@ export function isThemeMode(value: string | null): value is ThemeMode {
 export function getStoredThemeMode(): ThemeMode {
   if (typeof window === "undefined") return "system";
   try {
-    const preferences = JSON.parse(window.localStorage.getItem("llama-board-preferences") ?? "null") as { values?: { theme?: unknown } } | null;
+    const preferences = JSON.parse(window.localStorage.getItem("aiolm-preferences") ?? "null") as { values?: { theme?: unknown } } | null;
     const theme = preferences?.values?.theme;
     if (isThemeMode(typeof theme === "string" ? theme : null)) return theme as ThemeMode;
     const value = window.localStorage.getItem(STORAGE_KEY);
