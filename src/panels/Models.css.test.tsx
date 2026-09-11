@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import type { AppConfig } from "../api";
 import type { AppStore } from "../store";
@@ -80,6 +80,66 @@ function storeFor(cfg: AppConfig): AppStore {
 }
 
 describe("ModelsPanel CSS cascade", () => {
+  it("selects a library model with the saved Vulkan profile missing its build", async () => {
+    localStorage.clear();
+    localStorage.setItem("llama-board-model-profiles", JSON.stringify({
+      version: 4, server: [{ id: "server-default", name: "Default", backend: "vulkan", build: "", ctx_size: 8192 }],
+      model: [], activeServerIds: {},
+    }));
+    const model = { name: "legacy.gguf", path: "C:/models/legacy.gguf", size_mb: 100, is_vision: false };
+    mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
+    const cfg = { ...baseCfg, models_dir: "C:/models", active_backend: "rocm", active_build: "local_b10840_nop2p" };
+    const store = storeFor(cfg);
+    const save = vi.fn(async (patch: Partial<AppConfig>) => {
+      const next = { ...cfg, ...patch };
+      if (!next.active_backend !== !next.active_build) throw new Error("active runtime backend and build must be selected together");
+      return next;
+    });
+    store.updateConfig = save as AppStore["updateConfig"];
+    const view = render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
+    fireEvent.click(await screen.findByRole("button", { name: "Select legacy.gguf" }));
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: 8192 });
+    const saved = await save.mock.results[0].value;
+    view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
+    expect(screen.getByRole("button", { name: "Select legacy.gguf" })).toHaveAttribute("aria-current", "true");
+    localStorage.clear();
+  });
+
+  it.each([false, true])("saves a valid runtime pair when selecting a library model (saved PATH profile: %s)", async (savedProfile) => {
+    localStorage.clear();
+    if (savedProfile) {
+      localStorage.setItem("llama-board-model-profiles", JSON.stringify({
+        version: 4,
+        server: [{ id: "system", name: "System", backend: "PATH", build: "" }],
+        model: [], activeServerIds: {},
+      }));
+    }
+    const model = { name: "selectable.gguf", path: "C:/models/selectable.gguf", size_mb: 100, is_vision: false };
+    mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
+    const cfg = { ...baseCfg, models_dir: "C:/models", active_backend: savedProfile ? "vulkan" : "", active_build: savedProfile ? "b100" : "" };
+    const store = storeFor(cfg);
+    const save = vi.fn(async (patch: Partial<AppConfig>) => {
+      const next = { ...cfg, ...patch };
+      // Match the native validator that rejected model selection.
+      if (!next.active_backend !== !next.active_build) {
+        throw new Error("active runtime backend and build must be selected together");
+      }
+      return next;
+    });
+    store.updateConfig = save as AppStore["updateConfig"];
+    const view = render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
+    fireEvent.click(await screen.findByRole("button", { name: "Select selectable.gguf" }));
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "", active_build: "" });
+    const saved = await save.mock.results[0].value;
+    view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
+    expect(screen.getByRole("button", { name: "Select selectable.gguf" })).toHaveAttribute("aria-current", "true");
+    expect(screen.queryByText(/active runtime backend and build must be selected together/)).not.toBeInTheDocument();
+    localStorage.clear();
+  });
+
+
   it("gives the scan-error retry button only the app-* danger class, not a conflicting Tailwind bg-red-900 utility", async () => {
     mocked.listModels.mockRejectedValue(new Error("scan failed"));
     const cfg = { ...baseCfg, models_dir: "C:/models" };

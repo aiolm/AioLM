@@ -110,7 +110,13 @@ export function createServerProfile(cfg: AppConfig, name: string) { return { ...
 export function createModelProfile(cfg: AppConfig, name: string) { return { ...defaultModelProfile(cfg), id: makeId("model"), name }; }
 
 export function serverProfilePatch(profile: ServerProfile): Partial<AppConfig> {
-  return { runtime_defaults: profile.runtime_defaults ?? [], active_backend: profile.backend, ...(profile.build !== undefined ? { active_build: profile.build } : {}), ...(profile.gpu ? { gpu: structuredClone(profile.gpu) } : {}), ctx_size: profile.ctx_size, batch_size: profile.batch_size, ubatch_size: profile.ubatch_size, keep: profile.keep,
+  // PATH is a profile display label; native config uses an empty runtime pair.
+  const systemRuntime = !profile.backend || profile.backend === "PATH";
+  // Older tuning profiles can have a backend but no build. They cannot identify
+  // a runtime, so preserve the current pair instead of saving a partial one.
+  const runtime = systemRuntime ? { active_backend: "", active_build: "" }
+    : profile.build ? { active_backend: profile.backend, active_build: profile.build } : {};
+  return { runtime_defaults: profile.runtime_defaults ?? [], ...runtime, ...(profile.gpu ? { gpu: structuredClone(profile.gpu) } : {}), ctx_size: profile.ctx_size, batch_size: profile.batch_size, ubatch_size: profile.ubatch_size, keep: profile.keep,
     cache_type_k: profile.cache_type_k, cache_type_v: profile.cache_type_v, ngl: profile.ngl, n_cpu_moe: profile.n_cpu_moe, threads: profile.threads, parallel: profile.parallel,
     request_timeout_seconds: profile.request_timeout_seconds, sleep_idle_seconds: profile.sleep_idle_seconds, flash_attn: profile.flash_attn, spec_type: profile.spec_type,
     spec_draft_n_max: profile.spec_draft_n_max, spec_draft_n_min: profile.spec_draft_n_min, spec_draft_p_min: profile.spec_draft_p_min, spec_draft_p_split: profile.spec_draft_p_split,

@@ -3,7 +3,7 @@ import type { AppConfig } from "./api";
 import { activeProfilesPatch, createModelProfile, createServerProfile, defaultModelProfile, defaultServerProfile, deleteModelProfile, duplicateModelProfile, getActiveModelProfile, loadProfiles, modelProfilePatch, profileDirtyFields, saveModelProfile, saveProfileSelection, serverProfilePatch, MODEL_PROFILES_STORAGE_KEY } from "./modelProfiles";
 
 const cfg = {
-  active_backend: "PATH", ctx_size: 4096, batch_size: 2048, ubatch_size: 512, keep: 0,
+  active_backend: "", ctx_size: 4096, batch_size: 2048, ubatch_size: 512, keep: 0,
   cache_type_k: "f16", cache_type_v: "f16", ngl: 10, n_cpu_moe: 0, threads: 8, parallel: 1,
   request_timeout_seconds: 60, sleep_idle_seconds: -1, flash_attn: "auto", spec_type: "none", spec_draft_n_max: 16,
   spec_draft_n_min: 0, spec_draft_p_min: 0, spec_draft_p_split: 0, spec_draft_ngl: "auto", spec_draft_device: "",
@@ -15,6 +15,29 @@ const cfg = {
 
 describe("model profiles", () => {
   beforeEach(() => localStorage.clear());
+
+  it.each(["", undefined])("preserves the current runtime for an incomplete saved backend profile (build: %s)", (build) => {
+    const profile = { ...defaultServerProfile(cfg), backend: "vulkan", build, ctx_size: 8192 };
+    localStorage.setItem(MODEL_PROFILES_STORAGE_KEY, JSON.stringify({ version: 4, server: [profile], model: [], activeServerIds: {} }));
+    const current = { ...cfg, active_backend: "rocm", active_build: "local_b10840_nop2p" };
+    expect({ ...current, ...activeProfilesPatch(current, "model.gguf") }).toMatchObject({
+      active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: 8192,
+    });
+  });
+
+  it("applies the default system runtime as an empty backend and build pair", () => {
+    expect(defaultServerProfile(cfg).backend).toBe("PATH");
+    expect(activeProfilesPatch(cfg, "model.gguf")).toMatchObject({ active_backend: "", active_build: "" });
+    expect(profileDirtyFields(defaultServerProfile(cfg), cfg)).toEqual([]);
+  });
+
+  it("clears a managed build when applying a saved PATH profile", () => {
+    const profile = { ...defaultServerProfile(cfg), build: undefined };
+    localStorage.setItem(MODEL_PROFILES_STORAGE_KEY, JSON.stringify({ version: 4, server: [profile], model: [], activeServerIds: {} }));
+    const managed = { ...cfg, active_backend: "vulkan", active_build: "b100" };
+    expect({ ...managed, ...activeProfilesPatch(managed, "model.gguf") }).toMatchObject({ active_backend: "", active_build: "" });
+    expect(serverProfilePatch({ ...profile, build: "b100" })).toMatchObject({ active_backend: "", active_build: "" });
+  });
 
   it("restores the runtime build and explicit or automatic GPU placement", () => {
     const automatic = defaultServerProfile({ ...cfg, active_backend: "vulkan", active_build: "b100" });
