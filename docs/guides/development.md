@@ -16,7 +16,7 @@ Bump toolchain: `.node-version` + `package.json#engines` together; `rust-toolcha
 ## Clone and run
 
 ```bash
-git clone https://github.com/llama-board/llama-board.git aiolm
+git clone https://github.com/joowon-jang/AioLM.git aiolm
 cd aiolm
 npm install
 npm run tauri -- dev

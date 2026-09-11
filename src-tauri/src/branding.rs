@@ -138,11 +138,9 @@ fn lock_profile(root: &Path, locks: &mut Vec<File>) -> Result<(), String> {
                 use std::os::windows::fs::OpenOptionsExt;
                 options.share_mode(0);
             }
-            locks.push(
-                options
-                    .open(entry.path())
-                    .map_err(|e| format!("Close llama-board and retry. Profile is locked: {e}"))?,
-            );
+            locks.push(options.open(entry.path()).map_err(|e| {
+                format!("Close the previous application and retry. Profile is locked: {e}")
+            })?);
         }
     }
     Ok(())
@@ -184,7 +182,7 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
             }
             let mut input = options.open(entry.path()).map_err(|e| {
                 format!(
-                    "Close llama-board and retry. {}: {e}",
+                    "Close the previous application and retry. {}: {e}",
                     entry.path().display()
                 )
             })?;
@@ -342,7 +340,9 @@ pub fn prepare_desktop() -> Result<(), String> {
                 .to_lowercase()
                 .contains("\"llama-board.exe\"")
             {
-                return Err("Close llama-board before importing its data into AioLM.".into());
+                return Err(
+                    "Close the previous application before importing its data into AioLM.".into(),
+                );
             }
         }
         copy_root(&source, &target, &[], false)?;

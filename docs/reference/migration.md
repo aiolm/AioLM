@@ -1,6 +1,14 @@
 # Data migration and compatibility
 
-AioLM 0.1.6 is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained. The working folder and GitHub repository are not renamed by this change.
+AioLM is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained.
+
+## Project identity
+
+The canonical repository is [joowon-jang/AioLM](https://github.com/joowon-jang/AioLM). App branding uses **AioLM — All-In-One LM**; package names, command names and new data directories use `aiolm`. Installation, source and runtime-artifact links use the canonical repository.
+
+Existing checkouts can update their remote with `git remote set-url origin https://github.com/joowon-jang/AioLM.git`. A checkout's local directory name is independent of the remote; new clones can use `git clone https://github.com/joowon-jang/AioLM.git AioLM`.
+
+Previous product names below are compatibility identifiers used to discover and import existing data, environment variables and exports. They are deliberately retained so upgrading does not strand earlier installations or user data.
 
 ## First launch on Windows
 

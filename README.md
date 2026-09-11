@@ -23,7 +23,7 @@ Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support
 
 ## Download
 
-Get the latest release from [GitHub Releases](https://github.com/llama-board/llama-board/releases).
+Get the latest release from [GitHub Releases](https://github.com/joowon-jang/AioLM/releases).
 
 For advanced install options, verification, development setup, and CLI usage, see [install.md](docs/guides/install.md), [development.md](docs/guides/development.md), and [cli.md](docs/guides/cli.md).
 
