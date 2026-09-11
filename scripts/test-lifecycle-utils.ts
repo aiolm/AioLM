@@ -27,6 +27,18 @@ assert.equal(normalizeDisplayPath("\\\\?\\C:\\models\\model.gguf"), "C:\\models\
 assert.equal(normalizeDisplayPath("\\\\?\\UNC\\server\\share\\model.gguf"), "\\\\server\\share\\model.gguf");
 assert.equal(normalizeDisplayText("--model=\\\\?\\C:\\models\\model.gguf"), "--model=C:\\models\\model.gguf");
 assert.equal(normalizeDisplayPathLines("--model\n\\\\?\\C:\\models\\model.gguf"), "--model\nC:\\models\\model.gguf");
+for (const [raw, display] of [
+  [String.raw`\\?\C:\models\model.gguf`, String.raw`C:\models\model.gguf`],
+  [String.raw`\\?\UNC\server\share\model.gguf`, String.raw`\\server\share\model.gguf`],
+  [String.raw`\\?\unc\server\share\model.gguf`, String.raw`\\server\share\model.gguf`],
+]) {
+  const diagnostic = { path: raw, error: `Could not load ${raw}` };
+  const normalized = normalizeDisplayText(JSON.stringify(diagnostic, null, 2));
+  assert.deepEqual(JSON.parse(normalized), { path: display, error: `Could not load ${display}` });
+  assert.equal(normalizeDisplayText(normalized), normalized);
+  assert.equal(diagnostic.path, raw);
+}
+assert.equal(normalizeDisplayText("  ordinary text\nC:\\models\\a.gguf  "), "  ordinary text\nC:\\models\\a.gguf  ");
 const exported = configExport({ theme: "dark" });
 assert.deepEqual(parseConfigExport<typeof exported.preferences>(JSON.stringify(exported)), { theme: "dark" });
 const csv = benchmarkCsv([{
