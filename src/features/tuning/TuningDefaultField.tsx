@@ -9,6 +9,7 @@ import { serverOptionsText } from '../../shared/i18n/serverOptionsI18n';
 export const TuningDefaultsContext = createContext<{
   cfg: AppConfig;
   disabled: boolean;
+  revision?: number;
   reset: (key: string) => void;
 } | null>(null);
 
@@ -19,6 +20,12 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
   const context = useContext(TuningDefaultsContext);
   const { t, locale } = useI18n();
   const [editing, setEditing] = useState(false);
+  const identity = `${context?.cfg.active_model}/${context?.revision ?? 0}`;
+  const [editingIdentity, setEditingIdentity] = useState(identity);
+  if (editingIdentity !== identity) {
+    setEditingIdentity(identity);
+    setEditing(false);
+  }
   if (!context) return <>{children}<TuningOptionMetadata fieldKey={fieldKey} /></>;
   const inherited = request ? !hasChatOverride(context.cfg, fieldKey) : usesRuntimeDefault(context.cfg, fieldKey);
   return (

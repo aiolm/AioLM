@@ -1,4 +1,5 @@
 import StableLabel from "../shared/ui/StableLabel";
+import { version } from '../../package.json';
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { applyTheme, persistThemeMode, subscribeToSystemTheme } from "../shared/config/theme";
 import "../styles/app.css";
@@ -19,20 +20,22 @@ import { useI18n } from "../shared/i18n/i18n";
 import { buildNumber } from "../shared/runtime/runtimeUtils";
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
+import { DraftGuardProvider, useDraftGuard } from '../shared/state/draftGuard';
+import { useExecutionStore } from '../features/models/useExecutionStore';
+import { executionText } from '../shared/i18n/executionI18n';
+import type { ExecutionSection } from '../features/models/ModelWorkspace';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
 const DeveloperPanel = lazy(() => import("../features/developer/Developer"));
 const McpPanel = lazy(() => import("../features/mcp/Mcp"));
-const ModelsPanel = lazy(() => import("../features/models/Models"));
+const ModelWorkspace = lazy(() => import("../features/models/ModelWorkspace"));
 const SessionsPanel = lazy(() => import("../features/sessions/Sessions"));
 
 const BenchPanel = lazy(() => import("../features/bench/Bench"));
 const RuntimesPanel = lazy(() => import("../features/runtimes/Runtimes"));
 const ProjectsPanel = lazy(() => import("../features/projects/Projects"));
-const TuningPanel = lazy(() => import("../features/tuning/Tuning"));
 const SettingsPanel = lazy(() => import("../features/settings/Settings"));
-const ProfilesPanel = lazy(() => import("../features/profiles/ExecutionProfiles"));
 
 function PanelLoading() {
   const { t } = useI18n();
@@ -56,9 +59,17 @@ function shortModel(path: string | undefined, emptyLabel: string): string {
 }
 
 export default function App() {
+  return <DraftGuardProvider><AppContent /></DraftGuardProvider>;
+}
+
+function AppContent() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => loadPreferences());
-  const store = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
+  const baseStore = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
+  const { store, selectModel } = useExecutionStore(baseStore);
+  const draftGuard = useDraftGuard();
   const { t, locale, setLocale } = useI18n();
+  const executionCopy = executionText[locale];
+  const [executionSection, setExecutionSection] = useState<{ id: ExecutionSection; revision: number }>({ id: 'setup', revision: 0 });
   const [view, setView] = useState<ViewId>("chat");
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [developerSection, setDeveloperSection] = useState<"api" | "gateways" | "diagnostics">("api");
@@ -130,8 +141,11 @@ export default function App() {
   };
 
   const navigate = (next: ViewId): boolean => {
+    const executionTarget = next === 'tuning' || next === 'profiles' || next === 'lora' ? next : next === 'models' ? 'setup' : null;
+    if (executionTarget) next = 'models';
     const blocking = findTaskBlockingTabLeave(tasks);
     if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: blocking.label }))) return false;
+    if (executionTarget) setExecutionSection(current => ({ id: executionTarget, revision: current.revision + 1 }));
     window.dispatchEvent(new Event("aiolm:navigate"));
     setVisited(current => current.has(next) ? current : new Set([...current, next]));
     if (next === "api" || next === "gateways" || next === "diagnostics") setDeveloperSection(next);
@@ -146,13 +160,14 @@ export default function App() {
   const toggleServer = async () => {
     try {
       if (serverState === "running" || serverState === "starting") await store.stop();
-      else await store.start();
+      else await draftGuard.run(async () => { await store.start(); });
     } catch {
       // The store publishes an actionable error banner; keep the shell mounted.
     }
   };
 
-  const title = t(entries.find(item => item.id === view)!.label);
+  const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
+  const title = labelFor(view);
   const showDeveloper = view === "api" || view === "gateways" || view === "diagnostics";
   const backendLabel = store.cfg?.active_backend
     ? `${store.cfg.active_backend}${store.cfg.active_build ? ` · ${buildNumber(store.cfg.active_build)}` : ""}`
@@ -164,23 +179,23 @@ export default function App() {
     {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group">
       <h2>{copy[group.id]}</h2>
       {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="aiolm-nav-link" onClick={() => navigate(item.id)}>
-        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{t(item.label)}</span>
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{labelFor(item.id)}</span>
       </button>)}
     </section>)}
   </nav>;
-  const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={t(entries.find(item => item.id === id)!.label)} className="app-panel-host" data-view={id}>
+  const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
     <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
   return <PanelFeedbackProvider><div className="app-shell" onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
-    <aside className="aiolm-sidebar">{brand}{navigation}<div className="aiolm-sidebar-footer">{copy.local}<span>v0.1.6</span></div></aside>
+    <aside className="aiolm-sidebar">{brand}{navigation}<div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div></aside>
     <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setMenuOpen(false); }}>
       <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}>×</button></div>{navigation}</div>
     </dialog>
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context"><button type="button" className="aiolm-context-model" title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")} onClick={openModels}>{shortModel(store.cfg?.active_model, t("load.noModel"))}</button><button type="button" className="aiolm-context-runtime" onClick={() => navigate("runtimes")}>{backendLabel}</button></div>
+        <div className="aiolm-runtime-context"><button type="button" className="aiolm-context-model" title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")} onClick={openModels}>{shortModel(store.cfg?.active_model, t("load.noModel"))}</button><button type="button" className="aiolm-context-runtime" onClick={openModels}>{backendLabel}</button></div>
         <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span><button type="button" className={"app-button app-button--" + (serverState === "running" || serverState === "starting" ? "secondary" : "primary")} disabled={!store.cfg || (serverBusy && serverState !== "starting") || (!store.cfg.active_model && serverState !== "running" && serverState !== "starting")} onClick={() => void toggleServer()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : serverBusy ? t("status.working") : t("action.start")} labels={[t("action.stop"), t("status.working"), t("action.start")]} /></button></div>
       </header>
       <div className="app-main-area">
@@ -198,13 +213,10 @@ export default function App() {
         <main id="main-content" className="app-main" tabIndex={-1}>
           {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onOpenDiagnostics={openDiagnostics} />)}
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
-          {panel("models", <ModelsPanel store={store} focus="library" />)}
-          {panel("discover", <DiscoverPanel store={store} active={view === "discover"} />)}
-          {panel("lora", <ModelsPanel store={store} focus="lora" />)}
+          {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
+          {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
-          {panel("runtimes", <RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} />)}
-          {panel("tuning", <TuningPanel store={store} onNavigate={navigate} />)}
-          {panel("profiles", <div className="app-page-scroll"><ProfilesPanel store={store} modelPath={store.cfg?.active_model ?? ""} onOpenTuning={openTuning} /></div>)}
+          {panel("runtimes", <><div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={openModels}>{executionCopy.back}</button></div><RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} managementOnly /></>)}
           {panel("benchmark", <BenchPanel store={store} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>

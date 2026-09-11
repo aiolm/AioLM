@@ -57,7 +57,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const cfg = store.cfg;
   const [definitions, setDefinitions] = useState<api.SessionDefinition[]>(() => cfg?.sessions ?? []);
   const [statuses, setStatuses] = useState<Record<string, api.SessionStatus>>({});
-  const [devices, setDevices] = useState<api.GpuDevice[]>([]);
+  const runtimeKey = `${cfg?.active_backend ?? ''}/${cfg?.active_build ?? ''}`;
+  const [deviceResult, setDeviceResult] = useState<{ key: string; devices: api.GpuDevice[] }>();
+  const devices = deviceResult?.key === runtimeKey ? deviceResult.devices : [];
   const [probeBusy, setProbeBusy] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeAttempt, setProbeAttempt] = useState(0);
@@ -143,24 +145,23 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
-    setDevices([]);
     setProbeBusy(true);
     setProbeError(null);
     if (cfg?.active_backend && cfg?.active_build) {
       void api.rtProbe(cfg.active_backend, cfg.active_build).then((report) => {
-        if (!cancelled) setDevices(runtimeGpuDevices(report.backend, report.devices));
+        if (!cancelled) setDeviceResult({ key: runtimeKey, devices: runtimeGpuDevices(report.backend, report.devices) });
       }).catch((error: unknown) => {
         if (!cancelled) setProbeError(errorText(error));
       }).finally(() => { if (!cancelled) setProbeBusy(false); });
     } else {
       void api.deviceProfile().then((report) => {
-        if (!cancelled) setDevices(report.profile.gpus);
+        if (!cancelled) setDeviceResult({ key: runtimeKey, devices: report.profile.gpus });
       }).catch((error: unknown) => {
         if (!cancelled) setProbeError(errorText(error));
       }).finally(() => { if (!cancelled) setProbeBusy(false); });
     }
     return () => { cancelled = true; };
-  }, [active, cfg?.active_backend, cfg?.active_build, probeAttempt]);
+  }, [active, cfg?.active_backend, cfg?.active_build, probeAttempt, runtimeKey]);
 
   useEffect(() => {
     if (!cfg) return;

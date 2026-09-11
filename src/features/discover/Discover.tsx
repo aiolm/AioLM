@@ -7,14 +7,17 @@ import { formatBytes, isMmprojPath, quantLabel, validateHfRepoId } from "./disco
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { useDraftGuard } from '../../shared/state/draftGuard';
 
 
 function formatCount(locale: string, value: number): string {
   return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
-export default function DiscoverPanel({ store, active = true }: { store: AppStore; active?: boolean }) {
+export default function DiscoverPanel({ store, active = true, onSelectModel, onOpenModels }: { store: AppStore; active?: boolean; onSelectModel?: (path: string) => Promise<void>; onOpenModels?: () => void }) {
   const { t, locale } = useI18n();
+  const guard = useDraftGuard();
+  const latestStore = useRef(store); latestStore.current = store;
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<api.HfModel[]>([]);
@@ -106,7 +109,11 @@ export default function DiscoverPanel({ store, active = true }: { store: AppStor
         await store.updateConfig({ mmproj: downloaded.path });
         setNotice(t("ui.downloadedProjector", { file: file.path }));
       } else {
-        await store.updateConfig({ active_model: downloaded.path });
+        if (onSelectModel) await guard.run(async () => {
+          if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
+          await onSelectModel(downloaded.path); onOpenModels?.();
+        });
+        else await store.updateConfig({ active_model: downloaded.path });
         setNotice(t("ui.downloadedModel", { file: file.path }));
       }
     } catch (caught) {

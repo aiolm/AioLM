@@ -117,10 +117,10 @@ describe("model profiles", () => {
     ]);
     const persisted = JSON.parse(localStorage.getItem(MODEL_PROFILES_STORAGE_KEY)!);
     expect(persisted.version).toBe(4);
-    expect(persisted).not.toHaveProperty("activeModelIds");
+    expect(persisted.activeModelIds).toMatchObject({ 'models/a.gguf': modelA.id, 'models/b.gguf': modelB.id, 'models/c.gguf': modelB.id });
     for (const profile of persisted.model) expect(profile).not.toHaveProperty("modelPath");
     expect(loadProfiles(cfg, "models/d.gguf").model).toEqual(loaded.model);
-    expect(loadProfiles(cfg, "models/a.gguf").activeModelId).toBe(modelB.id);
+    expect(loadProfiles(cfg, "models/a.gguf").activeModelId).toBe(modelA.id);
   });
 
   it("reuses the selected profile and prompt when switching models or reloading", () => {

@@ -58,9 +58,16 @@ function visibleFields<T extends { category: TuningCategoryId; advancedOnly?: bo
 
 /** Tuning panel: server-side values require restart; sampling applies next chat. */
 export default function TuningPanel({ store, section = "server", onNavigate }: { store: AppStore; section?: TuningSection; onNavigate?: (view: ViewId) => void }) {
-  const { t, locale } = useI18n();
   const runtime = useServerOptions(store.cfg?.active_backend ?? '', store.cfg?.active_build ?? '');
   const tuning = useTuningController(store, runtime.options);
+  return <TuningEditor store={store} section={section} onNavigate={onNavigate} runtime={runtime} tuning={tuning} />;
+}
+
+export function TuningEditor({ store, section = 'server', onNavigate, runtime, tuning, embedded = false }: {
+  store: AppStore; section?: TuningSection; onNavigate?: (view: ViewId) => void;
+  runtime: ReturnType<typeof useServerOptions>; tuning: ReturnType<typeof useTuningController>; embedded?: boolean;
+}) {
+  const { t, locale } = useI18n();
   const cfg = useMemo(() => tuning.cfg ? tuningDisplayConfig(tuning.cfg, runtime.options) : null, [tuning.cfg, runtime.options]);
   const [mode, setMode] = useState<TuningViewMode>("quick");
   const [activeCategory, setActiveCategory] = useState<TuningCategoryId>(SECTION_TO_CATEGORY[section]);
@@ -70,10 +77,10 @@ export default function TuningPanel({ store, section = "server", onNavigate }: {
 
   const visibleCategories = useMemo(
     () => TUNING_CATEGORIES.map(category => category.id === 'options' ? { ...category, label: optionCopy.title, description: optionCopy.description } : category)
-      .filter((category) => (query.trim() || category.modes.includes(mode)) && (category.id === 'options'
+      .filter((category) => (!embedded || category.id !== 'multimodal') && (query.trim() || category.modes.includes(mode)) && (category.id === 'options'
         ? !query.trim() || runtime.options.some(option => serverOptionMatches(option, query)) || category.label.includes(query)
         : categoryMatchesSearch(category, query, t))),
-    [mode, query, t, optionCopy, runtime.options],
+    [mode, query, t, optionCopy, runtime.options, embedded],
   );
   const selectedCategory = visibleCategories.find((category) => category.id === activeCategory) ?? visibleCategories[0] ?? null;
   useEffect(() => {
@@ -122,7 +129,7 @@ export default function TuningPanel({ store, section = "server", onNavigate }: {
           serverSelectValue={tuning.serverSelectValue}
           selectServerText={tuning.selectServerText}
           showAdvanced={mode === "advanced" || !!query.trim()}
-          fields={serverFields}
+          fields={embedded ? serverFields.filter(field => !['ctx_size', 'ngl'].includes(field.key)) : serverFields}
           showFlashAttention={categoryId === "runtime"}
           showProjector={categoryId === "multimodal"}
           showSpeculative={categoryId === "speculative"}
@@ -243,7 +250,7 @@ export default function TuningPanel({ store, section = "server", onNavigate }: {
             ) : (
               <div className="tuning-navigation__empty" role="status">{t("extra.noSettingsMatchQuery", { query })}</div>
             )}
-            <TuningDefaultsContext.Provider key={tuning.defaultsRevision} value={{ cfg: tuning.cfg!, disabled: tuning.configMutationsDisabled, reset: (key) => void tuning.resetRuntimeDefaults(key) }}>
+            <TuningDefaultsContext.Provider value={{ cfg: tuning.cfg!, disabled: tuning.configMutationsDisabled, revision: tuning.defaultsRevision, reset: (key) => void tuning.resetRuntimeDefaults(key) }}>
               <TuningOptionsContext.Provider value={runtime}>
               {renderSection(selectedCategory)}
               </TuningOptionsContext.Provider>
@@ -251,12 +258,12 @@ export default function TuningPanel({ store, section = "server", onNavigate }: {
           </div>
         </div>
       </div>
-      <footer className="tuning-apply-footer">
+      {!embedded && <footer className="tuning-apply-footer">
         <p>{t("ui.tuningSaveHint")}</p>
         <button type="button" className="app-button app-button--primary" onClick={() => void tuning.applyRestart()} disabled={tuning.configMutationsDisabled || !cfg.active_model || store.status.state !== "running"}>
           <StableLabel value={tuning.phase === "applying" ? t("extra.applying") : t("extra.applyRestart")} labels={[t("extra.applying"), t("extra.applyRestart")]} />
         </button>
-      </footer>
+      </footer>}
     </div>
   );
 }

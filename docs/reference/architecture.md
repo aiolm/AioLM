@@ -10,7 +10,7 @@ src/
   app/                      Bootstrap, app shell, navigation, shell tests
   features/
     chat/                   Conversations, attachments, document retrieval, streaming
-    models/                 GGUF library and adapter selection
+    models/                 Model execution workspace, GGUF library, per-model settings
     discover/               Hugging Face search and download UI
     runtimes/               Runtime installation and device assignment UI
     sessions/               Independent running sessions
@@ -24,7 +24,7 @@ src/
   shared/
     api/                    Native/HTTP boundary and wire types
     config/                 Defaults, option catalogs, validation, preferences
-    state/                  App store, serialized config saves, task registry
+    state/                  App store, serialized config saves, draft guard, task registry
     storage/                Storage adapter and legacy-data migration
     runtime/                Runtime and session data helpers
     i18n/                   React provider and translation catalogs

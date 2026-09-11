@@ -22,7 +22,7 @@ import { TuningOptionsContext } from '../tuning/TuningOptionMetadata';
 
 export type { BackendRow } from "./runtimesHelpers";
 
-export default function RuntimesPanel({ store, active = true, onOpenProfiles }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void }) {
+export default function RuntimesPanel({ store, active = true, onOpenProfiles, managementOnly = false }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; managementOnly?: boolean }) {
   const { t, locale } = useI18n();
   const rt = useRuntimesController(store, active);
   const runtimeHelp = rt.capabilities?.backend === store.cfg?.active_backend && rt.capabilities?.build === store.cfg?.active_build ? rt.capabilities?.server_help ?? '' : '';
@@ -79,7 +79,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
       />
 
       {managedRuntime && <div className="my-3 flex justify-end"><button type="button" onClick={() => void rt.probe()} disabled={rt.probeBusy || rt.runtimeBusy || rt.serverRunning} className="app-button app-button--secondary app-button--sm"><StableLabel value={rt.probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button></div>}
-      {store.cfg && (
+      {!managementOnly && store.cfg && (
         <TuningOptionsContext.Provider value={{ options: runtimeOptions.length ? runtimeOptions : SERVER_OPTIONS, verified: runtimeOptions.length > 0 }}>
         <RuntimeGpuAssignment
           t={t}

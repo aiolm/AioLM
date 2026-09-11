@@ -92,6 +92,25 @@ describe("SessionsPanel editing", () => {
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalled());
     expect(mocked.sessionStart.mock.calls[0][1].gpu.tensor_split).toEqual([0.25, 0.75]);
   });
+  it('keeps GPU controls mounted during a refresh but drops devices from a different runtime', async () => {
+    const store = { cfg, status: { state: 'stopped' }, busy: false } as AppStore;
+    const view = (active: boolean) => <I18nProvider initialLocale="en"><SessionsPanel store={store} active={active} /></I18nProvider>;
+    const { rerender } = render(view(true));
+    const gpu = (await screen.findAllByRole('checkbox', { name: /Radeon/ }))[0];
+    rerender(view(false));
+    let complete!: (value: unknown) => void;
+    mocked.deviceProfile.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    rerender(view(true));
+    expect(gpu.isConnected).toBe(true);
+    expect(gpu).toBeDisabled();
+    await act(async () => { complete({ profile: { gpus: [{ stable_id: 'gpu-a', name: 'Radeon', vendor: 'amd' }] } }); });
+    expect(gpu.isConnected).toBe(true);
+    expect(gpu).toBeEnabled();
+    mocked.rtProbe.mockImplementationOnce(() => new Promise(() => undefined));
+    store.cfg = { ...cfg, active_backend: 'vulkan', active_build: 'b234' };
+    rerender(view(true));
+    expect(screen.queryByRole('checkbox', { name: /Radeon/ })).not.toBeInTheDocument();
+  });
 
   it("asks before discarding edits when switching sessions", async () => {
     renderPanel();

@@ -1,6 +1,14 @@
 # Data migration and compatibility
 
-AioLM 0.1.6 is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained. The working folder and GitHub repository are not renamed by this change.
+AioLM is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained.
+
+## Project identity
+
+The canonical repository is [joowon-jang/AioLM](https://github.com/joowon-jang/AioLM). App branding uses **AioLM — All-In-One LM**; package names, command names and new data directories use `aiolm`. Installation, source and runtime-artifact links use the canonical repository.
+
+Existing checkouts can update their remote with `git remote set-url origin https://github.com/joowon-jang/AioLM.git`. A checkout's local directory name is independent of the remote; new clones can use `git clone https://github.com/joowon-jang/AioLM.git AioLM`.
+
+Previous product names below are compatibility identifiers used to discover and import existing data, environment variables and exports. They are deliberately retained so upgrading does not strand earlier installations or user data.
 
 ## First launch on Windows
 
@@ -26,3 +34,13 @@ If copying fails, the application stops at a retry screen/dialog before default 
 - New exports use `aiolm.project.v1` and `aiolm-runtime*.json`. Existing project JSON and `llama-board-runtime*.json` manifests remain readable. Previously published PR artifact names remain accepted with the same digest and provenance checks.
 - IPC command names and feature data schemas are preserved. Only the bootstrap command `migration_paths` was added.
 - Runtime and desktop package names are `aiolm`; the Rust library is `aiolm_lib`. Installers include `aiolm.exe` and `aiolm-cli.exe`.
+
+## Model execution workspace
+
+The model execution page combines runtime selection, profiles, GPU placement and tuning. Runtime installation and independent sessions retain their own pages. Existing tuning, profile and LoRA shortcuts open the corresponding section of the model workspace.
+
+The localStorage entry `aiolm-model-execution` uses version 1 and stores the last saved execution configuration by normalized model path. It includes runtime/build, GPU placement, tuning defaults and overrides, projector and LoRA settings. App preferences, ports, authentication fields and independent session definitions are excluded; raw server arguments use the existing profile credential filter. Shared presets remain separate snapshots and are not modified by ordinary model edits.
+
+Existing `aiolm-model-profiles` versions 2–4 remain readable. The version 4 record now retains an optional `activeModelIds` map alongside the existing per-model server selection. Older records without that map inherit the current shared sampling selection on first use. Profile definitions and IDs are preserved, including the existing legacy duplicate-name migration.
+
+Returning to a model restores its saved configuration. A model without a record uses the existing profile defaults. Applying a project explicitly overrides the model record with the project configuration. Missing runtime builds are shown for installation or reselection; they are never silently replaced.

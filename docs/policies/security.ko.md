@@ -4,7 +4,7 @@
 
 ## 제보
 
-공개 이슈를 열지 마세요. [GitHub Security Advisories](https://github.com/joowon-jang/llama-board/security/advisories/new)를 이용하거나 메인테이너에게 비공개로 연락하세요. 최소 재현을 포함하고 시크릿은 `[REDACTED]`로 대체하세요.
+공개 이슈를 열지 마세요. [GitHub Security Advisories](https://github.com/joowon-jang/AioLM/security/advisories/new)를 이용하거나 메인테이너에게 비공개로 연락하세요. 최소 재현을 포함하고 시크릿은 `[REDACTED]`로 대체하세요.
 
 ## 범위
 

@@ -24,6 +24,7 @@ import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerBusy } from "../../shared/lib/serverLifecycle";
 import { normalizeDisplayPath, normalizeDisplayPathLines } from "../../shared/lib/displayPaths";
+import { useDraftGuard } from '../../shared/state/draftGuard';
 
 
 function fileName(project: ProjectPreset): string {
@@ -32,6 +33,7 @@ function fileName(project: ProjectPreset): string {
 
 export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore; onOpenTuning?: () => void }) {
   const { t } = useI18n();
+  const guard = useDraftGuard();
 
   const [projects, setProjects] = useState<ProjectPreset[]>(readProjects);
   const [selectedId, setSelectedId] = useState<string | null>(() => activeProjectId());
@@ -122,7 +124,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       return;
     }
     try {
-      await store.updateConfig(projectConfigPatch(project));
+      const applied = await guard.run(async () => { await store.updateConfig(projectConfigPatch(project)); });
+      if (!applied) return;
       setActiveProjectId(project.id);
       setNotice(t("ui.appliedProjectNamed", { name: project.name }));
       setError(null);

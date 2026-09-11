@@ -4,10 +4,12 @@ import { useI18n } from "../../shared/i18n/i18n";
 import { readLoadingProfiles, writeLoadingProfiles, type LoadingProfile } from "../../shared/runtime/runtimeUtils";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
+import { useDraftGuard } from '../../shared/state/draftGuard';
 
 /** Existing launch presets stay usable; new presets use the shared profile manager. */
 export default function RuntimeLoadingProfiles({ store, disabled }: { store: AppStore; disabled: boolean }) {
   const { t } = useI18n();
+  const guard = useDraftGuard();
   const [profiles, setProfiles] = useState(readLoadingProfiles);
   const [pending, setPending] = useState<LoadingProfile | null>(null);
   const [busy, setBusy] = useState(false);
@@ -19,7 +21,8 @@ export default function RuntimeLoadingProfiles({ store, disabled }: { store: App
     inFlight.current = true;
     setBusy(true);
     try {
-      await store.updateConfig({ active_backend: profile.backend, active_build: profile.build, active_model: profile.active_model, mmproj: profile.mmproj, ctx_size: profile.ctx_size, ngl: profile.ngl, threads: profile.threads, flash_attn: profile.flash_attn });
+      const applied = await guard.run(async () => { await store.updateConfig({ active_backend: profile.backend, active_build: profile.build, active_model: profile.active_model, mmproj: profile.mmproj, ctx_size: profile.ctx_size, ngl: profile.ngl, threads: profile.threads, flash_attn: profile.flash_attn }); });
+      if (!applied) return;
       setNotice(t("ui.appliedProfileNamed", { name: profile.name }));
       setError(null);
     } catch (cause) { setError(String(cause)); }

@@ -5,6 +5,7 @@ import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
 import { cloneGpuPlacement, gpuDeviceLabel, gpuTensorSplitDrafts, parseGpuTensorSplits, toggleGpuSelection, missingGpuIds } from "../../shared/runtime/sessionUtils";
+import { useEditorDraft } from '../../shared/state/draftGuard';
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -52,7 +53,7 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
     const tensorSplit = customSplit ? parseGpuTensorSplits(splitDrafts, selected) : [];
     if (tensorSplit === null) {
       setError(t("ui.gpuTensorSplitInvalid"));
-      return;
+      return false;
     }
     setError(null);
     try {
@@ -60,10 +61,16 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
       await onChange(saved);
       setBaselineKey(JSON.stringify(saved));
       setConflict(false);
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
     }
   };
+  useEditorDraft({ dirty, save, discard: () => {
+    setBaselineKey(placementKey); setDraft(cloneGpuPlacement(placement));
+    setSplitDrafts(gpuTensorSplitDrafts(placement)); setCustomSplit(placement.tensor_split.length > 0); setConflict(false); setError(null);
+  } });
 
   const toggle = (stableId: string) => {
     setDraft((current) => toggleGpuSelection(current, stableId, gpus));
@@ -122,7 +129,7 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
           {customSplit && <span className="mt-1 block text-xs ui-color-faint" >{t("ui.gpuTensorSplitHint")}</span>}
         </fieldset>
       </div>
-      <div className="mt-4 flex justify-end"><button type="button" className="app-button app-button--primary" disabled={disabled || !dirty} onClick={() => void save()}>{t("panel.save")}</button></div>
+      <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => { setDraft(cloneGpuPlacement(undefined)); setSplitDrafts({}); setCustomSplit(false); }}>{t('ui.gpuAny')}</button><button type="button" className="app-button app-button--primary" disabled={disabled || !dirty} onClick={() => void save()}>{t("panel.save")}</button></div>
     </section>
   );
 }

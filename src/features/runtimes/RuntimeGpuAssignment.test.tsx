@@ -1,4 +1,4 @@
-import { fireEvent, render as renderUI, screen } from "@testing-library/react";
+import { fireEvent, render as renderUI, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from 'react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { describe, expect, it, vi } from "vitest";
@@ -27,6 +27,14 @@ const t = (key: UnifiedKey) => key;
 const render = (element: ReactElement) => renderUI(element, { wrapper: ({ children }) => <I18nProvider initialLocale="en">{children}</I18nProvider> });
 
 describe("RuntimeGpuAssignment", () => {
+  it('can clear a previous GPU assignment when the selected runtime has no devices', async () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<RuntimeGpuAssignment t={t} device={{ ...device, profile: { ...device.profile, gpus: [] } }} placement={placement} disabled={false} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'ui.gpuAny' }));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'panel.save' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ gpu_ids: [], main_gpu: null, draft_gpu_id: null, split_mode: 'none', tensor_split: [] }));
+  });
   it("preserves unsaved ratios when another panel saves the placement", () => {
     const onChange = vi.fn().mockResolvedValue(undefined);
     const view = render(<RuntimeGpuAssignment t={t} device={device} placement={placement} disabled={false} onChange={onChange} />);

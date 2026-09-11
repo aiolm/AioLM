@@ -4,7 +4,7 @@
 
 ## Reporting
 
-Do not open a public issue. Use [GitHub Security Advisories](https://github.com/joowon-jang/llama-board/security/advisories/new) or contact the maintainer privately. Include a minimal reproduction and no secrets (replace them with `[REDACTED]`).
+Do not open a public issue. Use [GitHub Security Advisories](https://github.com/joowon-jang/AioLM/security/advisories/new) or contact the maintainer privately. Include a minimal reproduction and no secrets (replace them with `[REDACTED]`).
 
 ## Scope
 
@@ -24,7 +24,7 @@ Portable ZIP and workflow-published CPU artifacts are verified for platform/arch
 
 ## Building a PR from source
 
-Compiles third-party code as your user. Llama-board shows provenance before download (title/author/repo/branch/commit/state) and pins the build to that commit — if head moves before build, it refuses. The PR source archive is fetched via commit-pinned HTTPS and checked for the expected commit directory. GitHub does not publish a trusted digest for that source archive, so the stored SHA-256 is a local audit record; release installer assets use the GitHub asset digest when available or `checksums.txt` as a fallback. Build is confined to the archive (BoringSSL/libcurl/OpenSSL off), two-step confirmation required, every PR state is named. Supported backends: `cpu` `vulkan` `cuda` `rocm` (SYCL/OpenVINO refused).
+Compiles third-party code as your user. AioLM shows provenance before download (title/author/repo/branch/commit/state) and pins the build to that commit — if head moves before build, it refuses. The PR source archive is fetched via commit-pinned HTTPS and checked for the expected commit directory. GitHub does not publish a trusted digest for that source archive, so the stored SHA-256 is a local audit record; release installer assets use the GitHub asset digest when available or `checksums.txt` as a fallback. Build is confined to the archive (BoringSSL/libcurl/OpenSSL off), two-step confirmation required, every PR state is named. Supported backends: `cpu` `vulkan` `cuda` `rocm` (SYCL/OpenVINO refused).
 
 ## Child environment
 
