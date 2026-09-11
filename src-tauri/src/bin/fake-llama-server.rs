@@ -16,7 +16,7 @@ fn port_arg() -> u16 {
 
 fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &str) {
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(response.as_bytes());
@@ -48,9 +48,11 @@ fn handle(mut stream: TcpStream) {
             }
         }
     }
+    let mut slow = false;
     if content_length > 0 {
         let mut body = vec![0_u8; content_length];
         let _ = reader.read_exact(&mut body);
+        slow = String::from_utf8_lossy(&body).contains("slow");
     }
 
     let mut parts = request_line.split_whitespace();
@@ -58,6 +60,7 @@ fn handle(mut stream: TcpStream) {
     let path = parts.next().unwrap_or("");
 
     match (method, path) {
+        ("OPTIONS", _) => respond(&mut stream, "200 OK", "text/plain", ""),
         ("GET", "/health") => respond(
             &mut stream,
             "200 OK",
@@ -71,6 +74,21 @@ fn handle(mut stream: TcpStream) {
             r#"{"data":[{"id":"fake-model","object":"model"}]}"#,
         ),
         ("POST", "/v1/chat/completions") => {
+            if slow {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");
+                for _ in 0..20 {
+                    if stream
+                        .write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"OK \"}}]}\n\n")
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = stream.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                let _ = stream.write_all(b"data: [DONE]\n\n");
+                return;
+            }
             let body = "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n";
             respond(&mut stream, "200 OK", "text/event-stream", body);
         }
@@ -79,6 +97,10 @@ fn handle(mut stream: TcpStream) {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--version" || arg == "--help") {
+        println!("llama-server test fixture b1\n--model --port --api-key --api-key-file --ctx-size --threads --temp --top-p --top-k");
+        return;
+    }
     let port = port_arg();
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind fake llama-server port");
     for incoming in listener.incoming() {
