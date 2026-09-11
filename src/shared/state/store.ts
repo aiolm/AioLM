@@ -32,6 +32,23 @@ function errorMessage(error: unknown): string {
 const START_TIMEOUT_MS = 120_000;
 const STOP_TIMEOUT_MS = 20_000;
 
+function shallowEqual<T extends object>(left: T | undefined, right: T | undefined): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  const keys = Object.keys(left) as (keyof T)[];
+  return keys.length === Object.keys(right).length && keys.every((key) => Object.is(left[key], right[key]));
+}
+
+/** IPC deserializes a fresh object on every poll, even when nothing changed. */
+function sameServerStatus(left: api.ServerStatus, right: api.ServerStatus): boolean {
+  const keys = Object.keys(left) as (keyof api.ServerStatus)[];
+  return keys.length === Object.keys(right).length && keys.every((key) => {
+    if (key === "memory") return shallowEqual(left.memory, right.memory);
+    if (key === "lifecycle") return shallowEqual(left.lifecycle, right.lifecycle);
+    return Object.is(left[key], right[key]);
+  });
+}
+
 export function useAppStore(options: { pollIntervalMs?: number; autoStart?: boolean } = {}): AppStore {
   const [cfg, setCfg] = useState<api.AppConfig | null>(null);
   const cfgRef = useRef<api.AppConfig | null>(null);
@@ -79,7 +96,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     const generation = statusGeneration.current;
     try {
       const next = await api.serverStatus();
-      if (generation === statusGeneration.current && !operationInFlight.current) setStatus(next);
+      if (generation === statusGeneration.current && !operationInFlight.current) setStatus((current) => sameServerStatus(current, next) ? current : next);
       if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(null);
       pollFailures.current = 0;
     } catch (error) {
@@ -173,6 +190,9 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
 
   useEffect(() => {
     void loadConfig().catch(() => undefined);
+  }, [loadConfig]);
+
+  useEffect(() => {
     if (!api.isNativeRuntimeAvailable()) return undefined;
     pollStopped.current = false;
     const schedule = () => {
@@ -197,7 +217,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => { pollStopped.current = true; if (pollTimer.current !== null) window.clearTimeout(pollTimer.current); pollTimer.current = null; document.removeEventListener("visibilitychange", onVisibility); };
-  }, [loadConfig, options.pollIntervalMs, refreshStatus]);
+  }, [options.pollIntervalMs, refreshStatus]);
 
   useEffect(() => {
     if (!shouldAutoStart(Boolean(options.autoStart), status.state, busy, autoStartConsumedRef.current, configRevisionRef.current)) return;

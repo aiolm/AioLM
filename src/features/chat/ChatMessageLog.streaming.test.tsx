@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ChatHistoryMessage, ChatWorkspace } from "./chatHistory";
 
 /**
- * Regression test for P1-7 (docs/review-codex-6.md #2): Chat.tsx used to pass
+ * Streaming regression: Chat.tsx used to pass
  * ChatMessageLog a brand-new `onCopy` closure on every render, which broke
  * MessageBubble's `memo()` bailout for every earlier bubble whenever a
  * streaming tick patched only the newest message. MessageBubble.perf.test.tsx
@@ -190,5 +190,41 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     const newBubbleCalls = callsDuringTicks.filter((index) => index === NEW_ASSISTANT_INDEX);
     expect(newBubbleCalls.length).toBeGreaterThanOrEqual(2);
     await act(async () => stream.finish("Hello there friend."));
+  });
+
+  it("follows later streaming deltas until the user scrolls up", async () => {
+    renderPanel();
+    await screen.findByTestId(`bubble-${SEED_MESSAGE_COUNT - 1}`);
+    const log = screen.getByRole("log");
+    let height = 400;
+    Object.defineProperties(log, {
+      scrollHeight: { configurable: true, get: () => height },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    log.scrollTop = 200;
+    const scroll = vi.spyOn(log, "scrollTo").mockImplementation(() => { log.scrollTop = height - 200; });
+    const stream = controlledStream();
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Hi" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalled());
+    act(() => stream.emit("Hello "));
+    await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello"));
+    await waitFor(() => expect(scroll).toHaveBeenCalledWith({ top: 400, behavior: "auto" }));
+    scroll.mockClear();
+
+    height = 600;
+    act(() => stream.emit("there "));
+    await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello there"));
+    await waitFor(() => expect(scroll).toHaveBeenCalledWith({ top: 600, behavior: "auto" }));
+    scroll.mockClear();
+
+    log.scrollTop = 0;
+    fireEvent.scroll(log);
+    height = 800;
+    act(() => stream.emit("friend."));
+    await waitFor(() => expect(screen.getByTestId(`bubble-${NEW_ASSISTANT_INDEX}`)).toHaveTextContent("Hello there friend."));
+    await act(async () => stream.finish("Hello there friend."));
+    expect(scroll).not.toHaveBeenCalled();
+    expect(log.scrollTop).toBe(0);
   });
 });

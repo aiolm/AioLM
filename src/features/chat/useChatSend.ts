@@ -67,6 +67,7 @@ export function useChatSend({
   const documentTruncationRef = useRef(false);
 
   useEffect(() => () => {
+    ctrlRef.current?.abort();
     if (renderFrameRef.current !== null) window.cancelAnimationFrame(renderFrameRef.current);
   }, []);
 
@@ -94,7 +95,7 @@ export function useChatSend({
   };
 
   const send = async (retry = false, historyOverride?: api.ChatMessage[], canSend = true) => {
-    if (!baseUrl) return;
+    if (!baseUrl || ctrlRef.current) return;
     const toolFollowup = !!historyOverride;
     const failed = failedRef.current;
     const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
@@ -109,6 +110,10 @@ export function useChatSend({
 
     const controller = new AbortController();
     ctrlRef.current = controller;
+    // Preparation can await server wake-up and document embeddings. Lock the
+    // composer immediately and let Stop cancel before generation starts.
+    setPhase("thinking");
+    setError(null);
     streamRef.current = { assistant: "", reasoning: "", toolCalls: [] };
     cancelScheduledRender();
     setStreamingDraft(null);
@@ -119,8 +124,10 @@ export function useChatSend({
     try {
       await api.serverActivity("start");
       activityStarted = true;
+      controller.signal.throwIfAborted();
 
       const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, model, apiKey, baseUrl);
+      controller.signal.throwIfAborted();
       if (documentChunksTruncated) documentTruncationRef.current = true;
       setContextSources(retrievalSources);
       const requestContent = `${text}${documentContext ?? ""}`;
@@ -150,8 +157,6 @@ export function useChatSend({
       if (!toolFollowup) setInput("");
       if (!retry && !toolFollowup) setAttachments([]);
       if (!retry && !toolFollowup) setDocuments([]);
-      setError(null);
-      setPhase("thinking");
       atBottomRef.current = true;
       setMsgs((current) => {
         const last = current[current.length - 1];

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import ChatPanel from "./Chat";
 import { I18nProvider } from "../../shared/i18n/i18n";
@@ -164,6 +164,44 @@ describe("ChatPanel document context warning", () => {
     release();
     await screen.findByText("Done.");
     expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
+  });
+
+  it("locks the composer while preparing a request and lets Stop cancel before generation", async () => {
+    let release!: () => void;
+    mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    renderPanel();
+    await sendMessage("Keep this draft when preparation is cancelled.");
+
+    const composer = screen.getByLabelText("Chat message");
+    expect(composer).toBeDisabled();
+    expect(screen.getByLabelText("Loaded sessions")).toBeDisabled();
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(mocked.serverActivity).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop generation" }));
+    await act(async () => release());
+
+    await waitFor(() => expect(composer).toBeEnabled());
+    expect(composer).toHaveValue("Keep this draft when preparation is cancelled.");
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(mocked.serverActivity).toHaveBeenLastCalledWith("end");
+  });
+
+  it("cancels document preparation without sending or losing the attachment", async () => {
+    let release!: (vectors: number[][]) => void;
+    mocked.embedText.mockImplementationOnce(() => new Promise<number[][]>(resolve => { release = resolve; }));
+    renderPanel();
+    await attachDocument("cancel.txt", SMALL_DOCUMENT);
+    await sendMessage("Summarize this document.");
+    await waitFor(() => expect(mocked.embedText).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop generation" }));
+    await act(async () => release([]));
+
+    await waitFor(() => expect(screen.getByLabelText("Chat message")).toBeEnabled());
+    expect(screen.getByLabelText("Chat message")).toHaveValue("Summarize this document.");
+    expect(screen.getByText("cancel.txt")).toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
   });
 
   it("refreshes independent session state while chat remains open", async () => {

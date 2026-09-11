@@ -149,9 +149,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || !atBottomRef.current || (msgs.length === 0 && phase === "idle")) return;
-    const frame = window.requestAnimationFrame(() => element.scrollTo({ top: element.scrollHeight, behavior: "auto" }));
+    const frame = window.requestAnimationFrame(() => {
+      if (atBottomRef.current) element.scrollTo({ top: element.scrollHeight, behavior: "auto" });
+    });
     return () => window.cancelAnimationFrame(frame);
-  }, [msgs, phase]);
+  }, [msgs, phase, streamingDraft]);
 
   // Stable identity (not the inline `ct` closure) so MessageBubble's memo bailout
   // survives streaming re-renders of ChatPanel; see MessageBubble.tsx's doc comment.
