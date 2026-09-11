@@ -16,8 +16,10 @@ struct Field {
 }
 
 static FIELDS: LazyLock<Vec<Field>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../src/tuningDefaultsCatalog.json"))
-        .expect("checked-in tuning default catalog must be valid")
+    serde_json::from_str(include_str!(
+        "../../src/shared/config/tuningDefaultsCatalog.json"
+    ))
+    .expect("checked-in tuning default catalog must be valid")
 });
 
 pub fn is_known(key: &str) -> bool {

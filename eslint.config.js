@@ -40,7 +40,7 @@ export default [
     },
   },
   {
-    files: ["scripts/**/*.ts", "vite.config.ts"],
+    files: ["scripts/**/*.ts", "tests/direct/**/*.ts", "vite.config.ts"],
     languageOptions: {
       globals: {
         process: "readonly", console: "readonly", globalThis: "readonly",
@@ -49,6 +49,30 @@ export default [
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+    },
+  },
+  {
+    files: ["src/shared/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["**/app/**", "**/features/**", "**/testing/**"],
+          message: "Shared modules must stay independent of application composition, features, and test helpers.",
+        }],
+      }],
+    },
+  },
+  {
+    files: ["src/features/**/*.{ts,tsx}"],
+    ignores: ["**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["**/app/**", "**/testing/**"],
+          message: "Features receive application callbacks through props and use shared contracts instead of importing the app shell.",
+        }],
+      }],
     },
   },
 ];

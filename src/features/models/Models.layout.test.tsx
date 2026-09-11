@@ -1,0 +1,92 @@
+import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
+import type { AppConfig } from "../../shared/api/types";
+import type { AppStore } from "../../shared/state/store";
+import { I18nProvider } from "../../shared/i18n/i18n";
+import "../../styles/app.css";
+import ModelsPanel from "./Models";
+
+const cfg = {
+  config_version: 1,
+  models_dir: "",
+  port: 8080,
+  ngl: 0,
+  ctx_size: 4096,
+  batch_size: 2048,
+  ubatch_size: 512,
+  keep: 0,
+  cache_type_k: "f16",
+  cache_type_v: "f16",
+  flash_attn: "auto",
+  n_cpu_moe: 0,
+  threads: 8,
+  temperature: 0.7,
+  top_p: 0.9,
+  top_k: 40,
+  spec_type: "none",
+  spec_draft_n_max: 16,
+  spec_draft_n_min: 0,
+  spec_draft_p_min: 0,
+  spec_draft_p_split: 0,
+  spec_draft_ngl: "auto",
+  spec_draft_device: "",
+  spec_draft_model: "",
+  reasoning: "on",
+  reasoning_format: "deepseek",
+  reasoning_effort: "default",
+  reasoning_budget: -1,
+  reasoning_budget_message: "",
+  reasoning_preserve: "",
+  server_args: [],
+  chat_options: { max_tokens: 512 },
+  mmproj: "",
+  active_model: "C:/models/example.gguf",
+  active_backend: "PATH",
+  active_build: "",
+  iters: 1,
+  parallel: 1,
+  request_timeout_seconds: 60,
+  sleep_idle_seconds: -1,
+  lora_adapters: [],
+} satisfies AppConfig;
+
+const store = {
+  cfg,
+  status: { state: "stopped" },
+  busy: false,
+  updateConfig: async () => cfg,
+  start: async () => "",
+  stop: async () => undefined,
+} as unknown as AppStore;
+
+describe("ModelsPanel layout", () => {
+  it("does not render tuning controls in the model library", () => {
+    render(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ModelsPanel, { store }),
+    }));
+
+    const scrollRegion = screen.getByTestId("models-scroll-region");
+    expect(scrollRegion).toHaveClass("models-panel");
+    expect(screen.queryByTestId("execution-profiles-section")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Execution profiles" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("models-list")).toHaveClass("models-model-list");
+    expect(screen.getByTestId("models-header-actions")).toHaveClass("min-w-0", "w-full", "flex-wrap");
+  });
+
+  it("leaves server lifecycle controls to the app toolbar", () => {
+    const startingStore = {
+      ...store,
+      status: { state: "starting" },
+      busy: true,
+    } as AppStore;
+    render(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ModelsPanel, { store: startingStore }),
+    }));
+
+    expect(screen.queryByRole("button", { name: "Stop server" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unload model" })).toBeDisabled();
+  });
+});

@@ -25,5 +25,5 @@ for (const line of help.split('\n')) {
   });
 }
 if (options.length < 150) throw new Error(`Unexpectedly small catalog: ${options.length}`);
-await writeFile(new URL('../src/serverOptionsCatalog.json', import.meta.url), JSON.stringify({ source, commit: sha, options }, null, 2) + '\n');
+await writeFile(new URL('../src/shared/config/serverOptionsCatalog.json', import.meta.url), JSON.stringify({ source, commit: sha, options }, null, 2) + '\n');
 console.log(`Saved ${options.length} server options from ${sha}`);

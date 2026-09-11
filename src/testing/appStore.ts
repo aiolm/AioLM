@@ -1,6 +1,6 @@
 import { vi } from "vitest";
-import type { AppConfig } from "../api";
-import type { AppStore } from "../store";
+import type { AppConfig } from "../shared/api/types";
+import type { AppStore } from "../shared/state/store";
 
 export const testConfig: AppConfig = {
   config_version: 7, models_dir: "models", port: 8080,

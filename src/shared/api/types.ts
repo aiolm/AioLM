@@ -1,0 +1,453 @@
+import type { StreamDelta } from "./sse.ts";
+import type { JsonObject } from "../config/tuningValidation.ts";
+
+export interface AppConfig {
+  runtime_defaults?: string[];
+  config_version: number;
+  models_dir: string;
+  port: number;
+  ngl: number;
+  ctx_size: number;
+  batch_size: number;
+  ubatch_size: number;
+  keep: number;
+  cache_type_k: string;
+  cache_type_v: string;
+  flash_attn: string;
+  n_cpu_moe: number;
+  threads: number;
+  temperature: number;
+  top_p: number;
+  top_k: number;
+  spec_type: string;
+  spec_draft_n_max: number;
+  spec_draft_n_min: number;
+  spec_draft_p_min: number;
+  spec_draft_p_split: number;
+  spec_draft_ngl: string;
+  spec_draft_device: string;
+  spec_draft_model: string;
+  reasoning: string;
+  reasoning_format: string;
+  reasoning_effort: string;
+  reasoning_budget: number;
+  reasoning_budget_message: string;
+  reasoning_preserve: string;
+  server_args: string[];
+  chat_options: JsonObject;
+  mmproj: string;
+  active_model: string;
+  active_backend: string;
+  active_build: string;
+  iters: number;
+  parallel: number;
+  request_timeout_seconds: number;
+  sleep_idle_seconds: number;
+  lora_adapters: LoraAdapterConfig[];
+  /** Added by the multi-session config schema; optional for older app builds. */
+  stop_existing_sessions_on_load?: boolean;
+  sessions?: SessionDefinition[];
+  gpu?: GpuPlacement;
+}
+
+export interface LoraAdapterConfig {
+  path: string;
+  scale: number;
+  enabled: boolean;
+}
+
+export interface GgufModel {
+  name: string;
+  path: string;
+  size_mb: number;
+  is_vision: boolean;
+  shards?: { files: string[]; total: number; missing: number[] };
+}
+
+export interface ModelScanResult {
+  models: GgufModel[];
+  truncated: boolean;
+}
+
+export interface HfModel {
+  id: string;
+  author: string;
+  downloads: number;
+  likes: number;
+  last_modified: string;
+  pipeline_tag?: string;
+  tags: string[];
+  gated: boolean;
+}
+
+export interface HfFile {
+  path: string;
+  size_bytes: number;
+  oid?: string;
+  is_mmproj: boolean;
+  download_url: string;
+}
+
+export interface DownloadedModel {
+  repo_id: string;
+  file_path: string;
+  path: string;
+  size_bytes: number;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  enabled: boolean;
+}
+
+export interface McpTool {
+  name: string;
+  description?: string;
+  input_schema: unknown;
+}
+
+export interface ModelDownloadProgress {
+  repo_id: string;
+  file_path: string;
+  phase: "starting" | "downloading" | "cancelled" | "complete";
+  received: number;
+  total: number;
+}
+
+export interface LocalModelInfo {
+  id: string;
+  object?: string;
+  created?: number;
+  owned_by?: string;
+}
+
+export type GpuVendor = "nvidia" | "amd" | "intel" | "apple" | "unknown";
+
+export interface GpuDevice {
+  vendor: GpuVendor;
+  name: string;
+  vram_mb?: number;
+  driver?: string;
+  pci_id?: string;
+  integrated: boolean;
+  /** Stable physical-device id; never use the transient array index as a key. */
+  stable_id?: string;
+}
+
+export interface DeviceProfile {
+  schema_version: number;
+  os: string;
+  arch: string;
+  cpu: { name: string; logical_cores: number };
+  gpus: GpuDevice[];
+  detection: string;
+  /** Stable, non-identifying device-class key for the benchmark service. */
+  fingerprint: string;
+}
+
+/** Verdict from the local backend-recommendation policy. */
+export type BackendFit = "recommended" | "compatible" | "unsupported";
+
+export interface BackendSuitability {
+  backend: string;
+  fit: BackendFit;
+  /** Reason key resolved by the UI catalog, not a display string. */
+  reason: string;
+  device?: string;
+}
+
+export interface DeviceReport {
+  profile: DeviceProfile;
+  backends: BackendSuitability[];
+}
+
+export interface RuntimeVersion {
+  semver: string;
+  build: number;
+  commit: string;
+}
+
+export interface RuntimeSource {
+  pull_request: number;
+  /** Head repository — `ggml-org/llama.cpp` or a contributor's fork. */
+  repository: string;
+  /** Head branch at build time. A label, not an identity: `commit` is that. */
+  head_ref?: string;
+  author?: string;
+  /** `open`, `closed` or `merged`, as of the build. */
+  state?: string;
+  fork?: boolean;
+  commit: string;
+  /**
+   * SHA-256 of the archive as this machine downloaded it, computed locally.
+   * GitHub publishes no digest for a source archive, so this records what was
+   * built — it is not an independent verification of the download.
+   */
+  archive_sha256: string;
+  /** How the extracted tree was tied back to `commit`. */
+  commit_check?: string;
+  url: string;
+}
+
+/**
+ * A PR runtime keeps one directory per pull request, so rebuilding the same PR
+ * replaces the previous commit. Present only on a fresh install that displaced
+ * a different commit — never when listing.
+ */
+export interface RuntimeReplacement {
+  previous_commit: string;
+  previous_pull_request: number;
+}
+
+/** Reasons a pull request deserves a second look. None of them refuse a build. */
+export type PrAdvisory = "draft" | "closed" | "merged" | "fork" | "no-head-ref";
+
+export interface PullRequestArtifactPreview {
+  name: string;
+  sha256: string;
+  bytes: number;
+}
+
+/** What the user is shown before agreeing to build a pull request locally. */
+export interface PullRequestPreview {
+  pull_request: number;
+  title: string;
+  state: string;
+  draft: boolean;
+  author: string;
+  repository: string;
+  head_ref: string;
+  commit: string;
+  fork: boolean;
+  url: string;
+  archive_url: string;
+  updated_at: string;
+  advisories: PrAdvisory[];
+  /** Present when a verified, platform-matching prebuilt PR artifact exists. */
+  artifact?: PullRequestArtifactPreview | null;
+  /** Non-fatal artifact lookup error, when GitHub could not be queried reliably. */
+  artifact_error?: string | null;
+}
+
+export interface InstalledRuntime {
+  build: string;
+  backend: string;
+  dir: string;
+  size_mb: number;
+  /** Absent until the runtime is installed or probed by a build that records it. */
+  version?: RuntimeVersion;
+  /** Present for a runtime built from an upstream pull request. */
+  source?: RuntimeSource;
+  /** Set when this install displaced a PR build of a different commit. */
+  replaced?: RuntimeReplacement;
+}
+
+export interface RuntimeBundleInfo {
+  path: string;
+  backend: string;
+  build: string;
+  archive_sha256: string;
+  bytes: number;
+}
+
+export interface LatestInfo {
+  build: string;
+  file_name: string;
+  url: string;
+  digest?: string;
+}
+
+export interface RuntimeCapabilities {
+  backend: string;
+  build: string;
+  executable: string;
+  state: "available" | "failed preflight" | "not installed" | "unsupported by this runtime build" | "unknown";
+  version: string;
+  flags: string[];
+  /** Exact help from the selected executable, including build-specific options. */
+  server_help?: string;
+  devices: string[];
+  diagnostics: string[];
+  bench_available?: boolean;
+  supports_dflash?: boolean;
+}
+
+export interface BenchRow {
+  test: string;
+  size: string;
+  batch: string;
+  tps: number;
+}
+
+export interface BenchResult {
+  rows: BenchRow[];
+  args: string[];
+  /** Newer backends return a terminal state and any diagnostic. */
+  status?: "complete" | "partial" | "cancelled";
+  message?: string | null;
+}
+
+export type BenchmarkRunState = "complete" | "partial" | "cancelled" | "crashed" | "failed" | "running";
+
+/** A saved server session is a primary model plus optional sidecars. */
+export interface SessionModels {
+  primary_model: string;
+  mmproj: string;
+  draft_model: string;
+}
+
+export type SplitMode = "none" | "single" | "layer" | "row" | "tensor";
+
+export interface GpuPlacement {
+  gpu_ids: string[];
+  main_gpu?: string | null;
+  split_mode: SplitMode;
+  tensor_split: number[];
+  draft_gpu_id?: string | null;
+}
+
+export interface SessionDefinition {
+  id: string;
+  name: string;
+  models: SessionModels;
+  gpu: GpuPlacement;
+  enabled: boolean;
+}
+
+export interface SessionStatus {
+  id: string;
+  name: string;
+  state: ServerState;
+  url?: string;
+  /** The backend may provide this directly; the UI also derives it from url. */
+  port?: number;
+  model?: string;
+  mmproj?: string;
+  draft_model?: string;
+  api_key?: string;
+  pid?: number;
+  active_requests?: number;
+  idle_seconds?: number;
+  log_tail?: string;
+  error?: string;
+  gpu?: GpuPlacement;
+}
+
+export interface SessionListResult {
+  sessions: SessionStatus[];
+}
+
+/** One benchmark row, emitted as it is parsed from a running benchmark.
+ * Final status and args come from `runBench`'s resolved `BenchResult`, not
+ * from this stream. */
+export interface BenchmarkProgress {
+  row: BenchRow;
+}
+
+export type ServerState = "stopped" | "starting" | "running" | "stopping" | "failed" | "crashed";
+
+export interface ServerStatus {
+  state: ServerState;
+  url?: string;
+  model?: string;
+  api_key?: string;
+  mmproj?: string;
+  pid?: number;
+  log_tail?: string;
+  error?: string;
+  active_requests?: number;
+  idle_seconds?: number;
+  memory?: MemoryEstimate;
+  lifecycle?: LifecycleDiagnostics;
+}
+
+export interface MemoryEstimate {
+  model_mb: number;
+  context_mb: number;
+  kv_mb: number;
+  projector_mb: number;
+  adapters_mb: number;
+  total_mb: number;
+  available_mb?: number;
+  source: "metadata" | "filesystem" | "unknown";
+}
+
+export interface LifecycleDiagnostics {
+  idle_seconds?: number;
+  sleep_idle_seconds: number;
+  request_timeout_seconds: number;
+  parallel: number;
+  active_requests?: number;
+  auto_unload_due?: boolean;
+  effective_model?: string;
+  effective_backend?: string;
+  last_ready_at?: string;
+}
+
+export interface DownloadProgress {
+  backend: string;
+  build: string;
+  phase: string;
+  received: number;
+  total: number;
+}
+
+export interface ServerLoraAdapter {
+  id: number;
+  path: string;
+  scale: number;
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | ChatContentPart[];
+  tool_call_id?: string;
+  name?: string;
+  tool_calls?: ChatToolCall[];
+}
+
+export interface ChatToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+export interface ChatTextPart {
+  type: "text";
+  text: string;
+}
+
+export interface ChatImagePart {
+  type: "image_url";
+  image_url: { url: string };
+}
+
+export type ChatContentPart = ChatTextPart | ChatImagePart;
+
+export type ChatDelta = StreamDelta;
+
+export interface ChatSampling {
+  runtime_defaults?: string[];
+  temperature: number;
+  top_p: number;
+  top_k: number;
+  reasoning?: string;
+  reasoning_effort?: string;
+  options?: JsonObject;
+  tools?: ChatToolDefinition[];
+}
+
+export interface ChatToolDefinition {
+  type: "function";
+  function: { name: string; description?: string; parameters: unknown };
+}
+
+export interface ChatRequestBody {
+  model: string;
+  messages: ChatMessage[];
+  stream: true;
+  [key: string]: unknown;
+}
