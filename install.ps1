@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Repository = "joowon-jang/llama-board"
+$Repository = "joowon-jang/AioLM"
 $ApiHeaders = @{
     Accept = "application/vnd.github+json"
     "User-Agent" = "aiolm-installer"
@@ -31,7 +31,7 @@ $releaseUri = if ($Release -eq "latest") {
     "https://api.github.com/repos/$Repository/releases/tags/$Release"
 }
 
-Write-Host "==> Resolving aiolm release ($Release)"
+Write-Host "==> Resolving AioLM release ($Release)"
 $releaseMetadata = Invoke-RestMethod -UseBasicParsing -Uri $releaseUri -Headers $ApiHeaders
 
 $assetPattern = if ($Installer -eq "msi") {
@@ -108,7 +108,7 @@ try {
     if ($process.ExitCode -ne 0) {
         throw "Installer exited with code $($process.ExitCode)."
     }
-    Write-Host "aiolm installed successfully."
+    Write-Host "AioLM installed successfully."
 } finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }

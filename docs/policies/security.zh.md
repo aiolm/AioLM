@@ -4,7 +4,7 @@
 
 ## 报告
 
-请勿公开提交 issue。请使用 [GitHub Security Advisories](https://github.com/joowon-jang/llama-board/security/advisories/new) 或私下联系维护者。包含最小复现，敏感信息用 `[REDACTED]` 替换。
+请勿公开提交 issue。请使用 [GitHub Security Advisories](https://github.com/joowon-jang/AioLM/security/advisories/new) 或私下联系维护者。包含最小复现，敏感信息用 `[REDACTED]` 替换。
 
 ## 范围
 

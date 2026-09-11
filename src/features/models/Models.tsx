@@ -15,10 +15,13 @@ import { buildNumber } from "../../shared/runtime/runtimeUtils";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import { activeProfilesPatch } from "../profiles/modelProfiles";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
+import { executionText } from '../../shared/i18n/executionI18n';
+import { forgetExecution } from './modelExecutionState';
 
 
-export default function ModelsPanel({ store, focus = "library" }: { store: AppStore; focus?: "library" | "lora" }) {
-  const { t } = useI18n();
+export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean }) {
+  const { t, locale } = useI18n();
+  const copy = executionText[locale];
 
   const cfg = store.cfg;
   const [models, setModels] = useState<api.GgufModel[] | null>(null);
@@ -57,6 +60,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
       const result = await api.listModels(dir);
       if (!isCurrentScan(generation, scanGeneration.current)) return;
       setModels(result.models);
+      onModels?.(result.models);
       setScanTruncated(result.truncated);
     } catch (error) {
       if (!isCurrentScan(generation, scanGeneration.current)) return;
@@ -64,7 +68,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
     } finally {
       if (isCurrentScan(generation, scanGeneration.current)) setScanning(false);
     }
-  }, [dir, t]);
+  }, [dir, t, onModels]);
 
   const cancelScan = () => {
     scanGeneration.current = nextScanGeneration(scanGeneration.current);
@@ -161,6 +165,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
   const selectModel = async (model: api.GgufModel) => {
     if (model.shards?.missing.length) return;
     try {
+      if (onSelectModel) { await onSelectModel(model); return; }
       await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
       // 모델 선택은 저장/서버 시작 알림을 표시하지 않는다.
     } catch (error) {
@@ -242,6 +247,8 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
       setPendingConfirm(null);
       try {
         await api.deleteModel(model.path, model.shards?.files);
+        forgetExecution(model.path);
+        if (cfg?.active_model === model.path) await store.updateConfig({ active_model: '' });
         notify(t("ui.deletedModelNamed", { name: model.name }));
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -259,7 +266,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
   };
 
   return (
-    <div className="app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col p-4 pb-8" data-testid="models-scroll-region">
+    <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col p-4 pb-8${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
       {focus === "lora" && <div className="mb-4"><div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">{t("panel.models")}</div><h2 className="mt-1 text-xl font-semibold tracking-tight text-ink">{t("panel.loraAdapters")}</h2><p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">{t("ui.loraDescription")}</p></div>}
 
       {/* Rendered outside the library-only fragment so LoRA actions report too. */}
@@ -302,7 +309,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
         </div>
       </div>
 
-      <div className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
+      {!compact && <div className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{t("panel.activeModel")}</div>
@@ -331,7 +338,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
             <pre className="whitespace-pre-wrap break-words">{normalizeDisplayText(store.status.error)}</pre>
           </div>
         )}
-      </div>
+      </div>}
 
       </>}
 
@@ -383,7 +390,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
           const incomplete = !!model.shards?.missing.length;
           const isSelected = model.path === selected || !!model.shards?.files.includes(selected);
           const running = serverRunning && isSelected;
-          const actionLabel = running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
+          const actionLabel = onSelectModel ? copy.setupAction : running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
           return (
             <div
               key={model.path}
@@ -395,10 +402,10 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
                 type="button"
                 aria-current={isSelected ? "true" : undefined}
                 aria-label={t("ui.selectModelNamed", { name: model.name })}
-                disabled={incomplete}
-                aria-disabled={serverRunning ? "true" : undefined}
+                disabled={incomplete || store.busy}
+                aria-disabled={serverRunning && !onSelectModel ? "true" : undefined}
                 onClick={() => {
-                  if (serverRunning) {
+                  if (serverRunning && !onSelectModel) {
                     notify(t("ui.useRowAction"));
                     return;
                   }
@@ -418,7 +425,7 @@ export default function ModelsPanel({ store, focus = "library" }: { store: AppSt
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${model.name}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
                 <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
                 <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0 ui-color-danger" >{t("panel.delete")}</button>
-                <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy} aria-label={`${actionLabel}: ${model.name}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
+                <button type="button" onClick={() => { if (onSelectModel) void selectModel(model); else if (!running) void selectAndStart(model); }} disabled={incomplete || (!onSelectModel && running) || store.busy} aria-label={`${actionLabel}: ${model.name}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={onSelectModel ? [copy.setupAction] : [t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
               </div>
             </div>
           );

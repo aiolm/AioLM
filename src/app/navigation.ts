@@ -12,13 +12,10 @@ export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
  { id: 'models', items: [
   { id: 'models', label: 'section.library', icon: 'm12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5M3 16l9 5 9-5' },
   { id: 'discover', label: 'section.discover', icon: 'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z' },
-  { id: 'lora', label: 'section.lora', icon: 'M5 4v16M19 4v16M5 8h8v8h6M10 5l3 3-3 3M16 13l3 3-3 3' },
  ] },
  { id: 'execution', items: [
   { id: 'sessions', label: 'ui.sessionsTitle', icon: 'M4 5h16v14H4V5Z m6 4 5 3-5 3V9Z' },
   { id: 'runtimes', label: 'section.runtimes', icon: 'M6 6h12v12H6V6Z M9 1v5M15 1v5M9 18v5M15 18v5M1 9h5M1 15h5M18 9h5M18 15h5' },
-  { id: 'tuning', label: 'ui.tuningControls', icon: 'M4 7h16M4 17h16M8 4v6M16 14v6' },
-  { id: 'profiles', label: 'ui.executionProfiles', icon: 'M5 3h14v18l-7-4-7 4V3Z M9 8h6M9 12h4' },
   { id: 'benchmark', label: 'section.benchmark', icon: 'M4 3v17h17M8 16v-5M13 16V7M18 16V4' },
  ] },
  { id: 'integrations', items: [

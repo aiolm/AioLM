@@ -9,6 +9,7 @@ import type { useServerOptions } from './useServerOptions';
 import { ServerOptionDefault } from './TuningOptionMetadata';
 import { serverDefault } from '../../shared/config/optionDefaults';
 import { defaultScalar } from '../../shared/config/tuningResetValues';
+import { useEditorDraft } from '../../shared/state/draftGuard';
 
 const MEMORY_OPTIONS = new Set(['--mmap', '--mlock', '--direct-io', '--load-mode', '--lazy-mode', '--numa', '--kv-offload', '--op-offload', '--repack', '--fit', '--fit-target', '--fit-ctx', '--cache-ram', '--swa-full']);
 const LOAD_CHOICES = ['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio'];
@@ -49,13 +50,14 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options 
     setDraft([...items, { flag: option.id, values: Array.from({ length: option.arity }, () => value) }]);
   };
   const save = async (values: OptionOccurrence[]) => {
-    if (busy || disabled) return;
+    if (busy || disabled) return false;
     setBusy(true); setError(''); setFeedback('');
-    try { await onSave(option, values); setDraft(null); setFeedback(copy.saved); }
-    catch (cause) { setError(String(cause)); }
+    try { await onSave(option, values); setDraft(null); setFeedback(copy.saved); return true; }
+    catch (cause) { setError(String(cause)); return false; }
     finally { setBusy(false); }
   };
   const invalid = items.some(item => item.values.length !== option.arity || item.values.some(value => !value.trim()));
+  useEditorDraft({ dirty: draft !== null, save: async () => { if (invalid) { setError(copy.required); return false; } return save(items); }, discard: () => { setDraft(null); setError(''); } });
   return <div className="server-option-editor">
     {items.length === 0 && <p className="server-option-default">{copy.inherited}</p>}
     {items.map((item, index) => <div className="server-option-occurrence" key={index}>

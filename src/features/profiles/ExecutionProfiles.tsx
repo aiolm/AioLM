@@ -14,18 +14,20 @@ import {
 } from "./modelProfiles";
 import { REQUEST_DEFAULT_KEYS } from "../../shared/config/tuningDefaults";
 import RuntimeLoadingProfiles from "../runtimes/RuntimeLoadingProfiles";
+import { useDraftGuard, useEditorDraft } from '../../shared/state/draftGuard';
 
-type Props = { store: AppStore; modelPath: string; onOpenTuning?: () => void };
+type Props = { store: AppStore; modelPath: string; onOpenTuning?: () => void; compact?: boolean };
 type Kind = "server" | "model";
 
 /** Presets capture the canonical tuning form; they never host a second editor. */
 export default function ExecutionProfiles(props: Props) {
   if (!props.store.cfg) return null;
-  return <ProfileManager key={props.modelPath} {...props} cfg={props.store.cfg} />;
+  return <ProfileManager {...props} cfg={props.store.cfg} />;
 }
 
-function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: AppConfig }) {
+function ProfileManager({ store, modelPath, onOpenTuning, cfg, compact }: Props & { cfg: AppConfig }) {
   const { t } = useI18n();
+  const guard = useDraftGuard();
   const [profiles, setProfiles] = useState(() => loadProfiles(cfg, modelPath));
   const [serverId, setServerId] = useState(profiles.activeServerId);
   const [modelId, setModelId] = useState(profiles.activeModelId);
@@ -36,6 +38,14 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const inFlight = useRef(false);
+  const [loadedModel, setLoadedModel] = useState(modelPath);
+  if (loadedModel !== modelPath) {
+    // Reset only model-bound selections and drafts, preserving the controls and disclosures.
+    const next = loadProfiles(cfg, modelPath);
+    setLoadedModel(modelPath);
+    setProfiles(next); setServerId(next.activeServerId); setModelId(next.activeModelId);
+    setNameDraft(''); setEditing(null); setPending(null); setNotice(null); setError(null);
+  }
   const server = profiles.server.find((item) => item.id === serverId) ?? profiles.server[0];
   const model = profiles.model.find((item) => item.id === modelId) ?? profiles.model[0];
   const disabled = store.busy || applying || store.status.state === "starting" || store.status.state === "stopping";
@@ -48,13 +58,14 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
     setNotice(null);
   };
   const capture = (kind: Kind, name: string, id?: string) => {
+    const current = store.getConfig() ?? cfg;
     if (kind === "server") {
-      const next = { ...createServerProfile(cfg, name), ...(id ? { id } : {}) };
+      const next = { ...createServerProfile(current, name), ...(id ? { id } : {}) };
       saveServerProfile(next);
       setServerId(next.id);
       saveProfileSelection(next.id, modelPath, profiles.activeModelId);
     } else {
-      const next = { ...createModelProfile(cfg, name), ...(id ? { id } : {}), system_prompt: model.system_prompt };
+      const next = { ...createModelProfile(current, name), ...(id ? { id } : {}), system_prompt: model.system_prompt };
       saveModelProfile(next);
       setModelId(next.id);
       saveProfileSelection(profiles.activeServerId, modelPath, next.id);
@@ -73,6 +84,10 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
     }
     setEditing(null);
   };
+  useEditorDraft({ dirty: editing !== null, priority: 1, save: async () => {
+    if (!nameDraft.trim()) return false;
+    saveName(); return true;
+  }, discard: () => { setEditing(null); setNameDraft(''); } });
   const apply = async (kind: Kind) => {
     if (disabled || inFlight.current) return;
     inFlight.current = true;
@@ -106,7 +121,7 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
     setPending(null);
   };
 
-  return <section className="profiles-page" data-testid="execution-profiles-section">
+  return <section className={`profiles-page${compact ? ' profiles-page--compact' : ''}`} data-testid="execution-profiles-section">
     <header className="workspace-page-heading">
       <div><h2>{t("ui.executionProfiles")}</h2><p>{t("ui.profilesSingleEditorHint")}</p></div>
       {onOpenTuning && <button type="button" onClick={onOpenTuning} className="app-button app-button--secondary">{t("ui.editTuning")}</button>}
@@ -129,7 +144,7 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg }: Props & { cfg: 
           <CustomSelect id={`${kind}-snapshot-picker`} value={profile.id} disabled={blocked} className="w-full" onChange={(value) => select(kind, value)} options={items.map(item => ({ value: item.id, label: item.name }))} />
           <span className="profile-snapshot-status">{t(differs ? "ui.profileDiffers" : "ui.profileMatches")}</span>
           <div className="profile-snapshot-actions">
-            <button type="button" disabled={blocked} className="app-button app-button--primary" onClick={() => void apply(kind)}>{t("ui.loadSavedProfile")}</button>
+            <button type="button" disabled={blocked} className="app-button app-button--primary" onClick={() => void guard.run(() => apply(kind))}>{t("ui.loadSavedProfile")}</button>
             <button type="button" disabled={blocked || !differs} className="app-button app-button--secondary" onClick={() => setPending({ kind, action: "save" })}>{t("ui.saveCurrent")}</button>
           </div>
           <div className="profile-snapshot-actions">

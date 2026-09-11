@@ -13,6 +13,7 @@ Guides, technical reference, and policies for the current AioLM implementation.
 
 ## Technical reference
 
+- [Functional specification (한국어)](reference/functional-spec.ko.md): concise overview of current features and operating conditions.
 - [Source architecture](reference/architecture.md): folder layout, module responsibilities, and dependency rules.
 - [Server options](reference/server-options.md): tuning controls and runtime option behavior.
 - [Data migration](reference/migration.md): storage migration and compatibility.

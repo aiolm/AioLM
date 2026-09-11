@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppConfig } from "../../shared/api/types";
 import type { AppStore } from "../../shared/state/store";
 import { findModelTuningProfile } from "../../shared/config/qwenDefaults";
-import { isKnownSelectValue, parseChatOptions, parseServerArgs, SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "../../shared/config/tuningValidation";
+import { isKnownSelectValue, parseChatOptions, parseServerArgs, parseNumericInput, SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "../../shared/config/tuningValidation";
 import { draftStillCurrent } from "./tuningAsync";
 import { projectorChangeAllowed } from "../chat/visionState";
 import type { ConfigPatch } from "../../shared/state/configSaveQueue";
@@ -14,6 +14,9 @@ import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { validateTuningRelations } from "../../shared/config/tuningRelations";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import type { ChatOptionField, NumericField, NumericKey, ServerTextKey } from "./tuningFields";
+import { SERVER_FIELDS, MTP_FIELDS, REASONING_FIELDS, SAMPLING_FIELDS, ADVANCED_SAMPLING_FIELDS } from './tuningFields';
+import { useEditorDraft } from '../../shared/state/draftGuard';
+import { executionText } from '../../shared/i18n/executionI18n';
 import { normalizeSamplerChain } from "./TuningSamplerChain";
 import { canonicalResetKey, resetAllTuning, resetTuningField, usesRuntimeDefault } from "../../shared/config/tuningDefaults";
 import {
@@ -57,6 +60,47 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
   const serverArgsDraftRef = useRef("");
   const chatOptionsDraftRef = useRef("{}");
   const applyLockRef = useRef(false);
+  const getConfig = store.getConfig;
+  const discardDrafts = useCallback(() => {
+    setNumericDrafts({}); setChatOptionDrafts({}); setServerTextDrafts({}); setChatOptionSelectModes({});
+    setServerArgsDirty(false); setChatOptionsDirty(false); setAdvancedError(null);
+    const current = getConfig();
+    serverArgsDraftRef.current = current?.server_args.join('\n') ?? '';
+    chatOptionsDraftRef.current = JSON.stringify(current?.chat_options ?? {}, null, 2);
+    setServerArgsDraft(serverArgsDraftRef.current); setChatOptionsDraft(chatOptionsDraftRef.current);
+  }, [getConfig]);
+  useEffect(() => {
+    discardDrafts(); dismissFlash(); setPhase('idle'); setChangedServerFields([]); setPendingBulkChange(null);
+  }, [cfg?.active_model, discardDrafts, dismissFlash]);
+  useEditorDraft({
+    dirty: serverArgsDirty || chatOptionsDirty || Object.keys(numericDrafts).length > 0 || Object.keys(chatOptionDrafts).length > 0 || Object.keys(serverTextDrafts).length > 0,
+    discard: discardDrafts,
+    save: async () => {
+      try {
+        const patch: Partial<AppConfig> = { ...serverTextDrafts };
+        const numeric: Record<string, number> = {};
+        for (const [key, raw] of Object.entries(numericDrafts)) {
+          const field = [...SERVER_FIELDS, ...MTP_FIELDS, ...REASONING_FIELDS, ...SAMPLING_FIELDS].find(item => item.key === key);
+          const value = field ? parseNumericInput(raw, field.step) : null;
+          if (!field || value === null || value < field.min || value > field.max) throw new Error(`${key}: ${executionText[locale].invalidNumber}`);
+          numeric[key] = value;
+        }
+        Object.assign(patch, numeric);
+        const chat: Record<string, number> = {};
+        for (const [key, raw] of Object.entries(chatOptionDrafts)) {
+          const field = ADVANCED_SAMPLING_FIELDS.find(item => item.key === key);
+          const value = field ? parseNumericInput(raw, field.step) : null;
+          if (!field || value === null || value < field.min || value > field.max) throw new Error(`${key}: ${executionText[locale].invalidNumber}`);
+          chat[key] = value;
+        }
+        if (serverArgsDirty) patch.server_args = parseServerArgs(serverArgsDraftRef.current);
+        const parsedChat = chatOptionsDirty ? parseChatOptions(chatOptionsDraftRef.current) : null;
+        if (patch.mmproj !== undefined && !projectorChangeAllowed(store.status.state)) throw new Error(t('ui.stopBeforeProjector'));
+        await store.updateConfig(current => ({ ...patch, ...(parsedChat || Object.keys(chat).length ? { chat_options: { ...(parsedChat ?? current.chat_options), ...chat } } : {}) }));
+        discardDrafts(); return true;
+      } catch (cause) { setAdvancedError(String(cause)); return false; }
+    },
+  });
   const clearFieldDrafts = (key?: string) => {
     const resetKey = key ? canonicalResetKey(key) : undefined;
     const withoutKey = <T extends Record<string, unknown>>(drafts: T): T => {
@@ -116,11 +160,15 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
 
   const commitNumeric = async (field: NumericField, raw: string) => {
     if (applyLockRef.current || !cfg) return;
+    const parsed = parseNumericInput(raw, field.step);
+    if (parsed === null || parsed < field.min || parsed > field.max) return;
     await commitNumericField(cfg, field, raw, numericFieldLabel, setNumericDrafts, setChangedServerFields, commitContext);
   };
 
   const commitChatOption = async (field: ChatOptionField, raw: string) => {
     if (applyLockRef.current || !cfg) return;
+    const parsed = parseNumericInput(raw, field.step);
+    if (parsed === null || parsed < field.min || parsed > field.max) return;
     await commitChatOptionField(cfg, field, raw, setChatOptionDrafts, setChatOptionSelectModes, commitContext);
   };
 

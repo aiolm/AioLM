@@ -1,4 +1,6 @@
 import type { ChangeEvent, FocusEvent, KeyboardEvent, PointerEvent, ReactNode } from "react";
+import { useI18n } from '../../shared/i18n/i18n';
+import { executionText } from '../../shared/i18n/executionI18n';
 
 export interface TuningSliderFieldDescriptor {
   key?: string;
@@ -55,6 +57,7 @@ export default function TuningSliderField({
   labelExtra,
   valueMeta,
 }: TuningSliderFieldProps) {
+  const { locale } = useI18n();
   const resolvedLabel = label ?? field?.label ?? field?.key ?? "Value";
   const resolvedMin = min ?? field?.min ?? 0;
   const resolvedMax = max ?? field?.max ?? 100;
@@ -64,6 +67,8 @@ export default function TuningSliderField({
   const resolvedHint = hint ?? field?.hint;
   const hintId = resolvedHint ? `${inputId}-hint` : undefined;
   const rangeValue = Math.min(resolvedMax, Math.max(resolvedMin, finiteValue(value, resolvedMin)));
+  const invalid = !value.trim() || !Number.isFinite(Number(value)) || Number(value) < resolvedMin || Number(value) > resolvedMax;
+  const errorId = `${inputId}-error`;
 
   const commit = (event: FocusEvent<HTMLInputElement> | PointerEvent<HTMLInputElement>) => {
     onCommit(event.currentTarget.value);
@@ -121,11 +126,13 @@ export default function TuningSliderField({
           onKeyDown={commitOnEnter}
           disabled={disabled}
           aria-labelledby={labelId}
-          aria-describedby={hintId}
+          aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? errorId : hintId}
           className="tuning-slider-field__number"
         />
       </div>
       {resolvedHint && <span id={hintId} className="tuning-slider-field__hint">{resolvedHint}</span>}
+      {invalid && <span id={errorId} className="text-error" role="alert">{executionText[locale].invalidNumber} ({resolvedMin}–{resolvedMax})</span>}
     </div>
   );
 }

@@ -2,12 +2,35 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
-import { createServerProfile, loadProfiles, saveServerProfile, serverProfilePatch, createModelProfile, modelProfilePatch, saveModelProfile } from "./modelProfiles";
+import { createServerProfile, loadProfiles, saveServerProfile, serverProfilePatch, createModelProfile, modelProfilePatch, saveModelProfile, saveProfileSelection } from "./modelProfiles";
 import { writeLoadingProfiles } from "../../shared/runtime/runtimeUtils";
 import ExecutionProfiles from "./ExecutionProfiles";
 
 describe("Saved execution settings", () => {
   beforeEach(() => localStorage.clear());
+  it('restores each model’s selected profiles without replacing their controls', () => {
+    const store = createTestStore({ active_model: 'a.gguf' });
+    const initial = loadProfiles(store.cfg!, 'a.gguf');
+    const other = createServerProfile(store.cfg!, 'Other model settings');
+    saveServerProfile(other);
+    saveProfileSelection(initial.activeServerId, 'a.gguf', initial.activeModelId);
+    saveProfileSelection(other.id, 'b.gguf', initial.activeModelId);
+    const view = (modelPath: string) => <I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath={modelPath} /></I18nProvider>;
+    const { rerender } = render(view('a.gguf'));
+    const picker = screen.getByRole('combobox', { name: 'Select server profile' });
+    const button = screen.getAllByRole('button', { name: 'Load saved settings' })[0];
+    const details = document.querySelector<HTMLDetailsElement>('.profile-manage')!;
+    details.open = true;
+    store.cfg = { ...store.cfg!, active_model: 'b.gguf' };
+    rerender(view('b.gguf'));
+    expect(picker).toBe(screen.getByRole('combobox', { name: 'Select server profile' }));
+    expect(picker).toHaveTextContent(other.name);
+    expect(button.isConnected).toBe(true);
+    expect(details.open).toBe(true);
+    store.cfg = { ...store.cfg!, active_model: 'a.gguf' };
+    rerender(view('a.gguf'));
+    expect(picker).toHaveTextContent(initial.server[0].name);
+  });
 
   it("previews selection without applying it; load preserves sampling and its defaults", async () => {
     const store = createTestStore({ runtime_defaults: ["temperature"], temperature: 0.65 });
