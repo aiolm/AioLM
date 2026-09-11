@@ -1,6 +1,8 @@
 # AioLM
 
-> **언어:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+> **언어:** [English](../../README.md) | [한국어](overview.ko.md) | [日本語](overview.ja.md) | [中文](overview.zh.md)
+
+[문서 목차](../README.md) — 설치·개발 가이드, 코드 구조, 프로젝트 정책을 모았습니다.
 
 `llama.cpp`용 Windows 데스크톱 런타임 매니저. `llama-server` / `llama-bench`를 Tauri v2 데스크톱 UI로 감싸 모델, 런타임, 채팅, 벤치마크를 관리합니다.
 
@@ -23,23 +25,18 @@
 
 최신 릴리스는 [GitHub Releases](https://github.com/llama-board/llama-board/releases)에서 받으세요.
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
-```
+고급 설치 옵션, 검증, 개발 환경, CLI 사용법은 [install.ko.md](install.ko.md), [development.ko.md](development.ko.md), [cli.ko.md](cli.ko.md)를 참조하세요.
 
-고급 설치 옵션, 검증, 개발 환경, CLI 사용법은 [docs/INSTALL.ko.md](docs/INSTALL.ko.md), [docs/DEVELOPMENT.ko.md](docs/DEVELOPMENT.ko.md), [docs/CLI.ko.md](docs/CLI.ko.md)를 참조하세요.
-
-AioLM — All-In-One LM은 llama-board와 별도로 설치됩니다. 첫 실행에서 기존 설정·관리 런타임·CLI 저장소·WebView 프로필을 새 `aiolm` / `com.aiolm.desktop` 경로로 복사합니다. 원본을 유지하며, 이미 존재하는 AioLM 데이터를 우선합니다. 이전 앱을 종료한 뒤 실행하고, 잠금이나 공간 부족 오류가 발생하면 문제를 해결한 뒤 재시도하세요. [이전 방식과 호환성](docs/MIGRATION.md)을 참고하세요.
+기존 데이터 이전과 호환성은 [마이그레이션 가이드](../reference/migration.md)를 참고하세요.
 
 ## 코드 서명 정책 (Code signing policy)
 
-[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)와 [PRIVACY.md](PRIVACY.md)에서 서명 범위, 역할, 릴리스 승인, 개인정보 및 제거 정책을 확인하세요. 관리자는 [SignPath Foundation 신청 체크리스트](docs/SIGNPATH_FOUNDATION.md)를 따라 설정할 수 있습니다.
+[code-signing.md](../policies/code-signing.md)와 [privacy.md](../policies/privacy.md)에서 서명 범위, 역할, 릴리스 승인, 개인정보 및 제거 정책을 확인하세요. 관리자는 [SignPath Foundation 신청 체크리스트](signpath.md)를 따라 설정할 수 있습니다.
 
 ## 보안
 
-[SECURITY.ko.md](SECURITY.ko.md) 참조.
+[security.ko.md](../policies/security.ko.md) 참조.
 
 ## 라이선스
 
-MIT — [LICENSE](LICENSE) 참조. llama.cpp 바이너리 — [NOTICE](NOTICE) 참조.
-
+MIT — [LICENSE](../../LICENSE) 참조. llama.cpp 바이너리 — [NOTICE](../../NOTICE) 참조.

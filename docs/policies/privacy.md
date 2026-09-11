@@ -24,7 +24,7 @@ AioLM does not silently upload local models, documents, chat history, prompts, o
 
 ## Credentials and local services
 
-Credentials for a user-configured endpoint are used for that endpoint request and are not sent to aiolm maintainers. The desktop-managed server binds to the local loopback interface and uses a per-start local bearer token; users must not expose or forward that endpoint. See [SECURITY.md](SECURITY.md).
+Credentials for a user-configured endpoint are used for that endpoint request and are not sent to aiolm maintainers. The desktop-managed server binds to the local loopback interface and uses a per-start local bearer token; users must not expose or forward that endpoint. See [SECURITY.md](../SECURITY.md).
 
 ## Third-party services
 
@@ -36,6 +36,6 @@ When a user requests a network operation, the relevant provider may receive norm
 
 ## Changes and contact
 
-Material changes to this policy will be announced in the repository and reflected in the “Last updated” date. For privacy or security questions, contact the maintainer privately through the instructions in [SECURITY.md](SECURITY.md).
+Material changes to this policy will be announced in the repository and reflected in the “Last updated” date. For privacy or security questions, contact the maintainer privately through the instructions in [SECURITY.md](../SECURITY.md).
 
 

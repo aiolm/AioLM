@@ -1,6 +1,6 @@
 # CLI
 
-> **언어:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
+> **언어:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
 개발 중 `aiolm-cli.exe`는 `.codex-target/release/aiolm-cli.exe`에 생성됩니다. 패키지 빌드에서는 Tauri 리소스로 포함되므로 설치 후 앱의 리소스 디렉터리에서 찾을 수 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
 
@@ -39,4 +39,4 @@ headless 서버를 시작하기 전에 모델을 설정하세요. 서버 실행 
 - `server start`는 설정된 모델을 사용하고 `127.0.0.1`에 바인딩하며 API-key 인증을 의도적으로 끕니다. 신뢰할 수 있는 컴퓨터에서만 사용하고 포트를 외부에 노출하거나 전달하지 마세요.
 - 표준 출력은 JSON이며 서버 로그 크기는 제한됩니다.
 
-[SECURITY.ko.md](../SECURITY.ko.md)에서 인증 및 프로세스 경계를 확인하세요.
+[security.ko.md](../policies/security.ko.md)에서 인증 및 프로세스 경계를 확인하세요.

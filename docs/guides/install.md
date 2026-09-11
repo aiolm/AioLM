@@ -1,6 +1,6 @@
 # Install
 
-> **Language:** [English](INSTALL.md) | [한국어](INSTALL.ko.md) | [日本語](INSTALL.ja.md) | [中文](INSTALL.zh.md)
+> **Language:** [English](install.md) | [한국어](install.ko.md) | [日本語](install.ja.md) | [中文](install.zh.md)
 
 ## One-line install (Windows)
 
@@ -38,11 +38,11 @@ $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -Firs
 
 Release page: <https://github.com/llama-board/llama-board/releases/latest>
 
-AioLM — All-In-One LM installs separately from llama-board. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](MIGRATION.md).
+AioLM — All-In-One LM installs separately from llama-board. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](../reference/migration.md).
 
 ## Code signing policy
 
-See [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md). After SignPath Foundation onboarding, release installers are submitted from GitHub-hosted CI and require manual approval before Authenticode signing. An explicitly marked bootstrap release may be unsigned before onboarding; verify `checksums.txt` and the Authenticode status before installing.
+See [code-signing.md](../policies/code-signing.md). After SignPath Foundation onboarding, release installers are submitted from GitHub-hosted CI and require manual approval before Authenticode signing. An explicitly marked bootstrap release may be unsigned before onboarding; verify `checksums.txt` and the Authenticode status before installing.
 
 ## Uninstall
 
@@ -50,5 +50,5 @@ Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **
 
 ## Linux / macOS (planned)
 
-`curl | tar` distribution is planned. No OS signing required for tar path. See [README.md](../README.md#platform-support).
+`curl | tar` distribution is planned. No OS signing required for tar path. See [README.md](../../README.md#platform-support).
 

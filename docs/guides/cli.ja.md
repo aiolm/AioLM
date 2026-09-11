@@ -1,6 +1,6 @@
 # CLI
 
-> **言語:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
+> **言語:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
 開発中の `aiolm-cli.exe` は `.codex-target/release/aiolm-cli.exe` に生成されます。パッケージ版では Tauri リソースとして含まれるため、インストール後はアプリのリソースディレクトリにあります。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
 
@@ -39,4 +39,4 @@
 - `server start` は設定済みモデルを使用し、`127.0.0.1` にバインドして API-key 認証を意図的に無効化します。信頼できる PC だけで使用し、ポートを外部公開・転送しないでください。
 - 標準出力は JSON で、サーバーログのサイズには上限があります。
 
-[SECURITY.ja.md](../SECURITY.ja.md) で認証とプロセス境界を確認してください。
+[security.ja.md](../policies/security.ja.md) で認証とプロセス境界を確認してください。

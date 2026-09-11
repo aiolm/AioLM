@@ -1,6 +1,8 @@
 # AioLM
 
-> **言語:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+> **言語:** [English](../../README.md) | [한국어](overview.ko.md) | [日本語](overview.ja.md) | [中文](overview.zh.md)
+
+[ドキュメント一覧](../README.md) — インストール、開発、コード構成、プロジェクトポリシー。
 
 `llama.cpp` 用 Windows デスクトップランタイムマネージャー。`llama-server` / `llama-bench` を Tauri v2 デスクトップ UI でラップし、モデル、ランタイム、チャット、ベンチマークを管理します。
 
@@ -23,23 +25,18 @@
 
 最新リリースは [GitHub Releases](https://github.com/llama-board/llama-board/releases) から取得してください。
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
-```
+高度なインストールオプション、検証、開発環境、CLI の使い方は [install.ja.md](install.ja.md)、[development.ja.md](development.ja.md)、[cli.ja.md](cli.ja.md) を参照してください。
 
-高度なインストールオプション、検証、開発環境、CLI の使い方は [docs/INSTALL.ja.md](docs/INSTALL.ja.md)、[docs/DEVELOPMENT.ja.md](docs/DEVELOPMENT.ja.md)、[docs/CLI.ja.md](docs/CLI.ja.md) を参照してください。
-
-AioLM — All-In-One LMはllama-boardとは別にインストールされます。初回起動時に設定、管理ランタイム、CLIデータ、WebViewプロファイルを新しい `aiolm` / `com.aiolm.desktop` の場所へコピーします。元のデータは保持され、既存のAioLMデータが優先されます。移行前に旧アプリを終了してください。ロックや容量不足は解消後に再試行できます。[移行の詳細](docs/MIGRATION.md)。
+既存データの移行と互換性は[移行ガイド](../reference/migration.md)を参照してください。
 
 ## コード署名ポリシー (Code signing policy)
 
-[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) と [PRIVACY.md](PRIVACY.md) で、署名範囲、役割、リリース承認、プライバシー、アンインストール方針を確認できます。
+[code-signing.md](../policies/code-signing.md) と [privacy.md](../policies/privacy.md) で、署名範囲、役割、リリース承認、プライバシー、アンインストール方針を確認できます。
 
 ## セキュリティ
 
-[SECURITY.ja.md](SECURITY.ja.md) を参照してください。
+[security.ja.md](../policies/security.ja.md) を参照してください。
 
 ## ライセンス
 
-MIT — [LICENSE](LICENSE) 参照。llama.cpp バイナリ — [NOTICE](NOTICE) 参照。
-
+MIT — [LICENSE](../../LICENSE) 参照。llama.cpp バイナリ — [NOTICE](../../NOTICE) 参照。

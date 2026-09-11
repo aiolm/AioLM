@@ -358,7 +358,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           target_commitish: ${{ needs.prepare.outputs.target_sha }}
           body: |
-            Code signing policy: https://github.com/llama-board/llama-board/blob/main/CODE_SIGNING_POLICY.md
+            Code signing policy: https://github.com/llama-board/llama-board/blob/main/docs/policies/code-signing.md
             Signing mode: ${{ steps.signing.outputs.mode }}
             ${{ steps.signpath.outputs.signing-request-web-url && format('SignPath signing request: {0}', steps.signpath.outputs.signing-request-web-url) || '' }}
             ${{ steps.signing.outputs.mode == 'unsigned' && 'This release is unsigned because SignPath is not configured. Verify the SHA-256 checksum before installing.' || '' }}

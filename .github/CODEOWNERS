@@ -4,7 +4,7 @@
 * @joowon-jang
 .github/ @joowon-jang
 .signpath/ @joowon-jang
-CODE_SIGNING_POLICY.md @joowon-jang
-PRIVACY.md @joowon-jang
+docs/policies/ @joowon-jang
+docs/SECURITY.md @joowon-jang
 
 

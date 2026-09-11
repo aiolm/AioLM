@@ -1018,7 +1018,7 @@ const BUILD_PLATFORM_ENVIRONMENT: &[&str] = &["LIBRARY_PATH", "CPATH", "C_INCLUD
 /// proxy URL of the form `http://user:password@proxy` puts one in
 /// `HTTPS_PROXY`. That is the user's own proxy credential, it is passed only
 /// to CMake and its generator, and without it the build cannot reach anything
-/// at all. It is documented in SECURITY.md rather than silently dropped.
+/// at all. It is documented in docs/SECURITY.md rather than silently dropped.
 const BUILD_NETWORK_ENVIRONMENT: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",

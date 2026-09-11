@@ -1,6 +1,8 @@
 # AioLM
 
-> **语言:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+> **语言:** [English](../../README.md) | [한국어](overview.ko.md) | [日本語](overview.ja.md) | [中文](overview.zh.md)
+
+[文档目录](../README.md) — 安装、开发、代码结构及项目政策。
 
 `llama.cpp` 的 Windows 桌面运行时管理器。通过 Tauri v2 桌面 UI 封装 `llama-server` / `llama-bench`，管理模型、运行时、聊天和基准测试。
 
@@ -23,23 +25,18 @@
 
 从 [GitHub Releases](https://github.com/llama-board/llama-board/releases) 获取最新版本。
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
-```
+高级安装选项、验证、开发环境和 CLI 用法请参见 [install.zh.md](install.zh.md)、[development.zh.md](development.zh.md) 和 [cli.zh.md](cli.zh.md)。
 
-高级安装选项、验证、开发环境和 CLI 用法请参见 [docs/INSTALL.zh.md](docs/INSTALL.zh.md)、[docs/DEVELOPMENT.zh.md](docs/DEVELOPMENT.zh.md) 和 [docs/CLI.zh.md](docs/CLI.zh.md)。
-
-AioLM — All-In-One LM与llama-board独立安装。首次启动会将原有设置、托管运行时、CLI数据和WebView配置复制到新的 `aiolm` / `com.aiolm.desktop` 目录。原始数据保留，已有AioLM数据优先。迁移前请关闭旧应用；解除锁定或释放磁盘空间后可重试。[迁移详情](docs/MIGRATION.md)。
+现有数据迁移与兼容性请参阅[迁移指南](../reference/migration.md)。
 
 ## 代码签名政策 (Code signing policy)
 
-请参阅 [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) 和 [PRIVACY.md](PRIVACY.md)，了解签名范围、角色、发布审批、隐私和卸载政策。
+请参阅 [code-signing.md](../policies/code-signing.md) 和 [privacy.md](../policies/privacy.md)，了解签名范围、角色、发布审批、隐私和卸载政策。
 
 ## 安全
 
-请参见 [SECURITY.zh.md](SECURITY.zh.md)。
+请参见 [security.zh.md](../policies/security.zh.md)。
 
 ## 许可证
 
-MIT — 见 [LICENSE](LICENSE)。llama.cpp 二进制文件 — 见 [NOTICE](NOTICE)。
-
+MIT — 见 [LICENSE](../../LICENSE)。llama.cpp 二进制文件 — 见 [NOTICE](../../NOTICE)。

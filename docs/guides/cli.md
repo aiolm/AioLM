@@ -1,6 +1,6 @@
 # CLI
 
-> **Language:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
+> **Language:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
 During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli.exe`. Packaged builds include it as a Tauri resource; locate the installed copy in the app's resource directory. Output is JSON, the server is loopback-only, and credentials are not persisted.
 

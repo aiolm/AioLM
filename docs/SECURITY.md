@@ -1,6 +1,6 @@
 # Security Policy
 
-> **Language:** [English](SECURITY.md) | [한국어](SECURITY.ko.md) | [日本語](SECURITY.ja.md) | [中文](SECURITY.zh.md)
+> **Language:** [English](SECURITY.md) | [한국어](policies/security.ko.md) | [日本語](policies/security.ja.md) | [中文](policies/security.zh.md)
 
 ## Reporting
 
@@ -36,5 +36,5 @@ Latest release and `main` receive fixes. Older releases may require upgrade.
 
 ## Privacy
 
-See [PRIVACY.md](PRIVACY.md) for network requests, local data, credentials, and third-party service handling.
+See [privacy.md](policies/privacy.md) for network requests, local data, credentials, and third-party service handling.
 

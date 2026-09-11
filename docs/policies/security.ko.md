@@ -1,6 +1,6 @@
 # 보안 정책
 
-> **언어:** [English](SECURITY.md) | [한국어](SECURITY.ko.md) | [日本語](SECURITY.ja.md) | [中文](SECURITY.zh.md)
+> **언어:** [English](../SECURITY.md) | [한국어](security.ko.md) | [日本語](security.ja.md) | [中文](security.zh.md)
 
 ## 제보
 

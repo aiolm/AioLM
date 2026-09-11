@@ -1,4 +1,4 @@
-# AioLM — All-In-One LM
+# Data migration and compatibility
 
 AioLM 0.1.6 is installed as a separate application (`com.aiolm.desktop`). The old application and its original data are retained. The working folder, GitHub repository and SignPath service are not renamed by this change.
 
@@ -26,11 +26,3 @@ If copying fails, the application stops at a retry screen/dialog before default 
 - New exports use `aiolm.project.v1` and `aiolm-runtime*.json`. Existing project JSON and `llama-board-runtime*.json` manifests remain readable. Previously published PR artifact names remain accepted with the same digest and provenance checks.
 - IPC command names and feature data schemas are preserved. Only the bootstrap command `migration_paths` was added.
 - Runtime and desktop package names are `aiolm`; the Rust library is `aiolm_lib`. Installers include `aiolm.exe` and `aiolm-cli.exe`.
-
-## UI
-
-All fifteen views use one labeled navigation. The desktop sidebar is 224 px; below 960 px, navigation opens in a modal drawer. Views stay mounted after their first visit so drafts, selections and running operations survive navigation. Sidebar, header and panel shortcuts share the same task-leave guard.
-
-Theme, density, reduced motion and four languages are retained. Pretendard Variable is bundled locally under the SIL Open Font License (`public/fonts/OFL.txt`). UI tokens are defined in `src/styles/app-tokens.css`; shared components and responsive rules replace the previous global palette and shell.
-
-See [verification results](AIOLM_VERIFICATION.md) for automated checks, rendered checks and remaining native-installation limits.

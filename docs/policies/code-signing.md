@@ -8,10 +8,10 @@ This policy describes how the aiolm project builds, reviews, approves, and publi
 
 - Project: [aiolm](https://github.com/joowon-jang/llama-board)
 - Source repository: <https://github.com/joowon-jang/llama-board>
-- License: MIT ([LICENSE](LICENSE))
+- License: MIT ([LICENSE](../../LICENSE))
 - Download page: [GitHub Releases](https://github.com/joowon-jang/llama-board/releases)
-- Privacy policy: [PRIVACY.md](PRIVACY.md)
-- Security reports: [SECURITY.md](SECURITY.md)
+- Privacy policy: [privacy.md](privacy.md)
+- Security reports: [SECURITY.md](../SECURITY.md)
 
 AioLM is an actively maintained, released, open-source Windows desktop application for managing llama.cpp runtimes, models, local servers, chat, and benchmarks. It is not a malware, potentially unwanted program, exploit, vulnerability-scanning, or security-bypass tool.
 
@@ -25,7 +25,7 @@ The project team maintains this repository, its source files, build scripts, rel
 
 All project members must use multi-factor authentication for GitHub and SignPath access. If the project team grows, this document and the GitHub access groups will be updated before new signing roles are used.
 
-The repository includes [CODEOWNERS](.github/CODEOWNERS) for the signing policy, CI workflow, artifact configuration, and privacy-policy changes. GitHub branch protection must require pull-request and Code Owner review on `main` before the Foundation signing policy is activated.
+The repository includes [CODEOWNERS](../../.github/CODEOWNERS) for the signing policy, CI workflow, artifact configuration, and privacy-policy changes. GitHub branch protection must require pull-request and Code Owner review on `main` before the Foundation signing policy is activated.
 
 ## Build and signing process
 
@@ -36,11 +36,11 @@ The repository includes [CODEOWNERS](.github/CODEOWNERS) for the signing policy,
 5. Every production release requires manual approval by the Approver in SignPath. Only the returned signed artifacts are published to the GitHub release, together with `checksums.txt`.
 6. The published release links back to this policy and states the signing mode. Any transitional unsigned release is explicitly marked and is not considered a SignPath Foundation release.
 
-The workflow uses the SignPath GitHub Action and the artifact configuration at [.signpath/artifact-configurations/windows-release.xml](.signpath/artifact-configurations/windows-release.xml). It signs the top-level NSIS installer, MSI installer, and PowerShell installer script. The artifact configuration requires the product name `aiolm` and passes the synchronized release version to the signed PE metadata.
+The workflow uses the SignPath GitHub Action and the artifact configuration at [.signpath/artifact-configurations/windows-release.xml](../../.signpath/artifact-configurations/windows-release.xml). It signs the top-level NSIS installer, MSI installer, and PowerShell installer script. The artifact configuration requires the product name `aiolm` and passes the synchronized release version to the signed PE metadata.
 
 ## User privacy and system changes
 
-See [PRIVACY.md](PRIVACY.md). The application is local-first and does not send telemetry or usage reports by default. Network requests are made only when the user starts a feature or configures a service, such as GitHub/llama.cpp runtime discovery, Hugging Face model discovery/download, or a user-selected LLM/MCP endpoint.
+See [privacy.md](privacy.md). The application is local-first and does not send telemetry or usage reports by default. Network requests are made only when the user starts a feature or configures a service, such as GitHub/llama.cpp runtime discovery, Hugging Face model discovery/download, or a user-selected LLM/MCP endpoint.
 
 The Windows installer installs the application and registers the normal Windows uninstall entry. Runtime and model files are downloaded or removed only through user-requested actions in the application. No system security settings or background service are installed by aiolm.
 
@@ -55,5 +55,5 @@ Before installing, users should download the installer from the same GitHub rele
 (Get-AuthenticodeSignature -LiteralPath .\aiolm_*_x64-setup.exe).Status
 ```
 
-See [docs/INSTALL.md](docs/INSTALL.md) for the complete verification and installation instructions.
+See [install.md](../guides/install.md) for the complete verification and installation instructions.
 

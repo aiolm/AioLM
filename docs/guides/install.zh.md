@@ -1,6 +1,6 @@
 # 安装
 
-> **语言:** [English](INSTALL.md) | [한국어](INSTALL.ko.md) | [日本語](INSTALL.ja.md) | [中文](INSTALL.zh.md)
+> **语言:** [English](install.md) | [한국어](install.ko.md) | [日本語](install.ja.md) | [中文](install.zh.md)
 
 ## 一行安装 (Windows)
 
@@ -38,8 +38,8 @@ $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -Firs
 
 发布页面: <https://github.com/llama-board/llama-board/releases/latest>
 
-AioLM — All-In-One LM与llama-board独立安装。首次启动会将原有设置、托管运行时、CLI数据和WebView配置复制到新的 `aiolm` / `com.aiolm.desktop` 目录。原始数据保留，已有AioLM数据优先。迁移前请关闭旧应用；解除锁定或释放磁盘空间后可重试。[迁移详情](MIGRATION.md)。
+AioLM — All-In-One LM与llama-board独立安装。首次启动会将原有设置、托管运行时、CLI数据和WebView配置复制到新的 `aiolm` / `com.aiolm.desktop` 目录。原始数据保留，已有AioLM数据优先。迁移前请关闭旧应用；解除锁定或释放磁盘空间后可重试。[迁移详情](../reference/migration.md)。
 
 ## Linux / macOS (计划中)
 
-计划提供 `curl | tar` 分发。tar 路径无需 OS 签名。详见 [README.zh.md](../README.zh.md#平台支持)。
+计划提供 `curl | tar` 分发。tar 路径无需 OS 签名。详见 [overview.zh.md](overview.zh.md#平台支持)。

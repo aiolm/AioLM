@@ -1,6 +1,6 @@
 # Development
 
-> **Language:** [English](DEVELOPMENT.md) | [한국어](DEVELOPMENT.ko.md) | [日本語](DEVELOPMENT.ja.md) | [中文](DEVELOPMENT.zh.md)
+> **Language:** [English](development.md) | [한국어](development.ko.md) | [日本語](development.ja.md) | [中文](development.zh.md)
 
 ## Requirements
 
@@ -24,6 +24,10 @@ npm run tauri -- dev
 ```
 
 ## Validation
+
+See [Source architecture](../reference/architecture.md) for folder ownership, dependency rules,
+and test placement. Direct Node tests live in `tests/direct`; component and hook
+tests live beside their source files.
 
 ```bash
 npm test              # direct scripts + vitest coverage

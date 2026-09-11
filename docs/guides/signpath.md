@@ -14,13 +14,13 @@ For Smart App Control, use RSA code signing from a trusted provider, not a local
 
 | Foundation condition | Repository evidence |
 | --- | --- |
-| Open-source license | [MIT LICENSE](../LICENSE) and [NOTICE](../NOTICE) |
-| Released and documented product | [GitHub Releases](https://github.com/joowon-jang/llama-board/releases), [README](../README.md), and [Install guide](INSTALL.md) |
-| Source/build ownership | Public source repository and [release workflow](../.github/workflows/release.yml) |
-| Code signing policy | [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md), linked from the home/download pages |
-| Privacy policy | [PRIVACY.md](../PRIVACY.md) |
-| Review protection | [.github/CODEOWNERS](../.github/CODEOWNERS) |
-| Artifact metadata restrictions | [windows-release.xml](../.signpath/artifact-configurations/windows-release.xml) |
+| Open-source license | [MIT LICENSE](../../LICENSE) and [NOTICE](../../NOTICE) |
+| Released and documented product | [GitHub Releases](https://github.com/joowon-jang/llama-board/releases), [README](../../README.md), and [Install guide](install.md) |
+| Source/build ownership | Public source repository and [release workflow](../../.github/workflows/release.yml) |
+| Code signing policy | [code-signing.md](../policies/code-signing.md), linked from the home/download pages |
+| Privacy policy | [privacy.md](../policies/privacy.md) |
+| Review protection | [.github/CODEOWNERS](../../.github/CODEOWNERS) |
+| Artifact metadata restrictions | [windows-release.xml](../../.signpath/artifact-configurations/windows-release.xml) |
 | CI origin verification path | Tests, build, artifact upload, and signing submission all run through GitHub-hosted Actions jobs |
 | Uninstallation | Windows installer entry plus documented removal instructions in the policy and install guide |
 
@@ -30,7 +30,7 @@ For Smart App Control, use RSA code signing from a trusted provider, not a local
 2. In SignPath, add the predefined `GitHub.com` Trusted Build System to the organization and link it to the project. Install the SignPath GitHub App for this repository when requested by the connector setup.
 3. Create a project named `aiolm` with repository URL `https://github.com/joowon-jang/llama-board`.
 4. Add the committed XML file as an artifact configuration and use its slug for the `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` repository variable.
-5. Create a `release-signing` policy using the SignPath Foundation certificate. Enable Trusted Build System verification and origin verification, restrict the release policy to `main`, enable the approval process, and add the Approver listed in [CODE_SIGNING_POLICY.md](../CODE_SIGNING_POLICY.md).
+5. Create a `release-signing` policy using the SignPath Foundation certificate. Enable Trusted Build System verification and origin verification, restrict the release policy to `main`, enable the approval process, and add the Approver listed in [code-signing.md](../policies/code-signing.md).
 6. Create a SignPath API token for a submitter/CI user with permission to submit requests for this project and policy. Store it only as the GitHub Actions secret `SIGNPATH_API_TOKEN`.
 7. Configure these GitHub repository variables in **Settings → Secrets and variables → Actions → Variables**:
 
@@ -60,6 +60,6 @@ Purpose: Open-source local-first desktop manager for llama.cpp runtimes, models,
 Signing artifacts: Project-built NSIS/MSI installers and install.ps1
 Build system: GitHub Actions on GitHub-hosted runners
 Release approval: Manual approval through SignPath release-signing policy
-Policy: https://github.com/joowon-jang/llama-board/blob/main/CODE_SIGNING_POLICY.md
-Privacy: https://github.com/joowon-jang/llama-board/blob/main/PRIVACY.md
+Policy: https://github.com/joowon-jang/llama-board/blob/main/docs/policies/code-signing.md
+Privacy: https://github.com/joowon-jang/llama-board/blob/main/docs/policies/privacy.md
 ```

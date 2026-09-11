@@ -1,6 +1,6 @@
 # CLI
 
-> **语言:** [English](CLI.md) | [한국어](CLI.ko.md) | [日本語](CLI.ja.md) | [中文](CLI.zh.md)
+> **语言:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
 开发时，`aiolm-cli.exe` 会生成在 `.codex-target/release/aiolm-cli.exe`。打包版本会将它作为 Tauri 资源包含；安装后请在应用的资源目录中查找。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
 
@@ -39,4 +39,4 @@
 - `server start` 使用已配置的模型并绑定到 `127.0.0.1`，且会有意禁用 API-key 认证。仅在可信计算机上使用，不要将端口暴露或转发到外部。
 - 标准输出为 JSON，服务器日志大小有限制。
 
-请参阅 [SECURITY.zh.md](../SECURITY.zh.md) 了解认证和进程边界。
+请参阅 [security.zh.md](../policies/security.zh.md) 了解认证和进程边界。

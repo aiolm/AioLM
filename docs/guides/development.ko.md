@@ -1,6 +1,6 @@
 # 개발
 
-> **언어:** [English](DEVELOPMENT.md) | [한국어](DEVELOPMENT.ko.md) | [日本語](DEVELOPMENT.ja.md) | [中文](DEVELOPMENT.zh.md)
+> **언어:** [English](development.md) | [한국어](development.ko.md) | [日本語](development.ja.md) | [中文](development.zh.md)
 
 ## 요구사항
 
@@ -24,6 +24,9 @@ npm run tauri -- dev
 ```
 
 ## 검증
+
+폴더별 역할과 의존성 규칙은 [소스 구조 안내](../reference/architecture.md)를 참고하세요.
+직접 실행하는 Node 테스트는 `tests/direct`에, 컴포넌트와 훅 테스트는 해당 소스 옆에 둡니다.
 
 ```bash
 npm test              # 직접 스크립트 + Vitest 커버리지

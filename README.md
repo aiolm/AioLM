@@ -1,6 +1,8 @@
 # AioLM
 
-> **Language:** [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [中文](README.zh.md)
+> **Language:** [English](README.md) | [한국어](docs/guides/overview.ko.md) | [日本語](docs/guides/overview.ja.md) | [中文](docs/guides/overview.zh.md)
+
+[Documentation index](docs/README.md) — installation, development, architecture, and policies.
 
 Windows desktop runtime manager for `llama.cpp`. Wraps `llama-server` / `llama-bench` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
 
@@ -23,25 +25,20 @@ Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support
 
 Get the latest release from [GitHub Releases](https://github.com/llama-board/llama-board/releases).
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/llama-board/llama-board/releases/latest/download/install.ps1 | iex"
-```
+For advanced install options, verification, development setup, and CLI usage, see [install.md](docs/guides/install.md), [development.md](docs/guides/development.md), and [cli.md](docs/guides/cli.md).
 
-For advanced install options, verification, development setup, and CLI usage, see [docs/INSTALL.md](docs/INSTALL.md), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), and [docs/CLI.md](docs/CLI.md).
-
-AioLM — All-In-One LM installs separately from llama-board. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](docs/MIGRATION.md).
+For data migration and compatibility, see [the migration guide](docs/reference/migration.md).
 
 ## Code signing policy
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
-See [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md) and [PRIVACY.md](PRIVACY.md) for the project’s signing scope, roles, release approval, privacy, and uninstall policy. Maintainers can follow the [SignPath Foundation onboarding checklist](docs/SIGNPATH_FOUNDATION.md).
+See [code-signing.md](docs/policies/code-signing.md) and [privacy.md](docs/policies/privacy.md) for the project’s signing scope, roles, release approval, privacy, and uninstall policy. Maintainers can follow the [SignPath Foundation onboarding checklist](docs/guides/signpath.md).
 
 ## Security
 
-See [SECURITY.md](SECURITY.md).
+See [SECURITY.md](docs/SECURITY.md).
 
 ## License
 
 MIT — see [LICENSE](LICENSE). llama.cpp binaries — see [NOTICE](NOTICE).
-
