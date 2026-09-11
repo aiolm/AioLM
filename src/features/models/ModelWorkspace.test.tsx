@@ -35,10 +35,17 @@ function mount(base = createTestStore({ active_model: 'a.gguf' })) {
   render(<I18nProvider initialLocale="en"><DraftGuardProvider><Harness base={base} /></DraftGuardProvider></I18nProvider>);
   return base;
 }
+function modelLibrary() {
+  return within(document.querySelector<HTMLElement>('.model-workspace-library')!);
+}
 function findModelButton(path: string) {
-  // Wait for the asynchronous scan without repeatedly traversing the large tuning form.
-  const library = document.querySelector<HTMLElement>('.model-workspace-library')!;
-  return within(library).findByRole('button', { name: `Configure & run: ${path}` }, { timeout: 3000 });
+  return modelLibrary().findByRole('button', { name: `Configure & run: ${path}` }, { timeout: 3000 });
+}
+function getModelButton(path: string) {
+  return modelLibrary().getByRole('button', { name: `Configure & run: ${path}` });
+}
+function getStartButton() {
+  return within(document.querySelector<HTMLElement>('.execution-footer')!).getByRole('button', { name: 'Start' });
 }
 describe('model execution workspace', () => {
   beforeEach(() => { localStorage.clear(); Element.prototype.scrollIntoView = vi.fn(); });
@@ -46,22 +53,23 @@ describe('model execution workspace', () => {
     const base = mount();
     await findModelButton('b.gguf');
     expect(screen.getByLabelText('Runtime', { selector: 'select' })).toHaveValue('cpu/b123');
-    fireEvent.change(screen.getByRole('spinbutton', { name: /Context size/ }), { target: { value: '8192' } });
-    fireEvent.blur(screen.getByRole('spinbutton', { name: /Context size/ }));
+    const contextSize = within(document.querySelector<HTMLElement>('.execution-quick')!).getByRole('spinbutton', { name: /Context size/ });
+    fireEvent.change(contextSize, { target: { value: '8192' } });
+    fireEvent.blur(contextSize);
     await waitFor(() => expect(base.cfg?.ctx_size).toBe(8192));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Configure & run: b.gguf' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Configure & run: b.gguf' }));
+    await waitFor(() => expect(getModelButton('b.gguf')).toBeEnabled());
+    fireEvent.click(getModelButton('b.gguf'));
     await waitFor(() => expect(base.cfg?.active_model).toBe('b.gguf'));
     expect(base.start).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Configure & run: a.gguf' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Configure & run: a.gguf' }));
+    await waitFor(() => expect(getModelButton('a.gguf')).toBeEnabled());
+    fireEvent.click(getModelButton('a.gguf'));
     await waitFor(() => expect(base.cfg?.active_model).toBe('a.gguf'));
     expect(base.cfg?.ctx_size).toBe(8192);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(getStartButton()).toBeEnabled());
+    fireEvent.click(getStartButton());
     await waitFor(() => expect(base.start).toHaveBeenCalledOnce());
-    expect(screen.getByRole('button', { name: 'Configure & run: missing.gguf' })).toBeDisabled();
-  });
+    expect(getModelButton('missing.gguf')).toBeDisabled();
+  }, 10000); // Covers saving, two model transitions, and starting on slower CI runners.
   it('requires an explicit stop before switching and cancellation leaves the server alone', async () => {
     const base = createTestStore({ active_model: 'a.gguf' }); base.status = { state: 'running' };
     mount(base);
@@ -69,7 +77,7 @@ describe('model execution workspace', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Stop and switch model?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(base.stop).not.toHaveBeenCalled(); expect(base.cfg?.active_model).toBe('a.gguf');
-    fireEvent.click(screen.getByRole('button', { name: 'Configure & run: b.gguf' }));
+    fireEvent.click(getModelButton('b.gguf'));
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop and switch model?' })).getByRole('button', { name: 'Stop & select' }));
     await waitFor(() => expect(base.cfg?.active_model).toBe('b.gguf'));
     expect(base.stop).toHaveBeenCalledOnce(); expect(base.start).not.toHaveBeenCalled();
@@ -77,8 +85,9 @@ describe('model execution workspace', () => {
   it('blocks invalid drafts and allows discarding before model selection', async () => {
     const base = mount();
     await findModelButton('b.gguf');
-    fireEvent.change(screen.getByRole('spinbutton', { name: /Context size/ }), { target: { value: '-8' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Configure & run: b.gguf' }));
+    const contextSize = within(document.querySelector<HTMLElement>('.execution-quick')!).getByRole('spinbutton', { name: /Context size/ });
+    fireEvent.change(contextSize, { target: { value: '-8' } });
+    fireEvent.click(getModelButton('b.gguf'));
     const dialog = await screen.findByRole('dialog', { name: 'Unsaved settings' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save & continue' }));
     await within(dialog).findByRole('alert');
@@ -90,19 +99,19 @@ describe('model execution workspace', () => {
   it('shows a missing runtime and blocks starting without silently replacing it', async () => {
     const base = mount(createTestStore({ active_model: 'a.gguf', active_backend: 'cuda', active_build: 'missing' }));
     await screen.findByText('This runtime is not installed. Install it or select another runtime.');
-    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(getStartButton()).toBeDisabled();
     expect(base.cfg?.active_backend).toBe('cuda'); expect(base.start).not.toHaveBeenCalled();
   });
   it('keeps buttons, expanded settings and runtime resources mounted when selecting a model', async () => {
     mount();
     await findModelButton('b.gguf');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeEnabled());
+    await waitFor(() => expect(getStartButton()).toBeEnabled());
     const detail = document.querySelector('.model-workspace-detail')!;
     const buttons = Array.from(detail.querySelectorAll('button'));
     const advanced = detail.querySelector<HTMLDetailsElement>('.execution-disclosure')!;
     advanced.open = true;
     const calls = [vi.mocked(api.rtList).mock.calls.length, vi.mocked(api.rtProbe).mock.calls.length, vi.mocked(api.deviceProfile).mock.calls.length];
-    fireEvent.click(screen.getByRole('button', { name: 'Configure & run: b.gguf' }));
+    fireEvent.click(getModelButton('b.gguf'));
     await screen.findByRole('heading', { name: 'b.gguf' });
     expect(buttons.every(button => button.isConnected)).toBe(true);
     expect(advanced.open).toBe(true);
