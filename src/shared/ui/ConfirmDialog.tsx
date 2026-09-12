@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { useI18n } from "../i18n/i18n";
+import { normalizeDisplayText } from "../lib/displayPaths";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -78,11 +79,11 @@ export default function ConfirmDialog({
     >
       <div className="app-confirm-dialog__panel">
         <div className="app-confirm-dialog__eyebrow">{t("common.confirm")}</div>
-        <h2 id={titleId}>{title}</h2>
+        <h2 id={titleId}>{normalizeDisplayText(title)}</h2>
         {/* A div, not a p: `description` is a ReactNode, and callers that
             pass structured content (a provenance table, a warning block)
             would otherwise nest block elements inside a paragraph. */}
-        <div id={descriptionId} className="app-confirm-dialog__description">{description}</div>
+        <div id={descriptionId} className="app-confirm-dialog__description">{typeof description === "string" ? normalizeDisplayText(description) : description}</div>
         <div className="app-confirm-dialog__actions">
           <button type="button" ref={cancelRef} className="app-button app-button--secondary" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
           <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy} onClick={onConfirm}>{busy ? `${confirmLabel.replace(/^Remove\s+/i, "Removing ").replace(/^Delete\s+/i, "Deleting ").replace(/^Restart\s+/i, "Restarting ")}` : confirmLabel}</button>

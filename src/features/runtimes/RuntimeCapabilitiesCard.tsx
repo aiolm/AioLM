@@ -2,6 +2,7 @@ import StableLabel from "../../shared/ui/StableLabel";
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { buildNumber, capabilityLabel } from "../../shared/runtime/runtimeUtils";
+import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, serverRunning, activeBackend, activeBuild, onProbe }: Props) {
+  const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
+  const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   return (
     <section className="runtime-capabilities-card mb-4 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="runtime-capabilities-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -27,13 +30,13 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, se
       {capabilities && (
         <div className="mt-3.5 grid gap-2.5 app-summary-grid">
           <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeState")}</div><div className={["mt-1 text-xs font-semibold", (capabilities.state === "available" ? "ui-color-success" : "ui-color-warning")].filter(Boolean).join(" ")} >{capabilityLabel(capabilities.state)}</div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {capabilities.build}</div></div>
-          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 max-h-20 overflow-auto whitespace-pre-wrap break-words font-mono text-xs ui-color-ink" >{capabilities.version || t("ui.notReported")}</div></div>
-          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 app-text-wrap font-mono text-xs ui-color-faint"  title={capabilities.flags.join(", ")}>{capabilities.flags.join(", ") || t("ui.none")}</div></div>
-          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: capabilities.devices.length })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={capabilities.devices.join(" · ")}>{capabilities.devices.join(" · ") || t("ui.noDevicesReported")}</div></div>
+          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 max-h-20 overflow-auto whitespace-pre-wrap break-words font-mono text-xs ui-color-ink" >{normalizeDisplayText(capabilities.version || t("ui.notReported"))}</div></div>
+          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 app-text-wrap font-mono text-xs ui-color-faint"  title={displayFlags}>{displayFlags || t("ui.none")}</div></div>
+          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: capabilities.devices.length })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>
           <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeBench")}</div><div className={["mt-1 text-xs font-semibold", (capabilities.bench_available ? "ui-color-success" : "ui-color-warning")].filter(Boolean).join(" ")} >{capabilities.bench_available ? t("ui.benchAvailable") : t("ui.benchMissing")}</div><div className="mt-1 text-xs ui-color-faint" >llama-bench --help</div></div>
         </div>
       )}
-      {capabilities?.diagnostics.length ? <details className="mt-3"><summary className="cursor-pointer text-xs ui-color-warning" >{t("ui.diagnosticsCount", { count: capabilities.diagnostics.length })}</summary><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded p-2 font-mono text-xs ui-background-mono-bg ui-color-faint" >{capabilities.diagnostics.join("\n")}</pre></details> : null}
+      {capabilities?.diagnostics.length ? <details className="mt-3"><summary className="cursor-pointer text-xs ui-color-warning" >{t("ui.diagnosticsCount", { count: capabilities.diagnostics.length })}</summary><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded p-2 font-mono text-xs ui-background-mono-bg ui-color-faint" >{normalizeDisplayText(capabilities.diagnostics.join("\n"))}</pre></details> : null}
     </section>
   );
 }

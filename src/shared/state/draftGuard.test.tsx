@@ -15,6 +15,19 @@ function Action({ run }: { run: () => Promise<void> }) {
 }
 
 describe('unsaved execution settings', () => {
+  it('hides Windows path prefixes when saving a draft fails', async () => {
+    const run = vi.fn(async () => {});
+    render(<I18nProvider initialLocale="en"><DraftGuardProvider>
+      <Draft save={async () => { throw new Error(String.raw`Cannot save \\?\C:\models\config.json`); }} discard={vi.fn()} /><Action run={run} />
+    </DraftGuardProvider></I18nProvider>);
+    fireEvent.click(screen.getByText('Switch model'));
+    fireEvent.click(screen.getByText('Save & continue'));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(String.raw`Cannot save C:\models\config.json`);
+    expect(alert.textContent).not.toContain("\\\\?\\");
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('saves settings before a profile capture and then performs exactly one pending action', async () => {
     const order: string[] = [];
     const run = vi.fn(async () => { order.push('switch'); });

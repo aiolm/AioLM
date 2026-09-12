@@ -187,6 +187,8 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
 
   const commitServerText = async (key: ServerTextKey, raw: string) => {
     if (applyLockRef.current || !cfg) return;
+    // A displayed path omits the Windows prefix; focus changes must not persist that formatting.
+    if (serverPathKeys.has(key) && serverTextDrafts[key] === undefined) return;
     if (key === "mmproj" && !projectorEditable) {
       setServerTextDrafts((current) => ({ ...current, mmproj: cfg.mmproj }));
       notify(t("ui.stopBeforeProjector"));

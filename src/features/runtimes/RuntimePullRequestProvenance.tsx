@@ -37,14 +37,14 @@ export default function PullRequestProvenance({ t, preview, backend }: { t: (key
           a crashed dialog would be a worse failure than a missing warning. */}
       {(preview.advisories ?? []).map((advisory) => (
         <p key={advisory} className={`rounded-lg border px-2.5 py-2 text-xs ${advisory === "fork" ? "border-warning-line bg-warning-soft/40 text-warning" : "app-border-strongest bg-surface/60 text-ink"}`}>
-          {advisory === "fork" ? t("ui.prForkWarning", { repository: preview.repository }) : t(`ui.${advisoryText[advisory] ?? "prAdvisoryUnknown"}`, { advisory })}
+          {normalizeDisplayText(advisory === "fork" ? t("ui.prForkWarning", { repository: preview.repository }) : t(`ui.${advisoryText[advisory] ?? "prAdvisoryUnknown"}`, { advisory }))}
         </p>
       ))}
       <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
         {rows.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-muted">{label}</dt>
-            <dd className="min-w-0 break-all font-mono text-ink">{value}</dd>
+            <dd className="min-w-0 break-all font-mono text-ink">{normalizeDisplayText(value)}</dd>
           </div>
         ))}
       </dl>
@@ -62,7 +62,7 @@ export default function PullRequestProvenance({ t, preview, backend }: { t: (key
       {preview.artifact ? (
         <p className="rounded-lg border app-border-success bg-success-soft/40 px-2.5 py-2 text-xs text-success">
           {t("ui.prPrebuiltAvailable", {
-            name: preview.artifact.name,
+            name: normalizeDisplayText(preview.artifact.name),
             size: (preview.artifact.bytes / 1048576).toFixed(1),
           })}
           <span className="mt-1 block break-all font-mono text-xs text-success/70">SHA-256: {preview.artifact.sha256}</span>

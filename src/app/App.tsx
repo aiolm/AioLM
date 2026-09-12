@@ -144,7 +144,7 @@ function AppContent() {
     const executionTarget = next === 'tuning' || next === 'profiles' || next === 'lora' ? next : next === 'models' ? 'setup' : null;
     if (executionTarget) next = 'models';
     const blocking = findTaskBlockingTabLeave(tasks);
-    if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: blocking.label }))) return false;
+    if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: normalizeDisplayText(blocking.label) }))) return false;
     if (executionTarget) setExecutionSection(current => ({ id: executionTarget, revision: current.revision + 1 }));
     window.dispatchEvent(new Event("aiolm:navigate"));
     setVisited(current => current.has(next) ? current : new Set([...current, next]));

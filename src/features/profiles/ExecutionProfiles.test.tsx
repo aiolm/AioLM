@@ -8,6 +8,21 @@ import ExecutionProfiles from "./ExecutionProfiles";
 
 describe("Saved execution settings", () => {
   beforeEach(() => localStorage.clear());
+  it('formats saved runtime labels without changing the runtime selection or user prompt', () => {
+    const raw = String.raw`\\?\C:\runtime\b123`;
+    const store = createTestStore({ active_build: raw });
+    const profiles = loadProfiles(store.cfg!, 'model.gguf');
+    saveModelProfile({ ...profiles.model[0], system_prompt: `Explain ${raw}` });
+    render(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="model.gguf" /></I18nProvider>);
+    expect(document.querySelector('.profile-model-name')).toHaveTextContent(String.raw`cpu · C:\runtime\b123`);
+    const prompt = screen.getByLabelText('Default system prompt for this profile');
+    expect(prompt).toHaveValue(`Explain ${raw}`);
+    fireEvent.blur(prompt);
+    expect(loadProfiles(store.cfg!, 'model.gguf').model[0].system_prompt).toBe(`Explain ${raw}`);
+    expect(store.cfg?.active_build).toBe(raw);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
   it('restores each model’s selected profiles without replacing their controls', () => {
     const store = createTestStore({ active_model: 'a.gguf' });
     const initial = loadProfiles(store.cfg!, 'a.gguf');

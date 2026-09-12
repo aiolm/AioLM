@@ -16,4 +16,17 @@ describe("desktop settings", () => {
     expect(screen.getByText(/Switching tabs does not stop them/)).toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
   });
+
+  it("hides Windows path prefixes in settings import failures", async () => {
+    const update = vi.fn();
+    const { container } = render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={update} reset={vi.fn()} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
+    const file = new File(["{}"], "settings.json", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockRejectedValue(new Error(String.raw`Cannot read \\?\UNC\server\settings.json`)) });
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(String.raw`Cannot read \\server\settings.json`);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(String.raw`\\?\UNC`);
+    expect(update).not.toHaveBeenCalled();
+  });
 });

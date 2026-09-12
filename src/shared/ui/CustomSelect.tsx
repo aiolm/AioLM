@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { normalizeDisplayText } from "../lib/displayPaths";
 import { createPortal } from "react-dom";
 
 export interface CustomSelectOption<T extends string | number = string> {
@@ -234,7 +235,7 @@ export function CustomSelect<T extends string | number = string>({
       >
         <span className="app-text-wrap flex items-center gap-1.5 min-w-0">
           {selected?.icon}
-          <span className="app-text-wrap">{selected?.label ?? String(value)}</span>
+          <span className="app-text-wrap">{normalizeDisplayText(selected?.label ?? String(value))}</span>
         </span>
         <svg
           className={`shrink-0 text-muted transition-transform duration-150 ${isSm ? "h-3 w-3" : "h-3.5 w-3.5"} ${
@@ -280,7 +281,7 @@ export function CustomSelect<T extends string | number = string>({
               >
                 <span className="app-text-wrap flex items-center gap-2 min-w-0">
                   {opt.icon}
-                  <span className="app-text-wrap">{opt.label}</span>
+                  <span className="app-text-wrap">{normalizeDisplayText(opt.label)}</span>
                 </span>
                 {isSelected && (
                   <svg className="app-custom-dropdown-check h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">

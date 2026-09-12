@@ -69,6 +69,39 @@ describe("SessionsPanel editing", () => {
     expect(alert.textContent).not.toContain("\\\\?\\");
   });
 
+  it.each(['default', 'saved', 'live'] as const)('hides all three model path prefixes in a %s session and keeps original paths', async (source) => {
+    const primary = String.raw`\\?\C:\models\main.gguf`;
+    const projector = String.raw`\\?\UNC\server\share\mmproj.gguf`;
+    const draft = String.raw`\\?\C:\models\draft.gguf`;
+    const models = { primary_model: primary, mmproj: projector, draft_model: draft };
+    const saved = { ...definition, name: `Work session ${primary}`, models };
+    const config = { ...cfg, active_model: primary, mmproj: projector, spec_draft_model: draft, sessions: [saved] };
+    if (source === 'live') mocked.sessionList.mockResolvedValue([{ id: 'live', name: `Live session ${primary}`,
+      state: 'running', model: primary, mmproj: projector, draft_model: draft }]);
+    const store = renderPanel(config);
+    if (source !== 'default') fireEvent.click(await screen.findByRole('button', { name: source === 'saved' ? /Work session/ : /Live session/ }));
+    expect(screen.getByLabelText('Primary model')).toHaveValue(String.raw`C:\models\main.gguf`);
+    expect(screen.getByDisplayValue(String.raw`\\server\share\mmproj.gguf`)).toBeInTheDocument();
+    expect(screen.getByDisplayValue(String.raw`C:\models\draft.gguf`)).toBeInTheDocument();
+    for (const input of screen.getAllByRole('textbox')) expect((input as HTMLInputElement).value).not.toContain('\\\\?\\');
+    expect(document.body.textContent).not.toContain('\\\\?\\');
+    expect(config.active_model).toBe(primary);
+    expect(saved.models).toEqual(models);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    if (source === 'saved') {
+      fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Renamed' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
+      await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({
+        sessions: [expect.objectContaining({ name: 'Renamed', models })],
+      })));
+      fireEvent.click(screen.getByRole('button', { name: 'Load session' }));
+      await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalled());
+      expect(mocked.sessionStart.mock.calls[0][1]).toEqual(expect.objectContaining({
+        active_model: primary, mmproj: projector, spec_draft_model: draft,
+      }));
+    }
+  });
+
   it("never substitutes OS GPU numbers when a managed runtime probe fails and can retry", async () => {
     mocked.rtProbe.mockRejectedValueOnce(new Error("Runtime probe timed out"));
     renderPanel({ ...cfg, active_backend: "rocm", active_build: "b10840" });

@@ -1,3 +1,5 @@
+// Apply at presentation boundaries (including tooltips, diagnostics and copied paths).
+// Keep stored paths and command arguments intact: Windows file access can need the prefix.
 export function normalizeDisplayPath(value: string): string {
   const path = value.trim();
   const lower = path.toLowerCase();

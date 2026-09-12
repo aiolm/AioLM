@@ -10,6 +10,7 @@ import { ServerOptionDefault } from './TuningOptionMetadata';
 import { serverDefault } from '../../shared/config/optionDefaults';
 import { defaultScalar } from '../../shared/config/tuningResetValues';
 import { useEditorDraft } from '../../shared/state/draftGuard';
+import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 
 const MEMORY_OPTIONS = new Set(['--mmap', '--mlock', '--direct-io', '--load-mode', '--lazy-mode', '--numa', '--kv-offload', '--op-offload', '--repack', '--fit', '--fit-target', '--fit-ctx', '--cache-ram', '--swa-full']);
 const LOAD_CHOICES = ['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio'];
@@ -69,13 +70,13 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options 
       {Array.from({ length: option.arity }, (_, argumentIndex) => <label key={argumentIndex}>
         <span>{copy.argument} {option.arity > 1 ? argumentIndex + 1 : ''}</span>
         <input className="app-input" aria-label={`${option.id} ${copy.argument} ${index + 1}.${argumentIndex + 1}`} list={choices.length ? `choices-${option.id}` : undefined}
-          placeholder={option.signature} value={item.values[argumentIndex] ?? ''} disabled={disabled || busy} spellCheck={false}
-          onChange={event => { const values = [...item.values]; values[argumentIndex] = event.target.value; update(index, { ...item, values }); }} />
+          placeholder={normalizeDisplayText(option.signature)} value={normalizeDisplayText(item.values[argumentIndex] ?? '')} disabled={disabled || busy} spellCheck={false}
+          onChange={event => { const values = [...item.values]; values[argumentIndex] = choices.find(value => normalizeDisplayText(value) === event.target.value) ?? event.target.value; update(index, { ...item, values }); }} />
       </label>)}
       <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled || busy} aria-label={`${option.id} ${copy.remove} ${index + 1}`}
         onClick={() => setDraft(items.filter((_, i) => i !== index))}>{copy.remove}</button>
     </div>)}
-    {choices.length > 0 && <datalist id={`choices-${option.id}`}>{choices.map(value => <option key={value} value={value} />)}</datalist>}
+    {choices.length > 0 && <datalist id={`choices-${option.id}`}>{choices.map(value => <option key={value} value={normalizeDisplayText(value)} />)}</datalist>}
     <div className="server-option-actions">
       {(!single || !items.length) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={append}>{items.length ? copy.add : copy.edit}</button>}
       {draft && <button type="button" className="app-button app-button--primary app-button--sm" disabled={disabled || busy || invalid} onClick={() => void save(items)}>{copy.save}</button>}
@@ -83,7 +84,7 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options 
     </div>
     {invalid && <p className="app-section-hint">{copy.required}</p>}
     {feedback && <p className="server-option-default" role="status">{feedback}</p>}
-    {error && <p className="text-error" role="alert">{error}</p>}
+    {error && <p className="text-error" role="alert">{normalizeDisplayText(error)}</p>}
   </div>;
 }
 
@@ -101,7 +102,7 @@ export default function TuningServerOptions({ cfg, runtime, disabled, rawDirty, 
       <button className="app-button app-button--secondary app-button--sm" type="button" disabled={runtime.loading} onClick={runtime.refresh}>{runtime.loading ? copy.loading : copy.refresh}</button>
     </div>
     <p className="app-section-hint" role="status">{runtime.verified ? copy.runtime : copy.fallback} · {options.length} {copy.count}</p>
-    {!runtime.verified && runtime.error && <details><summary>{copy.unverified}</summary><p className="app-section-hint">{runtime.error}</p></details>}
+    {!runtime.verified && runtime.error && <details><summary>{copy.unverified}</summary><p className="app-section-hint">{normalizeDisplayText(runtime.error)}</p></details>}
     {!memoryOnly && <div className="server-options-toolbar">
       <input className="app-input" type="search" value={localQuery} onChange={event => setLocalQuery(event.target.value)} aria-label={copy.search} placeholder={copy.search} />
       <label><input type="checkbox" checked={configuredOnly} onChange={event => setConfiguredOnly(event.target.checked)} />{copy.custom}</label>
@@ -115,10 +116,10 @@ export default function TuningServerOptions({ cfg, runtime, disabled, rawDirty, 
         const destination = managed ? DESTINATIONS[managed] : undefined;
         const occurrences = getOptionOccurrences(cfg.server_args, option);
         return <details className="server-option" key={option.id} data-server-option={option.id}>
-          <summary><code>{option.signature}</code><span className="server-option-state">{managed ? copy.managed : occurrences.length ? `${copy.custom} · ${occurrences.length}` : copy.inherited}</span>
+          <summary><code>{normalizeDisplayText(option.signature)}</code><span className="server-option-state">{managed ? copy.managed : occurrences.length ? `${copy.custom} · ${occurrences.length}` : copy.inherited}</span>
             <ServerOptionDefault option={option} options={runtime.options} verified={runtime.verified} />
           </summary>
-          <p className="server-option-description">{option.description}</p>
+          <p className="server-option-description">{normalizeDisplayText(option.description)}</p>
           {managed === '--port' ? <OptionEditor key={`port:${cfg.port}`} option={option} options={runtime.options} args={['--port', String(cfg.port)]} disabled={disabled || rawDirty} onSave={onSave} single /> : managed ? <div className="server-option-actions"><span>{copy.managed}</span>
             {field ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onCategory(field.category)}>{copy.dedicated}</button>
               : destination && onNavigate ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onNavigate(destination)}>{copy.dedicated}</button> : <p>{copy.lifecycle}</p>}

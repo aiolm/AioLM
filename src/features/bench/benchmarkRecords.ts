@@ -1,3 +1,5 @@
+import { normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
+
 export function benchmarkFingerprint(value: { model: string; backend: string; build: string; ctx: number; ngl: number; threads: number; parallel: number; iters: number; runtimeDefaults?: string[] }): string {
   const base = [value.model, value.backend, value.build, value.ctx, value.ngl, value.threads, value.parallel, value.iters].join("|");
   return value.runtimeDefaults?.length ? `${base}|defaults=${[...value.runtimeDefaults].sort().join(",")}` : base;
@@ -85,7 +87,7 @@ export function benchmarkCsv(records: BenchmarkRecord[]): string {
         record.runtimeDefaults?.includes("threads") ? "default" : record.threads,
         record.runtimeDefaults?.includes("parallel") ? "default" : record.parallel, record.iters,
         row.test, row.size, row.batch, row.value, row.unit,
-      ].map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","));
+      ].map((value) => `"${normalizeDisplayText(String(value)).replace(/"/g, '""')}"`).join(","));
     }
   }
   return `${lines.join("\n")}\n`;

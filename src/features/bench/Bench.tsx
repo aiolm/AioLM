@@ -248,7 +248,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
 
       <PanelFeedback>
         {serverRunning && <div role="status">{t("panel.serverRunningBenchmark")}</div>}
-        {info && <div className="rounded-lg border px-3 py-2 text-xs leading-relaxed ui-border-color-warning-border ui-background-warning-bg ui-color-warning-ink"  role="status">{info}</div>}
+        {info && <div className="rounded-lg border px-3 py-2 text-xs leading-relaxed ui-border-color-warning-border ui-background-warning-bg ui-color-warning-ink"  role="status">{normalizeDisplayText(info)}</div>}
       </PanelFeedback>
 
       <div className="mt-4 min-h-0 flex-1 overflow-auto" tabIndex={0} role="region" aria-label={t("panel.benchmarkResults")}>
@@ -295,7 +295,7 @@ export default function BenchPanel({ store }: { store: AppStore }) {
         </details>}
         {history.length > 0 && <section className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="benchmark-history-heading">
           <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="benchmark-history-heading" className="app-section-title">{t("ui.benchHistory", { count: history.length })}</h2><button type="button" onClick={() => downloadText("aiolm-benchmarks.csv", benchmarkCsv(history), "text/csv") } className="app-button app-button--secondary app-button--sm">{t("ui.benchExportCsv")}</button></div>
-          <div className="mt-2.5 space-y-1.5">{history.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums ui-color-faint" ><span>{new Date(record.createdAt).toLocaleString()} · {normalizeDisplayPath(record.model).split(/[\\/]/).pop()} · {benchmarkStatusLabel(record.status === "partial" ? "crashed" : record.status ?? "complete", t)}</span><span>{record.rows.length > 0 ? record.rows.map((row) => `${row.test}: ${row.value.toFixed(1)} ${row.unit}`).join(" · ") : record.error ?? "—"}</span></div>)}</div>
+          <div className="mt-2.5 space-y-1.5">{history.slice(0, 5).map((record) => <div key={record.id} className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums ui-color-faint" ><span>{new Date(record.createdAt).toLocaleString()} · {normalizeDisplayPath(record.model).split(/[\\/]/).pop()} · {benchmarkStatusLabel(record.status === "partial" ? "crashed" : record.status ?? "complete", t)}</span><span>{record.rows.length > 0 ? record.rows.map((row) => `${row.test}: ${row.value.toFixed(1)} ${row.unit}`).join(" · ") : normalizeDisplayText(record.error ?? "—")}</span></div>)}</div>
         </section>}
       </div>
     </div>

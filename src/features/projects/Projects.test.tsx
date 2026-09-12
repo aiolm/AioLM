@@ -33,4 +33,19 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0]).toMatchObject({ systemPrompt: "Cite the source", toolIds: ["docs:search"], documentBindings: [{ name: "notes.md", path: "notes.md" }], config: { ctx_size: 32768, gpu, runtime_defaults: ["ngl", "temperature"] } });
   });
+
+  it("hides prefixes in restored document editors and model tooltips while preserving saved paths", () => {
+    const model = String.raw`\\?\C:\models\test.gguf`;
+    const document = String.raw`\\?\UNC\server\share\notes.md`;
+    const displayDocument = String.raw`\\server\share\notes.md`;
+    const store = createTestStore({ active_model: model });
+    const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: document }]);
+    writeProjects([project]); setActiveProjectId(project.id);
+    const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByLabelText("Document bindings · one path per line")).toHaveValue(displayDocument);
+    expect(container.querySelector('dd[title]')).toHaveAttribute('title', String.raw`C:\models\test.gguf`);
+    expect(container.textContent).not.toContain('\\\\?\\');
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0]).toMatchObject({ config: { active_model: model }, documentBindings: [{ name: "notes.md", path: document }] });
+  });
 });

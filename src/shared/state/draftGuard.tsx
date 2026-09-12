@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { useI18n } from '../i18n/i18n';
 import { executionText } from '../i18n/executionI18n';
+import { normalizeDisplayText } from '../lib/displayPaths';
 
 export interface EditorDraft {
   dirty: boolean;
@@ -60,7 +61,7 @@ export function DraftGuardProvider({ children }: { children: ReactNode }) {
   return <DraftContext.Provider value={guard}>
     {children}
     <ConfirmDialog open={!!pending} title={copy.unsavedTitle} tone="primary" busy={busy}
-      description={<><p>{copy.unsavedBody}</p>{error && <p role="alert" className="text-error">{error}</p>}
+      description={<><p>{copy.unsavedBody}</p>{error && <p role="alert" className="text-error">{normalizeDisplayText(error)}</p>}
         <button type="button" className="app-button app-button--ghost" disabled={busy} onClick={() => void finish(false)}>{copy.discardContinue}</button></>}
       confirmLabel={copy.saveContinue} cancelLabel={t('common.cancel')} onConfirm={() => void finish(true)}
       onCancel={() => { pending?.resolve(false); setPending(null); locked.current = false; }} />

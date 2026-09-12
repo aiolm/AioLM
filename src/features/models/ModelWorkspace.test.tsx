@@ -49,6 +49,41 @@ function getStartButton() {
 }
 describe('model execution workspace', () => {
   beforeEach(() => { localStorage.clear(); Element.prototype.scrollIntoView = vi.fn(); });
+  it('hides runtime failure paths inside nested feedback content and keeps configured paths intact', async () => {
+    const raw = String.raw`\\?\C:\runtime\llama-server.exe`;
+    const projector = String.raw`\\?\UNC\server\models\mmproj.gguf`;
+    vi.mocked(api.rtList).mockRejectedValueOnce(new Error(`Cannot read ${raw}`));
+    const base = mount(createTestStore({ active_model: 'a.gguf', mmproj: projector }));
+    const detail = await screen.findByText(String.raw`Error: Cannot read C:\runtime\llama-server.exe`);
+    expect(detail.closest('[role="alert"]')).toHaveTextContent('Could not load runtimes or devices');
+    expect(document.body.textContent).not.toContain('\\\\?\\');
+    const projectorInput = document.querySelector<HTMLInputElement>('#execution-projector')!;
+    expect(projectorInput).toHaveValue(String.raw`\\server\models\mmproj.gguf`);
+    fireEvent.blur(projectorInput);
+    expect(base.cfg?.mmproj).toBe(projector);
+    expect(base.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('formats model row labels and accessibility names while selecting the original path', async () => {
+    const raw = String.raw`\\?\C:\models\b.gguf`;
+    const display = String.raw`C:\models\b.gguf`;
+    const model = { name: raw, path: raw, size_mb: 1500, is_vision: false };
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [model], truncated: false });
+    const base = createTestStore();
+    const select = vi.fn(async () => undefined);
+    render(<I18nProvider initialLocale="en"><DraftGuardProvider><ModelWorkspace store={base} onSelectModel={select} active section={{ id: 'setup', revision: 0 }} onNavigate={vi.fn()} /></DraftGuardProvider></I18nProvider>);
+    const button = await modelLibrary().findByRole('button', { name: `Select ${display}` });
+    expect(button).toHaveTextContent(display);
+    expect(document.body.textContent).not.toContain('\\\\?\\');
+    for (const element of document.querySelectorAll('[aria-label], [title]')) {
+      expect(element.getAttribute('aria-label') ?? '').not.toContain('\\\\?\\');
+      expect(element.getAttribute('title') ?? '').not.toContain('\\\\?\\');
+    }
+    fireEvent.click(button);
+    await waitFor(() => expect(select).toHaveBeenCalledWith(raw));
+    expect(model.path).toBe(raw);
+  });
+
   it('selects without starting, restores per-model edits and starts from the same screen', async () => {
     const base = mount();
     await findModelButton('b.gguf');

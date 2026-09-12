@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
+import { normalizeDisplayText } from "../lib/displayPaths";
 
 export interface TooltipContent {
   title: string;
@@ -61,8 +62,8 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
 
   const popover = typeof document !== "undefined" ? createPortal(
     <span ref={popoverRef} id={tooltipId} role="tooltip" className={`app-tooltip-popover ${open ? "is-open" : ""}`} style={position}>
-      {title && <strong className="app-tooltip-title">{title}</strong>}
-      <span>{description}</span>
+      {title && <strong className="app-tooltip-title">{normalizeDisplayText(title)}</strong>}
+      <span>{normalizeDisplayText(description)}</span>
     </span>,
     document.body,
   ) : null;
@@ -73,7 +74,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
         ref={triggerRef}
         type="button"
         className="app-tooltip-trigger"
-        aria-label={resolvedLabel}
+        aria-label={normalizeDisplayText(resolvedLabel)}
         aria-describedby={tooltipId}
         aria-expanded={open}
         onFocus={() => setOpen(true)}

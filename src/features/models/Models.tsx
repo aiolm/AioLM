@@ -220,7 +220,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     if (switching && shouldConfirmDestructive()) {
       setPendingConfirm({
         title: t("panel.restartSwitchQuestion"),
-        description: t("ui.switchModelBody", { name: model.name }),
+        description: t("ui.switchModelBody", { name: normalizeDisplayText(model.name) }),
         confirmLabel: t("panel.restartSwitch"),
         onConfirm: () => { setPendingConfirm(null); void performSelectAndStart(model); },
       });
@@ -259,7 +259,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     if (!shouldConfirmDestructive()) { void remove(); return; }
     setPendingConfirm({
       title: t("ui.deleteModelTitle"),
-      description: model.shards ? t("ui.deleteSplitModelBody", { name: model.name, count: model.shards.files.length }) : t("ui.deleteModelBody", { name: model.name }),
+      description: model.shards ? t("ui.deleteSplitModelBody", { name: normalizeDisplayText(model.name), count: model.shards.files.length }) : t("ui.deleteModelBody", { name: normalizeDisplayText(model.name) }),
       confirmLabel: t("ui.deleteModelAction"),
       onConfirm: () => void remove(),
     });
@@ -314,7 +314,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{t("panel.activeModel")}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {selected ? <div className="app-text-wrap text-[15px] font-semibold ui-color-ink"  title={normalizeDisplayPath(selected)}>{visible.find((model) => model.path === selected)?.name ?? normalizeDisplayPath(selected).split(/[\\/]/).pop()}</div> : <div className="text-sm ui-color-faint" >{t("panel.noneSelected")}</div>}
+            {selected ? <div className="app-text-wrap text-[15px] font-semibold ui-color-ink"  title={normalizeDisplayPath(selected)}>{normalizeDisplayText(visible.find((model) => model.path === selected)?.name ?? normalizeDisplayPath(selected).split(/[\\/]/).pop() ?? "")}</div> : <div className="text-sm ui-color-faint" >{t("panel.noneSelected")}</div>}
             <div className="mt-1 break-words text-xs ui-color-muted" >{t("ui.modelsBackendLine", { backend: cfg?.active_backend || "PATH", build: cfg?.active_build ? buildNumber(cfg.active_build) : "system", port: cfg?.port ?? "—" })}</div>
             <details className="models-runtime-details mt-1">
             <summary>{t("section.diagnostics")}</summary>
@@ -387,6 +387,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           </div>
         )}
         {visible.map((model) => {
+          const displayName = normalizeDisplayText(model.name);
           const incomplete = !!model.shards?.missing.length;
           const isSelected = model.path === selected || !!model.shards?.files.includes(selected);
           const running = serverRunning && isSelected;
@@ -401,7 +402,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
               <button
                 type="button"
                 aria-current={isSelected ? "true" : undefined}
-                aria-label={t("ui.selectModelNamed", { name: model.name })}
+                aria-label={t("ui.selectModelNamed", { name: displayName })}
                 disabled={incomplete || store.busy}
                 aria-disabled={serverRunning && !onSelectModel ? "true" : undefined}
                 onClick={() => {
@@ -414,7 +415,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 className={[`min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning ? "cursor-default opacity-80" : "hover:bg-[var(--ui-surface-muted)]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]`, (isSelected ? "ui-background-transparent" : "")].filter(Boolean).join(" ")}
 
               >
-                <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{model.name}</span>
+                <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{displayName}</span>
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
                 <span className="block app-text-wrap text-xs ui-color-faint"  title={normalizeDisplayPath(model.path)}>{normalizeDisplayPath(model.path)}</span>
               </button>
@@ -422,10 +423,10 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 <span className="shrink-0 text-xs tabular-nums ui-color-faint" >{model.size_mb.toFixed(0)} MB</span>
                 {model.is_vision && <span className="rounded-full border px-1.5 py-0.5 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{t("ui.visionTag")}</span>}
                 {isSelected && <span className="rounded-full px-2 py-0.5 text-xs font-medium ui-background-success-bg ui-color-success-ink ui-border-1px-solid-var-tone-success-border" >{t("ui.activeTag")}</span>}
-                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${model.name}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
-                <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${model.name}`} className="app-button app-button--ghost app-button--sm shrink-0 ui-color-danger" >{t("panel.delete")}</button>
-                <button type="button" onClick={() => { if (onSelectModel) void selectModel(model); else if (!running) void selectAndStart(model); }} disabled={incomplete || (!onSelectModel && running) || store.busy} aria-label={`${actionLabel}: ${model.name}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={onSelectModel ? [copy.setupAction] : [t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
+                {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
+                <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
+                <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--sm shrink-0 ui-color-danger" >{t("panel.delete")}</button>
+                <button type="button" onClick={() => { if (onSelectModel) void selectModel(model); else if (!running) void selectAndStart(model); }} disabled={incomplete || (!onSelectModel && running) || store.busy} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={onSelectModel ? [copy.setupAction] : [t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
               </div>
             </div>
           );

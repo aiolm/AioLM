@@ -96,8 +96,8 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
             <label key={gpu.stable_id} className={["flex cursor-pointer items-start gap-3 rounded-lg border p-3", (selected.includes(gpu.stable_id) ? "ui-border-color-accent" : "ui-border-color-border")].filter(Boolean).join(" ")} >
               <input type="checkbox" checked={selected.includes(gpu.stable_id)} disabled={disabled} onChange={() => toggle(gpu.stable_id)} className="mt-1" />
               <span className="min-w-0">
-                <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{gpuDeviceLabel(gpu, index)}</span>
-                <span className="block text-xs ui-color-faint" >{gpu.vram_mb ? `${gpu.vram_mb.toLocaleString()} MiB / ` : ""}{gpu.integrated ? "integrated / " : ""}{t("ui.gpuStableId")}: {gpu.stable_id}</span>
+                <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{normalizeDisplayText(gpuDeviceLabel(gpu, index))}</span>
+                <span className="block text-xs ui-color-faint" >{gpu.vram_mb ? `${gpu.vram_mb.toLocaleString()} MiB / ` : ""}{gpu.integrated ? "integrated / " : ""}{t("ui.gpuStableId")}: {normalizeDisplayText(gpu.stable_id)}</span>
               </span>
             </label>
           ))}
@@ -123,7 +123,7 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
           {customSplit && <div className="mt-2 grid gap-2">
             {selected.map((id) => {
               const gpu = gpus.find((item) => item.stable_id === id);
-              return <label key={id} className="grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-2 text-xs ui-color-faint" ><span className="app-text-wrap">{gpu ? gpuDeviceLabel(gpu, gpus.indexOf(gpu)) : id}</span><input aria-label={`${t("ui.gpuTensorSplit")} ${id}`} className="app-input w-full font-mono" inputMode="decimal" value={splitDrafts[id] ?? "1"} onChange={(event) => setSplitDrafts((current) => ({ ...current, [id]: event.target.value }))} /></label>;
+              return <label key={id} className="grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-2 text-xs ui-color-faint" ><span className="app-text-wrap">{normalizeDisplayText(gpu ? gpuDeviceLabel(gpu, gpus.indexOf(gpu)) : id)}</span><input aria-label={`${t("ui.gpuTensorSplit")} ${normalizeDisplayText(id)}`} className="app-input w-full font-mono" inputMode="decimal" value={splitDrafts[id] ?? "1"} onChange={(event) => setSplitDrafts((current) => ({ ...current, [id]: event.target.value }))} /></label>;
             })}
           </div>}
           {customSplit && <span className="mt-1 block text-xs ui-color-faint" >{t("ui.gpuTensorSplitHint")}</span>}

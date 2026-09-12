@@ -73,6 +73,27 @@ function store(): AppStore {
 }
 
 describe("TuningPanel phase-1 shell", () => {
+  it.each([
+    ['--mmproj', 'tuning-mmproj', 'mmproj'],
+    ['--spec-draft-model', 'tuning-spec-draft-model', 'spec_draft_model'],
+  ] as const)('keeps the original %s path on focus changes and saves deliberate edits', async (query, inputId, key) => {
+    const raw = String.raw`\\?\UNC\server\models\vision.gguf`;
+    const configured = { ...cfg, [key]: raw };
+    const base = store();
+    const save = vi.fn(async () => configured);
+    render(<I18nProvider initialLocale="en"><TuningPanel store={{ ...base, cfg: configured, getConfig: () => configured, updateConfig: save }} /></I18nProvider>);
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: query } });
+    const input = document.getElementById(inputId)!;
+    expect(input).toHaveValue(String.raw`\\server\models\vision.gguf`);
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(save).not.toHaveBeenCalled();
+    expect(configured[key]).toBe(raw);
+    fireEvent.change(input, { target: { value: 'C:/models/new.gguf' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ [key]: 'C:/models/new.gguf' }));
+  });
+
   it("opens the canonical parameter form without duplicate profile editors", () => {
     render(<I18nProvider initialLocale="en"><TuningPanel store={store()} /></I18nProvider>);
     expect(screen.queryByTestId("execution-profiles-section")).not.toBeInTheDocument();

@@ -32,6 +32,17 @@ const record: BenchmarkRecord = {
 };
 
 describe("benchmark records", () => {
+  it('exports readable paths without rewriting stored models or fingerprints', () => {
+    const model = String.raw`\\?\UNC\server\models\qwen.gguf`;
+    const fingerprint = `${model}|cpu|b123`;
+    const saved = { ...record, model, fingerprint };
+    const csv = benchmarkCsv([saved]);
+    expect(csv).toContain(String.raw`\\server\models\qwen.gguf`);
+    expect(csv).not.toContain('\\\\?\\');
+    expect(saved.model).toBe(model);
+    expect(saved.fingerprint).toBe(fingerprint);
+  });
+
   it("normalizes llama-bench rows into unit-tagged metrics", () => {
     expect(record.rows).toEqual([
       { test: "pp512", size: "512", batch: "512", value: 1234.5, unit: "tok/s" },

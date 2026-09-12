@@ -6,7 +6,7 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import type { ViewId } from '../../shared/types/navigation';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
-import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
+import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import ModelsPanel from './Models';
@@ -67,7 +67,7 @@ export default function ModelWorkspace({ store, active, section, onNavigate, onS
       {store.cfg?.active_model ? <ExecutionSetup store={store} active={active} section={section} onNavigate={onNavigate} model={models.find(model => model.path === store.cfg?.active_model)} />
         : <div className="app-empty-state"><h2>{copy.setup}</h2><p>{copy.selectFirst}</p></div>}
     </div>
-    <ConfirmDialog open={!!pendingModel} title={copy.switchTitle} description={<><p>{copy.switchBody}</p><strong>{pendingModel?.name}</strong></>}
+    <ConfirmDialog open={!!pendingModel} title={copy.switchTitle} description={<><p>{copy.switchBody}</p><strong>{normalizeDisplayText(pendingModel?.name ?? '')}</strong></>}
       confirmLabel={copy.switchAction} cancelLabel={t('common.cancel')} tone="primary" busy={switching}
       onConfirm={() => { const model = pendingModel; setPendingModel(null); if (model) void switchTo(model, true); }} onCancel={() => setPendingModel(null)} />
   </div>;
@@ -147,11 +147,11 @@ function ExecutionSetup({ store, active, section, onNavigate, model }: Omit<Prop
       <div className="execution-section-heading"><label htmlFor="execution-runtime">{copy.runtime}</label><button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => onNavigate('runtimes')}>{copy.manageRuntime}</button></div>
       <select id="execution-runtime" className="app-select" value={selectedRuntime} disabled={disabled || !resources} onChange={event => void changeRuntime(event.target.value)}>
         <option value="/">{copy.systemRuntime}</option>
-        {resources?.runtimes.map(item => <option key={`${item.backend}/${item.build}`} value={`${item.backend}/${item.build}`}>{item.backend} · {item.build}</option>)}
-        {managed && (!resources || missing) && <option value={selectedRuntime}>{cfg.active_backend} · {cfg.active_build}</option>}
+        {resources?.runtimes.map(item => <option key={`${item.backend}/${item.build}`} value={`${item.backend}/${item.build}`}>{normalizeDisplayText(`${item.backend} · ${item.build}`)}</option>)}
+        {managed && (!resources || missing) && <option value={selectedRuntime}>{normalizeDisplayText(`${cfg.active_backend} · ${cfg.active_build}`)}</option>}
       </select>
       {missing && <p className="text-error" role="alert">{copy.runtimeMissing}</p>}
-      {loadError && <FeedbackBanner tone="error" action={{ label: t('panel.retry'), onClick: () => setRevision(value => value + 1) }}>{copy.runtimeError}<span className="execution-error-detail">{loadError}</span></FeedbackBanner>}
+      {loadError && <FeedbackBanner tone="error" action={{ label: t('panel.retry'), onClick: () => setRevision(value => value + 1) }}>{copy.runtimeError}<span className="execution-error-detail">{normalizeDisplayText(loadError)}</span></FeedbackBanner>}
     </section>
     <div ref={profiles} className="execution-profiles"><ExecutionProfiles store={store} modelPath={cfg.active_model} compact /></div>
     <TuningOptionsContext.Provider value={runtime}>

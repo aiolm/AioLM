@@ -2,6 +2,7 @@ import { memo } from "react";
 import type { ChatHistoryMessage } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
+import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 
 interface MessageBubbleProps {
@@ -44,8 +45,8 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             <div className="mt-1.5 whitespace-pre-wrap break-words">{message.reasoning}</div>
           </details>
         )}
-        {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <img key={image.dataUrl} src={image.dataUrl} alt={image.name} loading="lazy" decoding="async" width={144} height={144} className="h-36 w-36 max-h-40 max-w-40 rounded-lg border object-contain ui-border-color-border ui-background-mono-bg"  />)}</div> : null}
-        {message.documents?.length ? <div className="mb-2 flex flex-wrap gap-1.5">{message.documents.map((document) => <span key={document.path} className="rounded-full border px-2.5 py-1 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{text("document")} · {document.name}</span>)}</div> : null}
+        {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <img key={image.dataUrl} src={image.dataUrl} alt={normalizeDisplayText(image.name)} loading="lazy" decoding="async" width={144} height={144} className="h-36 w-36 max-h-40 max-w-40 rounded-lg border object-contain ui-border-color-border ui-background-mono-bg"  />)}</div> : null}
+        {message.documents?.length ? <div className="mb-2 flex flex-wrap gap-1.5">{message.documents.map((document) => <span key={document.path} className="rounded-full border px-2.5 py-1 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{text("document")} · {normalizeDisplayText(document.name)}</span>)}</div> : null}
         <div className="whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinking")}</span> : "")}</div>
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{text("partialFailed")}</div>}

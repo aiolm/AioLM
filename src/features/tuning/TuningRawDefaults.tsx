@@ -2,6 +2,7 @@ import { useContext } from "react";
 import { TuningDefaultsContext } from "./TuningDefaultField";
 import { useI18n } from "../../shared/i18n/i18n";
 import TuningOptionMetadata from './TuningOptionMetadata';
+import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 
 export default function TuningRawDefaults() {
   const context = useContext(TuningDefaultsContext);
@@ -16,8 +17,8 @@ export default function TuningRawDefaults() {
     <p className="my-2 text-xs text-muted">{t("ui.runtimeDefaultRawHint")}</p>
     <div className="grid min-w-0 gap-2 app-form-grid">
       {fields.map(({ key, label }) => <div key={key} className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded border border-line-strong p-2">
-        <div className="min-w-0"><code className="text-xs text-ink">{label}</code><TuningOptionMetadata fieldKey={key} /></div>
-        <button type="button" disabled={context.disabled} className="app-button app-button--secondary app-button--sm" aria-label={t("ui.runtimeDefaultResetRaw", { label })}
+        <div className="min-w-0"><code className="text-xs text-ink">{normalizeDisplayText(label)}</code><TuningOptionMetadata fieldKey={key} /></div>
+        <button type="button" disabled={context.disabled} className="app-button app-button--secondary app-button--sm" aria-label={t("ui.runtimeDefaultResetRaw", { label: normalizeDisplayText(label) })}
           onClick={() => context.reset(key)}>{t("ui.runtimeDefaultReset")}</button>
       </div>)}
     </div>

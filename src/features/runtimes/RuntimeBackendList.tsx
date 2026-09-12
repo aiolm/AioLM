@@ -54,7 +54,7 @@ export default function RuntimeBackendList({
               <span className={`rounded px-2 py-0.5 text-xs ${state.cls}`}>{state.label}</span>
               {device && <span className={`rounded px-2 py-0.5 text-xs ${fitClassOf(fitOf(device, row.backend))}`}>{fitLabelOf(locale, fitOf(device, row.backend))}</span>}
             </div>
-            <div className="mt-0.5 break-words text-xs text-muted">{t(`ui.${row.note}`)}{device && reasonText(locale, suitabilityOf(device, row.backend)) ? ` · ${reasonText(locale, suitabilityOf(device, row.backend))}` : ""}</div>
+            <div className="mt-0.5 break-words text-xs text-muted">{t(`ui.${row.note}`)}{device && reasonText(locale, suitabilityOf(device, row.backend)) ? ` · ${normalizeDisplayText(reasonText(locale, suitabilityOf(device, row.backend)))}` : ""}</div>
           </div>
           {rowAction === "cancel" ? (
             <button type="button" onClick={onCancelInstall} disabled={cancelBusy} className="app-button app-button--danger app-button--sm shrink-0"><StableLabel value={cancelBusy ? t("ui.cancelling") : t("ui.cancelInstall")} labels={[t("ui.cancelling"), t("ui.cancelInstall")]} /></button>
@@ -80,7 +80,7 @@ export default function RuntimeBackendList({
             const selectBlockedReason = serverRunning ? t("ui.stopBeforeSelect") : prBusy ? t("ui.installingPr") : null;
             const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : null;
             return <div key={item.build} role="listitem" className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${isActive ? "app-border-success bg-success-soft/40" : "border-line-strong app-bg-muted"}`} title={normalizeDisplayPath(item.dir)}>
-              <span className="text-ink" title={item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build}>{item.source ? `${t("ui.runtimePrBuild", { pr: item.source.pull_request })} · ${item.source.commit.slice(0, 7)} · ` : ""}{formatRuntimeVersion(item.build, item.version)}</span>
+              <span className="text-ink" title={normalizeDisplayText(item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build)}>{item.source ? `${t("ui.runtimePrBuild", { pr: item.source.pull_request })} · ${item.source.commit.slice(0, 7)} · ` : ""}{normalizeDisplayText(formatRuntimeVersion(item.build, item.version))}</span>
               <span className="text-muted">{item.size_mb.toFixed(1)} MB</span>
               {isActive ? <span className="rounded bg-success-soft px-1.5 py-0.5 text-xs text-success">{t("ui.active")}</span> : <>
                 <button type="button" onClick={() => selectBlockedReason ? onBlockedAction?.(selectBlockedReason) : onSelect(row.backend, item.build)} aria-disabled={selectBlockedReason ? "true" : undefined} title={selectBlockedReason ?? undefined} aria-label={`${t("ui.makeActive")}: ${backendName} ${item.build}`} className={`app-button app-button--secondary app-button--sm ${selectBlockedReason ? "opacity-80" : ""}`}>{t("ui.makeActive")}</button>

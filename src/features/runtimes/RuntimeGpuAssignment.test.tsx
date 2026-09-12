@@ -27,6 +27,24 @@ const t = (key: UnifiedKey) => key;
 const render = (element: ReactElement) => renderUI(element, { wrapper: ({ children }) => <I18nProvider initialLocale="en">{children}</I18nProvider> });
 
 describe("RuntimeGpuAssignment", () => {
+  it("hides device path prefixes from labels and accessible names while preserving saved identities", async () => {
+    const firstId = String.raw`\\?\C:\devices\gpu-a`;
+    const secondId = String.raw`\\?\UNC\server\gpu-b`;
+    const pathPlacement: api.GpuPlacement = { ...placement, gpu_ids: [firstId, secondId], main_gpu: firstId };
+    const pathDevice = {
+      ...device,
+      profile: { ...device.profile, gpus: device.profile.gpus.map((gpu, index) => ({ ...gpu, stable_id: index === 0 ? firstId : secondId })) },
+    };
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<RuntimeGpuAssignment t={t} device={pathDevice} placement={pathPlacement} disabled={false} onChange={onChange} />);
+
+    const ratio = screen.getByLabelText(String.raw`ui.gpuTensorSplit C:\devices\gpu-a`);
+    expect(container.textContent).not.toContain(firstId.slice(0, 4));
+    fireEvent.change(ratio, { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "panel.save" }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...pathPlacement, tensor_split: [2, 1] }));
+  });
+
   it('can clear a previous GPU assignment when the selected runtime has no devices', async () => {
     const onChange = vi.fn().mockResolvedValue(undefined);
     render(<RuntimeGpuAssignment t={t} device={{ ...device, profile: { ...device.profile, gpus: [] } }} placement={placement} disabled={false} onChange={onChange} />);

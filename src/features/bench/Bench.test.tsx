@@ -71,6 +71,21 @@ function renderPanel() {
 }
 
 describe("BenchPanel streaming rows", () => {
+  it("hides prefixes in saved failure history without rewriting it", async () => {
+    const raw = String.raw`\\?\C:\models\missing.gguf`;
+    const history = JSON.stringify([{ schemaVersion: 1, id: 'failed', createdAt: 0, model: raw,
+      status: 'failed', rows: [], error: `Cannot load ${raw}` }]);
+    localStorage.setItem('aiolm-benchmark-history.v1', history);
+    try {
+      const { container } = renderPanel();
+      await screen.findByText(String.raw`Cannot load C:\models\missing.gguf`);
+      expect(container.textContent).not.toContain('\\\\?\\');
+      expect(localStorage.getItem('aiolm-benchmark-history.v1')).toBe(history);
+    } finally {
+      localStorage.removeItem('aiolm-benchmark-history.v1');
+    }
+  });
+
   let emitProgress: ((progress: api.BenchmarkProgress) => void) | undefined;
 
   beforeEach(() => {
@@ -108,5 +123,19 @@ describe("BenchPanel streaming rows", () => {
     });
     expect(await screen.findByText("tg128")).toBeInTheDocument();
     expect(screen.getByText("42.5")).toBeInTheDocument();
+  });
+
+  it('hides paths in partial-run status messages while preserving saved diagnostics', async () => {
+    const raw = String.raw`\\?\C:\models\test.gguf`;
+    const message = `Partial result for ${raw}`;
+    mocked.runBench.mockResolvedValue({ rows: [], status: 'partial', message, args: ['-m', raw] });
+    const { container } = renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run benchmark' }));
+    const display = String.raw`Partial result for C:\models\test.gguf`;
+    await waitFor(() => expect(screen.getAllByText(display).length).toBeGreaterThan(0));
+    expect(container.textContent).not.toContain('\\\\?\\');
+    const history = JSON.parse(localStorage.getItem('aiolm-benchmark-history.v1') ?? '[]');
+    expect(history[0].error).toBe(message);
+    expect(history[0].model).toBe(cfg.active_model);
   });
 });

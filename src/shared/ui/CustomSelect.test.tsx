@@ -17,6 +17,22 @@ function renderSelect(onChange = vi.fn()) {
 }
 
 describe("CustomSelect", () => {
+  it("displays clean paths while selecting and submitting the original path", () => {
+    const raw = String.raw`\\?\UNC\server\share\model.gguf`;
+    const display = String.raw`\\server\share\model.gguf`;
+    const onChange = vi.fn();
+    const { container } = render(<form><CustomSelect name="model" value={raw} options={[{ value: raw, label: raw }]} onChange={onChange} ariaLabel="Model" /></form>);
+    const trigger = screen.getByRole('combobox');
+    expect(trigger).toHaveTextContent(display);
+    expect(trigger.textContent).not.toContain("\\\\?\\");
+    fireEvent.click(trigger);
+    const option = screen.getByRole('option');
+    expect(option.textContent).toBe(display);
+    fireEvent.click(option);
+    expect(onChange).toHaveBeenCalledWith(raw);
+    expect(new FormData(container.querySelector('form')!).get('model')).toBe(raw);
+  });
+
   it("keeps complete long labels in the trigger and options and serializes the value", () => {
     const label = "긴 프로필 이름 Japanese 中文 Long profile name ".repeat(12);
     const { container } = render(<form><CustomSelect name="profile" value="saved" options={[{ value: "saved", label }]} onChange={() => undefined} ariaLabel="Saved profile" /></form>);

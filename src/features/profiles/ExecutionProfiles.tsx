@@ -15,6 +15,7 @@ import {
 import { REQUEST_DEFAULT_KEYS } from "../../shared/config/tuningDefaults";
 import RuntimeLoadingProfiles from "../runtimes/RuntimeLoadingProfiles";
 import { useDraftGuard, useEditorDraft } from '../../shared/state/draftGuard';
+import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 
 type Props = { store: AppStore; modelPath: string; onOpenTuning?: () => void; compact?: boolean };
 type Kind = "server" | "model";
@@ -139,7 +140,7 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg, compact }: Props 
         return <section className="profile-snapshot" key={kind}>
           <h3>{t(kind === "server" ? "ui.serverProfile" : "ui.modelTuningProfile")}</h3>
           <p className="profile-snapshot-hint">{t(kind === "server" ? "ui.serverSnapshotHint" : "ui.modelSnapshotHint")}</p>
-          <p className="profile-model-name">{kind === "server" ? `${server.backend} · ${server.build || "PATH"}` : t("ui.sharedAcrossModels")}</p>
+          <p className="profile-model-name">{kind === "server" ? normalizeDisplayText(`${server.backend} · ${server.build || "PATH"}`) : t("ui.sharedAcrossModels")}</p>
           <label htmlFor={`${kind}-snapshot-picker`} className="sr-only">{t(kind === "server" ? "ui.selectServerProfile" : "ui.selectModelProfile")}</label>
           <CustomSelect id={`${kind}-snapshot-picker`} value={profile.id} disabled={blocked} className="w-full" onChange={(value) => select(kind, value)} options={items.map(item => ({ value: item.id, label: item.name }))} />
           <span className="profile-snapshot-status">{t(differs ? "ui.profileDiffers" : "ui.profileMatches")}</span>

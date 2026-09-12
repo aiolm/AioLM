@@ -7,6 +7,8 @@ import { createTestStore, testConfig } from '../../testing/appStore';
 import { withManualOverrides } from '../../shared/config/tuningDefaults';
 import TuningPanel from './Tuning';
 import { ADVANCED_SAMPLING_FIELDS, chatOptionValue } from './tuningFields';
+import TuningServerOptions from './TuningServerOptions';
+import { parseRuntimeHelp } from '../../shared/config/serverOptions';
 
 const help = '--mmap, --no-mmap                       memory mapping\n--cache-ram N                          cache memory\n--min-p N                              minimum probability\n--top-p N                              probability\n--port PORT                            HTTP port\n--future-pr-option N                   custom build option';
 beforeEach(() => {
@@ -34,6 +36,67 @@ function openOption(flag: string) {
 }
 
 describe('server option editing', () => {
+  it('formats runtime path suggestions and signatures while saving the original selected path', async () => {
+    const raw = String.raw`\\?\UNC\server\models\cache.bin`;
+    const display = String.raw`\\server\models\cache.bin`;
+    const [base] = parseRuntimeHelp('--cache-path FILE             cache file');
+    const option = { ...base, signature: `--cache-path FILE (default: ${raw})`, choices: [raw] };
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: ['--cache-path', 'old.bin'] }}
+      runtime={{ options: [option], verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const editor = openOption('--cache-path');
+    expect(container.textContent).toContain(`--cache-path FILE (default: ${display})`);
+    const suggestion = container.querySelector('datalist option');
+    expect(suggestion).toHaveAttribute('value', display);
+    const input = editor.getByRole('combobox', { name: '--cache-path Argument 1.1' });
+    fireEvent.change(input, { target: { value: display } });
+    fireEvent.click(editor.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(option, [{ flag: '--cache-path', values: [raw] }]));
+    expect(container.textContent).not.toContain('\\\\?\\');
+  });
+
+  it.each([
+    [String.raw`\\?\C:\models\cache.bin`, String.raw`C:\models\cache.bin`],
+    [String.raw`\\?\UNC\server\share\cache.bin`, String.raw`\\server\share\cache.bin`],
+  ])('hides path prefixes in values, help and defaults while preserving untouched arguments: %s', async (raw, display) => {
+    const options = parseRuntimeHelp(`--cache-path FILE             cache file (default: ${raw})`);
+    const cfg = { ...testConfig, server_args: ['--cache-path', raw, '--cache-path', 'old.bin'] };
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={cfg}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const option = openOption('--cache-path');
+    const inputs = option.getAllByRole('textbox');
+    expect(inputs[0]).toHaveValue(display);
+    expect(container.textContent).toContain(display);
+    expect(container.textContent).not.toContain("\\\\?\\");
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.change(inputs[1], { target: { value: 'new.bin' } });
+    fireEvent.click(option.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(options[0], [
+      { flag: '--cache-path', values: [raw] }, { flag: '--cache-path', values: ['new.bin'] },
+    ]));
+    expect(cfg.server_args[1]).toBe(raw);
+  });
+
+  it('hides raw and JSON-escaped paths in runtime diagnostics and save failures', async () => {
+    const raw = String.raw`\\?\C:\runtime\server.exe`;
+    const diagnostic = `Cannot load ${raw}`;
+    const options = parseRuntimeHelp('--cache-path FILE             cache file');
+    const { container } = render(<I18nProvider initialLocale="en"><TuningServerOptions
+      cfg={{ ...testConfig, server_args: ['--cache-path', 'cache.bin'] }}
+      runtime={{ options, verified: false, loading: false, refresh: vi.fn(), error: diagnostic, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={vi.fn().mockRejectedValue(new Error(JSON.stringify({ path: raw })))} onCategory={vi.fn()} /></I18nProvider>);
+    expect(container.textContent).toContain(String.raw`Cannot load C:\runtime\server.exe`);
+    const option = openOption('--cache-path');
+    fireEvent.change(option.getByRole('textbox'), { target: { value: 'new.bin' } });
+    fireEvent.click(option.getByRole('button', { name: 'Save option' }));
+    const error = await option.findByRole('alert');
+    expect(error.textContent).toContain(JSON.stringify({ path: String.raw`C:\runtime\server.exe` }));
+    expect(container.textContent).not.toContain("\\\\?\\");
+  });
+
   it('discovers a custom build option, saves mmap, and resets it without removing other settings', async () => {
     const cfg = mount();
     fireEvent.click(screen.getByRole('button', { name: 'All server options' }));
