@@ -36,6 +36,11 @@ export function PanelFeedbackOutlet() {
   return <div ref={context?.setTarget} className="app-feedback-layer app-panel-notices" aria-live="polite" />;
 }
 
+export function PanelFeedbackActivity({ hasActivity, children }: { hasActivity: boolean; children: ReactNode }) {
+  const context = useContext(FeedbackContext);
+  return <details className="app-activity" hidden={!hasActivity && !context?.count}>{children}</details>;
+}
+
 export function PanelFeedbackIndicator({ message, globalError }: { message: string; globalError: boolean }) {
   const context = useContext(FeedbackContext);
   const { t } = useI18n();

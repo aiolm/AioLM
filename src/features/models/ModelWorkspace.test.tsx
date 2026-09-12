@@ -6,11 +6,14 @@ import * as api from '../../shared/api/index';
 import { useModelSettings, type ModelSettingsContext } from '../model-settings/ModelSettingsProvider';
 import { rememberExecution, MODEL_EXECUTION_KEY } from './modelExecutionState';
 import ModelWorkspace from './ModelWorkspace';
+import { notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock('../../shared/api/index', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api/index')>(),
   listModels: vi.fn(),
+  sessionList: vi.fn(),
+  isNativeRuntimeAvailable: vi.fn(() => false),
 }));
 const models: api.GgufModel[] = [
   { name: 'a.gguf', path: 'a.gguf', size_mb: 3000, is_vision: false },
@@ -29,6 +32,40 @@ describe('model management and settings', () => {
     localStorage.clear(); vi.clearAllMocks(); Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(useModelSettings).mockReturnValue(settings);
     vi.mocked(api.listModels).mockResolvedValue({ models, truncated: false });
+    vi.mocked(api.sessionList).mockResolvedValue([]);
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(false);
+  });
+  it('treats all unloaded models equally even when a previous model remains saved', async () => {
+    mount();
+    const first = await findModelButton('a.gguf');
+    const second = await findModelButton('b.gguf');
+    expect(first).not.toHaveAttribute('aria-current');
+    expect(first.closest('[role="listitem"]')).toHaveAttribute('class', second.closest('[role="listitem"]')!.className);
+    expect(screen.queryByText('Running')).not.toBeInTheDocument();
+    expect(screen.queryByText('Active')).not.toBeInTheDocument();
+  });
+  it('marks models loaded by named sessions and clears the mark after unloading', async () => {
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+    const live: api.SessionStatus = { id: 'work', name: 'Work', state: 'running', model: 'b.gguf' };
+    vi.mocked(api.sessionList).mockResolvedValue([live]);
+    mount();
+    const first = (await findModelButton('a.gguf')).closest('[role="listitem"]') as HTMLElement;
+    const second = (await findModelButton('b.gguf')).closest('[role="listitem"]') as HTMLElement;
+    expect(within(first).queryByText('Running')).not.toBeInTheDocument();
+    expect(await within(second).findByText('Running')).toBeVisible();
+    fireEvent.click(within(second).getByText('•••'));
+    expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeDisabled();
+    vi.mocked(api.sessionList).mockResolvedValue([{ ...live, state: 'stopped' }]);
+    act(() => notifySessionStatusChanged());
+    await waitFor(() => expect(within(second).queryByText('Running')).not.toBeInTheDocument());
+    expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeEnabled();
+    expect(second).toHaveAttribute('class', first.className);
+  });
+  it.each(['starting', 'stopping', 'stopped'] as const)('does not mark a %s default model as loaded', async state => {
+    const base = createTestStore({ active_model: 'b.gguf' }); base.status = { state, model: 'a.gguf' };
+    mount(base);
+    await findModelButton('a.gguf');
+    expect(screen.queryByText('Running')).not.toBeInTheDocument();
   });
   it('opens a model draft while preserving the saved model and running server', async () => {
     const base = createTestStore({ active_model: 'a.gguf' }); base.status = { state: 'running', model: 'a.gguf' };
@@ -55,10 +92,11 @@ describe('model management and settings', () => {
     let finish!: (result: api.ModelScanResult) => void;
     vi.mocked(api.listModels).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const base = mount(createTestStore({ active_model: path }));
-    expect(screen.getByRole('heading', { name: 'Example.gguf' })).toHaveAttribute('title', path);
     await waitFor(() => expect(finish).toBeDefined());
     await act(async () => finish({ models: [{ name: 'Example.gguf', path, size_mb: 3000, is_vision: false, shards: { files: [path, 'models/Example-00002-of-00003.gguf', 'models/Example-00003-of-00003.gguf'], total: 3, missing: [] } }], truncated: false }));
-    fireEvent.click(await findModelButton('Example.gguf'));
+    const selected = await findModelButton('Example.gguf');
+    expect(selected).toHaveAttribute('title', path);
+    fireEvent.click(selected);
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: path }) }));
     expect(base.cfg?.active_model).toBe(path);
   });
@@ -68,15 +106,15 @@ describe('model management and settings', () => {
     expect(button).toBeDisabled(); fireEvent.click(button);
     expect(settings.open).not.toHaveBeenCalled();
   });
-  it('opens current model settings without retaining an inline execution form', async () => {
+  it('opens settings from the model list without a duplicate setup panel', async () => {
     mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Configure and run' }));
-    expect(settings.open).toHaveBeenCalledWith({ target: { kind: 'default' }, section: 'runtime' });
+    fireEvent.click(await findModelButton('a.gguf'));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'a.gguf' }) }));
     expect(screen.queryByRole('spinbutton', { name: /Context size/ })).not.toBeInTheDocument();
   });
-  it('opens model selection when no model is configured', () => {
+  it('allows choosing a library model when no model is configured', async () => {
     mount(createTestStore({ active_model: '' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
-    expect(settings.open).toHaveBeenCalledWith({ target: { kind: 'default' }, section: 'model' });
+    fireEvent.click(await findModelButton('b.gguf'));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'b.gguf' }) }));
   });
 });

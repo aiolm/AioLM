@@ -75,6 +75,17 @@ describe('model settings target application', () => {
     expect(mocks.saveProfileSelection).not.toHaveBeenCalled();
   });
 
+  it('preserves settings saved for the next run when reopening the loaded model', async () => {
+    const store = createTestStore({ ctx_size: 8192 });
+    store.status = running({ ...store.cfg!, ctx_size: 4096 });
+    mocks.serverStatus.mockResolvedValue(store.status);
+    const dialog = await open(store, { target: { kind: 'default' } });
+    expect(dialog.initialConfig.ctx_size).toBe(8192);
+    await act(async () => { await dialog.onApply({ ...dialog.initialConfig, temperature: 0.2 }, 'save'); });
+    expect(store.cfg).toMatchObject({ ctx_size: 8192, temperature: 0.2 });
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
   it.each(['benchmark', 'project'] as const)('applies %s settings only to the requesting editor', async kind => {
     const store = createTestStore();
     const onApply = vi.fn();

@@ -18,7 +18,7 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Notes", "Keep citations", store.cfg!, [{ name: "notes.md", path: "notes.md" }], ["docs:search"]);
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Choose model:/ }));
     const request = vi.mocked(settings.open).mock.calls[0][0];
     expect(request.target).toEqual({ kind: "project", id: project.id });
     const changed = { ...store.cfg!, active_model: "models/project.gguf", ctx_size: 8192, chat_options: { stop: ["done"] } };
@@ -69,7 +69,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByLabelText("Document bindings · one path per line")).toHaveValue(displayDocument);
-    expect(container.querySelector('dd[title]')).toHaveAttribute('title', String.raw`C:\models\test.gguf`);
+    expect(screen.getByTitle(String.raw`C:\models\test.gguf`)).toHaveTextContent('test.gguf');
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0]).toMatchObject({ config: { active_model: model }, documentBindings: [{ name: "notes.md", path: document }] });

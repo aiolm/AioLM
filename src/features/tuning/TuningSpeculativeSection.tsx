@@ -49,7 +49,7 @@ export default function TuningSpeculativeSection({
             </div>
             <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
-          <TuningDefaultField fieldKey="spec_type" label={t("ui.specTypeLabel")} hideLabel><CustomSelect
+          <TuningDefaultField fieldKey="spec_type" label={t("ui.specTypeLabel")}><CustomSelect
             id={`${id}-spec-type`}
             value={serverSelectValue("spec_type")}
             options={[
@@ -84,7 +84,7 @@ export default function TuningSpeculativeSection({
             </div>
             <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
-          <TuningDefaultField fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")} hideLabel><CustomSelect
+          <TuningDefaultField fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")}><CustomSelect
             id={`${id}-spec-draft-ngl`}
             value={serverSelectValue("spec_draft_ngl")}
             options={[

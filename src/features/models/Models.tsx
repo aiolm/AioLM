@@ -12,17 +12,18 @@ import { useI18n } from "../../shared/i18n/i18n";
 import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../shared/lib/serverLifecycle";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
-import { buildNumber } from "../../shared/runtime/runtimeUtils";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import { activeProfilesPatch } from "../profiles/modelProfiles";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
 import { executionText } from '../../shared/i18n/executionI18n';
 import { forgetExecution } from './modelExecutionState';
+import { SESSION_STATUS_CHANGED_EVENT } from '../../shared/runtime/sessionUtils';
 
 
-export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean }) {
+export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
   const { t, locale } = useI18n();
   const copy = executionText[locale];
+  const fileActionsLabel = { en: 'File actions', ko: '파일 작업', ja: 'ファイル操作', zh: '文件操作' }[locale];
 
   const cfg = store.cfg;
   const [models, setModels] = useState<api.GgufModel[] | null>(null);
@@ -44,6 +45,25 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const scanTimer = useRef<number | null>(null);
   const scanGeneration = useRef(0);
   const requestedScanDirRef = useRef("");
+  const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+
+  useEffect(() => {
+    if (!active || focus !== 'library' || !api.isNativeRuntimeAvailable()) return;
+    let disposed = false;
+    let generation = 0;
+    const refresh = async () => {
+      const request = ++generation;
+      try {
+        const result = await api.sessionList();
+        if (!disposed && request === generation) setSessions(api.normalizeSessionList(result));
+      } catch { /* Keep the last known session state until the next status update. */ }
+    };
+    void refresh();
+    const onChange = () => { void refresh(); };
+    window.addEventListener(SESSION_STATUS_CHANGED_EVENT, onChange);
+    const timer = window.setInterval(onChange, 3000);
+    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener(SESSION_STATUS_CHANGED_EVENT, onChange); };
+  }, [active, focus]);
 
   const scan = useCallback(async () => {
     const generation = nextScanGeneration(scanGeneration.current);
@@ -107,8 +127,10 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
-  const selected = cfg?.active_model ?? "";
+  const liveModel = store.status.model ?? "";
   const serverRunning = isServerBusy(store.status.state);
+  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => session.model));
+  if (isServerRunning(store.status.state) && store.status.model) loadedModels.add(store.status.model);
 
   const refreshServerAdapters = useCallback(async () => {
     if (!isServerRunning(store.status.state) || !store.status.url || !store.status.api_key) {
@@ -129,8 +151,8 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   }, [t, notify, store.status.api_key, store.status.state, store.status.url]);
 
   useEffect(() => {
-    void refreshServerAdapters();
-  }, [refreshServerAdapters]);
+    if (focus === 'lora') void refreshServerAdapters();
+  }, [focus, refreshServerAdapters]);
 
   const addAdapter = async () => {
     try {
@@ -210,7 +232,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   };
 
   const performSelectAndStart = async (model: api.GgufModel) => {
-    const switching = serverRunning && selected !== model.path;
+    const switching = serverRunning && liveModel !== model.path;
     try {
       if (switching) await store.stop();
       const next = await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
@@ -223,7 +245,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   const selectAndStart = async (model: api.GgufModel) => {
     if (model.shards?.missing.length) return;
-    const switching = serverRunning && selected !== model.path;
+    const switching = serverRunning && liveModel !== model.path;
     if (switching && shouldConfirmDestructive()) {
       setPendingConfirm({
         title: t("panel.restartSwitchQuestion"),
@@ -246,7 +268,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   };
 
   const removeModel = async (model: api.GgufModel) => {
-    if (serverRunning) {
+    if (serverRunning || loadedModels.has(model.path) || model.shards?.files.some(path => loadedModels.has(path))) {
       notify(t("ui.stopBeforeDelete"));
       return;
     }
@@ -294,6 +316,8 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       </PanelFeedback>
 
       {focus !== "lora" && <>
+      <details className="models-folder" open={!dir.trim() || folderDirty}>
+      <summary>{t("panel.modelsDirectory")}<span title={normalizeDisplayPath(dir)}>{normalizeDisplayPath(dir) || t("panel.chooseFolder")}</span></summary>
       <div className="models-folder-actions min-w-0 items-center gap-2.5">
         <label htmlFor="models-dir" className="text-sm text-muted">{t("panel.modelsDirectory")}</label>
         <input
@@ -308,22 +332,19 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           placeholder="models"
         />
         <div className="models-folder-buttons">
-        <div className="models-folder-buttons">
         <button type="button" onClick={() => void browse()} disabled={scanning} className="app-button app-button--secondary shrink-0">{t("panel.browse")}</button>
-        <button type="button" onClick={() => { const displayPath = normalizeDisplayPath(dir); setDir(displayPath); void store.updateConfig({ models_dir: displayPath }).then(() => { setFolderDirty(false); setFolderSaved(true); requestedScanDirRef.current = displayPath; setScanRequest((current) => current + 1); }).catch((error) => notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`)); }} disabled={!folderDirty || scanning} className="app-button app-button--secondary shrink-0">{t("panel.saveFolder")}</button>
-        <button type="button" onClick={() => setScanRequest((current) => current + 1)} disabled={scanning} className="app-button app-button--primary shrink-0"><StableLabel value={scanning ? t("panel.scanning") : t("panel.rescan")} labels={[t("panel.scanning"), t("panel.rescan")]} /></button>
-        <button type="button" onClick={cancelScan} disabled={!scanning} className="app-button app-button--secondary shrink-0">{t("panel.cancelScan")}</button>
-        </div>
+        {folderDirty && <button type="button" onClick={() => { const displayPath = normalizeDisplayPath(dir); setDir(displayPath); void store.updateConfig({ models_dir: displayPath }).then(() => { setFolderDirty(false); setFolderSaved(true); requestedScanDirRef.current = displayPath; setScanRequest((current) => current + 1); }).catch((error) => notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`)); }} disabled={scanning} className="app-button app-button--primary shrink-0">{t("panel.saveFolder")}</button>}
         </div>
       </div>
+      </details>
 
-      {!compact && <div className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
+      {!compact && serverRunning && <div className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="app-eyebrow">{t("panel.activeModel")}</div>
+            <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {selected ? <div className="app-text-wrap text-[15px] font-semibold ui-color-ink"  title={normalizeDisplayPath(selected)}>{modelDisplayName(models?.find((model) => model.path === selected)?.name ?? selected)}</div> : <div className="text-sm ui-color-faint" >{t("panel.noneSelected")}</div>}
-            <div className="mt-1 break-words text-xs ui-color-muted" >{t("ui.modelsBackendLine", { backend: cfg?.active_backend || "PATH", build: cfg?.active_build ? buildNumber(cfg.active_build) : "system", port: cfg?.port ?? "—" })}</div>
+            {liveModel && <div className="app-text-wrap text-[15px] font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{modelDisplayName(models?.find((model) => model.path === liveModel)?.name ?? liveModel)}</div>}
+            <div className="mt-1 break-words text-xs ui-color-muted">{store.status.url ?? '—'}</div>
             <details className="models-runtime-details mt-1">
             <summary>{t("section.diagnostics")}</summary>
             <div className="models-runtime-details-content">
@@ -371,6 +392,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       {focus !== "lora" && <div className="mt-4 flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5"><h2 className="text-sm font-semibold ui-color-ink" >{t("panel.models")} {models ? `(${visible.length})` : ""}</h2><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input min-w-0 max-w-xs flex-1 h-7 text-xs" /></div>
         <label className="flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} className="ui-accent-color-accent-solid"  /> {t("panel.visionModels")}</label>
+        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{t("panel.rescan")}</button>}
       </div>}
 
       <ConfirmDialog
@@ -397,20 +419,19 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         {visible.map((model) => {
           const displayName = normalizeDisplayText(model.name);
           const incomplete = !!model.shards?.missing.length;
-          const isSelected = model.path === selected || !!model.shards?.files.includes(selected);
-          const running = serverRunning && isSelected;
+          const running = loadedModels.has(model.path) || !!model.shards?.files.some(path => loadedModels.has(path));
           const actionLabel = onSelectModel ? copy.setupAction : running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
           return (
             <div
               key={model.path}
               role="listitem"
-              className={[`models-model-row flex min-w-0 flex-nowrap items-center justify-between gap-3 border-b px-2 py-1.5 last:border-0 ${isSelected ? "is-selected" : ""}`, "ui-border-color-border", (isSelected ? "ui-background-accent-soft" : "")].filter(Boolean).join(" ")}
+              className={[`models-model-row flex min-w-0 flex-nowrap items-center justify-between gap-3 border-b px-2 py-1.5 last:border-0 ${running ? "is-loaded" : ""}`, "ui-border-color-border", (running ? "ui-background-accent-soft" : "")].filter(Boolean).join(" ")}
 
             >
               <button
                 type="button"
-                aria-current={isSelected ? "true" : undefined}
-                aria-label={t("ui.selectModelNamed", { name: displayName })}
+                aria-label={onSelectModel ? `${copy.setupAction}: ${displayName}` : t("ui.selectModelNamed", { name: displayName })}
+                title={normalizeDisplayPath(model.path)}
                 disabled={incomplete || store.busy}
                 aria-disabled={serverRunning && !onSelectModel ? "true" : undefined}
                 onClick={() => {
@@ -420,22 +441,26 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                   }
                   void selectModel(model);
                 }}
-                className={[`min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning ? "cursor-default opacity-80" : "hover:bg-[var(--ui-surface-muted)]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]`, (isSelected ? "ui-background-transparent" : "")].filter(Boolean).join(" ")}
+                className={[`min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning && !onSelectModel ? "cursor-default opacity-80" : "hover:bg-[var(--ui-surface-muted)]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]`, (running ? "ui-background-transparent" : "")].filter(Boolean).join(" ")}
 
               >
                 <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{displayName}</span>
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
-                <span className="block app-text-wrap text-xs ui-color-faint"  title={normalizeDisplayPath(model.path)}>{normalizeDisplayPath(model.path)}</span>
               </button>
               <div className="models-model-actions flex min-w-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto px-1">
                 <span className="shrink-0 text-xs tabular-nums ui-color-faint" >{model.size_mb.toFixed(0)} MB</span>
                 {model.is_vision && <span className="rounded-full border px-1.5 py-0.5 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{t("ui.visionTag")}</span>}
-                {isSelected && <span className="rounded-full px-2 py-0.5 text-xs font-medium ui-background-success-bg ui-color-success-ink ui-border-1px-solid-var-tone-success-border" >{t("ui.activeTag")}</span>}
+                {running && <span className="app-status-badge app-status-badge--success">{copy.running}</span>}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm shrink-0">{t("panel.copyPath")}</button>
-                <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--sm shrink-0 ui-color-danger" >{t("panel.delete")}</button>
-                <button type="button" onClick={() => { if (onSelectModel) void selectModel(model); else if (!running) void selectAndStart(model); }} disabled={incomplete || (!onSelectModel && running) || store.busy} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={onSelectModel ? [copy.setupAction] : [t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>
+                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
+              <details className="models-file-actions">
+                <summary aria-label={`${fileActionsLabel}: ${displayName}`} title={fileActionsLabel}>•••</summary>
+                <div><code>{normalizeDisplayPath(model.path)}</code>
+                  <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
+                  <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--sm ui-color-danger">{t("panel.delete")}</button>
+                </div>
+              </details>
             </div>
           );
         })}

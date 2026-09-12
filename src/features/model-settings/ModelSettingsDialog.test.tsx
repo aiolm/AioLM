@@ -36,6 +36,57 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 describe('model settings editor', () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
+  it('leaves inherited numeric and text values unchanged when navigating through their inputs', async () => {
+    const { onClose, onApply } = mount({ initialSection: 'tuning', initialConfig: { ...cfg, ngl: 12, runtime_defaults: ['ngl', 'temperature', 'reasoning_budget_message'], reasoning_budget_message: 'old value' } });
+    await waitFor(() => expect(api.rtList).toHaveBeenCalled());
+    expect(numeric('ngl')).toHaveValue(99);
+    expect(numeric('ngl')).toBeEnabled();
+    fireEvent.focus(numeric('ngl')); fireEvent.blur(numeric('ngl'));
+    fireEvent.pointerUp(document.querySelector('input[id$="-ngl-range"]')!);
+    fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
+    fireEvent.focus(numeric('temperature')); fireEvent.blur(numeric('temperature'));
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+    const message = document.querySelector<HTMLInputElement>('input[id$="-reasoning-budget-message"]')!;
+    expect(message).toHaveValue('');
+    fireEvent.focus(message); fireEvent.blur(message);
+    expect(screen.queryByRole('button', { name: /Set custom value/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument();
+  });
+
+  it('edits and resets inherited options directly while preserving defaults for other fields', async () => {
+    const { onApply } = mount({ initialSection: 'tuning', initialConfig: { ...cfg, runtime_defaults: ['ngl', 'temperature'] } });
+    await waitFor(() => expect(api.rtList).toHaveBeenCalled());
+    fireEvent.change(numeric('ngl'), { target: { value: '-' } });
+    expect(screen.getByRole('button', { name: 'Save selection & settings' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Reset GPU layers.*to default/ }));
+    expect(numeric('ngl')).toHaveValue(99);
+    expect(numeric('ngl')).toBeEnabled();
+    fireEvent.change(numeric('ngl'), { target: { value: '25' } });
+    fireEvent.blur(numeric('ngl'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save selection & settings' }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ ngl: 25, runtime_defaults: ['temperature'] }), 'save', {}));
+  });
+
+  it('starts with no model selected and restores the saved model settings on explicit choice', async () => {
+    const saved = { ...cfg, ctx_size: 12288, mmproj: 'models/projector.gguf' };
+    const { onApply } = mount({ initialConfig: saved, requireModelSelection: true });
+    expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
+    expect(within(screen.getByRole('navigation', { name: 'Model & settings' })).getByRole('button', { name: 'Runtime & GPU' })).toBeVisible();
+    const first = await screen.findByRole('button', { name: /a.gguf/ });
+    const second = await screen.findByRole('button', { name: /b.gguf/ });
+    expect(first).toHaveAttribute('aria-pressed', 'false');
+    expect(second).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Save & start' })).toBeDisabled();
+    fireEvent.click(first);
+    expect(first).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Save & start' }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: saved.active_model, ctx_size: 12288, mmproj: saved.mmproj }), 'start', {}));
+    expect(saved.active_model).toBe('models/a.gguf');
+  });
+
   it('keeps numeric blur and preset edits out of persistence until apply, and discards them on cancel', async () => {
     const writes = vi.spyOn(Storage.prototype, 'setItem');
     const { onApply, onClose } = mount({ initialSection: 'tuning' });
@@ -57,7 +108,6 @@ describe('model settings editor', () => {
     const writes = vi.spyOn(Storage.prototype, 'setItem');
     const { onApply } = mount();
     fireEvent.click(await screen.findByRole('button', { name: /b.gguf/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Model settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Performance & memory' }));
     expect(numeric('ctx_size').value).toBe('16384');
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });

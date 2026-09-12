@@ -1,4 +1,5 @@
 import StableLabel from "../../shared/ui/StableLabel";
+import "./sessions.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
@@ -24,7 +25,15 @@ import {
 
 type PendingNavigation =
   | { kind: "select"; definition: api.SessionDefinition }
-  | { kind: "new" };
+  | { kind: "new" }
+  | { kind: "close" };
+
+const sessionCopy = {
+  en: { options: "Load options", details: "Session details" },
+  ko: { options: "로드 옵션", details: "세션 상세" },
+  ja: { options: "ロードオプション", details: "セッション詳細" },
+  zh: { options: "加载选项", details: "会话详情" },
+};
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -56,9 +65,12 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const [definitions, setDefinitions] = useState<api.SessionDefinition[]>(() => cfg?.sessions ?? []);
   const [statuses, setStatuses] = useState<Record<string, api.SessionStatus>>({});
   const [selectedId, setSelectedId] = useState(DEFAULT_SESSION_ID);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [editing, setEditing] = useState<api.SessionDefinition | null>(null);
   const [stopExisting, setStopExisting] = useState(cfg?.stop_existing_sessions_on_load ?? true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
@@ -163,13 +175,17 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const performSelection = (definition: api.SessionDefinition) => {
     setSelectedId(definition.id);
+    setDetailsOpen(true);
     setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(definition));
     setNotice(null);
     setFailure(null);
   };
 
   const selectDefinition = (definition: api.SessionDefinition) => {
-    if (definition.id === selectedId) return;
+    if (definition.id === selectedId) {
+      setDetailsOpen(true);
+      return;
+    }
     if (hasUnsavedChanges) {
       setPendingNavigation({ kind: "select", definition });
       return;
@@ -182,13 +198,13 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     const normalizedEditing = editing;
     const snapshot = currentEdit.current;
     saving.current = true;
+    setSavingId(editing.id);
     const trimmed = normalizedEditing.name.trim();
     const latestDefinitions = (store.getConfig?.() ?? cfg)?.sessions ?? definitions;
     const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
     const nextDefinition = {
       ...(latestDefinition ?? normalizedEditing),
       name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
-      enabled: normalizedEditing.enabled,
     };
     const next = [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition];
     try {
@@ -199,13 +215,14 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       }
     } catch (error) {
       setFailure(errorText(error));
-    } finally { saving.current = false; }
+    } finally { saving.current = false; setSavingId(null); }
   };
 
   const addDefinition = () => {
     if (!cfg) return;
     const definition = defaultSessionDefinition(cfg);
     setSelectedId(definition.id);
+    setDetailsOpen(true);
     setEditing(definition);
     setNotice(null);
     setFailure(null);
@@ -220,7 +237,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   };
 
   const load = async (definition: api.SessionDefinition) => {
-    if (!definition.enabled) return;
     if (sessionHasActivity(definition.id) || (stopExisting && anySessionActivity())) {
       setFailure("Stop the active response before loading a model.");
       return;
@@ -234,6 +250,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     const launchConfig = store.getConfig?.() ?? cfg;
     const taskId = `session-load-${runnableDefinition.id}`;
     setBusyId(runnableDefinition.id);
+    setLoadingId(runnableDefinition.id);
     setNotice(null);
     setFailure(null);
     setStatuses((current) => ({
@@ -261,7 +278,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       const loaded = await api.sessionStart(runnableDefinition.id, sessionConfig(launchConfig, runnableDefinition), stopExisting);
       notifySessionStatusChanged();
       setStatuses((current) => ({ ...current, [loaded.id]: loaded }));
-      setNotice(t("ui.sessionRunning"));
       finishTask(taskId, "completed");
     } catch (error) {
       const cancelled = errorText(error).toLowerCase().includes("cancel");
@@ -272,7 +288,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
         try {
           await store.start(sessionConfig(launchConfig, runnableDefinition));
           notifySessionStatusChanged();
-          setNotice(t("ui.sessionRunning"));
           finishTask(taskId, "completed");
         } catch (fallbackError) {
           const message = errorText(fallbackError);
@@ -286,6 +301,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       }
     } finally {
       setBusyId(null);
+      setLoadingId(null);
       await refresh();
     }
   };
@@ -303,13 +319,11 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       else await api.sessionStop(id);
       notifySessionStatusChanged();
       if (id === DEFAULT_SESSION_ID) await store.refreshStatus();
-      setNotice(t("ui.sessionStopped"));
     } catch (error) {
       if (id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
         try {
           await store.stop();
           notifySessionStatusChanged();
-          setNotice(t("ui.sessionStopped"));
         } catch (fallbackError) {
           setFailure(errorText(fallbackError));
         }
@@ -350,6 +364,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       const next = ((store.getConfig?.() ?? cfg)?.sessions ?? definitions).filter((item) => item.id !== definition.id);
       await persist(next);
       setSelectedId(DEFAULT_SESSION_ID);
+      setDetailsOpen(false);
       setEditing(null);
       setNotice(t("ui.sessionDeleted"));
     } catch (error) {
@@ -373,88 +388,118 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     : undefined;
   const savedDefinition = editing?.id === DEFAULT_SESSION_ID ? defaultDefinition : editing ? definitionsById.get(editing.id) ?? liveBaseline : undefined;
   const hasUnsavedChanges = Boolean(editing && JSON.stringify(editing) !== JSON.stringify(savedDefinition));
-  const status = statuses[selectedId] ?? (selectedId === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
-  const openSettings = () => {
-    if (!modelSettings || !cfg || !currentDefinition) return;
-    const definition = structuredClone(currentDefinition);
+  const closeDetails = () => {
+    if (hasUnsavedChanges) {
+      setPendingNavigation({ kind: "close" });
+      return;
+    }
+    setDetailsOpen(false);
+    setEditing(null);
+    setSelectedId(DEFAULT_SESSION_ID);
+  };
+  const openSettings = (target: api.SessionDefinition) => {
+    if (!modelSettings || !cfg) return;
+    const definition = structuredClone(target.id === selectedId && currentDefinition ? currentDefinition : target);
     const snapshot = currentEdit.current;
     modelSettings.open({
       target: definition.id === DEFAULT_SESSION_ID ? { kind: "default" } : { kind: "session", sessionId: definition.id },
       definition,
-      config: sessionConfig(cfg, definition),
+      ...(definition.id !== DEFAULT_SESSION_ID ? { config: sessionConfig(cfg, definition) } : {}),
       onApply: (applied) => {
-        if (currentEdit.current !== snapshot) return;
         const saved = applied.sessions?.find((item) => item.id === definition.id) ?? settingsForSession(definition, applied);
         if (definition.id !== DEFAULT_SESSION_ID) setDefinitions((current) => [...current.filter((item) => item.id !== saved.id), saved]);
-        setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(saved));
+        if (currentEdit.current === snapshot && definition.id === selectedId) setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(saved));
         setNotice(t("ui.sessionSaved"));
         void refresh();
       },
     });
   };
+  const visibleDefinitions = allDefinitions.filter((definition) => {
+    if (definition.id !== DEFAULT_SESSION_ID) return true;
+    const status = statuses[DEFAULT_SESSION_ID] ?? fallbackDefaultStatus();
+    return status.state !== "stopped";
+  });
 
   return (
     <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4 p-4 pb-8" data-testid="sessions-panel">
-      <section className="rounded-xl border p-4 ui-border-color-border ui-background-panel" >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="app-section-title">{t("ui.sessionsTitle")}</h2>
-            <p className="app-section-hint">{t("ui.sessionsIntro")}</p>
-          </div>
-          <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg}>{t("ui.newSession")}</button>
-        </div>
-        <label className="mt-4 flex items-start gap-2 text-xs ui-color-muted" >
-          <input type="checkbox" checked={stopExisting} onChange={(event) => { const next = event.target.checked; setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
-          <span><span className="font-medium ui-color-ink" >{t("ui.sessionStopExisting")}</span><span className="block mt-0.5">{t("ui.sessionStopExistingHint")}</span></span>
-        </label>
-      </section>
+      <header className="flex flex-wrap items-center justify-end gap-3">
+        <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button>
+      </header>
 
       {(notice || failure) && <div className={["rounded-lg border px-3 py-2 text-xs", (failure ? "ui-border-color-error-border" : "ui-border-color-info-border"), (failure ? "ui-background-error-bg" : "ui-background-info-bg"), (failure ? "ui-color-error-ink" : "ui-color-info-ink")].filter(Boolean).join(" ")} role={failure ? "alert" : "status"} >{normalizeDisplayText(failure ?? notice ?? "")}</div>}
 
-      <div className="grid min-h-0 gap-4 app-master-detail">
-        <section className="min-w-0 rounded-xl border p-3 ui-border-color-border ui-background-panel"  aria-label={t("ui.sessionsTitle")}>
-          <div className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.16em] ui-color-faint" >{t("ui.sessionsTitle")}</div>
-          <div className="space-y-1.5">
-            {allDefinitions.map((definition) => {
-              const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
-              const rowState = rowStatus?.state ?? "stopped";
-              return (
-                <button key={definition.id} type="button" onClick={() => selectDefinition(definition)} className={`session-list-row ${selectedId === definition.id ? "is-selected" : ""}`} aria-pressed={selectedId === definition.id}>
-                  <span className="min-w-0 flex-1 text-left"><span className="block app-text-wrap text-sm font-medium">{normalizeDisplayText(definition.name || definition.id)}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{modelLabel(definition.models.primary_model, t("ui.sessionNoModel"))}</span></span>
-                  <span className={`session-state session-state--${rowState}`}><StableLabel value={statusCopy(rowState, t)} labels={(["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => statusCopy(state, t))} /></span>
+      <section className="sessions-list" aria-label={t("ui.sessionsTitle")}>
+        {visibleDefinitions.map((definition) => {
+          const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
+          const rowState = rowStatus?.state ?? "stopped";
+          const expanded = detailsOpen && selectedId === definition.id;
+          const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
+          const rowName = normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
+          const live = rowState === "running" || rowState === "starting" || rowState === "stopping";
+          const model = live ? rowStatus?.model || rowDefinition.models.primary_model : rowDefinition.models.primary_model;
+          const runtime = live ? rowStatus?.execution ?? rowDefinition.execution : rowDefinition.execution;
+          const backend = runtime?.active_backend ?? cfg?.active_backend ?? "PATH";
+          const build = runtime?.active_build ?? cfg?.active_build;
+          const controlsDisabled = busyId !== null || savingId !== null || store.busy;
+          return (
+            <article key={definition.id} className="session-entry" aria-label={rowName}>
+              <div className="session-entry-main">
+                <button type="button" className="session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
+                  <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
+                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted">{modelLabel(model, t("ui.sessionNoModel"))}</span></span>
                 </button>
-              );
-            })}
-            {allDefinitions.length === 1 && <div className="px-1 py-3 text-xs ui-color-faint" >{t("ui.sessionEmpty")}</div>}
-          </div>
-        </section>
-
-        {currentDefinition ? (
-          <section className="min-w-0 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0"><div className="app-eyebrow">{currentDefinition.id === DEFAULT_SESSION_ID ? t("ui.defaultSession") : t("ui.sessionName")}</div><h3 className="mt-1 app-text-wrap text-lg font-semibold ui-color-ink" >{normalizeDisplayText(currentDefinition.name || currentDefinition.id)}</h3></div>
-              <div className="flex flex-wrap items-center gap-2 text-xs ui-color-muted" ><span className={`session-state session-state--${status?.state ?? "stopped"}`}>{statusCopy(status?.state ?? "stopped", t)}</span>{status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status, currentDefinition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}</div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings || busyId !== null || store.busy} onClick={openSettings}>{modelSettingsCopy[locale].title}</button>
-              <p className="min-w-0 app-text-wrap text-xs ui-color-muted">{modelLabel(currentDefinition.models.primary_model, t("ui.sessionNoModel"))} · {currentDefinition.execution?.active_backend ?? cfg?.active_backend ?? "PATH"}{currentDefinition.execution?.active_build || cfg?.active_build ? ` / ${currentDefinition.execution?.active_build ?? cfg?.active_build}` : ""}</p>
-            </div>
-
-            {currentDefinition.id !== DEFAULT_SESSION_ID && <div className="mt-3 grid gap-3 app-form-grid"><label className="text-xs ui-color-muted" >{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(currentDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label><label className="flex items-end gap-2 pb-2 text-xs ui-color-muted" ><input type="checkbox" checked={currentDefinition.enabled} onChange={(event) => updateEditing({ enabled: event.target.checked })} />{t("ui.sessionEnabled")}</label></div>}
-
-
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              {(currentDefinition.id !== DEFAULT_SESSION_ID || editing?.id === DEFAULT_SESSION_ID) && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void saveDefinition()} disabled={busyId !== null}>{t("ui.saveSession")}</button>}
-              {busyId === currentDefinition.id ? <button type="button" className="app-button app-button--danger app-button--sm" onClick={() => void cancelLoad(currentDefinition.id)}>{t("common.cancel")}</button> : status?.state === "running" || status?.state === "starting" ? <><button type="button" className="app-button app-button--danger app-button--sm" onClick={() => void stop(currentDefinition.id)} disabled={busyId !== null}>{t("ui.sessionStop")}</button><button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void stop(currentDefinition.id, true)} disabled={busyId !== null}>{t("ui.sessionUnload")}</button></> : <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void load(currentDefinition)} disabled={busyId !== null || !currentDefinition.enabled || !currentDefinition.models.primary_model.trim()}>{t("ui.sessionStart")}</button>}
-              {currentDefinition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void remove(currentDefinition)} disabled={busyId !== null}>{t("ui.sessionDelete")}</button>}
-              {status?.pid && <span className="ml-auto text-xs ui-color-faint" >{t("ui.sessionPidLabel", { pid: status.pid })}{status.active_requests !== undefined ? ` · ${t("ui.sessionRequestsLabel", { count: status.active_requests })}` : ""}</span>}
-            </div>
-            {(status?.error || status?.log_tail) && <details className="mt-3 rounded border p-2 text-xs ui-border-color-error-border ui-background-error-bg ui-color-error-ink" ><summary className="cursor-pointer">{t("ui.sessionStatus")}</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{normalizeDisplayText(status.error ?? status.log_tail ?? "")}</pre></details>}
-          </section>
-        ) : <section className="rounded-xl border p-4 text-sm ui-border-color-border ui-background-panel ui-color-faint" >{t("ui.sessionEmpty")}</section>}
-      </div>
-      <ConfirmDialog open={pendingNavigation !== null} title={t("ui.gpuUnsaved")} description={t("ui.sessionUnsavedSwitchHint")} confirmLabel={t("ui.undoProfileChanges")} tone="danger" onConfirm={() => { const next = pendingNavigation; setPendingNavigation(null); if (next?.kind === "select") performSelection(next.definition); else if (next?.kind === "new") addDefinition(); }} onCancel={() => setPendingNavigation(null)} />
+                <span className={`session-state session-state--${rowState}`}><StableLabel value={statusCopy(rowState, t)} labels={(["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => statusCopy(state, t))} /></span>
+                <div className="session-entry-actions">
+                  <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings || controlsDisabled || rowState === "starting" || rowState === "stopping"} onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
+                  {(loadingId === definition.id || rowState === "starting") && rowState !== "stopping"
+                    ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</button>
+                    : rowState === "running"
+                      ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
+                      : <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
+                </div>
+              </div>
+              {rowStatus?.error && <p className="session-entry-error text-xs ui-color-error-ink" role="alert">{normalizeDisplayText(rowStatus.error)}</p>}
+              {expanded && <div id={`session-details-${definition.id}`} className="session-entry-details">
+                {definition.id !== DEFAULT_SESSION_ID && <div className="grid gap-3 app-form-grid">
+                  <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
+                </div>}
+                <div className="session-entry-diagnostics text-xs ui-color-muted">
+                  <span>{backend}{build ? ` / ${build}` : ""}</span>
+                  {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus, definition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}
+                  {rowStatus?.pid && <span>{t("ui.sessionPidLabel", { pid: rowStatus.pid })}</span>}
+                  {rowStatus?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: rowStatus.active_requests })}</span>}
+                </div>
+                {rowStatus?.log_tail && <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs ui-color-muted">{normalizeDisplayText(rowStatus.log_tail)}</pre>}
+                <div className="flex flex-wrap items-center gap-2">
+                  {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>}
+                  <button type="button" className="app-button app-button--ghost app-button--sm" onClick={closeDetails}>{t("common.dismiss")}</button>
+                  {rowState === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
+                  {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>}
+                </div>
+              </div>}
+            </article>
+          );
+        })}
+        {visibleDefinitions.length === 0 && <p className="py-4 text-sm ui-color-muted">{t("ui.sessionEmpty")}</p>}
+      </section>
+      <details className="sessions-load-options text-xs ui-color-muted">
+        <summary>{sessionCopy[locale].options}</summary>
+        <label className="mt-3 flex items-start gap-2">
+          <input type="checkbox" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(event) => { const next = event.target.checked; setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
+          <span>{t("ui.sessionStopExisting")}</span>
+        </label>
+      </details>
+      <ConfirmDialog open={pendingNavigation !== null} title={t("ui.gpuUnsaved")} description={t("ui.sessionUnsavedSwitchHint")} confirmLabel={t("ui.undoProfileChanges")} tone="danger" onConfirm={() => {
+        const next = pendingNavigation;
+        setPendingNavigation(null);
+        if (next?.kind === "select") performSelection(next.definition);
+        else if (next?.kind === "new") addDefinition();
+        else if (next?.kind === "close") {
+          setEditing(null);
+          setSelectedId(DEFAULT_SESSION_ID);
+          setDetailsOpen(false);
+        }
+      }} onCancel={() => setPendingNavigation(null)} />
     </div>
   );
 }

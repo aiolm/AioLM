@@ -13,7 +13,7 @@ describe('visible setting defaults', () => {
     expect(screen.getByText("'auto'")).toBeVisible();
     expect(screen.getByText('자동 선택 · 실제 값은 실행 환경에 따라 결정됩니다.')).toBeVisible();
   });
-  it('keeps the default and CLI/JSON names visible while inherited and manually editing', () => {
+  it('keeps inherited controls editable alongside their default and CLI/JSON names', () => {
     const runtime = { options: parseRuntimeHelp('--min-p N           minimum (default: 0.12)'), verified: true };
     render(<I18nProvider initialLocale="ko"><TuningOptionsContext.Provider value={runtime}>
       <TuningDefaultsContext.Provider value={{ cfg: { ...testConfig, chat_options: {}, server_args: [] }, disabled: false, reset: vi.fn() }}>
@@ -23,8 +23,8 @@ describe('visible setting defaults', () => {
     expect(screen.getByText('--min-p N')).toBeVisible();
     expect(screen.getByText('min_p')).toBeVisible();
     expect(screen.getByText('0.12')).toBeVisible();
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Min-p/ }));
+    expect(screen.queryByRole('button', { name: /직접 설정/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Min-p.*기본값/ })).toBeEnabled();
     expect(screen.getByRole('textbox')).toHaveValue('0.12');
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '0.2' } });
     expect(screen.getByRole('textbox')).toHaveValue('0.2');

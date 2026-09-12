@@ -31,18 +31,19 @@ describe('reset then edit', () => {
     fireEvent.click(field('ngl').getByRole('button', { name: /Reset.*to default/i }));
     await waitFor(() => expect(test.saved().ngl).toBe(99));
     expect(test.saved().runtime_defaults).toContain('ngl');
-    fireEvent.click(field('ngl').getByRole('button', { name: /Set custom value/ }));
     expect(field('ngl').getByRole('spinbutton')).toHaveValue(99);
     const persisted = JSON.parse(JSON.stringify(test.saved()));
     test.view.unmount(); mount(persisted);
-    fireEvent.click(field('ngl').getByRole('button', { name: /Set custom value/ }));
     expect(field('ngl').getByRole('spinbutton')).toHaveValue(99);
   });
   it('uses 99 for an old inherited config that still contains a manual GPU value', () => {
-    mount({ ngl: 12, runtime_defaults: ['ngl'] });
+    const test = mount({ ngl: 12, runtime_defaults: ['ngl'] });
     expect(document.querySelector('[data-option-metadata="ngl"] .option-default-value > code')).toHaveTextContent('99');
-    fireEvent.click(field('ngl').getByRole('button', { name: /Set custom value/ }));
     expect(field('ngl').getByRole('spinbutton')).toHaveValue(99);
+    fireEvent.focus(field('ngl').getByRole('spinbutton'));
+    fireEvent.blur(field('ngl').getByRole('spinbutton'));
+    expect(test.saved().ngl).toBe(12);
+    expect(test.saved().runtime_defaults).toEqual(['ngl']);
   });
   it('opens an inherited draft GPU control at the numeric runtime default, not its old value or auto', async () => {
     vi.mocked(api.rtProbe).mockResolvedValue({ backend: 'cpu', build: 'b123', executable: 'llama-server', state: 'available', version: 'test', flags: [], devices: [], diagnostics: [], server_help: '--spec-draft-ngl N          layers (default: 32)' });
@@ -50,7 +51,6 @@ describe('reset then edit', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
     fireEvent.click(document.querySelector('[data-tuning-category="speculative"]')!);
     await waitFor(() => expect(document.querySelector('[data-option-metadata="spec_draft_ngl"] .option-default-value > code')).toHaveTextContent('32'));
-    fireEvent.click(field('spec_draft_ngl').getByRole('button', { name: /Set custom value/ }));
     expect(field('spec_draft_ngl').getByRole('textbox')).toHaveValue('32');
   });
   it('resets context to the displayed app default and discards an old reasoning message draft', async () => {
@@ -59,13 +59,11 @@ describe('reset then edit', () => {
     expect(document.querySelector('[data-option-metadata="ctx_size"] .option-default-value > code')).toHaveTextContent('4096');
     fireEvent.click(field('ctx_size').getByRole('button', { name: /Reset.*to default/i }));
     await waitFor(() => expect(test.saved().ctx_size).toBe(4096));
-    fireEvent.click(field('ctx_size').getByRole('button', { name: /Set custom value/ }));
     expect(field('ctx_size').getByRole('spinbutton')).toHaveValue(4096);
     fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
     fireEvent.change(field('reasoning_budget_message').getByRole('textbox'), { target: { value: 'unsaved message' } });
     fireEvent.click(field('reasoning_budget_message').getByRole('button', { name: /Reset.*to default/i }));
     await waitFor(() => expect(test.saved().reasoning_budget_message).toBe(''));
-    fireEvent.click(field('reasoning_budget_message').getByRole('button', { name: /Set custom value/ }));
     expect(field('reasoning_budget_message').getByRole('textbox')).toHaveValue('');
   });
   it('starts primary and advanced samplers at the selected runtime defaults after reset', async () => {
@@ -75,12 +73,10 @@ describe('reset then edit', () => {
     await waitFor(() => expect(document.querySelector('[data-option-metadata="top_p"]')).toHaveTextContent('0.87'));
     fireEvent.click(field('top_p').getByRole('button', { name: /Reset.*to default/i }));
     await waitFor(() => expect(test.saved().top_p).toBe(0.87));
-    fireEvent.click(field('top_p').getByRole('button', { name: /Set custom value/ }));
     expect(field('top_p').getByRole('spinbutton')).toHaveValue(0.87);
     document.querySelector<HTMLDetailsElement>('.tuning-section--sampling details')!.open = true;
     fireEvent.click(field('min_p').getByRole('button', { name: /Reset.*to default/i }));
     await waitFor(() => expect(test.saved().chat_options).not.toHaveProperty('min_p'));
-    fireEvent.click(field('min_p').getByRole('button', { name: /Set custom value/ }));
     expect(field('min_p').getByRole('spinbutton')).toHaveValue(0.12);
   });
   it('reopens a catalog option at its default instead of an old saved argument', async () => {
@@ -91,7 +87,6 @@ describe('reset then edit', () => {
     row.open = true;
     fireEvent.click(within(row).getByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(test.saved().server_args).toEqual([]));
-    fireEvent.click(within(row).getByRole('button', { name: 'Set custom value' }));
     expect(within(row).getByRole('textbox')).toHaveValue('8192');
   });
 });

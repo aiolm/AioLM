@@ -39,16 +39,20 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options 
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState('');
-  const items = draft ?? stored;
   const choices = option.id === '--load-mode' ? LOAD_CHOICES : option.choices;
+  const scalar = defaultScalar(serverDefault(option, options).value);
+  const pathArgument = /\b(?:FNAME|FILE|PATH|DIR)\b/.test(option.signature);
+  const absent = typeof scalar === 'string' && !choices.includes(scalar)
+    && (['disabled', 'unused', 'unset'].includes(scalar) || (pathArgument && scalar === 'none'));
+  const initialValue = option.arity === 1 && scalar !== undefined && !absent ? String(scalar) : '';
+  const initialItem = { flag: option.id, values: Array.from({ length: option.arity }, () => initialValue) };
+  const occurrences = draft ?? stored;
+  const inherited = occurrences.length === 0;
+  const items = inherited ? [initialItem] : occurrences;
   const update = (index: number, item: OptionOccurrence) => setDraft(items.map((value, i) => i === index ? item : value));
   const append = () => {
-    const scalar = defaultScalar(serverDefault(option, options).value);
-    const pathArgument = /\b(?:FNAME|FILE|PATH|DIR)\b/.test(option.signature);
-    const absent = typeof scalar === 'string' && !choices.includes(scalar)
-      && (['disabled', 'unused', 'unset'].includes(scalar) || (pathArgument && scalar === 'none'));
-    const value = items.length === 0 && option.arity === 1 && scalar !== undefined && !absent ? String(scalar) : '';
-    setDraft([...items, { flag: option.id, values: Array.from({ length: option.arity }, () => value) }]);
+    setDraft(inherited && option.arity === 0 ? [initialItem]
+      : [...items, { flag: option.id, values: Array.from({ length: option.arity }, () => '') }]);
   };
   const save = async (values: OptionOccurrence[]) => {
     if (busy || disabled) return false;
@@ -57,13 +61,14 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options 
     catch (cause) { setError(String(cause)); return false; }
     finally { setBusy(false); }
   };
-  const invalid = items.some(item => item.values.length !== option.arity || item.values.some(value => !value.trim()));
-  useEditorDraft({ dirty: draft !== null, save: async () => { if (invalid) { setError(copy.required); return false; } return save(items); }, discard: () => { setDraft(null); setError(''); } });
+  const invalid = occurrences.some(item => item.values.length !== option.arity || item.values.some(value => !value.trim()));
+  useEditorDraft({ dirty: draft !== null, save: async () => { if (invalid) { setError(copy.required); return false; } return save(occurrences); }, discard: () => { setDraft(null); setError(''); } });
   return <div className="server-option-editor">
-    {items.length === 0 && <p className="server-option-default">{copy.inherited}</p>}
+    {inherited && <p className="server-option-default">{copy.inherited}</p>}
     {items.map((item, index) => <div className="server-option-occurrence" key={index}>
-      <label><span>{copy.flag}</span><select className="app-select" aria-label={`${option.id} ${copy.flag} ${index + 1}`} value={item.flag} disabled={disabled || busy}
-        onChange={event => update(index, { ...item, flag: event.target.value })}>
+      <label><span>{copy.flag}</span><select className="app-select" aria-label={`${option.id} ${copy.flag} ${index + 1}`} value={inherited && option.arity === 0 ? '' : item.flag} disabled={disabled || busy}
+        onChange={event => event.target.value ? update(index, { ...item, flag: event.target.value }) : setDraft(items.filter((_, i) => i !== index))}>
+        {option.arity === 0 && <option value="">{copy.inherited}</option>}
         {option.flags.filter(flag => flag.startsWith('--') || !option.flags.some(value => value.startsWith('--'))).map(flag => <option key={flag}>{flag}</option>)}
         {!item.flag.startsWith('--') && <option>{item.flag}</option>}
       </select></label>
@@ -73,14 +78,14 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options 
           placeholder={normalizeDisplayText(option.signature)} value={normalizeDisplayText(item.values[argumentIndex] ?? '')} disabled={disabled || busy} spellCheck={false}
           onChange={event => { const values = [...item.values]; values[argumentIndex] = choices.find(value => normalizeDisplayText(value) === event.target.value) ?? event.target.value; update(index, { ...item, values }); }} />
       </label>)}
-      <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled || busy} aria-label={`${option.id} ${copy.remove} ${index + 1}`}
-        onClick={() => setDraft(items.filter((_, i) => i !== index))}>{copy.remove}</button>
+      {!inherited && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled || busy} aria-label={`${option.id} ${copy.remove} ${index + 1}`}
+        onClick={() => setDraft(items.filter((_, i) => i !== index))}>{copy.remove}</button>}
     </div>)}
     {choices.length > 0 && <datalist id={`choices-${option.id}`}>{choices.map(value => <option key={value} value={normalizeDisplayText(value)} />)}</datalist>}
     <div className="server-option-actions">
-      {(!single || !items.length) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={append}>{items.length ? copy.add : copy.edit}</button>}
-      {draft && <button type="button" className="app-button app-button--primary app-button--sm" disabled={disabled || busy || invalid} onClick={() => void save(items)}>{copy.save}</button>}
-      {(items.length > 0 || stored.length > 0) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={() => void save([])}>{copy.reset}</button>}
+      {!single && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={append}>{copy.add}</button>}
+      {draft && <button type="button" className="app-button app-button--primary app-button--sm" disabled={disabled || busy || invalid} onClick={() => void save(occurrences)}>{copy.save}</button>}
+      {(draft !== null || stored.length > 0) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={() => void save([])}>{copy.reset}</button>}
     </div>
     {invalid && <p className="app-section-hint">{copy.required}</p>}
     {feedback && <p className="server-option-default" role="status">{feedback}</p>}

@@ -20,7 +20,7 @@ vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover con
 vi.mock("../features/tuning/Tuning", () => ({ default: () => <p>Parameter form</p> }));
 vi.mock("../features/profiles/ExecutionProfiles", () => ({ default: () => <p>Saved profiles</p> }));
 vi.mock("../features/bench/Bench", () => ({ default: () => <input aria-label="Benchmark result" /> }));
-vi.mock("../features/model-settings/ModelSettingsDialog", () => ({ default: ({ open, initialConfig, initialSection, onClose }: ModelSettingsDialogProps) => open ? <div role="dialog" aria-label="Model settings editor"><p>{initialSection ?? "model"}</p><input aria-label="Editor model" value={initialConfig.active_model} readOnly /><button onClick={onClose}>Close editor</button></div> : null }));
+vi.mock("../features/model-settings/ModelSettingsDialog", () => ({ default: ({ open, initialConfig, initialSection, requireModelSelection, onClose }: ModelSettingsDialogProps) => open ? <div role="dialog" aria-label="Model settings editor"><p>{initialSection ?? "model"}</p><input aria-label="Editor model" value={requireModelSelection ? '' : initialConfig.active_model} readOnly /><button onClick={onClose}>Close editor</button></div> : null }));
 
 describe("Workspace navigation", () => {
   beforeEach(() => { localStorage.clear(); store = createTestStore(); });
@@ -32,6 +32,7 @@ describe("Workspace navigation", () => {
     const name = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
     const path = `C:/models/${name}-00001-of-00033.gguf`;
     store = createTestStore({ active_model: path });
+    store.status = { state: 'running', model: path };
     mount();
     const model = screen.getByRole("button", { name: `Choose model: ${name}.gguf` });
     expect(model).toHaveAttribute("title", path);
@@ -43,6 +44,30 @@ describe("Workspace navigation", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
+  it('shows the loaded model and opens its live settings when another model was saved', async () => {
+    store = createTestStore({ active_model: 'models/next.gguf', ctx_size: 8192 });
+    store.status = { state: 'running', model: 'models/loaded.gguf', execution: { active_model: 'models/loaded.gguf', ctx_size: 4096 } };
+    mount();
+    expect(screen.queryByText('next.gguf')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model: loaded.gguf' }));
+    await screen.findByRole('dialog', { name: 'Model settings editor' });
+    expect(screen.getByLabelText('Editor model')).toHaveValue('models/loaded.gguf');
+    expect(store.cfg?.active_model).toBe('models/next.gguf');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('opens an unselected picker when stopped without starting the last saved model', async () => {
+    store.status = { state: 'stopped', model: 'model.gguf' };
+    mount();
+    expect(screen.queryByText('model.gguf')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
+    await screen.findByRole('dialog', { name: 'Model settings editor' });
+    expect(screen.getByLabelText('Editor model')).toHaveValue('');
+    expect(store.start).not.toHaveBeenCalled();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("guards navigation while settings can open without leaving the current workspace", async () => {
     mount();
     fireEvent.click(mainTab("Projects"));
@@ -51,7 +76,7 @@ describe("Workspace navigation", () => {
     const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
     fireEvent.click(mainTab("Run a model"));
     expect(confirm).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button",{name:"Choose model: model.gguf"}));
+    fireEvent.click(screen.getByRole("button",{name:"Choose model"}));
     await screen.findByRole("dialog", { name: "Model settings editor" });
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(screen.getByText("Project parameters"));
@@ -87,7 +112,7 @@ describe("Workspace navigation", () => {
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(12);
     fireEvent.click(mainTab("Manage runtimes"));
     await screen.findByText("Saved runtime settings");
-    fireEvent.click(screen.getByRole("button", { name: "Choose model: model.gguf" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
     expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
     expect(mainTab("Manage runtimes")).toHaveAttribute("aria-current", "page");
   });

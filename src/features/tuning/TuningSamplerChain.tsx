@@ -111,7 +111,7 @@ export default function TuningSamplerChain({
           {draft.map((sampler, index) => (
             <div
               key={sampler}
-              role="group"
+              role="listitem"
               aria-label={sampler}
               className={`tuning-sampler-chip ${draggedIndex === index ? "is-dragging" : ""}`}
               draggable={!disabled}

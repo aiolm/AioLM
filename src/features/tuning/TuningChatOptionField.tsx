@@ -81,7 +81,7 @@ export default function TuningChatOptionField({
                 min={field.min}
                 max={field.max}
                 onChange={(event) => setChatOptionDrafts((drafts) => ({ ...drafts, [field.key]: event.target.value }))}
-                onBlur={(event) => onCommit(field, event.currentTarget.value)}
+                onBlur={(event) => { if (chatOptionDrafts[field.key] !== undefined) onCommit(field, event.currentTarget.value); }}
                 onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
                 disabled={disabled}
                 className="w-full min-w-0 rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"

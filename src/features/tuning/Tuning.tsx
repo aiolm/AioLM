@@ -250,7 +250,7 @@ export function TuningEditor({ store, section = 'server', onNavigate, runtime, t
             ) : (
               <div className="tuning-navigation__empty" role="status">{t("extra.noSettingsMatchQuery", { query })}</div>
             )}
-            <TuningDefaultsContext.Provider value={{ cfg: tuning.cfg!, disabled: tuning.configMutationsDisabled, revision: tuning.defaultsRevision, reset: (key) => void tuning.resetRuntimeDefaults(key) }}>
+            <TuningDefaultsContext.Provider value={{ cfg: tuning.cfg!, disabled: tuning.configMutationsDisabled, reset: (key) => void tuning.resetRuntimeDefaults(key) }}>
               <TuningOptionsContext.Provider value={runtime}>
               {renderSection(selectedCategory)}
               </TuningOptionsContext.Provider>

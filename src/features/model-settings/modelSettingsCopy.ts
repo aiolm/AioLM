@@ -1,7 +1,6 @@
 const en = {
   saveNext: 'Save for next run', apply: 'Apply', restart: 'Apply & restart', switchStart: 'Switch & start',
   profilePending: 'Save or discard the shared profile edits before applying the target settings.', pathPending: 'Select the entered model path before applying.',
-  details: 'Model settings', choose: 'Choose model',
   title: 'Model & settings', model: 'Model', runtime: 'Runtime & GPU', tuning: 'Performance & memory', sampling: 'Generation', reasoning: 'Reasoning', adapters: 'Auxiliary models & LoRA', advanced: 'Advanced', profiles: 'Profiles',
   search: 'Search models', path: 'Model path', selected: 'Selected', empty: 'No matching models. Enter a model path or manage the model folder.', refresh: 'Refresh', browse: 'Choose file',
   draft: 'Changes stay in this editor until you apply them.', save: 'Save selection & settings', start: 'Save & start', benchmarkApply: 'Apply to benchmark', projectApply: 'Apply to project editor', cancel: 'Cancel', close: 'Close',
@@ -20,7 +19,6 @@ type Copy = { [K in keyof typeof en]: string };
 const ko: Copy = {
   saveNext: '다음 실행에 저장', apply: '적용', restart: '적용 후 다시 실행', switchStart: '전환하여 실행',
   profilePending: '공유 프로필 편집을 저장하거나 버린 뒤 대상 설정을 적용하세요.', pathPending: '입력한 모델 경로를 선택한 뒤 적용하세요.',
-  details: '모델 설정', choose: '모델 선택',
   title: '모델 선택·설정', model: '모델', runtime: '런타임·GPU', tuning: '성능·메모리', sampling: '생성', reasoning: '추론', adapters: '보조 모델·LoRA', advanced: '고급', profiles: '프로필',
   search: '모델 검색', path: '모델 경로', selected: '선택됨', empty: '일치하는 모델이 없습니다. 모델 경로를 입력하거나 모델 폴더를 관리하세요.', refresh: '새로고침', browse: '파일 선택',
   draft: '적용하기 전까지 변경 사항은 이 편집기에만 보관됩니다.', save: '선택 및 설정 저장', start: '저장 후 실행', benchmarkApply: '벤치마크에 적용', projectApply: '프로젝트 편집에 적용', cancel: '취소', close: '닫기',
@@ -38,7 +36,6 @@ const ko: Copy = {
 const ja: Copy = {
   saveNext: '次回の起動用に保存', apply: '適用', restart: '適用して再起動', switchStart: '切り替えて起動',
   profilePending: '共有プロファイルの編集を保存または破棄してから対象の設定を適用してください。', pathPending: '入力したモデルパスを選択してから適用してください。',
-  details: 'モデル設定', choose: 'モデルを選択',
   title: 'モデル選択・設定', model: 'モデル', runtime: 'ランタイム・GPU', tuning: '性能・メモリ', sampling: '生成', reasoning: '推論', adapters: '補助モデル・LoRA', advanced: '詳細', profiles: 'プロファイル',
   search: 'モデルを検索', path: 'モデルパス', selected: '選択中', empty: '一致するモデルがありません。パスを入力するかモデルフォルダーを管理してください。', refresh: '更新', browse: 'ファイルを選択',
   draft: '適用するまで変更はこのエディター内に保持されます。', save: '選択と設定を保存', start: '保存して起動', benchmarkApply: 'ベンチマークに適用', projectApply: 'プロジェクト編集に適用', cancel: 'キャンセル', close: '閉じる',
@@ -55,7 +52,6 @@ const ja: Copy = {
 const zh: Copy = {
   saveNext: '保存供下次运行', apply: '应用', restart: '应用并重启', switchStart: '切换并启动',
   profilePending: '请先保存或放弃共享预设编辑，再应用目标设置。', pathPending: '请先选择输入的模型路径，再应用设置。',
-  details: '模型设置', choose: '选择模型',
   title: '模型选择与设置', model: '模型', runtime: '运行时与 GPU', tuning: '性能与内存', sampling: '生成', reasoning: '推理', adapters: '辅助模型与 LoRA', advanced: '高级', profiles: '配置预设',
   search: '搜索模型', path: '模型路径', selected: '已选择', empty: '没有匹配的模型。请输入路径或管理模型目录。', refresh: '刷新', browse: '选择文件',
   draft: '应用前，修改仅保留在此编辑器中。', save: '保存选择与设置', start: '保存并启动', benchmarkApply: '应用到基准测试', projectApply: '应用到项目编辑', cancel: '取消', close: '关闭',

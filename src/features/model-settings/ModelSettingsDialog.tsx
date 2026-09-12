@@ -24,6 +24,7 @@ export interface ModelSettingsDialogProps {
   onClose: () => void; onManageRuntimes?: (draft?: api.AppConfig) => void;
   busy?: boolean; liveState?: string; applyLabel?: string; startLabel?: string;
   liveConfig?: api.AppConfig;
+  requireModelSelection?: boolean;
   executionNotice?: ReactNode; onCancelStart?: () => void;
 }
 
@@ -31,19 +32,19 @@ const normalizeSection = (section = 'model') => ({ setup: 'runtime', gpu: 'runti
 
 /** A target-scoped editor. No configuration or model-profile writes happen on preview. */
 export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, initialSection, onApply, onClose, onManageRuntimes,
-  busy = false, liveState, liveConfig, applyLabel, startLabel, executionNotice, onCancelStart }: ModelSettingsDialogProps) {
+  busy = false, liveState, liveConfig, applyLabel, startLabel, executionNotice, onCancelStart, requireModelSelection = false }: ModelSettingsDialogProps) {
   const { t, locale } = useI18n();
   const copy = modelSettingsCopy[locale];
   const id = useId();
-  const initial = useRef(structuredClone(initialConfig));
-  const [baseline, setBaseline] = useState(() => executionSettings(initialConfig));
-  const [settings, setSettings] = useState<ExecutionSettings>(() => executionSettings(initialConfig));
+  const saved = useRef(structuredClone(initialConfig));
+  const initial = useRef({ ...saved.current, ...(requireModelSelection ? { active_model: '' } : {}) });
+  const [baseline, setBaseline] = useState(() => executionSettings(initial.current));
+  const [settings, setSettings] = useState<ExecutionSettings>(() => executionSettings(initial.current));
   const cfg = executionConfig(initialConfig, settings);
   const latest = useRef(cfg); latest.current = cfg;
   const [section, setSection] = useState(normalizeSection(initialSection));
-  const [quickPicker, setQuickPicker] = useState(!initialSection || initialSection === 'model');
   const [query, setQuery] = useState('');
-  const [pathDraft, setPathDraft] = useState(initialConfig.active_model);
+  const [pathDraft, setPathDraft] = useState(initial.current.active_model);
   const [error, setError] = useState('');
   const [applying, setApplying] = useState(false);
   const applyLock = useRef(false);
@@ -109,7 +110,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     if (!path.trim() || path === cfg.active_model) return;
     const load = () => {
       try {
-        const restored = previewExecution(initial.current, path);
+        const restored = previewExecution(saved.current, path);
         const next = executionSettings({ ...initial.current, ...restored, active_model: path,
           mmproj: restored.mmproj ?? '', spec_draft_model: restored.spec_draft_model ?? '', lora_adapters: restored.lora_adapters ?? [],
           ...(mode === 'session' ? { gpu: initial.current.gpu } : {}) });
@@ -138,7 +139,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]) }] : [])]} onChange={value => change({ [key]: value })} />
     <input className="app-input" aria-label={`${label} — ${copy.path}`} value={cfg[key]} disabled={disabled} onChange={event => change({ [key]: event.target.value })} />
   </label>;
-  return <dialog ref={dialog} className={`model-settings-dialog${quickPicker ? ' model-settings-dialog--picker' : ''}`} aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
+  return <dialog ref={dialog} className="model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
     onKeyDown={event => {
       if (event.key !== 'Tab') return;
       const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])'))
@@ -151,14 +152,14 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     onCancel={event => { event.preventDefault(); if (!disabled) { if (pending) setPending(null); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell">
-        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{quickPicker ? copy.choose : copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}>{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p></div>
+        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}>{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p></div>
           <button type="button" className="app-button app-button--ghost" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}>×</button></header>
         <div className="model-settings-layout" inert={!!pending || disabled}>
-          {!quickPicker && <nav className="model-settings-nav" aria-label={copy.title}>{sections.map(value => <button type="button" key={value} className={section === value ? 'is-active' : ''} aria-current={section === value ? 'page' : undefined} onClick={() => setSection(value)}>{copy[value]}</button>)}</nav>}
+          <nav className="model-settings-nav" aria-label={copy.title}>{sections.map(value => <button type="button" key={value} className={section === value ? 'is-active' : ''} aria-current={section === value ? 'page' : undefined} onClick={() => setSection(value)}>{copy[value]}</button>)}</nav>
           <div className="model-settings-body">
-            {benchmark && !quickPicker && <p className="model-settings-scope">{copy.benchmarkControlled}</p>}
+            {benchmark && <p className="model-settings-scope">{copy.benchmarkControlled}</p>}
             <div hidden={section !== 'model'} className="model-settings-fields">
-              <div className="model-settings-section-heading"><h3>{copy.model}</h3><div>{quickPicker && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => { setQuickPicker(false); setSection('runtime'); }}>{copy.details}</button>}<button type="button" className="app-button app-button--ghost app-button--sm" onClick={catalog.refresh}>{copy.refresh}</button></div></div>
+              <div className="model-settings-section-heading"><h3>{copy.model}</h3><button type="button" className="app-button app-button--ghost app-button--sm" onClick={catalog.refresh}>{copy.refresh}</button></div>
               <input type="search" className="app-input" value={query} onChange={event => setQuery(event.target.value)} placeholder={copy.search} aria-label={copy.search} />
               {catalog.error && <p className="text-error" role="alert">{normalizeDisplayText(catalog.error)}</p>}
               {catalog.loading && <p role="status">{t('extra.loading')}</p>}
@@ -203,9 +204,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         </div>
         <footer className="model-settings-footer">
           {pending ? <div className="model-settings-confirm" role="alert"><strong>{copy.discardTitle}</strong><p>{copy.discardBody}</p><div><button type="button" className="app-button app-button--secondary" onClick={() => setPending(null)}>{copy.keep}</button><button type="button" className="app-button app-button--danger" onClick={() => { const action = pending; setPending(null); action(); }}>{copy.discard}</button></div></div>
-            : <><div className="model-settings-notices"><p>{copy.draft}</p>{profileDirty && <p role="status">{copy.profilePending}</p>}{pathPending && <p role="status">{copy.pathPending}</p>}{executionNotice}{error && <p className="text-error" role="alert">{normalizeDisplayText(error)}</p>}{invalid.size > 0 && <p className="text-error" role="alert">{copy.invalid} ({[...invalid].join(', ')})</p>}{incomplete && <p className="text-error">{t('ui.modelShardsMissing', { count: selected!.shards!.missing.length, total: selected!.shards!.total })}</p>}</div>
+            : <><div className="model-settings-notices">{profileDirty && <p role="status">{copy.profilePending}</p>}{pathPending && <p role="status">{copy.pathPending}</p>}{executionNotice}{error && <p className="text-error" role="alert">{normalizeDisplayText(error)}</p>}{invalid.size > 0 && <p className="text-error" role="alert">{copy.invalid} ({[...invalid].join(', ')})</p>}{incomplete && <p className="text-error">{t('ui.modelShardsMissing', { count: selected!.shards!.missing.length, total: selected!.shards!.total })}</p>}</div>
               <div className="model-settings-actions"><button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => guarded(onClose)}>{copy.cancel}</button>
-                <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim()} onClick={() => void apply('save')}>{applying ? copy.pending : saveText}</button>
+                <button type="button" className={`app-button app-button--${benchmark || mode === 'project' ? 'primary' : 'secondary'}`} disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim()} onClick={() => void apply('save')}>{applying ? copy.pending : saveText}</button>
                 {!benchmark && mode !== 'project' && <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || incomplete || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>}
                 {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" onClick={onCancelStart}>{copy.cancel}</button>}
               </div></>}

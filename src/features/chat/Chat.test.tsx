@@ -270,9 +270,21 @@ describe("ChatPanel document context warning", () => {
     expect(sessionHasActivity("work")).toBe(false);
   });
 
-  it("starts the selected stopped session with its saved execution settings", async () => {
+  it('opens the model picker when the default session is stopped despite a saved model', async () => {
+    const open = vi.fn();
+    const start = vi.fn();
+    vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
+    renderPanel({ ...store, status: { state: 'stopped', model: cfg.active_model }, start });
+    expect(screen.queryByText('Model ready')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start server' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Model & settings' })[0]);
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' } }));
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("starts a stopped session with its saved settings regardless of its legacy enabled value", async () => {
     mocked.sessionList.mockResolvedValue([]);
-    const definition: api.SessionDefinition = { id: "work", name: "Work", enabled: true,
+    const definition: api.SessionDefinition = { id: "work", name: "Work", enabled: false,
       models: { primary_model: "models/work.gguf", mmproj: "", draft_model: "" },
       gpu: { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null },
       execution: { ctx_size: 8192, temperature: 0.2 },

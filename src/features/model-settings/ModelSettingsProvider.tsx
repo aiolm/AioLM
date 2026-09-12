@@ -58,7 +58,11 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     const definition = target.kind === 'session' ? cfg.sessions?.find(item => item.id === target.sessionId) ?? request.definition : undefined;
     if (request.target.kind === 'session' && !definition) { setError(copy.missing); return; }
     const base = definition ? sessionConfig(cfg, definition) : request.target.kind === 'default' ? cfg : request.config ?? cfg;
-    setEditor({ request, base: structuredClone(base), baseDefinition: definition ? structuredClone(definition) : undefined, initial: structuredClone(request.config ?? base), key: ++counter.current,
+    const status = latest.current.status;
+    const initial = request.config ?? (target.kind === 'default' && status.state === 'running' && status.model !== cfg.active_model
+      ? { ...executionConfig(cfg, status.execution ?? {}), active_model: status.model ?? '' }
+      : base);
+    setEditor({ request, base: structuredClone(base), baseDefinition: definition ? structuredClone(definition) : undefined, initial: structuredClone(initial), key: ++counter.current,
       existingSession: !!definition && !!cfg.sessions?.some(item => item.id === definition.id) });
     setSuspended(false); setError('');
   }, [copy.missing]);
@@ -123,7 +127,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
           const metadata = editor.request.definition;
           const original = editor.baseDefinition ?? definition;
           const metadataPatch: Partial<api.SessionDefinition> = {};
-          for (const field of ['name', 'enabled'] as const) {
+          for (const field of ['name'] as const) {
             if (!metadata || metadata[field] === original[field]) continue;
             if (source[field] !== original[field] && source[field] !== metadata[field]) throw new Error(copy.conflict + field);
             Object.assign(metadataPatch, { [field]: metadata[field] });
@@ -161,13 +165,17 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const id = target?.kind === 'session' ? target.sessionId : 'default';
   const liveStatus = target?.kind === 'session' ? sessions.find(item => item.id === id) : target?.kind === 'default' ? store.status : undefined;
   const liveState = liveStatus?.state ?? (target?.kind === 'session' ? 'stopped' : undefined);
+  const stopsOtherSessions = (target?.kind === 'session' || target?.kind === 'default') && store.cfg?.stop_existing_sessions_on_load !== false
+    && (sessions.some(session => session.id !== id && ['running', 'starting', 'stopping'].includes(session.state))
+      || (target.kind === 'session' && ['running', 'starting', 'stopping'].includes(store.status.state)));
   const targetLabel = target ? `${copy[target.kind]}${target.kind === 'session' ? `: ${store.cfg?.sessions?.find(item => item.id === id)?.name || id}` : ''}` : '';
   return <Context.Provider value={{ open, suspended, resume: () => setSuspended(false), getRequestConfig, getRequestProfile }}>
     {children}
     {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
     {editor && <Suspense fallback={<div role="status">{copy.loading}</div>}><ModelSettingsDialog key={editor.key} open={!suspended} initialConfig={editor.initial} targetLabel={targetLabel} mode={editor.request.target.kind}
+      requireModelSelection={editor.request.target.kind === 'default' && !editor.request.config && !['running', 'starting', 'stopping'].includes(store.status.state)}
       initialSection={editor.request.section} busy={busy} liveState={liveState} liveConfig={store.cfg && liveStatus?.execution ? executionConfig(store.cfg, liveStatus.execution) : undefined} onApply={apply} onClose={() => { if (!lock.current) setEditor(null); }}
-      executionNotice={<>{liveState === 'running' && <p>{copy.live}</p>}{(target?.kind === 'session' || target?.kind === 'default') && store.cfg?.stop_existing_sessions_on_load !== false && <p>{copy.stopOthers}</p>}</>}
+      executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
       onCancelStart={launching ? () => { void (id === 'default' ? latest.current.stop() : api.sessionStop(id)).catch(cause => setError(String(cause))); } : undefined}
       onManageRuntimes={() => { setSuspended(true); window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES)); }} /></Suspense>}
   </Context.Provider>;

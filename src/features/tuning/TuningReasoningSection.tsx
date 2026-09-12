@@ -36,7 +36,7 @@ export default function TuningReasoningSection({
             <label htmlFor={`${id}-reasoning`} className="text-sm text-ink">{t("ui.reasoningMode")}</label>
             <Tooltip content={{ title: "Reasoning mode", description: "Select whether the runtime should expose model reasoning content." }} label={`Help for ${t("ui.reasoningMode")}`} id={`${id}-reasoning-help`} />
           </div>
-          <TuningDefaultField fieldKey="reasoning" label={t("ui.reasoningMode")} hideLabel><CustomSelect
+          <TuningDefaultField fieldKey="reasoning" label={t("ui.reasoningMode")}><CustomSelect
             id={`${id}-reasoning`}
             value={cfg.reasoning}
             options={[
@@ -55,7 +55,7 @@ export default function TuningReasoningSection({
             <label htmlFor={`${id}-reasoning-format`} className="text-sm text-ink">{t("ui.reasoningFormat")}</label>
             <Tooltip content={{ title: "Reasoning format", description: "Choose the template format used for reasoning content." }} label={`Help for ${t("ui.reasoningFormat")}`} id={`${id}-reasoning-format-help`} />
           </div>
-          <TuningDefaultField fieldKey="reasoning_format" label={t("ui.reasoningFormat")} hideLabel><CustomSelect
+          <TuningDefaultField fieldKey="reasoning_format" label={t("ui.reasoningFormat")}><CustomSelect
             id={`${id}-reasoning-format`}
             value={cfg.reasoning_format}
             options={[
@@ -75,7 +75,7 @@ export default function TuningReasoningSection({
             <label htmlFor={`${id}-reasoning-preserve`} className="text-sm text-ink">{t("ui.reasoningPreserve")}</label>
             <Tooltip content={{ title: "Preserve reasoning", description: "Keep reasoning state available to the chat template when supported." }} label={`Help for ${t("ui.reasoningPreserve")}`} id={`${id}-reasoning-preserve-help`} />
           </div>
-          <TuningDefaultField fieldKey="reasoning_preserve" label={t("ui.reasoningPreserve")} hideLabel><CustomSelect
+          <TuningDefaultField fieldKey="reasoning_preserve" label={t("ui.reasoningPreserve")}><CustomSelect
             id={`${id}-reasoning-preserve`}
             value={cfg.reasoning_preserve}
             options={[
@@ -97,7 +97,7 @@ export default function TuningReasoningSection({
             </div>
             <span className="shrink-0 text-xs text-warning">{t("ui.serverAndRequest")}</span>
           </div>
-          <TuningDefaultField fieldKey="reasoning_effort" label={t("ui.reasoningEffort")} hideLabel><CustomSelect
+          <TuningDefaultField fieldKey="reasoning_effort" label={t("ui.reasoningEffort")}><CustomSelect
             id={`${id}-reasoning-effort`}
             value={cfg.reasoning_effort}
             options={[
@@ -124,7 +124,7 @@ export default function TuningReasoningSection({
             <label htmlFor={`${id}-reasoning-budget-message`} className="text-sm text-ink">{t("ui.budgetMessageLabel")}</label>
             <Tooltip content={{ title: "Budget message", description: "Optional server message shown when the reasoning budget is exhausted." }} label={`Help for ${t("ui.budgetMessageLabel")}`} id={`${id}-reasoning-budget-message-help`} />
           </div>
-          <TuningDefaultField fieldKey="reasoning_budget_message" label={t("ui.budgetMessageLabel")} hideLabel><input
+          <TuningDefaultField fieldKey="reasoning_budget_message" label={t("ui.budgetMessageLabel")}><input
             id={`${id}-reasoning-budget-message`}
             value={reasoningBudgetMessageValue}
             onChange={(event) => onReasoningBudgetMessageChange(event.target.value)}

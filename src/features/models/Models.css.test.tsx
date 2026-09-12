@@ -12,6 +12,7 @@ import * as api from "../../shared/api/index";
 // a hand-written `app-*` class, or never generates a competing rule.
 
 vi.mock("../../shared/api/index", () => ({
+  isNativeRuntimeAvailable: () => false,
   listModels: vi.fn(),
   deleteModel: vi.fn(),
   pickModelsDir: vi.fn(),
@@ -101,7 +102,7 @@ describe("ModelsPanel CSS cascade", () => {
     await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: 8192 });
     const saved = await save.mock.results[0].value;
     view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
-    expect(screen.getByRole("button", { name: "Select legacy.gguf" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Select legacy.gguf" })).not.toHaveAttribute("aria-current");
     localStorage.clear();
   });
 
@@ -133,7 +134,7 @@ describe("ModelsPanel CSS cascade", () => {
     await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "", active_build: "" });
     const saved = await save.mock.results[0].value;
     view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
-    expect(screen.getByRole("button", { name: "Select selectable.gguf" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "Select selectable.gguf" })).not.toHaveAttribute("aria-current");
     expect(screen.queryByText(/active runtime backend and build must be selected together/)).not.toBeInTheDocument();
     localStorage.clear();
   });
@@ -152,6 +153,7 @@ describe("ModelsPanel CSS cascade", () => {
     expect(screen.getByText("300 MB")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Select large.gguf" }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ active_model: files[0] })));
+    fireEvent.click(screen.getByLabelText("File actions: large.gguf"));
     fireEvent.click(screen.getByRole("button", { name: "Delete: large.gguf" }));
     expect(await screen.findByText("All 2 files belonging to large.gguf will be permanently removed. This cannot be undone.")).toBeInTheDocument();
     expect(mocked.deleteModel).not.toHaveBeenCalled();

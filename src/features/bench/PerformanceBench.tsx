@@ -8,7 +8,7 @@ import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "..
 import { performanceCsv, readPerformanceHistory, savePerformanceRecord, summarizePerformanceRows, type BenchmarkDevice, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import { benchmarkCopy } from "./benchmarkCopy";
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
-import { executionConfig, executionSettings, type ExecutionSettings } from '../../shared/config/executionSettings';
+import { executionChanges, executionConfig, executionSettings, type ExecutionSettings } from '../../shared/config/executionSettings';
 import { modelActions } from '../../shared/i18n/modelActions';
 
 const PROMPT_LENGTHS = [1024, 4096, 8192, 16384, 32768, 65536, 131072, 200000];
@@ -116,6 +116,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const serverRunning = isServerRunning(store.status.state);
   const targetConfig = store.cfg ? executionConfig(store.cfg, targetSettings ?? executionSettings(store.cfg)) : null;
   const model = targetConfig?.active_model ?? "";
+  const targetDiffers = !!store.cfg && !!targetConfig && Object.keys(executionChanges(store.cfg, targetConfig)).length > 0;
   const displayedModel = busy && runModel ? runModel : { model, backend: targetConfig?.active_backend ?? "", build: targetConfig?.active_build ?? "" };
   const blockingSessions = sessions.filter(session => session.id !== 'default' && ['running', 'starting', 'stopping'].includes(session.state));
   const canRun = !!targetConfig && !!model && valid && !busy && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
@@ -232,7 +233,11 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
     <header className="performance-heading"><div><h2>{copy.title}</h2><p>{copy.description}</p></div>{device && <span className="performance-device">{device.profile.cpu.name}{device.profile.gpus[0] ? ` · ${device.profile.gpus[0].name}` : ""}</span>}</header>
     <form className="performance-card" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-card-heading"><h3>{copy.configuration}</h3><span>{copy.totalTests}: <strong>{total}</strong></span></div>
-      <div className="performance-model"><span>{copy.model}</span><strong title={normalizeDisplayPath(displayedModel.model)}>{displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}</strong>{displayedModel.model && <small>{displayedModel.backend} · {displayedModel.build}</small>}{modelSettings && <div className="performance-model-actions"><button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => editModel('model')}>{modelCopy.choose}</button><button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => editModel('runtime')}>{modelCopy.settings}</button><button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || !store.cfg} onClick={() => { if (store.cfg) setTargetSettings(executionSettings(store.cfg)); }}>{modelCopy.importDefault}</button></div>}</div>
+      <div className="performance-model"><span>{copy.model}</span>
+        {modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" title={normalizeDisplayPath(displayedModel.model)} aria-label={`${modelCopy.choose}: ${displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}`} disabled={busy} onClick={() => editModel('model')}><span>{displayedModel.model ? modelDisplayName(displayedModel.model) : modelCopy.choose}</span><span aria-hidden="true">▾</span></button> : <strong title={normalizeDisplayPath(displayedModel.model)}>{displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}</strong>}
+        {displayedModel.model && <small>{displayedModel.backend} · {displayedModel.build}</small>}
+        {modelSettings && <div className="performance-model-actions"><button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => editModel('runtime')}>{modelCopy.settings}</button>{targetDiffers && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => { if (store.cfg) setTargetSettings(executionSettings(store.cfg)); }}>{modelCopy.importDefault}</button>}</div>}
+      </div>
       <fieldset disabled={busy} className="performance-fields">
         <legend className="sr-only">{copy.configuration}</legend>
         <div className="performance-input-grid">
@@ -244,7 +249,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
         <div className="performance-lower-fields"><fieldset className="performance-choice-group"><legend>{copy.batchSizes}</legend><div className="performance-chips"><span className="performance-baseline-chip">1×</span>{BATCH_SIZES.map((value) => <label key={value} className="performance-chip"><input type="checkbox" checked={batchSizes.includes(value)} onChange={() => toggle(value, batchSizes, setBatchSizes)} /><span>{value}×</span></label>)}</div></fieldset><label className="performance-warmup"><input type="checkbox" checked={warmup} onChange={(event) => setWarmup(event.target.checked)} /><span>{copy.warmup}<small>{copy.warmupHint}</small></span></label></div>
         <p className="performance-hint">{copy.batchHint}</p>
       </fieldset>
-      <div className="performance-actions">{busy ? <button type="button" className="app-button app-button--danger app-button--md" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</button> : <button type="submit" className="app-button app-button--primary app-button--md" disabled={!canRun}>{copy.run}</button>}<span>{busy ? progressMessage : statusLabel ?? copy.idle}</span></div>
+      <div className="performance-actions">{busy ? <button type="button" className="app-button app-button--danger app-button--md" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</button> : <button type="submit" className="app-button app-button--primary app-button--md" disabled={!canRun}>{copy.run}</button>}{busy && <span>{progressMessage}</span>}</div>
       <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.validation}</p>
     </form>
     {serverRunning && !busy && <div className="performance-notice" role="status"><p>{copy.stopHint}</p><button type="button" className="app-button app-button--secondary app-button--sm" disabled={store.busy} onClick={() => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))}>{copy.stopServer}</button></div>}

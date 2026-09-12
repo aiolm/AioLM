@@ -1,11 +1,30 @@
 import { useState } from "react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import PanelFeedback, { ActivePanelContext, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "./PanelFeedback";
+import PanelFeedback, { ActivePanelContext, PanelFeedbackActivity, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "./PanelFeedback";
 import FeedbackBanner from "./FeedbackBanner";
 import { I18nProvider } from "../i18n/i18n";
 
 describe("panel notices", () => {
+  it("reveals the hidden activity drawer when a page publishes a notice", () => {
+    function Fixture() {
+      const [notice, setNotice] = useState(false);
+      return <PanelFeedbackProvider>
+        <button onClick={() => setNotice(true)}>Notify</button>
+        <PanelFeedbackActivity hasActivity={false}><summary>Activity</summary><PanelFeedbackOutlet /></PanelFeedbackActivity>
+        <PanelFeedback>{notice && <div role="alert">Save failed<button onClick={() => setNotice(false)}>Dismiss</button></div>}</PanelFeedback>
+      </PanelFeedbackProvider>;
+    }
+    render(<Fixture />);
+    const drawer = screen.getByText('Activity').closest('details')!;
+    expect(drawer).toHaveAttribute('hidden');
+    fireEvent.click(screen.getByText('Notify'));
+    expect(drawer).not.toHaveAttribute('hidden');
+    fireEvent.click(screen.getByText('Activity'));
+    expect(screen.getByRole('alert')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(drawer).toHaveAttribute('hidden');
+  });
   it("keeps notices actionable in the shared drawer and only includes the active page", () => {
     const retry = vi.fn();
     function Fixture() {

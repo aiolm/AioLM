@@ -37,13 +37,12 @@
 .model-settings-shared label { margin: 14px 0; }
 .model-settings-footer { flex-shrink: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow-y: auto; }
 .model-settings-notices { font-size: 12px; color: var(--ui-muted); margin-bottom: 12px; line-height: 1.5; }
+.model-settings-notices:empty { display: none; }
 .model-settings-actions { display: flex; gap: 9px; justify-content: flex-end; flex-wrap: wrap; }
 .model-settings-confirm { font-size: 13px; line-height: 1.5; }
 .model-settings-confirm p { margin: 5px 0 12px; }
 .model-settings-confirm > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .model-settings-overlays { position: static; }
-.model-settings-dialog--picker { width: min(640px, calc(100vw - 40px)); height: min(690px, calc(100dvh - 40px)); }
-.model-settings-dialog--picker .model-settings-layout { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 720px) {
   .model-settings-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); border-radius: 12px; }
   .model-settings-header { padding: 15px 16px 12px; }

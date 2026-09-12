@@ -8,6 +8,8 @@
 .profile-snapshot h3 { font-size: 18px; }
 .profile-snapshot-hint, .profile-model-name, .profile-snapshot-status { color: var(--ui-muted); font-size: 13px; margin: 4px 0 8px; }
 .profile-snapshot-actions, .profile-name-form { gap: 8px; margin-top: 12px; }
+.model-target-button { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.model-target-button > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-default-prompt, .legacy-profiles, .legacy-profile-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--ui-border); }
 .profile-default-prompt p, .legacy-profiles p { margin: 8px 0; color: var(--ui-muted); font-size: 13px; }
 .profile-default-prompt textarea { margin-top: 12px; }

@@ -42,7 +42,6 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
   const modelProfileName = cfg ? findModelTuningProfile(cfg.active_model, cfg.active_build)?.name ?? null : null;
   const [phase, setPhase] = useState<TuningPhase>("idle");
   const [resetting, setResetting] = useState(false);
-  const [defaultsRevision, setDefaultsRevision] = useState(0);
   const [flash, notify, dismissFlash] = useFlashMessage();
   const [serverArgsDraft, setServerArgsDraft] = useState("");
   const [chatOptionsDraft, setChatOptionsDraft] = useState("{}");
@@ -187,6 +186,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
 
   const commitServerText = async (key: ServerTextKey, raw: string) => {
     if (applyLockRef.current || !cfg) return;
+    if (serverTextDrafts[key] === undefined && raw === String(usesRuntimeDefault(cfg, key) ? resetValues[key] ?? '' : cfg[key] ?? '')) return;
     // A displayed path omits the Windows prefix; focus changes must not persist that formatting.
     if (serverPathKeys.has(key) && serverTextDrafts[key] === undefined) return;
     if (key === "mmproj" && !projectorEditable) {
@@ -373,7 +373,6 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
       const saved = await store.updateConfig((current) => key ? resetTuningField(current, key, resetValues) : resetAllTuning(resetValues));
       // Clear only the reset field's drafts. Unrelated unsaved text remains intact.
       clearFieldDrafts(key);
-      if (!key) setDefaultsRevision((value) => value + 1);
       if (!key || !serverArgsDirty) {
         const text = saved.server_args.join("\n");
         serverArgsDraftRef.current = text; setServerArgsDraft(text); setServerArgsDirty(false);
@@ -397,7 +396,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
   };
 
   return {
-    cfg, locale, phase, setPhase, flash, notify, dismissFlash, modelProfileName, resetRuntimeDefaults, defaultsRevision,
+    cfg, locale, phase, setPhase, flash, notify, dismissFlash, modelProfileName, resetRuntimeDefaults,
     serverArgsDraft, setServerArgsDraft, chatOptionsDraft, setChatOptionsDraft,
     serverArgsDirty, setServerArgsDirty, chatOptionsDirty, setChatOptionsDirty,
     advancedError, setAdvancedError,

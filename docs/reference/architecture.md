@@ -11,7 +11,7 @@ src/
   features/
     chat/                   Conversations, attachments, document retrieval, streaming
     models/                 GGUF library and remembered per-model settings
-    model-settings/         Shared model picker, draft editor and target-scoped apply
+    model-settings/         Shared model selection and execution settings editor
     discover/               Hugging Face search and download UI
     runtimes/               Runtime installation and device assignment UI
     sessions/               Independent running sessions

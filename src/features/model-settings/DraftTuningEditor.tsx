@@ -34,7 +34,6 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   const [chatNumbers, setChatNumbers] = useState<Record<string, string>>({});
   const [selectModes, setSelectModes] = useState<Record<string, 'select' | 'custom'>>({});
   const [customText, setCustomText] = useState<Partial<Record<ServerTextKey, boolean>>>({});
-  const [revision, setRevision] = useState(0);
   const numeric = (key: NumericKey, raw: string) => {
     setNumbers(previous => ({ ...previous, [key]: raw }));
     const field = [...SERVER_FIELDS, ...MTP_FIELDS, ...SAMPLING_FIELDS, ...REASONING_FIELDS].find(item => item.key === key)!;
@@ -68,7 +67,6 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
       setNumbers(previous => { const next = { ...previous }; delete next[key as NumericKey]; return next; });
       setChatNumbers(previous => { const next = { ...previous }; delete next[key]; return next; });
     }
-    setRevision(value => value + 1);
   };
   const filterPatch = (patch: Partial<AppConfig>) => benchmark
     ? Object.fromEntries(Object.entries(patch).filter(([key]) => !BENCHMARK_CONTROLLED_KEYS.has(key))) as Partial<AppConfig> : patch;
@@ -80,11 +78,12 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   };
   const textValue = (key: ServerTextKey) => String(display[key] ?? '');
   const text = (key: ServerTextKey, value: string) => onChange({ [key]: value });
+  const commitText = (key: ServerTextKey, value: string) => { if (value !== textValue(key)) text(key, value); };
   const optionsFor = (key: 'spec_type' | 'spec_draft_ngl'): readonly string[] => key === 'spec_type' ? SPEC_TYPE_OPTIONS : SPEC_DRAFT_NGL_OPTIONS;
   const profile = findModelTuningProfile(cfg.active_model, cfg.active_build);
   const numericProps = { numericDrafts: numbers, onNumericChange: numeric, onNumericCommit: (field: { key: NumericKey }, value: string) => numeric(field.key, value) };
   const fields = SERVER_FIELDS.filter(field => !benchmark || !BENCHMARK_CONTROLLED_KEYS.has(field.key));
-  return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, revision, reset }}>
+  return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, reset }}>
     <div className="model-settings-presets">
       <span>{copy.preset}</span>
       <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} onClick={() => bulk({ ngl: 0, threads: 0, flash_attn: 'off' })}>{copy.cpu}</button>
@@ -101,10 +100,10 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
       : section === 'reasoning' ? <TuningReasoningSection t={t} cfg={display} disabled={disabled} {...numericProps}
         updateServerText={text} updateReasoningEffort={reasoning_effort => onChange({ reasoning_effort })}
         reasoningBudgetMessageValue={textValue('reasoning_budget_message')} onReasoningBudgetMessageChange={value => text('reasoning_budget_message', value)}
-        onReasoningBudgetMessageCommit={value => text('reasoning_budget_message', value)} />
+        onReasoningBudgetMessageCommit={value => commitText('reasoning_budget_message', value)} />
         : <TuningServerSection t={t} cfg={display} disabled={disabled} {...numericProps} fields={section === 'adapters' ? [] : fields}
           showFlashAttention={section !== 'adapters'} showCacheTypes={section !== 'adapters'} showProjector={false} showSpeculative={section === 'adapters'}
-          updateFlash={flash_attn => onChange({ flash_attn })} serverTextValue={textValue} onServerTextChange={text} commitServerText={text} projectorEditable
+          updateFlash={flash_attn => onChange({ flash_attn })} serverTextValue={textValue} onServerTextChange={text} commitServerText={commitText} projectorEditable
           serverSelectValue={key => customText[key] || !optionsFor(key).includes(textValue(key)) ? 'custom' : textValue(key)}
           selectServerText={(key, value) => { setCustomText(previous => ({ ...previous, [key]: value === 'custom' })); if (value !== 'custom') text(key, value); }} />}
   </TuningDefaultsContext.Provider></TuningOptionsContext.Provider></TuningIdScope.Provider>;

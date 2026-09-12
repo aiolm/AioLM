@@ -1,4 +1,4 @@
-import type { ChangeEvent, FocusEvent, KeyboardEvent, PointerEvent, ReactNode } from "react";
+import { useRef, type ChangeEvent, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { useI18n } from '../../shared/i18n/i18n';
 import { executionText } from '../../shared/i18n/executionI18n';
 
@@ -69,8 +69,11 @@ export default function TuningSliderField({
   const rangeValue = Math.min(resolvedMax, Math.max(resolvedMin, finiteValue(value, resolvedMin)));
   const invalid = !value.trim() || !Number.isFinite(Number(value)) || Number(value) < resolvedMin || Number(value) > resolvedMax;
   const errorId = `${inputId}-error`;
+  const pendingValue = useRef<string | null>(null);
 
   const commit = (event: FocusEvent<HTMLInputElement> | PointerEvent<HTMLInputElement>) => {
+    if (pendingValue.current === null || pendingValue.current !== event.currentTarget.value) return;
+    pendingValue.current = null;
     onCommit(event.currentTarget.value);
   };
 
@@ -81,6 +84,7 @@ export default function TuningSliderField({
   };
 
   const update = (event: ChangeEvent<HTMLInputElement>) => {
+    pendingValue.current = event.currentTarget.value;
     onChange(event.currentTarget.value);
   };
 

@@ -113,7 +113,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const apiKey = serverOn ? selectedStatus.api_key ?? "" : "";
   const targetConfig = store.cfg && selectedDefinition ? sessionConfig(store.cfg, selectedDefinition) : store.cfg;
   const configuredModel = selectedDefinition?.models.primary_model ?? (selectedSessionId === "default" ? store.cfg?.active_model ?? "" : selectedStatus.model ?? "");
-  const model = (serverOn ? selectedStatus.model : "") || configuredModel;
+  const model = serverOn ? selectedStatus.model || configuredModel : selectedSessionId === 'default' ? '' : configuredModel;
   const effectiveConfig = targetConfig
     ? modelSettings?.getRequestConfig(selectedSessionId, targetConfig, selectedStatus)
       ?? { ...targetConfig, ...(serverOn ? selectedStatus.execution : {}), active_model: model }
@@ -138,7 +138,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     else onOpenModels?.();
   };
   const startSelectedSession = async () => {
-    if (!requireIdle() || startingSession || !targetConfig || selectedDefinition?.enabled === false) return;
+    if (!requireIdle() || startingSession || !targetConfig) return;
+    if (selectedSessionId === 'default') { openModelSettings(); return; }
     const latest = store.getConfig?.() ?? store.cfg;
     if (!latest) return;
     if (sessionHasActivity(selectedSessionId) || ((latest.stop_existing_sessions_on_load ?? true) && anySessionActivity())) {
@@ -148,12 +149,9 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     setStartingSession(true);
     setError(null);
     try {
-      if (selectedSessionId === "default") await store.start();
-      else {
-        const definition = latest.sessions?.find((item) => item.id === selectedSessionId) ?? selectedDefinition;
-        if (!definition) throw new Error("Save this session's model settings before starting it.");
-        await api.sessionStart(selectedSessionId, sessionConfig(latest, definition), latest.stop_existing_sessions_on_load ?? true);
-      }
+      const definition = latest.sessions?.find((item) => item.id === selectedSessionId) ?? selectedDefinition;
+      if (!definition) throw new Error("Save this session's model settings before starting it.");
+      await api.sessionStart(selectedSessionId, sessionConfig(latest, definition), latest.stop_existing_sessions_on_load ?? true);
       notifySessionStatusChanged();
       await store.refreshStatus();
     } catch (caught) {
@@ -302,7 +300,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             modelSettingsLabel={modelSettings ? modelSettingsCopy[locale].title : undefined}
             onOpenDiagnostics={onOpenDiagnostics}
             onStart={() => void startSelectedSession()}
-            starting={store.busy || startingSession || selectedDefinition?.enabled === false}
+            starting={store.busy || startingSession}
           />
 
           <ChatComposer

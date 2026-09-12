@@ -14,19 +14,18 @@ import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
 import InitialSurface from "../shared/ui/InitialSurface";
-import { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator } from "../shared/ui/PanelFeedback";
+import { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
 
 import { useI18n } from "../shared/i18n/i18n";
 import { buildNumber } from "../shared/runtime/runtimeUtils";
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
-import { DraftGuardProvider, useDraftGuard } from '../shared/state/draftGuard';
+import { DraftGuardProvider } from '../shared/state/draftGuard';
 import { useExecutionStore } from '../features/models/useExecutionStore';
 import { executionText } from '../shared/i18n/executionI18n';
 import type { ExecutionSection } from '../features/models/ModelWorkspace';
 import { ModelSettingsProvider, useModelSettings, MANAGE_MODEL_RUNTIMES } from '../features/model-settings/ModelSettingsProvider';
 import { modelActions } from '../shared/i18n/modelActions';
-import { sessionHasActivity } from '../shared/state/sessionActivity';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
@@ -73,7 +72,6 @@ function AppContent() {
 
 function AppShell({ preferences, setPreferences, store, selectModel }: { preferences: AppPreferences; setPreferences: React.Dispatch<React.SetStateAction<AppPreferences>>; store: ReturnType<typeof useAppStore>; selectModel: (path: string) => Promise<void> }) {
   const modelSettings = useModelSettings()!;
-  const draftGuard = useDraftGuard();
   const { t, locale, setLocale } = useI18n();
   const modelCopy = modelActions(locale);
   const executionCopy = executionText[locale];
@@ -174,12 +172,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const openDiagnostics = () => { navigate("diagnostics"); };
   const openTuning = () => { navigate("tuning"); };
   const openProfiles = () => { navigate("profiles"); };
-  const toggleServer = async () => {
+  const stopDefaultSession = async () => {
     try {
       if (serverState === "running" || serverState === "starting") await store.stop();
-      else if (sessionHasActivity('default')) { modelSettings.open({ target: { kind: 'default' } }); return; }
-      else if (!store.cfg?.active_model) openModels();
-      else await draftGuard.run(async () => { await store.start(); });
     } catch {
       // The store publishes an actionable error banner; keep the shell mounted.
     }
@@ -188,8 +183,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "gateways" || view === "diagnostics";
-  const backendLabel = store.cfg?.active_backend
-    ? `${store.cfg.active_backend}${store.cfg.active_build ? ` · ${buildNumber(store.cfg.active_build)}` : ""}`
+  const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? store.status.model : undefined;
+  const backendLabel = store.status.execution?.active_backend
+    ? `${store.status.execution.active_backend}${store.status.execution.active_build ? ` · ${buildNumber(store.status.execution.active_build)}` : ""}`
     : t("load.pathRuntime");
 
 
@@ -214,11 +210,11 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="aiolm-context-model" aria-label={`${modelCopy.choose}: ${shortModel(store.cfg?.active_model, t('load.noModel'))}`} title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")} onClick={openModels}>{shortModel(store.cfg?.active_model, t("load.noModel"))}</button><button type="button" className="aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{backendLabel} · ⚙</button>{serverState === 'running' && store.status.model !== store.cfg?.active_model && <small>{modelCopy.current}: {shortModel(store.status.model, t('load.noModel'))}</small>}</div>
-        <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span><button type="button" className={"app-button app-button--" + (serverState === "running" || serverState === "starting" ? "secondary" : "primary")} disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void toggleServer()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : serverBusy ? t("status.working") : !store.cfg?.active_model ? modelCopy.choose : t("action.start")} labels={[t("action.stop"), t("status.working"), t("action.start"), modelCopy.choose]} /></button></div>
+        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{shortModel(liveModel, modelCopy.choose)}</button><button type="button" className="aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel ? `${backendLabel} · ` : ''}⚙</button></div>
+        <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span>{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
-        <details className="app-activity">
+        <PanelFeedbackActivity hasActivity={tasks.length > 0 || !!hasError || store.bootState === 'native-unavailable'}>
           <summary><span>{t("ui.taskStripTitle")}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span><PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} /></summary>
           <div className="app-activity-content">
         <div className="app-feedback-layer" aria-live="polite">
@@ -228,14 +224,14 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <TaskStrip />
         <PanelFeedbackOutlet />
           </div>
-        </details>
+        </PanelFeedbackActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
           {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onOpenDiagnostics={openDiagnostics} />)}
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
-          {panel("runtimes", <><div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.suspended ? modelSettings.resume : openModels}>{modelSettings.suspended ? modelCopy.resume : executionCopy.back}</button></div><RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} managementOnly /></>)}
+          {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} managementOnly /></>)}
           {panel("benchmark", <BenchPanel store={store} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>

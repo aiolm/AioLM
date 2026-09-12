@@ -57,7 +57,7 @@ export default function TuningServerSection({
           </div>
           <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
         </div>
-        <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")} hideLabel><CustomSelect
+        <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}><CustomSelect
           id={`${id}-flash-attn`}
           value={cfg.flash_attn === "on" || cfg.flash_attn === "off" ? cfg.flash_attn : "auto"}
           options={[
@@ -86,7 +86,7 @@ export default function TuningServerSection({
                   <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
                   <Tooltip content={tooltip} label={`Help for ${label}`} id={`${inputId}-help`} />
                 </div>
-                <TuningDefaultField fieldKey={field.key} label={label} hideLabel><CustomSelect
+                <TuningDefaultField fieldKey={field.key} label={label}><CustomSelect
                   id={inputId}
                   value={field.options?.includes(value) ? value : (field.options?.[0] ?? value)}
                   options={(field.options ?? []).map((option) => ({ value: option, label: option }))}

@@ -52,7 +52,7 @@ describe("Performance benchmark workflow", () => {
   it("applies a benchmark model independently and freezes its configuration for a run", async () => {
     vi.mocked(useModelSettings).mockReturnValue(settings);
     const { rerender } = renderPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Choose model:/ }));
     const request = vi.mocked(settings.open).mock.calls[0][0];
     expect(request.target.kind).toBe("benchmark");
     const target = { ...cfg, active_model: "models/benchmark.gguf", ctx_size: 8192, temperature: 0.2, server_args: ["--threads", "4"] };
@@ -70,7 +70,7 @@ describe("Performance benchmark workflow", () => {
     target.server_args.push("--no-mmap");
     rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, cfg: { ...cfg, active_model: "models/another.gguf" } }} /></I18nProvider>);
     expect(screen.getByTitle("models/benchmark.gguf")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Choose model" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Choose model:/ })).toBeDisabled();
     expect(runConfig.server_args).toEqual(["--threads", "4"]);
     await act(async () => finish(result(runRequest.run_id, [row()])));
     const record = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0];
@@ -87,7 +87,7 @@ describe("Performance benchmark workflow", () => {
     expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
     expect(mocked.sessionStop).not.toHaveBeenCalled();
     expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Choose model:/ }));
     expect(settings.open).toHaveBeenCalled();
     expect(mocked.sessionStop).not.toHaveBeenCalled();
   });

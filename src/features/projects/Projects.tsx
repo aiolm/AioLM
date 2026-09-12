@@ -184,7 +184,6 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     <div className="app-page-scroll relative flex h-full min-h-0 flex-col overflow-auto p-4">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="app-eyebrow">{t("section.projects")}</div>
           <h2 className="mt-1 text-[18px] font-semibold tracking-tight ui-color-ink" >{t("ui.projectsTitle")}</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-muted" >{t("ui.projectsDescription")}</p>
         </div>
@@ -230,15 +229,14 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <label className="mt-3 block text-xs ui-color-muted" >{t("ui.fieldSystemPrompt")}<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={3} className="app-textarea mt-1" /></label>
           <section className="project-config-snapshot">
             <h3>{t("ui.projectSavedSetup")}</h3>
-            <p>{t("ui.projectSnapshotHint")}</p>
             <dl>
-              <div><dt>{t("ui.fieldModelPath")}</dt><dd title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? "")}>{modelDisplayName((configSnapshot ?? cfg)?.active_model ?? "") || t("load.noModel")}</dd></div>
+              <div><dt>{t("ui.fieldModelPath")}</dt><dd>{modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" disabled={!cfg} title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? '')} aria-label={`${modelCopy.choose}: ${modelDisplayName((configSnapshot ?? cfg)?.active_model ?? '') || t('load.noModel')}`} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'model', onApply: next => setConfigSnapshot(structuredClone(next)) })}><span>{modelDisplayName((configSnapshot ?? cfg)?.active_model ?? '') || modelCopy.choose}</span><span aria-hidden="true">▾</span></button> : <span title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? '')}>{modelDisplayName((configSnapshot ?? cfg)?.active_model ?? '') || t('load.noModel')}</span>}</dd></div>
               <div><dt>{t("ui.fieldBackend")}</dt><dd>{(configSnapshot ?? cfg)?.active_backend || "PATH"} · {(configSnapshot ?? cfg)?.active_build || "system"}</dd></div>
               <div><dt>{t("ui.fieldContext")}</dt><dd>{(configSnapshot ?? cfg)?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : (configSnapshot ?? cfg)?.ctx_size.toLocaleString()}</dd></div>
             </dl>
             <div className="profile-snapshot-actions">
               <button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={() => { setConfigSnapshot(structuredClone(cfg)); setNotice(t("ui.projectSnapshotCaptured")); }}>{t("ui.useCurrentSetup")}</button>
-              {modelSettings ? <><button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'model', onApply: next => setConfigSnapshot(structuredClone(next)) })}>{modelCopy.choose}</button><button type="button" className="app-button app-button--ghost" disabled={!cfg} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'runtime', onApply: next => setConfigSnapshot(structuredClone(next)) })}>{modelCopy.settings}</button></> : onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
+              {modelSettings ? <button type="button" className="app-button app-button--ghost" disabled={!cfg} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'runtime', onApply: next => setConfigSnapshot(structuredClone(next)) })}>{modelCopy.settings}</button> : onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
             </div>
           </section>
           <div className="mt-4 border-t pt-3 ui-border-color-border" >
@@ -252,7 +250,6 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <button type="button" onClick={save} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
             {selected && <><button type="button" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--primary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
           </div>
-          <p className="mt-3 text-xs leading-relaxed ui-color-faint" >{t("ui.projectsFooter")}</p>
         </section>
       </div>
     </div>

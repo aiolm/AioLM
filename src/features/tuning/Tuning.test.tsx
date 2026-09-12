@@ -174,7 +174,6 @@ describe("Tuning defaults controls", () => {
     await waitFor(() => expect(test.config().runtime_defaults).toEqual(["ngl"]));
     expect(test.config().server_args).toEqual(["--min-p", "0.2"]);
     expect(test.config().ctx_size).toBe(4096);
-    fireEvent.click(screen.getByRole("button", { name: /Set custom value for GPU layers/i }));
     const input = screen.getByRole("spinbutton", { name: /GPU layers/i });
     fireEvent.change(input, { target: { value: "25" } });
     fireEvent.blur(input);

@@ -72,7 +72,7 @@ describe("ModelsPanel layout", () => {
     expect(screen.queryByTestId("execution-profiles-section")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Execution profiles" })).not.toBeInTheDocument();
     expect(screen.getByTestId("models-list")).toHaveClass("models-model-list");
-    expect(screen.getByTestId("models-header-actions")).toHaveClass("min-w-0", "w-full", "flex-wrap");
+    expect(screen.queryByTestId("models-header-actions")).not.toBeInTheDocument();
   });
 
   it("leaves server lifecycle controls to the app toolbar", () => {

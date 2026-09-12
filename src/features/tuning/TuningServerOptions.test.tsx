@@ -36,6 +36,57 @@ function openOption(flag: string) {
 }
 
 describe('server option editing', () => {
+  it('shows an editable runtime default without creating an override on focus', async () => {
+    const options = parseRuntimeHelp('--custom-limit N             custom limit (default: 32)');
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: [] }}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const option = openOption('--custom-limit');
+    const input = option.getByRole('textbox');
+    expect(input).toHaveValue('32');
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+    expect(save).not.toHaveBeenCalled();
+    expect(option.queryByRole('button', { name: 'Save option' })).not.toBeInTheDocument();
+    expect(option.queryByRole('button', { name: 'Set custom value' })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '64' } });
+    fireEvent.click(option.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(options[0], [{ flag: '--custom-limit', values: ['64'] }]));
+  });
+
+  it('allows a flag without arguments to be selected directly from its inherited state', async () => {
+    const options = parseRuntimeHelp('--custom-flag                 custom flag');
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: [] }}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const option = openOption('--custom-flag');
+    expect(option.getByRole('combobox')).toHaveValue('');
+    fireEvent.change(option.getByRole('combobox'), { target: { value: '--custom-flag' } });
+    fireEvent.click(option.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(options[0], [{ flag: '--custom-flag', values: [] }]));
+  });
+
+  it('keeps a default input after removing the last occurrence and saves an empty override list', async () => {
+    const options = parseRuntimeHelp('--custom-limit N             custom limit (default: 32)');
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: ['--custom-limit', '64'] }}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const option = openOption('--custom-limit');
+    fireEvent.click(option.getByRole('button', { name: 'Add occurrence' }));
+    expect(option.getAllByRole('textbox')).toHaveLength(2);
+    fireEvent.change(option.getByRole('textbox', { name: '--custom-limit Argument 2.1' }), { target: { value: '128' } });
+    fireEvent.click(option.getByRole('button', { name: '--custom-limit Remove occurrence 2' }));
+    expect(option.getByRole('textbox')).toHaveValue('64');
+    fireEvent.click(option.getByRole('button', { name: '--custom-limit Remove occurrence 1' }));
+    expect(option.getByRole('textbox')).toHaveValue('32');
+    expect(option.getByRole('textbox')).toBeEnabled();
+    fireEvent.click(option.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(options[0], []));
+  });
+
   it('formats runtime path suggestions and signatures while saving the original selected path', async () => {
     const raw = String.raw`\\?\UNC\server\models\cache.bin`;
     const display = String.raw`\\server\models\cache.bin`;
@@ -103,12 +154,13 @@ describe('server option editing', () => {
     await waitFor(() => expect(document.querySelector('[data-server-option="--future-pr-option"]')).toBeInTheDocument());
     expect(document.querySelector('[data-server-option="--load-mode"]')).not.toBeInTheDocument();
     const mmap = openOption('--mmap');
-    fireEvent.click(mmap.getByRole('button', { name: 'Set custom value' }));
     fireEvent.change(mmap.getByRole('combobox'), { target: { value: '--no-mmap' } });
     fireEvent.click(mmap.getByRole('button', { name: 'Save option' }));
     await waitFor(() => expect(cfg().server_args).toEqual(['--cache-ram', '-1', '--no-mmap']));
     fireEvent.click(mmap.getByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(cfg().server_args).toEqual(['--cache-ram', '-1']));
+    expect(mmap.getByRole('combobox')).toHaveValue('');
+    expect(mmap.queryByRole('button', { name: 'Set custom value' })).not.toBeInTheDocument();
   });
   it('saves port through the dedicated config and rejects an invalid port', async () => {
     const cfg = mount();
@@ -129,7 +181,6 @@ describe('server option editing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All server options' }));
     await waitFor(() => expect(document.querySelector('[data-server-option="--top-p"]')).toBeInTheDocument());
     const topP = openOption('--top-p');
-    fireEvent.click(topP.getByRole('button', { name: 'Set custom value' }));
     fireEvent.change(topP.getByRole('textbox'), { target: { value: '0.6' } });
     fireEvent.click(topP.getByRole('button', { name: 'Save option' }));
     await waitFor(() => expect(cfg().top_p).toBe(0.6));
@@ -137,6 +188,8 @@ describe('server option editing', () => {
     fireEvent.click(topP.getByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(cfg().runtime_defaults).toContain('top_p'));
     expect(cfg().server_args).toEqual(['--cache-ram', '-1']);
+    expect(topP.getByRole('textbox')).toBeEnabled();
+    expect(topP.queryByRole('button', { name: 'Save option' })).not.toBeInTheDocument();
   });
   it('displays server sampling overrides and prioritizes explicit request values', () => {
     const field = ADVANCED_SAMPLING_FIELDS.find(item => item.key === 'min_p')!;
