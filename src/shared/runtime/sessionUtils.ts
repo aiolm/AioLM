@@ -1,4 +1,5 @@
 import type { AppConfig, GpuPlacement, GpuDevice, SessionDefinition, SessionStatus } from "../api/types";
+import { executionSettings, sessionExecutionSettings } from "../config/executionSettings";
 
 export const DEFAULT_SESSION_ID = "default";
 export const SESSION_STATUS_CHANGED_EVENT = "aiolm:session-status-changed";
@@ -97,10 +98,22 @@ export function parseGpuTensorSplits(drafts: Record<string, string>, gpuIds: str
 export function sessionConfig(cfg: AppConfig, definition: SessionDefinition): AppConfig {
   return {
     ...cfg,
+    ...executionSettings(definition.execution ?? {}),
     active_model: definition.models.primary_model,
     mmproj: definition.models.mmproj,
     spec_draft_model: definition.models.draft_model,
     gpu: cloneGpuPlacement(definition.gpu),
+  };
+}
+
+export function sessionDefinitionFromStatus(status: SessionStatus, cfg: AppConfig): SessionDefinition {
+  return {
+    id: status.id,
+    name: status.name || status.id,
+    models: { primary_model: status.model ?? "", mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
+    gpu: cloneGpuPlacement(status.gpu ?? status.execution?.gpu),
+    enabled: true,
+    ...(status.execution ? { execution: sessionExecutionSettings({ ...cfg, ...executionSettings(status.execution) }) } : {}),
   };
 }
 

@@ -5,6 +5,15 @@ import { createTestStore } from "../../testing/appStore";
 import { createServerProfile, loadProfiles, saveServerProfile, serverProfilePatch, createModelProfile, modelProfilePatch, saveModelProfile, saveProfileSelection } from "./modelProfiles";
 import { writeLoadingProfiles } from "../../shared/runtime/runtimeUtils";
 import ExecutionProfiles from "./ExecutionProfiles";
+import type { AppConfig } from '../../shared/api/types';
+
+function savedProfiles(cfg: AppConfig, path: string) {
+  const loaded = loadProfiles(cfg, path);
+  loaded.server.forEach(profile => saveServerProfile(profile));
+  loaded.model.forEach(profile => saveModelProfile(profile));
+  saveProfileSelection(loaded.activeServerId, path, loaded.activeModelId);
+  return loaded;
+}
 
 describe("Saved execution settings", () => {
   beforeEach(() => localStorage.clear());
@@ -25,7 +34,7 @@ describe("Saved execution settings", () => {
 
   it('restores each model’s selected profiles without replacing their controls', () => {
     const store = createTestStore({ active_model: 'a.gguf' });
-    const initial = loadProfiles(store.cfg!, 'a.gguf');
+    const initial = savedProfiles(store.cfg!, 'a.gguf');
     const other = createServerProfile(store.cfg!, 'Other model settings');
     saveServerProfile(other);
     saveProfileSelection(initial.activeServerId, 'a.gguf', initial.activeModelId);
@@ -49,7 +58,7 @@ describe("Saved execution settings", () => {
 
   it("previews selection without applying it; load preserves sampling and its defaults", async () => {
     const store = createTestStore({ runtime_defaults: ["temperature"], temperature: 0.65 });
-    const initial = loadProfiles(store.cfg!, "model.gguf");
+    const initial = savedProfiles(store.cfg!, "model.gguf");
     const saved = createServerProfile({ ...store.cfg!, ctx_size: 8192, runtime_defaults: ["ngl"] }, "Long context");
     saveServerProfile(saved);
     render(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="model.gguf" /></I18nProvider>);
@@ -80,7 +89,7 @@ describe("Saved execution settings", () => {
 
   it("requires confirmation before replacing a saved preset", () => {
     const store = createTestStore();
-    loadProfiles(store.cfg!, "model.gguf");
+    savedProfiles(store.cfg!, "model.gguf");
     store.cfg = { ...store.cfg!, ctx_size: 16384 };
     render(<I18nProvider initialLocale="en"><ExecutionProfiles store={store} modelPath="model.gguf" /></I18nProvider>);
     fireEvent.click(screen.getAllByRole("button", { name: "Save current" })[0]);
@@ -90,7 +99,7 @@ describe("Saved execution settings", () => {
 
   it("keeps selection unchanged when persistence fails", async () => {
     const store = createTestStore();
-    const initial = loadProfiles(store.cfg!, "model.gguf");
+    const initial = savedProfiles(store.cfg!, "model.gguf");
     const saved = createServerProfile(store.cfg!, "Other");
     saveServerProfile(saved);
     store.updateConfig = vi.fn(async () => { throw new Error("Disk full"); });
@@ -136,7 +145,7 @@ describe("Saved execution settings", () => {
 
   it("loads a shared profile explicitly without changing the current model or server settings", async () => {
     const store = createTestStore({ active_model: "a.gguf", runtime_defaults: ["ctx_size"] });
-    const initial = loadProfiles(store.cfg!, "a.gguf");
+    const initial = savedProfiles(store.cfg!, "a.gguf");
     const shared = createModelProfile({ ...store.cfg!, temperature: 0.25, chat_options: { stop: ["<end>"] }, runtime_defaults: ["top_k"] }, "Precise");
     saveModelProfile(shared);
     Object.assign(store.cfg!, { active_model: "b.gguf" });

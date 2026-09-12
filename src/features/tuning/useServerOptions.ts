@@ -3,11 +3,12 @@ import { rtProbe } from '../../shared/api/index';
 import { parseRuntimeHelp, SERVER_OPTIONS } from '../../shared/config/serverOptions';
 import type { RuntimeCapabilities } from '../../shared/api/types';
 
-export function useServerOptions(backend: string, build: string) {
+export function useServerOptions(backend: string, build: string, enabled = true) {
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState<{ key: string; help: string; error: string; loading: boolean; capabilities?: RuntimeCapabilities }>();
   const key = `${backend}/${build}`;
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     setResult(previous => ({ ...(previous?.key === key ? previous : { key, help: '' }), error: '', loading: true }));
     void rtProbe(backend, build).then(value => {
@@ -18,7 +19,7 @@ export function useServerOptions(backend: string, build: string) {
       if (active) setResult(previous => ({ ...(previous?.key === key ? previous : { key, help: '' }), error: String(error), loading: false }));
     });
     return () => { active = false; };
-  }, [backend, build, key, revision]);
+  }, [backend, build, key, revision, enabled]);
   const current = result?.key === key ? result : undefined;
   const catalog = useMemo(() => {
     const parsed = parseRuntimeHelp(current?.help ?? '');

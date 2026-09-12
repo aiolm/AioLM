@@ -4,7 +4,9 @@ The Benchmark screen measures local serving requests with a dedicated `llama-ser
 
 ## Workflow
 
-Select a model and runtime in the model workspace, stop running model sessions, and open Benchmark. Select one or more prompt lengths, the output length, concurrent request counts, repetitions, and an input profile. Every input length gets a single-request baseline and each selected concurrent workload. Leaving the screen does not cancel the run. Cancel stops the dedicated server and preserves trials already returned.
+Choose a model directly in Benchmark and open Model settings to select its runtime, GPU placement, and execution options. Applying these settings changes only the benchmark target. The default execution model and saved chat settings remain available for their own sessions. Stop running model sessions before starting a measurement; the page lists sessions that must be stopped. Select one or more prompt lengths, the output length, concurrent request counts, repetitions, and an input profile. Every input length gets a single-request baseline and each selected concurrent workload. Leaving the screen does not cancel the run. Cancel stops the dedicated server and preserves trials already returned.
+
+The settings dialog edits a draft. Cancel discards unapplied edits. Context allocation, concurrency, and sampling used by the measurement are controlled by the benchmark workload; their controls explain this constraint. The target starts from the default execution settings on first use and then remains independent. Use the explicit default-settings action to replace it with the current default execution settings.
 
 Defaults are 4,096 and 16,384 input tokens, 128 output tokens, 2 and 4 concurrent requests, one repetition, Python code, and warmup enabled. Concurrent request counts are separate from the runtime's token batch and microbatch settings. A workload without additional concurrent request counts runs only its single-request baseline.
 

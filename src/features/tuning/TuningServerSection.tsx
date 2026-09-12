@@ -7,6 +7,7 @@ import TuningDefaultField from "./TuningDefaultField";
 import TuningOptionMetadata from './TuningOptionMetadata';
 import { SERVER_FIELDS, SERVER_TEXT_FIELDS, tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import TuningSpeculativeSection from "./TuningSpeculativeSection";
+import { useTuningId } from './TuningIdScope';
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -39,6 +40,7 @@ export default function TuningServerSection({
   fields = SERVER_FIELDS, showFlashAttention = true, showProjector = true,
   showSpeculative = true, showCacheTypes = true,
 }: Props) {
+  const id = useTuningId();
   const projectorField = SERVER_TEXT_FIELDS.find((field) => field.key === "mmproj");
   const projectorTooltip = projectorField ? tuningFieldTooltip(t as never, projectorField) : undefined;
   const cacheKeyField = SERVER_TEXT_FIELDS.find((field) => field.key === "cache_type_k");
@@ -50,13 +52,13 @@ export default function TuningServerSection({
       {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 w-full max-w-lg">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
-            <label htmlFor="tuning-flash-attn" className="text-sm text-ink">{t("ui.flashAttention")}</label>
-            <Tooltip content={{ title: t("ui.flashAttention") as string, description: t("ui.flashAttentionHint") as string }} label={`Help for ${t("ui.flashAttention")}`} id="tuning-flash-attn-help" />
+            <label htmlFor={`${id}-flash-attn`} className="text-sm text-ink">{t("ui.flashAttention")}</label>
+            <Tooltip content={{ title: t("ui.flashAttention") as string, description: t("ui.flashAttentionHint") as string }} label={`Help for ${t("ui.flashAttention")}`} id={`${id}-flash-attn-help`} />
           </div>
           <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
         </div>
         <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")} hideLabel><CustomSelect
-          id="tuning-flash-attn"
+          id={`${id}-flash-attn`}
           value={cfg.flash_attn === "on" || cfg.flash_attn === "off" ? cfg.flash_attn : "auto"}
           options={[
             { value: "auto", label: "auto" },
@@ -73,7 +75,7 @@ export default function TuningServerSection({
       {showCacheTypes && showAdvanced && cacheFields.length > 0 && (
         <div className="mt-4 grid min-w-0 gap-4 app-form-grid">
           {cacheFields.map((field) => {
-            const inputId = `tuning-${field.key}`;
+            const inputId = `${id}-${field.key}`;
             const value = serverTextValue(field.key);
             const label = tuningFieldLabel(t as never, field);
             const hint = tuningFieldHint(t as never, field);
@@ -107,13 +109,13 @@ export default function TuningServerSection({
           {showProjector && <div className="mt-4 flex min-w-0 flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-1.5">
-                <label htmlFor="tuning-mmproj" className="text-sm text-ink">{t("ui.mmprojLabel")}</label>
-                {projectorTooltip && <Tooltip content={projectorTooltip} label={`Help for ${t("ui.mmprojLabel")}`} id="tuning-mmproj-help" />}
+                <label htmlFor={`${id}-mmproj`} className="text-sm text-ink">{t("ui.mmprojLabel")}</label>
+                {projectorTooltip && <Tooltip content={projectorTooltip} label={`Help for ${t("ui.mmprojLabel")}`} id={`${id}-mmproj-help`} />}
               </div>
               <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
             </div>
             <input
-              id="tuning-mmproj"
+              id={`${id}-mmproj`}
               value={serverTextValue("mmproj")}
               onChange={(event) => onServerTextChange("mmproj", event.target.value)}
               onBlur={(event) => commitServerText("mmproj", event.currentTarget.value)}

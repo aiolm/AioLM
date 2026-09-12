@@ -47,6 +47,8 @@ pub struct ServerState {
     pub model: String,
     pub mmproj: String,
     pub draft_model: String,
+    /// Successful launch settings, independent of values saved for the next run.
+    pub execution: Option<AppConfig>,
     pub lifecycle: Lifecycle,
     pub last_error: Option<String>,
     pub last_activity_at: Instant,
@@ -124,6 +126,7 @@ impl ServerState {
             model: String::new(),
             mmproj: String::new(),
             draft_model: String::new(),
+            execution: None,
             lifecycle: Lifecycle::Stopped,
             last_error: None,
             last_activity_at: Instant::now(),
@@ -141,12 +144,14 @@ impl Default for ServerState {
 
 impl ServerState {
     pub fn begin_launch(&mut self) -> u64 {
+        self.execution = None;
         self.launch_generation = self.launch_generation.wrapping_add(1);
         self.lifecycle = Lifecycle::Starting;
         self.launch_generation
     }
 
     pub fn cancel_launch(&mut self) {
+        self.execution = None;
         self.launch_generation = self.launch_generation.wrapping_add(1);
         self.lifecycle = Lifecycle::Stopped;
     }
@@ -956,6 +961,7 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
                 state.redaction_secret.clear();
                 state.mmproj.clear();
                 state.lifecycle = Lifecycle::Crashed;
+                state.execution = None;
                 state.last_error = Some(if tail.trim().is_empty() {
                     format!("failed to inspect server process: {error}")
                 } else {
@@ -974,6 +980,7 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
     state.redaction_secret.clear();
     state.mmproj.clear();
     state.lifecycle = Lifecycle::Crashed;
+    state.execution = None;
     let tail = err.tail();
     let code = status
         .code()

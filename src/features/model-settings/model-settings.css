@@ -1,0 +1,59 @@
+.model-settings-dialog { width: min(1120px, calc(100vw - 40px)); max-width: none; height: min(850px, calc(100dvh - 40px)); max-height: none; padding: 0; margin: auto; border: 1px solid var(--ui-border); border-radius: 18px; color: var(--ui-ink); background: var(--ui-panel); box-shadow: 0 24px 100px #0005; overflow: visible; }
+.model-settings-dialog::backdrop { background: #08101c88; backdrop-filter: blur(3px); }
+.model-settings-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-radius: inherit; }
+.model-settings-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 24px 16px; border-bottom: 1px solid var(--ui-border); flex-shrink: 0; }
+.model-settings-header > div { min-width: 0; }
+.model-settings-header h2 { margin: 4px 0; font-size: 21px; font-weight: 650; outline-offset: 4px; }
+.model-settings-header p { margin: 0; color: var(--ui-muted); overflow-wrap: anywhere; font-size: 13px; }
+.model-settings-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
+.model-settings-nav { display: flex; flex-direction: column; gap: 4px; padding: 16px 12px; border-right: 1px solid var(--ui-border); overflow-y: auto; }
+.model-settings-nav button { display: block; text-align: left; font-size: 13px; padding: 11px 12px; border-radius: 9px; color: var(--ui-muted); white-space: normal; }
+.model-settings-nav button:hover, .model-settings-nav button.is-active { background: var(--ui-accent-soft); color: var(--ui-ink); }
+.model-settings-nav button.is-active { font-weight: 650; box-shadow: inset 3px 0 var(--ui-accent); }
+.model-settings-body { min-width: 0; overflow: auto; padding: 20px 24px 28px; overscroll-behavior: contain; }
+.model-settings-body [hidden] { display: none !important; }
+.model-settings-fields { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.model-settings-fields label { display: flex; flex-direction: column; gap: 7px; min-width: 0; font-size: 13px; }
+.model-settings-fields h3 { font-size: 15px; font-weight: 650; }
+.model-settings-section-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.model-settings-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 20px; font-size: 12px; }
+.model-settings-models { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.model-settings-models button { display: flex; justify-content: space-between; align-items: center; text-align: left; width: 100%; padding: 14px 16px; border-radius: 11px; border: 1px solid var(--ui-border); background: var(--ui-panel); gap: 14px; font-size: 12px; }
+.model-settings-models button > span:first-child { min-width: 0; }
+.model-settings-models strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.model-settings-models small { display: block; margin-top: 5px; color: var(--ui-muted); }
+.model-settings-models button.is-selected { border-color: var(--ui-accent); background: var(--ui-accent-soft); }
+.model-settings-models button:disabled { opacity: .55; cursor: not-allowed; }
+.model-settings-gpus { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.model-settings-fields .model-settings-gpu { flex-direction: row; gap: 9px; align-items: flex-start; border: 1px solid var(--ui-border); border-radius: 10px; padding: 12px; }
+.model-settings-gpu small { display: block; margin-top: 4px; color: var(--ui-muted); }
+.model-settings-scope { border: 1px solid var(--ui-border); background: var(--ui-accent-soft); border-radius: 10px; margin-bottom: 18px; padding: 12px 14px; font-size: 12px; line-height: 1.6; }
+.model-settings-lora { display: grid; grid-template-columns: minmax(0, 1fr) auto 90px auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--ui-border); border-radius: 10px; }
+.model-settings-lora strong { font-size: 12px; overflow-wrap: anywhere; }
+.model-settings-options details, .model-settings-shared { border: 1px solid var(--ui-border); border-radius: 10px; padding: 12px; margin-bottom: 8px; }
+.model-settings-options summary, .model-settings-shared summary { cursor: pointer; font-size: 13px; }
+.model-settings-options details > p, .model-settings-shared > p { margin: 12px 0; }
+.model-settings-shared label { margin: 14px 0; }
+.model-settings-footer { flex-shrink: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow-y: auto; }
+.model-settings-notices { font-size: 12px; color: var(--ui-muted); margin-bottom: 12px; line-height: 1.5; }
+.model-settings-actions { display: flex; gap: 9px; justify-content: flex-end; flex-wrap: wrap; }
+.model-settings-confirm { font-size: 13px; line-height: 1.5; }
+.model-settings-confirm p { margin: 5px 0 12px; }
+.model-settings-confirm > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.model-settings-overlays { position: static; }
+.model-settings-dialog--picker { width: min(640px, calc(100vw - 40px)); height: min(690px, calc(100dvh - 40px)); }
+.model-settings-dialog--picker .model-settings-layout { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 720px) {
+  .model-settings-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); border-radius: 12px; }
+  .model-settings-header { padding: 15px 16px 12px; }
+  .model-settings-layout { display: flex; flex-direction: column; }
+  .model-settings-nav { flex-direction: row; flex-shrink: 0; overflow-x: auto; overflow-y: hidden; padding: 8px; border-right: 0; border-bottom: 1px solid var(--ui-border); }
+  .model-settings-nav button { white-space: nowrap; padding: 8px 10px; }
+  .model-settings-nav button.is-active { box-shadow: inset 0 -2px var(--ui-accent); }
+  .model-settings-body { padding: 16px; }
+  .model-settings-grid, .model-settings-gpus { grid-template-columns: minmax(0, 1fr); }
+  .model-settings-lora { grid-template-columns: minmax(0, 1fr) 80px; }
+  .model-settings-footer { padding: 12px 16px; }
+  .model-settings-actions > button { flex: 1 1 120px; }
+}

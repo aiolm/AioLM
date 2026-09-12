@@ -7,9 +7,13 @@ import type { AppStore } from "../../shared/state/store";
 import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
 import { PERFORMANCE_HISTORY_KEY, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import * as performanceRecords from "./performanceRecords";
+import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
+
+vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", () => ({
   deviceProfile: vi.fn(), onPerformanceBenchmarkProgress: vi.fn(), runPerformanceBench: vi.fn(), benchCancel: vi.fn(),
+  sessionList: vi.fn(async () => []), normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []), sessionStop: vi.fn(async () => undefined),
 }));
 
 const cfg = { active_model: "C:/models/test.gguf", active_backend: "cpu", active_build: "b1", iters: 3, runtime_defaults: [] } as unknown as api.AppConfig;
@@ -30,9 +34,11 @@ function renderPanel(selectedStore = store) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(useModelSettings).mockReturnValue(null);
+  mocked.sessionList.mockResolvedValue([]);
   localStorage.clear();
   for (const task of getTaskSnapshot()) removeTask(task.id);
-  store = { cfg, status: { state: "stopped" }, busy: false, refreshStatus: vi.fn().mockResolvedValue(undefined), stop: vi.fn().mockResolvedValue(undefined) } as unknown as AppStore;
+  store = { cfg, status: { state: "stopped" }, busy: false, updateConfig: vi.fn(), refreshStatus: vi.fn().mockResolvedValue(undefined), stop: vi.fn().mockResolvedValue(undefined) } as unknown as AppStore;
   mocked.deviceProfile.mockResolvedValue(null as unknown as api.DeviceReport);
   mocked.onPerformanceBenchmarkProgress.mockImplementation(async (callback) => { emit = callback; return unlisten; });
   mocked.benchCancel.mockResolvedValue(undefined);
@@ -41,6 +47,51 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Performance benchmark workflow", () => {
+  const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null };
+
+  it("applies a benchmark model independently and freezes its configuration for a run", async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    const request = vi.mocked(settings.open).mock.calls[0][0];
+    expect(request.target.kind).toBe("benchmark");
+    const target = { ...cfg, active_model: "models/benchmark.gguf", ctx_size: 8192, temperature: 0.2, server_args: ["--threads", "4"] };
+    await act(async () => { await request.onApply?.(target); });
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.stop).not.toHaveBeenCalled();
+    expect(store.cfg?.active_model).toBe(cfg.active_model);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run benchmark" })).toBeEnabled());
+    let finish!: (value: api.PerformanceBenchmarkResult) => void;
+    mocked.runPerformanceBench.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
+    const [runConfig, runRequest] = mocked.runPerformanceBench.mock.calls[0];
+    expect(runConfig).toMatchObject({ active_model: target.active_model, ctx_size: 8192, server_args: ["--threads", "4"] });
+    target.server_args.push("--no-mmap");
+    rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, cfg: { ...cfg, active_model: "models/another.gguf" } }} /></I18nProvider>);
+    expect(screen.getByTitle("models/benchmark.gguf")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Choose model" })).toBeDisabled();
+    expect(runConfig.server_args).toEqual(["--threads", "4"]);
+    await act(async () => finish(result(runRequest.run_id, [row()])));
+    const record = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0];
+    expect(record.model).toBe("models/benchmark.gguf");
+    expect(screen.getByTitle("models/benchmark.gguf")).toBeVisible();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("blocks measuring while a named session is running", async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work", state: "running", model: "models/work.gguf" }]);
+    renderPanel();
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
+    expect(mocked.sessionStop).not.toHaveBeenCalled();
+    expect(mocked.runPerformanceBench).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    expect(settings.open).toHaveBeenCalled();
+    expect(mocked.sessionStop).not.toHaveBeenCalled();
+  });
+
   it("starts with default workloads and allows single-request-only measurements", async () => {
     renderPanel();
     expect(screen.getByRole("checkbox", { name: "4K" })).toBeChecked();

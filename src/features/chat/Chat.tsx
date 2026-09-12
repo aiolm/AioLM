@@ -17,11 +17,15 @@ import ChatThreadSidebar from "./ChatThreadSidebar";
 import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
-import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
+import { SESSION_STATUS_CHANGED_EVENT, notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus } from "../../shared/runtime/sessionUtils";
+import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
+import { useModelSettings } from "../model-settings/ModelSettingsProvider";
+import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { titleFromMessage } from "./chatHistory";
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
+  const modelSettings = useModelSettings();
   const ct = (key: ChatTextKey) => t(`chat.${key}`);
   const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
   const [input, setInput] = useState("");
@@ -30,6 +34,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState("default");
+  const [startingSession, setStartingSession] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
 
@@ -61,7 +66,17 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     };
   }, [active]);
 
-  const selectedSession = selectedSessionId === "default" ? null : sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const savedSessions = store.cfg?.sessions ?? [];
+  const availableSessions = [
+    ...sessions,
+    ...savedSessions.filter((definition) => !sessions.some((session) => session.id === definition.id)).map((definition): api.SessionStatus => ({
+      id: definition.id, name: definition.name, state: "stopped", model: definition.models.primary_model,
+      mmproj: definition.models.mmproj, draft_model: definition.models.draft_model,
+    })),
+  ];
+  const selectedSession = selectedSessionId === "default" ? null : availableSessions.find((session) => session.id === selectedSessionId) ?? null;
+  const selectedDefinition = savedSessions.find((definition) => definition.id === selectedSessionId)
+    ?? (selectedSession && store.cfg ? sessionDefinitionFromStatus(selectedSession, store.cfg) : undefined);
   const selectedSessionAvailable = selectedSessionId === "default" || selectedSession !== null;
 
   useEffect(() => {
@@ -76,7 +91,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools({ setError: (message) => setError(message) });
 
   const requireIdle = () => {
-    if (phase === "idle") return true;
+    if (phase === "idle" && !pendingToolCall) return true;
     setError("Stop the current response before switching conversations.");
     return false;
   };
@@ -96,17 +111,57 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   const baseUrl = serverOn && selectedStatus.url ? selectedStatus.url : null;
   const apiKey = serverOn ? selectedStatus.api_key ?? "" : "";
-  const configuredModel = store.cfg?.active_model ?? "";
-  const model = (serverOn ? selectedStatus.model : "") || (selectedSessionId === "default" ? configuredModel : "");
+  const targetConfig = store.cfg && selectedDefinition ? sessionConfig(store.cfg, selectedDefinition) : store.cfg;
+  const configuredModel = selectedDefinition?.models.primary_model ?? (selectedSessionId === "default" ? store.cfg?.active_model ?? "" : selectedStatus.model ?? "");
+  const model = (serverOn ? selectedStatus.model : "") || configuredModel;
+  const effectiveConfig = targetConfig
+    ? modelSettings?.getRequestConfig(selectedSessionId, targetConfig, selectedStatus)
+      ?? { ...targetConfig, ...(serverOn ? selectedStatus.execution : {}), active_model: model }
+    : null;
 
   const {
     setError, error, contextWarning, contextSources, aborting, pendingToolCall, metrics, streamingDraft,
     failedRef, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   } = useChatSend({
-    store, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
+    store, effectiveConfig, sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
+    modelProfile: effectiveConfig ? modelSettings?.getRequestProfile(selectedSessionId, effectiveConfig) : undefined,
     input, setInput, attachments, documents, setAttachments, setDocuments,
     mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
   });
+
+  const openModelSettings = () => {
+    if (!requireIdle()) return;
+    if (modelSettings) modelSettings.open({
+      target: selectedSessionId === "default" ? { kind: "default" } : { kind: "session", sessionId: selectedSessionId },
+      ...(selectedDefinition ? { definition: selectedDefinition } : {}),
+    });
+    else onOpenModels?.();
+  };
+  const startSelectedSession = async () => {
+    if (!requireIdle() || startingSession || !targetConfig || selectedDefinition?.enabled === false) return;
+    const latest = store.getConfig?.() ?? store.cfg;
+    if (!latest) return;
+    if (sessionHasActivity(selectedSessionId) || ((latest.stop_existing_sessions_on_load ?? true) && anySessionActivity())) {
+      setError("Stop the active response before loading a model.");
+      return;
+    }
+    setStartingSession(true);
+    setError(null);
+    try {
+      if (selectedSessionId === "default") await store.start();
+      else {
+        const definition = latest.sessions?.find((item) => item.id === selectedSessionId) ?? selectedDefinition;
+        if (!definition) throw new Error("Save this session's model settings before starting it.");
+        await api.sessionStart(selectedSessionId, sessionConfig(latest, definition), latest.stop_existing_sessions_on_load ?? true);
+      }
+      notifySessionStatusChanged();
+      await store.refreshStatus();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setStartingSession(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -141,8 +196,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
 
   const displayModel = normalizeDisplayPath(model);
-  const headerSubtitle = model ? `${modelDisplayName(model)}${selectedSessionId === "default" && configuredModel && selectedStatus.model && configuredModel !== selectedStatus.model ? ` · ${modelDisplayName(selectedStatus.model)}` : ""}` : t("chat.newConversation");
-  const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const headerSubtitle = model ? modelDisplayName(model) : t("chat.newConversation");
+  const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
   useEffect(() => {
@@ -195,14 +250,17 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         headerSubtitle={headerSubtitle}
         activeProjectName={activeProjectName}
         phase={phase}
+        targetBusy={pendingToolCall !== null || startingSession}
         onUpdateThread={updateActiveThread}
         sessionLabel={t("ui.sessionsTitle")}
         sessionOptions={[
           { id: "default", label: t("ui.defaultSession") },
-          ...sessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${session.state}`, disabled: session.state !== "running" })),
+          ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
         ]}
         selectedSessionId={selectedSessionId}
-        onSelectSession={setSelectedSessionId}
+        onSelectSession={(id) => { if (requireIdle()) setSelectedSessionId(id); }}
+        onOpenModelSettings={modelSettings || onOpenModels ? openModelSettings : undefined}
+        modelSettingsLabel={modelSettingsCopy[locale].title}
         ct={ct}
       />
 
@@ -240,10 +298,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             canRetry={!!failedRef.current}
             onRetry={() => void send(true)}
             ct={ct}
-            onOpenModels={onOpenModels}
+            onOpenModels={modelSettings || onOpenModels ? openModelSettings : undefined}
+            modelSettingsLabel={modelSettings ? modelSettingsCopy[locale].title : undefined}
             onOpenDiagnostics={onOpenDiagnostics}
-            onStart={() => void store.start()}
-            starting={store.busy}
+            onStart={() => void startSelectedSession()}
+            starting={store.busy || startingSession || selectedDefinition?.enabled === false}
           />
 
           <ChatComposer

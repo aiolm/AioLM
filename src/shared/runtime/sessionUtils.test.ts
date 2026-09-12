@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GpuPlacement } from "../api/types";
-import { gpuTensorSplitDrafts, parseGpuTensorSplits, runtimeGpuDevices, toggleGpuSelection } from "./sessionUtils";
+import type { AppConfig, GpuPlacement, SessionDefinition } from "../api/types";
+import { gpuTensorSplitDrafts, parseGpuTensorSplits, runtimeGpuDevices, sessionConfig, toggleGpuSelection } from "./sessionUtils";
 
 const placement: GpuPlacement = {
   gpu_ids: ["gpu-a", "gpu-b"],
@@ -24,5 +24,30 @@ describe("GPU tensor split drafts", () => {
   it("rejects incomplete ratios and clears splits for a single GPU", () => {
     expect(parseGpuTensorSplits({ "gpu-a": "1", "gpu-b": "" }, ["gpu-a", "gpu-b"])).toBeNull();
     expect(parseGpuTensorSplits({ "gpu-a": "0.5" }, ["gpu-a"])).toEqual([]);
+  });
+});
+
+describe("session execution settings", () => {
+  const config = { active_model: "default.gguf", mmproj: "default-projector.gguf", spec_draft_model: "", temperature: 0.8, ctx_size: 4096, models_dir: "models", port: 8080, gpu: placement, chat_options: { stop: ["end"] } } as unknown as AppConfig;
+  const definition: SessionDefinition = { id: "work", name: "Work", enabled: true, models: { primary_model: "work.gguf", mmproj: "", draft_model: "draft.gguf" }, gpu: { ...placement, gpu_ids: ["gpu-c"] } };
+
+  it("inherits the existing defaults when a stored session has no execution override", () => {
+    expect(sessionConfig(config, definition)).toMatchObject({ active_model: "work.gguf", mmproj: "", temperature: 0.8, ctx_size: 4096, port: 8080, gpu: definition.gpu });
+  });
+
+  it("keeps a named session's execution and nested request settings independent", () => {
+    const selected = { ...definition, execution: { ctx_size: 8192, temperature: 0.3, chat_options: { stop: ["done"] } } };
+    const resolved = sessionConfig(config, selected);
+    expect(resolved).toMatchObject({ active_model: "work.gguf", ctx_size: 8192, temperature: 0.3, chat_options: { stop: ["done"] } });
+    (resolved.chat_options.stop as string[]).push("another");
+    resolved.gpu?.gpu_ids.push("gpu-d");
+    expect(selected.execution.chat_options.stop).toEqual(["done"]);
+    expect(definition.gpu.gpu_ids).toEqual(["gpu-c"]);
+    expect(config.temperature).toBe(0.8);
+  });
+
+  it("ignores app preferences and duplicate model bindings in an untrusted override", () => {
+    const selected = { ...definition, execution: { temperature: 0.2, active_model: "other.gguf", models_dir: "private", port: 9090, gpu: placement } };
+    expect(sessionConfig(config, selected)).toMatchObject({ active_model: "work.gguf", models_dir: "models", port: 8080, gpu: definition.gpu, temperature: 0.2 });
   });
 });

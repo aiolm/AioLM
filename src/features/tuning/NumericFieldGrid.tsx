@@ -4,6 +4,7 @@ import { useI18n } from "../../shared/i18n/i18n";
 import TuningSliderField from "./TuningSliderField";
 import TuningDefaultField from "./TuningDefaultField";
 import { tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type NumericField, type NumericKey } from "./tuningFields";
+import { useTuningId } from './TuningIdScope';
 
 interface NumericFieldGridProps {
   fields: readonly NumericField[];
@@ -16,12 +17,13 @@ interface NumericFieldGridProps {
 
 export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChange, onCommit }: NumericFieldGridProps) {
   const { t } = useI18n();
+  const id = useTuningId();
   return (
     <>
       {fields.map((field) => {
         const current = typeof cfg[field.key] === "number" ? cfg[field.key] as number : field.min;
         const draft = drafts[field.key] ?? String(current);
-        const inputId = `tuning-${field.key}`;
+        const inputId = `${id}-${field.key}`;
         const label = tuningFieldLabel(t, field);
         const hint = tuningFieldHint(t, field);
         const tooltip = tuningFieldTooltip(t, field);

@@ -1,5 +1,7 @@
 //! Named session IPC and port selection.
-use super::server::{start_on_target, stop_session_by_id};
+use super::server::{
+    ensure_no_active_requests, prepare_launch, start_on_target, stop_session_by_id,
+};
 use crate::{config, server, session, state::AppState};
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -51,16 +53,31 @@ pub(crate) async fn session_start(
         Some(explicit) => explicit,
         None => config::load_result()?.stop_existing_sessions_on_load,
     };
+    ensure_no_active_requests(&state, &id, policy)?;
     let name = Path::new(cfg.active_model.trim())
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| id.clone());
 
+    let mut prepared = prepare_launch(
+        &state,
+        cfg,
+        id == session::DEFAULT_SESSION_ID,
+        &launch_cancel,
+    )
+    .await?;
+    if id != session::DEFAULT_SESSION_ID {
+        prepared.cfg.port =
+            session::effective_port(prepared.cfg.port, &session_ports_excluding(&state, &id))?;
+    }
+
+    ensure_no_active_requests(&state, &id, policy)?;
     if policy {
         let mut all_ids = state.sessions.ids();
         all_ids.push(session::DEFAULT_SESSION_ID.to_string());
         for other in session::ids_to_stop_for_policy(&all_ids, &id) {
+            ensure_no_active_requests(&state, &id, true)?;
             stop_session_by_id(&state, &other).await?;
         }
     }
@@ -71,7 +88,7 @@ pub(crate) async fn session_start(
     if id == session::DEFAULT_SESSION_ID {
         let target = state.server.clone();
         let err = state.err.clone();
-        start_on_target(&state, &target, &err, cfg, true, true, &launch_cancel).await?;
+        start_on_target(&state, &target, &err, prepared, true, &launch_cancel).await?;
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
@@ -88,16 +105,11 @@ pub(crate) async fn session_start(
         .name
         .lock()
         .map_err(|_| "session name lock was poisoned".to_string())? = name.clone();
-    let mut launch_cfg = cfg;
-    launch_cfg.port =
-        session::effective_port(launch_cfg.port, &session_ports_excluding(&state, &id))?;
-
     start_on_target(
         &state,
         &entry.state,
         &entry.err,
-        launch_cfg,
-        false,
+        prepared,
         false,
         &launch_cancel,
     )

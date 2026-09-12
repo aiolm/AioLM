@@ -75,4 +75,14 @@ describe('execution store', () => {
       expect(base.cfg?.active_model).toBe('a.gguf'); expect(base.updateConfig).not.toHaveBeenCalled();
     } finally { write.mockRestore(); }
   });
+  it('saves session and app metadata without accessing model memory', async () => {
+    const base = createTestStore();
+    const hook = renderHook(() => useExecutionStore(base));
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage full'); });
+    try {
+      await act(async () => { await hook.result.current.store.updateConfig({ sessions: [], stop_existing_sessions_on_load: false }); });
+      expect(base.cfg?.stop_existing_sessions_on_load).toBe(false);
+      expect(write).not.toHaveBeenCalled();
+    } finally { write.mockRestore(); }
+  });
 });

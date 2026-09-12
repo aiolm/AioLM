@@ -172,6 +172,12 @@ fn session_uses_model_file(server: &server::ServerState, candidate: &Path) -> bo
     server.lifecycle.blocks_resource_change()
         && [&server.model, &server.mmproj, &server.draft_model]
             .into_iter()
+            .chain(server.execution.iter().flat_map(|cfg| {
+                cfg.lora_adapters
+                    .iter()
+                    .filter(|adapter| adapter.enabled)
+                    .map(|adapter| &adapter.path)
+            }))
             .filter(|path| !path.trim().is_empty())
             .filter_map(|path| fs::canonicalize(path).ok())
             .any(|path| path == candidate)
@@ -294,7 +300,8 @@ mod tests {
         let primary = root.join("primary.gguf");
         let projector = root.join("mmproj.gguf");
         let draft = root.join("draft.gguf");
-        for path in [&primary, &projector, &draft] {
+        let adapter = root.join("adapter.gguf");
+        for path in [&primary, &projector, &draft, &adapter] {
             fs::write(path, b"model").expect("write model fixture");
         }
         let mut server = crate::server::ServerState::default();
@@ -302,6 +309,18 @@ mod tests {
         server.model = primary.to_string_lossy().into_owned();
         server.mmproj = projector.to_string_lossy().into_owned();
         server.draft_model = draft.to_string_lossy().into_owned();
+        server.execution = Some(config::AppConfig {
+            lora_adapters: vec![config::LoraAdapterConfig {
+                path: adapter.to_string_lossy().into_owned(),
+                scale: 1.0,
+                enabled: true,
+            }],
+            ..Default::default()
+        });
+        assert!(super::session_uses_model_file(
+            &server,
+            &adapter.canonicalize().unwrap()
+        ));
 
         assert!(super::session_uses_model_file(
             &server,

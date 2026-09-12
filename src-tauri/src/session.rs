@@ -245,6 +245,7 @@ pub struct SessionStatus {
     pub idle_seconds: u64,
     pub log_tail: Option<String>,
     pub error: Option<String>,
+    pub execution: Option<crate::config::execution::ExecutionSettings>,
 }
 
 /// Reap a crashed child (see `server::reap_if_exited`) and snapshot the
@@ -276,6 +277,10 @@ pub fn build_status(
             .last_error
             .as_ref()
             .map(|error| server::redact_text(error, &state.redaction_secret)),
+        execution: state
+            .execution
+            .as_ref()
+            .map(crate::config::execution::snapshot),
     }
 }
 

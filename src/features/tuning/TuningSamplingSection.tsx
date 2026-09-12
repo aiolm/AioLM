@@ -23,6 +23,7 @@ interface Props {
   onSamplerChainChange: (samplers: string[]) => void;
   /** Quick view keeps the three common sampling controls visible only. */
   showAdvanced?: boolean;
+  draftMode?: boolean;
 }
 
 export default function TuningSamplingSection({
@@ -30,6 +31,7 @@ export default function TuningSamplingSection({
   chatOptionDrafts, setChatOptionDrafts, chatOptionSelectModes, setChatOptionSelectModes, onChatOptionCommit,
   showAdvanced = true,
   samplerChain, onSamplerChainChange,
+  draftMode = false,
 }: Props) {
   return (
     <section className="tuning-section tuning-section--sampling">
@@ -63,7 +65,7 @@ export default function TuningSamplingSection({
           </details>
         </>
       )}
-      <div className="mt-5 text-xs text-muted">{t("extra.savedNextMessage")}</div>
+      {!draftMode && <div className="mt-5 text-xs text-muted">{t("extra.savedNextMessage")}</div>}
     </section>
   );
 }

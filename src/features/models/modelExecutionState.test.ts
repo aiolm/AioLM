@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
-import { executionSnapshot, rememberExecution, restoreExecution, MODEL_EXECUTION_KEY } from './modelExecutionState';
-import { loadProfiles, createModelProfile, saveModelProfile, saveProfileSelection } from '../profiles/modelProfiles';
+import { executionSnapshot, rememberExecution, restoreExecution, previewExecution, MODEL_EXECUTION_KEY } from './modelExecutionState';
+import { loadProfiles, createModelProfile, saveModelProfile, saveServerProfile, saveProfileSelection } from '../profiles/modelProfiles';
 
 describe('model execution memory', () => {
   beforeEach(() => localStorage.clear());
@@ -15,6 +15,8 @@ describe('model execution memory', () => {
   it('keeps execution memory separate from mutable shared profiles and remembers both model selections', () => {
     const a = { ...testConfig, active_model: 'a.gguf', temperature: 0.2 };
     const initial = loadProfiles(a, a.active_model);
+    saveServerProfile(initial.server[0]); saveModelProfile(initial.model[0]);
+    saveProfileSelection(initial.activeServerId, a.active_model, initial.activeModelId);
     const creative = createModelProfile({ ...a, temperature: 1.2 }, 'Creative');
     saveModelProfile(creative);
     saveProfileSelection(initial.activeServerId, 'b.gguf', creative.id);
@@ -32,5 +34,13 @@ describe('model execution memory', () => {
     localStorage.setItem(MODEL_EXECUTION_KEY, JSON.stringify({ version: 1, models: { 'a.gguf': { ...captured, port: 9999, api_key: 'injected' } } }));
     expect(restoreExecution(testConfig, 'a.gguf')).not.toHaveProperty('api_key');
     expect(restoreExecution(testConfig, 'a.gguf')).not.toHaveProperty('port');
+  });
+  it('previews an unseen model without copying another model sidecars or writing memory', () => {
+    const a = { ...testConfig, active_model: 'a.gguf', mmproj: 'a-projector.gguf', spec_type: 'draft', spec_draft_model: 'a-draft.gguf', lora_adapters: [{ path: 'a-adapter.gguf', scale: 1, enabled: true }] };
+    const before = localStorage.length;
+    expect(previewExecution(a, 'b.gguf')).toMatchObject({ active_model: 'b.gguf', mmproj: '', spec_draft_model: '', spec_type: 'none', lora_adapters: [] });
+    expect(localStorage.length).toBe(before);
+    rememberExecution({ ...a, active_model: 'b.gguf', mmproj: 'b-projector.gguf' });
+    expect(previewExecution(a, 'b.gguf').mmproj).toBe('b-projector.gguf');
   });
 });

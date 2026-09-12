@@ -62,12 +62,12 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg, compact }: Props 
     const current = store.getConfig() ?? cfg;
     if (kind === "server") {
       const next = { ...createServerProfile(current, name), ...(id ? { id } : {}) };
-      saveServerProfile(next);
+      saveServerProfile(next, profiles.server);
       setServerId(next.id);
       saveProfileSelection(next.id, modelPath, profiles.activeModelId);
     } else {
       const next = { ...createModelProfile(current, name), ...(id ? { id } : {}), system_prompt: model.system_prompt };
-      saveModelProfile(next);
+      saveModelProfile(next, profiles.model);
       setModelId(next.id);
       saveProfileSelection(profiles.activeServerId, modelPath, next.id);
     }

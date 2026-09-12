@@ -1,12 +1,38 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
 import { projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
+import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
+
+vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 describe("Project configuration snapshots", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); });
+
+  it("applies model settings to the project editor before explicit project save", async () => {
+    const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const store = createTestStore({ active_model: "models/default.gguf" });
+    const project = projectFromConfig("Notes", "Keep citations", store.cfg!, [{ name: "notes.md", path: "notes.md" }], ["docs:search"]);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
+    const request = vi.mocked(settings.open).mock.calls[0][0];
+    expect(request.target).toEqual({ kind: "project", id: project.id });
+    const changed = { ...store.cfg!, active_model: "models/project.gguf", ctx_size: 8192, chat_options: { stop: ["done"] } };
+    await act(async () => { await request.onApply?.(changed); });
+    changed.chat_options.stop.push("later mutation");
+    expect(readProjects()[0].config.active_model).toBe("models/default.gguf");
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.start).not.toHaveBeenCalled();
+    expect(screen.getByText("project.gguf")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0]).toMatchObject({ systemPrompt: "Keep citations", toolIds: ["docs:search"], documentBindings: [{ name: "notes.md", path: "notes.md" }], config: { active_model: "models/project.gguf", ctx_size: 8192, chat_options: { stop: ["done"] } } });
+    expect(store.cfg?.active_model).toBe("models/default.gguf");
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
 
   it("keeps saved tuning when only project metadata changes", () => {
     const store = createTestStore({ ctx_size: 8192, temperature: 0.3, runtime_defaults: ["ngl"] });

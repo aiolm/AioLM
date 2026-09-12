@@ -67,3 +67,4 @@
 .performance-run-config dt { color: var(--ui-faint); margin-bottom: 5px; }
 .performance-run-config dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 @media (max-width: 620px) { .performance-input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .performance-field:first-child { grid-column: 1 / -1; } .performance-fields, .performance-model, .performance-actions { padding: 14px; } .performance-heading h2 { font-size: 20px; } .performance-actions > button { width: 100%; } }
+.performance-model-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }

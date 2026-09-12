@@ -6,6 +6,10 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
+import { sessionHasActivity } from "../../shared/state/sessionActivity";
+import { useModelSettings } from "../model-settings/ModelSettingsProvider";
+
+vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", () => ({
   pickAttachment: vi.fn(),
@@ -19,6 +23,7 @@ vi.mock("../../shared/api/index", () => ({
   mcpListTools: vi.fn(),
   mcpCallTool: vi.fn(),
   sessionList: vi.fn(async () => []),
+  sessionStart: vi.fn(async () => ({ id: "work", state: "running" })),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
 }));
 
@@ -127,6 +132,7 @@ describe("ChatPanel unified attachments", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
     mocked.sessionList.mockResolvedValue([]);
   });
 
@@ -220,6 +226,7 @@ describe("ChatPanel document context warning", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
     mocked.serverActivity.mockResolvedValue(undefined);
     // Every request embeds one vector per input string; the content does not matter for ranking here.
     mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1]));
@@ -243,6 +250,72 @@ describe("ChatPanel document context warning", () => {
     fireEvent.click(selector); await screen.findByRole("option", { name: "Vision · 8091 · running" });
     fireEvent.click(screen.getByRole("option", { name: "Vision · 8091 · running" }));
     expect(selector).toHaveTextContent("Vision · 8091 · running");
+  });
+
+  it("uses the selected session's live request settings and activity identity", async () => {
+    mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work", state: "running", port: 8091,
+      url: "http://127.0.0.1:8091", api_key: "work-key", model: "models/work.gguf",
+      execution: { ctx_size: 8192, temperature: 0.25, top_k: 12, chat_options: { max_tokens: 96 } },
+    }]);
+    renderPanel();
+    fireEvent.click(await screen.findByLabelText("Loaded sessions"));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    respondWithText("Session answer");
+    await sendMessage("Hello");
+    await screen.findByText("Session answer");
+    expect(mocked.chatStream).toHaveBeenCalledWith("http://127.0.0.1:8091", "work-key", "models/work.gguf", expect.any(Array),
+      expect.objectContaining({ temperature: 0.25, top_k: 12, options: { max_tokens: 96 } }), expect.any(Function), expect.any(AbortSignal));
+    expect(mocked.serverActivity).toHaveBeenCalledWith("start", "work");
+    expect(mocked.serverActivity).toHaveBeenLastCalledWith("end", "work");
+    expect(sessionHasActivity("work")).toBe(false);
+  });
+
+  it("starts the selected stopped session with its saved execution settings", async () => {
+    mocked.sessionList.mockResolvedValue([]);
+    const definition: api.SessionDefinition = { id: "work", name: "Work", enabled: true,
+      models: { primary_model: "models/work.gguf", mmproj: "", draft_model: "" },
+      gpu: { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null },
+      execution: { ctx_size: 8192, temperature: 0.2 },
+    };
+    const startDefault = vi.fn();
+    renderPanel({ ...store, cfg: { ...cfg, sessions: [definition], stop_existing_sessions_on_load: false }, start: startDefault });
+    fireEvent.click(await screen.findByLabelText("Loaded sessions"));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/work.gguf", ctx_size: 8192, temperature: 0.2 }), false));
+    expect(startDefault).not.toHaveBeenCalled();
+  });
+
+  it("opens settings for the selected session without clearing the composer or attachments", async () => {
+    const open = vi.fn();
+    vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
+    mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work", state: "running", port: 8091, model: "models/work.gguf", url: "http://127.0.0.1:8091", api_key: "work-key" }]);
+    renderPanel();
+    await attachDocument("notes.txt", SMALL_DOCUMENT);
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Keep this draft" } });
+    fireEvent.click(screen.getByLabelText("Loaded sessions"));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "session", sessionId: "work" }, definition: expect.objectContaining({ id: "work" }) }));
+    expect(screen.getByLabelText("Chat message")).toHaveValue("Keep this draft");
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+  });
+
+  it("captures request settings before asynchronous preparation", async () => {
+    mocked.sessionList.mockResolvedValue([]);
+    let release!: () => void;
+    mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const mutableConfig = structuredClone(cfg);
+    renderPanel({ ...store, cfg: mutableConfig });
+    respondWithText("Original settings");
+    await sendMessage("Hello");
+    expect(sessionHasActivity("default")).toBe(true);
+    mutableConfig.temperature = 0.1;
+    mutableConfig.chat_options.max_tokens = 8;
+    await act(async () => release());
+    await screen.findByText("Original settings");
+    expect(mocked.chatStream.mock.calls[0][4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
+    expect(sessionHasActivity("default")).toBe(false);
   });
 
   it("sets the full conversation title before asynchronous request preparation finishes", async () => {
@@ -278,7 +351,7 @@ describe("ChatPanel document context warning", () => {
     await waitFor(() => expect(composer).toBeEnabled());
     expect(composer).toHaveValue("Keep this draft when preparation is cancelled.");
     expect(mocked.chatStream).not.toHaveBeenCalled();
-    expect(mocked.serverActivity).toHaveBeenLastCalledWith("end");
+    expect(mocked.serverActivity).toHaveBeenLastCalledWith("end", "default");
   });
 
   it("cancels document preparation without sending or losing the attachment", async () => {
@@ -309,7 +382,7 @@ describe("ChatPanel document context warning", () => {
     mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "crashed", port: 8092, model: "worker.gguf" }]);
     window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
 
-    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · crashed" })).toHaveAttribute("aria-disabled", "true"));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · crashed" })).not.toHaveAttribute("aria-disabled", "true"));
   });
 
   it("warns in the DOM when an attached document exceeds the 64-chunk search limit", async () => {
@@ -366,7 +439,8 @@ describe("ChatPanel document context warning", () => {
     mocked.mcpListTools.mockResolvedValue([{ name: "test_tool", description: "A test tool.", input_schema: { type: "object", properties: {} } }]);
     mocked.mcpCallTool.mockResolvedValue({ ok: true });
 
-    renderPanel();
+    const mutableConfig = structuredClone(cfg);
+    renderPanel({ ...store, cfg: mutableConfig });
     fireEvent.click(await screen.findByRole("button", { name: "Load MCP tools" }));
     await screen.findByText(/Test Server/);
 
@@ -378,6 +452,11 @@ describe("ChatPanel document context warning", () => {
     });
     await sendMessage("Use the tool on the attached document.");
     await findTruncationWarning();
+    expect(sessionHasActivity("default")).toBe(true);
+    expect(screen.getByLabelText("Loaded sessions")).toBeDisabled();
+    expect(mocked.serverActivity).toHaveBeenCalledTimes(1);
+    mutableConfig.temperature = 0.05;
+    mutableConfig.chat_options.max_tokens = 12;
 
     respondWithText("Final answer after the tool call.");
     fireEvent.click(await screen.findByRole("button", { name: "Approve once" }));
@@ -385,5 +464,8 @@ describe("ChatPanel document context warning", () => {
     await screen.findByText("Final answer after the tool call.");
     await waitFor(() => expect(mocked.mcpCallTool).toHaveBeenCalledTimes(1));
     await findTruncationWarning();
+    expect(mocked.chatStream.mock.calls[1][4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
+    expect(sessionHasActivity("default")).toBe(false);
+    expect(mocked.serverActivity).toHaveBeenLastCalledWith("end", "default");
   });
 });

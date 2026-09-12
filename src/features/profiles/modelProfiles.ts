@@ -83,7 +83,7 @@ function read(preferredModelPath = "", fallbackModelPath = ""): StoredProfiles |
     return { version: 4, server: value.server, model, activeServerId: text(value.activeServerId), activeServerIds: value.activeServerIds ?? {}, activeModelId, activeModelIds: value.activeModelIds ?? {} };
   } catch { return null; }
 }
-function write(value: StoredProfiles) { try { window.localStorage.setItem(KEY, JSON.stringify(value)); } catch { /* optional */ } }
+function write(value: StoredProfiles) { window.localStorage.setItem(KEY, JSON.stringify(value)); }
 function current(): StoredProfiles { return read() ?? { version: 4, server: [], model: [], activeServerId: "", activeServerIds: {}, activeModelId: "" }; }
 function migrateServer(value: Partial<ServerProfile>, cfg: AppConfig): ServerProfile { return { ...defaultServerProfile(cfg), ...value, gpu: value.gpu, build: value.build ?? (value.backend === cfg.active_backend ? cfg.active_build : ""), runtime_defaults: list(value.runtime_defaults), server_args: list(value.server_args) }; }
 function migrateModel(value: Partial<ModelProfile>, cfg: AppConfig): ModelProfile { return { ...defaultModelProfile(cfg), ...value, runtime_defaults: list(value.runtime_defaults), chat_options: value.chat_options && typeof value.chat_options === "object" ? value.chat_options : {}, stop_strings: list(value.stop_strings) }; }
@@ -96,16 +96,15 @@ export function loadProfiles(cfg: AppConfig, modelPath: string) {
   const requestedServerId = stored?.activeServerIds?.[modelPath] ?? stored?.activeServerId;
   const activeServerId = requestedServerId && server.some((item) => item.id === requestedServerId) ? requestedServerId : server[0].id;
   const activeModelId = stored?.activeModelId && profiles.some((item) => item.id === stored.activeModelId) ? stored.activeModelId : profiles[0].id;
-  write({ version: 4, server, model: profiles, activeServerId, activeServerIds: { ...(stored?.activeServerIds ?? {}), [modelPath]: activeServerId }, activeModelId, activeModelIds: { ...(stored?.activeModelIds ?? {}), [modelPath]: activeModelId } });
   return { server, model: profiles, activeServerId, activeModelId };
 }
 export function saveProfileSelection(activeServerId: string, modelPath: string, activeModelId: string) { const value = current(); write({ ...value, activeServerId, activeServerIds: { ...value.activeServerIds, [modelPath]: activeServerId }, activeModelId, activeModelIds: { ...value.activeModelIds, [modelPath]: activeModelId } }); }
-export function saveServerProfile(profile: ServerProfile) { const value = current(); write({ ...value, server: [...value.server.filter((item) => item.id !== profile.id), profile] }); }
-export function saveModelProfile(profile: ModelProfile) { const value = current(); write({ ...value, model: [...value.model.filter((item) => item.id !== profile.id), profile] }); }
+export function saveServerProfile(profile: ServerProfile, initialProfiles: ServerProfile[] = []) { const value = current(); const server = value.server.length ? value.server : initialProfiles; write({ ...value, server: [...server.filter((item) => item.id !== profile.id), profile] }); }
+export function saveModelProfile(profile: ModelProfile, initialProfiles: ModelProfile[] = []) { const value = current(); const model = value.model.length ? value.model : initialProfiles; write({ ...value, model: [...model.filter((item) => item.id !== profile.id), profile] }); }
 export function deleteServerProfile(profileId: string) { const value = current(); if (value.server.length <= 1) return; const server = value.server.filter((item) => item.id !== profileId); const fallback = server[0].id; write({ ...value, server, activeServerId: value.activeServerId === profileId ? fallback : value.activeServerId, activeServerIds: Object.fromEntries(Object.entries(value.activeServerIds).map(([modelPath, id]) => [modelPath, id === profileId ? fallback : id])) }); }
 export function deleteModelProfile(profileId: string) { const value = current(); const model = value.model.filter((item) => item.id !== profileId); if (!model.length) return; write({ ...value, model, activeModelId: value.activeModelId === profileId ? model[0].id : value.activeModelId, activeModelIds: Object.fromEntries(Object.entries(value.activeModelIds ?? {}).map(([path, id]) => [path, id === profileId ? model[0].id : id])) }); }
-export function duplicateServerProfile(profile: ServerProfile): ServerProfile { const copy = { ...profile, id: makeId("server"), name: `${profile.name} 복사`, server_args: [...profile.server_args] }; saveServerProfile(copy); return copy; }
-export function duplicateModelProfile(profile: ModelProfile): ModelProfile { const copy = { ...profile, id: makeId("model"), name: `${profile.name} 복사`, chat_options: { ...profile.chat_options }, stop_strings: [...profile.stop_strings] }; saveModelProfile(copy); return copy; }
+export function duplicateServerProfile(profile: ServerProfile): ServerProfile { const copy = { ...profile, id: makeId("server"), name: `${profile.name} 복사`, server_args: [...profile.server_args] }; saveServerProfile(copy, [profile]); return copy; }
+export function duplicateModelProfile(profile: ModelProfile): ModelProfile { const copy = { ...profile, id: makeId("model"), name: `${profile.name} 복사`, chat_options: { ...profile.chat_options }, stop_strings: [...profile.stop_strings] }; saveModelProfile(copy, [profile]); return copy; }
 export function createServerProfile(cfg: AppConfig, name: string) { return { ...defaultServerProfile(cfg), id: makeId("server"), name }; }
 export function createModelProfile(cfg: AppConfig, name: string) { return { ...defaultModelProfile(cfg), id: makeId("model"), name }; }
 

@@ -7,6 +7,7 @@ import { clampNumber } from "../../shared/config/tuningValidation";
 import { chatOptionValue, tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type ChatOptionField } from "./tuningFields";
 import TuningSliderField from "./TuningSliderField";
 import TuningDefaultField from "./TuningDefaultField";
+import { useTuningId } from './TuningIdScope';
 
 interface Props {
   cfg: AppConfig;
@@ -24,9 +25,10 @@ export default function TuningChatOptionField({
   cfg, field, t, disabled, chatOptionDrafts, setChatOptionDrafts,
   chatOptionSelectModes, setChatOptionSelectModes, onCommit,
 }: Props) {
+  const id = useTuningId();
   const current = clampNumber(chatOptionValue(cfg, field), field.min, field.max, field.defaultValue);
   const draft = chatOptionDrafts[field.key] ?? String(current);
-  const inputId = `tuning-${field.key}`;
+  const inputId = `${id}-${field.key}`;
   const label = tuningFieldLabel(t as never, field);
   const hint = tuningFieldHint(t as never, field);
   const tooltip = tuningFieldTooltip(t as never, field);

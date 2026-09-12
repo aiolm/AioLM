@@ -4,7 +4,7 @@ import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
 import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
-import { getActiveModelProfile } from "../profiles/modelProfiles";
+import { getActiveModelProfile, type ModelProfile } from "../profiles/modelProfiles";
 import { usesRuntimeDefault } from "../../shared/config/tuningDefaults";
 import type { AppPreferences } from "../../shared/config/preferences";
 import { deriveTokensPerSecond } from "../../shared/lib/metrics";
@@ -12,6 +12,7 @@ import type { StreamUsage } from "../../shared/api/sse";
 import type { ChatMcpTool } from "./useChatMcpTools";
 import type { ChatMetrics, FailedRequest, PendingToolCall } from "./chatSendTypes";
 import { createStreamDeltaHandler, resolveDetectedToolCall, retrieveDocumentContext, sameDocuments, sameImages, toChatMessage } from "./chatSendHelpers";
+import { setSessionActivity } from "../../shared/state/sessionActivity";
 
 export type { ChatMetrics, PendingToolCall } from "./chatSendTypes";
 
@@ -19,6 +20,9 @@ type Msg = ChatHistoryMessage;
 
 interface UseChatSendOptions {
   store: AppStore;
+  effectiveConfig?: api.AppConfig | null;
+  modelProfile?: ModelProfile | null;
+  sessionId?: string;
   preferences?: AppPreferences;
   baseUrl: string | null;
   apiKey: string;
@@ -44,7 +48,7 @@ interface UseChatSendOptions {
 // (completion, tool call, or error), not once per animation frame, and any still-pending
 // rAF is cancelled at each of those terminal transitions to avoid a redundant flush.
 export function useChatSend({
-  store, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
+  store, effectiveConfig, modelProfile, sessionId = "default", preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
   input, setInput, attachments, documents, setAttachments, setDocuments,
   mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
 }: UseChatSendOptions) {
@@ -61,6 +65,24 @@ export function useChatSend({
   const streamRef = useRef<{ assistant: string; reasoning: string; toolCalls: api.ChatToolCall[] }>({ assistant: "", reasoning: "", toolCalls: [] });
   const metricsRef = useRef<{ startedAt: number; firstTokenAt?: number; usage?: StreamUsage }>({ startedAt: 0 });
   const toolRoundsRef = useRef(0);
+  const turnRef = useRef<{
+    config: api.AppConfig | null;
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    sessionId: string;
+    systemPrompt: string;
+    tools: api.ChatToolDefinition[];
+    toolEntries: Map<string, ChatMcpTool>;
+  } | null>(null);
+  const activityRef = useRef<{ sessionId: string; started: boolean } | null>(null);
+  const releaseActivity = () => {
+    const activity = activityRef.current;
+    activityRef.current = null;
+    if (!activity) return;
+    setSessionActivity(activity.sessionId, false);
+    if (activity.started) void api.serverActivity("end", activity.sessionId).catch(() => undefined);
+  };
   // MCP follow-up sends carry no documents of their own, so this tracks whether the
   // turn's original message hit the search limit and keeps that warning visible
   // across follow-up rounds until a new user message (or thread switch) resets it.
@@ -69,6 +91,12 @@ export function useChatSend({
   useEffect(() => () => {
     ctrlRef.current?.abort();
     if (renderFrameRef.current !== null) window.cancelAnimationFrame(renderFrameRef.current);
+    const activity = activityRef.current;
+    activityRef.current = null;
+    if (activity) {
+      setSessionActivity(activity.sessionId, false);
+      if (activity.started) void api.serverActivity("end", activity.sessionId).catch(() => undefined);
+    }
   }, []);
 
   const cancelScheduledRender = () => {
@@ -95,7 +123,7 @@ export function useChatSend({
   };
 
   const send = async (retry = false, historyOverride?: api.ChatMessage[], canSend = true) => {
-    if (!baseUrl || ctrlRef.current) return;
+    if (ctrlRef.current || (!historyOverride && (!baseUrl || pendingToolCall))) return;
     const toolFollowup = !!historyOverride;
     const failed = failedRef.current;
     const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
@@ -106,7 +134,19 @@ export function useChatSend({
     if (!toolFollowup) {
       toolRoundsRef.current = 0;
       documentTruncationRef.current = false;
+      const config = structuredClone(effectiveConfig ?? store.cfg);
+      const profile = modelProfile !== undefined ? modelProfile : config ? getActiveModelProfile(config) : null;
+      turnRef.current = {
+        config,
+        baseUrl: baseUrl!, apiKey, model, sessionId,
+        systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || "You are a helpful assistant.",
+        tools: structuredClone(mcpDefinitions),
+        toolEntries: new Map(mcpEntryByFunctionName),
+      };
     }
+    const turn = turnRef.current;
+    if (!turn) return;
+    const requestConfig = turn.config;
 
     const controller = new AbortController();
     ctrlRef.current = controller;
@@ -119,14 +159,21 @@ export function useChatSend({
     setStreamingDraft(null);
     metricsRef.current = { startedAt: performance.now() };
     setMetrics(null);
-    let activityStarted = false;
+    let awaitingTool = false;
     let assistantAppended = false;
     try {
-      await api.serverActivity("start");
-      activityStarted = true;
+      if (!activityRef.current) {
+        const activity = { sessionId: turn.sessionId, started: false };
+        activityRef.current = activity;
+        setSessionActivity(turn.sessionId, true);
+        await api.serverActivity("start", turn.sessionId);
+        activity.started = true;
+        // An unmount can release the frontend lock while native wake-up is pending.
+        if (activityRef.current !== activity) void api.serverActivity("end", turn.sessionId).catch(() => undefined);
+      }
       controller.signal.throwIfAborted();
 
-      const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, model, apiKey, baseUrl);
+      const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, turn.model, turn.apiKey, turn.baseUrl);
       controller.signal.throwIfAborted();
       if (documentChunksTruncated) documentTruncationRef.current = true;
       setContextSources(retrievalSources);
@@ -135,19 +182,18 @@ export function useChatSend({
         role: "user",
         content: images.length ? buildMultimodalContent(requestContent, images) : requestContent,
       };
-      const activeProfile = !historyOverride && store.cfg ? getActiveModelProfile(store.cfg) : null;
       const rawHistory = historyOverride ?? (retry && failed ? failed.history : [
-        { role: "system" as const, content: activeThread?.systemPrompt.trim() || activeProfile?.system_prompt.trim() || "You are a helpful assistant." },
+        { role: "system" as const, content: turn.systemPrompt },
         ...msgs.map(toChatMessage),
         userMessage,
       ]);
-      const contextSize = Math.max(512, store.cfg?.ctx_size ?? 4096);
-      const runtimeContext = store.cfg ? usesRuntimeDefault(store.cfg, "ctx_size") : false;
+      const contextSize = Math.max(512, requestConfig?.ctx_size ?? 4096);
+      const runtimeContext = requestConfig ? usesRuntimeDefault(requestConfig, "ctx_size") : false;
       const maxContextTokens = Math.max(256, Math.floor(contextSize * 0.75));
       // When the runtime owns context sizing, the old manual number is not a valid limit.
       const bounded = toolFollowup || runtimeContext ? { messages: rawHistory, trimmed: false } : trimChatHistory(rawHistory, maxContextTokens);
       const promptTokens = estimateChatTokens(bounded.messages);
-      const chatOptions = runtimeContext ? (store.cfg?.chat_options ?? {}) : capMaxTokens(store.cfg?.chat_options ?? {}, promptTokens, contextSize);
+      const chatOptions = runtimeContext ? (requestConfig?.chat_options ?? {}) : capMaxTokens(requestConfig?.chat_options ?? {}, promptTokens, contextSize);
       const warnings = [
         documentTruncationRef.current ? `Only the first ${MAX_SEARCHABLE_DOCUMENT_CHUNKS} document chunks were searched; the rest of the attached document(s) were not included.` : null,
         bounded.trimmed ? "Older messages were omitted from this request to stay within the configured context window." : null,
@@ -169,18 +215,18 @@ export function useChatSend({
       });
       assistantAppended = true;
       const sampling = {
-        temperature: store.cfg?.temperature ?? QWEN38_DEFAULTS.temperature,
-        runtime_defaults: store.cfg?.runtime_defaults,
-        top_p: store.cfg?.top_p ?? QWEN38_DEFAULTS.top_p,
-        top_k: store.cfg?.top_k ?? QWEN38_DEFAULTS.top_k,
-        reasoning: store.cfg?.reasoning ?? QWEN38_DEFAULTS.reasoning,
-        reasoning_effort: store.cfg?.reasoning_effort ?? QWEN38_DEFAULTS.reasoning_effort,
+        temperature: requestConfig?.temperature ?? QWEN38_DEFAULTS.temperature,
+        runtime_defaults: requestConfig?.runtime_defaults,
+        top_p: requestConfig?.top_p ?? QWEN38_DEFAULTS.top_p,
+        top_k: requestConfig?.top_k ?? QWEN38_DEFAULTS.top_k,
+        reasoning: requestConfig?.reasoning ?? QWEN38_DEFAULTS.reasoning,
+        reasoning_effort: requestConfig?.reasoning_effort ?? QWEN38_DEFAULTS.reasoning_effort,
         options: chatOptions,
-        tools: mcpDefinitions,
+        tools: turn.tools,
       };
       const streamResponses = preferences?.chat.streamResponses ?? true;
       const onDelta = createStreamDeltaHandler({ streamRef, metricsRef, streamResponses, setPhase: () => setPhase("streaming"), scheduleAssistantRender });
-      const full = await api.chatStream(baseUrl, apiKey, model, bounded.messages, sampling, onDelta, controller.signal);
+      const full = await api.chatStream(turn.baseUrl, turn.apiKey, turn.model, bounded.messages, sampling, onDelta, controller.signal);
 
       const toolCall = streamRef.current.toolCalls[0];
       if (toolCall) {
@@ -195,7 +241,8 @@ export function useChatSend({
         setStreamingDraft(null);
         toolRoundsRef.current += 1;
         if (toolRoundsRef.current > 4) throw new Error("MCP tool loop limit reached (4 calls per response).");
-        setPendingToolCall(resolveDetectedToolCall(toolCall, mcpEntryByFunctionName));
+        setPendingToolCall(resolveDetectedToolCall(toolCall, turn.toolEntries));
+        awaitingTool = true;
         setPhase("idle");
         return;
       }
@@ -257,7 +304,10 @@ export function useChatSend({
         setPhase("idle");
       }
     } finally {
-      if (activityStarted) void api.serverActivity("end").catch(() => undefined);
+      if (!awaitingTool) {
+        releaseActivity();
+        turnRef.current = null;
+      }
       ctrlRef.current = null;
       setAborting(false);
       void store.refreshStatus();
@@ -267,12 +317,15 @@ export function useChatSend({
   const approvePendingTool = async () => {
     const pending = pendingToolCall;
     const failed = failedRef.current;
-    if (!pending || !failed || phase !== "idle") return;
+    if (!pending || !failed || phase !== "idle" || ctrlRef.current) return;
     setPendingToolCall(null);
     setError(null);
     setPhase("thinking");
+    const controller = new AbortController();
+    ctrlRef.current = controller;
     try {
       const result = await api.mcpCallTool(pending.serverId, pending.toolName, pending.argumentsValue);
+      controller.signal.throwIfAborted();
       const serializedResult = JSON.stringify(result);
       if (serializedResult.length > 256_000) throw new Error("MCP tool result exceeds the 256 KiB chat safety limit.");
       const followupHistory: api.ChatMessage[] = [
@@ -280,14 +333,21 @@ export function useChatSend({
         { role: "assistant", content: "", tool_calls: [pending.call] },
         { role: "tool", tool_call_id: pending.call.id, name: pending.call.function.name, content: serializedResult },
       ];
+      ctrlRef.current = null;
       await send(false, followupHistory);
     } catch (caught) {
+      releaseActivity();
+      turnRef.current = null;
+      ctrlRef.current = null;
+      setAborting(false);
       setPhase("idle");
-      setError(`MCP tool call failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+      if (!controller.signal.aborted) setError(`MCP tool call failed: ${caught instanceof Error ? caught.message : String(caught)}`);
     }
   };
 
   const rejectPendingTool = () => {
+    releaseActivity();
+    turnRef.current = null;
     setPendingToolCall(null);
     failedRef.current = null;
     toolRoundsRef.current = 0;

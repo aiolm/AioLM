@@ -3,6 +3,7 @@ import type { AppStore } from '../../shared/state/store';
 import type { AppConfig } from '../../shared/api/types';
 import type { ConfigPatch } from '../../shared/state/configSaveQueue';
 import { MODEL_EXECUTION_KEY, rememberExecution, restoreExecution } from './modelExecutionState';
+import { executionChanges } from '../../shared/config/executionSettings';
 
 /** All screens persist model settings through the same serialized native config queue. */
 export function useExecutionStore(base: AppStore) {
@@ -15,6 +16,9 @@ export function useExecutionStore(base: AppStore) {
       const current = latest.current.getConfig();
       if (!current) throw new Error('Configuration is still loading.');
       const next = typeof patch === 'function' ? patch(current) : patch;
+      if (!Object.keys(executionChanges(current, { ...current, ...next })).length) {
+        const saved = await latest.current.updateConfig(next); setError(null); return saved;
+      }
       // Save the departing model before allowing a selection/project to overwrite it.
       if (next.active_model && next.active_model !== current.active_model) rememberExecution(current);
       const previousMemory = window.localStorage.getItem(MODEL_EXECUTION_KEY);
@@ -40,11 +44,11 @@ export function useExecutionStore(base: AppStore) {
   const selectModel = useCallback(async (path: string) => {
     await updateConfig(current => current.active_model === path ? {} : restoreExecution(current, path));
   }, [updateConfig]);
-  const start = useCallback(async (override?: AppConfig) => {
+  const start = useCallback(async (override?: AppConfig, replaceRunning = false) => {
     // A failed save rolls back config; an explicit retry may run that saved configuration.
     await pending.current.catch(() => undefined);
     setError(null);
-    return latest.current.start(override);
+    return latest.current.start(override, replaceRunning);
   }, []);
   const clearErrors = useCallback(() => { setError(null); latest.current.clearErrors(); }, []);
   // Persistence is serialized above; only server lifecycle operations lock the app.

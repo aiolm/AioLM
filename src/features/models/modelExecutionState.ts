@@ -36,6 +36,14 @@ export function restoreExecution(cfg: AppConfig, path: string): Partial<AppConfi
   return { ...(saved ? executionSnapshot({ ...cfg, ...saved }) : activeProfilesPatch(cfg, path)), active_model: path };
 }
 
+/** Preview a new model without inheriting unrelated model-specific sidecars. */
+export function previewExecution(cfg: AppConfig, path: string): Partial<AppConfig> {
+  if (path === cfg.active_model) return executionSnapshot(cfg);
+  const remembered = read().models[identity(path)];
+  const restored = restoreExecution(cfg, path);
+  return remembered ? restored : { ...restored, active_model: path, mmproj: '', spec_draft_model: '', spec_type: 'none', lora_adapters: [] };
+}
+
 export function forgetExecution(path: string) {
   const value = read();
   delete value.models[identity(path)];

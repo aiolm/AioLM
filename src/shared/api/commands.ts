@@ -36,9 +36,11 @@ export const mcpCallTool = (id: string, name: string, argumentsValue: Record<str
   invoke<unknown>("mcp_call_tool", { id, name, arguments: argumentsValue });
 
 export const startServer = (cfg: AppConfig) => invoke<string>("start_server", { cfg });
+export const preflightLaunch = (cfg: AppConfig) => invoke<AppConfig>('preflight_launch', { cfg });
+export const applyRequestSettings = (cfg: AppConfig, sessionId = 'default') => invoke<NonNullable<ServerStatus['execution']>>('apply_request_settings', { cfg, sessionId });
 export const stopServer = () => invoke<void>("stop_server");
 export const unloadModel = () => invoke<void>("unload_model");
-export const serverActivity = (phase: "start" | "end" | "touch") => invoke<void>("server_activity", { phase });
+export const serverActivity = (phase: "start" | "end" | "touch", sessionId?: string) => invoke<void>("server_activity", { phase, ...(sessionId ? { sessionId } : {}) });
 export const serverStatus = () => invoke<ServerStatus>("server_status");
 export const startAnthropicGateway = () => invoke<string>("start_anthropic_gateway");
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");

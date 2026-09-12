@@ -1,172 +1,82 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
-import { DraftGuardProvider } from '../../shared/state/draftGuard';
 import { createTestStore } from '../../testing/appStore';
-import type { AppStore } from '../../shared/state/store';
-import ModelWorkspace from './ModelWorkspace';
-import { useExecutionStore } from './useExecutionStore';
-import { useCallback, useState } from 'react';
 import * as api from '../../shared/api/index';
+import { useModelSettings, type ModelSettingsContext } from '../model-settings/ModelSettingsProvider';
+import { rememberExecution, MODEL_EXECUTION_KEY } from './modelExecutionState';
+import ModelWorkspace from './ModelWorkspace';
 
+vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock('../../shared/api/index', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api/index')>(),
-  listModels: vi.fn(async () => ({ models: [
-    { name: 'a.gguf', path: 'a.gguf', size_mb: 3000, is_vision: false },
-    { name: 'b.gguf', path: 'b.gguf', size_mb: 1500, is_vision: false },
-    { name: 'missing.gguf', path: 'missing.gguf', size_mb: 1500, is_vision: false, shards: { missing: ['part2'], files: ['missing.gguf'], total: 2 } },
-  ], truncated: false })),
-  rtList: vi.fn(async () => [{ backend: 'cpu', build: 'b123', dir: 'runtime', size_mb: 30 }]),
-  deviceProfile: vi.fn(async () => ({ profile: { gpus: [] }, backends: [] })),
-  rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', devices: [], diagnostics: [], flags: [], state: 'available', server_help: '' })),
-  listServerLoraAdapters: vi.fn(async () => []),
+  listModels: vi.fn(),
 }));
-function Harness({ base }: { base: AppStore }) {
-  const [cfg, setConfig] = useState(base.cfg);
-  const updateConfig = useCallback<AppStore['updateConfig']>(async patch => {
-    const saved = await base.updateConfig(patch);
-    setConfig({ ...saved });
-    return saved;
-  }, [base]);
-  const execution = useExecutionStore({ ...base, cfg, updateConfig });
-  return <ModelWorkspace store={execution.store} onSelectModel={execution.selectModel} active section={{ id: 'setup', revision: 0 }} onNavigate={vi.fn()} />;
-}
+const models: api.GgufModel[] = [
+  { name: 'a.gguf', path: 'a.gguf', size_mb: 3000, is_vision: false },
+  { name: 'b.gguf', path: 'b.gguf', size_mb: 1500, is_vision: false },
+  { name: 'missing.gguf', path: 'missing.gguf', size_mb: 1500, is_vision: false, shards: { missing: [2], files: ['missing.gguf'], total: 2 } },
+];
+const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
 function mount(base = createTestStore({ active_model: 'a.gguf' })) {
-  render(<I18nProvider initialLocale="en"><DraftGuardProvider><Harness base={base} /></DraftGuardProvider></I18nProvider>);
+  render(<I18nProvider initialLocale="en"><ModelWorkspace store={base} onSelectModel={vi.fn()} active section={{ id: 'setup', revision: 0 }} onNavigate={vi.fn()} /></I18nProvider>);
   return base;
 }
-function modelLibrary() {
-  return within(document.querySelector<HTMLElement>('.model-workspace-library')!);
-}
-function findModelButton(path: string) {
-  return modelLibrary().findByRole('button', { name: `Configure & run: ${path}` }, { timeout: 3000 });
-}
-function getModelButton(path: string) {
-  return modelLibrary().getByRole('button', { name: `Configure & run: ${path}` });
-}
-function getStartButton() {
-  return within(document.querySelector<HTMLElement>('.execution-footer')!).getByRole('button', { name: 'Start' });
-}
-describe('model execution workspace', () => {
-  beforeEach(() => { localStorage.clear(); Element.prototype.scrollIntoView = vi.fn(); });
-  it('hides runtime failure paths inside nested feedback content and keeps configured paths intact', async () => {
-    const raw = String.raw`\\?\C:\runtime\llama-server.exe`;
-    const projector = String.raw`\\?\UNC\server\models\mmproj.gguf`;
-    vi.mocked(api.rtList).mockRejectedValueOnce(new Error(`Cannot read ${raw}`));
-    const base = mount(createTestStore({ active_model: 'a.gguf', mmproj: projector }));
-    const detail = await screen.findByText(String.raw`Error: Cannot read C:\runtime\llama-server.exe`);
-    expect(detail.closest('[role="alert"]')).toHaveTextContent('Could not load runtimes or devices');
-    expect(document.body.textContent).not.toContain('\\\\?\\');
-    const projectorInput = document.querySelector<HTMLInputElement>('#execution-projector')!;
-    expect(projectorInput).toHaveValue(String.raw`\\server\models\mmproj.gguf`);
-    fireEvent.blur(projectorInput);
-    expect(base.cfg?.mmproj).toBe(projector);
-    expect(base.updateConfig).not.toHaveBeenCalled();
-  });
+const findModelButton = (name: string) => within(document.querySelector<HTMLElement>('.model-workspace-library')!).findByRole('button', { name: 'Configure & run: ' + name });
 
-  it('formats model row labels and accessibility names while selecting the original path', async () => {
-    const raw = String.raw`\\?\C:\models\b.gguf`;
-    const display = String.raw`C:\models\b.gguf`;
-    const model = { name: raw, path: raw, size_mb: 1500, is_vision: false };
-    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [model], truncated: false });
-    const base = createTestStore();
-    const select = vi.fn(async () => undefined);
-    render(<I18nProvider initialLocale="en"><DraftGuardProvider><ModelWorkspace store={base} onSelectModel={select} active section={{ id: 'setup', revision: 0 }} onNavigate={vi.fn()} /></DraftGuardProvider></I18nProvider>);
-    const button = await modelLibrary().findByRole('button', { name: `Select ${display}` });
-    expect(button).toHaveTextContent(display);
-    expect(document.body.textContent).not.toContain('\\\\?\\');
-    for (const element of document.querySelectorAll('[aria-label], [title]')) {
-      expect(element.getAttribute('aria-label') ?? '').not.toContain('\\\\?\\');
-      expect(element.getAttribute('title') ?? '').not.toContain('\\\\?\\');
-    }
-    fireEvent.click(button);
-    await waitFor(() => expect(select).toHaveBeenCalledWith(raw));
-    expect(model.path).toBe(raw);
+describe('model management and settings', () => {
+  beforeEach(() => {
+    localStorage.clear(); vi.clearAllMocks(); Element.prototype.scrollIntoView = vi.fn();
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    vi.mocked(api.listModels).mockResolvedValue({ models, truncated: false });
   });
-
-  it('shows the grouped model label before and after scanning while preserving the launch path', async () => {
-    const name = 'Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64';
-    const path = `C:/models/${name}-00001-of-00033.gguf`;
-    let finishScan!: (value: api.ModelScanResult) => void;
-    vi.mocked(api.listModels).mockImplementationOnce(() => new Promise(resolve => { finishScan = resolve; }));
-    const base = mount(createTestStore({ active_model: path }));
-    expect(screen.getByRole('heading', { name: `${name}.gguf` })).toHaveAttribute('title', path);
-    await waitFor(() => expect(finishScan).toBeDefined());
-    finishScan({ models: [{ name: `${name}.gguf`, path, size_mb: 33000, is_vision: false,
-      shards: { files: Array.from({ length: 33 }, (_, index) => `C:/models/${name}-${String(index + 1).padStart(5, '0')}-of-00033.gguf`), total: 33, missing: [] } }], truncated: false });
-    await findModelButton(`${name}.gguf`);
-    expect(screen.getByRole('heading', { name: `${name}.gguf` })).toHaveAttribute('title', path);
-    await waitFor(() => expect(getStartButton()).toBeEnabled());
-    fireEvent.click(getStartButton());
-    await waitFor(() => expect(base.start).toHaveBeenCalledOnce());
-    expect(base.cfg?.active_model).toBe(path);
+  it('opens a model draft while preserving the saved model and running server', async () => {
+    const base = createTestStore({ active_model: 'a.gguf' }); base.status = { state: 'running', model: 'a.gguf' };
+    mount(base);
+    const stored = vi.spyOn(Storage.prototype, 'setItem');
+    fireEvent.click(await findModelButton('b.gguf'));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' }, config: expect.objectContaining({ active_model: 'b.gguf' }) }));
+    expect(base.cfg?.active_model).toBe('a.gguf');
+    expect(base.start).not.toHaveBeenCalled(); expect(base.stop).not.toHaveBeenCalled(); expect(base.updateConfig).not.toHaveBeenCalled();
+    expect(stored).not.toHaveBeenCalled(); stored.mockRestore();
   });
-  it('selects without starting, restores per-model edits and starts from the same screen', async () => {
-    const base = mount();
-    await findModelButton('b.gguf');
-    expect(screen.getByLabelText('Runtime', { selector: 'select' })).toHaveValue('cpu/b123');
-    const contextSize = within(document.querySelector<HTMLElement>('.execution-quick')!).getByRole('spinbutton', { name: /Context size/ });
-    fireEvent.change(contextSize, { target: { value: '8192' } });
-    fireEvent.blur(contextSize);
-    await waitFor(() => expect(base.cfg?.ctx_size).toBe(8192));
-    await waitFor(() => expect(getModelButton('b.gguf')).toBeEnabled());
-    fireEvent.click(getModelButton('b.gguf'));
-    await waitFor(() => expect(base.cfg?.active_model).toBe('b.gguf'));
-    expect(base.start).not.toHaveBeenCalled();
-    await waitFor(() => expect(getModelButton('a.gguf')).toBeEnabled());
-    fireEvent.click(getModelButton('a.gguf'));
-    await waitFor(() => expect(base.cfg?.active_model).toBe('a.gguf'));
-    expect(base.cfg?.ctx_size).toBe(8192);
-    await waitFor(() => expect(getStartButton()).toBeEnabled());
-    fireEvent.click(getStartButton());
-    await waitFor(() => expect(base.start).toHaveBeenCalledOnce());
-    expect(getModelButton('missing.gguf')).toBeDisabled();
-  }, 10000); // Covers saving, two model transitions, and starting on slower CI runners.
-  it('requires an explicit stop before switching and cancellation leaves the server alone', async () => {
-    const base = createTestStore({ active_model: 'a.gguf' }); base.status = { state: 'running' };
+  it('previews remembered settings without altering model memory', async () => {
+    const base = createTestStore({ active_model: 'a.gguf', ctx_size: 4096 });
+    rememberExecution({ ...base.cfg!, active_model: 'b.gguf', ctx_size: 8192, temperature: 0.25 });
+    const saved = localStorage.getItem(MODEL_EXECUTION_KEY);
     mount(base);
     fireEvent.click(await findModelButton('b.gguf'));
-    const dialog = await screen.findByRole('dialog', { name: 'Stop and switch model?' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-    expect(base.stop).not.toHaveBeenCalled(); expect(base.cfg?.active_model).toBe('a.gguf');
-    fireEvent.click(getModelButton('b.gguf'));
-    fireEvent.click(within(screen.getByRole('dialog', { name: 'Stop and switch model?' })).getByRole('button', { name: 'Stop & select' }));
-    await waitFor(() => expect(base.cfg?.active_model).toBe('b.gguf'));
-    expect(base.stop).toHaveBeenCalledOnce(); expect(base.start).not.toHaveBeenCalled();
-  });
-  it('blocks invalid drafts and allows discarding before model selection', async () => {
-    const base = mount();
-    await findModelButton('b.gguf');
-    const contextSize = within(document.querySelector<HTMLElement>('.execution-quick')!).getByRole('spinbutton', { name: /Context size/ });
-    fireEvent.change(contextSize, { target: { value: '-8' } });
-    fireEvent.click(getModelButton('b.gguf'));
-    const dialog = await screen.findByRole('dialog', { name: 'Unsaved settings' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save & continue' }));
-    await within(dialog).findByRole('alert');
-    expect(base.cfg?.active_model).toBe('a.gguf');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard & continue' }));
-    await waitFor(() => expect(base.cfg?.active_model).toBe('b.gguf'));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: 'b.gguf', ctx_size: 8192, temperature: 0.25 }) }));
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(saved);
     expect(base.cfg?.ctx_size).toBe(4096);
   });
-  it('shows a missing runtime and blocks starting without silently replacing it', async () => {
-    const base = mount(createTestStore({ active_model: 'a.gguf', active_backend: 'cuda', active_build: 'missing' }));
-    await screen.findByText('This runtime is not installed. Install it or select another runtime.');
-    expect(getStartButton()).toBeDisabled();
-    expect(base.cfg?.active_backend).toBe('cuda'); expect(base.start).not.toHaveBeenCalled();
+  it('preserves the first shard path while displaying a grouped model name', async () => {
+    const name = 'Example-00001-of-00003.gguf', path = 'models/' + name;
+    let finish!: (result: api.ModelScanResult) => void;
+    vi.mocked(api.listModels).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const base = mount(createTestStore({ active_model: path }));
+    expect(screen.getByRole('heading', { name: 'Example.gguf' })).toHaveAttribute('title', path);
+    await waitFor(() => expect(finish).toBeDefined());
+    await act(async () => finish({ models: [{ name: 'Example.gguf', path, size_mb: 3000, is_vision: false, shards: { files: [path, 'models/Example-00002-of-00003.gguf', 'models/Example-00003-of-00003.gguf'], total: 3, missing: [] } }], truncated: false }));
+    fireEvent.click(await findModelButton('Example.gguf'));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_model: path }) }));
+    expect(base.cfg?.active_model).toBe(path);
   });
-  it('keeps buttons, expanded settings and runtime resources mounted when selecting a model', async () => {
+  it('keeps missing-shard models unavailable for configuration', async () => {
     mount();
-    await findModelButton('b.gguf');
-    await waitFor(() => expect(getStartButton()).toBeEnabled());
-    const detail = document.querySelector('.model-workspace-detail')!;
-    const buttons = Array.from(detail.querySelectorAll('button'));
-    const advanced = detail.querySelector<HTMLDetailsElement>('.execution-disclosure')!;
-    advanced.open = true;
-    const calls = [vi.mocked(api.rtList).mock.calls.length, vi.mocked(api.rtProbe).mock.calls.length, vi.mocked(api.deviceProfile).mock.calls.length];
-    fireEvent.click(getModelButton('b.gguf'));
-    await screen.findByRole('heading', { name: 'b.gguf' });
-    expect(buttons.every(button => button.isConnected)).toBe(true);
-    expect(advanced.open).toBe(true);
-    expect([vi.mocked(api.rtList).mock.calls.length, vi.mocked(api.rtProbe).mock.calls.length, vi.mocked(api.deviceProfile).mock.calls.length]).toEqual(calls);
+    const button = await findModelButton('missing.gguf');
+    expect(button).toBeDisabled(); fireEvent.click(button);
+    expect(settings.open).not.toHaveBeenCalled();
+  });
+  it('opens current model settings without retaining an inline execution form', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Configure and run' }));
+    expect(settings.open).toHaveBeenCalledWith({ target: { kind: 'default' }, section: 'runtime' });
+    expect(screen.queryByRole('spinbutton', { name: /Context size/ })).not.toBeInTheDocument();
+  });
+  it('opens model selection when no model is configured', () => {
+    mount(createTestStore({ active_model: '' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
+    expect(settings.open).toHaveBeenCalledWith({ target: { kind: 'default' }, section: 'model' });
   });
 });

@@ -47,6 +47,30 @@ fn shard_name(name: &str) -> Option<(&str, usize, usize)> {
     (total > 1 && index > 0 && index <= total).then_some((base, index, total))
 }
 
+pub(crate) fn validate_model_shards(path: &Path) -> Result<(), String> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+    let Some((base, index, total)) = shard_name(name) else {
+        return Ok(());
+    };
+    if index != 1 {
+        return Err("select the first GGUF shard before starting the model".into());
+    }
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("gguf");
+    for index in 1..=total {
+        let shard = parent.join(format!("{base}-{index:05}-of-{total:05}.{extension}"));
+        if !shard.is_file() {
+            return Err(format!("model shard is missing: {}", shard.display()));
+        }
+    }
+    Ok(())
+}
+
 fn group_shards(files: Vec<GgufModel>) -> Vec<GgufModel> {
     let mut models = Vec::new();
     let mut groups = BTreeMap::<(PathBuf, String, usize), Vec<(usize, GgufModel)>>::new();

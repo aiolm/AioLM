@@ -25,6 +25,8 @@ import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerBusy } from "../../shared/lib/serverLifecycle";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayPathLines } from "../../shared/lib/displayPaths";
 import { useDraftGuard } from '../../shared/state/draftGuard';
+import { useModelSettings } from '../model-settings/ModelSettingsProvider';
+import { modelActions } from '../../shared/i18n/modelActions';
 
 
 function fileName(project: ProjectPreset): string {
@@ -32,7 +34,9 @@ function fileName(project: ProjectPreset): string {
 }
 
 export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore; onOpenTuning?: () => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const modelSettings = useModelSettings();
+  const modelCopy = modelActions(locale);
   const guard = useDraftGuard();
 
   const [projects, setProjects] = useState<ProjectPreset[]>(readProjects);
@@ -234,7 +238,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             </dl>
             <div className="profile-snapshot-actions">
               <button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={() => { setConfigSnapshot(structuredClone(cfg)); setNotice(t("ui.projectSnapshotCaptured")); }}>{t("ui.useCurrentSetup")}</button>
-              {onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
+              {modelSettings ? <><button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'model', onApply: next => setConfigSnapshot(structuredClone(next)) })}>{modelCopy.choose}</button><button type="button" className="app-button app-button--ghost" disabled={!cfg} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'runtime', onApply: next => setConfigSnapshot(structuredClone(next)) })}>{modelCopy.settings}</button></> : onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
             </div>
           </section>
           <div className="mt-4 border-t pt-3 ui-border-color-border" >

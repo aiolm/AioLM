@@ -10,6 +10,30 @@ struct RuntimeBusyGuard {
     busy: Arc<AtomicBool>,
 }
 
+fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
+    if state
+        .server
+        .lock()
+        .map_err(|_| "server state lock was poisoned".to_string())?
+        .lifecycle
+        .blocks_resource_change()
+    {
+        return Ok(true);
+    }
+    for entry in state.sessions.entries() {
+        if entry
+            .state
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?
+            .lifecycle
+            .blocks_resource_change()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 impl RuntimeBusyGuard {
     fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, String> {
         busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -68,13 +92,7 @@ pub(crate) async fn rt_install(
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = state.operation.lock().await;
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?
-            .lifecycle
-            .blocks_resource_change()
-        {
+        if runtime_resources_in_use(&state)? {
             return Err("stop the server before changing runtimes".into());
         }
     }
@@ -123,13 +141,7 @@ pub(crate) async fn rt_install_pr(
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = state.operation.lock().await;
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?
-            .lifecycle
-            .blocks_resource_change()
-        {
+        if runtime_resources_in_use(&state)? {
             return Err("stop the server before changing runtimes".into());
         }
     }
@@ -158,13 +170,7 @@ pub(crate) async fn rt_export(
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = state.operation.lock().await;
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?
-            .lifecycle
-            .blocks_resource_change()
-        {
+        if runtime_resources_in_use(&state)? {
             return Err("stop the server before exporting a runtime".into());
         }
     }
@@ -215,13 +221,7 @@ pub(crate) async fn rt_import(
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = state.operation.lock().await;
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?
-            .lifecycle
-            .blocks_resource_change()
-        {
+        if runtime_resources_in_use(&state)? {
             return Err("stop the server before importing a runtime".into());
         }
     }
@@ -270,13 +270,7 @@ pub(crate) async fn rt_uninstall(
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = state.operation.lock().await;
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?
-            .lifecycle
-            .blocks_resource_change()
-        {
+        if runtime_resources_in_use(&state)? {
             return Err("stop the server before changing runtimes".into());
         }
     }
@@ -301,13 +295,7 @@ pub(crate) async fn rt_select(
     let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     {
         let _operation = state.operation.lock().await;
-        if state
-            .server
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?
-            .lifecycle
-            .blocks_resource_change()
-        {
+        if runtime_resources_in_use(&state)? {
             return Err("stop the server before selecting a different runtime".into());
         }
     }
@@ -350,6 +338,19 @@ pub(crate) async fn rt_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_mutations_check_named_sessions_as_well_as_default() {
+        let state = AppState::default();
+        assert!(!runtime_resources_in_use(&state).unwrap());
+        let named = state.sessions.get_or_create("named", "Named").unwrap();
+        named.state.lock().unwrap().lifecycle = crate::server::Lifecycle::Ready;
+        assert!(runtime_resources_in_use(&state).unwrap());
+        named.state.lock().unwrap().lifecycle = crate::server::Lifecycle::Stopped;
+        assert!(!runtime_resources_in_use(&state).unwrap());
+        state.server.lock().unwrap().lifecycle = crate::server::Lifecycle::Starting;
+        assert!(runtime_resources_in_use(&state).unwrap());
+    }
 
     #[test]
     fn runtime_busy_guard_releases_on_every_exit_path() {

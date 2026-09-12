@@ -8,6 +8,10 @@ import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { useDraftGuard } from '../../shared/state/draftGuard';
+import { useModelSettings } from '../model-settings/ModelSettingsProvider';
+import { previewExecution } from '../models/modelExecutionState';
+import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
+import { modelActions } from '../../shared/i18n/modelActions';
 
 
 function formatCount(locale: string, value: number): string {
@@ -16,6 +20,9 @@ function formatCount(locale: string, value: number): string {
 
 export default function DiscoverPanel({ store, active = true, onSelectModel, onOpenModels }: { store: AppStore; active?: boolean; onSelectModel?: (path: string) => Promise<void>; onOpenModels?: () => void }) {
   const { t, locale } = useI18n();
+  const modelSettings = useModelSettings();
+  const modelCopy = modelActions(locale);
+  const [downloadedChoice, setDownloadedChoice] = useState<{ path: string; projector: boolean } | null>(null);
   const guard = useDraftGuard();
   const latestStore = useRef(store); latestStore.current = store;
 
@@ -105,6 +112,13 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     setNotice(null);
     try {
       const downloaded = await api.hfDownloadModel(selected.id, file.path, store.cfg.models_dir);
+      invalidateModelCatalog();
+      if (modelSettings) {
+        const projector = file.is_mmproj || isMmprojPath(file.path);
+        setDownloadedChoice({ path: downloaded.path, projector });
+        setNotice(t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }));
+        return;
+      }
       if (file.is_mmproj || isMmprojPath(file.path)) {
         await store.updateConfig({ mmproj: downloaded.path });
         setNotice(t("ui.downloadedProjector", { file: file.path }));
@@ -156,6 +170,13 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       </form>
 
       <PanelFeedback>
+        {downloadedChoice && modelSettings && <FeedbackBanner tone="info" action={{ label: modelCopy.configure, onClick: () => {
+          const cfg = latestStore.current.getConfig();
+          if (!cfg) return;
+          modelSettings.open({ target: { kind: 'default' }, config: downloadedChoice.projector
+            ? { ...cfg, mmproj: downloadedChoice.path }
+            : { ...cfg, ...previewExecution(cfg, downloadedChoice.path), active_model: downloadedChoice.path }, section: downloadedChoice.projector ? 'adapters' : 'runtime' });
+        } }}>{downloadedChoice.path.split(/[\\/]/).pop()}</FeedbackBanner>}
         {error && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
         {notice && <FeedbackBanner tone="success" title={t("panel.downloadComplete")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
         {downloading && progress && (

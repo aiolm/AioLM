@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { OverlayContainerContext } from './CustomSelect';
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
 import { normalizeDisplayText } from "../lib/displayPaths";
@@ -17,6 +18,7 @@ interface TooltipProps {
 
 /** A viewport-positioned help popover, also associated with its control for AT. */
 export default function Tooltip({ content, label, id }: TooltipProps) {
+  const overlayContainer = useContext(OverlayContainerContext);
   const { t } = useI18n();
   const title = typeof content === "string" ? undefined : content.title;
   const description = typeof content === "string" ? content : content.description;
@@ -65,7 +67,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
       {title && <strong className="app-tooltip-title">{normalizeDisplayText(title)}</strong>}
       <span>{normalizeDisplayText(description)}</span>
     </span>,
-    document.body,
+    overlayContainer ?? document.body,
   ) : null;
 
   return (
@@ -80,6 +82,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onClick={() => setOpen((value) => !value)}
+        onKeyDown={event => { if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); } }}
       >
         <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="9" />

@@ -55,13 +55,35 @@ pub(super) async fn validate_launch_config_with_cancel(
     cfg: &mut config::AppConfig,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<gpu::ResolvedGpu, String> {
+    validate_launch(cfg, cancel, true).await
+}
+
+#[tauri::command]
+pub(crate) async fn preflight_launch(
+    mut cfg: config::AppConfig,
+) -> Result<config::AppConfig, String> {
+    validate_launch(&mut cfg, None, false).await?;
+    Ok(cfg)
+}
+
+async fn validate_launch(
+    cfg: &mut config::AppConfig,
+    cancel: Option<&Arc<AtomicBool>>,
+    repair: bool,
+) -> Result<gpu::ResolvedGpu, String> {
     validate_start_config(cfg)?;
     if !cfg.active_backend.is_empty() {
-        let repair_cancel = cancel
-            .cloned()
-            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-        runtime::repair_runtime_dependencies(&cfg.active_backend, &cfg.active_build, repair_cancel)
+        if repair {
+            let repair_cancel = cancel
+                .cloned()
+                .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+            runtime::repair_runtime_dependencies(
+                &cfg.active_backend,
+                &cfg.active_build,
+                repair_cancel,
+            )
             .await?;
+        }
         let capabilities = match cancel {
             Some(cancel) => {
                 runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, cancel).await?
@@ -79,6 +101,7 @@ pub(super) async fn validate_launch_config_with_cancel(
         gpu::validate_known_rocm_peer_issue(cfg, &resolved, &capabilities.devices)?;
         return Ok(resolved);
     }
+    crate::server::server_bin(cfg)?;
     gpu::resolve(&cfg.gpu, &cfg.active_backend, &hardware::detect())
 }
 
@@ -102,6 +125,7 @@ fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result
             extensions.join(", ")
         ));
     }
+    crate::models::validate_model_shards(Path::new(path))?;
     Ok(())
 }
 
@@ -157,6 +181,30 @@ fn validate_runtime_adapter_capabilities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_validation_rejects_incomplete_model_shards() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-shard-preflight-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("model-00001-of-00002.gguf");
+        let second = root.join("model-00002-of-00002.gguf");
+        fs::write(&first, b"synthetic shard").unwrap();
+        let mut cfg = config::AppConfig {
+            active_model: first.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("shard is missing"));
+        fs::write(&second, b"synthetic shard").unwrap();
+        assert!(validate_start_config(&mut cfg).is_ok());
+        cfg.active_model = second.to_string_lossy().into_owned();
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("first GGUF shard"));
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn start_validation_rejects_missing_projector_and_enabled_adapter() {

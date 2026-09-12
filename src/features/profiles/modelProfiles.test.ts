@@ -115,6 +115,8 @@ describe("model profiles", () => {
       expect.objectContaining({ id: modelA.id, name: "기본 · a.gguf", temperature: 0.2, system_prompt: "Be concise.", stop_strings: ["<end-a>"] }),
       expect.objectContaining({ id: modelB.id, name: "기본 · b.gguf", temperature: 1.2, runtime_defaults: ["top_k"], chat_options: { seed: 42 } }),
     ]);
+    expect(JSON.parse(localStorage.getItem(MODEL_PROFILES_STORAGE_KEY)!).version).toBe(version);
+    saveProfileSelection(loaded.activeServerId, 'models/c.gguf', loaded.activeModelId);
     const persisted = JSON.parse(localStorage.getItem(MODEL_PROFILES_STORAGE_KEY)!);
     expect(persisted.version).toBe(4);
     expect(persisted.activeModelIds).toMatchObject({ 'models/a.gguf': modelA.id, 'models/b.gguf': modelB.id, 'models/c.gguf': modelB.id });
@@ -126,7 +128,7 @@ describe("model profiles", () => {
   it("reuses the selected profile and prompt when switching models or reloading", () => {
     const initial = loadProfiles(cfg, "models/a.gguf");
     const shared = { ...createModelProfile({ ...cfg, temperature: 1.1 }, "Creative"), system_prompt: "Write creatively." };
-    saveModelProfile(shared);
+    saveModelProfile(shared, initial.model);
     saveProfileSelection(initial.activeServerId, "models/a.gguf", shared.id);
     for (const modelPath of ["models/b.gguf", "models/c.gguf", "models/a.gguf"]) {
       expect(loadProfiles(cfg, modelPath).activeModelId).toBe(shared.id);

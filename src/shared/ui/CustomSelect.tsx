@@ -1,6 +1,9 @@
-import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { normalizeDisplayText } from "../lib/displayPaths";
 import { createPortal } from "react-dom";
+
+/** Keep overlays inside a modal's top layer while retaining viewport positioning. */
+export const OverlayContainerContext = createContext<HTMLElement | null>(null);
 
 export interface CustomSelectOption<T extends string | number = string> {
   value: T;
@@ -26,6 +29,7 @@ export interface CustomSelectProps<T extends string | number = string> {
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
   size?: "sm" | "md";
+  portalContainer?: HTMLElement | null;
 }
 
 interface DropdownPosition {
@@ -53,7 +57,9 @@ export function CustomSelect<T extends string | number = string>({
   "aria-labelledby": ariaLabelledByKebab,
   "aria-describedby": ariaDescribedByKebab,
   size = "md",
+  portalContainer,
 }: CustomSelectProps<T>) {
+  const overlayContainer = useContext(OverlayContainerContext);
   const effectiveAriaLabel = ariaLabel ?? ariaLabelKebab;
   const effectiveAriaLabelledBy = ariaLabelledBy ?? ariaLabelledByKebab;
   const effectiveAriaDescribedBy = ariaDescribedBy ?? ariaDescribedByKebab;
@@ -164,6 +170,7 @@ export function CustomSelect<T extends string | number = string>({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (disabled) return;
     if (e.key === "Escape") {
+      if (isOpen) { e.preventDefault(); e.stopPropagation(); }
       setIsOpen(false);
       return;
     }
@@ -296,7 +303,7 @@ export function CustomSelect<T extends string | number = string>({
             );
           })}
         </ul>,
-        document.body,
+        portalContainer ?? overlayContainer ?? document.body,
       )}
     </div>
   );

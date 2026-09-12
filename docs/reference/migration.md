@@ -32,15 +32,21 @@ If copying fails, the application stops at a retry screen/dialog before default 
 
 - New environment variables use `AIOLM_`. Existing `LLAMA_BOARD_` inputs remain accepted; the new name wins when both are present. This includes the CUDA override, CLI smoke inputs, PR artifact repository override and installation-script options.
 - New exports use `aiolm.project.v1` and `aiolm-runtime*.json`. Existing project JSON and `llama-board-runtime*.json` manifests remain readable. Previously published PR artifact names remain accepted with the same digest and provenance checks.
-- IPC command names and feature data schemas are preserved. Only the bootstrap command `migration_paths` was added.
+- Existing IPC command names remain available. New commands support launch validation and session-scoped request settings.
 - Runtime and desktop package names are `aiolm`; the Rust library is `aiolm_lib`. Installers include `aiolm.exe` and `aiolm-cli.exe`.
 
 ## Model execution workspace
 
-The model execution page combines runtime selection, profiles, GPU placement and tuning. Runtime installation and independent sessions retain their own pages. Existing tuning, profile and LoRA shortcuts open the corresponding section of the model workspace.
+The model page manages the model library. Runtime selection, profiles, GPU placement and tuning are available in a shared settings dialog from the header, chat, sessions, benchmark and project editor. Existing tuning, profile and LoRA shortcuts open the corresponding dialog section. Runtime installation and independent sessions retain their own pages.
 
 The localStorage entry `aiolm-model-execution` uses version 1 and stores the last saved execution configuration by normalized model path. It includes runtime/build, GPU placement, tuning defaults and overrides, projector and LoRA settings. App preferences, ports, authentication fields and independent session definitions are excluded; raw server arguments use the existing profile credential filter. Shared presets remain separate snapshots and are not modified by ordinary model edits.
 
 Existing `aiolm-model-profiles` versions 2–4 remain readable. The version 4 record now retains an optional `activeModelIds` map alongside the existing per-model server selection. Older records without that map inherit the current shared sampling selection on first use. Profile definitions and IDs are preserved, including the existing legacy duplicate-name migration.
 
 Returning to a model restores its saved configuration. A model without a record uses the existing profile defaults. Applying a project explicitly overrides the model record with the project configuration. Missing runtime builds are shown for installation or reselection; they are never silently replaced.
+
+## Session execution settings
+
+Configuration version 11 adds optional `execution` and `model_profile_id` fields to saved sessions. Sessions without execution overrides retain their previous inheritance behavior. Editing a session stores only that session's execution options; model paths and GPU placement remain in their existing fields. Application preferences, ports and other session definitions are excluded from the overrides.
+
+Running-session status includes an allowlisted execution snapshot captured at launch. Saving a different model, projector or server configuration for the next launch does not replace that snapshot. Request-only changes can be applied to the current session separately. Settings dialogs keep unapplied changes in memory; opening or cancelling them does not migrate or rewrite profile selections.

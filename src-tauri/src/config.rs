@@ -5,7 +5,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-const CURRENT_CONFIG_VERSION: u32 = 10;
+pub mod execution;
+
+const CURRENT_CONFIG_VERSION: u32 = 11;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
@@ -267,6 +269,10 @@ pub struct SessionDefinition {
     pub models: SessionModels,
     pub gpu: GpuPlacement,
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<execution::ExecutionSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_profile_id: Option<String>,
 }
 
 impl Default for SessionDefinition {
@@ -277,6 +283,8 @@ impl Default for SessionDefinition {
             models: SessionModels::default(),
             gpu: GpuPlacement::default(),
             enabled: true,
+            execution: None,
+            model_profile_id: None,
         }
     }
 }
@@ -293,6 +301,11 @@ impl SessionDefinition {
         self.models.mmproj = self.models.mmproj.trim().to_string();
         self.models.draft_model = self.models.draft_model.trim().to_string();
         self.gpu.normalize();
+        self.model_profile_id = self
+            .model_profile_id
+            .take()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty());
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -301,6 +314,16 @@ impl SessionDefinition {
         }
         if self.name.len() > 200 {
             return Err(format!("session '{}' name is too long", self.id));
+        }
+        if self
+            .model_profile_id
+            .as_ref()
+            .is_some_and(|id| id.len() > 200 || id.chars().any(char::is_control))
+        {
+            return Err(format!(
+                "session '{}' model profile id is invalid or too long",
+                self.id
+            ));
         }
         for (label, value) in [
             ("primary model", &self.models.primary_model),
@@ -602,8 +625,11 @@ impl AppConfig {
         if !matches!(self.flash_attn.as_str(), "auto" | "on" | "off") {
             self.flash_attn = "auto".into();
         }
+        let mut execution_base = self.clone();
+        execution_base.sessions.clear();
         for session in &mut self.sessions {
             session.normalize();
+            execution::normalize_session(&execution_base, session);
         }
         {
             let mut seen = std::collections::HashSet::new();
@@ -715,6 +741,11 @@ impl AppConfig {
             let mut seen = std::collections::HashSet::new();
             for session in &self.sessions {
                 session.validate()?;
+                if session.execution.is_some() {
+                    execution::session_config(self, session)?
+                        .validate()
+                        .map_err(|error| format!("session '{}': {error}", session.id))?;
+                }
                 if !seen.insert(session.id.as_str()) {
                     return Err(format!("duplicate session id: {}", session.id));
                 }
@@ -915,7 +946,7 @@ fn migrate_with_presence(
         // type default, so a config written before either existed migrates
         // for free through the container-level `#[serde(default)]` on
         // `AppConfig` itself; no per-field repair is needed here.
-        2..=9 => {}
+        2..=10 => {}
         CURRENT_CONFIG_VERSION => {}
         _ => unreachable!("future config versions are rejected above"),
     }
@@ -1076,6 +1107,37 @@ pub fn save(cfg: &AppConfig) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v10_sessions_keep_inheritance_and_v11_overrides_are_normalized() {
+        let cfg = migrate_value(serde_json::json!({
+            "config_version": 10,
+            "sessions": [{"id":"legacy","models":{"primary_model":"model.gguf"}}]
+        }))
+        .unwrap();
+        assert_eq!(cfg.config_version, 11);
+        assert!(cfg.sessions[0].execution.is_none());
+        let migrated = migrate_value(serde_json::json!({
+            "config_version":11,
+            "sessions":[{"id":"isolated","model_profile_id":" profile-a ","execution":{"temperature":99,"ctx_size":256}}]
+        })).unwrap();
+        let execution = migrated.sessions[0].execution.as_ref().unwrap();
+        assert_eq!(execution["temperature"], 2.0);
+        assert_eq!(execution["ctx_size"], 512);
+        assert_eq!(
+            migrated.sessions[0].model_profile_id.as_deref(),
+            Some("profile-a")
+        );
+        for invalid in [
+            serde_json::json!({"port":9000}),
+            serde_json::json!({"temperature":"invalid"}),
+        ] {
+            assert!(migrate_value(
+                serde_json::json!({"sessions":[{"id":"bad","execution":invalid}]})
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn normalize_clamps_tuning_ranges() {

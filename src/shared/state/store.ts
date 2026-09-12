@@ -18,7 +18,7 @@ export interface AppStore {
   loadConfig: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   updateConfig: (patch: ConfigPatch<api.AppConfig>) => Promise<api.AppConfig>;
-  start: (cfgOverride?: api.AppConfig) => Promise<string>;
+  start: (cfgOverride?: api.AppConfig, replaceRunning?: boolean) => Promise<string>;
   stop: () => Promise<void>;
   clearActionError: () => void;
   clearErrors: () => void;
@@ -45,6 +45,7 @@ function sameServerStatus(left: api.ServerStatus, right: api.ServerStatus): bool
   return keys.length === Object.keys(right).length && keys.every((key) => {
     if (key === "memory") return shallowEqual(left.memory, right.memory);
     if (key === "lifecycle") return shallowEqual(left.lifecycle, right.lifecycle);
+    if (key === 'execution') return JSON.stringify(left.execution) === JSON.stringify(right.execution);
     return Object.is(left[key], right[key]);
   });
 }
@@ -123,13 +124,13 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     return saved;
   }, []);
 
-  const start = useCallback(async (cfgOverride?: api.AppConfig) => {
+  const start = useCallback(async (cfgOverride?: api.AppConfig, replaceRunning = false) => {
     if (!api.isNativeRuntimeAvailable()) {
       const error = new Error("Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.");
       setActionError(error.message);
       throw error;
     }
-    if (operationInFlight.current || status.state === "running" || status.state === "starting") return status.url ?? "";
+    if (operationInFlight.current || (status.state === "running" && !replaceRunning) || status.state === "starting") return status.url ?? "";
     const current = cfgOverride ?? cfgRef.current;
     if (!current) throw new Error("Configuration is still loading.");
     setBusy(true); setActionError(null); setStatus({ state: "starting" }); operationInFlight.current = true; statusGeneration.current += 1;

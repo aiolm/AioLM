@@ -1,7 +1,7 @@
 //! Default server IPC, shared session lifecycle operations and idle tracking.
 use super::gateway::abort_gateway_now;
 use super::launch::validate_launch_config_with_cancel;
-use crate::{config, gateway, server, session, state::AppState, tuning_defaults};
+use crate::{config, gateway, gpu, server, session, state::AppState, tuning_defaults};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -10,23 +10,31 @@ use std::time::Duration;
 use tauri::{Manager, State};
 use uuid::Uuid;
 
-/// Launch one session's llama-server process onto `target`/`err` and wait for
-/// it to become ready. Shared by the legacy `start_server` command (the
-/// default session: `persist = true` writes the config file, `abort_gateway
-/// = true` tears down the Anthropic gateway that proxies it) and
-/// `session_start` (an extra session: never persisted, no gateway to abort).
-/// Every lock scope and exit-mid-start check below is copied verbatim from
-/// `start_server`'s original single-session body, just parameterized over
-/// which `ServerState`/`ErrBuf` to drive.
-pub(super) async fn start_on_target(
+pub(super) struct PreparedLaunch {
+    pub cfg: config::AppConfig,
+    gpu: gpu::ResolvedGpu,
+}
+
+/// Complete validation and optional persistence before stopping any session.
+pub(super) async fn prepare_launch(
     state: &AppState,
-    target: &Arc<Mutex<server::ServerState>>,
-    err: &Arc<server::ErrBuf>,
-    cfg: config::AppConfig,
+    mut cfg: config::AppConfig,
     persist: bool,
-    abort_gateway: bool,
     launch_cancel: &Arc<AtomicBool>,
-) -> Result<String, String> {
+) -> Result<PreparedLaunch, String> {
+    ensure_launch_allowed(state, launch_cancel)?;
+    let gpu = validate_launch_config_with_cancel(&mut cfg, Some(launch_cancel)).await?;
+    ensure_launch_allowed(state, launch_cancel)?;
+    if persist {
+        let _config_write = state.config_write.lock().await;
+        ensure_launch_allowed(state, launch_cancel)?;
+        let latest = config::load_result()?;
+        cfg = config::save(&config::execution::merge_launch(&latest, &cfg)?)?;
+    }
+    Ok(PreparedLaunch { cfg, gpu })
+}
+
+fn ensure_launch_allowed(state: &AppState, launch_cancel: &AtomicBool) -> Result<(), String> {
     if state.runtime_busy.load(Ordering::Acquire) {
         return Err(
             "a runtime operation is in progress; wait for it to finish before starting the server"
@@ -39,10 +47,65 @@ pub(super) async fn start_on_target(
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
     }
+    Ok(())
+}
+
+/// Starting can replace the selected target and, under the load policy,
+/// every other session. Active responses must finish before that transition.
+pub(super) fn ensure_no_active_requests(
+    state: &AppState,
+    target_id: &str,
+    stop_existing: bool,
+) -> Result<(), String> {
+    let mut targets = Vec::new();
+    if target_id == session::DEFAULT_SESSION_ID || stop_existing {
+        targets.push((
+            session::DEFAULT_SESSION_ID.to_string(),
+            state.server.clone(),
+        ));
+    }
+    targets.extend(
+        state
+            .sessions
+            .entries()
+            .into_iter()
+            .filter(|entry| stop_existing || entry.id == target_id)
+            .map(|entry| (entry.id.clone(), entry.state.clone())),
+    );
+    for (id, target) in targets {
+        let server = target
+            .lock()
+            .map_err(|_| "server state lock was poisoned".to_string())?;
+        if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
+            return Err(format!(
+                "finish or stop the active response in session '{id}' before loading a model"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Launch a previously validated configuration on one session target.
+pub(super) async fn start_on_target(
+    state: &AppState,
+    target: &Arc<Mutex<server::ServerState>>,
+    err: &Arc<server::ErrBuf>,
+    prepared: PreparedLaunch,
+    abort_gateway: bool,
+    launch_cancel: &Arc<AtomicBool>,
+) -> Result<String, String> {
+    ensure_launch_allowed(state, launch_cancel)?;
+    let PreparedLaunch {
+        cfg: saved,
+        gpu: resolved_gpu,
+    } = prepared;
     let launch_generation = {
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
+        if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
+            return Err("finish or stop the active response before replacing this model".into());
+        }
         let generation = server.begin_launch();
         server.last_error = None;
         server.url.clear();
@@ -56,49 +119,6 @@ pub(super) async fn start_on_target(
     };
     err.clear();
 
-    let mut next = cfg;
-    let resolved_gpu =
-        match validate_launch_config_with_cancel(&mut next, Some(launch_cancel)).await {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                let mut server = target
-                    .lock()
-                    .map_err(|_| "server state lock was poisoned".to_string())?;
-                if !server.is_current_launch(launch_generation) {
-                    return Err("server start cancelled".into());
-                }
-                server.lifecycle = server::Lifecycle::Failed;
-                server.last_error = Some(error.clone());
-                return Err(error);
-            }
-        };
-    {
-        let server = target
-            .lock()
-            .map_err(|_| "server state lock was poisoned".to_string())?;
-        if !server.is_current_launch(launch_generation) {
-            return Err("server start cancelled".into());
-        }
-    }
-    let saved = if persist {
-        let _config_write = state.config_write.lock().await;
-        match config::save(&next) {
-            Ok(saved) => saved,
-            Err(error) => {
-                let mut server = target
-                    .lock()
-                    .map_err(|_| "server state lock was poisoned".to_string())?;
-                if !server.is_current_launch(launch_generation) {
-                    return Err("server start cancelled".into());
-                }
-                server.lifecycle = server::Lifecycle::Failed;
-                server.last_error = Some(error.clone());
-                return Err(error);
-            }
-        }
-    } else {
-        next
-    };
     {
         let server = target
             .lock()
@@ -188,6 +208,7 @@ pub(super) async fn start_on_target(
                 });
             }
             server.lifecycle = server::Lifecycle::Ready;
+            server.execution = Some(saved.clone());
             server.last_error = None;
             server.touch_activity();
             server::cleanup_api_key_file(api_key_file.as_deref());
@@ -232,15 +253,27 @@ pub(crate) async fn start_server(
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
     }
-    if cfg.stop_existing_sessions_on_load {
+    ensure_no_active_requests(
+        &state,
+        session::DEFAULT_SESSION_ID,
+        cfg.stop_existing_sessions_on_load,
+    )?;
+    let prepared = prepare_launch(&state, cfg, true, &launch_cancel).await?;
+    ensure_no_active_requests(
+        &state,
+        session::DEFAULT_SESSION_ID,
+        prepared.cfg.stop_existing_sessions_on_load,
+    )?;
+    if prepared.cfg.stop_existing_sessions_on_load {
         let ids = state.sessions.ids();
         for id in session::ids_to_stop_for_policy(&ids, session::DEFAULT_SESSION_ID) {
+            ensure_no_active_requests(&state, session::DEFAULT_SESSION_ID, true)?;
             stop_session_by_id(&state, &id).await?;
         }
     }
     let target = state.server.clone();
     let err = state.err.clone();
-    start_on_target(&state, &target, &err, cfg, true, true, &launch_cancel).await
+    start_on_target(&state, &target, &err, prepared, true, &launch_cancel).await
 }
 
 /// Tear down one session's process and reset it to `Stopped`. Shared by the
@@ -315,10 +348,11 @@ pub(crate) async fn unload_model(state: State<'_, AppState>) -> Result<(), Strin
 pub(crate) async fn server_activity(
     state: State<'_, AppState>,
     phase: String,
+    session_id: Option<String>,
 ) -> Result<(), String> {
     let _operation = state.operation.lock().await;
-    let mut server = state
-        .server
+    let target = activity_target(&state, session_id.as_deref())?;
+    let mut server = target
         .lock()
         .map_err(|_| "server state lock was poisoned".to_string())?;
     if server.lifecycle != server::Lifecycle::Ready {
@@ -333,11 +367,46 @@ pub(crate) async fn server_activity(
     Ok(())
 }
 
+fn activity_target(
+    state: &AppState,
+    session_id: Option<&str>,
+) -> Result<Arc<Mutex<server::ServerState>>, String> {
+    match session_id.map(str::trim).filter(|id| !id.is_empty()) {
+        None | Some(session::DEFAULT_SESSION_ID) => Ok(state.server.clone()),
+        Some(id) => state
+            .sessions
+            .get(id)
+            .map(|entry| entry.state.clone())
+            .ok_or_else(|| format!("session is not running: {id}")),
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn apply_request_settings(
+    state: State<'_, AppState>,
+    cfg: config::AppConfig,
+    session_id: Option<String>,
+) -> Result<config::execution::ExecutionSettings, String> {
+    let _operation = state.operation.lock().await;
+    let target = activity_target(&state, session_id.as_deref())?;
+    let mut server = target
+        .lock()
+        .map_err(|_| "server state lock was poisoned".to_string())?;
+    if server.lifecycle != server::Lifecycle::Ready {
+        return Err("server is not ready for request settings".into());
+    }
+    let live = server
+        .execution
+        .as_ref()
+        .ok_or_else(|| "running execution settings are unavailable".to_string())?;
+    let next = config::execution::apply_request_settings(live, &cfg)?;
+    let snapshot = config::execution::snapshot(&next);
+    server.execution = Some(next);
+    Ok(snapshot)
+}
+
 async fn unload_idle_server(state: &AppState) -> bool {
     let _operation = state.operation.lock().await;
-    let Some(cfg) = config::load_result().ok() else {
-        return false;
-    };
     let (gateway_running, gateway_active) = {
         let gateway = state.gateway.lock().ok();
         (
@@ -359,7 +428,10 @@ async fn unload_idle_server(state: &AppState) -> bool {
         if server.lifecycle != server::Lifecycle::Ready
             || gateway_running
             || gateway_active > 0
-            || !server.auto_unload_due(tuning_defaults::app_idle_timeout(&cfg))
+            || !server
+                .execution
+                .as_ref()
+                .is_some_and(|cfg| server.auto_unload_due(tuning_defaults::app_idle_timeout(cfg)))
         {
             return false;
         }
@@ -370,6 +442,8 @@ async fn unload_idle_server(state: &AppState) -> bool {
         server.redaction_secret.clear();
         server.model.clear();
         server.mmproj.clear();
+        server.draft_model.clear();
+        server.execution = None;
         server.active_requests = 0;
         server.touch_activity();
         server.last_error = None;
@@ -391,6 +465,24 @@ async fn unload_idle_server(state: &AppState) -> bool {
     true
 }
 
+async fn unload_idle_named_sessions(state: &AppState) {
+    let _operation = state.operation.lock().await;
+    for entry in state.sessions.entries() {
+        let Ok(mut server) = entry.state.lock() else {
+            continue;
+        };
+        if server.lifecycle == server::Lifecycle::Ready
+            && server
+                .execution
+                .as_ref()
+                .is_some_and(|cfg| server.auto_unload_due(tuning_defaults::app_idle_timeout(cfg)))
+        {
+            stop_target(&mut server, &entry.err);
+            entry.err.clear();
+        }
+    }
+}
+
 pub(crate) async fn idle_watchdog(app: tauri::AppHandle) {
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -401,6 +493,7 @@ pub(crate) async fn idle_watchdog(app: tauri::AppHandle) {
             break;
         }
         let _ = unload_idle_server(&state).await;
+        unload_idle_named_sessions(&state).await;
     }
 }
 
@@ -416,6 +509,12 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
     response.insert("state".into(), server.lifecycle.as_str().into());
     response.insert("active_requests".into(), server.active_requests.into());
     response.insert("idle_seconds".into(), server.idle_seconds().into());
+    if let Some(execution) = &server.execution {
+        response.insert(
+            "execution".into(),
+            config::execution::snapshot(execution).into(),
+        );
+    }
     if !server.url.is_empty() {
         response.insert("url".into(), server.url.clone().into());
     }
@@ -441,7 +540,11 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
             server::redact_text(error, &server.redaction_secret).into(),
         );
     }
-    if let Ok(cfg) = config::load_result() {
+    if let Some(cfg) = server
+        .execution
+        .clone()
+        .or_else(|| config::load_result().ok())
+    {
         response.insert(
             "memory".into(),
             if tuning_defaults::inherited(&cfg, "ctx_size")
@@ -471,4 +574,152 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
         abort_gateway_now(&state);
     }
     Ok(response.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_activity_guard_respects_target_and_stop_existing_policy() {
+        let state = AppState::default();
+        let work = state.sessions.get_or_create("work", "Work").unwrap();
+        {
+            let mut server = work.state.lock().unwrap();
+            server.lifecycle = server::Lifecycle::Ready;
+            server.active_requests = 1;
+        }
+        assert!(ensure_no_active_requests(&state, "default", true).is_err());
+        assert!(ensure_no_active_requests(&state, "work", false).is_err());
+        assert!(ensure_no_active_requests(&state, "other", true).is_err());
+        assert!(ensure_no_active_requests(&state, "default", false).is_ok());
+        assert!(ensure_no_active_requests(&state, "other", false).is_ok());
+        assert_eq!(work.state.lock().unwrap().active_requests, 1);
+        assert_eq!(
+            work.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Ready
+        );
+
+        work.state.lock().unwrap().active_requests = 0;
+        assert!(ensure_no_active_requests(&state, "default", true).is_ok());
+        {
+            let mut default = state.server.lock().unwrap();
+            default.lifecycle = server::Lifecycle::Ready;
+            default.begin_request();
+        }
+        assert!(ensure_no_active_requests(&state, "default", false).is_err());
+        assert!(ensure_no_active_requests(&state, "work", true).is_err());
+        assert!(ensure_no_active_requests(&state, "work", false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn prepared_launch_rechecks_activity_before_replacing_its_target() {
+        let state = AppState::default();
+        assert!(ensure_no_active_requests(&state, "default", false).is_ok());
+        {
+            let mut current = state.server.lock().unwrap();
+            current.lifecycle = server::Lifecycle::Ready;
+            current.model = "current.gguf".into();
+            current.begin_request();
+        }
+        let prepared = PreparedLaunch {
+            cfg: config::AppConfig::default(),
+            gpu: gpu::ResolvedGpu::default(),
+        };
+        let result = start_on_target(
+            &state,
+            &state.server,
+            &state.err,
+            prepared,
+            false,
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+        assert!(result.unwrap_err().contains("active response"));
+        let current = state.server.lock().unwrap();
+        assert_eq!(current.lifecycle, server::Lifecycle::Ready);
+        assert_eq!(current.model, "current.gguf");
+        assert_eq!(current.active_requests, 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_replacement_keeps_current_and_other_sessions_untouched() {
+        let state = AppState::default();
+        {
+            let mut current = state.server.lock().unwrap();
+            current.lifecycle = server::Lifecycle::Ready;
+            current.model = "current.gguf".into();
+            current.execution = Some(config::AppConfig {
+                active_model: "current.gguf".into(),
+                ..Default::default()
+            });
+        }
+        let other = state.sessions.get_or_create("other", "Other").unwrap();
+        other.state.lock().unwrap().lifecycle = server::Lifecycle::Ready;
+        let result = prepare_launch(
+            &state,
+            config::AppConfig::default(),
+            true,
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+        assert!(result.err().unwrap().contains("select a GGUF model"));
+        let current = state.server.lock().unwrap();
+        assert_eq!(current.lifecycle, server::Lifecycle::Ready);
+        assert_eq!(current.model, "current.gguf");
+        assert_eq!(
+            current.execution.as_ref().unwrap().active_model,
+            "current.gguf"
+        );
+        assert_eq!(
+            other.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Ready
+        );
+    }
+
+    #[test]
+    fn activity_targets_never_fall_back_from_an_unknown_named_session() {
+        let state = AppState::default();
+        let named = state.sessions.get_or_create("named", "Named").unwrap();
+        assert!(Arc::ptr_eq(
+            &activity_target(&state, None).unwrap(),
+            &state.server
+        ));
+        assert!(Arc::ptr_eq(
+            &activity_target(&state, Some("default")).unwrap(),
+            &state.server
+        ));
+        assert!(Arc::ptr_eq(
+            &activity_target(&state, Some("named")).unwrap(),
+            &named.state
+        ));
+        assert!(activity_target(&state, Some("missing")).is_err());
+    }
+
+    #[tokio::test]
+    async fn named_idle_policy_uses_live_settings_and_spares_active_requests() {
+        let state = AppState::default();
+        let idle = state.sessions.get_or_create("idle", "Idle").unwrap();
+        let busy = state.sessions.get_or_create("busy", "Busy").unwrap();
+        for entry in [&idle, &busy] {
+            let mut server = entry.state.lock().unwrap();
+            server.lifecycle = server::Lifecycle::Ready;
+            server.execution = Some(config::AppConfig {
+                sleep_idle_seconds: 1,
+                ..Default::default()
+            });
+            server.last_activity_at = std::time::Instant::now() - Duration::from_secs(10);
+        }
+        busy.state.lock().unwrap().active_requests = 1;
+        unload_idle_named_sessions(&state).await;
+        assert_eq!(
+            idle.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Stopped
+        );
+        assert!(idle.state.lock().unwrap().execution.is_none());
+        assert_eq!(
+            busy.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Ready
+        );
+    }
 }

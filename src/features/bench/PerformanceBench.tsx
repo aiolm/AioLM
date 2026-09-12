@@ -7,6 +7,9 @@ import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { performanceCsv, readPerformanceHistory, savePerformanceRecord, summarizePerformanceRows, type BenchmarkDevice, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import { benchmarkCopy } from "./benchmarkCopy";
+import { useModelSettings } from '../model-settings/ModelSettingsProvider';
+import { executionConfig, executionSettings, type ExecutionSettings } from '../../shared/config/executionSettings';
+import { modelActions } from '../../shared/i18n/modelActions';
 
 const PROMPT_LENGTHS = [1024, 4096, 8192, 16384, 32768, 65536, 131072, 200000];
 const BATCH_SIZES = [2, 4, 8];
@@ -73,6 +76,14 @@ function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; c
 export default function PerformanceBench({ store }: { store: AppStore }) {
   const { locale } = useI18n();
   const copy = benchmarkCopy(locale);
+  const modelCopy = modelActions(locale);
+  const modelSettings = useModelSettings();
+  const [targetSettings, setTargetSettings] = useState<ExecutionSettings | null>(() => store.cfg ? executionSettings(store.cfg) : null);
+  const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const [sessionsError, setSessionsError] = useState(false);
+  const [sessionsReady, setSessionsReady] = useState(false);
+  const [sessionRevision, setSessionRevision] = useState(0);
+  const [stoppingSessions, setStoppingSessions] = useState(false);
   const [promptLengths, setPromptLengths] = useState([4096, 16384]);
   const [batchSizes, setBatchSizes] = useState([2, 4]);
   const [generation, setGeneration] = useState("128");
@@ -103,9 +114,11 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const validRepetitions = Number.isInteger(repetitionsNumber) && repetitionsNumber >= 1 && repetitionsNumber <= 10;
   const valid = promptLengths.length > 0 && validGeneration && validRepetitions;
   const serverRunning = isServerRunning(store.status.state);
-  const model = store.cfg?.active_model ?? "";
-  const displayedModel = busy && runModel ? runModel : { model, backend: store.cfg?.active_backend ?? "", build: store.cfg?.active_build ?? "" };
-  const canRun = !!store.cfg && !!model && valid && !busy && !serverRunning && !store.busy && !otherBenchmark;
+  const targetConfig = store.cfg ? executionConfig(store.cfg, targetSettings ?? executionSettings(store.cfg)) : null;
+  const model = targetConfig?.active_model ?? "";
+  const displayedModel = busy && runModel ? runModel : { model, backend: targetConfig?.active_backend ?? "", build: targetConfig?.active_build ?? "" };
+  const blockingSessions = sessions.filter(session => session.id !== 'default' && ['running', 'starting', 'stopping'].includes(session.state));
+  const canRun = !!targetConfig && !!model && valid && !busy && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptLengths.length * (batchSizes.length + 1) * (validRepetitions ? repetitionsNumber : 0);
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
   const visibleRows = selectedHistory && selectedRecord ? selectedRecord.result.rows : rows;
@@ -113,6 +126,29 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const summary = useMemo(() => summarizePerformanceRows(visibleRows), [visibleRows]);
   const singleRows = summary.filter((row) => row.concurrency === 1);
   const batchRows = summary.filter((row) => row.concurrency > 1);
+
+  useEffect(() => {
+    if (!targetSettings && store.cfg) setTargetSettings(executionSettings(store.cfg));
+  }, [store.cfg, targetSettings]);
+  const hasSettings = !!modelSettings;
+  useEffect(() => {
+    if (!hasSettings) return;
+    let disposed = false;
+    const refresh = () => { void api.sessionList().then(value => { if (!disposed) { setSessions(api.normalizeSessionList(value)); setSessionsError(false); setSessionsReady(true); } }).catch(() => { if (!disposed) { setSessionsError(true); setSessionsReady(false); } }); };
+    refresh(); const timer = window.setInterval(refresh, 2000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [hasSettings, sessionRevision]);
+  const editModel = (section: string) => {
+    if (busy || !targetConfig) return;
+    modelSettings?.open({ target: { kind: 'benchmark', id: TASK_ID }, config: targetConfig, section, onApply: cfg => { setTargetSettings(executionSettings(cfg)); } });
+  };
+  const stopSessions = async () => {
+    if (stoppingSessions) return;
+    setStoppingSessions(true);
+    try { for (const session of blockingSessions) await api.sessionStop(session.id); setSessionRevision(value => value + 1); }
+    catch (cause) { setError(normalizeDisplayText(String(cause))); }
+    finally { setStoppingSessions(false); }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -136,7 +172,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
 
   const run = async () => {
     if (!canRun || !store.cfg || activeRef.current) return;
-    const cfg = { ...store.cfg };
+    const cfg = structuredClone(targetConfig!);
     const runId = `performance-${crypto.randomUUID()}`;
     const request: api.PerformanceBenchmarkRequest = { run_id: runId, context_profile: corpus, prompt_lengths: [...promptLengths].sort((a, b) => a - b), generation_length: generationNumber, batch_sizes: [...batchSizes].sort((a, b) => a - b), repetitions: repetitionsNumber, warmup };
     const createdAt = Date.now();
@@ -196,7 +232,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
     <header className="performance-heading"><div><h2>{copy.title}</h2><p>{copy.description}</p></div>{device && <span className="performance-device">{device.profile.cpu.name}{device.profile.gpus[0] ? ` · ${device.profile.gpus[0].name}` : ""}</span>}</header>
     <form className="performance-card" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-card-heading"><h3>{copy.configuration}</h3><span>{copy.totalTests}: <strong>{total}</strong></span></div>
-      <div className="performance-model"><span>{copy.model}</span><strong title={normalizeDisplayPath(displayedModel.model)}>{displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}</strong>{displayedModel.model && <small>{displayedModel.backend} · {displayedModel.build}</small>}</div>
+      <div className="performance-model"><span>{copy.model}</span><strong title={normalizeDisplayPath(displayedModel.model)}>{displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}</strong>{displayedModel.model && <small>{displayedModel.backend} · {displayedModel.build}</small>}{modelSettings && <div className="performance-model-actions"><button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => editModel('model')}>{modelCopy.choose}</button><button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => editModel('runtime')}>{modelCopy.settings}</button><button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || !store.cfg} onClick={() => { if (store.cfg) setTargetSettings(executionSettings(store.cfg)); }}>{modelCopy.importDefault}</button></div>}</div>
       <fieldset disabled={busy} className="performance-fields">
         <legend className="sr-only">{copy.configuration}</legend>
         <div className="performance-input-grid">
@@ -212,6 +248,8 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
       <p id="performance-validation" className={valid ? "sr-only" : "performance-validation"}>{copy.validation}</p>
     </form>
     {serverRunning && !busy && <div className="performance-notice" role="status"><p>{copy.stopHint}</p><button type="button" className="app-button app-button--secondary app-button--sm" disabled={store.busy} onClick={() => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))}>{copy.stopServer}</button></div>}
+    {blockingSessions.length > 0 && !busy && <div className="performance-notice" role="status"><p>{modelCopy.sessionsHint} {blockingSessions.map(session => normalizeDisplayText(session.name || session.id)).join(', ')}</p><button type="button" className="app-button app-button--secondary app-button--sm" disabled={stoppingSessions} onClick={() => void stopSessions()}>{modelCopy.stopSessions}</button></div>}
+    {sessionsError && <div className="performance-notice" role="alert">{modelCopy.sessionsError}<button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => setSessionRevision(value => value + 1)}>{modelCopy.retry}</button></div>}
     {otherBenchmark && <p className="performance-notice" role="status">{copy.activeElsewhere}</p>}
     {busy && <section className="performance-progress performance-card" aria-label={copy.running}><div role="status" aria-live="polite"><strong>{progressMessage}</strong><span>{progress?.completed ?? 0} / {progress?.total ?? total}</span></div><progress max={Math.max(1, progress?.total ?? total)} value={progress?.completed ?? 0} aria-label={copy.totalTests} /></section>}
     {error && <div className="performance-error" role="alert">{normalizeDisplayText(error)}</div>}

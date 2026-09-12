@@ -1,5 +1,6 @@
 import type { StreamDelta } from "./sse.ts";
 import type { JsonObject } from "../config/tuningValidation.ts";
+import type { ExecutionSettings, SessionExecutionSettings } from '../config/executionSettings';
 
 export interface AppConfig {
   runtime_defaults?: string[];
@@ -356,6 +357,8 @@ export interface SessionDefinition {
   models: SessionModels;
   gpu: GpuPlacement;
   enabled: boolean;
+  execution?: SessionExecutionSettings;
+  model_profile_id?: string;
 }
 
 export interface SessionStatus {
@@ -375,6 +378,7 @@ export interface SessionStatus {
   log_tail?: string;
   error?: string;
   gpu?: GpuPlacement;
+  execution?: Partial<ExecutionSettings>;
 }
 
 export interface SessionListResult {
@@ -396,6 +400,7 @@ export interface ServerStatus {
   idle_seconds?: number;
   memory?: MemoryEstimate;
   lifecycle?: LifecycleDiagnostics;
+  execution?: Partial<ExecutionSettings>;
 }
 
 export interface MemoryEstimate {

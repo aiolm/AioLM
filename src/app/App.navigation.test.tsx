@@ -5,6 +5,8 @@ import { createTestStore } from "../testing/appStore";
 import type { AppStore } from "../shared/state/store";
 import App from "./App";
 import { registerTask, removeTask } from "../shared/state/taskRegistry";
+import { setSessionActivity } from "../shared/state/sessionActivity";
+import type { ModelSettingsDialogProps } from "../features/model-settings/ModelSettingsDialog";
 
 let store: AppStore;
 vi.mock("../shared/state/store", () => ({ useAppStore: () => store }));
@@ -18,10 +20,11 @@ vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover con
 vi.mock("../features/tuning/Tuning", () => ({ default: () => <p>Parameter form</p> }));
 vi.mock("../features/profiles/ExecutionProfiles", () => ({ default: () => <p>Saved profiles</p> }));
 vi.mock("../features/bench/Bench", () => ({ default: () => <input aria-label="Benchmark result" /> }));
+vi.mock("../features/model-settings/ModelSettingsDialog", () => ({ default: ({ open, initialConfig, initialSection, onClose }: ModelSettingsDialogProps) => open ? <div role="dialog" aria-label="Model settings editor"><p>{initialSection ?? "model"}</p><input aria-label="Editor model" value={initialConfig.active_model} readOnly /><button onClick={onClose}>Close editor</button></div> : null }));
 
 describe("Workspace navigation", () => {
   beforeEach(() => { localStorage.clear(); store = createTestStore(); });
-  afterEach(() => { act(() => removeTask("blocked-navigation")); vi.restoreAllMocks(); });
+  afterEach(() => { act(() => { removeTask("blocked-navigation"); setSessionActivity("default", false); }); vi.restoreAllMocks(); });
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
 
@@ -30,28 +33,35 @@ describe("Workspace navigation", () => {
     const path = `C:/models/${name}-00001-of-00033.gguf`;
     store = createTestStore({ active_model: path });
     mount();
-    const model = screen.getByRole("button", { name: `${name}.gguf` });
+    const model = screen.getByRole("button", { name: `Choose model: ${name}.gguf` });
     expect(model).toHaveAttribute("title", path);
     fireEvent.click(model);
-    expect(await screen.findByText("Model library")).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
+    expect(screen.getByLabelText("Editor model")).toHaveValue(path);
+    expect(mainTab("Chat")).toHaveAttribute("aria-current", "page");
     expect(store.cfg?.active_model).toBe(path);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
-  it("applies the task leave guard to sidebar, header and panel shortcuts", async () => {
+  it("guards navigation while settings can open without leaving the current workspace", async () => {
     mount();
     fireEvent.click(mainTab("Projects"));
     await screen.findByText("Project parameters");
     act(() => { registerTask({id:"blocked-navigation",kind:"other",label:"Saving work",interruptible:false}); });
     const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
     fireEvent.click(mainTab("Run a model"));
-    fireEvent.click(screen.getByRole("button",{name:"model.gguf"}));
+    expect(confirm).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button",{name:"Choose model: model.gguf"}));
+    await screen.findByRole("dialog", { name: "Model settings editor" });
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(screen.getByText("Project parameters"));
-    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(await screen.findByText("tuning")).toBeVisible();
+    expect(confirm).toHaveBeenCalledOnce();
     expect(screen.getByLabelText("Project draft")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByText("Project parameters"));
-    expect(await screen.findByText("Parameter form")).toBeVisible();
+    fireEvent.click(mainTab("Run a model"));
+    expect(await screen.findByText("Model library")).toBeVisible();
   });
 
   it("keeps projects beside conversations and retains the conversation draft", async () => {
@@ -60,24 +70,26 @@ describe("Workspace navigation", () => {
     fireEvent.click(mainTab("Projects"));
     fireEvent.change(await screen.findByLabelText("Project draft"), { target: { value: "New workspace" } });
     fireEvent.click(await screen.findByText("Project parameters"));
-    expect(await screen.findByText("Parameter form")).toBeVisible();
+    expect(await screen.findByText("tuning")).toBeVisible();
     expect(store.start).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(mainTab("Chat"));
     expect(screen.getByLabelText("Conversation draft")).toHaveValue("Keep this");
     fireEvent.click(mainTab("Projects"));
     expect(screen.getByLabelText("Project draft")).toHaveValue("New workspace");
   });
 
-  it("consolidates execution into twelve destinations and routes the model picker to setup", async () => {
+  it("keeps twelve destinations and opens model selection over the current screen", async () => {
     mount();
     fireEvent.click(mainTab("Run a model"));
     await screen.findByText("Model library");
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(12);
     fireEvent.click(mainTab("Manage runtimes"));
     await screen.findByText("Saved runtime settings");
-    fireEvent.click(screen.getByRole("button", { name: "model.gguf" }));
-    expect(await screen.findByText("Model library")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Choose model: model.gguf" }));
+    expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
+    expect(mainTab("Manage runtimes")).toHaveAttribute("aria-current", "page");
   });
 
   it("provides a single global stop action even during startup", async () => {
@@ -92,6 +104,16 @@ describe("Workspace navigation", () => {
     expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
   });
 
+  it("stops the running server while a response is active", () => {
+    store.status = { state: "running" };
+    setSessionActivity("default", true);
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(store.stop).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "Model settings editor" })).not.toBeInTheDocument();
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
   it("keeps benchmark state when changing tuning sections", async () => {
     mount();
     fireEvent.click(mainTab("Run a model"));
@@ -99,7 +121,8 @@ describe("Workspace navigation", () => {
     fireEvent.change(await screen.findByLabelText("Benchmark result"), { target: { value: "completed 24 t/s" } });
     fireEvent.click(mainTab("Manage runtimes"));
     fireEvent.click(await screen.findByText('Saved runtime settings'));
-    expect(await screen.findByText("Saved profiles")).toBeVisible();
+    expect(await screen.findByText("profiles")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close editor" }));
     fireEvent.click(mainTab("Benchmark"));
     expect(screen.getByLabelText("Benchmark result")).toHaveValue("completed 24 t/s");
   });

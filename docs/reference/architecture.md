@@ -10,7 +10,8 @@ src/
   app/                      Bootstrap, app shell, navigation, shell tests
   features/
     chat/                   Conversations, attachments, document retrieval, streaming
-    models/                 Model execution workspace, GGUF library, per-model settings
+    models/                 GGUF library and remembered per-model settings
+    model-settings/         Shared model picker, draft editor and target-scoped apply
     discover/               Hugging Face search and download UI
     runtimes/               Runtime installation and device assignment UI
     sessions/               Independent running sessions

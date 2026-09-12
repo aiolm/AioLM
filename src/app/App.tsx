@@ -24,6 +24,9 @@ import { DraftGuardProvider, useDraftGuard } from '../shared/state/draftGuard';
 import { useExecutionStore } from '../features/models/useExecutionStore';
 import { executionText } from '../shared/i18n/executionI18n';
 import type { ExecutionSection } from '../features/models/ModelWorkspace';
+import { ModelSettingsProvider, useModelSettings, MANAGE_MODEL_RUNTIMES } from '../features/model-settings/ModelSettingsProvider';
+import { modelActions } from '../shared/i18n/modelActions';
+import { sessionHasActivity } from '../shared/state/sessionActivity';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
@@ -65,8 +68,14 @@ function AppContent() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => loadPreferences());
   const baseStore = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
   const { store, selectModel } = useExecutionStore(baseStore);
+  return <ModelSettingsProvider store={store}><AppShell preferences={preferences} setPreferences={setPreferences} store={store} selectModel={selectModel} /></ModelSettingsProvider>;
+}
+
+function AppShell({ preferences, setPreferences, store, selectModel }: { preferences: AppPreferences; setPreferences: React.Dispatch<React.SetStateAction<AppPreferences>>; store: ReturnType<typeof useAppStore>; selectModel: (path: string) => Promise<void> }) {
+  const modelSettings = useModelSettings()!;
   const draftGuard = useDraftGuard();
   const { t, locale, setLocale } = useI18n();
+  const modelCopy = modelActions(locale);
   const executionCopy = executionText[locale];
   const [executionSection, setExecutionSection] = useState<{ id: ExecutionSection; revision: number }>({ id: 'setup', revision: 0 });
   const [view, setView] = useState<ViewId>("chat");
@@ -123,7 +132,7 @@ function AppContent() {
         return next;
       });
     }
-  }, [locale, preferences.locale]);
+  }, [locale, preferences.locale, setPreferences]);
 
   const updatePreferences = (patch: Partial<AppPreferences>) => {
     setPreferences((current) => {
@@ -140,7 +149,10 @@ function AppContent() {
   };
 
   const navigate = (next: ViewId): boolean => {
-    const executionTarget = next === 'tuning' || next === 'profiles' || next === 'lora' ? next : next === 'models' ? 'setup' : null;
+    if (next === 'tuning' || next === 'profiles' || next === 'lora') {
+      modelSettings.open({ target: { kind: 'default' }, section: next }); setMenuOpen(false); return true;
+    }
+    const executionTarget = next === 'models' ? 'setup' : null;
     if (executionTarget) next = 'models';
     const blocking = findTaskBlockingTabLeave(tasks);
     if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: normalizeDisplayText(blocking.label) }))) return false;
@@ -152,13 +164,21 @@ function AppContent() {
     setMenuOpen(false);
     return true;
   };
-  const openModels = () => { navigate("models"); };
+  const navigateRef = useRef(navigate); navigateRef.current = navigate;
+  useEffect(() => {
+    const manage = () => { navigateRef.current('runtimes'); };
+    window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);
+    return () => window.removeEventListener(MANAGE_MODEL_RUNTIMES, manage);
+  }, []);
+  const openModels = () => { modelSettings.open({ target: { kind: 'default' }, section: 'model' }); };
   const openDiagnostics = () => { navigate("diagnostics"); };
   const openTuning = () => { navigate("tuning"); };
   const openProfiles = () => { navigate("profiles"); };
   const toggleServer = async () => {
     try {
       if (serverState === "running" || serverState === "starting") await store.stop();
+      else if (sessionHasActivity('default')) { modelSettings.open({ target: { kind: 'default' } }); return; }
+      else if (!store.cfg?.active_model) openModels();
       else await draftGuard.run(async () => { await store.start(); });
     } catch {
       // The store publishes an actionable error banner; keep the shell mounted.
@@ -194,8 +214,8 @@ function AppContent() {
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context"><button type="button" className="aiolm-context-model" title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")} onClick={openModels}>{shortModel(store.cfg?.active_model, t("load.noModel"))}</button><button type="button" className="aiolm-context-runtime" onClick={openModels}>{backendLabel}</button></div>
-        <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span><button type="button" className={"app-button app-button--" + (serverState === "running" || serverState === "starting" ? "secondary" : "primary")} disabled={!store.cfg || (serverBusy && serverState !== "starting") || (!store.cfg.active_model && serverState !== "running" && serverState !== "starting")} onClick={() => void toggleServer()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : serverBusy ? t("status.working") : t("action.start")} labels={[t("action.stop"), t("status.working"), t("action.start")]} /></button></div>
+        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="aiolm-context-model" aria-label={`${modelCopy.choose}: ${shortModel(store.cfg?.active_model, t('load.noModel'))}`} title={store.cfg?.active_model ? normalizeDisplayPath(store.cfg.active_model) : t("load.noModel")} onClick={openModels}>{shortModel(store.cfg?.active_model, t("load.noModel"))}</button><button type="button" className="aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{backendLabel} · ⚙</button>{serverState === 'running' && store.status.model !== store.cfg?.active_model && <small>{modelCopy.current}: {shortModel(store.status.model, t('load.noModel'))}</small>}</div>
+        <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span><button type="button" className={"app-button app-button--" + (serverState === "running" || serverState === "starting" ? "secondary" : "primary")} disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void toggleServer()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : serverBusy ? t("status.working") : !store.cfg?.active_model ? modelCopy.choose : t("action.start")} labels={[t("action.stop"), t("status.working"), t("action.start"), modelCopy.choose]} /></button></div>
       </header>
       <div className="app-main-area">
         <details className="app-activity">
@@ -215,13 +235,13 @@ function AppContent() {
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
-          {panel("runtimes", <><div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={openModels}>{executionCopy.back}</button></div><RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} managementOnly /></>)}
+          {panel("runtimes", <><div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.suspended ? modelSettings.resume : openModels}>{modelSettings.suspended ? modelCopy.resume : executionCopy.back}</button></div><RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} managementOnly /></>)}
           {panel("benchmark", <BenchPanel store={store} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
           </section>
           {panel("mcp", <McpPanel store={store} />)}
-          {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} />)}
+          {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} store={store} />)}
         </main>
       </div>
     </div>

@@ -4,254 +4,174 @@ import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import type { AppStore } from "../../shared/state/store";
 import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
+import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
+import { setSessionActivity } from "../../shared/state/sessionActivity";
 import SessionsPanel from "./Sessions";
 
+vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock("../../shared/api/index", () => ({
   sessionList: vi.fn(async () => []),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
-  deviceProfile: vi.fn(),
-  rtProbe: vi.fn(),
-  sessionStart: vi.fn(),
-  sessionStop: vi.fn(),
-  sessionUnload: vi.fn(),
+  sessionStart: vi.fn(), sessionStop: vi.fn(), sessionUnload: vi.fn(),
 }));
-
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const definition: api.SessionDefinition = {
-  id: "work",
-  name: "Work session",
-  models: { primary_model: "C:/models/work.gguf", mmproj: "", draft_model: "" },
-  gpu: { gpu_ids: ["gpu-a", "gpu-b"], main_gpu: "gpu-a", split_mode: "layer", tensor_split: [1, 1], draft_gpu_id: null },
-  enabled: true,
+  id: "work", name: "Work session", enabled: true,
+  models: { primary_model: "models/work.gguf", mmproj: "", draft_model: "" },
+  gpu: { gpu_ids: ["gpu-a"], main_gpu: "gpu-a", split_mode: "none", tensor_split: [], draft_gpu_id: null },
+  execution: { ctx_size: 8192, temperature: 0.2, active_backend: "vulkan", active_build: "test-build" },
 };
-const cfg = {
-  active_model: "C:/models/default.gguf",
-  mmproj: "",
-  spec_draft_model: "",
-  port: 8080,
+const cfg = { active_model: "models/default.gguf", mmproj: "", spec_draft_model: "", port: 8080, temperature: 0.7, ctx_size: 4096,
   gpu: { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null },
-  sessions: [definition],
-  stop_existing_sessions_on_load: false,
+  sessions: [definition], stop_existing_sessions_on_load: false,
 } as unknown as api.AppConfig;
-
+const settings: ModelSettingsContext = {
+  open: vi.fn(), suspended: false, resume: vi.fn(),
+  getRequestConfig: (_id, value) => value, getRequestProfile: () => null,
+};
 function renderPanel(config = cfg) {
-  const store = {
-    cfg: config,
-    status: { state: "stopped" },
-    busy: false,
-    updateConfig: vi.fn(async () => cfg),
-    start: vi.fn(),
-    stop: vi.fn(),
-    refreshStatus: vi.fn(),
+  const store = { cfg: config, getConfig: vi.fn(() => config), status: { state: "stopped" }, busy: false,
+    updateConfig: vi.fn(async () => config), start: vi.fn(), stop: vi.fn(), refreshStatus: vi.fn(),
   } as unknown as AppStore;
   render(<I18nProvider initialLocale="en"><SessionsPanel store={store} /></I18nProvider>);
   return store;
 }
-
-describe("SessionsPanel editing", () => {
+const selectWork = async () => fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
+describe("session model settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocked.sessionUnload.mockResolvedValue(undefined);
+    vi.mocked(useModelSettings).mockReturnValue(settings);
     mocked.sessionList.mockResolvedValue([]);
-    mocked.normalizeSessionList.mockImplementation((value: unknown) => Array.isArray(value) ? value : []);
-    mocked.deviceProfile.mockResolvedValue({ profile: { gpus: [
-      { stable_id: "gpu-a", name: "Radeon", vendor: "amd", vram_mb: 8192, integrated: false },
-      { stable_id: "gpu-b", name: "Radeon", vendor: "amd", vram_mb: 8192, integrated: false },
-    ] } });
+    mocked.sessionUnload.mockResolvedValue(undefined);
     mocked.sessionStart.mockResolvedValue({ id: "work", name: "Work session", state: "running" });
+    setSessionActivity("work", false);
+    setSessionActivity("default", false);
   });
-
-  it("hides Windows extended path prefixes in runtime probe errors", async () => {
-    mocked.rtProbe.mockRejectedValueOnce(new Error(String.raw`Runtime not found: \\?\C:\runtime\llama-server.exe`));
-    renderPanel({ ...cfg, active_backend: "rocm", active_build: "b10840" });
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(String.raw`Runtime not found: C:\runtime\llama-server.exe`);
-    expect(alert.textContent).not.toContain("\\\\?\\");
-  });
-
-  it.each(['default', 'saved', 'live'] as const)('hides all three model path prefixes in a %s session and keeps original paths', async (source) => {
-    const primary = String.raw`\\?\C:\models\main.gguf`;
-    const projector = String.raw`\\?\UNC\server\share\mmproj.gguf`;
-    const draft = String.raw`\\?\C:\models\draft.gguf`;
-    const models = { primary_model: primary, mmproj: projector, draft_model: draft };
-    const saved = { ...definition, name: `Work session ${primary}`, models };
-    const config = { ...cfg, active_model: primary, mmproj: projector, spec_draft_model: draft, sessions: [saved] };
-    if (source === 'live') mocked.sessionList.mockResolvedValue([{ id: 'live', name: `Live session ${primary}`,
-      state: 'running', model: primary, mmproj: projector, draft_model: draft }]);
-    const store = renderPanel(config);
-    if (source !== 'default') fireEvent.click(await screen.findByRole('button', { name: source === 'saved' ? /Work session/ : /Live session/ }));
-    expect(screen.getByLabelText('Primary model')).toHaveValue(String.raw`C:\models\main.gguf`);
-    expect(screen.getByDisplayValue(String.raw`\\server\share\mmproj.gguf`)).toBeInTheDocument();
-    expect(screen.getByDisplayValue(String.raw`C:\models\draft.gguf`)).toBeInTheDocument();
-    for (const input of screen.getAllByRole('textbox')) expect((input as HTMLInputElement).value).not.toContain('\\\\?\\');
-    expect(document.body.textContent).not.toContain('\\\\?\\');
-    expect(config.active_model).toBe(primary);
-    expect(saved.models).toEqual(models);
+  it("opens the default target without saving or loading", () => {
+    const store = renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" }, config: expect.objectContaining({ active_model: cfg.active_model }) }));
     expect(store.updateConfig).not.toHaveBeenCalled();
-    if (source === 'saved') {
-      fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Renamed' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Save session' }));
-      await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({
-        sessions: [expect.objectContaining({ name: 'Renamed', models })],
-      })));
-      fireEvent.click(screen.getByRole('button', { name: 'Load session' }));
-      await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalled());
-      expect(mocked.sessionStart.mock.calls[0][1]).toEqual(expect.objectContaining({
-        active_model: primary, mmproj: projector, spec_draft_model: draft,
-      }));
-    }
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Primary model")).not.toBeInTheDocument();
   });
-
-  it("never substitutes OS GPU numbers when a managed runtime probe fails and can retry", async () => {
-    mocked.rtProbe.mockRejectedValueOnce(new Error("Runtime probe timed out"));
-    renderPanel({ ...cfg, active_backend: "rocm", active_build: "b10840" });
-    expect(await screen.findByRole("alert")).toHaveTextContent("Runtime probe timed out");
-    expect(mocked.deviceProfile).not.toHaveBeenCalled();
-    expect(screen.queryByRole("checkbox", { name: /Radeon/ })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Main GPU")).toBeDisabled();
-    mocked.rtProbe.mockResolvedValueOnce({ backend: "rocm", devices: ["ROCm1: AMD Radeon (32624 MiB)"] });
-    fireEvent.click(screen.getByRole("button", { name: "Probe selected runtime" }));
-    expect(await screen.findByRole("checkbox", { name: /ROCm1/ })).toBeEnabled();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  it("passes a session's independent execution and unsaved metadata to the common editor", async () => {
+    const store = renderPanel();
+    await selectWork();
+    fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Renamed draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({
+      target: { kind: "session", sessionId: "work" },
+      definition: expect.objectContaining({ name: "Renamed draft" }),
+      config: expect.objectContaining({ active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, gpu: definition.gpu }),
+    }));
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(mocked.sessionStop).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Session name")).toHaveValue("Renamed draft");
   });
-
-  it("uses the visible per-GPU ratio drafts when loading", async () => {
-    renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
-    fireEvent.change(screen.getByLabelText(/gpu-a$/), { target: { value: "0.25" } });
-    fireEvent.change(screen.getByLabelText(/gpu-b$/), { target: { value: "0.75" } });
-    fireEvent.click(screen.getByRole("button", { name: "Load session" }));
-
-    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalled());
-    expect(mocked.sessionStart.mock.calls[0][1].gpu.tensor_split).toEqual([0.25, 0.75]);
-  });
-  it('keeps GPU controls mounted during a refresh but drops devices from a different runtime', async () => {
-    const store = { cfg, status: { state: 'stopped' }, busy: false } as AppStore;
-    const view = (active: boolean) => <I18nProvider initialLocale="en"><SessionsPanel store={store} active={active} /></I18nProvider>;
-    const { rerender } = render(view(true));
-    const gpu = (await screen.findAllByRole('checkbox', { name: /Radeon/ }))[0];
-    rerender(view(false));
-    let complete!: (value: unknown) => void;
-    mocked.deviceProfile.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
-    rerender(view(true));
-    expect(gpu.isConnected).toBe(true);
-    expect(gpu).toBeDisabled();
-    await act(async () => { complete({ profile: { gpus: [{ stable_id: 'gpu-a', name: 'Radeon', vendor: 'amd' }] } }); });
-    expect(gpu.isConnected).toBe(true);
-    expect(gpu).toBeEnabled();
-    mocked.rtProbe.mockImplementationOnce(() => new Promise(() => undefined));
-    store.cfg = { ...cfg, active_backend: 'vulkan', active_build: 'b234' };
-    rerender(view(true));
-    expect(screen.queryByRole('checkbox', { name: /Radeon/ })).not.toBeInTheDocument();
-  });
-
-  it("asks before discarding edits when switching sessions", async () => {
-    renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
-    fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Changed" } });
-    fireEvent.click(screen.getByRole("button", { name: /Default server/ }));
-
-    expect(await screen.findByRole("dialog", { name: "Unsaved changes" })).toHaveAccessibleDescription(/discard them/i);
-  });
-
-  it("does not discard edits when the selected session is clicked again", async () => {
-    renderPanel();
-    const row = await screen.findByRole("button", { name: /Work session/ });
-    fireEvent.click(row);
-    const name = screen.getByLabelText("Session name");
-    fireEvent.change(name, { target: { value: "Changed" } });
-    fireEvent.click(row);
-    expect(name).toHaveValue("Changed");
-  });
-
-  it("asks before replacing an edited session with a new one", async () => {
-    renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
-    fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Changed" } });
+  it("provides an unsaved new session to the modal without a preliminary write", () => {
+    const store = renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "New session" }));
-    expect(await screen.findByRole("dialog", { name: "Unsaved changes" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    const request = vi.mocked(settings.open).mock.calls[0][0];
+    expect(request.target.kind).toBe("session");
+    expect(request.definition?.id).toMatch(/^session-/);
+    expect(request.config?.active_model).toBe(cfg.active_model);
+    expect(store.updateConfig).not.toHaveBeenCalled();
   });
-
-  it("allows ratio-only edits on the default server to be saved", async () => {
-    const config = { ...cfg, gpu: definition.gpu } as api.AppConfig;
-    const store = renderPanel(config);
-    fireEvent.change(await screen.findByLabelText(/gpu-a$/), { target: { value: "0.4" } });
+  it("loads the selected session with its own settings and the existing stop policy", async () => {
+    renderPanel(); await selectWork();
+    fireEvent.click(screen.getByRole("button", { name: "Load session" }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({
+      active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, active_backend: "vulkan", gpu: definition.gpu,
+    }), false));
+  });
+  it("uses settings returned by the modal for the next load", async () => {
+    renderPanel(); await selectWork();
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    const appliedDefinition = { ...definition, models: { ...definition.models, primary_model: "models/changed.gguf" }, execution: { ...definition.execution, ctx_size: 16384 } };
+    await act(async () => { await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...cfg, active_model: "models/changed.gguf", sessions: [appliedDefinition] }); });
+    fireEvent.click(screen.getByRole("button", { name: "Load session" }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/changed.gguf", ctx_size: 16384 }), false));
+  });
+  it("preserves newer execution settings when saving only a session name", async () => {
+    const store = renderPanel(); await selectWork();
+    fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Renamed" } });
+    const latest = { ...definition, execution: { ...definition.execution, ctx_size: 32768 } };
+    vi.mocked(store.getConfig).mockReturnValue({ ...cfg, sessions: [latest] });
     fireEvent.click(screen.getByRole("button", { name: "Save session" }));
-    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ gpu: expect.objectContaining({ tensor_split: [0.4, 1] }) })));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ sessions: [expect.objectContaining({ name: "Renamed", execution: latest.execution })] })));
   });
-
-  it("keeps an unpersisted running session visible and manageable", async () => {
+  it("blocks a load that would interrupt a current response", async () => {
+    renderPanel({ ...cfg, stop_existing_sessions_on_load: true }); await selectWork();
+    setSessionActivity("default", true);
+    fireEvent.click(screen.getByRole("button", { name: "Load session" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Stop the active response");
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    setSessionActivity("default", false);
+  });
+  it("keeps an unpersisted session visible and opens its model settings", async () => {
+    mocked.sessionList.mockResolvedValue([{ id: "transient", name: "Transient", state: "running", model: "models/temp.gguf", port: 8094 }]);
     renderPanel();
-    await waitFor(() => expect(mocked.sessionList).toHaveBeenCalled());
-    mocked.sessionList.mockResolvedValue([{ id: "transient", name: "Transient", state: "running", model: "C:/models/temp.gguf", port: 8094 }]);
+    fireEvent.click(await screen.findByRole("button", { name: /Transient/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "session", sessionId: "transient" }, definition: expect.objectContaining({ models: expect.objectContaining({ primary_model: "models/temp.gguf" }) }) }));
+  });
+  it("updates status while remaining on the session screen", async () => {
+    renderPanel();
+    await act(async () => {});
+    mocked.sessionList.mockResolvedValue([{ id: "transient", name: "Transient", state: "running", model: "models/temp.gguf" }]);
     window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
     expect(await screen.findByRole("button", { name: /Transient/ })).toBeInTheDocument();
   });
-
-  it("keeps session status when GPU detection fails", async () => {
-    mocked.sessionList.mockResolvedValue([{ id: "remote", name: "Remote", state: "running", model: "remote.gguf", port: 8095 }]);
-    mocked.deviceProfile.mockRejectedValue(new Error("GPU probe failed"));
-    renderPanel();
-    expect(await screen.findByRole("button", { name: /Remote/ })).toBeInTheDocument();
+  it.each(["selection", "new"] as const)("asks before discarding metadata edits for %s", async (action) => {
+    renderPanel(); await selectWork();
+    fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Changed" } });
+    fireEvent.click(screen.getByRole("button", { name: action === "selection" ? /Default server/ : "New session" }));
+    expect(await screen.findByRole("dialog", { name: "Unsaved changes" })).toBeInTheDocument();
   });
-
-  it("unloads even a stopped session before deleting its definition", async () => {
-    mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work session", state: "stopped" }]);
-    const store = renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
-    mocked.sessionList.mockResolvedValue([]);
+  it("keeps edits when the selected session is clicked again", async () => {
+    renderPanel(); await selectWork();
+    fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Changed" } });
+    await selectWork();
+    expect(screen.getByLabelText("Session name")).toHaveValue("Changed");
+  });
+  it("unloads a stopped session before removing its definition", async () => {
+    const store = renderPanel(); await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ sessions: [] })));
     expect(mocked.sessionUnload).toHaveBeenCalledWith("work");
-    expect(screen.queryByRole("button", { name: /Work session/ })).not.toBeInTheDocument();
   });
-
-  it("preserves the definition and reports failure when unloading fails", async () => {
-    mocked.sessionUnload.mockRejectedValue(new Error("Unload failed"));
-    const store = renderPanel();
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
+  it("preserves the definition after an unload failure", async () => {
+    mocked.sessionUnload.mockRejectedValueOnce(new Error("Unload failed"));
+    const store = renderPanel(); await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Unload failed");
     expect(store.updateConfig).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /Work session/ })).toBeInTheDocument();
   });
-
-  it("does not overwrite a new selection when an earlier save finishes", async () => {
+  it("does not overwrite a selection when an earlier save completes", async () => {
     const store = renderPanel();
     let finish!: (value: api.AppConfig) => void;
-    vi.mocked(store.updateConfig).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
+    vi.mocked(store.updateConfig).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Save session" }));
     fireEvent.click(screen.getByRole("button", { name: /Default server/ }));
     await act(async () => { finish(cfg); });
-    expect(screen.getByLabelText("Primary model")).toHaveValue(cfg.active_model);
-    expect(screen.getByLabelText("Primary model")).toBeDisabled();
+    expect(screen.queryByLabelText("Session name")).not.toBeInTheDocument();
   });
-
-  it("preserves edits made while saving", async () => {
+  it("preserves newer metadata edits while a save completes", async () => {
     const store = renderPanel();
     let finish!: (value: api.AppConfig) => void;
-    vi.mocked(store.updateConfig).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
+    vi.mocked(store.updateConfig).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Save session" }));
     fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Newer edit" } });
     await act(async () => { finish(cfg); });
     expect(screen.getByLabelText("Session name")).toHaveValue("Newer edit");
   });
-
-  it("prevents loading a disabled definition", async () => {
-    renderPanel({ ...cfg, sessions: [{ ...definition, enabled: false }] });
-    fireEvent.click(await screen.findByRole("button", { name: /Work session/ }));
-    const load = screen.getByRole("button", { name: "Load session" });
-    expect(load).toBeDisabled();
-    fireEvent.click(load);
-    expect(mocked.sessionStart).not.toHaveBeenCalled();
-  });
-
-  it("shows session status without waiting for a pending GPU probe", async () => {
-    mocked.deviceProfile.mockImplementationOnce(() => new Promise(() => {}));
-    mocked.sessionList.mockResolvedValue([{ id: "remote", name: "Remote", state: "running", model: "remote.gguf" }]);
-    renderPanel();
-    expect(await screen.findByRole("button", { name: /Remote/ })).toBeInTheDocument();
+  it("keeps disabled definitions available for editing but prevents loading them", async () => {
+    renderPanel({ ...cfg, sessions: [{ ...definition, enabled: false }] }); await selectWork();
+    expect(screen.getByRole("button", { name: "Load session" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Model & settings" })).toBeEnabled();
   });
 });

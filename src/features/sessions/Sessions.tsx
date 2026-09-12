@@ -1,25 +1,23 @@
-import { CustomSelect } from "../../shared/ui/CustomSelect";
 import StableLabel from "../../shared/ui/StableLabel";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { finishTask, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { useModelSettings } from "../model-settings/ModelSettingsProvider";
+import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
+import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
+import { settingsForSession } from "../../shared/config/executionSettings";
 import {
   DEFAULT_SESSION_ID,
   SESSION_STATUS_CHANGED_EVENT,
   cloneGpuPlacement,
   defaultSessionDefinition,
-  gpuDeviceLabel,
-  gpuTensorSplitDrafts,
-  missingGpuIds,
   notifySessionStatusChanged,
-  parseGpuTensorSplits,
-  runtimeGpuDevices,
-  toggleGpuSelection,
   sessionConfig,
+  sessionDefinitionFromStatus,
   sessionPort,
   sessionStatusLabel,
 } from "../../shared/runtime/sessionUtils";
@@ -52,27 +50,20 @@ function modelLabel(path: string, empty: string): string {
 }
 
 export default function SessionsPanel({ store, active = true }: { store: AppStore; active?: boolean }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const modelSettings = useModelSettings();
   const cfg = store.cfg;
   const [definitions, setDefinitions] = useState<api.SessionDefinition[]>(() => cfg?.sessions ?? []);
   const [statuses, setStatuses] = useState<Record<string, api.SessionStatus>>({});
-  const runtimeKey = `${cfg?.active_backend ?? ''}/${cfg?.active_build ?? ''}`;
-  const [deviceResult, setDeviceResult] = useState<{ key: string; devices: api.GpuDevice[] }>();
-  const devices = deviceResult?.key === runtimeKey ? deviceResult.devices : [];
-  const [probeBusy, setProbeBusy] = useState(false);
-  const [probeError, setProbeError] = useState<string | null>(null);
-  const [probeAttempt, setProbeAttempt] = useState(0);
   const [selectedId, setSelectedId] = useState(DEFAULT_SESSION_ID);
   const [editing, setEditing] = useState<api.SessionDefinition | null>(null);
   const [stopExisting, setStopExisting] = useState(cfg?.stop_existing_sessions_on_load ?? true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [tensorSplitDrafts, setTensorSplitDrafts] = useState<Record<string, string>>({});
-  const [customTensorSplit, setCustomTensorSplit] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const currentEdit = useRef("");
-  currentEdit.current = JSON.stringify([selectedId, editing, tensorSplitDrafts, customTensorSplit]);
+  currentEdit.current = JSON.stringify([selectedId, editing]);
   const saving = useRef(false);
   const legacyState = store.status.state;
   const legacyUrl = store.status.url;
@@ -98,7 +89,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     const knownIds = new Set([DEFAULT_SESSION_ID, ...definitions.map((definition) => definition.id), ...(editing ? [editing.id] : [])]);
     const liveDefinitions = Object.values(statuses)
       .filter((status) => !knownIds.has(status.id))
-      .map((status): api.SessionDefinition => ({
+      .map((status): api.SessionDefinition => cfg ? sessionDefinitionFromStatus(status, cfg) : ({
         id: status.id,
         name: status.name || status.id,
         models: { primary_model: status.model ?? "", mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
@@ -111,7 +102,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       ...(editing && editing.id !== DEFAULT_SESSION_ID && !definitions.some((definition) => definition.id === editing.id) ? [editing] : []),
       ...liveDefinitions,
     ];
-  }, [defaultDefinition, definitions, editing, statuses]);
+  }, [cfg, defaultDefinition, definitions, editing, statuses]);
 
   const fallbackDefaultStatus = useCallback((): api.SessionStatus => ({
     id: DEFAULT_SESSION_ID,
@@ -141,26 +132,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     }
   }, [fallbackDefaultStatus]);
 
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    setProbeBusy(true);
-    setProbeError(null);
-    if (cfg?.active_backend && cfg?.active_build) {
-      void api.rtProbe(cfg.active_backend, cfg.active_build).then((report) => {
-        if (!cancelled) setDeviceResult({ key: runtimeKey, devices: runtimeGpuDevices(report.backend, report.devices) });
-      }).catch((error: unknown) => {
-        if (!cancelled) setProbeError(errorText(error));
-      }).finally(() => { if (!cancelled) setProbeBusy(false); });
-    } else {
-      void api.deviceProfile().then((report) => {
-        if (!cancelled) setDeviceResult({ key: runtimeKey, devices: report.profile.gpus });
-      }).catch((error: unknown) => {
-        if (!cancelled) setProbeError(errorText(error));
-      }).finally(() => { if (!cancelled) setProbeBusy(false); });
-    }
-    return () => { cancelled = true; };
-  }, [active, cfg?.active_backend, cfg?.active_build, probeAttempt, runtimeKey]);
 
   useEffect(() => {
     if (!cfg) return;
@@ -185,17 +156,14 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     };
   }, [active, refresh]);
 
-  const persist = async (next: api.SessionDefinition[], nextStopExisting = stopExisting) => {
-    await store.updateConfig({ sessions: next, stop_existing_sessions_on_load: nextStopExisting });
+  const persist = async (next: api.SessionDefinition[]) => {
+    await store.updateConfig({ sessions: next });
     setDefinitions(next);
-    setStopExisting(nextStopExisting);
   };
 
   const performSelection = (definition: api.SessionDefinition) => {
     setSelectedId(definition.id);
-    setEditing(definition.id === DEFAULT_SESSION_ID ? null : { ...definition, models: { ...definition.models }, gpu: cloneGpuPlacement(definition.gpu) });
-    setTensorSplitDrafts(gpuTensorSplitDrafts(definition.gpu));
-    setCustomTensorSplit(definition.gpu.tensor_split.length > 0);
+    setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(definition));
     setNotice(null);
     setFailure(null);
   };
@@ -209,36 +177,20 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     performSelection(definition);
   };
 
-  const withDraftTensorSplit = (definition: api.SessionDefinition): api.SessionDefinition | null => {
-    const tensorSplit = customTensorSplit ? parseGpuTensorSplits(tensorSplitDrafts, definition.gpu.gpu_ids) : [];
-    if (tensorSplit === null) {
-      setFailure(t("ui.gpuTensorSplitInvalid"));
-      return null;
-    }
-    return { ...definition, gpu: { ...cloneGpuPlacement(definition.gpu), tensor_split: tensorSplit } };
-  };
-
   const saveDefinition = async () => {
-    if (!editing || saving.current) return;
-    const normalizedEditing = withDraftTensorSplit(editing);
-    if (!normalizedEditing) return;
+    if (!editing || editing.id === DEFAULT_SESSION_ID || saving.current) return;
+    const normalizedEditing = editing;
     const snapshot = currentEdit.current;
     saving.current = true;
-    if (normalizedEditing.id === DEFAULT_SESSION_ID) {
-      try {
-        await store.updateConfig({ gpu: cloneGpuPlacement(normalizedEditing.gpu) });
-        if (currentEdit.current === snapshot) {
-          setEditing(null);
-          setNotice(t("ui.sessionSaved"));
-        }
-      } catch (error) {
-        setFailure(errorText(error));
-      } finally { saving.current = false; }
-      return;
-    }
     const trimmed = normalizedEditing.name.trim();
-    const nextDefinition = { ...normalizedEditing, name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id) };
-    const next = [...definitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition];
+    const latestDefinitions = (store.getConfig?.() ?? cfg)?.sessions ?? definitions;
+    const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
+    const nextDefinition = {
+      ...(latestDefinition ?? normalizedEditing),
+      name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
+      enabled: normalizedEditing.enabled,
+    };
+    const next = [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition];
     try {
       await persist(next);
       if (currentEdit.current === snapshot) {
@@ -255,8 +207,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     const definition = defaultSessionDefinition(cfg);
     setSelectedId(definition.id);
     setEditing(definition);
-    setTensorSplitDrafts(gpuTensorSplitDrafts(definition.gpu));
-    setCustomTensorSplit(definition.gpu.tensor_split.length > 0);
     setNotice(null);
     setFailure(null);
   };
@@ -271,13 +221,17 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const load = async (definition: api.SessionDefinition) => {
     if (!definition.enabled) return;
-    const runnableDefinition = withDraftTensorSplit(definition);
-    if (!runnableDefinition) return;
+    if (sessionHasActivity(definition.id) || (stopExisting && anySessionActivity())) {
+      setFailure("Stop the active response before loading a model.");
+      return;
+    }
+    const runnableDefinition = definition;
     if (!runnableDefinition.models.primary_model.trim()) {
       setFailure(t("ui.sessionNoModel"));
       return;
     }
     if (!cfg) return;
+    const launchConfig = store.getConfig?.() ?? cfg;
     const taskId = `session-load-${runnableDefinition.id}`;
     setBusyId(runnableDefinition.id);
     setNotice(null);
@@ -304,7 +258,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       },
     });
     try {
-      const loaded = await api.sessionStart(runnableDefinition.id, sessionConfig(cfg, runnableDefinition), stopExisting);
+      const loaded = await api.sessionStart(runnableDefinition.id, sessionConfig(launchConfig, runnableDefinition), stopExisting);
       notifySessionStatusChanged();
       setStatuses((current) => ({ ...current, [loaded.id]: loaded }));
       setNotice(t("ui.sessionRunning"));
@@ -316,7 +270,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
         finishTask(taskId, "cancelled");
       } else if (runnableDefinition.id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
         try {
-          await store.start(sessionConfig(cfg, runnableDefinition));
+          await store.start(sessionConfig(launchConfig, runnableDefinition));
           notifySessionStatusChanged();
           setNotice(t("ui.sessionRunning"));
           finishTask(taskId, "completed");
@@ -337,6 +291,10 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   };
 
   const stop = async (id: string, unload = false) => {
+    if (sessionHasActivity(id)) {
+      setFailure("Stop the active response before unloading its model.");
+      return;
+    }
     setBusyId(id);
     setNotice(null);
     setFailure(null);
@@ -379,13 +337,17 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const remove = async (definition: api.SessionDefinition) => {
     if (definition.id === DEFAULT_SESSION_ID) return;
+    if (sessionHasActivity(definition.id)) {
+      setFailure("Stop the active response before removing its session.");
+      return;
+    }
     setBusyId(definition.id);
     setNotice(null);
     setFailure(null);
     try {
       await api.sessionUnload(definition.id);
       notifySessionStatusChanged();
-      const next = definitions.filter((item) => item.id !== definition.id);
+      const next = ((store.getConfig?.() ?? cfg)?.sessions ?? definitions).filter((item) => item.id !== definition.id);
       await persist(next);
       setSelectedId(DEFAULT_SESSION_ID);
       setEditing(null);
@@ -399,28 +361,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   };
 
   const updateEditing = (patch: Partial<api.SessionDefinition>) => setEditing((current) => current ? { ...current, ...patch } : current);
-  const updateModels = (patch: Partial<api.SessionModels>) => setEditing((current) => current ? { ...current, models: { ...current.models, ...patch } } : current);
-  const updateGpu = (patch: Partial<api.GpuPlacement>) => setEditing((current) => current
-    ? { ...current, gpu: { ...cloneGpuPlacement(current.gpu), ...patch } }
-    : selectedId === DEFAULT_SESSION_ID
-      ? { ...defaultDefinition, gpu: { ...cloneGpuPlacement(defaultDefinition.gpu), ...patch } }
-      : current);
   const currentDefinition = editing ?? (selectedId === DEFAULT_SESSION_ID ? defaultDefinition : definitionsById.get(selectedId));
-  const currentPlacement = currentDefinition?.gpu ?? cloneGpuPlacement(cfg?.gpu);
-  const tensorSplitSyncValue = editing ? null : JSON.stringify(currentPlacement);
-  useEffect(() => {
-    if (tensorSplitSyncValue) {
-      const savedPlacement = JSON.parse(tensorSplitSyncValue) as api.GpuPlacement;
-      setTensorSplitDrafts(gpuTensorSplitDrafts(savedPlacement));
-      setCustomTensorSplit(savedPlacement.tensor_split.length > 0);
-    }
-  }, [tensorSplitSyncValue]);
-  const parsedTensorSplit = customTensorSplit ? parseGpuTensorSplits(tensorSplitDrafts, currentPlacement.gpu_ids) : [];
-  const editingWithDrafts = editing && parsedTensorSplit !== null
-    ? { ...editing, gpu: { ...cloneGpuPlacement(editing.gpu), tensor_split: parsedTensorSplit } }
-    : editing;
   const liveBaseline = editing && statuses[editing.id]
-    ? {
+    ? cfg ? sessionDefinitionFromStatus(statuses[editing.id], cfg) : {
         id: statuses[editing.id].id,
         name: statuses[editing.id].name || statuses[editing.id].id,
         models: { primary_model: statuses[editing.id].model ?? "", mmproj: statuses[editing.id].mmproj ?? "", draft_model: statuses[editing.id].draft_model ?? "" },
@@ -429,15 +372,26 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       }
     : undefined;
   const savedDefinition = editing?.id === DEFAULT_SESSION_ID ? defaultDefinition : editing ? definitionsById.get(editing.id) ?? liveBaseline : undefined;
-  const hasUnsavedChanges = Boolean(editing && (
-    parsedTensorSplit === null
-    || (editing.id === DEFAULT_SESSION_ID
-      ? JSON.stringify(editingWithDrafts?.gpu) !== JSON.stringify(savedDefinition?.gpu)
-      : JSON.stringify(editingWithDrafts) !== JSON.stringify(savedDefinition))
-  ));
-  const selectedGpuIds = new Set(currentPlacement.gpu_ids);
-  const missing = missingGpuIds(currentPlacement, devices);
+  const hasUnsavedChanges = Boolean(editing && JSON.stringify(editing) !== JSON.stringify(savedDefinition));
   const status = statuses[selectedId] ?? (selectedId === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
+  const openSettings = () => {
+    if (!modelSettings || !cfg || !currentDefinition) return;
+    const definition = structuredClone(currentDefinition);
+    const snapshot = currentEdit.current;
+    modelSettings.open({
+      target: definition.id === DEFAULT_SESSION_ID ? { kind: "default" } : { kind: "session", sessionId: definition.id },
+      definition,
+      config: sessionConfig(cfg, definition),
+      onApply: (applied) => {
+        if (currentEdit.current !== snapshot) return;
+        const saved = applied.sessions?.find((item) => item.id === definition.id) ?? settingsForSession(definition, applied);
+        if (definition.id !== DEFAULT_SESSION_ID) setDefinitions((current) => [...current.filter((item) => item.id !== saved.id), saved]);
+        setEditing(definition.id === DEFAULT_SESSION_ID ? null : structuredClone(saved));
+        setNotice(t("ui.sessionSaved"));
+        void refresh();
+      },
+    });
+  };
 
   return (
     <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4 p-4 pb-8" data-testid="sessions-panel">
@@ -450,7 +404,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg}>{t("ui.newSession")}</button>
         </div>
         <label className="mt-4 flex items-start gap-2 text-xs ui-color-muted" >
-          <input type="checkbox" checked={stopExisting} onChange={(event) => { const next = event.target.checked; setStopExisting(next); void persist(definitions, next).catch((error) => setFailure(errorText(error))); }} />
+          <input type="checkbox" checked={stopExisting} onChange={(event) => { const next = event.target.checked; setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
           <span><span className="font-medium ui-color-ink" >{t("ui.sessionStopExisting")}</span><span className="block mt-0.5">{t("ui.sessionStopExistingHint")}</span></span>
         </label>
       </section>
@@ -482,35 +436,13 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
               <div className="flex flex-wrap items-center gap-2 text-xs ui-color-muted" ><span className={`session-state session-state--${status?.state ?? "stopped"}`}>{statusCopy(status?.state ?? "stopped", t)}</span>{status && <span>{t("ui.sessionPortLabel", { port: sessionPort(status, currentDefinition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}</div>
             </div>
 
-            <div className="mt-4 grid gap-3 app-form-grid">
-              <label className="app-field-full text-xs ui-color-muted" >{t("ui.sessionPrimary")}<input className="app-input mt-1" value={normalizeDisplayPath(currentDefinition.models.primary_model)} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ primary_model: event.target.value })} placeholder={t("ui.sessionNoModel")} /></label>
-              <label className="text-xs ui-color-muted" >{t("ui.sessionMmproj")}<input className="app-input mt-1" value={normalizeDisplayPath(currentDefinition.models.mmproj)} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ mmproj: event.target.value })} placeholder={t("panel.optionalSidecar")} /></label>
-              <label className="text-xs ui-color-muted" >{t("ui.sessionDraft")}<input className="app-input mt-1" value={normalizeDisplayPath(currentDefinition.models.draft_model)} disabled={currentDefinition.id === DEFAULT_SESSION_ID} onChange={(event) => updateModels({ draft_model: event.target.value })} placeholder={t("ui.specDraftModelPlaceholder")} /></label>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings || busyId !== null || store.busy} onClick={openSettings}>{modelSettingsCopy[locale].title}</button>
+              <p className="min-w-0 app-text-wrap text-xs ui-color-muted">{modelLabel(currentDefinition.models.primary_model, t("ui.sessionNoModel"))} · {currentDefinition.execution?.active_backend ?? cfg?.active_backend ?? "PATH"}{currentDefinition.execution?.active_build || cfg?.active_build ? ` / ${currentDefinition.execution?.active_build ?? cfg?.active_build}` : ""}</p>
             </div>
 
             {currentDefinition.id !== DEFAULT_SESSION_ID && <div className="mt-3 grid gap-3 app-form-grid"><label className="text-xs ui-color-muted" >{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(currentDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label><label className="flex items-end gap-2 pb-2 text-xs ui-color-muted" ><input type="checkbox" checked={currentDefinition.enabled} onChange={(event) => updateEditing({ enabled: event.target.checked })} />{t("ui.sessionEnabled")}</label></div>}
 
-            <div className="mt-4">
-              <button type="button" className="app-button app-button--secondary app-button--sm" disabled={probeBusy} onClick={() => setProbeAttempt((value) => value + 1)}><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button>
-              {probeError && <p role="alert" className="mt-2 break-words text-xs ui-color-error-ink" >{normalizeDisplayText(probeError)}</p>}
-            </div>
-            <fieldset disabled={probeBusy || probeError !== null} className="mt-3 min-w-0 rounded-lg border p-3 ui-border-color-border ui-background-surface" aria-label={t("ui.gpuAssignment")} >
-              <div className="flex flex-wrap items-start justify-between gap-2"><div><h4 className="text-sm font-semibold ui-color-ink" >{t("ui.gpuAssignment")}</h4><p className="mt-0.5 text-xs ui-color-faint" >{t("ui.gpuRuntimeIdentityHint")}</p></div><span className="text-xs ui-color-faint" >{t("ui.gpuSelectedCount", { count: selectedGpuIds.size })}</span></div>
-              {!probeBusy && !probeError && devices.length === 0 && <div className="mt-3 rounded border px-3 py-2 text-xs ui-border-color-warning-border ui-background-warning-bg ui-color-warning-ink" >{t("ui.gpuNoDetected")}</div>}
-              <div className="mt-3 grid gap-2 app-form-grid">
-                {devices.map((gpu, index) => {
-                  const id = gpu.stable_id;
-                  return <label key={id ?? `gpu-${index}`} className={[`flex min-w-0 items-start gap-2 rounded border px-2.5 py-2 text-xs ${id && selectedGpuIds.has(id) ? "app-border-accent" : ""}`, (id && selectedGpuIds.has(id) ? "ui-border-color-accent" : "ui-border-color-border"), "ui-color-muted"].filter(Boolean).join(" ")} ><input type="checkbox" checked={Boolean(id && selectedGpuIds.has(id))} disabled={!id} onChange={(event) => { if (!id) return; if (event.target.checked) setTensorSplitDrafts((current) => id in current ? current : { ...current, [id]: "1" }); updateGpu(toggleGpuSelection(currentPlacement, id, devices)); }} /><span className="min-w-0"><span className="block app-text-wrap ui-color-ink" >{normalizeDisplayText(gpuDeviceLabel(gpu, index))}</span><span className="block app-text-wrap" title={normalizeDisplayText(id ?? t("ui.gpuStableId"))}>{normalizeDisplayText(gpu.vendor)}{gpu.vram_mb ? ` · ${Math.round(gpu.vram_mb)} MB` : ""}</span></span></label>;
-                })}
-              </div>
-              <div className="mt-3 grid gap-3 app-form-grid">
-                <label className="text-xs ui-color-muted" >{t("ui.gpuMain")}<CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuMain")} value={currentPlacement.main_gpu ?? ""} onChange={value => updateGpu({ main_gpu: value || null })} options={[{ value: "", label: t("ui.gpuAny") }, ...devices.filter(gpu => gpu.stable_id && selectedGpuIds.has(gpu.stable_id)).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, devices.indexOf(gpu)) }))]} /></label>
-                <label className="text-xs ui-color-muted" >{t("ui.gpuDraft")}<CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuDraft")} value={currentPlacement.draft_gpu_id ?? ""} onChange={value => updateGpu({ draft_gpu_id: value || null })} options={[{ value: "", label: t("ui.gpuAny") }, ...devices.filter(gpu => gpu.stable_id).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, devices.indexOf(gpu)) }))]} /></label>
-                <label className="text-xs ui-color-muted" >{t("ui.gpuSplitMode")}<CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuSplitMode")} value={currentPlacement.split_mode} onChange={value => updateGpu({ split_mode: value as api.SplitMode })} options={[{ value: "none", label: t("ui.gpuSplitNone") }, { value: "layer", label: t("ui.gpuSplitLayer") }, { value: "row", label: t("ui.gpuSplitRow") }]} /></label>
-              </div>
-              {currentPlacement.gpu_ids.length > 1 && <fieldset className="mt-3 min-w-0"><legend className="text-xs ui-color-muted" >{t("ui.gpuTensorSplit")}</legend><label className="mt-1 flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={customTensorSplit} onChange={(event) => { setCustomTensorSplit(event.target.checked); updateGpu({ tensor_split: [] }); }} />{t("ui.gpuCustomTensorSplit")}</label>{customTensorSplit && <><div className="mt-2 grid gap-2 app-form-grid">{currentPlacement.gpu_ids.map((id) => { const gpu = devices.find((item) => item.stable_id === id); return <label key={id} className="grid grid-cols-[minmax(0,1fr)_5rem] items-center gap-2 text-xs ui-color-faint" ><span className="app-text-wrap">{normalizeDisplayText(gpu ? gpuDeviceLabel(gpu, devices.indexOf(gpu)) : id)}</span><input aria-label={`${t("ui.gpuTensorSplit")} ${normalizeDisplayText(id)}`} className="app-input w-full font-mono" inputMode="decimal" value={tensorSplitDrafts[id] ?? "1"} onChange={(event) => { if (!editing && selectedId === DEFAULT_SESSION_ID) setEditing({ ...defaultDefinition, gpu: cloneGpuPlacement(defaultDefinition.gpu) }); setTensorSplitDrafts((current) => ({ ...current, [id]: event.target.value })); }} /></label>; })}</div><span className="mt-1 block text-xs ui-color-faint" >{t("ui.gpuTensorSplitHint")}</span></>}</fieldset>}
-              {missing.length > 0 && <div className="mt-3 rounded border px-3 py-2 text-xs ui-border-color-error-border ui-background-error-bg ui-color-error-ink" role="alert" ><strong>{t("ui.gpuMissingWarning")}</strong><span className="ml-1">{t("ui.gpuMissing", { ids: missing.map(normalizeDisplayText).join(", ") })}</span></div>}
-            </fieldset>
 
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {(currentDefinition.id !== DEFAULT_SESSION_ID || editing?.id === DEFAULT_SESSION_ID) && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void saveDefinition()} disabled={busyId !== null}>{t("ui.saveSession")}</button>}

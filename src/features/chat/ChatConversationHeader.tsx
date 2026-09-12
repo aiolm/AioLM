@@ -10,6 +10,9 @@ interface ChatConversationHeaderProps {
   headerSubtitle: string;
   activeProjectName: string | null;
   phase: "idle" | "thinking" | "streaming";
+  targetBusy?: boolean;
+  onOpenModelSettings?: () => void;
+  modelSettingsLabel?: string;
   onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt">>) => void;
   sessionLabel: string;
   sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
@@ -20,7 +23,7 @@ interface ChatConversationHeaderProps {
 
 export default function ChatConversationHeader({
   threadPanelOpen, setThreadPanelOpen, activeThread, headerSubtitle, activeProjectName, phase, onUpdateThread,
-  sessionLabel, sessionOptions, selectedSessionId, onSelectSession, ct,
+  sessionLabel, sessionOptions, selectedSessionId, onSelectSession, ct, targetBusy = false, onOpenModelSettings, modelSettingsLabel,
 }: ChatConversationHeaderProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
@@ -55,7 +58,8 @@ export default function ChatConversationHeader({
       </div>
       <div className="chat-heading-controls">
         <label className="sr-only" htmlFor="chat-session-target">{sessionLabel}</label>
-        <CustomSelect id="chat-session-target" className="chat-session-picker" value={selectedSessionId} disabled={phase !== "idle"} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
+        <CustomSelect id="chat-session-target" className="chat-session-picker" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
+        {onOpenModelSettings && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={onOpenModelSettings} disabled={phase !== "idle" || targetBusy}>{modelSettingsLabel}</button>}
       <details
         ref={detailsRef}
         className="relative shrink-0"

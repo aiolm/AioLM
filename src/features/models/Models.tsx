@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { isCurrentScan, nextScanGeneration } from "./scanGeneration";
+import { invalidateModelCatalog, MODEL_CATALOG_CHANGED } from '../model-settings/useModelCatalog';
 import { projectorChangeAllowed } from "../chat/visionState";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
@@ -76,6 +77,12 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     setScanning(false);
     setScanError(null);
   };
+
+  useEffect(() => {
+    const refresh = () => setScanRequest(value => value + 1);
+    window.addEventListener(MODEL_CATALOG_CHANGED, refresh);
+    return () => window.removeEventListener(MODEL_CATALOG_CHANGED, refresh);
+  }, []);
 
   useEffect(() => {
     const nextDir = cfg?.models_dir?.trim() ?? "";
@@ -247,6 +254,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       setPendingConfirm(null);
       try {
         await api.deleteModel(model.path, model.shards?.files);
+        invalidateModelCatalog();
         forgetExecution(model.path);
         if (cfg?.active_model === model.path) await store.updateConfig({ active_model: '' });
         notify(t("ui.deletedModelNamed", { name: model.name }));
