@@ -25,6 +25,19 @@ describe("Workspace navigation", () => {
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
 
+  it("shows the grouped model name in the header while retaining the first shard path", async () => {
+    const name = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
+    const path = `C:/models/${name}-00001-of-00033.gguf`;
+    store = createTestStore({ active_model: path });
+    mount();
+    const model = screen.getByRole("button", { name: `${name}.gguf` });
+    expect(model).toHaveAttribute("title", path);
+    fireEvent.click(model);
+    expect(await screen.findByText("Model library")).toBeVisible();
+    expect(store.cfg?.active_model).toBe(path);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("applies the task leave guard to sidebar, header and panel shortcuts", async () => {
     mount();
     fireEvent.click(mainTab("Projects"));

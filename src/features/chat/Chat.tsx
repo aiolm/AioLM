@@ -7,7 +7,7 @@ import type { AppPreferences } from "../../shared/config/preferences";
 import { useI18n } from "../../shared/i18n/i18n";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
-import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useChatThreads } from "./useChatThreads";
 import { useChatAttachments } from "./useChatAttachments";
@@ -141,8 +141,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
 
   const displayModel = normalizeDisplayPath(model);
-  const displayStatusModel = normalizeDisplayPath(selectedStatus.model ?? "");
-  const headerSubtitle = model ? `${displayModel.split(/[\\/]/).pop()}${selectedSessionId === "default" && configuredModel && selectedStatus.model && configuredModel !== selectedStatus.model ? ` · ${displayStatusModel.split(/[\\/]/).pop()}` : ""}` : t("chat.newConversation");
+  const headerSubtitle = model ? `${modelDisplayName(model)}${selectedSessionId === "default" && configuredModel && selectedStatus.model && configuredModel !== selectedStatus.model ? ` · ${modelDisplayName(selectedStatus.model)}` : ""}` : t("chat.newConversation");
   const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 

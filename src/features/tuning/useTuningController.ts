@@ -10,7 +10,7 @@ import { replaceServerOption, type OptionOccurrence, type ServerOption } from '.
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { serverOptionsText } from '../../shared/i18n/serverOptionsI18n';
 import { useI18n } from "../../shared/i18n/i18n";
-import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { validateTuningRelations } from "../../shared/config/tuningRelations";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import type { ChatOptionField, NumericField, NumericKey, ServerTextKey } from "./tuningFields";
@@ -346,7 +346,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
     setServerTextDrafts({});
     void savePatch({ ...profile.defaults, mmproj: cfg.mmproj, server_args: [...profile.serverArgs], chat_options: profile.chatOptions }, t("ui.saveFailedFor", { label: profile.name }));
     setPhase("dirty");
-    notify(t("ui.profileAppliedFor", { profile: profile.name, model: normalizeDisplayPath(cfg.active_model).split(/[\\/]/).pop() ?? cfg.active_model }));
+    notify(t("ui.profileAppliedFor", { profile: profile.name, model: modelDisplayName(cfg.active_model) }));
   };
 
   const applyRestart = async () => {

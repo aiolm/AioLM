@@ -8,6 +8,17 @@ export function normalizeDisplayPath(value: string): string {
   return path;
 }
 
+/** A model label groups GGUF shards; file access and API requests must use the original value. */
+export function modelDisplayName(value: string): string {
+  const path = normalizeDisplayPath(value);
+  const name = path.split(/[\\/]/).pop() || path;
+  const shard = /^(.+)-(\d{5})-of-(\d{5})(\.gguf)?$/i.exec(name);
+  if (!shard) return name;
+  const index = Number(shard[2]);
+  const total = Number(shard[3]);
+  return total > 1 && index > 0 && index <= total ? `${shard[1]}${shard[4] ?? ""}` : name;
+}
+
 /** Removes Windows verbatim path prefixes from arbitrary displayed text. */
 export function normalizeDisplayText(value: string): string {
   return value

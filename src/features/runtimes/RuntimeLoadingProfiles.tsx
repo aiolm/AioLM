@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
 import { readLoadingProfiles, writeLoadingProfiles, type LoadingProfile } from "../../shared/runtime/runtimeUtils";
-import { normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useDraftGuard } from '../../shared/state/draftGuard';
@@ -35,7 +35,7 @@ export default function RuntimeLoadingProfiles({ store, disabled }: { store: App
     <p>{t("ui.legacyProfilesHint")}</p>
     {notice && <FeedbackBanner tone="success">{notice}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
-    {profiles.map((profile) => <div key={profile.id} className="legacy-profile-row"><div><strong>{normalizeDisplayText(profile.name)}</strong><p>{normalizeDisplayText(profile.backend)} · {normalizeDisplayText(profile.build)} · {normalizeDisplayText(profile.active_model).split(/[\\/]/).pop()}</p></div><button type="button" className="app-button app-button--secondary" disabled={disabled || busy} onClick={() => void apply(profile)}>{t("ui.loadSavedProfile")}</button><button type="button" className="app-button app-button--ghost" disabled={busy} aria-label={`${t("panel.delete")}: ${normalizeDisplayText(profile.name)}`} onClick={() => setPending(profile)}>{t("panel.delete")}</button></div>)}
+    {profiles.map((profile) => <div key={profile.id} className="legacy-profile-row"><div><strong>{normalizeDisplayText(profile.name)}</strong><p>{normalizeDisplayText(profile.backend)} · {normalizeDisplayText(profile.build)} · {modelDisplayName(profile.active_model)}</p></div><button type="button" className="app-button app-button--secondary" disabled={disabled || busy} onClick={() => void apply(profile)}>{t("ui.loadSavedProfile")}</button><button type="button" className="app-button app-button--ghost" disabled={busy} aria-label={`${t("panel.delete")}: ${normalizeDisplayText(profile.name)}`} onClick={() => setPending(profile)}>{t("panel.delete")}</button></div>)}
     <ConfirmDialog open={!!pending} title={t("ui.profileDeleteTitle")} description={normalizeDisplayText(pending?.name ?? "")} confirmLabel={t("panel.delete")} onConfirm={() => { const next = profiles.filter((profile) => profile.id !== pending?.id); writeLoadingProfiles(next); setProfiles(next); setPending(null); }} onCancel={() => setPending(null)} />
   </details>;
 }

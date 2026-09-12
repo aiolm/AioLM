@@ -9,7 +9,7 @@ import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../shared/lib/serverLifecycle";
-import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { buildNumber } from "../../shared/runtime/runtimeUtils";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
@@ -314,7 +314,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{t("panel.activeModel")}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {selected ? <div className="app-text-wrap text-[15px] font-semibold ui-color-ink"  title={normalizeDisplayPath(selected)}>{normalizeDisplayText(visible.find((model) => model.path === selected)?.name ?? normalizeDisplayPath(selected).split(/[\\/]/).pop() ?? "")}</div> : <div className="text-sm ui-color-faint" >{t("panel.noneSelected")}</div>}
+            {selected ? <div className="app-text-wrap text-[15px] font-semibold ui-color-ink"  title={normalizeDisplayPath(selected)}>{modelDisplayName(models?.find((model) => model.path === selected)?.name ?? selected)}</div> : <div className="text-sm ui-color-faint" >{t("panel.noneSelected")}</div>}
             <div className="mt-1 break-words text-xs ui-color-muted" >{t("ui.modelsBackendLine", { backend: cfg?.active_backend || "PATH", build: cfg?.active_build ? buildNumber(cfg.active_build) : "system", port: cfg?.port ?? "—" })}</div>
             <details className="models-runtime-details mt-1">
             <summary>{t("section.diagnostics")}</summary>

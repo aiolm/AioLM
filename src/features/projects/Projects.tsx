@@ -23,7 +23,7 @@ import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerBusy } from "../../shared/lib/serverLifecycle";
-import { normalizeDisplayPath, normalizeDisplayPathLines } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath, normalizeDisplayPathLines } from "../../shared/lib/displayPaths";
 import { useDraftGuard } from '../../shared/state/draftGuard';
 
 
@@ -215,7 +215,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{normalizeDisplayPath(project.config.active_model).split(/[\\/]/).pop() || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink" >{t("ui.active")}</span>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink" >{t("ui.active")}</span>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
@@ -228,7 +228,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <h3>{t("ui.projectSavedSetup")}</h3>
             <p>{t("ui.projectSnapshotHint")}</p>
             <dl>
-              <div><dt>{t("ui.fieldModelPath")}</dt><dd title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? "")}>{normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? "").split(/[\\/]/).pop() || t("load.noModel")}</dd></div>
+              <div><dt>{t("ui.fieldModelPath")}</dt><dd title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? "")}>{modelDisplayName((configSnapshot ?? cfg)?.active_model ?? "") || t("load.noModel")}</dd></div>
               <div><dt>{t("ui.fieldBackend")}</dt><dd>{(configSnapshot ?? cfg)?.active_backend || "PATH"} · {(configSnapshot ?? cfg)?.active_build || "system"}</dd></div>
               <div><dt>{t("ui.fieldContext")}</dt><dd>{(configSnapshot ?? cfg)?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : (configSnapshot ?? cfg)?.ctx_size.toLocaleString()}</dd></div>
             </dl>

@@ -5,7 +5,7 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
-import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { finishTask, registerTask, updateTask } from "../../shared/state/taskRegistry";
 import {
   DEFAULT_SESSION_ID,
@@ -48,8 +48,7 @@ function statusCopy(state: api.SessionStatus["state"], t: ReturnType<typeof useI
 
 function modelLabel(path: string, empty: string): string {
   if (!path.trim()) return empty;
-  const display = normalizeDisplayPath(path);
-  return display.split(/[\\/]/).pop() || display;
+  return modelDisplayName(path) || empty;
 }
 
 export default function SessionsPanel({ store, active = true }: { store: AppStore; active?: boolean }) {

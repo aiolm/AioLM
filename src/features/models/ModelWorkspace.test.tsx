@@ -84,6 +84,23 @@ describe('model execution workspace', () => {
     expect(model.path).toBe(raw);
   });
 
+  it('shows the grouped model label before and after scanning while preserving the launch path', async () => {
+    const name = 'Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64';
+    const path = `C:/models/${name}-00001-of-00033.gguf`;
+    let finishScan!: (value: api.ModelScanResult) => void;
+    vi.mocked(api.listModels).mockImplementationOnce(() => new Promise(resolve => { finishScan = resolve; }));
+    const base = mount(createTestStore({ active_model: path }));
+    expect(screen.getByRole('heading', { name: `${name}.gguf` })).toHaveAttribute('title', path);
+    await waitFor(() => expect(finishScan).toBeDefined());
+    finishScan({ models: [{ name: `${name}.gguf`, path, size_mb: 33000, is_vision: false,
+      shards: { files: Array.from({ length: 33 }, (_, index) => `C:/models/${name}-${String(index + 1).padStart(5, '0')}-of-00033.gguf`), total: 33, missing: [] } }], truncated: false });
+    await findModelButton(`${name}.gguf`);
+    expect(screen.getByRole('heading', { name: `${name}.gguf` })).toHaveAttribute('title', path);
+    await waitFor(() => expect(getStartButton()).toBeEnabled());
+    fireEvent.click(getStartButton());
+    await waitFor(() => expect(base.start).toHaveBeenCalledOnce());
+    expect(base.cfg?.active_model).toBe(path);
+  });
   it('selects without starting, restores per-model edits and starts from the same screen', async () => {
     const base = mount();
     await findModelButton('b.gguf');

@@ -6,7 +6,7 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import type { ViewId } from '../../shared/types/navigation';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
-import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import ModelsPanel from './Models';
@@ -138,7 +138,7 @@ function ExecutionSetup({ store, active, section, onNavigate, model }: Omit<Prop
   };
   return <div className="execution-setup">
     <header className="execution-heading">
-      <div><span className="app-eyebrow">{copy.setup}{model ? ` · ${model.size_mb.toLocaleString(locale, { maximumFractionDigits: 0 })} MB` : ''}</span><h2 title={normalizeDisplayPath(cfg.active_model)}>{normalizeDisplayPath(cfg.active_model).split(/[\\/]/).pop()}</h2><p>{copy.remembered}</p></div>
+      <div><span className="app-eyebrow">{copy.setup}{model ? ` · ${model.size_mb.toLocaleString(locale, { maximumFractionDigits: 0 })} MB` : ''}</span><h2 title={normalizeDisplayPath(cfg.active_model)}>{modelDisplayName(model?.name ?? cfg.active_model)}</h2><p>{copy.remembered}</p></div>
       <span className={`app-status-badge app-status-badge--${store.status.state === 'running' ? 'success' : 'neutral'}`} role="status">{copy[store.status.state]}</span>
     </header>
     {(error || store.actionError || store.status.error) && <FeedbackBanner tone="error">{error || store.actionError || store.status.error}</FeedbackBanner>}

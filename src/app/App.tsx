@@ -19,7 +19,7 @@ import { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFe
 import { useI18n } from "../shared/i18n/i18n";
 import { buildNumber } from "../shared/runtime/runtimeUtils";
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
-import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
 import { DraftGuardProvider, useDraftGuard } from '../shared/state/draftGuard';
 import { useExecutionStore } from '../features/models/useExecutionStore';
 import { executionText } from '../shared/i18n/executionI18n';
@@ -54,8 +54,7 @@ export function findTaskBlockingTabLeave(tasks: AppTask[]): AppTask | undefined 
 
 function shortModel(path: string | undefined, emptyLabel: string): string {
   if (!path) return emptyLabel;
-  const displayPath = normalizeDisplayPath(path);
-  return displayPath.split(/[\\/]/).pop() || displayPath;
+  return modelDisplayName(path);
 }
 
 export default function App() {

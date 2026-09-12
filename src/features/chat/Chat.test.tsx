@@ -130,6 +130,17 @@ describe("ChatPanel unified attachments", () => {
     mocked.sessionList.mockResolvedValue([]);
   });
 
+  it("displays a grouped shard name while sending the original model identifier", async () => {
+    const name = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
+    const model = `${name}-00001-of-00033`;
+    renderPanel({ ...store, cfg: { ...cfg, active_model: model }, status: { ...store.status, model } });
+    expect(await screen.findByText(name, { exact: true })).toBeVisible();
+    respondWithText("Ready");
+    await sendMessage("Hello");
+    await screen.findByText("Ready", { exact: true });
+    expect(mocked.chatStream.mock.calls[0][2]).toBe(model);
+  });
+
   it("attaches documents and images with one button and blocks another selection while reading", async () => {
     renderPanel(visionStore);
     await attachDocument("notes.txt", SMALL_DOCUMENT);
