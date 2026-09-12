@@ -72,7 +72,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const serverOn = isServerRunning(selectedStatus.state);
   const visionReady = serverOn && !!selectedStatus.mmproj;
 
-  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addImage, addDocument, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, setError: (message) => setError(message) });
+  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, setError: (message) => setError(message) });
   const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools({ setError: (message) => setError(message) });
 
   const requireIdle = () => {
@@ -269,8 +269,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             onKeyDown={onKeyDown}
             disabled={disabled}
             phase={phase}
-            onAddDocument={() => void addDocument()}
-            onAddImage={() => void addImage()}
+            onAddAttachment={() => void addAttachment()}
             onStop={stop}
             aborting={aborting}
             onSend={sendMessage}

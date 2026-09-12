@@ -10,6 +10,11 @@ use zip::ZipArchive;
 
 const MAX_DOCUMENT_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTRACTED_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp"];
+const DOCUMENT_EXTENSIONS: &[&str] = &[
+    "txt", "md", "markdown", "csv", "json", "log", "xml", "html", "htm", "yaml", "yml", "toml",
+    "ini", "py", "rs", "ts", "tsx", "js", "jsx", "css", "sql", "sh", "ps1", "docx", "pdf",
+];
 
 struct LimitedWriter {
     bytes: Vec<u8>,
@@ -62,7 +67,7 @@ pub(crate) fn pick_image(state: State<'_, AppState>) -> Option<String> {
     }
     let path = rfd::FileDialog::new()
         .set_title("Choose an image for vision chat")
-        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+        .add_filter("Images", IMAGE_EXTENSIONS)
         .pick_file()?;
     let canonical = path.canonicalize().ok()?;
     image_mime_type(&canonical)?;
@@ -72,39 +77,56 @@ pub(crate) fn pick_image(state: State<'_, AppState>) -> Option<String> {
 }
 
 fn document_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .map(|value| value.to_ascii_lowercase())
-            .as_deref(),
-        Some(
-            "txt"
-                | "md"
-                | "markdown"
-                | "csv"
-                | "json"
-                | "log"
-                | "xml"
-                | "html"
-                | "htm"
-                | "yaml"
-                | "yml"
-                | "toml"
-                | "ini"
-                | "py"
-                | "rs"
-                | "ts"
-                | "tsx"
-                | "js"
-                | "jsx"
-                | "css"
-                | "sql"
-                | "sh"
-                | "ps1"
-                | "docx"
-                | "pdf"
-        )
-    )
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| DOCUMENT_EXTENSIONS.contains(&value.to_ascii_lowercase().as_str()))
+}
+
+fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("cannot select attachment: {error}"))?;
+    let selection = if image_mime_type(&canonical).is_some() {
+        &state.selected_image
+    } else if document_extension(&canonical) {
+        &state.selected_document
+    } else {
+        return Err("unsupported attachment type; choose an image or document".into());
+    };
+    let mut selected = selection
+        .lock()
+        .map_err(|_| "attachment selection state was poisoned".to_string())?;
+    *selected = Some(canonical.clone());
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    *state
+        .selected_image
+        .lock()
+        .map_err(|_| "image selection state was poisoned".to_string())? = None;
+    *state
+        .selected_document
+        .lock()
+        .map_err(|_| "document selection state was poisoned".to_string())? = None;
+    let path = tokio::task::spawn_blocking(|| {
+        let extensions: Vec<&str> = IMAGE_EXTENSIONS
+            .iter()
+            .chain(DOCUMENT_EXTENSIONS)
+            .copied()
+            .collect();
+        rfd::FileDialog::new()
+            .set_title("Choose an attachment for chat")
+            .add_filter("Images and documents", &extensions)
+            .add_filter("Images", IMAGE_EXTENSIONS)
+            .add_filter("Documents", DOCUMENT_EXTENSIONS)
+            .pick_file()
+    })
+    .await
+    .map_err(|error| format!("attachment picker task failed: {error}"))?;
+    path.map(|path| grant_selected_attachment(&state, &path))
+        .transpose()
 }
 
 fn xml_text(value: &str) -> String {
@@ -209,14 +231,7 @@ pub(crate) fn pick_document(state: State<'_, AppState>) -> Option<String> {
     }
     let path = rfd::FileDialog::new()
         .set_title("Choose a document for offline chat")
-        .add_filter(
-            "Documents",
-            &[
-                "txt", "md", "markdown", "csv", "json", "log", "xml", "html", "htm", "yaml", "yml",
-                "toml", "ini", "py", "rs", "ts", "tsx", "js", "jsx", "css", "sql", "sh", "ps1",
-                "docx", "pdf",
-            ],
-        )
+        .add_filter("Documents", DOCUMENT_EXTENSIONS)
         .pick_file()?;
     let canonical = path.canonicalize().ok()?;
     if !document_extension(&canonical) {
@@ -376,6 +391,53 @@ mod tests {
         assert_eq!(image_mime_type(Path::new("photo.jpeg")), Some("image/jpeg"));
         assert_eq!(image_mime_type(Path::new("photo.webp")), Some("image/webp"));
         assert_eq!(image_mime_type(Path::new("photo.svg")), None);
+    }
+
+    #[test]
+    fn unified_attachment_selection_grants_only_the_matching_reader() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-attachment-path-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create attachment test directory");
+        for (name, is_image) in [("photo.PNG", true), ("manual.PDF", false)] {
+            let state = AppState::default();
+            let path = root.join(name);
+            fs::write(&path, b"selected").expect("write attachment");
+            let canonical = path.canonicalize().expect("canonicalize attachment");
+
+            assert_eq!(
+                grant_selected_attachment(&state, &path).expect("grant selected attachment"),
+                canonical.to_string_lossy()
+            );
+            let image = state.selected_image.lock().expect("image selection state");
+            let document = state
+                .selected_document
+                .lock()
+                .expect("document selection state");
+            assert_eq!(
+                ensure_selected_image_path(image.as_deref(), &path).is_ok(),
+                is_image
+            );
+            assert_eq!(
+                ensure_selected_document_path(document.as_deref(), &path).is_ok(),
+                !is_image
+            );
+        }
+
+        let state = AppState::default();
+        let unsupported = root.join("program.exe");
+        fs::write(&unsupported, b"unsupported").expect("write unsupported attachment");
+        assert!(grant_selected_attachment(&state, &unsupported).is_err());
+        assert!(state
+            .selected_image
+            .lock()
+            .expect("image selection state")
+            .is_none());
+        assert!(state
+            .selected_document
+            .lock()
+            .expect("document selection state")
+            .is_none());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

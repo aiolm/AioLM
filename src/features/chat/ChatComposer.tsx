@@ -30,8 +30,7 @@ interface ChatComposerProps {
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   disabled: boolean;
   phase: "idle" | "thinking" | "streaming";
-  onAddDocument: () => void;
-  onAddImage: () => void;
+  onAddAttachment: () => void;
   onStop: () => void;
   aborting: boolean;
   onSend: () => void;
@@ -46,7 +45,7 @@ interface ChatComposerProps {
 export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
-  documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddDocument, onAddImage, onStop,
+  documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
   aborting, onSend, canSend, model, displayModel, msgsLength, metrics, ct,
 }: ChatComposerProps) {
   const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken") : msgsLength === 0 ? ct("emptyConversation") : `${ct("responseReady")} · ${msgsLength} ${ct("messages")}`;
@@ -88,7 +87,7 @@ export default function ChatComposer({
           {contextSources.length > 0 && <div className="rounded-md border px-3 py-2 text-xs ui-border-color-border ui-background-surface-muted ui-color-muted"  role="status"><span className="font-medium ui-color-ink" >{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</div>}
       </PanelFeedback>
       <div className="chat-composer-actions">
-      {(attachments.length > 0 || documents.length > 0 || attachmentStatus === "reading" || attachmentStatus === "failed") && <div className="chat-composer-context" tabIndex={0} role="region" aria-label={ct("pendingDocuments")}>
+      {(attachments.length > 0 || documents.length > 0 || attachmentStatus === "reading" || attachmentStatus === "failed") && <div className="chat-composer-context" tabIndex={0} role="region" aria-label={ct("pendingAttachments")}>
       <div className="chat-attachment-status-slot">
         {attachmentStatus !== "idle" && <div className="text-xs ui-color-faint"  role="status" aria-live="polite">{attachmentStatus === "reading" ? ct("attachmentReading") : attachmentStatus === "ready" ? ct("attachmentReady") : ct("attachmentFailed")}</div>}
       </div>
@@ -96,8 +95,7 @@ export default function ChatComposer({
       {documents.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label={ct("pendingDocuments")}>{documents.map((document) => <div key={document.path} className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ui-border-color-border ui-background-surface-muted ui-color-muted" ><span className="max-w-48 app-text-wrap">{normalizeDisplayText(document.name)}</span><button type="button" onClick={() => onRemoveDocument(document.path)} className="flex h-5 w-5 items-center justify-center rounded-full hover:bg-[var(--ui-panel)] ui-color-faint"  aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(document.name)}`}><svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
       </div>}
         <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={disabled || phase !== "idle"} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct("offline") : ct("placeholder")} className="app-textarea min-h-[52px] min-w-0 flex-1 resize-y p-3 text-sm leading-relaxed" />
-        <button type="button" onClick={onAddDocument} disabled={disabled || phase !== "idle" || documents.length >= 4} title={ct("attachDocument")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachDocument")}>{ct("attachDocument")}</button>
-        <button type="button" onClick={onAddImage} disabled={disabled || phase !== "idle" || attachments.length >= 4} title={ct("attachImage")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachImage")}>{ct("attachImage")}</button>
+        <button type="button" onClick={onAddAttachment} disabled={disabled || phase !== "idle" || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}>{ct("attachFile")}</button>
         <button type="button" onClick={phase !== "idle" ? onStop : onSend} disabled={phase !== "idle" ? aborting : !canSend} className={"app-button app-button--sm shrink-0 " + (phase !== "idle" ? "app-button--danger" : "app-button--primary")} aria-label={phase !== "idle" ? ct("stop") : ct("send")}><StableLabel value={phase !== "idle" ? aborting ? ct("stopping") : ct("stop") : ct("send")} labels={[ct("send"), ct("stop"), ct("stopping")]} /></button>
       </div>
 

@@ -20,6 +20,7 @@ export const hfModelFiles = (repoId: string) => invoke<HfFile[]>("hf_model_files
 export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string) =>
   invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir });
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
+export const pickAttachment = () => invoke<string | null>("pick_attachment");
 export const pickImage = () => invoke<string | null>("pick_image");
 export const readImageData = (path: string) => invoke<string>("read_image_data", { path });
 export const pickDocument = () => invoke<string | null>("pick_document");

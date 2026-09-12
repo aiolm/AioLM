@@ -60,10 +60,9 @@ vi.mock("./chatHistory", async () => {
 });
 
 vi.mock("../../shared/api/index", () => ({
-  pickDocument: vi.fn(),
+  pickAttachment: vi.fn(),
   readDocumentText: vi.fn(),
   readDocumentBinding: vi.fn(),
-  pickImage: vi.fn(),
   readImageData: vi.fn(),
   embedText: vi.fn(),
   chatStream: vi.fn(),

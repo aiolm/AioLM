@@ -58,6 +58,7 @@ pub fn run() {
             commands::mcp::mcp_remove_server,
             commands::mcp::mcp_list_tools,
             commands::mcp::mcp_call_tool,
+            commands::documents::pick_attachment,
             commands::documents::pick_document,
             commands::documents::read_document_text,
             commands::documents::read_document_binding,

@@ -13,40 +13,37 @@ export function useChatAttachments({ visionReady, setError }: UseChatAttachments
   const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState<"idle" | "reading" | "ready" | "failed">("idle");
 
-  const addImage = async () => {
-    if (!visionReady) {
-      setError("Select an mmproj vision sidecar in Models or Tuning before attaching an image.");
-      return;
-    }
+  const addAttachment = async () => {
+    if (attachmentStatus === "reading") return;
     setAttachmentStatus("reading");
     try {
-      const path = await api.pickImage();
-      if (!path) { setAttachmentStatus("idle"); return; }
-      const dataUrl = await api.readImageData(path);
-      setAttachments((current) => current.length >= 4 ? current : [...current, { name: path.split(/[\\/]/).pop() ?? "image", dataUrl }]);
+      const path = await api.pickAttachment();
+      if (!path) { setAttachmentStatus(attachmentStatus); return; }
+      const name = path.split(/[\\/]/).pop() ?? "file";
+      if (/\.(png|jpe?g|webp)$/i.test(path)) {
+        if (!visionReady) {
+          throw new Error("Select an mmproj vision sidecar in Models or Tuning before attaching an image.");
+        }
+        if (attachments.length >= 4) throw new Error("You can attach up to 4 images per message.");
+        const dataUrl = await api.readImageData(path);
+        setAttachments((current) => current.length >= 4 ? current : [...current, { name, dataUrl }]);
+      } else {
+        if (documents.some((document) => document.path === path)) {
+          setAttachmentStatus("ready");
+          setError(null);
+          return;
+        }
+        if (documents.length >= 4) throw new Error("You can attach up to 4 documents per message.");
+        const text = await api.readDocumentText(path);
+        setDocuments((current) => current.some((document) => document.path === path) || current.length >= 4
+          ? current
+          : [...current, { name, path, text }]);
+      }
       setAttachmentStatus("ready");
       setError(null);
     } catch (caught) {
       setAttachmentStatus("failed");
-      setError(`Image attachment failed: ${caught instanceof Error ? caught.message : String(caught)}`);
-    }
-  };
-
-  const addDocument = async () => {
-    setAttachmentStatus("reading");
-    try {
-      const path = await api.pickDocument();
-      if (!path) { setAttachmentStatus("idle"); return; }
-      const text = await api.readDocumentText(path);
-      const name = path.split(/[\\/]/).pop() ?? "document";
-      setDocuments((current) => current.some((document) => document.path === path) || current.length >= 4
-        ? current
-        : [...current, { name, path, text }]);
-      setAttachmentStatus("ready");
-      setError(null);
-    } catch (caught) {
-      setAttachmentStatus("failed");
-      setError(`Document attachment failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+      setError(`File attachment failed: ${caught instanceof Error ? caught.message : String(caught)}`);
     }
   };
 
@@ -67,6 +64,6 @@ export function useChatAttachments({ visionReady, setError }: UseChatAttachments
 
   return {
     attachments, documents, attachmentStatus, setAttachments, setDocuments,
-    addImage, addDocument, removeAttachment, removeDocument, clearComposerAttachments,
+    addAttachment, removeAttachment, removeDocument, clearComposerAttachments,
   };
 }
