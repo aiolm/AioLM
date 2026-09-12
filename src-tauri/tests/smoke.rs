@@ -33,10 +33,10 @@ fn cfg_with(model: &str) -> AppConfig {
     }
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "loads a real model; set AIOLM_SMOKE=1 and run explicitly"]
-fn smoke_real_benchmark_cancel_keeps_progress() {
-    use aiolm_lib::bench;
+async fn smoke_real_benchmark_cancel_keeps_progress() {
+    use aiolm_lib::performance_bench;
     use std::sync::atomic::{AtomicBool, Ordering};
     assert_eq!(
         aiolm_lib::branding::env_var("AIOLM_SMOKE").as_deref(),
@@ -44,30 +44,57 @@ fn smoke_real_benchmark_cancel_keeps_progress() {
     );
     let model = aiolm_lib::branding::env_var("AIOLM_SMOKE_MODEL").expect("set smoke model");
     let mut cfg = cfg_with(&model);
-    cfg.iters = 1;
+    if let Ok(gpu_id) = std::env::var("AIOLM_BENCH_SMOKE_GPU") {
+        cfg.gpu.gpu_ids = vec![gpu_id];
+    } else if let Ok(devices) = aiolm_lib::branding::env_var("AIOLM_SMOKE_DEVICE") {
+        cfg.gpu.gpu_ids = devices
+            .split(',')
+            .map(|device| format!("runtime:{}:{}", cfg.active_backend, device.trim()))
+            .collect();
+    }
+    let gpu = aiolm_lib::validate_launch_config(&mut cfg)
+        .await
+        .expect("selected runtime must pass launch validation");
     let cancel = Arc::new(AtomicBool::new(false));
     let callback_cancel = cancel.clone();
     let rows = Arc::new(Mutex::new(Vec::new()));
     let callback_rows = rows.clone();
-    let progress: bench::BenchProgress = Arc::new(move |row| {
-        callback_rows.lock().unwrap().push(row.clone());
-        callback_cancel.store(true, Ordering::Release);
-    });
-    let timeout_cancel = cancel.clone();
-    let (done, finished) = std::sync::mpsc::channel();
-    let watchdog = std::thread::spawn(move || {
-        if finished
-            .recv_timeout(std::time::Duration::from_secs(90))
-            .is_err()
-        {
-            timeout_cancel.store(true, Ordering::Release);
+    let progress: performance_bench::Progress = Arc::new(move |event| {
+        if let Some(row) = event.row {
+            callback_rows.lock().unwrap().push(row);
+            callback_cancel.store(true, Ordering::Release);
         }
     });
-    let result = bench::run_with_progress(&cfg, cancel, None, Some(progress));
-    let _ = done.send(());
-    watchdog.join().unwrap();
-    let result = result.expect("benchmark returned partial results");
-    assert_eq!(result.status, bench::BenchStatus::Cancelled);
+    let request = performance_bench::PerformanceBenchRequest {
+        run_id: "smoke-cancel".into(),
+        prompt_lengths: vec![512],
+        generation_length: 8,
+        batch_sizes: vec![2],
+        repetitions: 1,
+        context_profile: "code_python".into(),
+        warmup: true,
+    };
+    let active_pid = Arc::new(Mutex::new(None));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(90),
+        performance_bench::run(
+            cfg,
+            request,
+            gpu,
+            cancel,
+            active_pid.clone(),
+            progress,
+            "unknown".into(),
+            false,
+        ),
+    )
+    .await
+    .expect("benchmark did not reach a cancellable result in time");
+    assert_eq!(result.status, "cancelled", "{:?}", result.message);
+    assert!(
+        active_pid.lock().unwrap().is_none(),
+        "cancelled benchmark retained its process"
+    );
     assert!(
         !rows.lock().unwrap().is_empty(),
         "no live progress before cancellation"
@@ -76,6 +103,11 @@ fn smoke_real_benchmark_cancel_keeps_progress() {
         !result.rows.is_empty(),
         "cancellation discarded completed rows"
     );
+    let completed = &result.rows[0];
+    assert!(completed.error.is_none(), "{:?}", completed.error);
+    assert_eq!(completed.prompt_tokens, 512);
+    assert_eq!(completed.completion_tokens, 8);
+    assert_eq!(completed.cached_tokens, 0);
     println!(
         "[smoke] cancelled benchmark retained {} rows",
         result.rows.len()

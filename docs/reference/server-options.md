@@ -20,7 +20,7 @@ Dedicated model, adapter, GPU, context and reasoning controls remain the owners 
 
 Catalog changes use the existing config save queue and `server_args`, so existing configuration files, execution profiles and project snapshots retain them. An unsaved raw argument draft must be saved or reset before individual catalog entries can be changed. The raw server-argument and chat-JSON editors remain available under **Advanced / raw**.
 
-Benchmarks translate compatible memory switches to the `llama-bench` syntax (for example, server `--no-mmap` becomes bench `--mmap 0`). Server-only switches are not forwarded. New runtimes support `--load-mode` for combined memory mapping and locking; the standalone server `--mlock` switch is not a bench option.
+Benchmarks use the selected model's server configuration to launch a dedicated `llama-server`. Workload controls temporarily override context size, concurrent slots, prompt-cache reuse, and the loopback port. Other compatible tuning and memory options remain server arguments. These temporary overrides do not change saved settings; see [Benchmarks](benchmarks.md) for the workflow and recorded configuration.
 
 To refresh the checked-in reference catalog from an upstream commit or tag:
 

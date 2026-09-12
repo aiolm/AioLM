@@ -779,6 +779,7 @@ pub async fn wait_ready(
     err: &Arc<ErrBuf>,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
+        .no_proxy()
         .connect_timeout(Duration::from_millis(500))
         .timeout(Duration::from_secs(2))
         .build()

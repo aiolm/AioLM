@@ -130,14 +130,8 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["--device", "Vulkan1"]));
         assert!(!args.contains(&"--spec-draft-model".into()));
         assert!(args.windows(2).any(|pair| pair == ["--host", "127.0.0.1"]));
-        let bench = crate::bench::build_args(&cfg);
         assert!(args.windows(2).any(|pair| pair == ["--n-gpu-layers", "99"]));
         assert!(args.windows(2).any(|pair| pair == ["--ctx-size", "4096"]));
-        assert!(bench
-            .windows(2)
-            .any(|pair| pair == ["--n-gpu-layers", "99"]));
-        assert!(!bench.contains(&"--threads".into()));
-        assert!(bench.contains(&"--repetitions".into()));
     }
 
     #[test]

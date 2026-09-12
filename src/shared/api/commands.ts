@@ -1,11 +1,12 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
 import type {
-  AppConfig, BenchmarkProgress, BenchResult, BenchRow, DeviceReport,
+  AppConfig, DeviceReport,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
   LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus,
+  PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkProgress,
 } from "./types.ts";
 
 export const getConfig = () => invoke<AppConfig>("get_config");
@@ -43,7 +44,8 @@ export const startAnthropicGateway = () => invoke<string>("start_anthropic_gatew
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");
 export const anthropicGatewayStatus = () => invoke<{ running: boolean; url?: string }>("anthropic_gateway_status");
 
-export const runBench = (cfg: AppConfig) => invoke<BenchResult>("run_bench", { cfg });
+export const runPerformanceBench = (cfg: AppConfig, request: PerformanceBenchmarkRequest) =>
+  invoke<PerformanceBenchmarkResult>("run_performance_bench", { cfg, request });
 export const benchCancel = () => invoke<void>("bench_cancel");
 
 /** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
@@ -87,9 +89,9 @@ export function onRuntimeProgress(
   return listen<DownloadProgress>("runtime-download-progress", (event) => cb(event.payload));
 }
 
-export function onBenchmarkProgress(cb: (progress: BenchmarkProgress) => void): Promise<UnlistenFn> {
+export function onPerformanceBenchmarkProgress(cb: (progress: PerformanceBenchmarkProgress) => void): Promise<UnlistenFn> {
   if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
-  return listen<BenchRow>("bench-progress", (event) => cb({ row: event.payload }));
+  return listen<PerformanceBenchmarkProgress>("performance-bench-progress", (event) => cb(event.payload));
 }
 
 export function onModelDownloadProgress(

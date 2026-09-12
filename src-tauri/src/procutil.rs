@@ -6,8 +6,8 @@
 //! about how the child runs or how its stdio pipes behave.
 //!
 //! Unix process-group setup (`configure_build_process_group` in `runtime.rs`)
-//! is a separate, build-specific concern and stays where it is; this module
-//! only owns the Windows console flag.
+//! is a separate, build-specific concern and stays where it is. Tracked
+//! process cancellation shared by the benchmark IPC and shutdown lives here.
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -38,6 +38,27 @@ pub fn tokio_command<S: AsRef<std::ffi::OsStr>>(program: S) -> tokio::process::C
     command
 }
 
+/// Terminate a tracked subprocess when its owning task must be interrupted.
+/// The process owner remains responsible for reaping the child handle.
+pub fn terminate_pid(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::process::Stdio;
+        let pid = pid.to_string();
+        let _ = std_command("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std_command("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+}
+
 #[cfg(windows)]
 fn configure_std(command: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
@@ -60,6 +81,16 @@ fn configure_tokio(_command: &mut tokio::process::Command) {}
 mod tests {
     use super::*;
     use std::os::windows::process::CommandExt as _;
+
+    #[test]
+    fn tracked_process_cancellation_terminates_the_child() {
+        let mut child = std_command("cmd")
+            .args(["/C", "ping 127.0.0.1 -n 30 >NUL"])
+            .spawn()
+            .expect("spawn cancellation fixture");
+        terminate_pid(child.id());
+        assert!(!child.wait().expect("reap cancelled child").success());
+    }
 
     #[test]
     fn policy_denial_includes_actionable_guidance_and_original_error() {

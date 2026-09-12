@@ -1,6 +1,5 @@
 //! Backend modules, public client APIs and desktop application startup.
 pub mod backends;
-pub mod bench;
 pub mod branding;
 mod commands;
 pub mod config;
@@ -10,6 +9,8 @@ pub mod gpu;
 pub mod hardware;
 mod mcp;
 pub mod models;
+pub mod performance_bench;
+pub mod performance_memory;
 mod procutil;
 pub mod runtime;
 pub mod server;
@@ -76,7 +77,7 @@ pub fn run() {
             commands::gateway::anthropic_gateway_status,
             commands::server::server_activity,
             commands::server::server_status,
-            commands::benchmark::run_bench,
+            commands::benchmark::run_performance_bench,
             commands::benchmark::bench_cancel,
             commands::runtimes::rt_list,
             commands::runtimes::rt_latest,
@@ -123,7 +124,7 @@ pub fn run() {
                 }
                 if let Ok(pid) = state.bench_pid.lock() {
                     if let Some(pid) = *pid {
-                        bench::terminate_pid(pid);
+                        procutil::terminate_pid(pid);
                     }
                 }
                 if let Ok(mut server) = state.server.lock() {

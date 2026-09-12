@@ -275,22 +275,63 @@ export interface RuntimeCapabilities {
   supports_dflash?: boolean;
 }
 
-export interface BenchRow {
-  test: string;
-  size: string;
-  batch: string;
-  tps: number;
+export type BenchmarkContextProfile = "code_python" | "code_mixed" | "novel_ko" | "novel_en" | "novel_ja";
+
+/** A workload for an isolated local llama-server. It does not change saved tuning. */
+export interface PerformanceBenchmarkRequest {
+  run_id: string;
+  prompt_lengths: number[];
+  generation_length: number;
+  batch_sizes: number[];
+  repetitions: number;
+  context_profile: BenchmarkContextProfile;
+  warmup: boolean;
 }
 
-export interface BenchResult {
-  rows: BenchRow[];
+/** One trial. Rates are observed at the client, using server-reported token counts. */
+export interface PerformanceBenchmarkRow {
+  id: string;
+  prompt_tokens: number;
+  generation_length: number;
+  concurrency: number;
+  repetition: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  ttft_ms: number | null;
+  tpot_ms: number | null;
+  /** Aggregate prompt tokens / time until every request has emitted its first token. */
+  pp_tps: number | null;
+  /** Output tokens excluding each first token / observed batch decode interval. */
+  tg_tps: number | null;
+  e2e_ms: number;
+  /** Total output tokens / complete trial wall time (includes prefill). */
+  total_tps: number | null;
+  /** Sampled child-process resident RAM, not GPU VRAM. */
+  peak_memory_bytes: number | null;
+  timing_source: "server" | "client";
+  error?: string | null;
+}
+
+export interface PerformanceBenchmarkResult {
+  run_id: string;
+  rows: PerformanceBenchmarkRow[];
+  status: "complete" | "partial" | "cancelled" | "failed";
+  message?: string | null;
+  /** Effective server arguments with credentials removed. */
   args: string[];
-  /** Newer backends return a terminal state and any diagnostic. */
-  status?: "complete" | "partial" | "cancelled";
+  runtime_version: string;
+  context_size: number;
+  parallel: number;
+}
+
+export interface PerformanceBenchmarkProgress {
+  run_id: string;
+  phase: "loading" | "warmup" | "single" | "batch" | "cleanup";
+  completed: number;
+  total: number;
+  row?: PerformanceBenchmarkRow | null;
   message?: string | null;
 }
-
-export type BenchmarkRunState = "complete" | "partial" | "cancelled" | "crashed" | "failed" | "running";
 
 /** A saved server session is a primary model plus optional sidecars. */
 export interface SessionModels {
@@ -338,13 +379,6 @@ export interface SessionStatus {
 
 export interface SessionListResult {
   sessions: SessionStatus[];
-}
-
-/** One benchmark row, emitted as it is parsed from a running benchmark.
- * Final status and args come from `runBench`'s resolved `BenchResult`, not
- * from this stream. */
-export interface BenchmarkProgress {
-  row: BenchRow;
 }
 
 export type ServerState = "stopped" | "starting" | "running" | "stopping" | "failed" | "crashed";

@@ -1,0 +1,98 @@
+import type { Locale } from "../../shared/i18n/i18n";
+
+const en = {
+  title: "Benchmark", description: "Compare response speed across prompt lengths and concurrent requests.",
+  configuration: "Configuration", model: "Selected model", corpus: "Prompt content", promptLengths: "Input tokens", generation: "Output tokens", repetitions: "Repetitions", batchSizes: "Concurrent requests", warmup: "Warm up before measuring", warmupHint: "Prepare the model before collecting results.",
+  batchHint: "Every selected input length includes a single request as the comparison baseline.",
+  code_python: "Code · Python", code_mixed: "Code · Mixed", novel_ko: "Prose · Korean", novel_en: "Prose · English", novel_ja: "Prose · Japanese",
+  run: "Run benchmark", cancel: "Cancel benchmark", cancelling: "Cancelling…", stopServer: "Stop server", stopHint: "Stop the server before benchmarking. A dedicated server measures the selected model.", noModel: "Select a model from Models to get started.",
+  totalTests: "Measured tests", idle: "Ready to benchmark", starting: "Preparing model…", warming: "Warming up…", complete: "Completed", cancelled: "Cancelled", failed: "Failed", partial: "Partial results",
+  single: "Single requests", batch: "Concurrent requests", test: "Input / output", concurrency: "Requests", repeat: "Samples", ttft: "TTFT", tpot: "TPOT", pp: "Prefill (est.)", tg: "Generation", e2e: "Total time", throughput: "Total throughput", memory: "Peak process RAM", speedup: "Speedup", unavailable: "N/A",
+  empty: "Choose the test conditions and run a benchmark. Results appear here as each test finishes.",
+  history: "Result history", current: "Current run", exportCsv: "Export CSV", copy: "Copy results", copied: "Copied", metrics: "About these metrics",
+  metricsHint: "TTFT: average wait until the first token. TPOT: average time per generated token. Rates use client-observed timings. Repeated tests show means and generation standard deviation. Speedup uses a single request with the same input and output lengths and timing method.",
+  ppHint: "Estimated prefill rate: total input tokens divided by time until every request receives its first token. Includes queueing and transfer time.",
+  throughputHint: "Total throughput: generated output tokens divided by the full elapsed time, including input processing.",
+  memoryHint: "Sampled peak process RAM, not GPU VRAM. Unavailable measurements remain N/A.",
+  storageError: "The result could not be saved to history. It remains on this screen and can be exported as CSV.",
+  validation: "Select at least one input length. Output tokens must be 1–4,096 and repetitions 1–10.",
+  activeElsewhere: "Another benchmark is running. Wait for it to finish before starting a new run.",
+  details: "Run configuration", seconds: "s", milliseconds: "ms", tokens: "tok/s",
+  running: "Measuring…", cleanup: "Finishing benchmark…", measuringSingle: "Measuring single requests…", measuringBatch: "Measuring concurrent requests…",
+  exportAllCsv: "Export all history", contextSize: "Server context tokens", parallel: "Server request slots", runtimeVersion: "Runtime version", enabled: "Enabled", disabled: "Disabled",
+  effectiveArgs: "Effective llama-server arguments",
+} as const;
+
+type BenchmarkCopy = { [K in keyof typeof en]: string };
+
+const ko: BenchmarkCopy = {
+  title: "벤치마크", description: "입력 길이와 동시 요청 수에 따른 응답 속도를 비교합니다.",
+  configuration: "측정 설정", model: "선택한 모델", corpus: "입력 내용", promptLengths: "입력 토큰", generation: "출력 토큰", repetitions: "반복 횟수", batchSizes: "동시 요청 수", warmup: "측정 전 워밍업", warmupHint: "모델을 준비한 뒤 측정을 시작합니다.",
+  batchHint: "선택한 모든 입력 길이에서 단일 요청을 함께 측정해 비교 기준으로 사용합니다.",
+  code_python: "코드 · Python", code_mixed: "코드 · 혼합", novel_ko: "산문 · 한국어", novel_en: "산문 · 영어", novel_ja: "산문 · 일본어",
+  run: "벤치마크 실행", cancel: "벤치마크 취소", cancelling: "취소 중…", stopServer: "서버 중지", stopHint: "벤치마크를 실행하려면 서버를 중지하세요. 전용 서버로 선택한 모델을 측정합니다.", noModel: "모델 화면에서 측정할 모델을 선택하세요.",
+  totalTests: "측정 횟수", idle: "측정 준비 완료", starting: "모델 준비 중…", warming: "워밍업 중…", complete: "완료", cancelled: "취소됨", failed: "실패", partial: "부분 결과",
+  single: "단일 요청", batch: "동시 요청", test: "입력 / 출력", concurrency: "요청 수", repeat: "측정 수", ttft: "TTFT", tpot: "TPOT", pp: "입력 처리 (추정)", tg: "토큰 생성", e2e: "전체 시간", throughput: "전체 처리량", memory: "최대 프로세스 RAM", speedup: "성능 배율", unavailable: "측정 불가",
+  empty: "측정 조건을 선택하고 벤치마크를 실행하세요. 각 측정이 끝나면 결과가 표시됩니다.",
+  history: "결과 이력", current: "현재 실행", exportCsv: "CSV 내보내기", copy: "결과 복사", copied: "복사됨", metrics: "측정 지표 안내",
+  metricsHint: "TTFT는 첫 토큰까지의 평균 대기 시간, TPOT는 생성 토큰당 평균 시간입니다. 속도는 클라이언트 관측 시간으로 계산합니다. 반복 측정은 평균과 생성 속도 표준편차를 표시합니다. 성능 배율은 입력·출력 길이와 측정 방식이 같은 단일 요청을 기준으로 합니다.",
+  ppHint: "입력 처리 속도는 총 입력 토큰을 모든 요청의 첫 토큰이 도착할 때까지의 시간으로 나눈 추정값입니다. 대기와 전송 시간이 포함됩니다.",
+  throughputHint: "전체 처리량은 생성한 출력 토큰을 입력 처리를 포함한 전체 소요 시간으로 나눈 값입니다.",
+  memoryHint: "샘플링한 프로세스 최대 RAM이며 GPU VRAM이 아닙니다. 확인할 수 없는 값은 측정 불가로 표시합니다.",
+  storageError: "결과 이력에 저장하지 못했습니다. 현재 화면에서 결과를 확인하고 CSV로 내보낼 수 있습니다.",
+  validation: "입력 길이를 하나 이상 선택하세요. 출력 토큰은 1~4,096, 반복 횟수는 1~10이어야 합니다.",
+  activeElsewhere: "다른 벤치마크가 실행 중입니다. 완료 후 새 측정을 시작하세요.",
+  details: "실행 설정", seconds: "초", milliseconds: "ms", tokens: "tok/s",
+  running: "측정 중…", cleanup: "벤치마크 마무리 중…", measuringSingle: "단일 요청 측정 중…", measuringBatch: "동시 요청 측정 중…",
+  exportAllCsv: "전체 이력 내보내기", contextSize: "서버 컨텍스트 토큰", parallel: "서버 요청 슬롯", runtimeVersion: "런타임 버전", enabled: "사용", disabled: "사용 안 함",
+  effectiveArgs: "실제 llama-server 인자",
+};
+
+const ja: BenchmarkCopy = {
+  title: "ベンチマーク", description: "入力長と同時リクエスト数による応答速度を比較します。",
+  configuration: "測定設定", model: "選択中のモデル", corpus: "入力内容", promptLengths: "入力トークン", generation: "出力トークン", repetitions: "繰り返し回数", batchSizes: "同時リクエスト数", warmup: "測定前にウォームアップ", warmupHint: "モデルの準備後に測定を開始します。",
+  batchHint: "選択した各入力長で単一リクエストも測定し、比較の基準にします。",
+  code_python: "コード · Python", code_mixed: "コード · 混合", novel_ko: "散文 · 韓国語", novel_en: "散文 · 英語", novel_ja: "散文 · 日本語",
+  run: "ベンチマークを実行", cancel: "ベンチマークを中止", cancelling: "中止中…", stopServer: "サーバーを停止", stopHint: "測定前にサーバーを停止してください。専用サーバーで選択したモデルを測定します。", noModel: "モデル画面から測定するモデルを選択してください。",
+  totalTests: "測定回数", idle: "測定準備完了", starting: "モデル準備中…", warming: "ウォームアップ中…", complete: "完了", cancelled: "中止済み", failed: "失敗", partial: "部分的な結果",
+  single: "単一リクエスト", batch: "同時リクエスト", test: "入力 / 出力", concurrency: "リクエスト数", repeat: "測定数", ttft: "TTFT", tpot: "TPOT", pp: "入力処理（推定）", tg: "トークン生成", e2e: "合計時間", throughput: "総処理量", memory: "最大プロセスRAM", speedup: "速度倍率", unavailable: "測定不可",
+  empty: "条件を選択してベンチマークを実行してください。各測定が完了すると結果が表示されます。",
+  history: "結果履歴", current: "現在の実行", exportCsv: "CSVを書き出す", copy: "結果をコピー", copied: "コピー済み", metrics: "測定指標について",
+  metricsHint: "TTFTは最初のトークンまでの平均待機時間、TPOTは生成トークンあたりの平均時間です。速度はクライアントで観測した時間から計算します。繰り返し測定は平均と生成速度の標準偏差を表示します。速度倍率は同じ入出力長・測定方式の単一リクエストと比較します。",
+  ppHint: "入力処理速度の推定値：合計入力トークンを全リクエストの最初のトークンが到着するまでの時間で割ります。待機・転送時間も含みます。",
+  throughputHint: "総処理量は、生成した出力トークンを入力処理も含む合計時間で割った値です。",
+  memoryHint: "サンプリングしたプロセスの最大RAMです。GPU VRAMではありません。取得できない値は測定不可です。",
+  storageError: "結果を履歴に保存できませんでした。この画面で確認し、CSVに書き出せます。",
+  validation: "入力長を1つ以上選択してください。出力トークンは1〜4,096、繰り返しは1〜10です。",
+  activeElsewhere: "別のベンチマークが実行中です。完了後に開始してください。",
+  details: "実行設定", seconds: "秒", milliseconds: "ms", tokens: "tok/s",
+  running: "測定中…", cleanup: "ベンチマークを終了中…", measuringSingle: "単一リクエストを測定中…", measuringBatch: "同時リクエストを測定中…",
+  exportAllCsv: "すべての履歴を書き出す", contextSize: "サーバーのコンテキスト", parallel: "サーバーのリクエスト枠", runtimeVersion: "ランタイムバージョン", enabled: "有効", disabled: "無効",
+  effectiveArgs: "実際の llama-server 引数",
+};
+
+const zh: BenchmarkCopy = {
+  title: "基准测试", description: "比较不同输入长度和并发请求数下的响应速度。",
+  configuration: "测试配置", model: "已选模型", corpus: "输入内容", promptLengths: "输入令牌", generation: "输出令牌", repetitions: "重复次数", batchSizes: "并发请求数", warmup: "测量前预热", warmupHint: "准备模型后再开始测量。",
+  batchHint: "每个选定的输入长度都会测量单个请求，作为比较基准。",
+  code_python: "代码 · Python", code_mixed: "代码 · 混合", novel_ko: "散文 · 韩语", novel_en: "散文 · 英语", novel_ja: "散文 · 日语",
+  run: "运行基准测试", cancel: "取消基准测试", cancelling: "正在取消…", stopServer: "停止服务器", stopHint: "请先停止服务器，再运行基准测试。专用服务器将测量所选模型。", noModel: "请在模型页面选择要测试的模型。",
+  totalTests: "测量次数", idle: "准备就绪", starting: "正在准备模型…", warming: "正在预热…", complete: "已完成", cancelled: "已取消", failed: "失败", partial: "部分结果",
+  single: "单个请求", batch: "并发请求", test: "输入 / 输出", concurrency: "请求数", repeat: "测量数", ttft: "TTFT", tpot: "TPOT", pp: "输入处理（估算）", tg: "令牌生成", e2e: "总耗时", throughput: "总吞吐量", memory: "进程峰值 RAM", speedup: "加速比", unavailable: "不可测量",
+  empty: "选择条件并运行基准测试。每项测试完成后会显示结果。",
+  history: "结果历史", current: "当前运行", exportCsv: "导出 CSV", copy: "复制结果", copied: "已复制", metrics: "测量指标说明",
+  metricsHint: "TTFT 是首个令牌的平均等待时间，TPOT 是每个生成令牌的平均时间。速度使用客户端观测时间计算。重复测量显示平均值和生成速度标准差。加速比与相同输入输出长度和计时方式的单个请求比较。",
+  ppHint: "输入处理速度为估算值：总输入令牌除以所有请求收到首个令牌所需的时间，包含等待和传输时间。",
+  throughputHint: "总吞吐量为生成的输出令牌除以包括输入处理在内的总耗时。",
+  memoryHint: "采样得到的进程峰值 RAM，并非 GPU 显存。无法获取的数值显示为不可测量。",
+  storageError: "无法将结果保存到历史记录。您仍可在当前页面查看并导出 CSV。",
+  validation: "请至少选择一个输入长度。输出令牌范围为 1–4,096，重复次数为 1–10。",
+  activeElsewhere: "另一项基准测试正在运行。请等待完成后再开始。",
+  details: "运行配置", seconds: "秒", milliseconds: "ms", tokens: "tok/s",
+  running: "正在测量…", cleanup: "正在结束基准测试…", measuringSingle: "正在测量单个请求…", measuringBatch: "正在测量并发请求…",
+  exportAllCsv: "导出全部历史", contextSize: "服务器上下文令牌", parallel: "服务器请求槽位", runtimeVersion: "运行时版本", enabled: "启用", disabled: "禁用",
+  effectiveArgs: "实际 llama-server 参数",
+};
+
+const copies: Record<Locale, BenchmarkCopy> = { en, ko, ja, zh };
+export const benchmarkCopy = (locale: Locale): BenchmarkCopy => copies[locale];

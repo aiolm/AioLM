@@ -20,7 +20,7 @@
 .runtime-profiles-link { margin: 16px 0; color: var(--ui-muted); }
 .models-model-row { padding: 16px; border-bottom: 1px solid var(--ui-border); }
 .models-model-actions, .models-folder-actions { gap: 8px; }
-.models-status-line, .runtime-hidden-count, .bench-model-label { color: var(--ui-faint); font-size: 12px; }
+.models-status-line, .runtime-hidden-count { color: var(--ui-faint); font-size: 12px; }
 .developer-api-status { padding: 12px 16px; gap: 8px 12px; margin-bottom: 12px; background: var(--ui-surface-muted); border-radius: 8px; font-size: 13px; }
 .developer-api-status__title { font-weight: 600; }
 .developer-api-status__message { color: var(--ui-muted); }

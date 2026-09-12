@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { BENCHMARK_RECORD_SCHEMA, benchmarkCsv, benchmarkMetrics } from "../../src/features/bench/benchmarkRecords.ts";
 import { classifyLifecycleError, isLifecycleCancellation, isServerBusy, isServerRunning, lifecycleErrorMessage, nextPollDelay, shouldPoll } from "../../src/shared/lib/serverLifecycle.ts";
 import { configExport, parseConfigExport } from "../../src/shared/lib/exports.ts";
 import { deriveTokensPerSecond } from "../../src/shared/lib/metrics.ts";
@@ -45,13 +44,4 @@ for (const [raw, display] of [
 assert.equal(normalizeDisplayText("  ordinary text\nC:\\models\\a.gguf  "), "  ordinary text\nC:\\models\\a.gguf  ");
 const exported = configExport({ theme: "dark" });
 assert.deepEqual(parseConfigExport<typeof exported.preferences>(JSON.stringify(exported)), { theme: "dark" });
-const csv = benchmarkCsv([{
-  schemaVersion: BENCHMARK_RECORD_SCHEMA, id: "x", fingerprint: "f", createdAt: 0,
-  model: "m", backend: "b", build: "v", ctx: 1, ngl: 2, threads: 3, parallel: 1, iters: 2,
-  device: { fingerprint: "dev", os: "windows", arch: "x86_64", cpu: "CPU", cpuThreads: 8, gpu: "GPU", gpuVendor: "amd", gpuVramMb: 16384 },
-  rows: benchmarkMetrics([{ test: "tg", size: "1", batch: "2", tps: 3 }]),
-}]);
-assert.match(csv, /^createdAt,fingerprint,deviceFingerprint/);
-assert.match(csv, /"dev".*"GPU".*"tg".*"3","tok\/s"/);
-assert.doesNotMatch(csv, /undefined/);
 console.log("lifecycle utility tests passed");

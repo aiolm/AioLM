@@ -25,7 +25,6 @@ futures-util = "0.3"
 which = "6"
 zip = "2"
 pdf-extract = "0.12"
-csv = "1"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 rfd = "0.15"
