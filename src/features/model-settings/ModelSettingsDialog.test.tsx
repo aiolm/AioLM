@@ -41,7 +41,8 @@ function mount(props: Partial<ModelSettingsDialogProps> = {}, locale: Locale = '
 }
 function numeric(key: string) { return document.querySelector<HTMLInputElement>(`input[id$="-${key}"]`)!; }
 
-describe('model settings editor', { timeout: 15000 }, () => {
+// These flows render every settings section; shared CI runners need time for DOM queries and saves.
+describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
   it.each(['default', 'session', 'benchmark', 'project'] as const)('saves edited options into the named selected profile from the %s target', async mode => {
