@@ -15,22 +15,32 @@ import {
 const locales = ['en', 'ko', 'ja', 'zh'] as const;
 const numericFields = [...SERVER_FIELDS, ...MTP_FIELDS, ...REASONING_FIELDS, ...SAMPLING_FIELDS];
 
-function NumericAndRequestFields() {
+function NumericAndRequestFields({ numeric = numericFields, request = ADVANCED_SAMPLING_FIELDS }: {
+  numeric?: typeof numericFields; request?: typeof ADVANCED_SAMPLING_FIELDS;
+}) {
   const { t, setLocale } = useI18n();
   return <>
     <button onClick={() => setLocale('ko')}>한국어</button>
-    <NumericFieldGrid fields={numericFields} cfg={testConfig} drafts={{}} disabled={false} onChange={vi.fn()} onCommit={vi.fn()} />
-    {ADVANCED_SAMPLING_FIELDS.map(field => <TuningChatOptionField key={field.key} cfg={testConfig} field={field} t={t}
+    <NumericFieldGrid fields={numeric} cfg={testConfig} drafts={{}} disabled={false} onChange={vi.fn()} onCommit={vi.fn()} />
+    {request.map(field => <TuningChatOptionField key={field.key} cfg={testConfig} field={field} t={t}
       disabled={false} chatOptionDrafts={{}} setChatOptionDrafts={vi.fn()} chatOptionSelectModes={{}}
       setChatOptionSelectModes={vi.fn()} onCommit={vi.fn()} />)}
   </>;
 }
 
 describe('localized tuning explanations', () => {
-  it.each(locales)('shows each numeric and request explanation below its control in %s', locale => {
-    render(<I18nProvider initialLocale={locale}><NumericAndRequestFields /></I18nProvider>);
+  const groups = [
+    { group: 'server', numeric: SERVER_FIELDS, request: [] },
+    { group: 'draft', numeric: MTP_FIELDS, request: [] },
+    { group: 'reasoning', numeric: REASONING_FIELDS, request: [] },
+    { group: 'sampling', numeric: SAMPLING_FIELDS, request: [] },
+    { group: 'request', numeric: [], request: ADVANCED_SAMPLING_FIELDS },
+  ];
+  it.each(locales.flatMap(locale => groups.map(group => ({ ...group, locale }))))(
+    'shows each $group explanation below its control in $locale', ({ locale, numeric, request }) => {
+    render(<I18nProvider initialLocale={locale}><NumericAndRequestFields numeric={numeric} request={request} /></I18nProvider>);
     const t = (key: Parameters<typeof translate>[1]) => translate(locale, key);
-    for (const field of [...numericFields, ...ADVANCED_SAMPLING_FIELDS]) {
+    for (const field of [...numeric, ...request]) {
       const description = tuningFieldDescription(t, field);
       const help = screen.getByText(description);
       const control = within(help.parentElement!).getByRole('options' in field && field.options ? 'combobox' : 'spinbutton', { name: tuningFieldLabel(t, field) });
