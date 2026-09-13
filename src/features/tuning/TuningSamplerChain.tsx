@@ -1,6 +1,9 @@
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { useEffect, useState } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
+import { useTuningId } from './TuningIdScope';
+import { tuningHelp } from '../../shared/i18n/tuningHelp';
+import './tuning-sampler-chain.css';
 
 export const SAMPLER_CHAIN_OPTIONS = [
   "dry",
@@ -58,7 +61,9 @@ export default function TuningSamplerChain({
   onReorder,
   onSamplersChange,
 }: TuningSamplerChainProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const help = tuningHelp[locale];
+  const id = useTuningId();
   const source = value ?? samplers ?? EMPTY_SAMPLER_CHAIN;
   const [draft, setDraft] = useState<string[]>(() => normalizeSamplerChain(source));
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -79,14 +84,14 @@ export default function TuningSamplerChain({
 
   const move = (index: number, direction: -1 | 1) => {
     const target = index + direction;
-    if (target < 0 || target >= draft.length) return;
+    if (disabled || target < 0 || target >= draft.length) return;
     const next = [...draft];
     [next[index], next[target]] = [next[target], next[index]];
     publish(next);
   };
 
   const drop = (targetIndex: number) => {
-    if (draggedIndex === null || draggedIndex === targetIndex) return;
+    if (disabled || draggedIndex === null || draggedIndex === targetIndex) return;
     const next = [...draft];
     const [item] = next.splice(draggedIndex, 1);
     next.splice(targetIndex, 0, item);
@@ -101,15 +106,14 @@ export default function TuningSamplerChain({
       <div className="tuning-sampler-chain__header">
         <div>
           <h3 className="tuning-sampler-chain__title">{t("extra.samplerChainTitle")}</h3>
-          <p className="tuning-sampler-chain__hint">{t("extra.samplerChainHint")}</p>
         </div>
         <span className="tuning-sampler-chain__count">{t("extra.samplerChainCount", { count: draft.length })}</span>
       </div>
 
       {draft.length > 0 ? (
-        <div className="tuning-sampler-chain__list" role="list" aria-label="Sampler chain">
+        <ol className="tuning-sampler-chain__list" role="list" aria-label={t("extra.samplerChainTitle")} aria-describedby={`${id}-sampler-chain-hint`}>
           {draft.map((sampler, index) => (
-            <div
+            <li
               key={sampler}
               role="listitem"
               aria-label={sampler}
@@ -123,22 +127,23 @@ export default function TuningSamplerChain({
               data-testid={`sampler-chip-${sampler}`}
             >
               <span className="tuning-sampler-chip__grip" aria-hidden="true">⋮⋮</span>
+              <span className="tuning-sampler-chip__number" aria-hidden="true">{index + 1}</span>
               <span className="tuning-sampler-chip__name">{sampler}</span>
               <span className="tuning-sampler-chip__actions">
-                <button type="button" onClick={() => move(index, -1)} disabled={disabled || index === 0} aria-label={`Move ${sampler} earlier`}>←</button>
-                <button type="button" onClick={() => move(index, 1)} disabled={disabled || index === draft.length - 1} aria-label={`Move ${sampler} later`}>→</button>
-                <button type="button" onClick={() => publish(draft.filter((_, itemIndex) => itemIndex !== index))} disabled={disabled} aria-label={`Remove ${sampler}`}>×</button>
+                <button type="button" onClick={() => move(index, -1)} disabled={disabled || index === 0} aria-label={help.moveSamplerEarlier.replace('{name}', sampler)}>←</button>
+                <button type="button" onClick={() => move(index, 1)} disabled={disabled || index === draft.length - 1} aria-label={help.moveSamplerLater.replace('{name}', sampler)}>→</button>
+                <button type="button" className="tuning-sampler-chip__remove" onClick={() => publish(draft.filter((_, itemIndex) => itemIndex !== index))} disabled={disabled} aria-label={help.removeSampler.replace('{name}', sampler)}>×</button>
               </span>
-            </div>
+            </li>
           ))}
-        </div>
+        </ol>
       ) : (
         <p className="tuning-sampler-chain__empty" role="status">{t("extra.samplerChainEmpty")}</p>
       )}
 
       <div className="tuning-sampler-chain__add">
-        <label htmlFor="tuning-sampler-add" className="sr-only">{t("extra.samplerChainAdd")}</label>
-        <CustomSelect id="tuning-sampler-add" value={selectedToAdd} onChange={setSelectedToAdd} disabled={disabled || availableOptions.length === 0} className="tuning-sampler-chain__select" ariaLabel={t("extra.samplerChainAdd")} options={[{ value: "", label: t("extra.samplerChainAddPlaceholder") }, ...availableOptions.map(option => ({ value: option, label: option }))]} />
+        <label htmlFor={`${id}-sampler-add`} className="sr-only">{t("extra.samplerChainAdd")}</label>
+        <CustomSelect id={`${id}-sampler-add`} ariaDescribedBy={`${id}-sampler-chain-hint`} value={selectedToAdd} onChange={setSelectedToAdd} disabled={disabled || availableOptions.length === 0} className="tuning-sampler-chain__select" ariaLabel={t("extra.samplerChainAdd")} options={[{ value: "", label: t("extra.samplerChainAddPlaceholder") }, ...availableOptions.map(option => ({ value: option, label: option }))]} />
         <button
           type="button"
           className="app-button app-button--secondary app-button--sm"
@@ -152,6 +157,7 @@ export default function TuningSamplerChain({
           {t("extra.samplerChainAdd")}
         </button>
       </div>
+      <p id={`${id}-sampler-chain-hint`} className="tuning-sampler-chain__hint">{help.samplerChain}</p>
     </div>
   );
 }

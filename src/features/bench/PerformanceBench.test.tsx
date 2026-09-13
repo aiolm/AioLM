@@ -8,6 +8,8 @@ import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
 import { PERFORMANCE_HISTORY_KEY, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import * as performanceRecords from "./performanceRecords";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
+import { testConfig } from '../../testing/appStore';
+import { materializeProfileApplication, MODEL_PROFILE_KEYS, profileSettingsSnapshot, profileTargetKey, type SettingsProfile } from '../../shared/config/settingsProfiles';
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -30,6 +32,16 @@ function result(runId: string, rows: api.PerformanceBenchmarkRow[] = [], status:
 }
 function renderPanel(selectedStore = store) {
   return render(<I18nProvider initialLocale="en"><BenchPanel store={selectedStore} /></I18nProvider>);
+}
+
+function assignedConfig(overrides: Partial<api.AppConfig> = {}, id = 'profile-benchmark') {
+  const value = { ...structuredClone(testConfig), runtime_defaults: [], ...overrides };
+  const profile: SettingsProfile = { id, name: id, scope: 'global', legacy: true, coverage: [...MODEL_PROFILE_KEYS], revision: 1,
+    settings: profileSettingsSnapshot(value), system_prompt: 'Saved profile prompt' };
+  const application = materializeProfileApplication(value, profile.system_prompt!, profile);
+  value.settings_profiles = { version: 1, revision: 1, entries: [profile], default_profile_id: id, legacy_imported: true,
+    applied: { [profileTargetKey(value.active_model)]: application } };
+  return { config: value, application, profile };
 }
 
 beforeEach(() => {
@@ -55,8 +67,9 @@ describe("Performance benchmark workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Choose model:/ }));
     const request = vi.mocked(settings.open).mock.calls[0][0];
     expect(request.target.kind).toBe("benchmark");
-    const target = { ...cfg, active_model: "models/benchmark.gguf", ctx_size: 8192, temperature: 0.2, server_args: ["--threads", "4"] };
-    await act(async () => { await request.onApply?.(target); });
+    const { config: target, application } = assignedConfig({ active_model: "models/benchmark.gguf", ctx_size: 8192, temperature: 0.2, server_args: ["--no-mmap"] });
+    store.cfg = { ...store.cfg!, settings_profiles: target.settings_profiles };
+    await act(async () => { await request.onApply?.(target, application); });
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.stop).not.toHaveBeenCalled();
     expect(store.cfg?.active_model).toBe(cfg.active_model);
@@ -66,17 +79,94 @@ describe("Performance benchmark workflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
     const [runConfig, runRequest] = mocked.runPerformanceBench.mock.calls[0];
-    expect(runConfig).toMatchObject({ active_model: target.active_model, ctx_size: 8192, server_args: ["--threads", "4"] });
-    target.server_args.push("--no-mmap");
-    rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, cfg: { ...cfg, active_model: "models/another.gguf" } }} /></I18nProvider>);
+    expect(runConfig).toMatchObject({ active_model: target.active_model, ctx_size: 8192, server_args: ["--no-mmap"] });
+    expect(runConfig.settings_profiles?.applied[profileTargetKey(target.active_model)]).toMatchObject({ profile_id: application.profile_id });
+    target.server_args.push("--no-mlock");
+    rerender(<I18nProvider initialLocale="en"><BenchPanel store={{ ...store, cfg: { ...store.cfg!, active_model: "models/another.gguf" } }} /></I18nProvider>);
     expect(screen.getByTitle("models/benchmark.gguf")).toBeVisible();
     expect(screen.getByRole("button", { name: /^Choose model:/ })).toBeDisabled();
-    expect(runConfig.server_args).toEqual(["--threads", "4"]);
+    expect(runConfig.server_args).toEqual(["--no-mmap"]);
     await act(async () => finish(result(runRequest.run_id, [row()])));
     const record = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0];
     expect(record.model).toBe("models/benchmark.gguf");
     expect(screen.getByTitle("models/benchmark.gguf")).toBeVisible();
     expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('reopens and runs the selected profile at its latest saved revision without changing workload controls', async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const original = assignedConfig({ ngl: 4, ctx_size: 8192, temperature: 0.2 });
+    store.cfg = original.config;
+    let current = original.config;
+    store.getConfig = () => current;
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose model:/ }));
+    const request = vi.mocked(settings.open).mock.calls[0][0];
+    expect(request.application).toMatchObject({ profile_id: original.profile.id, profile_revision: 1 });
+    await act(async () => { await request.onApply?.(original.config, original.application); });
+    const revised = { ...original.profile, revision: 2, settings: { ...original.profile.settings, ngl: 12, ctx_size: 32768, temperature: 1.2 }, system_prompt: 'Updated saved prompt' };
+    current = { ...original.config, settings_profiles: { ...original.config.settings_profiles!, revision: 2, entries: [revised] } };
+    fireEvent.click(screen.getByRole('button', { name: /^Choose model:/ }));
+    const reopened = vi.mocked(settings.open).mock.calls[1][0];
+    expect(reopened.application).toMatchObject({ profile_id: original.profile.id, profile_revision: 2, system_prompt: 'Updated saved prompt' });
+    expect(reopened.config).toMatchObject({ ngl: 12, ctx_size: 8192, temperature: 0.2 });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
+    const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
+    expect(runConfig).toMatchObject({ ngl: 12, ctx_size: 8192, temperature: 0.2 });
+    expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: revised.id, profile_revision: 2 });
+    expect(runConfig.settings_profiles?.entries[0]).toEqual(revised);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('uses the designated default when the benchmark profile was deleted before a run', async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const original = assignedConfig({ ngl: 4, ctx_size: 8192, temperature: 0.2 });
+    store.cfg = original.config;
+    let current = original.config;
+    store.getConfig = () => current;
+    renderPanel();
+    const fallback = assignedConfig({ active_model: original.config.active_model, ngl: 16, ctx_size: 16384, temperature: 0.7 }, 'profile-fallback');
+    current = fallback.config;
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run benchmark' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
+    const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
+    expect(runConfig).toMatchObject({ active_model: original.config.active_model, ngl: 16, ctx_size: 8192, temperature: 0.2 });
+    expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: 'profile-fallback' });
+    expect(runConfig.settings_profiles?.entries.map(profile => profile.id)).toEqual(['profile-fallback']);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('imports the default execution profile identity along with its model settings', async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const original = assignedConfig({ active_model: 'models/default.gguf', ngl: 3 }, 'profile-default-execution');
+    const alternate = assignedConfig({ active_model: 'models/benchmark.gguf', ngl: 9 }, 'profile-alternate');
+    original.config.settings_profiles!.entries.push(alternate.profile);
+    store.cfg = original.config;
+    store.getConfig = () => original.config;
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose model:/ }));
+    const target = { ...alternate.config, settings_profiles: original.config.settings_profiles };
+    await act(async () => { await vi.mocked(settings.open).mock.calls[0][0].onApply?.(target, alternate.application); });
+    fireEvent.click(screen.getByRole('button', { name: 'Use default execution settings' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose model:/ }));
+    const reopened = vi.mocked(settings.open).mock.calls[1][0];
+    expect(reopened.application).toMatchObject({ model: 'models/default.gguf', profile_id: original.profile.id, profile_revision: 1 });
+    expect(reopened.config).toMatchObject({ active_model: 'models/default.gguf', ngl: 3 });
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a default import that resolves to the same selected profile and values', async () => {
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const original = assignedConfig({ ngl: 4 });
+    const revised = { ...original.profile, revision: 2, settings: { ...original.profile.settings, ngl: 12 } };
+    store.cfg = { ...original.config, settings_profiles: { ...original.config.settings_profiles!, entries: [revised] } };
+    renderPanel();
+    expect(screen.queryByRole('button', { name: 'Use default execution settings' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose model:/ }));
+    expect(vi.mocked(settings.open).mock.calls[0][0].config).toMatchObject({ ngl: 12 });
   });
 
   it("blocks measuring while a named session is running", async () => {
@@ -102,7 +192,7 @@ describe("Performance benchmark workflow", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "4×" }));
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     await waitFor(() => expect(mocked.runPerformanceBench).toHaveBeenCalledOnce());
-    expect(mocked.runPerformanceBench.mock.calls[0][0]).toEqual(cfg);
+    expect(mocked.runPerformanceBench.mock.calls[0][0]).toMatchObject(cfg);
     expect(mocked.runPerformanceBench.mock.calls[0][1]).toMatchObject({ prompt_lengths: [4096, 16384], generation_length: 128, batch_sizes: [], repetitions: 1, context_profile: "code_python", warmup: true });
     await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
     expect(JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]")[0].result.status).toBe("complete");
@@ -186,6 +276,47 @@ describe("Performance benchmark workflow", () => {
     expect(getTaskSnapshot().find((task) => task.id === "performance-benchmark-active")?.state).toBe("completed");
   });
 
+  it("offers one file export and no redundant history selector for the only current result", async () => {
+    const csv = vi.spyOn(performanceRecords, "performanceCsv");
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = vi.fn(() => "blob:benchmark");
+      static revokeObjectURL = vi.fn();
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const exportButton = await screen.findByRole("button", { name: "Export CSV" });
+    expect(screen.queryByRole("button", { name: "Export all history" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Result history" })).not.toBeInTheDocument();
+    fireEvent.click(exportButton);
+    const saved = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]");
+    expect(saved).toHaveLength(1);
+    expect(csv).toHaveBeenCalledWith(saved);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:benchmark");
+  });
+
+  it("keeps current and history exports separate when the new result could not be saved", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    await screen.findByRole("button", { name: "Export CSV" });
+    const prior = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? "[]");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError"); });
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    await screen.findByText("The result could not be saved to history. It remains on this screen and can be exported as CSV.");
+    const csv = vi.spyOn(performanceRecords, "performanceCsv");
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = vi.fn(() => "blob:benchmark");
+      static revokeObjectURL = vi.fn();
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+    expect(csv.mock.calls[0][0]).toHaveLength(1);
+    expect(csv.mock.calls[0][0][0].id).not.toBe(prior[0].id);
+    fireEvent.click(screen.getByRole("button", { name: "Export all history" }));
+    expect(csv.mock.calls[1][0]).toEqual(prior);
+    expect(within(screen.getByRole("combobox", { name: "Result history" })).getAllByRole("option")).toHaveLength(2);
+  });
+
   it("loads saved results, shows matching speedups, and copies raw trials", async () => {
     const request: api.PerformanceBenchmarkRequest = { run_id: "saved", prompt_lengths: [4096], generation_length: 128, batch_sizes: [2], repetitions: 1, context_profile: "novel_ko", warmup: true };
     const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: "saved", createdAt: 1, model: cfg.active_model, backend: "cpu", build: "b1", request, result: result("saved", [row(), row({ id: "batch", concurrency: 2, completion_tokens: 256, tg_tps: 180 })]) };
@@ -193,7 +324,10 @@ describe("Performance benchmark workflow", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     renderPanel();
+    expect(screen.getByRole("button", { name: "Export all history" })).toBeEnabled();
     fireEvent.change(screen.getByRole("combobox", { name: "Result history" }), { target: { value: "saved" } });
+    expect(screen.getByRole("button", { name: "Export CSV" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Export all history" })).not.toBeInTheDocument();
     expect(screen.getByText("1.80×")).toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: "Single requests" })).getByText("N/A")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Copy results" }));
@@ -227,6 +361,7 @@ describe("Performance benchmark workflow", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Current benchmark failed to start");
+    expect(within(screen.getByRole("combobox", { name: "Result history" })).getAllByRole("option")).toHaveLength(2);
     fireEvent.change(screen.getByRole("combobox", { name: "Result history" }), { target: { value: "previous" } });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("Current benchmark failed to start")).not.toBeInTheDocument();

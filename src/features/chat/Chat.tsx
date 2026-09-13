@@ -20,6 +20,7 @@ import ChatComposer from "./ChatComposer";
 import { SESSION_STATUS_CHANGED_EVENT, notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus } from "../../shared/runtime/sessionUtils";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
+import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { titleFromMessage } from "./chatHistory";
 
@@ -120,7 +121,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     : null;
 
   const {
-    setError, error, contextWarning, contextSources, aborting, pendingToolCall, metrics, streamingDraft,
+    setError, error, contextWarning, contextSources, aborting, pendingToolCall, streamingDraft,
     failedRef, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   } = useChatSend({
     store, effectiveConfig, sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
@@ -151,7 +152,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     try {
       const definition = latest.sessions?.find((item) => item.id === selectedSessionId) ?? selectedDefinition;
       if (!definition) throw new Error("Save this session's model settings before starting it.");
-      await api.sessionStart(selectedSessionId, sessionConfig(latest, definition), latest.stop_existing_sessions_on_load ?? true);
+      const prepared = await prepareSessionProfile(store, definition);
+      await api.sessionStart(selectedSessionId, prepared, prepared.stop_existing_sessions_on_load ?? true);
       notifySessionStatusChanged();
       await store.refreshStatus();
     } catch (caught) {
@@ -257,7 +259,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         ]}
         selectedSessionId={selectedSessionId}
         onSelectSession={(id) => { if (requireIdle()) setSelectedSessionId(id); }}
-        onOpenModelSettings={modelSettings || onOpenModels ? openModelSettings : undefined}
+        onOpenModelSettings={(!disabled || msgs.length > 0) && (modelSettings || onOpenModels) ? openModelSettings : undefined}
         modelSettingsLabel={modelSettingsCopy[locale].title}
         ct={ct}
       />
@@ -333,7 +335,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             model={model}
             displayModel={displayModel}
             msgsLength={msgs.length}
-            metrics={metrics}
             ct={ct}
           />
         </div>

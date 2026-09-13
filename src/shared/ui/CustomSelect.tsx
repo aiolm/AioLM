@@ -75,6 +75,25 @@ export function CustomSelect<T extends string | number = string>({
   const [highlightedIndex, setHighlightedIndex] = useState(selectedIndex);
   const typeaheadRef = useRef<{ query: string; timer: ReturnType<typeof setTimeout> | null }>({ query: "", timer: null });
 
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const labels = Array.from(trigger.labels ?? []);
+    const focusFromLabel = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node) || trigger.contains(target)) return;
+      const element = target instanceof Element ? target : target.parentElement;
+      if (element?.closest("button, input, select, textarea, a[href], summary, [contenteditable='true']")) return;
+
+      // Labels retain their accessible name and focus behavior without forwarding
+      // a second activation to the dropdown button.
+      event.preventDefault();
+      if (!trigger.disabled) trigger.focus();
+    };
+    labels.forEach((label) => label.addEventListener("click", focusFromLabel));
+    return () => labels.forEach((label) => label.removeEventListener("click", focusFromLabel));
+  });
+
   const updateMenuPosition = useCallback(() => {
     const trigger = triggerRef.current;
     if (!trigger) return;

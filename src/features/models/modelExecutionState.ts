@@ -1,6 +1,6 @@
 import type { AppConfig } from '../../shared/api/types';
-import { defaultServerProfile, defaultModelProfile, serverProfilePatch, modelProfilePatch, activeProfilesPatch } from '../profiles/modelProfiles';
 import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
+import { profileSettingsSnapshot, profileTargetKey } from '../../shared/config/settingsProfiles';
 
 export const MODEL_EXECUTION_KEY = 'aiolm-model-execution';
 type Snapshot = Partial<AppConfig>;
@@ -9,10 +9,7 @@ const identity = (path: string) => normalizeDisplayPath(path).replace(/\\/g, '/'
 
 /** Capture execution fields only; never copy app preferences, ports, keys or sessions. */
 export function executionSnapshot(cfg: AppConfig): Snapshot {
-  return structuredClone({
-    ...serverProfilePatch(defaultServerProfile(cfg)), ...modelProfilePatch(defaultModelProfile(cfg)),
-    runtime_defaults: cfg.runtime_defaults ?? [], lora_adapters: cfg.lora_adapters ?? [],
-  });
+  return structuredClone({ ...profileSettingsSnapshot(cfg), runtime_defaults: cfg.runtime_defaults ?? [], lora_adapters: cfg.lora_adapters ?? [] });
 }
 
 function read(): Saved {
@@ -31,17 +28,17 @@ export function rememberExecution(cfg: AppConfig) {
 }
 
 export function restoreExecution(cfg: AppConfig, path: string): Partial<AppConfig> {
-  const saved = read().models[identity(path)];
+  if (identity(cfg.active_model) === identity(path)) return { ...executionSnapshot(cfg), active_model: path };
+  const application = cfg.settings_profiles?.applied[profileTargetKey(path)];
+  const persisted = application && identity(application.model) === identity(path) ? application.settings : undefined;
+  const saved = persisted ?? read().models[identity(path)];
   // Re-capture through the allowlist even when local storage was manually edited.
-  return { ...(saved ? executionSnapshot({ ...cfg, ...saved }) : activeProfilesPatch(cfg, path)), active_model: path };
+  return { ...executionSnapshot({ ...cfg, mmproj: '', spec_draft_model: '', spec_type: 'none', lora_adapters: [], ...saved }), active_model: path };
 }
 
 /** Preview a new model without inheriting unrelated model-specific sidecars. */
 export function previewExecution(cfg: AppConfig, path: string): Partial<AppConfig> {
-  if (path === cfg.active_model) return executionSnapshot(cfg);
-  const remembered = read().models[identity(path)];
-  const restored = restoreExecution(cfg, path);
-  return remembered ? restored : { ...restored, active_model: path, mmproj: '', spec_draft_model: '', spec_type: 'none', lora_adapters: [] };
+  return restoreExecution(cfg, path);
 }
 
 export function forgetExecution(path: string) {

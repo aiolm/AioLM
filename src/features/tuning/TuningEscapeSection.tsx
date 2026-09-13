@@ -30,10 +30,10 @@ export default function TuningEscapeSection({
       <div className="grid gap-5 app-form-grid">
         <div className="min-w-0">
           <label htmlFor="tuning-server-args" className="text-sm font-medium text-ink">{t("ui.serverArgsLabel")}</label>
-          <p className="app-section-hint mb-2">{t("ui.serverArgsHint")}</p>
           <textarea
             id="tuning-server-args"
             aria-label={t("ui.serverArgsLabel")}
+            aria-describedby="tuning-server-args-hint"
             value={normalizeDisplayPathLines(serverArgsDraft)}
             onChange={(event) => onServerArgsChange(event.target.value)}
             disabled={disabled}
@@ -42,6 +42,7 @@ export default function TuningEscapeSection({
             className="app-textarea min-h-48 font-mono text-xs"
             placeholder={'--min-p\n0.05\n--chat-template\nqwen'}
           />
+          <p id="tuning-server-args-hint" className="app-section-hint">{t("ui.serverArgsHint")}</p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -56,10 +57,10 @@ export default function TuningEscapeSection({
         </div>
         <div className="min-w-0">
           <label htmlFor="tuning-chat-options" className="text-sm font-medium text-ink">{t("ui.chatOptionsLabel")}</label>
-          <p className="app-section-hint mb-2">{t("ui.chatOptionsHint")}</p>
           <textarea
             id="tuning-chat-options"
             aria-label={t("ui.chatOptionsLabel")}
+            aria-describedby="tuning-chat-options-hint"
             value={chatOptionsDraft}
             onChange={(event) => onChatOptionsChange(event.target.value)}
             disabled={disabled}
@@ -68,6 +69,7 @@ export default function TuningEscapeSection({
             className="app-textarea min-h-48 font-mono text-xs"
             placeholder={'{\n  "dry_sequence_breakers": ["\\n", ":"],\n  "samplers": ["dry", "top_k", "top_p", "temperature"]\n}'}
           />
+          <p id="tuning-chat-options-hint" className="app-section-hint">{t("ui.chatOptionsHint")}</p>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <button
               type="button"

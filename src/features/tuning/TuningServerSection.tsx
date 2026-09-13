@@ -1,13 +1,14 @@
 import type { AppConfig } from "../../shared/api/types";
-import Tooltip from "../../shared/ui/Tooltip";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
 import TuningOptionMetadata from './TuningOptionMetadata';
-import { SERVER_FIELDS, SERVER_TEXT_FIELDS, tuningFieldHint, tuningFieldLabel, tuningFieldTooltip, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
+import { SERVER_FIELDS, SERVER_TEXT_FIELDS, tuningFieldDescription, tuningFieldLabel, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import TuningSpeculativeSection from "./TuningSpeculativeSection";
 import { useTuningId } from './TuningIdScope';
+import { useI18n } from '../../shared/i18n/i18n';
+import { tuningHelp } from '../../shared/i18n/tuningHelp';
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -41,8 +42,7 @@ export default function TuningServerSection({
   showSpeculative = true, showCacheTypes = true,
 }: Props) {
   const id = useTuningId();
-  const projectorField = SERVER_TEXT_FIELDS.find((field) => field.key === "mmproj");
-  const projectorTooltip = projectorField ? tuningFieldTooltip(t as never, projectorField) : undefined;
+  const { locale } = useI18n();
   const cacheKeyField = SERVER_TEXT_FIELDS.find((field) => field.key === "cache_type_k");
   const cacheValueField = SERVER_TEXT_FIELDS.find((field) => field.key === "cache_type_v");
   const cacheFields = [cacheKeyField, cacheValueField].filter((field): field is NonNullable<typeof field> => Boolean(field));
@@ -53,12 +53,12 @@ export default function TuningServerSection({
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <label htmlFor={`${id}-flash-attn`} className="text-sm text-ink">{t("ui.flashAttention")}</label>
-            <Tooltip content={{ title: t("ui.flashAttention") as string, description: t("ui.flashAttentionHint") as string }} label={`Help for ${t("ui.flashAttention")}`} id={`${id}-flash-attn-help`} />
           </div>
           <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
         </div>
         <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}><CustomSelect
           id={`${id}-flash-attn`}
+          ariaDescribedBy={`${id}-flash-attn-hint`}
           value={cfg.flash_attn === "on" || cfg.flash_attn === "off" ? cfg.flash_attn : "auto"}
           options={[
             { value: "auto", label: "auto" },
@@ -68,8 +68,7 @@ export default function TuningServerSection({
           onChange={updateFlash}
           disabled={disabled}
           className="w-full"
-        /></TuningDefaultField>
-        <span className="text-xs text-muted">{t("ui.flashAttentionHint")}</span>
+        /><span id={`${id}-flash-attn-hint`} className="text-xs text-muted">{tuningHelp[locale].flashAttention}</span></TuningDefaultField>
       </div>}
 
       {showCacheTypes && showAdvanced && cacheFields.length > 0 && (
@@ -78,16 +77,15 @@ export default function TuningServerSection({
             const inputId = `${id}-${field.key}`;
             const value = serverTextValue(field.key);
             const label = tuningFieldLabel(t as never, field);
-            const hint = tuningFieldHint(t as never, field);
-            const tooltip = tuningFieldTooltip(t as never, field);
+            const description = tuningFieldDescription(t, field);
             return (
               <div key={field.key} className="flex min-w-0 flex-col gap-1.5">
                 <div className="flex min-w-0 items-center gap-1.5">
                   <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
-                  <Tooltip content={tooltip} label={`Help for ${label}`} id={`${inputId}-help`} />
                 </div>
                 <TuningDefaultField fieldKey={field.key} label={label}><CustomSelect
                   id={inputId}
+                  ariaDescribedBy={`${inputId}-hint`}
                   value={field.options?.includes(value) ? value : (field.options?.[0] ?? value)}
                   options={(field.options ?? []).map((option) => ({ value: option, label: option }))}
                   onChange={(next) => {
@@ -96,8 +94,7 @@ export default function TuningServerSection({
                   }}
                   disabled={disabled}
                   className="w-full"
-                /></TuningDefaultField>
-                <span className="text-xs text-muted">{hint}</span>
+                /><span id={`${inputId}-hint`} className="text-xs text-muted">{description}</span></TuningDefaultField>
               </div>
             );
           })}
@@ -110,12 +107,12 @@ export default function TuningServerSection({
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-1.5">
                 <label htmlFor={`${id}-mmproj`} className="text-sm text-ink">{t("ui.mmprojLabel")}</label>
-                {projectorTooltip && <Tooltip content={projectorTooltip} label={`Help for ${t("ui.mmprojLabel")}`} id={`${id}-mmproj-help`} />}
               </div>
               <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
             </div>
             <input
               id={`${id}-mmproj`}
+              aria-describedby={`${id}-mmproj-hint`}
               value={serverTextValue("mmproj")}
               onChange={(event) => onServerTextChange("mmproj", event.target.value)}
               onBlur={(event) => commitServerText("mmproj", event.currentTarget.value)}
@@ -124,7 +121,7 @@ export default function TuningServerSection({
               placeholder={t("ui.mmprojPlaceholder")}
               className="app-input mt-1"
             />
-            <span className="text-xs text-muted">{t("ui.mmprojHint")}</span>
+            <span id={`${id}-mmproj-hint`} className="text-xs text-muted">{tuningHelp[locale].projector}</span>
             <TuningOptionMetadata fieldKey="mmproj" />
           </div>}
 

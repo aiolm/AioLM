@@ -1,6 +1,6 @@
 [package]
 name = "aiolm"
-version = "0.1.8"
+version = "0.1.9"
 default-run = "aiolm"
 description = "AioLM: Tauri desktop GUI for llama.cpp"
 authors = ["aiolm contributors"]

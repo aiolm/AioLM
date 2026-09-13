@@ -1,5 +1,6 @@
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { useMemo } from 'react';
 import type { AppStore } from "../../shared/state/store";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
@@ -50,14 +51,16 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
       />
       <PanelFeedback>
         {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
-        {rt.loadError && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-error-line bg-error-soft/50 px-3.5 py-2.5 text-sm text-error" role="alert"><span className="min-w-0 flex-1 break-words">{t("ui.runtimeLookupFailed")}: {normalizeDisplayText(rt.loadError)}</span><button type="button" onClick={() => void rt.refresh()} className="app-button app-button--danger app-button--sm">{t("panel.retry")}</button></div>}
+        {rt.loadError && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-error-line bg-error-soft/50 px-3.5 py-2.5 text-sm text-error" role="alert"><span className="min-w-0 flex-1 break-words">{t("ui.runtimeLookupFailed")}: {normalizeDisplayText(rt.loadError)}</span></div>}
       </PanelFeedback>
 
       <div className="runtime-refresh-row mb-3 flex flex-wrap items-center justify-between gap-2">
         <PanelFeedback>
           {rt.flash && <div className="w-full break-words rounded-lg border border-accent-line bg-accent-soft/50 px-3.5 py-2.5 text-sm text-accent" role="status" aria-live="polite">{normalizeDisplayText(rt.flash)}</div>}
         </PanelFeedback>
-        <button type="button" onClick={() => void rt.refresh(true)} disabled={rt.runtimeBusy} className="app-button app-button--secondary app-button--sm shrink-0">{t("ui.refreshRemote")}</button>
+        {rt.bundleBusy
+          ? <LocalTaskCancelButton taskId="runtime-operation" pending={rt.cancelBusy} onClick={() => void rt.cancelInstall()} disabled={rt.cancelBusy} className="app-button app-button--danger app-button--sm shrink-0"><StableLabel value={rt.cancelBusy ? t("ui.cancelling") : t("ui.cancelRuntimeBundle")} labels={[t("ui.cancelling"), t("ui.cancelRuntimeBundle")]} /></LocalTaskCancelButton>
+          : <button type="button" onClick={() => void rt.refresh(true)} disabled={rt.runtimeBusy} className="app-button app-button--secondary app-button--sm shrink-0">{rt.loadError ? t("panel.retry") : t("ui.refreshRemote")}</button>}
       </div>
 
       <RuntimeBackendList
@@ -78,7 +81,6 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
         onUninstall={(backend, build) => void rt.uninstall(backend, build)}
       />
 
-      {managedRuntime && <div className="my-3 flex justify-end"><button type="button" onClick={() => void rt.probe()} disabled={rt.probeBusy || rt.runtimeBusy || rt.serverRunning} className="app-button app-button--secondary app-button--sm"><StableLabel value={rt.probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button></div>}
       {!managementOnly && store.cfg && (
         <TuningOptionsContext.Provider value={{ options: runtimeOptions.length ? runtimeOptions : SERVER_OPTIONS, verified: runtimeOptions.length > 0 }}>
         <RuntimeGpuAssignment
@@ -100,6 +102,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
             t={t}
             capabilities={rt.capabilities}
             probeBusy={rt.probeBusy}
+            runtimeBusy={rt.runtimeBusy}
             serverRunning={rt.serverRunning}
             activeBackend={rt.activeBackend}
             activeBuild={rt.activeBuild}
@@ -117,10 +120,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
             prReviewBusy={rt.prReviewBusy}
             serverRunning={rt.serverRunning}
             rows={rt.rows}
-            cancelBusy={rt.cancelBusy}
             activePrProgress={activePrProgress}
             onReview={() => void rt.reviewPullRequest()}
-            onCancel={() => void rt.cancelInstall()}
           />
           <RuntimePortableBundle
             t={t}
@@ -129,10 +130,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
             bundleProgress={rt.bundleProgress}
             runtimeBusy={rt.runtimeBusy}
             serverRunning={rt.serverRunning}
-            cancelBusy={rt.cancelBusy}
             onImport={() => void rt.importRuntime()}
             onExport={(backend, build) => void rt.exportRuntime(backend, build)}
-            onCancel={() => void rt.cancelInstall()}
           />
         </div>
       </details>

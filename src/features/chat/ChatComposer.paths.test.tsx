@@ -23,7 +23,7 @@ describe('chat path presentation', () => {
       documents={[{ name: raw, path: raw, text: 'Notes' }]} onRemoveDocument={removeDocument}
       input="" setInput={vi.fn()} onKeyDown={vi.fn()} disabled={false} phase="idle"
       {...attachmentActions} onStop={vi.fn()} aborting={false} onSend={vi.fn()} canSend={false}
-      model="model.gguf" displayModel="model.gguf" msgsLength={0} metrics={null} ct={key => key}
+      model="model.gguf" displayModel="model.gguf" msgsLength={0} ct={key => key}
     /></I18nProvider>);
     expect(container.textContent).toContain(`Cannot read ${display}`);
     expect(container.textContent).not.toContain('\\\\?\\');

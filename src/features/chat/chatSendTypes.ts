@@ -1,5 +1,7 @@
 import type * as api from "../../shared/api/types";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
+import type { StreamTimings, StreamUsage } from "../../shared/api/sse";
+import type { ResponseMetrics } from "../../shared/lib/metrics";
 
 export interface FailedRequest {
   text: string;
@@ -10,12 +12,18 @@ export interface FailedRequest {
   partialReasoning?: string;
 }
 
-export interface ChatMetrics {
-  promptTokens?: number;
-  completionTokens?: number;
-  firstTokenMs?: number;
-  totalMs?: number;
-  tokensPerSecond?: number;
+export interface RequestMetricsAccumulator {
+  preparationStartedAt: number;
+  requestStartedAt?: number;
+  firstTokenAt?: number;
+  usage?: StreamUsage;
+  timings?: StreamTimings;
+}
+
+export interface StreamingDraft {
+  content: string;
+  reasoning: string;
+  metrics?: ResponseMetrics;
 }
 
 export interface PendingToolCall {

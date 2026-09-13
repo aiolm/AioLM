@@ -2,6 +2,8 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/index";
 import { useAppStore } from "./store";
+import { testConfig } from "../../testing/appStore";
+import { emptyProfileLibrary, profileTargetKey } from "../config/settingsProfiles";
 
 vi.mock("../api/index", () => ({
   isNativeRuntimeAvailable: vi.fn(() => true), getConfig: vi.fn(),
@@ -17,12 +19,78 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getConfig).mockResolvedValue({ models_dir: "", active_model: "model.gguf", mmproj: "", lora_adapters: [] } as unknown as api.AppConfig);
+  localStorage.clear();
+  let saved = structuredClone(testConfig);
+  vi.mocked(api.getConfig).mockImplementation(async () => structuredClone(saved));
+  vi.mocked(api.saveConfig).mockImplementation(async cfg => { saved = structuredClone(cfg); return cfg; });
   vi.mocked(api.serverStatus).mockResolvedValue({ state: "stopped" });
   vi.mocked(api.stopServer).mockResolvedValue(undefined);
 });
 
 afterEach(() => { vi.useRealTimers(); });
+
+it("publishes migrated profiles only after their native save succeeds", async () => {
+  const original = JSON.stringify({ version: 1, models: { 'archived.gguf': { temperature: 0.3 } } });
+  localStorage.setItem('aiolm-model-execution', original);
+  const saving = deferred<api.AppConfig>();
+  vi.mocked(api.saveConfig).mockReturnValue(saving.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(api.saveConfig).toHaveBeenCalledOnce());
+  expect(result.current.cfg).toBeNull();
+  expect(result.current.bootState).toBe('loading');
+  const candidate = vi.mocked(api.saveConfig).mock.calls[0][0];
+  expect(candidate.settings_profiles).toMatchObject({ revision: 1, legacy_imported: true });
+  expect(candidate.settings_profiles?.applied[profileTargetKey('archived.gguf')].settings.temperature).toBe(0.3);
+  await act(async () => { saving.resolve(candidate); await saving.promise; });
+  expect(result.current.bootState).toBe('ready');
+  expect(result.current.cfg?.settings_profiles).toEqual(candidate.settings_profiles);
+  expect(localStorage.getItem('aiolm-model-execution')).toBe(original);
+});
+
+it("keeps originals and leaves migration retryable after a failed save", async () => {
+  const original = JSON.stringify({ version: 1, models: { 'archived.gguf': { temperature: 0.3 } } });
+  localStorage.setItem('aiolm-model-execution', original);
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(new Error('disk full'));
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('error'));
+  expect(result.current.bootError).toContain('disk full');
+  expect(result.current.cfg).toBeNull();
+  expect(localStorage.getItem('aiolm-model-execution')).toBe(original);
+  const first = vi.mocked(api.saveConfig).mock.calls[0][0].settings_profiles;
+  await act(async () => { await result.current.loadConfig(); });
+  expect(result.current.bootState).toBe('ready');
+  expect(result.current.cfg?.settings_profiles).toEqual(first);
+});
+
+it("does not overwrite malformed legacy storage or mark its migration complete", async () => {
+  localStorage.setItem('aiolm-model-profiles', '{invalid');
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('error'));
+  expect(api.saveConfig).not.toHaveBeenCalled();
+  expect(localStorage.getItem('aiolm-model-profiles')).toBe('{invalid');
+});
+
+it("skips imported libraries and increments an existing library only once", async () => {
+  vi.mocked(api.getConfig).mockResolvedValue({ ...testConfig, settings_profiles: { ...emptyProfileLibrary(), revision: 7 } });
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  expect(result.current.cfg?.settings_profiles).toMatchObject({ revision: 8, legacy_imported: true });
+  vi.mocked(api.getConfig).mockResolvedValue(result.current.cfg!);
+  await act(async () => { await result.current.loadConfig(); });
+  expect(api.saveConfig).toHaveBeenCalledOnce();
+  expect(result.current.cfg?.settings_profiles?.revision).toBe(8);
+});
+
+it("serializes concurrent initialization so migration is saved only once", async () => {
+  const first = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  const second = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => {
+    expect(first.result.current.bootState).toBe('ready');
+    expect(second.result.current.bootState).toBe('ready');
+  });
+  expect(api.saveConfig).toHaveBeenCalledOnce();
+  expect(first.result.current.cfg?.settings_profiles).toEqual(second.result.current.cfg?.settings_profiles);
+});
 
 it("preserves the rendered snapshot when polling returns unchanged nested status", async () => {
   const snapshot: api.ServerStatus = {

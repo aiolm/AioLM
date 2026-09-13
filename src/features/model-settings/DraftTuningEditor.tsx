@@ -12,12 +12,12 @@ import { ADVANCED_SAMPLING_FIELDS, MTP_FIELDS, REASONING_FIELDS, SAMPLING_FIELDS
 import { tuningDisplayConfig } from '../tuning/tuningResetState';
 import { resetAllTuning, resetTuningField } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
-import { findModelTuningProfile } from '../../shared/config/qwenDefaults';
 import type { useServerOptions } from '../tuning/useServerOptions';
 import { modelSettingsCopy } from './modelSettingsCopy';
+import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 export type DraftPatch = (patch: Partial<AppConfig>) => void;
-export const BENCHMARK_CONTROLLED_KEYS = new Set(['ctx_size', 'parallel', 'request_timeout_seconds', 'sleep_idle_seconds', 'temperature', 'top_p', 'top_k', 'chat_options', 'reasoning_effort']);
+export { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /** All handlers edit an in-memory draft. Persistence belongs to the dialog's caller. */
 export default function DraftTuningEditor({ cfg, section, disabled, benchmark, runtime, onChange, onInvalid, onResetDrafts }: {
@@ -70,7 +70,6 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   };
   const filterPatch = (patch: Partial<AppConfig>) => benchmark
     ? Object.fromEntries(Object.entries(patch).filter(([key]) => !BENCHMARK_CONTROLLED_KEYS.has(key))) as Partial<AppConfig> : patch;
-  const bulk = (patch: Partial<AppConfig>) => { clearDrafts(); onChange(filterPatch(patch)); onResetDrafts(); };
   const reset = (key?: string) => {
     clearDrafts(key);
     onChange(filterPatch(key ? resetTuningField(cfg, key, tuningResetValues(runtime.options)) : resetAllTuning(tuningResetValues(runtime.options))));
@@ -80,16 +79,10 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   const text = (key: ServerTextKey, value: string) => onChange({ [key]: value });
   const commitText = (key: ServerTextKey, value: string) => { if (value !== textValue(key)) text(key, value); };
   const optionsFor = (key: 'spec_type' | 'spec_draft_ngl'): readonly string[] => key === 'spec_type' ? SPEC_TYPE_OPTIONS : SPEC_DRAFT_NGL_OPTIONS;
-  const profile = findModelTuningProfile(cfg.active_model, cfg.active_build);
   const numericProps = { numericDrafts: numbers, onNumericChange: numeric, onNumericCommit: (field: { key: NumericKey }, value: string) => numeric(field.key, value) };
   const fields = SERVER_FIELDS.filter(field => !benchmark || !BENCHMARK_CONTROLLED_KEYS.has(field.key));
   return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, reset }}>
     <div className="model-settings-presets">
-      <span>{copy.preset}</span>
-      <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} onClick={() => bulk({ ngl: 0, threads: 0, flash_attn: 'off' })}>{copy.cpu}</button>
-      <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} onClick={() => bulk({ ngl: 99, ctx_size: 8192, threads: 0, flash_attn: 'auto' })}>{copy.balanced}</button>
-      <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} onClick={() => bulk({ ngl: 99, ctx_size: 16384, threads: 0, flash_attn: 'on' })}>{copy.maxGpu}</button>
-      {profile && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} onClick={() => bulk({ ...profile.defaults, mmproj: cfg.mmproj, server_args: [...profile.serverArgs], chat_options: structuredClone(profile.chatOptions) })}>{copy.tuningProfile}</button>}
       <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled} onClick={() => reset()}>{copy.reset}</button>
     </div>
     {section === 'sampling' ? <TuningSamplingSection t={t} cfg={display} disabled={disabled} {...numericProps}

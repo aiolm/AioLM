@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 pub mod execution;
+pub mod profiles;
 
 const CURRENT_CONFIG_VERSION: u32 = 11;
 const MAX_SERVER_ARGS: usize = 512;
@@ -428,6 +429,8 @@ pub struct AppConfig {
     pub sessions: Vec<SessionDefinition>,
     /// Structured GPU placement for the default/single-session launch path.
     pub gpu: GpuPlacement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_profiles: Option<profiles::SettingsProfileLibrary>,
 }
 
 fn default_iters() -> u32 {
@@ -530,6 +533,7 @@ impl Default for AppConfig {
             stop_existing_sessions_on_load: true,
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),
+            settings_profiles: Some(profiles::SettingsProfileLibrary::default()),
         }
     }
 }
@@ -627,6 +631,7 @@ impl AppConfig {
         }
         let mut execution_base = self.clone();
         execution_base.sessions.clear();
+        execution_base.settings_profiles = None;
         for session in &mut self.sessions {
             session.normalize();
             execution::normalize_session(&execution_base, session);
@@ -739,10 +744,13 @@ impl AppConfig {
         }
         {
             let mut seen = std::collections::HashSet::new();
+            let mut execution_base = self.clone();
+            execution_base.sessions.clear();
+            execution_base.settings_profiles = None;
             for session in &self.sessions {
                 session.validate()?;
                 if session.execution.is_some() {
-                    execution::session_config(self, session)?
+                    execution::session_config(&execution_base, session)?
                         .validate()
                         .map_err(|error| format!("session '{}': {error}", session.id))?;
                 }
@@ -752,6 +760,9 @@ impl AppConfig {
             }
         }
         self.gpu.validate()?;
+        if let Some(profiles) = &self.settings_profiles {
+            profiles.validate()?;
+        }
         Ok(())
     }
 }
@@ -952,6 +963,15 @@ fn migrate_with_presence(
     }
     migrate_server_args(&mut cfg, raw);
     cfg.normalize();
+    if let Some(raw) = raw {
+        profiles::initialize_profiles(
+            &mut cfg,
+            raw.get("settings_profiles")
+                .is_some_and(|value| !value.is_null()),
+        )?;
+    } else if cfg.settings_profiles.is_none() {
+        cfg.settings_profiles = Some(profiles::SettingsProfileLibrary::default());
+    }
     cfg.config_version = CURRENT_CONFIG_VERSION;
     cfg.validate()?;
     Ok(cfg)
@@ -971,13 +991,17 @@ pub fn config_path() -> PathBuf {
 
 pub fn load_result() -> Result<AppConfig, String> {
     let path = config_path();
-    if !path.exists() && recover_legacy_backup(&path)? {
+    load_from_path(&path)
+}
+
+fn load_from_path(path: &Path) -> Result<AppConfig, String> {
+    if !path.exists() && recover_legacy_backup(path)? {
         // The recovered file is read below through the normal validation path.
     }
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    let raw = fs::read_to_string(&path)
+    let raw = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let raw_value: serde_json::Value = serde_json::from_str(&raw)
         .map_err(|error| format!("invalid config at {}: {error}", path.display()))?;
@@ -988,7 +1012,7 @@ pub fn load_result() -> Result<AppConfig, String> {
     if was_old {
         let serialized = serde_json::to_vec_pretty(&migrated)
             .map_err(|error| format!("failed to serialize migrated config: {error}"))?;
-        atomic_write(&path, &serialized)?;
+        atomic_write(path, &serialized)?;
     }
     Ok(migrated)
 }
@@ -1096,17 +1120,43 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
 }
 
 pub fn save(cfg: &AppConfig) -> Result<AppConfig, String> {
+    save_to_path(cfg, &config_path())
+}
+
+fn save_to_path(cfg: &AppConfig, path: &Path) -> Result<AppConfig, String> {
     let mut safe = cfg.clone();
     safe.normalize();
     safe = migrate(safe)?;
     let serialized = serde_json::to_vec_pretty(&safe).map_err(|error| error.to_string())?;
-    atomic_write(&config_path(), &serialized)?;
+    atomic_write(path, &serialized)?;
     Ok(safe)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_install_loads_and_saves_only_one_default_profile() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-profile-initialization-{}", Uuid::new_v4()));
+        let path = directory.join("config.json");
+        let mut cfg = load_from_path(&path).unwrap();
+        let profiles = cfg.settings_profiles.as_ref().unwrap();
+        assert_eq!(profiles, &profiles::SettingsProfileLibrary::default());
+        assert_eq!(profiles.entries.len(), 1);
+        assert_eq!(
+            profiles.applied["model:"].profile_id.as_deref(),
+            Some("profile-default")
+        );
+        assert!(!profiles.legacy_imported);
+        cfg.models_dir = "models".into();
+        save_to_path(&cfg, &path).unwrap();
+        let restored = load_from_path(&path).unwrap();
+        assert_eq!(restored.settings_profiles, cfg.settings_profiles);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn v10_sessions_keep_inheritance_and_v11_overrides_are_normalized() {

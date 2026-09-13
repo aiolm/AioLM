@@ -5,15 +5,22 @@
 .models-folder > summary { cursor: pointer; color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; }
 .models-folder > summary span { margin-inline-start: 12px; color: var(--ui-faint); }
 .models-folder-actions { margin-top: 12px; }
-.models-panel .models-model-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto 32px; align-items: center; padding: 10px 12px; gap: 8px; }
+.models-folder > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.models-panel .models-model-list { display: grid; gap: 10px; }
+.models-panel .models-model-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 10px 12px; gap: 8px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-panel); }
+.models-panel .models-model-row.is-loaded { background: var(--ui-accent-soft); border-color: var(--ui-border-accent); }
+.models-panel .models-model-row:focus-within { background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-panel)); border-color: var(--ui-border-accent); }
+.models-panel .models-model-name { background: transparent; }
+.models-panel .models-model-name:enabled::after { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: 12px; cursor: pointer; }
+.models-panel .models-model-name[aria-disabled="true"]::after { cursor: default; }
+.models-panel .models-model-name:focus-visible::after { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.models-panel .models-model-actions > button, .models-panel .models-file-actions > button { position: relative; z-index: 2; }
+@media (hover: hover) {
+  .models-panel .models-model-row:hover { background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-panel)); border-color: var(--ui-border-accent); }
+}
 .models-panel .models-model-actions { width: auto; max-width: none; padding: 0; gap: 8px; overflow: visible; }
-.models-file-actions { display: contents; }
-.models-file-actions > summary { display: flex; align-items: center; justify-content: center; cursor: pointer; list-style: none; min-width: 32px; min-height: 32px; border-radius: 6px; color: var(--ui-muted); }
-.models-file-actions > summary::-webkit-details-marker { display: none; }
-.models-file-actions > summary:hover, .models-file-actions[open] > summary { background: var(--ui-surface-muted); color: var(--ui-ink); }
-.models-file-actions > summary:focus-visible, .models-folder > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
-.models-file-actions > div { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px 0; border-top: 1px solid var(--ui-border); }
-.models-file-actions > div > code { flex: 1 1 20rem; min-width: 0; font-size: 12px; overflow-wrap: anywhere; color: var(--ui-muted); }
+.models-file-actions { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px 0; border-top: 1px solid var(--ui-border); }
+.models-file-actions > code { flex: 1 1 20rem; min-width: 0; font-size: 12px; overflow-wrap: anywhere; color: var(--ui-muted); }
 .execution-setup { max-width: 1040px; margin-inline: auto; }
 .execution-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
 .execution-heading h2 { margin: 5px 0; font-size: 22px; line-height: 1.35; font-weight: 650; overflow-wrap: anywhere; }
@@ -59,9 +66,8 @@
 }
 @media (max-width: 760px) {
   .model-workspace .models-panel--compact { padding: 12px; }
-  .models-panel .models-model-row { grid-template-columns: minmax(0, 1fr) 32px; padding: 8px; }
+  .models-panel .models-model-row { grid-template-columns: minmax(0, 1fr); padding: 8px; }
   .models-panel .models-model-actions { grid-column: 1; grid-row: 2; justify-content: flex-start; padding-inline: 12px; }
-  .models-file-actions > summary { grid-column: 2; grid-row: 1; }
   .execution-heading h2 { font-size: 18px; }
   .profiles-page--compact .profile-snapshot-grid { grid-template-columns: minmax(0, 1fr); }
   .execution-footer { bottom: 0; }

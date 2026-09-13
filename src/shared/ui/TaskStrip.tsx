@@ -3,6 +3,13 @@ import StableLabel from "./StableLabel";
 import { useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { updateTask, useTasks, type AppTask } from "../state/taskRegistry";
+import { useLocalTaskCancellationIds } from "./TaskCancellation";
+
+function hasPanelCancellation(task: AppTask): boolean {
+  return (task.kind === "runtime" && task.id === "runtime-operation")
+    || (task.kind === "benchmark" && task.id === "performance-benchmark-active")
+    || (task.kind === "other" && /^session-load-.+/.test(task.id));
+}
 
 function statusLabel(task: AppTask, t: ReturnType<typeof useI18n>["t"]): string {
   if (task.state === "running") return task.phase || t("ui.taskWorking");
@@ -16,6 +23,7 @@ function statusLabel(task: AppTask, t: ReturnType<typeof useI18n>["t"]): string 
 export default function TaskStrip() {
   const { t } = useI18n();
   const tasks = useTasks();
+  const localTaskIds = useLocalTaskCancellationIds();
   const [cancelError, setCancelError] = useState<string | null>(null);
   if (tasks.length === 0) return null;
   const active = tasks.filter((task) => task.state === "running" || task.state === "cancelling");
@@ -51,7 +59,7 @@ export default function TaskStrip() {
                 <span className="app-task-strip__status">{normalizeDisplayText(statusLabel(task, t))}{task.detail ? ` · ${normalizeDisplayText(task.detail)}` : ""}</span>
               </div>
               {progress !== undefined && <div className="app-task-strip__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} aria-label={normalizeDisplayText(task.label)}><span style={{ width: `${progress}%` }} /></div>}
-              {activeTask && task.cancel && <button type="button" className="app-task-strip__cancel" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
+              {activeTask && task.cancel && !(hasPanelCancellation(task) && localTaskIds.has(task.id)) && <button type="button" className="app-task-strip__cancel" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
             </div>
           );
         })}

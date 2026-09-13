@@ -141,13 +141,17 @@ function renderPanel() {
 
 /** Let each rendered delta acknowledge the next one instead of racing CI timers. */
 function controlledStream() {
-  let emit!: (delta: { content?: string }) => void;
+  let emit!: (delta: api.ChatDelta) => void;
   let finish!: (text: string) => void;
   mocked.chatStream.mockImplementationOnce((_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: typeof emit) => {
     emit = onDelta;
     return new Promise<string>((resolve) => { finish = resolve; });
   });
-  return { emit: (content: string) => emit({ content }), finish: (text: string) => finish(text) };
+  return {
+    emit: (content: string) => emit({ content }),
+    emitStats: (timings: api.ChatDelta["timings"]) => emit({ timings }),
+    finish: (text: string) => finish(text),
+  };
 }
 
 describe("ChatPanel streaming re-render isolation (P1-7)", () => {
@@ -188,6 +192,10 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
 
     const newBubbleCalls = callsDuringTicks.filter((index) => index === NEW_ASSISTANT_INDEX);
     expect(newBubbleCalls.length).toBeGreaterThanOrEqual(2);
+    bubbleRenderSpy.mockClear();
+    act(() => stream.emitStats({ predicted_n: 12, predicted_ms: 240 }));
+    await waitFor(() => expect(bubbleRenderSpy).toHaveBeenCalledWith(NEW_ASSISTANT_INDEX));
+    expect(bubbleRenderSpy.mock.calls.every(([index]) => index === NEW_ASSISTANT_INDEX)).toBe(true);
     await act(async () => stream.finish("Hello there friend."));
   });
 

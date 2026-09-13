@@ -80,7 +80,7 @@ function storeFor(cfg: AppConfig): AppStore {
 }
 
 describe("ModelsPanel CSS cascade", () => {
-  it("selects a library model with the saved Vulkan profile missing its build", async () => {
+  it("preserves current execution settings when a legacy profile has an incomplete runtime", async () => {
     localStorage.clear();
     localStorage.setItem("aiolm-model-profiles", JSON.stringify({
       version: 4, server: [{ id: "server-default", name: "Default", backend: "vulkan", build: "", ctx_size: 8192 }],
@@ -99,7 +99,7 @@ describe("ModelsPanel CSS cascade", () => {
     const view = render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
     fireEvent.click(await screen.findByRole("button", { name: "Select legacy.gguf" }));
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
-    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: 8192 });
+    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "rocm", active_build: "local_b10840_nop2p", ctx_size: cfg.ctx_size });
     const saved = await save.mock.results[0].value;
     view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
     expect(screen.getByRole("button", { name: "Select legacy.gguf" })).not.toHaveAttribute("aria-current");
@@ -131,7 +131,7 @@ describe("ModelsPanel CSS cascade", () => {
     const view = render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
     fireEvent.click(await screen.findByRole("button", { name: "Select selectable.gguf" }));
     await waitFor(() => expect(save).toHaveBeenCalledOnce());
-    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: "", active_build: "" });
+    await expect(save.mock.results[0].value).resolves.toMatchObject({ active_model: model.path, active_backend: cfg.active_backend, active_build: cfg.active_build });
     const saved = await save.mock.results[0].value;
     view.rerender(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: { ...store, cfg: saved } }) }));
     expect(screen.getByRole("button", { name: "Select selectable.gguf" })).not.toHaveAttribute("aria-current");
@@ -153,7 +153,8 @@ describe("ModelsPanel CSS cascade", () => {
     expect(screen.getByText("300 MB")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Select large.gguf" }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ active_model: files[0] })));
-    fireEvent.click(screen.getByLabelText("File actions: large.gguf"));
+    expect(screen.queryByLabelText("File actions: large.gguf")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy path: large.gguf" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Delete: large.gguf" }));
     expect(await screen.findByText("All 2 files belonging to large.gguf will be permanently removed. This cannot be undone.")).toBeInTheDocument();
     expect(mocked.deleteModel).not.toHaveBeenCalled();
@@ -170,7 +171,7 @@ describe("ModelsPanel CSS cascade", () => {
     expect(screen.getByRole("button", { name: "Start: partial.gguf" })).toBeDisabled();
   });
 
-  it("keeps loaded models visible after a rescan fails and retries from the error banner", async () => {
+  it("keeps loaded models visible after a rescan fails and replaces the toolbar action with Retry", async () => {
     const model = { name: "kept.gguf", path: "C:/models/kept.gguf", size_mb: 100, is_vision: false };
     mocked.listModels.mockReset().mockResolvedValueOnce({ models: [model], truncated: false })
       .mockRejectedValueOnce(new Error("scan failed"))
@@ -185,10 +186,38 @@ describe("ModelsPanel CSS cascade", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rescan" }));
     const retryButton = await screen.findByRole("button", { name: "Retry" });
     expect(screen.getByText("kept.gguf")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rescan" })).not.toBeInTheDocument();
     fireEvent.click(retryButton);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: "Rescan" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(mocked.listModels).toHaveBeenCalledTimes(3);
     expect(screen.getByText("kept.gguf")).toBeInTheDocument();
+  });
+
+  it("offers one folder picker and one scan action as the empty library's directory details open and close", async () => {
+    mocked.listModels.mockReset().mockResolvedValue({ models: [], truncated: false });
+    mocked.pickModelsDir.mockReset().mockResolvedValue(null);
+    const view = render(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models" }) }),
+    }));
+    await screen.findByRole("heading", { name: "No GGUF models found" });
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Browse" })).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
+    await waitFor(() => expect(mocked.pickModelsDir).toHaveBeenCalledOnce());
+
+    const summary = view.container.querySelector("details.models-folder > summary")!;
+    fireEvent.click(summary);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Choose folder" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    await waitFor(() => expect(mocked.pickModelsDir).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
+
+    fireEvent.click(summary);
+    expect(await screen.findByRole("button", { name: "Choose folder" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Browse" })).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
   });
 
   it("gives the LoRA add button an explicit hover class instead of the unsupported hover:app-bg-accent-solid variant", async () => {

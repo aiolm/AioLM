@@ -1,4 +1,5 @@
 import type { Locale } from "./i18nCatalog";
+import { tuningUiText } from './tuningFieldText.ts';
 
 /**
  * `ui.<key>` namespace data (see `i18nUnified.ts`'s `translate()`) — strings
@@ -1227,7 +1228,11 @@ running: "运行中", stopped: "已停止", enabled: "已启用", disabled: "已
   presetConfirm: "应用预设", loadProfileConfirm: "加载配置档",
 };
 
-export const uiText: Record<Locale, UiCatalog> = { en, ko, ja, zh };
+export const uiText: Record<Locale, UiCatalog> = {
+  en, ko,
+  ja: { ...ja, ...tuningUiText.ja },
+  zh: { ...zh, ...tuningUiText.zh },
+};
 
 export function assertUiCatalogComplete(): void {
   for (const locale of ["en", "ko", "ja", "zh"] as const) {

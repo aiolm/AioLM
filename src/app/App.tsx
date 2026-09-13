@@ -9,6 +9,7 @@ import { useAppStore } from "../shared/state/store";
 import EmptyState from "../shared/ui/EmptyState";
 import FeedbackBanner from "../shared/ui/FeedbackBanner";
 import TaskStrip from "../shared/ui/TaskStrip";
+import { TaskCancellationProvider } from "../shared/ui/TaskCancellation";
 import { useTasks, type AppTask } from "../shared/state/taskRegistry";
 import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
@@ -201,7 +202,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
     <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
-  return <PanelFeedbackProvider><div className="app-shell" onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
+  return <TaskCancellationProvider><PanelFeedbackProvider><div className="app-shell" onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
     <aside className="aiolm-sidebar">{brand}{navigation}<div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div></aside>
     <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setMenuOpen(false); }}>
@@ -218,8 +219,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           <summary><span>{t("ui.taskStripTitle")}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span><PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} /></summary>
           <div className="app-activity-content">
         <div className="app-feedback-layer" aria-live="polite">
-          {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
-          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "")}</FeedbackBanner>}
+          {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
+          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "")}</FeedbackBanner>}
         </div>
         <TaskStrip />
         <PanelFeedbackOutlet />
@@ -241,5 +242,5 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         </main>
       </div>
     </div>
-  </div></PanelFeedbackProvider>;
+  </div></PanelFeedbackProvider></TaskCancellationProvider>;
 }

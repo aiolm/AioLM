@@ -3,8 +3,7 @@ import type { AppConfig } from "../../shared/api/types";
 import { useI18n } from "../../shared/i18n/i18n";
 import { hasChatOverride, usesRuntimeDefault } from "../../shared/config/tuningDefaults";
 import TuningOptionMetadata from './TuningOptionMetadata';
-import catalog from '../../shared/config/tuningDefaultsCatalog.json';
-import { serverOptionsText } from '../../shared/i18n/serverOptionsI18n';
+import { settingMetadataCopy } from '../../shared/i18n/settingMetadataCopy';
 
 export const TuningDefaultsContext = createContext<{
   cfg: AppConfig;
@@ -21,16 +20,14 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
   if (!context) return <>{children}<TuningOptionMetadata fieldKey={fieldKey} /></>;
   const inherited = request ? !hasChatOverride(context.cfg, fieldKey) : usesRuntimeDefault(context.cfg, fieldKey);
   return (
-    <div className="tuning-default-field flex min-w-0 flex-col gap-2" data-default-field={fieldKey}>
+    <div className="tuning-default-field" data-default-field={fieldKey}>
       <div className="tuning-default-field__content">
       {children}
-      <TuningOptionMetadata fieldKey={fieldKey} />
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
+      <TuningOptionMetadata fieldKey={fieldKey} inherited={inherited}>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={context.disabled}
-          aria-label={t("ui.runtimeDefaultResetField", { label })} onClick={() => context.reset(fieldKey)}>{t("ui.runtimeDefaultReset")}</button>
-        {inherited && <span className="text-success">{catalog.some(field => field.key === fieldKey && field.appDefault) ? serverOptionsText[locale].defaultApp : t("ui.runtimeDefaultActive")}</span>}
-      </div>
+          aria-label={t("ui.runtimeDefaultResetField", { label })} onClick={() => context.reset(fieldKey)}>{settingMetadataCopy[locale].reset}</button>
+      </TuningOptionMetadata>
     </div>
   );
 }

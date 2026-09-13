@@ -114,8 +114,10 @@ pub(crate) async fn run_performance_bench(
         cancel,
         state.bench_pid.clone(),
         progress,
-        version,
-        cache_ram_supported,
+        performance_bench::RuntimeInfo {
+            version,
+            cache_ram_supported,
+        },
     )
     .await;
     state.bench_cancel.store(false, Ordering::Release);

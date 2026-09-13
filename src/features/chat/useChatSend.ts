@@ -4,17 +4,17 @@ import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
 import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
-import { getActiveModelProfile, type ModelProfile } from "../profiles/modelProfiles";
+import type { ModelProfile } from "../profiles/modelProfiles";
+import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
 import { usesRuntimeDefault } from "../../shared/config/tuningDefaults";
 import type { AppPreferences } from "../../shared/config/preferences";
-import { deriveTokensPerSecond } from "../../shared/lib/metrics";
-import type { StreamUsage } from "../../shared/api/sse";
+import { buildResponseMetrics } from "../../shared/lib/metrics";
 import type { ChatMcpTool } from "./useChatMcpTools";
-import type { ChatMetrics, FailedRequest, PendingToolCall } from "./chatSendTypes";
+import type { FailedRequest, PendingToolCall, RequestMetricsAccumulator, StreamingDraft } from "./chatSendTypes";
 import { createStreamDeltaHandler, resolveDetectedToolCall, retrieveDocumentContext, sameDocuments, sameImages, toChatMessage } from "./chatSendHelpers";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
 
-export type { ChatMetrics, PendingToolCall } from "./chatSendTypes";
+export type { PendingToolCall } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
 
@@ -57,13 +57,13 @@ export function useChatSend({
   const [contextSources, setContextSources] = useState<string[]>([]);
   const [aborting, setAborting] = useState(false);
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
-  const [metrics, setMetrics] = useState<ChatMetrics | null>(null);
-  const [streamingDraft, setStreamingDraft] = useState<{ content: string; reasoning: string } | null>(null);
+  const [streamingDraft, setStreamingDraft] = useState<StreamingDraft | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
   const failedRef = useRef<FailedRequest | null>(null);
   const renderFrameRef = useRef<number | null>(null);
   const streamRef = useRef<{ assistant: string; reasoning: string; toolCalls: api.ChatToolCall[] }>({ assistant: "", reasoning: "", toolCalls: [] });
-  const metricsRef = useRef<{ startedAt: number; firstTokenAt?: number; usage?: StreamUsage }>({ startedAt: 0 });
+  const metricsRef = useRef<RequestMetricsAccumulator>({ preparationStartedAt: 0 });
+  const streamResponsesRef = useRef(true);
   const toolRoundsRef = useRef(0);
   const turnRef = useRef<{
     config: api.AppConfig | null;
@@ -106,16 +106,32 @@ export function useChatSend({
     }
   };
 
+  const snapshotMetrics = (now = performance.now()) => {
+    const current = metricsRef.current;
+    if (current.requestStartedAt === undefined) return undefined;
+    return buildResponseMetrics(current.usage, current.timings, {
+      preparationMs: current.requestStartedAt - current.preparationStartedAt,
+      firstTokenMs: current.firstTokenAt === undefined ? undefined : current.firstTokenAt - current.requestStartedAt,
+      requestMs: now - current.requestStartedAt,
+    });
+  };
+
   const scheduleAssistantRender = () => {
     if (renderFrameRef.current !== null) return;
     renderFrameRef.current = window.requestAnimationFrame(() => {
       renderFrameRef.current = null;
       const { assistant, reasoning } = streamRef.current;
-      setStreamingDraft({ content: assistant, reasoning });
+      setStreamingDraft({
+        content: streamResponsesRef.current ? assistant : "",
+        reasoning: streamResponsesRef.current ? reasoning : "",
+        metrics: snapshotMetrics(),
+      });
     });
   };
 
   const resetChatState = () => {
+    cancelScheduledRender();
+    setStreamingDraft(null);
     setError(null);
     documentTruncationRef.current = false;
     setContextWarning(null);
@@ -135,7 +151,7 @@ export function useChatSend({
       toolRoundsRef.current = 0;
       documentTruncationRef.current = false;
       const config = structuredClone(effectiveConfig ?? store.cfg);
-      const profile = modelProfile !== undefined ? modelProfile : config ? getActiveModelProfile(config) : null;
+      const profile = modelProfile !== undefined ? modelProfile : config ? requestProfileFromApplication(appliedProfile(config, sessionId)) : null;
       turnRef.current = {
         config,
         baseUrl: baseUrl!, apiKey, model, sessionId,
@@ -157,8 +173,7 @@ export function useChatSend({
     streamRef.current = { assistant: "", reasoning: "", toolCalls: [] };
     cancelScheduledRender();
     setStreamingDraft(null);
-    metricsRef.current = { startedAt: performance.now() };
-    setMetrics(null);
+    metricsRef.current = { preparationStartedAt: performance.now() };
     let awaitingTool = false;
     let assistantAppended = false;
     try {
@@ -225,8 +240,12 @@ export function useChatSend({
         tools: turn.tools,
       };
       const streamResponses = preferences?.chat.streamResponses ?? true;
+      streamResponsesRef.current = streamResponses;
       const onDelta = createStreamDeltaHandler({ streamRef, metricsRef, streamResponses, setPhase: () => setPhase("streaming"), scheduleAssistantRender });
+      metricsRef.current.requestStartedAt = performance.now();
+      setStreamingDraft({ content: "", reasoning: "", metrics: snapshotMetrics(metricsRef.current.requestStartedAt) });
       const full = await api.chatStream(turn.baseUrl, turn.apiKey, turn.model, bounded.messages, sampling, onDelta, controller.signal);
+      const responseMetrics = snapshotMetrics();
 
       const toolCall = streamRef.current.toolCalls[0];
       if (toolCall) {
@@ -235,7 +254,7 @@ export function useChatSend({
         setMsgs((current) => {
           if (current[current.length - 1]?.role !== "assistant") return current;
           const next = current.slice();
-          next[next.length - 1] = { ...next[next.length - 1], content: toolCallAssistant, reasoning: toolCallReasoning };
+          next[next.length - 1] = { ...next[next.length - 1], content: toolCallAssistant, reasoning: toolCallReasoning, metrics: responseMetrics };
           return next;
         });
         setStreamingDraft(null);
@@ -256,28 +275,18 @@ export function useChatSend({
           content: full,
           reasoning: streamRef.current.reasoning,
           citations: retrievalCitations.length ? retrievalCitations : undefined,
+          metrics: responseMetrics,
         };
         return next;
       });
       setStreamingDraft(null);
-      {
-        const totalMs = performance.now() - metricsRef.current.startedAt;
-        const usage = metricsRef.current.usage;
-        const completionTokens = usage?.completion_tokens ?? estimateChatTokens([{ role: "assistant", content: full }]);
-        setMetrics({
-          promptTokens: usage?.prompt_tokens,
-          completionTokens,
-          firstTokenMs: metricsRef.current.firstTokenAt === undefined ? undefined : metricsRef.current.firstTokenAt - metricsRef.current.startedAt,
-          totalMs,
-          tokensPerSecond: deriveTokensPerSecond(completionTokens, totalMs) ?? undefined,
-        });
-      }
       failedRef.current = null;
       toolRoundsRef.current = 0;
       setPhase("idle");
     } catch (caught) {
       const isAbort = controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError");
       cancelScheduledRender();
+      const responseMetrics = snapshotMetrics();
       if (assistantAppended) {
         const partialAssistant = streamRef.current.assistant;
         const partialReasoning = streamRef.current.reasoning;
@@ -286,7 +295,7 @@ export function useChatSend({
           setMsgs((current) => {
             if (current[current.length - 1]?.role !== "assistant") return current;
             const next = current.slice();
-            next[next.length - 1] = { ...next[next.length - 1], content: partialAssistant, reasoning: partialReasoning, interrupted: isAbort, failed: !isAbort };
+            next[next.length - 1] = { ...next[next.length - 1], content: partialAssistant, reasoning: partialReasoning, interrupted: isAbort, failed: !isAbort, metrics: responseMetrics };
             return next;
           });
           setStreamingDraft(null);
@@ -363,7 +372,7 @@ export function useChatSend({
 
   return {
     error, setError, contextWarning, contextSources,
-    aborting, pendingToolCall, metrics, streamingDraft, failedRef,
+    aborting, pendingToolCall, streamingDraft, failedRef,
     send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };
 }

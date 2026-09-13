@@ -8,13 +8,14 @@ interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   capabilities: api.RuntimeCapabilities | null;
   probeBusy: boolean;
+  runtimeBusy?: boolean;
   serverRunning: boolean;
   activeBackend: string;
   activeBuild: string;
   onProbe: () => void;
 }
 
-export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, serverRunning, activeBackend, activeBuild, onProbe }: Props) {
+export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, activeBackend, activeBuild, onProbe }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   return (
@@ -24,7 +25,7 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, se
           <h2 id="runtime-capabilities-heading" className="app-section-title">{t("section.runtimes")}</h2>
           <p className="app-section-hint">{t("ui.probeHint")}</p>
         </div>
-        <button type="button" onClick={onProbe} disabled={probeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button>
+        <button type="button" onClick={onProbe} disabled={probeBusy || runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button>
       </div>
       {!capabilities && <p className="mt-3 text-xs ui-color-faint" >{activeBackend && activeBuild ? t("ui.probeReady", { backend: activeBackend, build: buildNumber(activeBuild) }) : t("ui.probeNoRuntime")}</p>}
       {capabilities && (

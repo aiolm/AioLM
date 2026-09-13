@@ -7,6 +7,10 @@ import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils"
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
 import SessionsPanel from "./Sessions";
+import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
+import { profileLibrary } from "../model-settings/profileEditor";
+import { profileTargetKey } from "../../shared/config/settingsProfiles";
+import TaskStrip from "../../shared/ui/TaskStrip";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 vi.mock("../../shared/api/index", () => ({
@@ -30,8 +34,9 @@ const settings: ModelSettingsContext = {
   getRequestConfig: (_id, value) => value, getRequestProfile: () => null,
 };
 function renderPanel(config = cfg, status: api.ServerStatus = { state: "stopped" }) {
-  const store = { cfg: config, getConfig: vi.fn(() => config), status, busy: false,
-    updateConfig: vi.fn(async () => config), start: vi.fn(), stop: vi.fn(), refreshStatus: vi.fn(),
+  const current = structuredClone(config);
+  const store = { cfg: current, getConfig: vi.fn(() => current), status, busy: false,
+    updateConfig: vi.fn(async (patch: Parameters<AppStore['updateConfig']>[0]) => Object.assign(current, typeof patch === 'function' ? patch(current) : patch)), start: vi.fn(), stop: vi.fn(), refreshStatus: vi.fn(),
   } as unknown as AppStore;
   render(<I18nProvider initialLocale="en"><SessionsPanel store={store} /></I18nProvider>);
   return store;
@@ -41,6 +46,7 @@ const sessionRow = (name = "Work session") => within(screen.getByRole("article",
 describe("session model settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    for (const task of getTaskSnapshot()) removeTask(task.id);
     vi.mocked(useModelSettings).mockReturnValue(settings);
     mocked.sessionList.mockResolvedValue([]);
     mocked.sessionUnload.mockResolvedValue(undefined);
@@ -72,8 +78,19 @@ describe("session model settings", () => {
     expect(screen.getByLabelText("Session name")).toHaveValue("Work session");
     expect(screen.getByText("PID 4321")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unload" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("button", { name: "Dismiss" })).not.toBeInTheDocument();
+    await selectWork();
     expect(screen.queryByLabelText("Session name")).not.toBeInTheDocument();
+  });
+  it("offers one stop action for the default session even when its details are expanded", async () => {
+    renderPanel(cfg, { state: "running", model: cfg.active_model });
+    const row = sessionRow("Default server");
+    fireEvent.click(row.getByRole("button", { name: /Default server/ }));
+    expect(row.getByRole("button", { name: /Default server/ })).toHaveAttribute("aria-expanded", "true");
+    expect(row.queryByRole("button", { name: "Unload" })).not.toBeInTheDocument();
+    fireEvent.click(row.getByRole("button", { name: "Stop session" }));
+    await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith("default"));
+    expect(mocked.sessionUnload).not.toHaveBeenCalled();
   });
   it("opens a named session's settings directly without selecting or saving it", () => {
     const store = renderPanel();
@@ -126,11 +143,76 @@ describe("session model settings", () => {
       active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, active_backend: "vulkan", gpu: definition.gpu,
     }), false));
   });
+
+  it("persists the selected profile's latest saved options before loading a session", async () => {
+    const configured = structuredClone(cfg);
+    const library = profileLibrary(configured);
+    const key = profileTargetKey(definition.models.primary_model, definition.id);
+    const application = library.applied[key];
+    library.entries = library.entries.map(profile => profile.id === application.profile_id
+      ? { ...profile, revision: profile.revision + 1, settings: { ...profile.settings, ctx_size: 16384 } } : profile);
+    configured.settings_profiles = library;
+    const before = structuredClone(configured);
+    const store = renderPanel(configured);
+    fireEvent.click(sessionRow().getByRole("button", { name: "Load session" }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ ctx_size: 16384 }), false));
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(store.cfg!.settings_profiles!.entries).toEqual(before.settings_profiles!.entries);
+    expect(store.cfg!.settings_profiles!.applied[key].profile_id).toBe(application.profile_id);
+    expect(store.cfg!.settings_profiles!.applied[profileTargetKey(cfg.active_model)]).toEqual(before.settings_profiles!.applied[profileTargetKey(cfg.active_model)]);
+  });
+
+  it("does not start a session when profile preparation cannot be persisted", async () => {
+    const store = renderPanel();
+    vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error("Synthetic persistence failure"));
+    fireEvent.click(sessionRow().getByRole("button", { name: "Load session" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Synthetic persistence failure");
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+  });
+
+  it("cancels a load while profile preparation is pending without starting the engine", async () => {
+    const store = renderPanel();
+    await act(async () => {});
+    let finish!: () => void;
+    vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise(resolve => {
+      finish = () => resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch));
+    }));
+    fireEvent.click(sessionRow().getByRole("button", { name: "Load session" }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+    fireEvent.click(sessionRow().getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith("work"));
+    await act(async () => finish());
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled');
+  });
+
+  it("does not launch after global cancellation fails while profile preparation is pending", async () => {
+    const store = renderPanel();
+    render(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    await act(async () => {});
+    let finish!: () => void;
+    vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise(resolve => {
+      finish = () => resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch));
+    }));
+    mocked.sessionStop.mockRejectedValueOnce(new Error('Synthetic cancellation failure'));
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+    fireEvent.click(within(screen.getByTestId('task-strip')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('failed'));
+    await act(async () => finish());
+    expect(mocked.sessionStop).toHaveBeenCalledWith('work');
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled');
+  });
+
   it("uses settings returned by the modal for the next load", async () => {
-    renderPanel(); await selectWork();
+    const store = renderPanel(); await selectWork();
     fireEvent.click(sessionRow().getByRole("button", { name: "Model & settings" }));
     const appliedDefinition = { ...definition, models: { ...definition.models, primary_model: "models/changed.gguf" }, execution: { ...definition.execution, ctx_size: 16384 } };
-    await act(async () => { await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...cfg, active_model: "models/changed.gguf", sessions: [appliedDefinition] }); });
+    await act(async () => {
+      await store.updateConfig({ sessions: [appliedDefinition] });
+      await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...store.cfg!, active_model: "models/changed.gguf" });
+    });
     fireEvent.click(sessionRow().getByRole("button", { name: "Load session" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/changed.gguf", ctx_size: 16384 }), false));
   });
@@ -179,7 +261,7 @@ describe("session model settings", () => {
   it("asks before closing unsaved metadata and discards it only on confirmation", async () => {
     const store = renderPanel(); await selectWork();
     fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Changed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await selectWork();
     const dialog = await screen.findByRole("dialog", { name: "Unsaved changes" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Discard changes" }));
     expect(screen.queryByLabelText("Session name")).not.toBeInTheDocument();
@@ -239,6 +321,7 @@ describe("session model settings", () => {
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({
       active_model: definition.models.primary_model, ctx_size: 8192, temperature: 0.2, active_backend: "vulkan", gpu: definition.gpu,
     }), false));
-    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(store.cfg!.settings_profiles!.applied[profileTargetKey(definition.models.primary_model, definition.id)].profile_id).toBeTruthy();
   });
 });

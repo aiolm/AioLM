@@ -114,7 +114,8 @@ describe("TuningPanel phase-1 shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Speculative" }));
     expect(screen.getByRole("heading", { name: "Speculative" })).toBeInTheDocument();
     expect(screen.getByLabelText("Speculative type(s)")).toBeInTheDocument();
-    expect(screen.getAllByRole("tooltip").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Speculative type(s)")).toHaveAccessibleDescription(/Chooses how candidate tokens are proposed/);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
   it("searches Korean labels and finds advanced settings from Quick mode", () => {
     render(<I18nProvider initialLocale="ko"><TuningPanel store={store()} /></I18nProvider>);
@@ -162,7 +163,7 @@ describe("Tuning defaults controls", () => {
     expect(test.config().chat_options).toEqual({});
     expect(test.config().active_model).toBe(cfg.active_model);
     expect(test.config().active_backend).toBe(cfg.active_backend);
-    expect(screen.getAllByText("Using llama.cpp default").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("In use").length).toBeGreaterThan(0);
     expect(test.base.stop).not.toHaveBeenCalled();
     expect(test.base.start).not.toHaveBeenCalled();
   });

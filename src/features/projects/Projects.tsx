@@ -1,6 +1,6 @@
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppStore } from "../../shared/state/store";
 import type { AppConfig } from "../../shared/api/types";
 import {
@@ -27,10 +27,22 @@ import { modelDisplayName, normalizeDisplayPath, normalizeDisplayPathLines } fro
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { modelActions } from '../../shared/i18n/modelActions';
+import { profileApplicationConfig, profileSettingsSnapshot, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
+import { resolveProfileForExecution } from '../../shared/config/profileAssignments';
+import { executionSettings } from '../../shared/config/executionSettings';
+import { appliedProfile, mergeProfileEditor, profileLibrary } from '../model-settings/profileEditor';
+import { modelSettingsCopy } from '../model-settings/modelSettingsCopy';
 
 
 function fileName(project: ProjectPreset): string {
   return `${project.name.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "aiolm-project"}.json`;
+}
+
+function currentProjectSetup(store: AppStore) {
+  const current = store.getConfig() ?? store.cfg;
+  if (!current) return null;
+  const resolved = resolveProfileForExecution(current, profileLibrary(current));
+  return { config: { ...structuredClone(current), ...profileApplicationConfig(resolved.application) }, application: resolved.application };
 }
 
 export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore; onOpenTuning?: () => void }) {
@@ -43,13 +55,17 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   const [selectedId, setSelectedId] = useState<string | null>(() => activeProjectId());
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
-  const [configSnapshot, setConfigSnapshot] = useState<AppConfig | null>(store.cfg);
+  const [initialSetup] = useState(() => currentProjectSetup(store));
+  const [systemPrompt, setSystemPrompt] = useState(initialSetup?.application.system_prompt ?? '');
+  const [configSnapshot, setConfigSnapshot] = useState<AppConfig | null>(initialSetup?.config ?? null);
+  const [profileApplication, setProfileApplication] = useState<ProfileApplication | undefined>(initialSetup?.application);
   const [toolIds, setToolIds] = useState("");
   const [documentPaths, setDocumentPaths] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ProjectPreset | null>(null);
+  const latestDraft = useRef({ selectedId, configSnapshot, systemPrompt });
+  latestDraft.current = { selectedId, configSnapshot, systemPrompt };
 
   const cfg = store.cfg;
   // Unlike other panels' "server running" guards, Projects also blocks applying a
@@ -60,11 +76,13 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
 
   const loadProject = (project: ProjectPreset | null) => {
     if (!project) {
+      const setup = currentProjectSetup(store);
       setSelectedId(null);
       setName("");
       setDescription("");
-      setSystemPrompt("You are a helpful assistant.");
-      setConfigSnapshot(cfg ? structuredClone(cfg) : null);
+      setSystemPrompt(setup?.application.system_prompt ?? '');
+      setConfigSnapshot(setup?.config ?? null);
+      setProfileApplication(setup?.application);
       setToolIds("");
       setDocumentPaths("");
       return;
@@ -74,6 +92,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     setDescription(project.description);
     setSystemPrompt(project.systemPrompt);
     setConfigSnapshot(cfg ? { ...cfg, ...structuredClone(project.config) } : null);
+    setProfileApplication(project.profileApplication ? structuredClone(project.profileApplication) : undefined);
     setToolIds(project.toolIds.join("\n"));
     setDocumentPaths(project.documentBindings.map((document) => document.path).join("\n"));
   };
@@ -100,13 +119,35 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     return structuredClone(configSnapshot ?? cfg!);
   };
 
+  const openModelSettings = (section: 'model' | 'runtime') => {
+    if (!modelSettings || !cfg) return;
+    const config = buildConfig();
+    const library = profileLibrary(store.getConfig() ?? cfg);
+    const resolved = profileApplication ? resolveProfileForExecution(config, library, profileApplication) : undefined;
+    modelSettings.open({
+      target: { kind: 'project', id: selectedId ?? 'new' },
+      config: resolved ? { ...config, ...profileApplicationConfig(resolved.application) } : config,
+      systemPrompt: resolved?.application.system_prompt ?? systemPrompt, section,
+      application: resolved?.application,
+      onApply: (next, application?: ProfileApplication) => {
+        setConfigSnapshot(structuredClone(next));
+        setProfileApplication(application ? structuredClone(application) : undefined);
+        if (application) setSystemPrompt(application.system_prompt);
+      },
+    });
+  };
+
   const save = () => {
     try {
       const bindings = documentPaths.split(/\r?\n/).map((path) => path.trim()).filter(Boolean).map((path) => ({
         path,
         name: path.split(/[\\/]/).pop() || path,
       }));
-      const project = projectFromConfig(name, systemPrompt, buildConfig(), bindings, toolIds.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean), description);
+      const config = buildConfig();
+      const resolved = profileApplication ? resolveProfileForExecution(config, profileLibrary(store.getConfig() ?? config), profileApplication) : undefined;
+      const savedConfig = resolved ? { ...config, ...profileApplicationConfig(resolved.application) } : config;
+      const savedPrompt = resolved?.application.system_prompt ?? systemPrompt;
+      const project = projectFromConfig(name, savedPrompt, savedConfig, bindings, toolIds.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean), description, Date.now(), resolved?.application ?? profileApplication);
       const existing = selectedId ? projects.find((item) => item.id === selectedId) : null;
       const saved = existing ? { ...project, id: existing.id, createdAt: existing.createdAt } : project;
       const next = upsertProject(saved, projects);
@@ -114,6 +155,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       setProjects(next);
       setSelectedId(saved.id);
       setActiveProjectId(saved.id);
+      setConfigSnapshot(structuredClone(savedConfig)); setSystemPrompt(savedPrompt);
+      if (resolved) setProfileApplication(resolved.application);
       setNotice(t("ui.savedProjectNamed", { name: saved.name }));
       setError(null);
     } catch (cause) {
@@ -128,8 +171,44 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       return;
     }
     try {
-      const applied = await guard.run(async () => { await store.updateConfig(projectConfigPatch(project)); });
+      let savedApplication: ProfileApplication | undefined;
+      const applied = await guard.run(async () => {
+        const saved = await store.updateConfig(current => {
+          const patch = projectConfigPatch(project);
+          const target = { ...current, ...patch };
+          const library = profileLibrary(current);
+          const resolved = resolveProfileForExecution(target, library, {
+            ...project.profileApplication, model: target.active_model,
+            settings: profileSettingsSnapshot(target), system_prompt: project.systemPrompt,
+          });
+          return { ...patch, ...executionSettings(profileApplicationConfig(resolved.application)), settings_profiles: mergeProfileEditor(current, {
+            baseRevision: library.revision, library: resolved.library, application: resolved.application,
+          }, 'default') };
+        });
+        savedApplication = appliedProfile(saved);
+      });
       if (!applied) return;
+      if (savedApplication) {
+        const application = savedApplication;
+        const profileSettings = executionSettings(profileApplicationConfig(application));
+        const latest = readProjects();
+        const savedProject = latest.find(item => item.id === project.id);
+        if (savedProject && savedProject.config.active_model === project.config.active_model
+          && savedProject.systemPrompt === project.systemPrompt && settingsEqual(savedProject.config, project.config)) {
+          const next = latest.map(item => item.id === project.id ? {
+            ...item, profileApplication: application,
+            config: { ...item.config, ...profileSettings }, systemPrompt: application.system_prompt,
+          } : item);
+          writeProjects(next); setProjects(next);
+        }
+        const draft = latestDraft.current;
+        if (draft.selectedId === project.id && draft.configSnapshot?.active_model === project.config.active_model
+          && draft.systemPrompt === project.systemPrompt && settingsEqual(draft.configSnapshot, project.config)) {
+          setProfileApplication(structuredClone(application));
+          setConfigSnapshot(previous => previous ? { ...previous, ...profileSettings } : previous);
+          setSystemPrompt(application.system_prompt);
+        }
+      }
       setActiveProjectId(project.id);
       setNotice(t("ui.appliedProjectNamed", { name: project.name }));
       setError(null);
@@ -180,6 +259,19 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     }
   };
 
+  const snapshot = configSnapshot ?? cfg;
+  const displayedProfile = profileApplication && snapshot
+    ? resolveProfileForExecution(snapshot, profileLibrary(store.getConfig() ?? snapshot), profileApplication).application : undefined;
+  const displayConfig = displayedProfile && snapshot ? { ...snapshot, ...profileApplicationConfig(displayedProfile) } : snapshot;
+  const displayedPrompt = displayedProfile?.system_prompt ?? systemPrompt;
+
+  const captureCurrent = () => {
+    const setup = currentProjectSetup(store);
+    if (!setup) return;
+    setConfigSnapshot(setup.config); setProfileApplication(setup.application); setSystemPrompt(setup.application.system_prompt);
+    setNotice(t("ui.projectSnapshotCaptured"));
+  };
+
   return (
     <div className="app-page-scroll relative flex h-full min-h-0 flex-col overflow-auto p-4">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -226,17 +318,18 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <label className="text-xs ui-color-muted" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input mt-1" /></label>
             <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
           </div>
-          <label className="mt-3 block text-xs ui-color-muted" >{t("ui.fieldSystemPrompt")}<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={3} className="app-textarea mt-1" /></label>
+          <label className="mt-3 block text-xs ui-color-muted">{t("ui.fieldSystemPrompt")}<textarea value={displayedPrompt} readOnly aria-describedby="project-profile-prompt-hint" rows={3} className="app-textarea mt-1" /></label>
+          <p id="project-profile-prompt-hint" className="mt-1 text-xs ui-color-muted">{modelSettingsCopy[locale].projectPromptHint}</p>
           <section className="project-config-snapshot">
             <h3>{t("ui.projectSavedSetup")}</h3>
             <dl>
-              <div><dt>{t("ui.fieldModelPath")}</dt><dd>{modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" disabled={!cfg} title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? '')} aria-label={`${modelCopy.choose}: ${modelDisplayName((configSnapshot ?? cfg)?.active_model ?? '') || t('load.noModel')}`} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'model', onApply: next => setConfigSnapshot(structuredClone(next)) })}><span>{modelDisplayName((configSnapshot ?? cfg)?.active_model ?? '') || modelCopy.choose}</span><span aria-hidden="true">▾</span></button> : <span title={normalizeDisplayPath((configSnapshot ?? cfg)?.active_model ?? '')}>{modelDisplayName((configSnapshot ?? cfg)?.active_model ?? '') || t('load.noModel')}</span>}</dd></div>
-              <div><dt>{t("ui.fieldBackend")}</dt><dd>{(configSnapshot ?? cfg)?.active_backend || "PATH"} · {(configSnapshot ?? cfg)?.active_build || "system"}</dd></div>
-              <div><dt>{t("ui.fieldContext")}</dt><dd>{(configSnapshot ?? cfg)?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : (configSnapshot ?? cfg)?.ctx_size.toLocaleString()}</dd></div>
+              <div><dt>{t("ui.fieldModelPath")}</dt><dd>{modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" disabled={!cfg} title={normalizeDisplayPath(displayConfig?.active_model ?? '')} aria-label={`${modelCopy.choose}: ${modelDisplayName(displayConfig?.active_model ?? '') || t('load.noModel')}`} onClick={() => openModelSettings('model')}><span>{modelDisplayName(displayConfig?.active_model ?? '') || modelCopy.choose}</span><span aria-hidden="true">▾</span></button> : <span title={normalizeDisplayPath(displayConfig?.active_model ?? '')}>{modelDisplayName(displayConfig?.active_model ?? '') || t('load.noModel')}</span>}</dd></div>
+              <div><dt>{t("ui.fieldBackend")}</dt><dd>{displayConfig?.active_backend || "PATH"} · {displayConfig?.active_build || "system"}</dd></div>
+              <div><dt>{t("ui.fieldContext")}</dt><dd>{displayConfig?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : displayConfig?.ctx_size.toLocaleString()}</dd></div>
             </dl>
             <div className="profile-snapshot-actions">
-              <button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={() => { setConfigSnapshot(structuredClone(cfg)); setNotice(t("ui.projectSnapshotCaptured")); }}>{t("ui.useCurrentSetup")}</button>
-              {modelSettings ? <button type="button" className="app-button app-button--ghost" disabled={!cfg} onClick={() => modelSettings.open({ target: { kind: 'project', id: selectedId ?? 'new' }, config: buildConfig(), section: 'runtime', onApply: next => setConfigSnapshot(structuredClone(next)) })}>{modelCopy.settings}</button> : onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
+              <button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={captureCurrent}>{t("ui.useCurrentSetup")}</button>
+              {modelSettings ? <button type="button" className="app-button app-button--ghost" disabled={!cfg} onClick={() => openModelSettings('runtime')}>{modelCopy.settings}</button> : onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
             </div>
           </section>
           <div className="mt-4 border-t pt-3 ui-border-color-border" >

@@ -53,7 +53,6 @@ describe('model management and settings', () => {
     const second = (await findModelButton('b.gguf')).closest('[role="listitem"]') as HTMLElement;
     expect(within(first).queryByText('Running')).not.toBeInTheDocument();
     expect(await within(second).findByText('Running')).toBeVisible();
-    fireEvent.click(within(second).getByText('•••'));
     expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeDisabled();
     vi.mocked(api.sessionList).mockResolvedValue([{ ...live, state: 'stopped' }]);
     act(() => notifySessionStatusChanged());

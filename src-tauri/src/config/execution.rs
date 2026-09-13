@@ -78,10 +78,10 @@ pub fn apply_request_settings(live: &AppConfig, edited: &AppConfig) -> Result<Ap
 }
 
 pub fn snapshot(cfg: &AppConfig) -> ExecutionSettings {
-    let Value::Object(mut fields) = serde_json::to_value(cfg).expect("serializable configuration")
-    else {
-        unreachable!("configuration is an object")
-    };
+    // Match saved JSON numbers instead of widening f32 fields into f64 values.
+    let mut fields: ExecutionSettings =
+        serde_json::from_slice(&serde_json::to_vec(cfg).expect("serializable configuration"))
+            .expect("serialized configuration is an object");
     fields.retain(|key, _| EXECUTION_FIELDS.contains(&key.as_str()));
     fields
 }
@@ -148,6 +148,30 @@ pub(super) fn normalize_session(base: &AppConfig, definition: &mut SessionDefini
 mod tests {
     use super::*;
     use crate::config::{GpuPlacement, SessionModels};
+
+    #[test]
+    fn execution_snapshots_keep_the_same_numbers_as_saved_configuration() {
+        let cfg = AppConfig {
+            models_dir: "models".into(),
+            temperature: 0.2,
+            top_p: 0.95,
+            spec_draft_p_min: 0.3,
+            spec_draft_p_split: 0.1,
+            ..Default::default()
+        };
+        let saved: Value = serde_json::from_slice(&serde_json::to_vec(&cfg).unwrap()).unwrap();
+        let execution = snapshot(&cfg);
+        for field in [
+            "temperature",
+            "top_p",
+            "spec_draft_p_min",
+            "spec_draft_p_split",
+        ] {
+            assert_eq!(execution[field], saved[field], "{field}");
+        }
+        assert_eq!(execution["temperature"], serde_json::json!(0.2));
+        assert_eq!(execution["spec_draft_p_split"], serde_json::json!(0.1));
+    }
 
     #[test]
     fn request_application_preserves_live_server_settings_and_default_modes() {

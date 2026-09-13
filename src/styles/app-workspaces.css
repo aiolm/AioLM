@@ -30,22 +30,31 @@
 .developer-section--snippets > * { min-width: 0; }
 .developer-section pre { overflow-wrap: anywhere; }
 .tuning-field-list { display: flex; flex-direction: column; }
-.tuning-field-list > .tuning-default-field { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 12px; padding: var(--ui-row-space) 0; border-bottom: 1px solid var(--ui-border); }
+.tuning-default-field { display: flex; flex-direction: column; min-width: 0; gap: 12px; }
+.tuning-field-list > .tuning-default-field { padding: var(--ui-row-space) 0; border-bottom: 1px solid var(--ui-border); }
 .tuning-field-list > .tuning-default-field:last-child { border-bottom: 0; }
-.tuning-field-list > .tuning-default-field > :last-child { justify-content: end; }
 .tuning-default-field__content { display: flex; flex-direction: column; min-width: 0; gap: 8px; container: tuning-field / inline-size; }
-.tuning-option-metadata { display: flex; flex-direction: column; min-width: 0; gap: 4px; font-size: 12px; line-height: 1.65; color: var(--ui-muted); }
-.tuning-option-identifiers { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.tuning-default-field__content > .text-xs { line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
+.tuning-option-metadata { display: flex; flex-direction: column; min-width: 0; gap: 8px; font-size: 12px; line-height: 1.65; color: var(--ui-muted); }
+.tuning-option-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.tuning-option-summary .option-default-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.tuning-default-note { margin-inline-start: 4px; color: var(--ui-muted); }
+.tuning-default-active { margin-inline-start: 4px; color: var(--tone-success-ink); }
+.tuning-option-details { min-width: 0; }
+.tuning-option-details > summary { width: fit-content; cursor: pointer; padding-block: 4px; user-select: none; }
+.tuning-option-details[open] > summary { margin-bottom: 6px; }
+.tuning-option-details dl { display: grid; gap: 8px; margin: 0; padding: 10px 12px; background: var(--ui-surface-muted); border-radius: 8px; }
+.tuning-option-details dl > div { display: grid; gap: 2px; }
+.tuning-option-details dt { color: var(--ui-muted); }
+.tuning-option-details dd { margin: 0; color: var(--ui-ink); overflow-wrap: anywhere; word-break: normal; }
+.tuning-option-details p { margin-block: 8px 0; word-break: keep-all; overflow-wrap: anywhere; }
 .tuning-option-metadata code, .option-default-value code { font-size: inherit; white-space: normal; overflow-wrap: anywhere; }
 .option-default-value { display: block; font-size: 12px; line-height: 1.65; color: var(--ui-muted); }
 .option-default-source { display: inline; margin-inline-start: 8px; font-size: 11px; }
-.option-default-value > code { color: var(--ui-ink); }
-@container fields (max-width: 599px) {
-  .tuning-field-list > .tuning-default-field { grid-template-columns: minmax(0, 1fr); }
-  .tuning-field-list > .tuning-default-field > :last-child { justify-content: start; }
-}
+.option-default-value > code { color: var(--ui-ink); font-family: inherit; font-variant-numeric: tabular-nums; word-break: keep-all; }
 .tuning-section { min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-panel); container: fields / inline-size; }
 .tuning-section + .tuning-section { margin-top: 16px; }
+.tuning-section .app-form-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); }
 .tuning-sampling-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
 .server-options-heading, .server-options-toolbar, .server-option-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .server-options-heading { align-items: start; justify-content: space-between; }
@@ -116,13 +125,23 @@
 .chat-composer-status { position: relative; display: flex; align-items: start; gap: 12px; flex-shrink: 0; margin-top: 8px; }
 .chat-composer-status > :first-child { flex: 1 1 auto; }
 .chat-composer-status > :last-child { flex: 0 0 auto; min-width: 0; max-width: 100%; }
-.chat-composer-metrics { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 12px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-panel); box-shadow: var(--ui-elev-2); position: absolute; bottom: calc(100% + 8px); right: 0; width: max-content; max-width: 100%; z-index: 23; }
 .chat-composer-actions { grid-template-columns: auto minmax(0,1fr); }
 .chat-composer-actions > button { min-width: 0; max-width: 100%; }
 .chat-thread-entry { display: flex; align-items: flex-start; justify-content: flex-start; width: 100%; min-height: 28px; }
 .chat-thread-title { display: block; }
 .chat-status-actions { display: flex; flex-wrap: wrap; align-items: start; gap: 4px 8px; }
-.chat-metrics-disclosure summary { cursor: pointer; }
+.chat-response-metrics { margin-top: 10px; max-width: 100%; color: var(--ui-muted); font-size: 11px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+.chat-response-metrics-stages { display: grid; gap: 2px; }
+.chat-response-metrics-row { display: grid; grid-template-columns: 1.75rem minmax(0,1fr); gap: 6px; }
+.chat-response-metrics-row > dt { font-weight: 600; }
+.chat-response-metrics-row > dd { display: flex; flex-wrap: wrap; gap: 0 6px; min-width: 0; }
+.chat-response-metrics-row > dd > span { max-width: 100%; overflow-wrap: anywhere; }
+.chat-response-metrics-details { margin-top: 4px; }
+.chat-response-metrics-details > summary { width: fit-content; max-width: 100%; cursor: pointer; border-radius: 3px; }
+.chat-response-metrics-details > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.chat-response-metrics-details > dl { display: grid; gap: 2px; margin-top: 4px; }
+.chat-response-metrics-details > dl > div { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+.chat-response-metrics-details dt, .chat-response-metrics-details dd { overflow-wrap: anywhere; min-width: 0; }
 .chat-thread-row { padding: 4px; }
 .chat-thread-list { --chat-scrollbar-size: 8px; scrollbar-width: auto; scrollbar-color: auto; scrollbar-gutter: stable; margin-inline-end: calc(-1 * var(--chat-scrollbar-size)); }
 .chat-thread-list::-webkit-scrollbar { width: var(--chat-scrollbar-size); }

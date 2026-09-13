@@ -6,6 +6,7 @@ import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import MessageBubble from "./MessageBubble";
+import type { ResponseMetrics } from "../../shared/lib/metrics";
 
 interface ChatMessageLogProps {
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -15,7 +16,7 @@ interface ChatMessageLogProps {
   model: string;
   serverOn: boolean;
   msgs: ChatHistoryMessage[];
-  streamingDraft: { content: string; reasoning: string } | null;
+  streamingDraft: { content: string; reasoning: string; metrics?: ResponseMetrics } | null;
   phase: "idle" | "thinking" | "streaming";
   copiedIndex: number | null;
   compactMessages: boolean;
@@ -82,7 +83,7 @@ export default function ChatMessageLog({
       {msgs.map((message, index) => (
         <MessageBubble
           key={`${message.role}-${index}`}
-          message={streamingDraft && index === msgs.length - 1 && message.role === "assistant" ? { ...message, content: streamingDraft.content, reasoning: streamingDraft.reasoning } : message}
+          message={streamingDraft && index === msgs.length - 1 && message.role === "assistant" ? { ...message, ...streamingDraft } : message}
           index={index}
           messageCount={msgs.length}
           phase={phase}

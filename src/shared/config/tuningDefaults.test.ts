@@ -63,7 +63,11 @@ describe("runtime-owned tuning defaults", () => {
   it("omits default sampling and reasoning overrides on the wire", () => {
     const next = { ...cfg, ...resetAllTuning() };
     const body = buildChatRequestBody("model", [], { ...next, options: next.chat_options });
-    expect(JSON.parse(JSON.stringify(body))).toEqual({ model: "model", messages: [], stream: true });
+    expect(JSON.parse(JSON.stringify(body))).toEqual({
+      model: "model", messages: [], stream: true,
+      timings_per_token: true, stream_options: { include_usage: true },
+    });
+    expect(next.chat_options).toEqual({});
   });
 
   it("single reset does not remove the other sampling request values", () => {

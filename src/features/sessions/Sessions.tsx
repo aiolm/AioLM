@@ -6,9 +6,11 @@ import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { finishTask, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
+import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
 import {
@@ -247,7 +249,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       return;
     }
     if (!cfg) return;
-    const launchConfig = store.getConfig?.() ?? cfg;
+    let launchConfig = store.getConfig?.() ?? cfg;
     const taskId = `session-load-${runnableDefinition.id}`;
     setBusyId(runnableDefinition.id);
     setLoadingId(runnableDefinition.id);
@@ -275,7 +277,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       },
     });
     try {
-      const loaded = await api.sessionStart(runnableDefinition.id, sessionConfig(launchConfig, runnableDefinition), stopExisting);
+      launchConfig = await prepareSessionProfile(store, runnableDefinition);
+      if (getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') throw new Error('Session load cancelled.');
+      const loaded = await api.sessionStart(runnableDefinition.id, launchConfig, stopExisting);
       notifySessionStatusChanged();
       setStatuses((current) => ({ ...current, [loaded.id]: loaded }));
       finishTask(taskId, "completed");
@@ -286,7 +290,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
         finishTask(taskId, "cancelled");
       } else if (runnableDefinition.id === DEFAULT_SESSION_ID && isMissingSessionFacade(error)) {
         try {
-          await store.start(sessionConfig(launchConfig, runnableDefinition));
+          await store.start(launchConfig);
           notifySessionStatusChanged();
           finishTask(taskId, "completed");
         } catch (fallbackError) {
@@ -452,7 +456,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                 <div className="session-entry-actions">
                   <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings || controlsDisabled || rowState === "starting" || rowState === "stopping"} onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
                   {(loadingId === definition.id || rowState === "starting") && rowState !== "stopping"
-                    ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</button>
+                    ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
                     : rowState === "running"
                       ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
                       : <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
@@ -472,8 +476,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                 {rowStatus?.log_tail && <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs ui-color-muted">{normalizeDisplayText(rowStatus.log_tail)}</pre>}
                 <div className="flex flex-wrap items-center gap-2">
                   {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>}
-                  <button type="button" className="app-button app-button--ghost app-button--sm" onClick={closeDetails}>{t("common.dismiss")}</button>
-                  {rowState === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
+                  {definition.id !== DEFAULT_SESSION_ID && rowState === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
                   {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>}
                 </div>
               </div>}

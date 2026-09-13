@@ -18,14 +18,16 @@ export default function ConfirmDialog({
   open,
   title,
   description,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
+  confirmLabel: providedConfirmLabel,
+  cancelLabel: providedCancelLabel,
   busy = false,
   tone = "danger",
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   const { t } = useI18n();
+  const confirmLabel = providedConfirmLabel ?? t("common.confirm");
+  const cancelLabel = providedCancelLabel ?? t("common.cancel");
   const id = useId();
   const titleId = `${id}-title`;
   const descriptionId = `${id}-description`;

@@ -1,5 +1,6 @@
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
+import type { ProfileApplication } from "../../shared/config/settingsProfiles";
 
 export const PROJECTS_KEY = "aiolm.projects.v1";
 export const ACTIVE_PROJECT_KEY = "aiolm.active-project.v1";
@@ -57,6 +58,7 @@ export interface ProjectPreset {
   description: string;
   systemPrompt: string;
   config: ProjectConfig;
+  profileApplication?: ProfileApplication;
   documentBindings: ProjectDocument[];
   toolIds: string[];
   createdAt: number;
@@ -88,7 +90,7 @@ function boolArray(value: unknown): string[] {
 
 function jsonObject(value: unknown): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as JsonObject;
+  return structuredClone(value) as JsonObject;
 }
 
 function loraAdapters(value: unknown): LoraAdapterConfig[] {
@@ -160,6 +162,18 @@ function normalizeProject(value: unknown): ProjectPreset | null {
   const name = stringValue(source.name).trim();
   if (!name) return null;
   const now = Date.now();
+  const config = normalizeConfig(source.config);
+  const systemPrompt = stringValue(source.systemPrompt, "You are a helpful assistant.").slice(0, 32_768);
+  const application = source.profileApplication;
+  const { active_model: model, ...settings } = config;
+  const profileApplication: ProfileApplication | undefined = application && typeof application === 'object'
+    && application.model === model && typeof application.profile_id === 'string' && application.profile_id.trim()
+    ? {
+      model, profile_id: application.profile_id.trim().slice(0, 256),
+      ...(typeof application.profile_name === 'string' ? { profile_name: application.profile_name.slice(0, 120) } : {}),
+      ...(Number.isSafeInteger(application.profile_revision) && application.profile_revision! >= 0 ? { profile_revision: application.profile_revision } : {}),
+      settings: structuredClone(settings), system_prompt: systemPrompt,
+    } : undefined;
   const documents = Array.isArray(source.documentBindings)
     ? source.documentBindings
       .filter((item): item is ProjectDocument => !!item && typeof item === "object" && typeof (item as ProjectDocument).name === "string" && typeof (item as ProjectDocument).path === "string")
@@ -170,8 +184,9 @@ function normalizeProject(value: unknown): ProjectPreset | null {
     id: stringValue(source.id, `project-${now.toString(36)}`),
     name: name.slice(0, 128),
     description: stringValue(source.description).slice(0, 512),
-    systemPrompt: stringValue(source.systemPrompt, "You are a helpful assistant.").slice(0, 32_768),
-    config: normalizeConfig(source.config),
+    systemPrompt,
+    config,
+    ...(profileApplication ? { profileApplication } : {}),
     documentBindings: documents,
     toolIds: boolArray(source.toolIds),
     createdAt: numberValue(source.createdAt, now),
@@ -225,6 +240,7 @@ export function projectFromConfig(
   toolIds: string[] = [],
   description = "",
   now = Date.now(),
+  profileApplication?: ProfileApplication,
 ): ProjectPreset {
   const project = normalizeProject({
     id: `project-${now.toString(36)}`,
@@ -232,6 +248,7 @@ export function projectFromConfig(
     description,
     systemPrompt,
     config,
+    profileApplication,
     documentBindings,
     toolIds,
     createdAt: now,
@@ -300,5 +317,5 @@ export function importProject(raw: string): ProjectPreset {
 }
 
 export function projectConfigPatch(project: ProjectPreset): Partial<AppConfig> {
-  return { ...project.config };
+  return structuredClone(project.config);
 }

@@ -49,7 +49,7 @@ export interface TuningCategory {
 interface TuningFieldMetadata {
   /** Category used by the phase-1 left navigation and search index. */
   category: TuningCategoryId;
-  /** Concise help shown by the field's tooltip affordance. */
+  /** Localizable description shared by the field and search index. */
   tooltip: TuningTooltip;
   /** Upstream names, including aliases when a field maps to more than one. */
   aliases?: readonly string[];
@@ -336,4 +336,13 @@ export function tuningFieldTooltip(
     title: translateFieldKey(t, `extra.tuningField${suffix}TooltipTitle`, field.tooltip.title),
     description: translateFieldKey(t, `extra.tuningField${suffix}TooltipDesc`, field.tooltip.description),
   };
+}
+
+/** One complete explanation, including any special values, without repeating hints. */
+export function tuningFieldDescription(
+  t: FieldTranslator,
+  field: { key: string; tooltip: TuningTooltip; hint?: string },
+): string {
+  const description = tuningFieldTooltip(t, field).description;
+  return description || tuningFieldHint(t, field);
 }

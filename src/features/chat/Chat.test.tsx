@@ -5,9 +5,11 @@ import ChatPanel from "./Chat";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { SESSION_STATUS_CHANGED_EVENT } from "../../shared/runtime/sessionUtils";
+import { SESSION_STATUS_CHANGED_EVENT, sessionConfig } from "../../shared/runtime/sessionUtils";
 import { sessionHasActivity } from "../../shared/state/sessionActivity";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
+import { createTestStore } from "../../testing/appStore";
+import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -85,6 +87,23 @@ const store = {
 
 function renderPanel(panelStore = store) {
   return render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ChatPanel, { store: panelStore }) }));
+}
+
+function namedSessionStore() {
+  const definition: api.SessionDefinition = { id: "work", name: "Work", enabled: false,
+    models: { primary_model: "models/work.gguf", mmproj: "", draft_model: "" },
+    gpu: { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null },
+    execution: { ctx_size: 8192, temperature: 0.2 },
+  };
+  const panelStore = createTestStore({ ...cfg, sessions: [definition], stop_existing_sessions_on_load: false });
+  const target = sessionConfig(panelStore.cfg!, definition);
+  const selected = { ...captureProfile({ ...target, ctx_size: 16384, temperature: 0.5, ngl: 17 }, "Saved session profile", "model", "Latest instruction"), revision: 2 };
+  const fallback = defaultSettingsProfile();
+  const original = { ...materializeProfileApplication(target, "Earlier instruction", selected), profile_revision: 1 };
+  const defaultApplication = materializeProfileApplication(panelStore.cfg!, "", fallback);
+  panelStore.cfg!.settings_profiles = { ...emptyProfileLibrary(), legacy_imported: true, entries: [fallback, selected],
+    default_profile_id: fallback.id, applied: { [profileTargetKey(cfg.active_model)]: defaultApplication, "session:work": original } };
+  return { panelStore, selected, defaultApplication };
 }
 
 /** 200KB of attached text: ~112 chunks at the 1800-char chunk size, well past the 64-chunk search limit. */
@@ -277,9 +296,32 @@ describe("ChatPanel document context warning", () => {
     renderPanel({ ...store, status: { state: 'stopped', model: cfg.active_model }, start });
     expect(screen.queryByText('Model ready')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Start server' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Model & settings' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Model & settings' }));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' } }));
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it("keeps one settings action when a ready conversation gains messages and its server stops", async () => {
+    const open = vi.fn();
+    vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
+    mocked.sessionList.mockResolvedValue([]);
+    const view = renderPanel();
+    await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" } }));
+
+    respondWithText("Conversation retained");
+    await sendMessage("Hello");
+    await screen.findByText("Conversation retained", { exact: true });
+    open.mockClear();
+    view.rerender(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ChatPanel, { store: { ...store, status: { state: "stopped", model: cfg.active_model } } }),
+    }));
+    expect(screen.getByText("Conversation retained", { exact: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
+    expect(open).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" } }));
   });
 
   it("starts a stopped session with its saved settings regardless of its legacy enabled value", async () => {
@@ -289,13 +331,49 @@ describe("ChatPanel document context warning", () => {
       gpu: { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null },
       execution: { ctx_size: 8192, temperature: 0.2 },
     };
-    const startDefault = vi.fn();
-    renderPanel({ ...store, cfg: { ...cfg, sessions: [definition], stop_existing_sessions_on_load: false }, start: startDefault });
+    const panelStore = createTestStore({ ...cfg, sessions: [definition], stop_existing_sessions_on_load: false });
+    renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
     fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/work.gguf", ctx_size: 8192, temperature: 0.2 }), false));
-    expect(startDefault).not.toHaveBeenCalled();
+    expect(panelStore.start).not.toHaveBeenCalled();
+  });
+
+  it("starts a named session with its latest selected profile while preserving profile identities and other targets", async () => {
+    mocked.sessionList.mockResolvedValue([]);
+    const { panelStore, selected, defaultApplication } = namedSessionStore();
+    const entries = structuredClone(panelStore.cfg!.settings_profiles!.entries);
+    renderPanel(panelStore);
+    fireEvent.click(await screen.findByLabelText("Loaded sessions"));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({
+      active_model: "models/work.gguf", ctx_size: 16384, temperature: 0.5, ngl: 17,
+    }), false));
+    const library = panelStore.getConfig()!.settings_profiles!;
+    expect(library.entries).toEqual(entries);
+    expect(library.applied["session:work"]).toMatchObject({ profile_id: selected.id, profile_revision: 2, system_prompt: "Latest instruction" });
+    expect(library.applied[profileTargetKey(cfg.active_model)]).toEqual(defaultApplication);
+    expect(panelStore.cfg!.sessions![0]).toMatchObject({ id: "work", name: "Work", enabled: false, execution: { ctx_size: 16384, temperature: 0.5 } });
+    expect(panelStore.cfg!.temperature).toBe(cfg.temperature);
+    expect(panelStore.start).not.toHaveBeenCalled();
+  });
+
+  it("does not launch a named session when saving its selected profile application fails", async () => {
+    mocked.sessionList.mockResolvedValue([]);
+    const { panelStore } = namedSessionStore();
+    const before = structuredClone(panelStore.cfg);
+    vi.mocked(panelStore.updateConfig).mockRejectedValueOnce(new Error("Profile save failed"));
+    renderPanel(panelStore);
+    fireEvent.click(await screen.findByLabelText("Loaded sessions"));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
+    expect(await screen.findByText(/Profile save failed/)).toBeInTheDocument();
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(panelStore.start).not.toHaveBeenCalled();
+    expect(panelStore.cfg).toEqual(before);
+    expect(screen.getByRole("button", { name: "Start server" })).toBeEnabled();
   });
 
   it("opens settings for the selected session without clearing the composer or attachments", async () => {
@@ -444,6 +522,20 @@ describe("ChatPanel document context warning", () => {
         "First question.", "The first answer.", "Second question.", "The second answer.",
       ]);
     });
+  });
+
+  it("opens tool controls without loading until their single load action is used", async () => {
+    mocked.mcpListServers.mockResolvedValue([{ id: "srv1", name: "Test Server", command: "node", args: [], enabled: true }]);
+    mocked.mcpListTools.mockResolvedValue([{ name: "test_tool", description: "A test tool.", input_schema: { type: "object", properties: {} } }]);
+    renderPanel();
+    fireEvent.click(screen.getByText("MCP tools", { selector: "summary" }));
+    expect(mocked.mcpListServers).not.toHaveBeenCalled();
+    const load = screen.getAllByRole("button", { name: "Load MCP tools" });
+    expect(load).toHaveLength(1);
+    fireEvent.click(load[0]);
+    await screen.findByText(/Test Server/);
+    expect(mocked.mcpListServers).toHaveBeenCalledOnce();
+    expect(mocked.mcpListTools).toHaveBeenCalledWith("srv1");
   });
 
   it("keeps the truncation warning visible through an approved MCP tool follow-up", async () => {

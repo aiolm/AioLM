@@ -1,8 +1,10 @@
 import type { StreamDelta } from "./sse.ts";
 import type { JsonObject } from "../config/tuningValidation.ts";
 import type { ExecutionSettings, SessionExecutionSettings } from '../config/executionSettings';
+import type { SettingsProfileLibrary } from '../config/settingsProfiles';
 
 export interface AppConfig {
+  settings_profiles?: SettingsProfileLibrary;
   runtime_defaults?: string[];
   config_version: number;
   models_dir: string;

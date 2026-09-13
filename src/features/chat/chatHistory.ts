@@ -1,5 +1,6 @@
 import type { ChatCitation, DocumentAttachment, ImageAttachment } from "./chatTypes.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
+import { sanitizeResponseMetrics, type ResponseMetrics } from "../../shared/lib/metrics.ts";
 
 export type { ChatCitation } from "./chatTypes.ts";
 
@@ -26,6 +27,7 @@ export interface ChatHistoryMessage {
   interrupted?: boolean;
   failed?: boolean;
   citations?: ChatCitation[];
+  metrics?: ResponseMetrics;
 }
 
 export interface ChatThread {
@@ -170,6 +172,8 @@ function localSafeWorkspace(workspace: ChatWorkspace): ChatWorkspace {
           }));
         }
         if (message.citations !== undefined) safeMessage.citations = message.citations.slice(0, 64);
+        const metrics = sanitizeResponseMetrics(message.metrics);
+        if (metrics) safeMessage.metrics = metrics;
         return safeMessage;
       }),
     })),
@@ -265,7 +269,7 @@ export function createChatThread(
   return {
     id,
     title,
-    systemPrompt: "You are a helpful assistant.",
+    systemPrompt: "",
     createdAt: now,
     updatedAt: now,
     messages: [],

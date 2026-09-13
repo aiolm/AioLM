@@ -13,7 +13,9 @@ pub(crate) async fn save_config(
     cfg: config::AppConfig,
 ) -> Result<config::AppConfig, String> {
     let _config_write = state.config_write.lock().await;
-    config::save(&cfg)
+    let latest = config::load_result()?;
+    let prepared = config::profiles::prepare_config_update(&latest, &cfg)?;
+    config::save(&prepared)
 }
 
 #[tauri::command]

@@ -291,11 +291,12 @@ fn aggregate(
     prompt: u32,
     concurrency: u32,
     repetition: u32,
-    started: Instant,
-    ended: Instant,
+    elapsed: std::ops::Range<Instant>,
     measurements: &[protocol::Measurement],
     peak_memory_bytes: Option<u64>,
 ) -> PerformanceBenchRow {
+    let started = elapsed.start;
+    let ended = elapsed.end;
     let first = measurements.iter().filter_map(|m| m.first_token).min();
     let last_first = measurements.iter().filter_map(|m| m.first_token).max();
     let last = measurements.iter().filter_map(|m| m.last_token).max();
@@ -354,9 +355,7 @@ fn aggregate(
 }
 
 async fn batch(
-    client: &reqwest::Client,
-    base: &str,
-    key: &str,
+    endpoint: &protocol::Endpoint,
     tokens: Arc<Vec<u32>>,
     generation: u32,
     concurrency: u32,
@@ -366,9 +365,7 @@ async fn batch(
     let mut requests = FuturesUnordered::new();
     for slot in 0..concurrency {
         requests.push(protocol::measure(
-            client.clone(),
-            base.to_owned(),
-            key.to_owned(),
+            endpoint.clone(),
             tokens.clone(),
             generation,
             slot,
@@ -383,6 +380,11 @@ async fn batch(
     results
 }
 
+pub struct RuntimeInfo {
+    pub version: String,
+    pub cache_ram_supported: bool,
+}
+
 pub async fn run(
     cfg: AppConfig,
     mut request: PerformanceBenchRequest,
@@ -390,15 +392,14 @@ pub async fn run(
     cancel: Arc<AtomicBool>,
     active_pid: Arc<Mutex<Option<u32>>>,
     progress: Progress,
-    runtime_version: String,
-    cache_ram_supported: bool,
+    runtime: RuntimeInfo,
 ) -> PerformanceBenchResult {
     let mut result = failed(&request, &cfg, String::new());
     if let Err(error) = validate_request(&mut request) {
         result.message = Some(error);
         return result;
     }
-    result.runtime_version = runtime_version;
+    result.runtime_version = runtime.version;
     result.message = None;
     let mut managed: Option<IsolatedServer> = None;
     let deadline = Instant::now() + RUN_TIMEOUT;
@@ -409,7 +410,7 @@ pub async fn run(
         // Shared wait_ready additionally verifies listener ownership by PID.
         let reservation = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| format!("cannot reserve benchmark port: {error}"))?;
         let port = reservation.local_addr().map_err(|error| error.to_string())?.port();
-        let isolated = isolated_config(&cfg, &request, port, cache_ram_supported);
+        let isolated = isolated_config(&cfg, &request, port, runtime.cache_ram_supported);
         result.context_size = isolated.ctx_size;
         result.parallel = isolated.parallel;
         result.args = redacted_args(server::build_args_with_gpu(&isolated, "", &gpu));
@@ -461,10 +462,11 @@ pub async fn run(
             target_bytes *= 2;
             if target_bytes > 4 * 1024 * 1024 { return Err("could not construct enough corpus tokens within the text size limit".into()); }
         };
+        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone() };
         if request.warmup {
             emit(&progress, &request, "warmup", 0, None, None);
             let tokens = Arc::new(all_tokens[..all_tokens.len().min(128)].to_vec());
-            let warmup = batch(&client, base, &key, tokens, 16, isolated.parallel, &cancel, REQUEST_TIMEOUT).await;
+            let warmup = batch(&endpoint, tokens, 16, isolated.parallel, &cancel, REQUEST_TIMEOUT).await;
             if let Some(error) = warmup.iter().find_map(|m| m.error.as_ref()) { return Err(format!("warmup failed: {error}")); }
         }
         for &prompt in &request.prompt_lengths {
@@ -478,9 +480,9 @@ pub async fn run(
                     emit(&progress, &request, phase, result.rows.len(), None, Some(format!("{prompt} input / {} output, {concurrency} request(s), repetition {repetition}", request.generation_length)));
                     let memory = PeakMemorySampler::start(pid);
                     let started = Instant::now();
-                    let measured = batch(&client, base, &key, tokens.clone(), request.generation_length, concurrency, &cancel, REQUEST_TIMEOUT.min(remaining)).await;
+                    let measured = batch(&endpoint, tokens.clone(), request.generation_length, concurrency, &cancel, REQUEST_TIMEOUT.min(remaining)).await;
                     let ended = Instant::now();
-                    let row = aggregate(&request, prompt, concurrency, repetition, started, ended, &measured, memory.finish());
+                    let row = aggregate(&request, prompt, concurrency, repetition, started..ended, &measured, memory.finish());
                     result.rows.push(row.clone());
                     emit(&progress, &request, phase, result.rows.len(), Some(row), None);
                     if cancel.load(Ordering::Acquire) { return Err("benchmark cancelled".into()); }
@@ -598,8 +600,7 @@ mod tests {
             100,
             2,
             1,
-            start,
-            start + Duration::from_secs(5),
+            start..start + Duration::from_secs(5),
             &measurements,
             Some(1234),
         );
@@ -642,8 +643,7 @@ mod tests {
             100,
             2,
             1,
-            start,
-            start + Duration::from_secs(4),
+            start..start + Duration::from_secs(4),
             &[observed.clone(), burst],
             None,
         );
@@ -655,8 +655,7 @@ mod tests {
             100,
             2,
             1,
-            start,
-            start + Duration::from_secs(4),
+            start..start + Duration::from_secs(4),
             &[observed, protocol::Measurement::default()],
             None,
         );
@@ -712,8 +711,10 @@ mod tests {
                     event.phase, event.completed, event.total, event.message
                 );
             }),
-            "unknown".into(),
-            true,
+            RuntimeInfo {
+                version: "unknown".into(),
+                cache_ram_supported: true,
+            },
         )
         .await;
         eprintln!("{}", serde_json::to_string_pretty(&result).unwrap());

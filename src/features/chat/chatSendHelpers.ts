@@ -6,9 +6,8 @@ import {
 } from "./chatUtils";
 import type { ChatCitation, ChatHistoryMessage } from "./chatHistory";
 import { loadDocumentVectors, saveDocumentVectors } from "./documentIndex";
-import type { StreamUsage } from "../../shared/api/sse";
 import type { ChatMcpTool } from "./useChatMcpTools";
-import type { PendingToolCall } from "./chatSendTypes";
+import type { PendingToolCall, RequestMetricsAccumulator } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
 
@@ -104,15 +103,17 @@ export interface StreamAccumulator {
 /** Builds the `chatStream` delta callback: accumulates content/reasoning/tool-call deltas into `streamRef` and throttles bubble repaint via `scheduleAssistantRender`. */
 export function createStreamDeltaHandler(options: {
   streamRef: { current: StreamAccumulator };
-  metricsRef: { current: { startedAt: number; firstTokenAt?: number; usage?: StreamUsage } };
+  metricsRef: { current: RequestMetricsAccumulator };
   streamResponses: boolean;
   setPhase: (phase: "streaming") => void;
   scheduleAssistantRender: () => void;
 }) {
   const { streamRef, metricsRef, streamResponses, setPhase, scheduleAssistantRender } = options;
   return (delta: api.ChatDelta) => {
-    if ((delta.content || delta.reasoning) && metricsRef.current.firstTokenAt === undefined) metricsRef.current.firstTokenAt = performance.now();
-    if (delta.usage) metricsRef.current.usage = delta.usage;
+    const generated = delta.content || delta.reasoning || delta.tool_calls?.some((tool) => tool.name || tool.arguments);
+    if (generated && metricsRef.current.firstTokenAt === undefined) metricsRef.current.firstTokenAt = performance.now();
+    if (delta.usage) metricsRef.current.usage = { ...metricsRef.current.usage, ...delta.usage };
+    if (delta.timings) metricsRef.current.timings = { ...metricsRef.current.timings, ...delta.timings };
     if (delta.reasoning) streamRef.current.reasoning += delta.reasoning;
     if (delta.content) {
       if (streamResponses) setPhase("streaming");
@@ -129,7 +130,7 @@ export function createStreamDeltaHandler(options: {
       if (toolDelta.arguments) current.function.arguments += toolDelta.arguments;
       streamRef.current.toolCalls[toolDelta.index] = current;
     }
-    if (streamResponses) scheduleAssistantRender();
+    if (streamResponses || delta.usage || delta.timings) scheduleAssistantRender();
   };
 }
 

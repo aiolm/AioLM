@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { I18nProvider } from "../shared/i18n/i18n";
 import { createTestStore } from "../testing/appStore";
 import type { AppStore } from "../shared/state/store";
 import App from "./App";
-import { registerTask, removeTask } from "../shared/state/taskRegistry";
+import { getTaskSnapshot, registerTask, removeTask } from "../shared/state/taskRegistry";
+import { LocalTaskCancelButton } from "../shared/ui/TaskCancellation";
 import { setSessionActivity } from "../shared/state/sessionActivity";
 import type { ModelSettingsDialogProps } from "../features/model-settings/ModelSettingsDialog";
 
 let store: AppStore;
+let showBenchmarkCancel = false;
+let benchmarkLoading: Promise<void> | null = null;
+const cancelBenchmark = vi.fn();
 vi.mock("../shared/state/store", () => ({ useAppStore: () => store }));
 vi.mock("../features/chat/Chat", () => ({ default: () => <input aria-label="Conversation draft" /> }));
 vi.mock("../features/projects/Projects", () => ({ default: ({ onOpenTuning }: { onOpenTuning: () => void }) => <><input aria-label="Project draft" /><button onClick={onOpenTuning}>Project parameters</button></> }));
@@ -19,14 +23,47 @@ vi.mock("../features/sessions/Sessions", () => ({ default: () => <p>Sessions con
 vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover content</p> }));
 vi.mock("../features/tuning/Tuning", () => ({ default: () => <p>Parameter form</p> }));
 vi.mock("../features/profiles/ExecutionProfiles", () => ({ default: () => <p>Saved profiles</p> }));
-vi.mock("../features/bench/Bench", () => ({ default: () => <input aria-label="Benchmark result" /> }));
+vi.mock("../features/bench/Bench", () => ({ default: () => {
+  if (benchmarkLoading) throw benchmarkLoading;
+  return <><input aria-label="Benchmark result" />{showBenchmarkCancel && <LocalTaskCancelButton taskId="performance-benchmark-active" onClick={cancelBenchmark}>Cancel benchmark</LocalTaskCancelButton>}</>;
+} }));
 vi.mock("../features/model-settings/ModelSettingsDialog", () => ({ default: ({ open, initialConfig, initialSection, requireModelSelection, onClose }: ModelSettingsDialogProps) => open ? <div role="dialog" aria-label="Model settings editor"><p>{initialSection ?? "model"}</p><input aria-label="Editor model" value={requireModelSelection ? '' : initialConfig.active_model} readOnly /><button onClick={onClose}>Close editor</button></div> : null }));
 
 describe("Workspace navigation", () => {
-  beforeEach(() => { localStorage.clear(); store = createTestStore(); });
-  afterEach(() => { act(() => { removeTask("blocked-navigation"); setSessionActivity("default", false); }); vi.restoreAllMocks(); });
+  beforeEach(() => { localStorage.clear(); store = createTestStore(); showBenchmarkCancel = false; benchmarkLoading = null; cancelBenchmark.mockReset(); });
+  afterEach(() => { act(() => { for (const task of getTaskSnapshot()) removeTask(task.id); setSessionActivity("default", false); }); vi.restoreAllMocks(); });
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
+
+  it("keeps global cancellation through panel loading and restores it after leaving the owner page", async () => {
+    showBenchmarkCancel = true;
+    let release!: () => void;
+    benchmarkLoading = new Promise<void>(resolve => { release = resolve; });
+    const view = mount();
+    act(() => { registerTask({ id: "performance-benchmark-active", kind: "benchmark", label: "Benchmark task", interruptible: true, cancel: cancelBenchmark }); });
+    fireEvent.click(view.container.querySelector("details.app-activity > summary")!);
+    const strip = screen.getByTestId("task-strip");
+    expect(within(strip).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    fireEvent.click(mainTab("Benchmark"));
+    expect(screen.queryByRole("button", { name: "Cancel benchmark" })).not.toBeInTheDocument();
+    expect(within(strip).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await act(async () => { benchmarkLoading = null; release(); });
+    expect(await screen.findByRole("button", { name: "Cancel benchmark" })).toBeVisible();
+    await waitFor(() => expect(within(strip).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument());
+    expect(within(strip).getByText("Benchmark task")).toBeVisible();
+    fireEvent.click(mainTab("Chat"));
+    const globalCancel = await within(strip).findByRole("button", { name: "Cancel" });
+    expect(globalCancel).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Cancel benchmark" })).not.toBeInTheDocument();
+    fireEvent.click(globalCancel);
+    expect(cancelBenchmark).toHaveBeenCalledOnce();
+    fireEvent.click(mainTab("Benchmark"));
+    const pendingCancel = await screen.findByRole("button", { name: "Cancelling" });
+    expect(pendingCancel).toBeDisabled();
+    expect(strip).not.toContainElement(pendingCancel);
+    fireEvent.click(pendingCancel);
+    expect(cancelBenchmark).toHaveBeenCalledOnce();
+  });
 
   it("shows the grouped model name in the header while retaining the first shard path", async () => {
     const name = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
@@ -56,14 +93,14 @@ describe("Workspace navigation", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
-  it('opens an unselected picker when stopped without starting the last saved model', async () => {
+  it('opens the last saved model settings when stopped without starting the model', async () => {
     store.status = { state: 'stopped', model: 'model.gguf' };
     mount();
     expect(screen.queryByText('model.gguf')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
     await screen.findByRole('dialog', { name: 'Model settings editor' });
-    expect(screen.getByLabelText('Editor model')).toHaveValue('');
+    expect(screen.getByLabelText('Editor model')).toHaveValue('model.gguf');
     expect(store.start).not.toHaveBeenCalled();
     expect(store.updateConfig).not.toHaveBeenCalled();
   });

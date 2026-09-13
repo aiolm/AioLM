@@ -83,6 +83,24 @@ describe('concurrent execution edits', () => {
 });
 
 describe('restart requirements', () => {
+  it('allows request delivery when saving an omitted GPU placement as the empty product default', () => {
+    const base = { ...structuredClone(testConfig), gpu: undefined };
+    const saved = { ...base, temperature: 0.2, gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none' as const, tensor_split: [], draft_gpu_id: null } };
+    expect(serverSettingsChanged(base, saved)).toBe(false);
+    expect(serverSettingsChanged(saved, base)).toBe(false);
+    expect(base.gpu).toBeUndefined();
+  });
+
+  it.each([
+    { gpu_ids: ['gpu-a'] }, { main_gpu: 'gpu-a' }, { split_mode: 'layer' as const },
+    { tensor_split: [0.5, 0.5] }, { draft_gpu_id: 'gpu-b' },
+  ])('requires a restart for an actual GPU placement change %j', patch => {
+    const base = { ...structuredClone(testConfig), gpu: undefined };
+    const changed = { ...base, gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none' as const, tensor_split: [], draft_gpu_id: null, ...patch } };
+    expect(serverSettingsChanged(base, changed)).toBe(true);
+    expect(serverSettingsChanged(changed, base)).toBe(true);
+  });
+
   it('allows request settings and request defaults to apply without a server restart', () => {
     const base = { ...structuredClone(testConfig), runtime_defaults: ['threads', 'temperature'] };
     const draft = { ...base, temperature: 0.2, top_p: 0.8, top_k: 10, reasoning_effort: 'high',

@@ -24,8 +24,11 @@ export function buildChatRequestBody(
   sampling: ChatSampling,
 ): ChatRequestBody {
   const options = mapChatOptionAliases(sampling.options ?? {});
+  const streamOptions = asJsonObject(options.stream_options) ?? {};
   const body: ChatRequestBody = {
     ...options,
+    timings_per_token: options.timings_per_token ?? true,
+    stream_options: { ...streamOptions, include_usage: streamOptions.include_usage ?? true },
     model,
     messages,
     stream: true,

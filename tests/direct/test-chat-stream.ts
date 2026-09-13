@@ -107,6 +107,30 @@ assert.equal(mappedRequest.mirostat_tau, 4);
 assert.equal(mappedRequest.mirostat_lr, undefined);
 assert.equal(mappedRequest.mirostat_ent, undefined);
 assert.equal(mappedRequest.seed, 7);
+assert.equal(mappedRequest.timings_per_token, true);
+assert.deepEqual(mappedRequest.stream_options, { include_usage: true });
+
+const sampling = Object.freeze({
+  temperature: 0.8, top_p: 0.95, top_k: 40,
+  options: Object.freeze({ timings_per_token: false, stream_options: Object.freeze({ include_usage: false, include_obfuscation: false }) }),
+});
+const explicitMetricsRequest = buildChatRequestBody("local-model", [], sampling);
+assert.equal(explicitMetricsRequest.timings_per_token, false);
+assert.deepEqual(explicitMetricsRequest.stream_options, { include_usage: false, include_obfuscation: false });
+assert.notEqual(explicitMetricsRequest.stream_options, sampling.options.stream_options);
+const defaultMetricsOptions = Object.freeze({ stream_options: Object.freeze({ include_obfuscation: false }) });
+const defaultMetricsRequest = buildChatRequestBody("local-model", [], { ...sampling, options: defaultMetricsOptions });
+assert.deepEqual(defaultMetricsRequest.stream_options, { include_usage: true, include_obfuscation: false });
+assert.deepEqual(defaultMetricsOptions, { stream_options: { include_obfuscation: false } });
+
+const statsDeltas: StreamDelta[] = [];
+const statsFrames = frame("reply")
+  + `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`
+  + `data: ${JSON.stringify({ choices: [], usage: { completion_tokens: 5 }, timings: { prompt_n: 40, predicted_n: 5, predicted_ms: 100 } })}\n\n`
+  + "data: [DONE]\n\n";
+assert.equal(await consumeChatStream(stream([encoder.encode(statsFrames)]), (delta) => statsDeltas.push(delta)), "reply");
+assert.equal(statsDeltas.at(-1)?.usage?.completion_tokens, 5);
+assert.equal(statsDeltas.at(-1)?.timings?.predicted_ms, 100);
 
 const toolChunks: StreamDelta[] = [];
 const toolParser = new SseParser((delta) => toolChunks.push(delta));

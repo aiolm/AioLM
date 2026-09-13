@@ -18,15 +18,13 @@ interface Props {
   prReviewBusy: boolean;
   serverRunning: boolean;
   rows: BackendRow[];
-  cancelBusy: boolean;
   activePrProgress: api.DownloadProgress | null | undefined;
   onReview: () => void;
-  onCancel: () => void;
 }
 
 export default function RuntimePullRequestCard({
   t, prBackend, setPrBackend, prBackendTouched, prSource, setPrSource, prBusy, bundleBusy, prReviewBusy,
-  serverRunning, rows, cancelBusy, activePrProgress, onReview, onCancel,
+  serverRunning, rows, activePrProgress, onReview,
 }: Props) {
   return (
     <section className="mb-4 rounded-xl border border-warning-line bg-warning-soft/20 p-4" aria-labelledby="pull-request-runtime-heading">
@@ -63,7 +61,6 @@ export default function RuntimePullRequestCard({
         </label>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={onReview} disabled={!prSource.trim() || prBusy || bundleBusy || prReviewBusy || !canBuildPrBackend(prBackend) || rows.some((row) => row.busy) || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : !canBuildPrBackend(prBackend) ? t("ui.prBackendBlocked", { backend: prBackend }) : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={prBusy ? t("ui.installingPr") : prReviewBusy ? t("ui.prResolving") : t("ui.reviewPrAction")} labels={[t("ui.installingPr"), t("ui.prResolving"), t("ui.reviewPrAction")]} /></button>
-          {prBusy && <button type="button" onClick={onCancel} disabled={cancelBusy} className="app-button app-button--danger app-button--sm"><StableLabel value={cancelBusy ? t("ui.cancelling") : t("ui.cancelPrBuild")} labels={[t("ui.cancelling"), t("ui.cancelPrBuild")]} /></button>}
         </div>
       </div>
       <div className="runtime-progress-slot mt-3">

@@ -11,15 +11,13 @@ interface Props {
   bundleProgress: api.DownloadProgress | null;
   runtimeBusy: boolean;
   serverRunning: boolean;
-  cancelBusy: boolean;
   onImport: () => void;
   onExport: (backend: string, build: string) => void;
-  onCancel: () => void;
 }
 
 /** Presentational: the "Portable runtime" import/export card on the Runtimes panel. */
 export default function RuntimePortableBundle({
-  t, rows, bundleBusy, bundleProgress, runtimeBusy, serverRunning, cancelBusy, onImport, onExport, onCancel,
+  t, rows, bundleBusy, bundleProgress, runtimeBusy, serverRunning, onImport, onExport,
 }: Props) {
   return (
     <section className="mb-4 rounded-xl border app-border-success bg-success-soft/20 p-4" aria-labelledby="portable-runtime-heading" aria-busy={bundleBusy}>
@@ -30,7 +28,6 @@ export default function RuntimePortableBundle({
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <button type="button" onClick={onImport} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={bundleBusy ? t("ui.runtimeBundleWorking") : t("ui.importRuntimeBundle")} labels={[t("ui.runtimeBundleWorking"), t("ui.importRuntimeBundle")]} /></button>
-          {bundleBusy && <button type="button" onClick={onCancel} disabled={cancelBusy} className="app-button app-button--danger app-button--sm"><StableLabel value={cancelBusy ? t("ui.cancelling") : t("ui.cancelRuntimeBundle")} labels={[t("ui.cancelling"), t("ui.cancelRuntimeBundle")]} /></button>}
         </div>
       </div>
       <div className="runtime-progress-slot mt-3">

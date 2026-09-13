@@ -119,6 +119,10 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(screen.queryByRole("checkbox", { name: /Test GPU/ })).not.toBeInTheDocument();
     await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: [], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
     expect(await screen.findByRole("checkbox", { name: /CUDA1.*Test GPU/ })).toBeEnabled();
+    const probe = screen.getByRole("button", { name: "Probe selected runtime" });
+    expect(probe.closest("details")).toHaveClass("runtime-advanced");
+    fireEvent.click(probe);
+    await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledTimes(2));
   });
 
   beforeEach(() => {
@@ -146,20 +150,35 @@ describe("RuntimesPanel pull-request builds", () => {
     mocked.rtInstallPr.mockImplementation(() => new Promise(() => undefined));
   });
 
-  it("keeps a working cancel action while a PR build runs on the newest installed backend", async () => {
+  it("keeps one backend cancel action for a PR build when advanced settings are collapsed", async () => {
     renderPanel();
     await screen.findByRole("heading", { name: "Install a llama.cpp PR build" });
     await startPullRequestBuild();
 
-    // The regression: the cuda row hid its button entirely once the newest
-    // release build was installed, so a PR build on that row could not be
-    // stopped. Both the section and the row must offer a cancel.
-    const sectionCancel = await screen.findByRole("button", { name: "Cancel build" });
-    const rowCancel = await screen.findByRole("button", { name: "Cancel install" });
-
-    fireEvent.click(rowCancel);
+    const advanced = screen.getByText("Advanced").closest("details")!;
+    fireEvent.click(advanced.querySelector("summary")!);
+    expect(advanced).toHaveAttribute("open");
+    fireEvent.click(advanced.querySelector("summary")!);
+    expect(advanced).not.toHaveAttribute("open");
+    const cancel = await screen.findByRole("button", { name: "Cancel build" });
+    expect(cancel.closest("details")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel install" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Probe selected runtime" })).toBeDisabled();
+    fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
-    expect(sectionCancel).toBeInTheDocument();
+  });
+
+  it("replaces the refresh action with one retry after a runtime lookup failure", async () => {
+    mocked.rtList.mockRejectedValueOnce(new Error("catalog unavailable"));
+    renderPanel();
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByRole("alert")).toHaveTextContent("catalog unavailable");
+    expect(screen.queryByRole("button", { name: "Refresh remote metadata" })).not.toBeInTheDocument();
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocked.rtList).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "Refresh remote metadata" })).toBeEnabled();
+    expect(mocked.rtLatest).toHaveBeenCalledWith("cuda", true);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("does not fire a second cancel while the first is still in flight", async () => {
@@ -172,9 +191,8 @@ describe("RuntimesPanel pull-request builds", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel build" });
     fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
-    // Both the section and the row button reflect the in-flight cancel.
     const cancelling = await screen.findAllByRole("button", { name: "Cancelling" });
-    expect(cancelling).toHaveLength(2);
+    expect(cancelling).toHaveLength(1);
     for (const button of cancelling) expect(button).toBeDisabled();
     fireEvent.click(cancelling[0]);
     releaseCancel();
@@ -201,6 +219,38 @@ describe("RuntimesPanel pull-request builds", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import runtime ZIP" }));
     await waitFor(() => expect(mocked.rtImport).toHaveBeenCalledTimes(1));
     expect(mocked.rtInstallPr).not.toHaveBeenCalled();
+  });
+
+  it("keeps bundle cancellation available outside collapsed advanced settings", async () => {
+    mocked.rtImport.mockImplementation(() => new Promise(() => undefined));
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Import runtime ZIP" }));
+    await waitFor(() => expect(mocked.rtImport).toHaveBeenCalledTimes(1));
+    const advanced = screen.getByText("Advanced").closest("details")!;
+    fireEvent.click(advanced.querySelector("summary")!);
+    expect(advanced).toHaveAttribute("open");
+    fireEvent.click(advanced.querySelector("summary")!);
+    expect(advanced).not.toHaveAttribute("open");
+    const cancel = screen.getByRole("button", { name: "Cancel operation" });
+    expect(cancel.closest("details")).toBeNull();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a filtered backend visible while its PR build can be cancelled", async () => {
+    renderPanel();
+    const picker = await screen.findByLabelText("Backend to build");
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole("option", { name: "CPU-only" }));
+    await reviewPullRequest("cpu");
+    expect(screen.queryByRole("heading", { name: "CPU-only" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Build this commit" }));
+    await waitFor(() => expect(mocked.rtInstallPr).toHaveBeenCalledWith("cpu", "27342", PREVIEW.commit));
+    expect(screen.getByRole("heading", { name: "CPU-only" })).toBeInTheDocument();
+    const cancel = screen.getByRole("button", { name: "Cancel build" });
+    expect(cancel.closest("details")).toBeNull();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
   });
 
   it("offers export for each installed runtime", async () => {

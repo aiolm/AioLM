@@ -4,6 +4,7 @@ import { createConfigSaveQueue, type ConfigPatch } from "./configSaveQueue";
 import { isLifecycleCancellation, lifecycleErrorMessage, nextPollDelay, shouldAutoStart, shouldPoll, withTimeout } from "../lib/serverLifecycle";
 import { normalizeAppConfig, normalizeConfigPatch } from "./storeConfig";
 import { withManualOverrides } from "../config/tuningDefaults";
+import { migrateProfileLibrary } from "../config/profileMigration";
 
 export interface AppStore {
   cfg: api.AppConfig | null;
@@ -31,6 +32,25 @@ function errorMessage(error: unknown): string {
 
 const START_TIMEOUT_MS = 120_000;
 const STOP_TIMEOUT_MS = 20_000;
+let configurationLoads: Promise<unknown> = Promise.resolve();
+
+function loadMigratedConfig(): Promise<api.AppConfig> {
+  const load = async () => {
+    const loaded = normalizeAppConfig(await api.getConfig());
+    const library = migrateProfileLibrary(loaded);
+    if (JSON.stringify(library) === JSON.stringify(loaded.settings_profiles)) return loaded;
+    library.revision += 1;
+    return normalizeAppConfig(await api.saveConfig({ ...loaded, settings_profiles: library }));
+  };
+  // Serialize initialization in this window; Web Locks cover other windows.
+  const pending = configurationLoads.catch(() => undefined).then(() => (
+    typeof navigator !== 'undefined' && navigator.locks
+      ? navigator.locks.request('aiolm.settings-profiles.migration.v1', load)
+      : load()
+  ));
+  configurationLoads = pending.catch(() => undefined);
+  return pending;
+}
 
 function shallowEqual<T extends object>(left: T | undefined, right: T | undefined): boolean {
   if (left === right) return true;
@@ -68,27 +88,29 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const pollFailures = useRef(0);
   const pollTimer = useRef<number | null>(null);
   const pollStopped = useRef(false);
+  const configLoadInFlight = useRef<Promise<void> | null>(null);
 
-  const loadConfig = useCallback(async () => {
+  const loadConfig = useCallback((): Promise<void> => {
+    if (configLoadInFlight.current) return configLoadInFlight.current;
     if (!api.isNativeRuntimeAvailable()) {
       setBootState("native-unavailable");
       setBootError("The native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.");
-      return;
+      return Promise.resolve();
     }
-    try {
-      const loaded = await api.getConfig();
-      const normalized = normalizeAppConfig(loaded);
-      cfgRef.current = normalized;
-      configRevisionRef.current += 1;
-      setCfg(normalized);
-      setBootError(null);
-      setBootState("ready");
-    } catch (error) {
-      const message = errorMessage(error);
-      setBootError(`Configuration could not be loaded: ${message}`);
-      setBootState("error");
-      throw error;
-    }
+    const pending = loadMigratedConfig().then(normalized => {
+        cfgRef.current = normalized;
+        configRevisionRef.current += 1;
+        setCfg(normalized);
+        setBootError(null);
+        setBootState("ready");
+      }).catch(error => {
+        const message = errorMessage(error);
+        setBootError(`Configuration could not be loaded: ${message}`);
+        setBootState("error");
+        throw error;
+      }).finally(() => { configLoadInFlight.current = null; });
+    configLoadInFlight.current = pending;
+    return pending;
   }, []);
 
   const refreshStatus = useCallback(async () => {

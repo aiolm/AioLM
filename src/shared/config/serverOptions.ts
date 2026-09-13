@@ -12,7 +12,7 @@ export interface ServerOption {
 }
 
 export const SERVER_OPTIONS_SOURCE = catalog.source;
-const FLAG = /^--?[a-zA-Z][\w-]*/;
+const FLAG = /^--?[a-zA-Z][\w.-]*/;
 
 export function describeServerOption(signature: string, description = '', group = ''): ServerOption | null {
   // Only the signature is scanned: flags mentioned in prose are not options.

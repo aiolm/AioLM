@@ -4,6 +4,7 @@ export interface StreamDelta {
   tool_calls?: ToolCallDelta[];
   finish_reason?: string | null;
   usage?: StreamUsage;
+  timings?: StreamTimings;
   id?: string;
   model?: string;
 }
@@ -19,14 +20,26 @@ export interface StreamUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+export interface StreamTimings {
+  cache_n?: number;
+  prompt_n?: number;
+  prompt_ms?: number;
+  prompt_per_second?: number;
+  predicted_n?: number;
+  predicted_ms?: number;
+  predicted_per_second?: number;
 }
 
 export type NormalizedStreamEvent =
   | { type: "text_delta"; text: string }
   | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_delta"; toolCall: ToolCallDelta }
-  | { type: "completed"; finishReason?: string | null; usage?: StreamUsage };
+  | { type: "stats"; usage?: StreamUsage; timings?: StreamTimings }
+  | { type: "completed"; finishReason?: string | null; usage?: StreamUsage; timings?: StreamTimings };
 
 export const MAX_SSE_FRAME_CHARS = 4 * 1024 * 1024;
 export const MAX_STREAM_RESULT_CHARS = 16 * 1024 * 1024;
@@ -44,8 +57,10 @@ export function normalizeStreamDelta(delta: StreamDelta): NormalizedStreamEvent[
   for (const toolCall of delta.tool_calls ?? []) {
     events.push({ type: "tool_call_delta", toolCall });
   }
-  if (delta.finish_reason !== undefined || delta.usage) {
-    events.push({ type: "completed", finishReason: delta.finish_reason, usage: delta.usage });
+  if (delta.finish_reason != null) {
+    events.push({ type: "completed", finishReason: delta.finish_reason, usage: delta.usage, timings: delta.timings });
+  } else if (delta.usage || delta.timings) {
+    events.push({ type: "stats", usage: delta.usage, timings: delta.timings });
   }
   return events;
 }
@@ -129,11 +144,14 @@ export class SseParser {
     const finishReason = typeof choice.finish_reason === "string" || choice.finish_reason === null
       ? choice.finish_reason
       : undefined;
-    const usage = json.usage && typeof json.usage === "object" ? json.usage as StreamUsage : undefined;
+    const usage = json.usage && typeof json.usage === "object" && !Array.isArray(json.usage)
+      ? json.usage as StreamUsage : undefined;
+    const timings = json.timings && typeof json.timings === "object" && !Array.isArray(json.timings)
+      ? json.timings as StreamTimings : undefined;
     if (this.result.length + content.length > MAX_STREAM_RESULT_CHARS) {
       throw new Error("The streamed response exceeds the configured size limit.");
     }
-    if (reasoning || content || toolCalls.length || finishReason !== undefined || usage) {
+    if (reasoning || content || toolCalls.length || finishReason !== undefined || usage || timings) {
       this.onDelta({
         id: typeof json?.id === "string" ? json.id : undefined,
         model: typeof json?.model === "string" ? json.model : undefined,
@@ -142,6 +160,7 @@ export class SseParser {
         tool_calls: toolCalls.length ? toolCalls : undefined,
         finish_reason: finishReason,
         usage,
+        timings,
       });
       if (content) this.result += content;
     }

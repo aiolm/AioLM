@@ -1,13 +1,14 @@
 import type { AppConfig } from "../../shared/api/types";
-import Tooltip from "../../shared/ui/Tooltip";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
 import TuningOptionMetadata from './TuningOptionMetadata';
-import { MTP_FIELDS, SERVER_TEXT_FIELDS, tuningFieldTooltip, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
+import { MTP_FIELDS, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import { SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "../../shared/config/tuningValidation";
 import { useTuningId } from './TuningIdScope';
+import { useI18n } from '../../shared/i18n/i18n';
+import { tuningHelp } from '../../shared/i18n/tuningHelp';
 
 type SpecSelectKey = Extract<ServerTextKey, "spec_type" | "spec_draft_ngl">;
 type SpecTextKey = Extract<ServerTextKey, "spec_type" | "spec_draft_ngl" | "spec_draft_device" | "spec_draft_model">;
@@ -32,10 +33,8 @@ export default function TuningSpeculativeSection({
   serverTextValue, serverSelectValue, selectServerText, onServerTextChange, commitServerText,
 }: Props) {
   const id = useTuningId();
-  const tooltipFor = (key: SpecTextKey) => {
-    const field = SERVER_TEXT_FIELDS.find((field) => field.key === key);
-    return field ? tuningFieldTooltip(t as never, field) : undefined;
-  };
+  const { locale } = useI18n();
+  const help = tuningHelp[locale];
   return (
     <div className="mt-5 rounded-lg border border-line-strong/80 bg-surface/40 p-3">
       <h3 className="app-section-title">{t("ui.specTitle")}</h3>
@@ -45,12 +44,12 @@ export default function TuningSpeculativeSection({
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-type`} className="text-sm text-ink">{t("ui.specTypeLabel")}</label>
-              {tooltipFor("spec_type") && <Tooltip content={tooltipFor("spec_type")!} label={`Help for ${t("ui.specTypeLabel")}`} id={`${id}-spec-type-help`} />}
             </div>
             <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <TuningDefaultField fieldKey="spec_type" label={t("ui.specTypeLabel")}><CustomSelect
             id={`${id}-spec-type`}
+            ariaDescribedBy={`${id}-spec-type-hint`}
             value={serverSelectValue("spec_type")}
             options={[
               ...SPEC_TYPE_OPTIONS.map((val) => ({ value: val, label: val })),
@@ -64,6 +63,7 @@ export default function TuningSpeculativeSection({
             {serverSelectValue("spec_type") === "custom" && (
               <input
                 aria-label={t("ui.customValueFor", { label: t("ui.specTypeLabel") })}
+                aria-describedby={`${id}-spec-type-hint`}
                 value={serverTextValue("spec_type")}
                 onChange={(event) => onServerTextChange("spec_type", event.target.value)}
                 onBlur={(event) => commitServerText("spec_type", event.currentTarget.value)}
@@ -74,18 +74,18 @@ export default function TuningSpeculativeSection({
               />
             )}
           </div>
-          </TuningDefaultField><span className="text-xs text-muted">{t("ui.specTypeHint")}</span>
+          <span id={`${id}-spec-type-hint`} className="text-xs text-muted">{help.specType}</span></TuningDefaultField>
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-draft-ngl`} className="text-sm text-ink">{t("ui.specDraftNglLabel")}</label>
-              {tooltipFor("spec_draft_ngl") && <Tooltip content={tooltipFor("spec_draft_ngl")!} label={`Help for ${t("ui.specDraftNglLabel")}`} id={`${id}-spec-draft-ngl-help`} />}
             </div>
             <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <TuningDefaultField fieldKey="spec_draft_ngl" label={t("ui.specDraftNglLabel")}><CustomSelect
             id={`${id}-spec-draft-ngl`}
+            ariaDescribedBy={`${id}-spec-draft-ngl-hint`}
             value={serverSelectValue("spec_draft_ngl")}
             options={[
               ...SPEC_DRAFT_NGL_OPTIONS.map((val) => ({ value: val, label: val })),
@@ -99,6 +99,7 @@ export default function TuningSpeculativeSection({
             {serverSelectValue("spec_draft_ngl") === "custom" && (
               <input
                 aria-label={t("ui.customValueFor", { label: t("ui.specDraftNglLabel") })}
+                aria-describedby={`${id}-spec-draft-ngl-hint`}
                 value={serverTextValue("spec_draft_ngl")}
                 onChange={(event) => onServerTextChange("spec_draft_ngl", event.target.value)}
                 onBlur={(event) => commitServerText("spec_draft_ngl", event.currentTarget.value)}
@@ -110,18 +111,18 @@ export default function TuningSpeculativeSection({
               />
             )}
           </div>
-          </TuningDefaultField><span className="text-xs text-muted">{t("ui.specDraftNglHint")}</span>
+          <span id={`${id}-spec-draft-ngl-hint`} className="text-xs text-muted">{help.specDraftGpuLayers}</span></TuningDefaultField>
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-draft-device`} className="text-sm text-ink">{t("ui.specDraftDeviceLabel")}</label>
-              {tooltipFor("spec_draft_device") && <Tooltip content={tooltipFor("spec_draft_device")!} label={`Help for ${t("ui.specDraftDeviceLabel")}`} id={`${id}-spec-draft-device-help`} />}
             </div>
             <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <input
             id={`${id}-spec-draft-device`}
+            aria-describedby={`${id}-spec-draft-device-hint`}
             value={serverTextValue("spec_draft_device")}
             onChange={(event) => onServerTextChange("spec_draft_device", event.target.value)}
             onBlur={(event) => commitServerText("spec_draft_device", event.currentTarget.value)}
@@ -130,19 +131,19 @@ export default function TuningSpeculativeSection({
             placeholder={t("ui.specDraftDevicePlaceholder")}
             className="w-full rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
           />
-          <span className="text-xs text-muted">{t("ui.specDraftDeviceHint")}</span>
+          <span id={`${id}-spec-draft-device-hint`} className="text-xs text-muted">{help.specDraftDevice}</span>
           <TuningOptionMetadata fieldKey="spec_draft_device" />
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-draft-model`} className="text-sm text-ink">{t("ui.specDraftModelLabel")}</label>
-              {tooltipFor("spec_draft_model") && <Tooltip content={tooltipFor("spec_draft_model")!} label={`Help for ${t("ui.specDraftModelLabel")}`} id={`${id}-spec-draft-model-help`} />}
             </div>
             <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
           </div>
           <input
             id={`${id}-spec-draft-model`}
+            aria-describedby={`${id}-spec-draft-model-hint`}
             value={serverTextValue("spec_draft_model")}
             onChange={(event) => onServerTextChange("spec_draft_model", event.target.value)}
             onBlur={(event) => commitServerText("spec_draft_model", event.currentTarget.value)}
@@ -151,7 +152,7 @@ export default function TuningSpeculativeSection({
             placeholder={t("ui.specDraftModelPlaceholder")}
             className="w-full rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
           />
-          <span className="text-xs text-muted">{t("ui.specDraftModelHint")}</span>
+          <span id={`${id}-spec-draft-model-hint`} className="text-xs text-muted">{help.specDraftModel}</span>
           <TuningOptionMetadata fieldKey="spec_draft_model" />
         </div>
       </div>

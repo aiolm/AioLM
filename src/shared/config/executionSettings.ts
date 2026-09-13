@@ -36,6 +36,8 @@ export function settingsForSession(definition: SessionDefinition, cfg: AppConfig
 }
 
 const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+const comparableGpu = (gpu: AppConfig['gpu']) => ({ gpu_ids: gpu?.gpu_ids ?? [], main_gpu: gpu?.main_gpu ?? null,
+  split_mode: gpu?.split_mode ?? 'none', tensor_split: gpu?.tensor_split ?? [], draft_gpu_id: gpu?.draft_gpu_id ?? null });
 
 export function executionChanges(base: AppConfig, draft: AppConfig): Partial<ExecutionSettings> {
   return structuredClone(Object.fromEntries(EXECUTION_KEYS.filter(key => !equal(base[key], draft[key])).map(key => [key, draft[key]])));
@@ -57,6 +59,7 @@ export class ExecutionConflictError extends Error {
 export function serverSettingsChanged(base: AppConfig, draft: AppConfig): boolean {
   return EXECUTION_KEYS.some(key => {
     if ((REQUEST_KEYS as readonly string[]).includes(key)) return false;
+    if (key === 'gpu') return !equal(comparableGpu(base.gpu), comparableGpu(draft.gpu));
     if (key === 'runtime_defaults') return !equal((base[key] ?? []).filter(name => !requestDefaultKeys.includes(name)).sort(), (draft[key] ?? []).filter(name => !requestDefaultKeys.includes(name)).sort());
     return !equal(base[key], draft[key]);
   });

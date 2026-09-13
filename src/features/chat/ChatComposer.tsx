@@ -6,7 +6,7 @@ import type * as api from "../../shared/api/types";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { ChatMcpTool } from "./useChatMcpTools";
-import type { ChatMetrics, PendingToolCall } from "./useChatSend";
+import type { PendingToolCall } from "./useChatSend";
 
 interface ChatComposerProps {
   contextWarning: string | null;
@@ -38,7 +38,6 @@ interface ChatComposerProps {
   model: string;
   displayModel: string;
   msgsLength: number;
-  metrics: ChatMetrics | null;
   ct: (key: ChatTextKey) => string;
 }
 
@@ -46,7 +45,7 @@ export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
-  aborting, onSend, canSend, model, displayModel, msgsLength, metrics, ct,
+  aborting, onSend, canSend, model, displayModel, msgsLength, ct,
 }: ChatComposerProps) {
   const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken") : msgsLength === 0 ? ct("emptyConversation") : `${ct("responseReady")} · ${msgsLength} ${ct("messages")}`;
   // Reserve only the status text's intrinsic width, including the pending reply,
@@ -60,7 +59,7 @@ export default function ChatComposer({
 
 
       <details className="chat-mcp-tools mt-2.5 rounded-lg border ui-border-color-border ui-background-panel" >
-        <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium ui-color-ink" >{ct("loadMcpTools")}</summary>
+        <summary className="cursor-pointer px-3 py-2.5 text-xs font-medium ui-color-ink" >{ct("mcpTools")}</summary>
         <div className="chat-mcp-expanded border-t p-3 ui-border-color-border" >
         <button type="button" className="chat-mcp-close app-button app-button--secondary app-button--sm absolute right-2 top-2" onClick={event => { const details = event.currentTarget.closest("details"); if (details) { details.open = false; details.querySelector("summary")?.focus(); } }}>{ct("close")}</button>
         <div className="flex flex-wrap items-center gap-2 pr-16">
@@ -103,19 +102,6 @@ export default function ChatComposer({
         <span className="min-w-0 app-text-wrap tabular-nums" title={displayModel}>{model ? displayModel : ct("empty")}</span>
         <div className="chat-status-actions">
         <span className="shrink-0 tabular-nums" role="status" aria-live="polite"><StableLabel value={conversationStatus} labels={statusLabels} /></span>
-        <details className="chat-metrics-disclosure">
-        <summary>{ct("metricsLabel")}</summary>
-      <div tabIndex={0} className="chat-composer-metrics text-xs tabular-nums ui-color-faint" role="status" aria-label={ct("metricsLabel")}>
-        {metrics ? (
-          <>
-            {metrics.promptTokens !== undefined && <span>{ct("metricsPrompt")} {metrics.promptTokens}</span>}
-            {metrics.completionTokens !== undefined && <span>{ct("metricsCompletion")} {metrics.completionTokens}</span>}
-            {metrics.firstTokenMs !== undefined && <span>{ct("metricsFirstToken")} {Math.round(metrics.firstTokenMs)} ms</span>}
-            {metrics.tokensPerSecond !== undefined && <span>{metrics.tokensPerSecond.toFixed(1)} {ct("metricsTps")}</span>}
-          </>
-        ) : ct("empty")}
-      </div>
-        </details>
         </div>
       </div>
     </>

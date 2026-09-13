@@ -1,4 +1,5 @@
 import StableLabel from "../../shared/ui/StableLabel";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import type * as api from "../../shared/api/types";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { buildNumber, buildPhaseLabelKey, formatRuntimeVersion, runtimeRowAction } from "../../shared/runtime/runtimeUtils";
@@ -57,7 +58,7 @@ export default function RuntimeBackendList({
             <div className="mt-0.5 break-words text-xs text-muted">{t(`ui.${row.note}`)}{device && reasonText(locale, suitabilityOf(device, row.backend)) ? ` · ${normalizeDisplayText(reasonText(locale, suitabilityOf(device, row.backend)))}` : ""}</div>
           </div>
           {rowAction === "cancel" ? (
-            <button type="button" onClick={onCancelInstall} disabled={cancelBusy} className="app-button app-button--danger app-button--sm shrink-0"><StableLabel value={cancelBusy ? t("ui.cancelling") : t("ui.cancelInstall")} labels={[t("ui.cancelling"), t("ui.cancelInstall")]} /></button>
+            <LocalTaskCancelButton taskId="runtime-operation" pending={cancelBusy} onClick={onCancelInstall} disabled={cancelBusy} className="app-button app-button--danger app-button--sm shrink-0"><StableLabel value={cancelBusy ? t("ui.cancelling") : prBusy ? t("ui.cancelPrBuild") : t("ui.cancelInstall")} labels={[t("ui.cancelling"), t("ui.cancelPrBuild"), t("ui.cancelInstall")]} /></LocalTaskCancelButton>
           ) : rowAction === "install" ? (
             <button type="button" onClick={() => installBlockedReason ? onBlockedAction?.(installBlockedReason) : onInstall(row.backend)} aria-disabled={installBlockedReason ? "true" : undefined} title={installBlockedReason ?? undefined} aria-label={`${info ? t("ui.installBuild", { build: buildNumber(info.build) }) : t("ui.installLatest")}: ${backendName}`} className={`app-button app-button--primary app-button--sm shrink-0 ${installBlockedReason ? "opacity-80" : ""}`}>
               <StableLabel value={info ? t("ui.installBuild", { build: buildNumber(info.build) }) : t("ui.installLatest")} labels={[t("ui.installBuild", { build: buildNumber(info?.build ?? "") }), t("ui.installLatest")]} />

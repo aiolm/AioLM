@@ -13,7 +13,6 @@ import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../sh
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
-import { activeProfilesPatch } from "../profiles/modelProfiles";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
 import { executionText } from '../../shared/i18n/executionI18n';
 import { forgetExecution } from './modelExecutionState';
@@ -23,7 +22,6 @@ import { SESSION_STATUS_CHANGED_EVENT } from '../../shared/runtime/sessionUtils'
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
   const { t, locale } = useI18n();
   const copy = executionText[locale];
-  const fileActionsLabel = { en: 'File actions', ko: '파일 작업', ja: 'ファイル操作', zh: '文件操作' }[locale];
 
   const cfg = store.cfg;
   const [models, setModels] = useState<api.GgufModel[] | null>(null);
@@ -34,6 +32,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [dir, setDir] = useState(cfg?.models_dir ?? "");
   const [folderDirty, setFolderDirty] = useState(false);
   const [folderSaved, setFolderSaved] = useState(false);
+  const [folderExpanded, setFolderExpanded] = useState(false);
   const [scanRequest, setScanRequest] = useState(0);
   const [showVision, setShowVision] = useState(false);
   const [flash, notify, dismissFlash] = useFlashMessage();
@@ -195,7 +194,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     if (model.shards?.missing.length) return;
     try {
       if (onSelectModel) { await onSelectModel(model); return; }
-      await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
+      await store.updateConfig({ active_model: model.path });
       // 모델 선택은 저장/서버 시작 알림을 표시하지 않는다.
     } catch (error) {
       notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -235,7 +234,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     const switching = serverRunning && liveModel !== model.path;
     try {
       if (switching) await store.stop();
-      const next = await store.updateConfig({ ...(cfg ? activeProfilesPatch(cfg, model.path) : {}), active_model: model.path });
+      const next = await store.updateConfig({ active_model: model.path });
       await store.start(next);
       notify(switching ? `${t("panel.restartServer")}: ${model.name}` : `${t("panel.serverStarted")}: ${model.name}`);
     } catch (error) {
@@ -302,7 +301,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       {/* Rendered outside the library-only fragment so LoRA actions report too. */}
       <PanelFeedback>
         {focus !== "lora" && scanning && <div className="text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
-        {focus !== "lora" && !scanning && scanError && <FeedbackBanner tone="error" action={{ label: t("panel.retry"), onClick: () => void scan() }}>{scanError}</FeedbackBanner>}
+        {focus !== "lora" && !scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
         {flash && <FeedbackBanner tone="info" onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
         {focus !== "lora" && (folderSaved || folderDirty) && (
           <FeedbackBanner tone="info">
@@ -316,7 +315,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       </PanelFeedback>
 
       {focus !== "lora" && <>
-      <details className="models-folder" open={!dir.trim() || folderDirty}>
+      <details className="models-folder" open={folderExpanded || !dir.trim() || folderDirty} onToggle={(event) => setFolderExpanded(event.currentTarget.open)}>
       <summary>{t("panel.modelsDirectory")}<span title={normalizeDisplayPath(dir)}>{normalizeDisplayPath(dir) || t("panel.chooseFolder")}</span></summary>
       <div className="models-folder-actions min-w-0 items-center gap-2.5">
         <label htmlFor="models-dir" className="text-sm text-muted">{t("panel.modelsDirectory")}</label>
@@ -392,7 +391,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       {focus !== "lora" && <div className="mt-4 flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5"><h2 className="text-sm font-semibold ui-color-ink" >{t("panel.models")} {models ? `(${visible.length})` : ""}</h2><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input min-w-0 max-w-xs flex-1 h-7 text-xs" /></div>
         <label className="flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} className="ui-accent-color-accent-solid"  /> {t("panel.visionModels")}</label>
-        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{t("panel.rescan")}</button>}
+        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
       </div>}
 
       <ConfirmDialog
@@ -404,16 +403,15 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         onCancel={() => setPendingConfirm(null)}
       />
 
-      {focus !== "lora" && <div className="models-model-list mt-2.5 min-w-0 overflow-hidden rounded-xl border ui-border-color-border"  data-testid="models-list" role="list" aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
+      {focus !== "lora" && <div className="models-model-list mt-2.5 min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
           <div className="app-empty-state">
             <h3>{t("panel.noModels")}</h3>
             <p>{t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}</p>
-            <div className="app-empty-actions">
+            {!folderExpanded && !!dir.trim() && !folderDirty && <div className="app-empty-actions">
               <button type="button" className="app-button app-button--primary" onClick={() => void browse()}>{t("panel.chooseFolder")}</button>
-              <button type="button" className="app-button app-button--secondary" onClick={() => void scan()}>{t("panel.rescan")}</button>
-            </div>
+            </div>}
           </div>
         )}
         {visible.map((model) => {
@@ -425,7 +423,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             <div
               key={model.path}
               role="listitem"
-              className={[`models-model-row flex min-w-0 flex-nowrap items-center justify-between gap-3 border-b px-2 py-1.5 last:border-0 ${running ? "is-loaded" : ""}`, "ui-border-color-border", (running ? "ui-background-accent-soft" : "")].filter(Boolean).join(" ")}
+              className={`models-model-row min-w-0${running ? ' is-loaded' : ''}`}
 
             >
               <button
@@ -441,7 +439,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                   }
                   void selectModel(model);
                 }}
-                className={[`min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning && !onSelectModel ? "cursor-default opacity-80" : "hover:bg-[var(--ui-surface-muted)]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]`, (running ? "ui-background-transparent" : "")].filter(Boolean).join(" ")}
+                className={`models-model-name min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning && !onSelectModel ? "cursor-default opacity-80" : ""} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]`}
 
               >
                 <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{displayName}</span>
@@ -454,13 +452,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
                 {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
-              <details className="models-file-actions">
-                <summary aria-label={`${fileActionsLabel}: ${displayName}`} title={fileActionsLabel}>•••</summary>
-                <div><code>{normalizeDisplayPath(model.path)}</code>
+              <div className="models-file-actions">
+                  <code>{normalizeDisplayPath(model.path)}</code>
                   <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
                   <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--sm ui-color-danger">{t("panel.delete")}</button>
-                </div>
-              </details>
+              </div>
             </div>
           );
         })}

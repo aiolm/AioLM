@@ -12,13 +12,13 @@ export function suitabilityOf(device: api.DeviceReport | null, backend: string):
   return device?.backends.find((item) => item.backend === backend);
 }
 
-/** Only backends that can actually drive the detected GPU. Anything already
- * installed stays regardless, or the user could not see or remove it. If a
+/** Only backends that can actually drive the detected GPU. Installed and busy
+ * backends stay visible so users can remove builds or cancel work. If a
  * device report has no matching verdicts (for example an unsupported
  * architecture), keep the catalog visible rather than rendering an empty
  * runtime list. */
 export function computeVisibleRows(rows: BackendRow[], device: api.DeviceReport | null, showAll: boolean) {
-  const matchingRows = rows.filter((row) => showAll || !device || row.installed.length > 0 || fitOf(device, row.backend) === "recommended");
+  const matchingRows = rows.filter((row) => showAll || !device || row.busy || row.installed.length > 0 || fitOf(device, row.backend) === "recommended");
   const visibleRows = (matchingRows.length > 0 ? matchingRows : rows)
     .slice()
     .sort((left, right) => FIT_ORDER[fitOf(device, left.backend)] - FIT_ORDER[fitOf(device, right.backend)]);

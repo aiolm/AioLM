@@ -242,16 +242,22 @@ pub(super) fn completion_body(tokens: &[u32], generation: u32, slot: u32) -> Val
         "stop": [], "id_slot": slot})
 }
 
+#[derive(Clone)]
+pub(super) struct Endpoint {
+    pub client: reqwest::Client,
+    pub base: String,
+    pub key: String,
+}
+
 pub(super) async fn measure(
-    client: reqwest::Client,
-    base: String,
-    key: String,
+    endpoint: Endpoint,
     tokens: Arc<Vec<u32>>,
     generation: u32,
     slot: u32,
     cancel: Arc<AtomicBool>,
     timeout: Duration,
 ) -> Measurement {
+    let Endpoint { client, base, key } = endpoint;
     let started = Instant::now();
     let mut stream = CompletionStream::default();
     let work = async {
@@ -392,9 +398,11 @@ mod tests {
         let measured = tokio::time::timeout(
             Duration::from_secs(2),
             measure(
-                client,
-                format!("http://{address}"),
-                "test".into(),
+                Endpoint {
+                    client,
+                    base: format!("http://{address}"),
+                    key: "test".into(),
+                },
                 Arc::new(vec![1, 2]),
                 10,
                 0,
@@ -418,7 +426,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0; 4096];
-            socket.read(&mut request).await.unwrap();
+            assert!(socket.read(&mut request).await.unwrap() > 0);
             socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"tokens\":[8,9],\"stop\":true,\"timings\":{\"prompt_n\":3,\"cache_n\":0,\"predicted_n\":2}}\n\n").await.unwrap();
             std::future::pending::<()>().await;
         });
@@ -426,9 +434,11 @@ mod tests {
         let measured = tokio::time::timeout(
             Duration::from_secs(2),
             measure(
-                client,
-                format!("http://{address}"),
-                "test".into(),
+                Endpoint {
+                    client,
+                    base: format!("http://{address}"),
+                    key: "test".into(),
+                },
                 Arc::new(vec![1, 2, 3]),
                 2,
                 0,

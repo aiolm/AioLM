@@ -17,6 +17,41 @@ function renderSelect(onChange = vi.fn()) {
 }
 
 describe("CustomSelect", () => {
+  it.each(["explicit", "wrapping"])("focuses without opening when the %s label is clicked", (labelType) => {
+    const select = <CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} />;
+    render(labelType === "explicit"
+      ? <><label htmlFor="theme"><span>Theme</span></label>{select}</>
+      : <label><span>Theme</span>{select}</label>);
+    const trigger = screen.getByRole("combobox", { name: /Theme/ });
+
+    fireEvent.click(screen.getByText("Theme"));
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Light"));
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps label focus separate from keyboard and assistive activation", () => {
+    render(<><label htmlFor="theme">Theme</label><CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} /></>);
+    const trigger = screen.getByRole("combobox", { name: "Theme" });
+    fireEvent.click(screen.getByText("Theme"));
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    fireEvent.click(trigger, { detail: 0 });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("does not cancel interactive content within a wrapping label", () => {
+    const onHelp = vi.fn();
+    render(<label><span>Theme</span><CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} /><button type="button" onClick={(event) => onHelp(event.defaultPrevented)}>Help</button></label>);
+    fireEvent.click(screen.getByRole("button", { name: "Help" }));
+    expect(onHelp).toHaveBeenCalledWith(false);
+    expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("displays clean paths while selecting and submitting the original path", () => {
     const raw = String.raw`\\?\UNC\server\share\model.gguf`;
     const display = String.raw`\\server\share\model.gguf`;
