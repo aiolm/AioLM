@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { I18nProvider, type Locale } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
@@ -284,11 +284,11 @@ describe('model settings editor', { timeout: 15000 }, () => {
   it('saves a new profile immediately and keeps it after closing the dialog', async () => {
     const { getSaved, onProfileCommit, onClose } = mount({ initialSection: 'sampling' });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Use concise answers.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
+    fireEvent.click(screen.getByText('Save as new', { selector: 'button' }));
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Concise' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
+    await act(async () => { fireEvent.click(screen.getByText('Create new profile', { selector: 'button' })); });
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Profile name' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText('Profile name')).not.toBeInTheDocument());
     expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ name: 'Default' }), expect.objectContaining({ name: 'Recovered profile' }), expect.objectContaining({ name: 'Concise', system_prompt: 'Use concise answers.' })]);
     const assignment = appliedProfile(getSaved())!;
     expect(assignment.profile_id).toBe(getSaved().settings_profiles?.entries.find(profile => profile.name === 'Concise')?.id);
@@ -322,11 +322,11 @@ describe('model settings editor', { timeout: 15000 }, () => {
     const onProfileCommit = vi.fn(async () => { throw new Error('Synthetic save failure'); });
     mount({ initialSection: 'sampling', onProfileCommit });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Keep this prompt.' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
+    fireEvent.click(screen.getByText('Save as new', { selector: 'button' }));
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Retry me' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
+    await act(async () => { fireEvent.click(screen.getByText('Create new profile', { selector: 'button' })); });
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create new profile' })).toBeEnabled());
+    expect(screen.getByText('Create new profile', { selector: 'button' })).toBeEnabled();
     expect(screen.getByLabelText('Profile name')).toHaveValue('Retry me');
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Keep this prompt.');
     expect(screen.getByRole('heading', { name: 'Recovered profile · Editing' })).toBeVisible();
@@ -403,9 +403,9 @@ describe('model settings editor', { timeout: 15000 }, () => {
     });
     mount({ initialSection: 'sampling', onProfileCommit });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Saved prompt' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save as new' }));
+    fireEvent.click(screen.getByText('Save as new', { selector: 'button' }));
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Saved once' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
+    await act(async () => { fireEvent.click(screen.getByText('Create new profile', { selector: 'button' })); });
     await waitFor(() => expect(screen.queryByLabelText('Profile name')).not.toBeInTheDocument());
     expect(screen.getByRole('alert')).toHaveTextContent('Settings were saved');
     expect(screen.getByRole('heading', { name: 'Saved once' })).toBeVisible();
