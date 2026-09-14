@@ -62,21 +62,29 @@ export function useExecutionStore(base: AppStore) {
     const operation = pending.current.catch(() => undefined).then(async () => {
       const current = latest.current.getConfig();
       if (!current) throw new Error('Configuration is still loading.');
-      let next = typeof patch === 'function' ? patch(current) : patch;
-      const changesExecution = Object.keys(executionChanges(current, { ...current, ...next })).length > 0;
-      if (changesExecution) next = withManualOverrides(current, next);
-      next = applicationPatch(current, next);
-      if (!changesExecution) {
-        const saved = await latest.current.updateConfig(next); setError(null); return saved;
+      // Expand against the latest config at persist time. The base store
+      // re-expands after a revision-conflict reload, so a computed profile
+      // library must never pin the snapshot read here.
+      const expand = (fresh: AppConfig): Partial<AppConfig> => {
+        let next = typeof patch === 'function' ? patch(fresh) : patch;
+        const changesExecution = Object.keys(executionChanges(fresh, { ...fresh, ...next })).length > 0;
+        if (changesExecution) next = withManualOverrides(fresh, next);
+        return applicationPatch(fresh, next);
+      };
+      const preview = expand(current);
+      if (!Object.keys(executionChanges(current, { ...current, ...preview })).length) {
+        const saved = await latest.current.updateConfig(expand);
+        setError(null);
+        return saved;
       }
       // Save the departing model before allowing a selection/project to overwrite it.
-      if (next.active_model && next.active_model !== current.active_model) rememberExecution(current);
+      if (preview.active_model && preview.active_model !== current.active_model) rememberExecution(current);
       const previousMemory = window.localStorage.getItem(MODEL_EXECUTION_KEY);
       // Detect storage/quota failures before publishing a new native selection.
-      rememberExecution({ ...current, ...next });
+      rememberExecution({ ...current, ...preview });
       let saved: AppConfig;
       try {
-        saved = await latest.current.updateConfig(next);
+        saved = await latest.current.updateConfig(expand);
       } catch (cause) {
         if (previousMemory === null) window.localStorage.removeItem(MODEL_EXECUTION_KEY);
         else window.localStorage.setItem(MODEL_EXECUTION_KEY, previousMemory);

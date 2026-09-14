@@ -72,12 +72,20 @@ struct ApiModel {
 }
 
 #[derive(Deserialize, Debug)]
+struct ApiLfs {
+    #[serde(default)]
+    oid: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
 struct ApiTreeEntry {
     path: String,
     #[serde(default)]
     size: u64,
     #[serde(default)]
     oid: Option<String>,
+    #[serde(default)]
+    lfs: Option<ApiLfs>,
     #[serde(rename = "type")]
     entry_type: String,
 }
@@ -413,10 +421,17 @@ pub async fn files(repo_id: &str) -> Result<Vec<HfFile>, String> {
         })
         .map(|entry| {
             validate_repo_path(&entry.path)?;
+            // HF stores large files in Git LFS: `oid` is the 40-char git blob
+            // SHA while the real file SHA-256 lives in `lfs.oid`.
+            let oid = entry
+                .lfs
+                .as_ref()
+                .and_then(|lfs| lfs.oid.clone())
+                .or(entry.oid);
             Ok(HfFile {
                 path: entry.path.clone(),
                 size_bytes: entry.size,
-                oid: entry.oid,
+                oid,
                 is_mmproj: is_mmproj(&entry.path),
                 download_url: download_url(repo_id, &entry.path),
             })
@@ -478,7 +493,7 @@ async fn receive_download<F>(
     mut response: reqwest::Response,
     part: &Path,
     total: u64,
-    expected: &str,
+    expected: Option<&str>,
     cancel: &AtomicBool,
     mut progress: F,
 ) -> Result<u64, String>
@@ -533,8 +548,12 @@ where
                 "model download ended at {received} bytes; expected {total}"
             ));
         }
-        if format!("{:x}", hasher.finalize()) != expected {
-            return Err("downloaded model checksum does not match Hugging Face metadata".into());
+        if let Some(expected) = expected {
+            if format!("{:x}", hasher.finalize()) != expected {
+                return Err(
+                    "downloaded model checksum does not match Hugging Face metadata".into(),
+                );
+            }
         }
         if cancel.load(Ordering::Acquire) {
             return Err(DOWNLOAD_CANCELLED.to_string());
@@ -577,8 +596,7 @@ pub async fn download(
     if total > MAX_MODEL_BYTES {
         return Err("model file exceeds the 512 GiB safety limit".into());
     }
-    let expected = expected_sha256(file.oid.as_deref())
-        .ok_or_else(|| "Hugging Face did not provide a valid SHA-256 digest".to_string())?;
+    let expected = expected_sha256(file.oid.as_deref());
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("model destination must not be a symbolic link".into());
@@ -586,12 +604,24 @@ pub async fn download(
         Ok(metadata) if !metadata.is_file() => {
             return Err("model destination is not a regular file".into());
         }
-        Ok(_) => {
-            let existing = target.clone();
-            let actual = tokio::task::spawn_blocking(move || hash_file(&existing))
-                .await
-                .map_err(|error| format!("existing model checksum task failed: {error}"))??;
-            if actual == expected {
+        Ok(metadata) => {
+            if let Some(expected) = expected.as_deref() {
+                let existing = target.clone();
+                let actual = tokio::task::spawn_blocking(move || hash_file(&existing))
+                    .await
+                    .map_err(|error| format!("existing model checksum task failed: {error}"))??;
+                if actual == expected {
+                    emit_progress(&app, repo_id, file_path, "complete", total, total);
+                    return Ok(DownloadedModel {
+                        repo_id: repo_id.to_owned(),
+                        file_path: file_path.to_owned(),
+                        path: target.to_string_lossy().into_owned(),
+                        size_bytes: total,
+                    });
+                }
+                return Err("a different model already exists at the download destination".into());
+            }
+            if metadata.len() == total {
                 emit_progress(&app, repo_id, file_path, "complete", total, total);
                 return Ok(DownloadedModel {
                     repo_id: repo_id.to_owned(),
@@ -636,7 +666,7 @@ pub async fn download(
         response,
         &part,
         response_total,
-        &expected,
+        expected.as_deref(),
         &cancel,
         |phase, received, total| {
             emit_progress(&app, repo_id, file_path, phase, received, total);
@@ -749,7 +779,7 @@ mod tests {
             response,
             &part,
             total,
-            &expected,
+            Some(expected.as_str()),
             &AtomicBool::new(false),
             |phase, received, total| updates.push((phase, received, total)),
         )
@@ -775,7 +805,7 @@ mod tests {
             response,
             &part,
             total,
-            &expected,
+            Some(expected.as_str()),
             &AtomicBool::new(false),
             |_, _, _| {},
         )
@@ -795,7 +825,7 @@ mod tests {
             response,
             &part,
             100,
-            "unused digest",
+            Some("unused digest"),
             &AtomicBool::new(false),
             |_, _, _| {},
         )
@@ -824,7 +854,7 @@ mod tests {
                 response,
                 &part,
                 100,
-                "unused digest",
+                Some("unused digest"),
                 &cancel,
                 |phase, received, total| updates.push((phase, received, total)),
             ),
@@ -933,5 +963,43 @@ mod tests {
             Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
         );
         assert_eq!(expected_sha256(Some("git-oid")), None);
+    }
+
+    #[test]
+    fn prefers_lfs_oid_over_git_blob_oid() {
+        // HF tree entries carry the 40-char git blob SHA in `oid` and the
+        // real file SHA-256 in `lfs.oid`.
+        let entry: ApiTreeEntry = serde_json::from_value(serde_json::json!({
+            "path": "model.Q4_K_M.gguf",
+            "size": 123,
+            "oid": "d283a4ea95d085fc82b6d743a816830c66ab050a",
+            "lfs": { "oid": "849856e1e7eff8ea7425a2a4cee50f3d547165194f50ea3112c9fc07cb08daad" },
+            "type": "file",
+        }))
+        .expect("parse LFS tree entry");
+        let oid = entry
+            .lfs
+            .as_ref()
+            .and_then(|lfs| lfs.oid.clone())
+            .or(entry.oid);
+        assert_eq!(
+            expected_sha256(oid.as_deref()),
+            Some("849856e1e7eff8ea7425a2a4cee50f3d547165194f50ea3112c9fc07cb08daad".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn download_without_checksum_still_verifies_size() {
+        let body = b"tiny model".to_vec();
+        let total = body.len() as u64;
+        let (response, server) = download_response(body.clone(), body.len(), false).await;
+        let (root, part) = download_staging_fixture();
+        let received = receive_download(response, &part, total, None, &AtomicBool::new(false), |_, _, _| {})
+            .await
+            .expect("size-checked download succeeds without LFS digest");
+        assert_eq!(received, total);
+        assert_eq!(fs::read(&part).expect("read size-checked download"), body);
+        server.await.expect("download server finished");
+        fs::remove_dir_all(root).expect("remove download fixture");
     }
 }

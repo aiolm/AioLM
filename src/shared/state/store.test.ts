@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../api/index";
 import { useAppStore } from "./store";
+import { useExecutionStore } from "../../features/models/useExecutionStore";
 import { testConfig } from "../../testing/appStore";
 import { emptyProfileLibrary, profileTargetKey } from "../config/settingsProfiles";
 
@@ -171,6 +172,74 @@ it("preserves defaults through queued saves and clears only explicit overrides",
   expect(result.current.cfg?.runtime_defaults).toEqual(["ngl"]);
   expect(result.current.cfg?.temperature).toBe(0.4);
   expect(result.current.cfg?.port).toBe(8081);
+});
+
+it("reloads and rebases a save once when disk profiles moved ahead", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const loadsBefore = vi.mocked(api.getConfig).mock.calls.length;
+  const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
+  // Disk moved ahead after our snapshot (lost save response, external writer).
+  vi.mocked(api.getConfig).mockResolvedValue(structuredClone({ ...result.current.cfg!, port: 9999 }));
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  let saved!: api.AppConfig;
+  await act(async () => { saved = await result.current.updateConfig({ port: 8081 }); });
+  expect(saved.port).toBe(8081);
+  expect(result.current.cfg?.port).toBe(8081);
+  expect(result.current.actionError).toBeNull();
+  expect(vi.mocked(api.getConfig).mock.calls.length).toBe(loadsBefore + 1);
+  expect(vi.mocked(api.saveConfig).mock.calls.length).toBe(savesBefore + 2);
+  expect(vi.mocked(api.saveConfig).mock.calls[savesBefore + 1][0].port).toBe(8081);
+});
+
+it("surfaces a repeated profile conflict instead of retrying forever", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  vi.mocked(api.saveConfig).mockRejectedValue(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
+  await act(async () => { await expect(result.current.updateConfig({ port: 8081 })).rejects.toThrow("reload before saving"); });
+  expect(vi.mocked(api.saveConfig).mock.calls.length).toBe(savesBefore + 2);
+  expect(result.current.actionError).toContain("Configuration was not saved");
+});
+
+it("does not reload on ordinary save failures", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const loadsBefore = vi.mocked(api.getConfig).mock.calls.length;
+  vi.mocked(api.saveConfig).mockRejectedValue(new Error("disk full"));
+  await act(async () => { await expect(result.current.updateConfig({ port: 8081 })).rejects.toThrow("disk full"); });
+  expect(vi.mocked(api.getConfig).mock.calls.length).toBe(loadsBefore);
+});
+
+it("heals a stale execution-store save through reload and re-expansion", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  // Emulate the backend revision guard from here on.
+  let disk = structuredClone(result.current.cfg!);
+  vi.mocked(api.saveConfig).mockImplementation(async (cfg) => {
+    const same = JSON.stringify(disk.settings_profiles) === JSON.stringify(cfg.settings_profiles);
+    if (!same && cfg.settings_profiles?.revision !== (disk.settings_profiles?.revision ?? 0) + 1) {
+      throw new Error("settings profiles changed since this configuration was opened; reload before saving");
+    }
+    disk = structuredClone(cfg);
+    return structuredClone(cfg);
+  });
+  // An external writer moves disk ahead without telling this window.
+  disk = { ...structuredClone(disk), settings_profiles: { ...disk.settings_profiles!, revision: disk.settings_profiles!.revision + 1 } };
+  const diskRev = disk.settings_profiles!.revision;
+  vi.mocked(api.getConfig).mockResolvedValue(structuredClone(disk));
+  const wrapped = renderHook(() => useExecutionStore(result.current));
+  const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
+  let saved!: api.AppConfig;
+  await act(async () => { saved = await wrapped.result.current.store.updateConfig({ models_dir: "D:\\new-models" }); });
+  // First attempt hits the stale revision, reload+re-expansion retries once.
+  expect(vi.mocked(api.saveConfig).mock.calls.length).toBe(savesBefore + 2);
+  expect(saved.models_dir).toBe("D:\\new-models");
+  expect(result.current.cfg?.models_dir).toBe("D:\\new-models");
+  expect(result.current.actionError).toBeNull();
+  const finalRev = result.current.cfg?.settings_profiles?.revision ?? 0;
+  expect(finalRev).toBeGreaterThanOrEqual(diskRev);
+  expect(finalRev).toBeLessThanOrEqual(diskRev + 1);
 });
 
 it("ignores a cancelled start settling after a new start begins", async () => {

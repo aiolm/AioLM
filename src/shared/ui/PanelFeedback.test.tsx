@@ -6,7 +6,7 @@ import FeedbackBanner from "./FeedbackBanner";
 import { I18nProvider } from "../i18n/i18n";
 
 describe("panel notices", () => {
-  it("reveals the hidden activity drawer when a page publishes a notice", () => {
+  it("opens the activity drawer automatically when a page publishes a notice", () => {
     function Fixture() {
       const [notice, setNotice] = useState(false);
       return <PanelFeedbackProvider>
@@ -20,8 +20,12 @@ describe("panel notices", () => {
     expect(drawer).toHaveAttribute('hidden');
     fireEvent.click(screen.getByText('Notify'));
     expect(drawer).not.toHaveAttribute('hidden');
-    fireEvent.click(screen.getByText('Activity'));
+    expect(drawer).toHaveProperty('open', true);
     expect(screen.getByRole('alert')).toBeVisible();
+    fireEvent.click(screen.getByText('Activity'));
+    expect(drawer).toHaveProperty('open', false);
+    fireEvent.click(screen.getByText('Activity'));
+    expect(drawer).toHaveProperty('open', true);
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(drawer).toHaveAttribute('hidden');
   });

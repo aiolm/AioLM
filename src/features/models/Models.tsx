@@ -30,9 +30,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [scanTruncated, setScanTruncated] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
   const [dir, setDir] = useState(cfg?.models_dir ?? "");
-  const [folderDirty, setFolderDirty] = useState(false);
   const [folderSaved, setFolderSaved] = useState(false);
-  const [folderExpanded, setFolderExpanded] = useState(false);
   const [scanRequest, setScanRequest] = useState(0);
   const [showVision, setShowVision] = useState(false);
   const [flash, notify, dismissFlash] = useFlashMessage();
@@ -105,11 +103,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   useEffect(() => {
     const nextDir = cfg?.models_dir?.trim() ?? "";
-    if (folderDirty || !nextDir || requestedScanDirRef.current === nextDir) return;
+    if (!nextDir || requestedScanDirRef.current === nextDir) return;
     requestedScanDirRef.current = nextDir;
     if (nextDir !== dir) setDir(nextDir);
     setScanRequest((current) => current + 1);
-  }, [cfg?.models_dir, dir, folderDirty]);
+  }, [cfg?.models_dir, dir]);
 
   useEffect(() => {
     if (scanRequest <= 0) return;
@@ -221,7 +219,6 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       if (!chosen) return;
       setDir(chosen.trim());
       await store.updateConfig({ models_dir: chosen });
-      setFolderDirty(false);
       setFolderSaved(true);
       requestedScanDirRef.current = chosen.trim();
       setScanRequest((current) => current + 1);
@@ -303,11 +300,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         {focus !== "lora" && scanning && <div className="text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {focus !== "lora" && !scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
         {flash && <FeedbackBanner tone="info" onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
-        {focus !== "lora" && (folderSaved || folderDirty) && (
-          <FeedbackBanner tone="info">
+        {focus !== "lora" && folderSaved && (
+          <FeedbackBanner tone="info" onDismiss={() => setFolderSaved(false)}>
             <div className="flex items-center justify-between gap-2">
-              <span>{folderDirty ? t("panel.modelsChanged") : t("panel.modelsSaved")}</span>
-              {folderSaved && !folderDirty && <span className="app-status-badge app-status-badge--success">{t("panel.saved")}</span>}
+              <span>{t("panel.modelsSaved")}</span>
+              <span className="app-status-badge app-status-badge--success">{t("panel.saved")}</span>
             </div>
           </FeedbackBanner>
         )}
@@ -315,27 +312,21 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       </PanelFeedback>
 
       {focus !== "lora" && <>
-      <details className="models-folder" open={folderExpanded || !dir.trim() || folderDirty} onToggle={(event) => setFolderExpanded(event.currentTarget.open)}>
-      <summary>{t("panel.modelsDirectory")}<span title={normalizeDisplayPath(dir)}>{normalizeDisplayPath(dir) || t("panel.chooseFolder")}</span></summary>
+      <div className="models-folder">
       <div className="models-folder-actions min-w-0 items-center gap-2.5">
         <label htmlFor="models-dir" className="text-sm text-muted">{t("panel.modelsDirectory")}</label>
         <input
           id="models-dir"
           value={normalizeDisplayPath(dir)}
-          onChange={(event) => { setDir(event.target.value); setFolderDirty(true); setFolderSaved(false); }}
-          onBlur={() => {
-            if (!folderDirty) return;
-            setDir(normalizeDisplayPath(dir));
-          }}
+          readOnly
           className="app-input min-w-0"
           placeholder="models"
         />
         <div className="models-folder-buttons">
         <button type="button" onClick={() => void browse()} disabled={scanning} className="app-button app-button--secondary shrink-0">{t("panel.browse")}</button>
-        {folderDirty && <button type="button" onClick={() => { const displayPath = normalizeDisplayPath(dir); setDir(displayPath); void store.updateConfig({ models_dir: displayPath }).then(() => { setFolderDirty(false); setFolderSaved(true); requestedScanDirRef.current = displayPath; setScanRequest((current) => current + 1); }).catch((error) => notify(`${t("panel.saveFailed")}: ${error instanceof Error ? error.message : String(error)}`)); }} disabled={scanning} className="app-button app-button--primary shrink-0">{t("panel.saveFolder")}</button>}
         </div>
       </div>
-      </details>
+      </div>
 
       {!compact && serverRunning && <div className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
@@ -409,7 +400,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           <div className="app-empty-state">
             <h3>{t("panel.noModels")}</h3>
             <p>{t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}</p>
-            {!folderExpanded && !!dir.trim() && !folderDirty && <div className="app-empty-actions">
+            {!!dir.trim() && <div className="app-empty-actions">
               <button type="button" className="app-button app-button--primary" onClick={() => void browse()}>{t("panel.chooseFolder")}</button>
             </div>}
           </div>

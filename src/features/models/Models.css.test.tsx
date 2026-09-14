@@ -194,7 +194,7 @@ describe("ModelsPanel CSS cascade", () => {
     expect(screen.getByText("kept.gguf")).toBeInTheDocument();
   });
 
-  it("offers one folder picker and one scan action as the empty library's directory details open and close", async () => {
+  it("keeps the folder controls always visible without a collapse toggle", async () => {
     mocked.listModels.mockReset().mockResolvedValue({ models: [], truncated: false });
     mocked.pickModelsDir.mockReset().mockResolvedValue(null);
     const view = render(createElement(I18nProvider, {
@@ -203,20 +203,13 @@ describe("ModelsPanel CSS cascade", () => {
     }));
     await screen.findByRole("heading", { name: "No GGUF models found" });
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Browse" })).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "Browse" })).toBeVisible();
+    expect(view.container.querySelector("details.models-folder")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
     await waitFor(() => expect(mocked.pickModelsDir).toHaveBeenCalledOnce());
 
-    const summary = view.container.querySelector("details.models-folder > summary")!;
-    fireEvent.click(summary);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Choose folder" })).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await waitFor(() => expect(mocked.pickModelsDir).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
-
-    fireEvent.click(summary);
-    expect(await screen.findByRole("button", { name: "Choose folder" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Browse" })).not.toBeVisible();
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
   });
 

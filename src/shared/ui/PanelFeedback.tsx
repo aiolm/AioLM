@@ -1,4 +1,4 @@
-import { Children, createContext, isValidElement, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { Children, createContext, isValidElement, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
 
@@ -38,7 +38,19 @@ export function PanelFeedbackOutlet() {
 
 export function PanelFeedbackActivity({ hasActivity, children }: { hasActivity: boolean; children: ReactNode }) {
   const context = useContext(FeedbackContext);
-  return <details className="app-activity" hidden={!hasActivity && !context?.count}>{children}</details>;
+  const drawerRef = useRef<HTMLDetailsElement>(null);
+  const seen = useRef({ count: context?.count ?? 0, attention: context?.attention ?? 0 });
+  const count = context?.count ?? 0;
+  const attention = context?.attention ?? 0;
+  useEffect(() => {
+    // New (or escalated) notices open the drawer on arrival; manual toggle
+    // stays native so keyboard and Escape handling keep working.
+    if ((count > seen.current.count || attention > seen.current.attention) && drawerRef.current && !drawerRef.current.open) {
+      drawerRef.current.open = true;
+    }
+    seen.current = { count, attention };
+  }, [count, attention]);
+  return <details ref={drawerRef} className="app-activity" hidden={!hasActivity && !count}>{children}</details>;
 }
 
 export function PanelFeedbackIndicator({ message, globalError }: { message: string; globalError: boolean }) {

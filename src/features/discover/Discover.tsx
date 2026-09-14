@@ -3,7 +3,7 @@ import StableLabel from "../../shared/ui/StableLabel";
 import { useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { formatBytes, isMmprojPath, quantLabel, validateHfRepoId } from "./discoverUtils";
+import { estimateDownloadSpeed, formatBytes, formatSpeedBps, isMmprojPath, quantLabel, validateHfRepoId, type DownloadSample } from "./discoverUtils";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
@@ -34,17 +34,33 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [progress, setProgress] = useState<api.ModelDownloadProgress | null>(null);
+  const [speedBps, setSpeedBps] = useState<number | null>(null);
+  const speedSamples = useRef<DownloadSample[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const searchGeneration = useRef(0);
   const inspectGeneration = useRef(0);
 
   useEffect(() => {
+    speedSamples.current = [];
+    setSpeedBps(null);
+  }, [downloading]);
+
+  useEffect(() => {
     if (!active) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void api.onModelDownloadProgress((next) => {
-      if (!disposed) setProgress(next);
+      if (disposed) return;
+      setProgress(next);
+      if (next.phase === "downloading") {
+        const samples = [...speedSamples.current, { received: next.received, at: Date.now() }].slice(-30);
+        speedSamples.current = samples;
+        setSpeedBps(estimateDownloadSpeed(samples));
+      } else {
+        speedSamples.current = [];
+        setSpeedBps(null);
+      }
     }).then((cleanup) => {
       if (disposed) cleanup();
       else unlisten = cleanup;
@@ -186,7 +202,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
             <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent}%</span>
           </div>
           <div className="mt-2.5 h-1.5 overflow-hidden rounded-full ui-background-border"  role="progressbar" aria-label={t("ui.downloadProgress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? progressPercent : undefined}><div className="h-full rounded-full transition-[width] ui-background-accent-solid" style={{ width: `${progressPercent}%` }} /></div>
-          <div className="mt-2.5 flex items-center justify-between gap-3 text-xs ui-color-muted" ><span className="tabular-nums">{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span><button type="button" onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</button></div>
+          <div className="mt-2.5 flex items-center justify-between gap-3"><span className="whitespace-nowrap text-xs tabular-nums ui-color-muted" >{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span><span className="flex shrink-0 items-center gap-2.5"><span className="whitespace-nowrap text-right text-sm font-semibold tabular-nums ui-color-accent ui-min-width-120px" >{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span><button type="button" onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</button></span></div>
         </div>
         )}
       </PanelFeedback>

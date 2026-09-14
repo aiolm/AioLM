@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppConfig } from '../../shared/api/types';
 import { createTestStore } from '../../testing/appStore';
 import { useExecutionStore } from './useExecutionStore';
 import { restoreExecution } from './modelExecutionState';
@@ -35,6 +36,19 @@ describe('execution store', () => {
     base.busy = true;
     hook.rerender();
     expect(hook.result.current.store.busy).toBe(true);
+  });
+  it('recomputes patches against the latest config instead of pinning a stale snapshot', async () => {
+    const base = createTestStore({ active_model: 'a.gguf', settings_profiles: { ...emptyProfileLibrary(), revision: 1, legacy_imported: true } });
+    const hook = renderHook(() => useExecutionStore(base));
+    await act(async () => { await hook.result.current.store.updateConfig({ models_dir: 'D:\\models' }); });
+    const patch = vi.mocked(base.updateConfig).mock.calls[0][0] as (fresh: AppConfig) => Partial<AppConfig>;
+    expect(typeof patch).toBe('function');
+    // A base-store conflict recovery re-expands after reloading: profiles must
+    // chain onto the reloaded revision instead of the stale one.
+    const fresh = { ...base.cfg!, settings_profiles: { ...base.cfg!.settings_profiles!, revision: 9 } };
+    const expanded = patch(fresh);
+    expect(expanded.models_dir).toBe('D:\\models');
+    if (expanded.settings_profiles) expect(expanded.settings_profiles.revision).toBe(10);
   });
   it('restores a model after edits, switching and remounting', async () => {
     const base = createTestStore({ active_model: 'a.gguf' });
