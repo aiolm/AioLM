@@ -29,6 +29,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Backend save_config guard: a profile library must chain onto the saved revision. */
+const PROFILE_REVISION_CONFLICT = "reload before saving";
+
+function isProfileRevisionConflict(error: unknown): boolean {
+  return errorMessage(error).includes(PROFILE_REVISION_CONFLICT);
+}
+
 
 const START_TIMEOUT_MS = 120_000;
 const STOP_TIMEOUT_MS = 20_000;
@@ -81,6 +88,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const [actionError, setActionError] = useState<string | null>(null);
   const [statusPollError, setStatusPollError] = useState<string | null>(null);
   const saveConfigQueue = useRef<((patch: ConfigPatch<api.AppConfig>) => Promise<api.AppConfig>) | null>(null);
+  const saveMutex = useRef<Promise<unknown>>(Promise.resolve());
   const pollInFlight = useRef(false);
   const operationInFlight = useRef(false);
   const autoStartConsumedRef = useRef(false);
@@ -130,7 +138,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     }
   }, []);
 
-  const updateConfig = useCallback(async (patch: ConfigPatch<api.AppConfig>) => {
+  const saveConfigWithRecovery = useCallback(async (patch: ConfigPatch<api.AppConfig>) => {
     if (!saveConfigQueue.current) {
       saveConfigQueue.current = createConfigSaveQueue(
         () => cfgRef.current,
@@ -141,10 +149,37 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     }
     const save = saveConfigQueue.current;
     if (!save) throw new Error("Configuration save queue is unavailable.");
-    const saved = await save(normalizeConfigPatch((current) => withManualOverrides(current, typeof patch === "function" ? patch(current) : patch)));
-    setActionError(null);
-    return saved;
+    const attempt = () => save(normalizeConfigPatch((current) => withManualOverrides(current, typeof patch === "function" ? patch(current) : patch)));
+    try {
+      const saved = await attempt();
+      setActionError(null);
+      return saved;
+    } catch (error) {
+      if (!isProfileRevisionConflict(error)) throw error;
+      // Disk moved ahead (a save response was lost, or another writer committed).
+      // The backend message itself prescribes reload: rebase this patch once.
+      let reloaded: api.AppConfig;
+      try {
+        reloaded = normalizeAppConfig(await api.getConfig());
+      } catch {
+        throw error;
+      }
+      cfgRef.current = reloaded;
+      configRevisionRef.current += 1;
+      setCfg(reloaded);
+      const saved = await attempt();
+      setActionError(null);
+      return saved;
+    }
   }, []);
+
+  const updateConfig = useCallback(async (patch: ConfigPatch<api.AppConfig>) => {
+    // Serialize whole saves (not just persistence) so a conflict recovery
+    // reload cannot interleave with another save reading stale state.
+    const operation = saveMutex.current.catch(() => undefined).then(() => saveConfigWithRecovery(patch));
+    saveMutex.current = operation.catch(() => undefined);
+    return operation;
+  }, [saveConfigWithRecovery]);
 
   const start = useCallback(async (cfgOverride?: api.AppConfig, replaceRunning = false) => {
     if (!api.isNativeRuntimeAvailable()) {

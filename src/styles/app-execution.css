@@ -2,10 +2,7 @@
 .model-workspace-library { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .model-workspace .models-panel--compact { flex: 1; padding: 20px; }
 .models-folder { border-bottom: 1px solid var(--ui-border); padding-bottom: 12px; }
-.models-folder > summary { cursor: pointer; color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; }
-.models-folder > summary span { margin-inline-start: 12px; color: var(--ui-faint); }
 .models-folder-actions { margin-top: 12px; }
-.models-folder > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 .models-panel .models-model-list { display: grid; gap: 10px; }
 .models-panel .models-model-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 10px 12px; gap: 8px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-panel); }
 .models-panel .models-model-row.is-loaded { background: var(--ui-accent-soft); border-color: var(--ui-border-accent); }
