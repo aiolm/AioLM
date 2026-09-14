@@ -611,6 +611,49 @@ impl SettingsProfileLibrary {
     }
 }
 
+/// JavaScript sends 1.0 back as 1, while serde_json distinguishes their number
+/// representations. Compare those exactly within the JS safe integer range;
+/// never round large integers or use a tolerance for changed settings.
+fn same_json_value(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            left == right
+                || (left.is_f64() != right.is_f64()
+                    && left
+                        .as_f64()
+                        .zip(right.as_f64())
+                        .is_some_and(|(a, b)| a == b && a.abs() <= 9_007_199_254_740_991.0))
+        }
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len() && left.iter().zip(right).all(|(a, b)| same_json_value(a, b))
+        }
+        (Value::Object(left), Value::Object(right)) => {
+            left.len() == right.len()
+                && left.iter().all(|(key, value)| {
+                    right
+                        .get(key)
+                        .is_some_and(|other| same_json_value(value, other))
+                })
+        }
+        _ => left == right,
+    }
+}
+
+fn same_library(
+    current: &SettingsProfileLibrary,
+    incoming: &SettingsProfileLibrary,
+) -> Result<bool, String> {
+    if current == incoming {
+        return Ok(true);
+    }
+    if current.revision != incoming.revision {
+        return Ok(false);
+    }
+    let current = serde_json::to_value(current).map_err(|error| error.to_string())?;
+    let incoming = serde_json::to_value(incoming).map_err(|error| error.to_string())?;
+    Ok(same_json_value(&current, &incoming))
+}
+
 /// Call while holding the configuration write lock, using the latest disk value.
 pub fn validate_update(
     current: Option<&SettingsProfileLibrary>,
@@ -640,7 +683,7 @@ pub fn validate_update(
     }
     match (current, incoming) {
         (None, None) => Ok(()),
-        (Some(current), Some(incoming)) if current == incoming => Ok(()),
+        (Some(current), Some(incoming)) if same_library(current, incoming)? => Ok(()),
         (current, Some(incoming))
             if current.map_or(Some(1), |library| library.revision.checked_add(1))
                 == Some(incoming.revision) =>
@@ -669,6 +712,16 @@ pub fn prepare_config_update(
         .settings_profiles
         .as_ref()
         .map(|library| library.revision);
+    if prepared
+        .settings_profiles
+        .as_ref()
+        .map(|library| library.revision)
+        == current_revision
+    {
+        // Validation accepted unchanged content. Keep the disk representation
+        // instead of rewriting profile snapshots on an unrelated folder save.
+        prepared.settings_profiles = current.settings_profiles.clone();
+    }
     if let Some(library) = &mut prepared.settings_profiles {
         if Some(library.revision) != current_revision {
             for application in library.applied.values_mut() {
@@ -752,6 +805,108 @@ mod tests {
         .unwrap();
         library.entries.push(default_profile());
         library
+    }
+
+    #[test]
+    fn models_folder_save_accepts_javascript_number_round_trip() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-profile-ipc-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("config.json");
+        let mut cfg = AppConfig {
+            models_dir: "models".into(),
+            active_model: "models/sample.gguf".into(),
+            settings_profiles: Some(library()),
+            ..Default::default()
+        };
+        let profiles = cfg.settings_profiles.as_mut().unwrap();
+        profiles.entries[0]
+            .settings
+            .insert("temperature".into(), json!(1.0));
+        profiles
+            .applied
+            .values_mut()
+            .next()
+            .unwrap()
+            .settings
+            .insert("temperature".into(), json!(1.0));
+        super::super::save_to_path(&cfg, &path).unwrap();
+        let current = super::super::load_from_path(&path).unwrap();
+        // JSON.stringify(JSON.parse(...)) emits integral JS Numbers as integers.
+        let wire = serde_json::to_string(&current)
+            .unwrap()
+            .replace("\"temperature\":1.0", "\"temperature\":1");
+        let mut incoming: AppConfig = serde_json::from_str(&wire).unwrap();
+        incoming.models_dir = "new-models".into();
+        assert_ne!(incoming.settings_profiles, current.settings_profiles);
+        let result = (|| -> Result<(), String> {
+            for folder in ["new-models", "other-models"] {
+                incoming.models_dir = folder.into();
+                let latest = super::super::load_from_path(&path)?;
+                let prepared = prepare_config_update(&latest, &incoming)?;
+                assert_eq!(prepared.models_dir, folder);
+                assert_eq!(prepared.settings_profiles, current.settings_profiles);
+                let saved = super::super::save_to_path(&prepared, &path)?;
+                let restored = super::super::load_from_path(&path)?;
+                assert_eq!(saved.settings_profiles, restored.settings_profiles);
+                assert_eq!(restored.models_dir, folder);
+            }
+            Ok(())
+        })();
+        // Clean up even when the regression fails.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+        result.expect("a folder-only edit must survive the JavaScript IPC round trip");
+    }
+
+    #[test]
+    fn profile_number_comparison_preserves_revision_conflict_detection() {
+        for (disk, wire, accepted) in [
+            (
+                json!({"nested": [1.0, -1.0, 0.0, 0.25]}),
+                json!({"nested": [1, -1, 0, 0.25]}),
+                true,
+            ),
+            (json!(-0.0), json!(0), true),
+            (json!(1), json!(1.0), true),
+            (
+                json!(9_007_199_254_740_991_u64),
+                json!(9_007_199_254_740_991.0),
+                true,
+            ),
+            (json!(1.0), json!(1.0000000000000002), false),
+            (
+                json!(9_007_199_254_740_993_u64),
+                json!(9_007_199_254_740_992.0),
+                false,
+            ),
+            (
+                json!(-9_007_199_254_740_993_i64),
+                json!(-9_007_199_254_740_992.0),
+                false,
+            ),
+            (json!(u64::MAX), json!(u64::MAX - 1), false),
+            (json!([1, 2]), json!([2, 1]), false),
+            (json!({"value": null}), json!({}), false),
+            (json!(1), json!("1"), false),
+        ] {
+            let mut current = library();
+            current.entries[0]
+                .settings
+                .insert("chat_options".into(), json!({"custom": disk}));
+            let mut incoming = current.clone();
+            incoming.entries[0]
+                .settings
+                .insert("chat_options".into(), json!({"custom": wire}));
+            assert_eq!(
+                validate_update(Some(&current), Some(&incoming)).is_ok(),
+                accepted,
+                "disk={disk}, wire={wire}"
+            );
+            incoming.revision = current.revision - 1;
+            assert!(validate_update(Some(&current), Some(&incoming)).is_err());
+            incoming.revision = current.revision + 1;
+            assert!(validate_update(Some(&current), Some(&incoming)).is_ok());
+        }
     }
 
     #[test]
