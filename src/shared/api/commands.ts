@@ -41,6 +41,8 @@ export const preflightLaunch = (cfg: AppConfig) => invoke<AppConfig>('preflight_
 /** Accept one blocked GPU placement, using the key printed in its refusal. */
 export const allowVerificationOverride = (key: string) => invoke<void>('allow_verification_override', { key });
 export const verifyModelDeeply = (cfg: AppConfig) => invoke<VerificationRecord>('verify_model_deeply', { cfg });
+/** Ask a deep verification in flight to stop between passes. */
+export const verifyCancel = () => invoke<void>('verify_cancel');
 export const applyRequestSettings = (cfg: AppConfig, sessionId = 'default') => invoke<NonNullable<ServerStatus['execution']>>('apply_request_settings', { cfg, sessionId });
 export const stopServer = () => invoke<void>("stop_server");
 export const unloadModel = () => invoke<void>("unload_model");

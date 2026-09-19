@@ -18,6 +18,7 @@ import RuntimeBackendList from "./RuntimeBackendList";
 import PullRequestProvenance from "./RuntimePullRequestProvenance";
 import RuntimeGpuAssignment from "./RuntimeGpuAssignment";
 import { runtimeGpuDevices } from "../../shared/runtime/sessionUtils";
+import { useDeepVerification } from "./useDeepVerification";
 import { parseRuntimeHelp, SERVER_OPTIONS } from '../../shared/config/serverOptions';
 import { TuningOptionsContext } from '../tuning/TuningOptionMetadata';
 
@@ -36,6 +37,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
+  const deepVerify = useDeepVerification(store, locale);
 
   return (
     <div className="app-page-scroll relative flex h-full min-h-0 flex-col">
@@ -107,6 +109,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
             activeBackend={rt.activeBackend}
             activeBuild={rt.activeBuild}
             onProbe={() => void rt.probe()}
+            deepVerify={deepVerify}
           />
           <RuntimePullRequestCard
             t={t}

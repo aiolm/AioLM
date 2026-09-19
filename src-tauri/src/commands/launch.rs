@@ -1,8 +1,12 @@
 //! Launch configuration and runtime capability validation shared with the CLI.
-use crate::{config, gpu, hardware, runtime, tuning_defaults};
+use crate::{config, gpu, hardware, runtime, state::AppState, tuning_defaults};
 use std::fs;
 use std::path::Path;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tauri::State;
 
 fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
     cfg.normalize();
@@ -89,8 +93,10 @@ pub(crate) async fn allow_verification_override(key: String) -> Result<(), Strin
 /// minutes rather than seconds, so nothing calls it automatically.
 #[tauri::command]
 pub(crate) async fn verify_model_deeply(
+    state: State<'_, AppState>,
     mut cfg: config::AppConfig,
 ) -> Result<crate::verify::Record, String> {
+    state.verify_cancel.store(false, Ordering::Release);
     validate_start_config(&mut cfg)?;
     let capabilities = runtime::probe(&cfg.active_backend, &cfg.active_build).await?;
     let profile = hardware::detect();
@@ -105,9 +111,16 @@ pub(crate) async fn verify_model_deeply(
         &resolved,
         &profile.fingerprint,
         &capabilities.devices,
-        None,
+        Some(&state.verify_cancel),
     )
     .await
+}
+
+/// Ask a deep verification in flight to stop. It reads the flag between passes
+/// and between chunks, so a cancel is honoured without killing the process.
+#[tauri::command]
+pub(crate) fn verify_cancel(state: State<'_, AppState>) {
+    state.verify_cancel.store(true, Ordering::Release);
 }
 
 async fn validate_launch(

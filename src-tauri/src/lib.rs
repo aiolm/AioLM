@@ -71,6 +71,7 @@ pub fn run() {
             commands::server::start_server,
             commands::launch::preflight_launch,
             commands::launch::verify_model_deeply,
+            commands::launch::verify_cancel,
             commands::launch::allow_verification_override,
             commands::server::stop_server,
             commands::server::unload_model,

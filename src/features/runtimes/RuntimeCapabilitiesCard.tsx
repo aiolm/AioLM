@@ -1,4 +1,6 @@
 import StableLabel from "../../shared/ui/StableLabel";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
+import { DEEP_VERIFICATION_TASK } from "./useDeepVerification";
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { buildNumber, capabilityLabel } from "../../shared/runtime/runtimeUtils";
@@ -13,9 +15,11 @@ interface Props {
   activeBackend: string;
   activeBuild: string;
   onProbe: () => void;
+  /** The opt-in deep check of this runtime against the selected model. */
+  deepVerify?: { busy: boolean; record: { verdict: string; detail: string } | null; error: string | null; start: () => void; cancel: () => void };
 }
 
-export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, activeBackend, activeBuild, onProbe }: Props) {
+export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, activeBackend, activeBuild, onProbe, deepVerify }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   return (
@@ -27,6 +31,17 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
         </div>
         <button type="button" onClick={onProbe} disabled={probeBusy || runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button>
       </div>
+      {deepVerify && <div className="runtime-deep-verify">
+        <p className="app-section-hint">{t("ui.deepVerifyHint")}</p>
+        <div className="runtime-deep-verify-actions">
+          {deepVerify.busy
+            ? <LocalTaskCancelButton taskId={DEEP_VERIFICATION_TASK} onClick={deepVerify.cancel} className="app-button app-button--danger app-button--sm">{t("common.cancel")}</LocalTaskCancelButton>
+            : <button type="button" onClick={deepVerify.start} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--secondary app-button--sm">{t("ui.deepVerify")}</button>}
+          {deepVerify.record && <span className={deepVerify.record.verdict === "pass" ? "app-status-badge app-status-badge--success" : "app-status-badge app-status-badge--danger"}>{t(deepVerify.record.verdict === "pass" ? "ui.deepVerifyPass" : "ui.deepVerifyFail")}</span>}
+        </div>
+        {deepVerify.record && <p className="app-section-hint">{normalizeDisplayText(deepVerify.record.detail)}</p>}
+        {deepVerify.error && <p className="text-error" role="alert">{normalizeDisplayText(deepVerify.error)}</p>}
+      </div>}
       {!capabilities && <p className="mt-3 text-xs ui-color-faint" >{activeBackend && activeBuild ? t("ui.probeReady", { backend: activeBackend, build: buildNumber(activeBuild) }) : t("ui.probeNoRuntime")}</p>}
       {capabilities && (
         <div className="mt-3.5 grid gap-2.5 app-summary-grid">
