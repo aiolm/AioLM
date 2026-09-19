@@ -6,8 +6,10 @@
 //!   $env:AIOLM_SMOKE = "1"
 //!   $env:AIOLM_SMOKE_MODEL = "C:\path\to\model.gguf"
 //!   cd src-tauri && cargo test --test smoke -- --ignored --nocapture --test-threads=1
-//! Optional: AIOLM_SMOKE_BACKEND/BUILD select a managed runtime;
-//! DEVICE selects runtime device names; PORT permits concurrent isolated runs;
+//! Required: AIOLM_SMOKE_BACKEND/BUILD select the managed runtime used for the
+//! run (only runtimes installed in AioLM are ever used; there is no system
+//! PATH fallback).
+//! Optional: DEVICE selects runtime device names; PORT permits concurrent isolated runs;
 //! MMPROJ tests image input; SPEC_TYPE/DRAFT test a draft head;
 //! CANCEL_LOAD=1 tests interruption before readiness. These do not change saved settings.
 use std::sync::{Arc, Mutex};
@@ -17,8 +19,10 @@ use aiolm_lib::{server, AppConfig, ErrBuf};
 fn cfg_with(model: &str) -> AppConfig {
     AppConfig {
         active_model: model.to_string(),
-        active_backend: aiolm_lib::branding::env_var("AIOLM_SMOKE_BACKEND").unwrap_or_default(),
-        active_build: aiolm_lib::branding::env_var("AIOLM_SMOKE_BUILD").unwrap_or_default(),
+        active_backend: aiolm_lib::branding::env_var("AIOLM_SMOKE_BACKEND")
+            .expect("set AIOLM_SMOKE_BACKEND to a managed runtime backend"),
+        active_build: aiolm_lib::branding::env_var("AIOLM_SMOKE_BUILD")
+            .expect("set AIOLM_SMOKE_BUILD to a managed runtime build"),
         mmproj: aiolm_lib::branding::env_var("AIOLM_SMOKE_MMPROJ").unwrap_or_default(),
         spec_type: aiolm_lib::branding::env_var("AIOLM_SMOKE_SPEC_TYPE")
             .unwrap_or_else(|_| "none".into()),

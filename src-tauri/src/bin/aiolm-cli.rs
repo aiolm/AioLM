@@ -571,11 +571,9 @@ async fn server_start_unlocked() -> Result<Value, String> {
     }
     let bin = server::server_bin(&cfg)?;
     let args = server::build_args_with_gpu(&cfg, "", &resolved_gpu);
-    let environment = if cfg.active_backend.is_empty() && cfg.active_build.is_empty() {
-        runtime::child_environment()
-    } else {
-        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?
-    };
+    // validate_launch_config above guarantees a managed runtime.
+    let environment =
+        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?;
     let log_file_path = log_path();
     if let Some(parent) = log_file_path.parent() {
         fs::create_dir_all(parent)

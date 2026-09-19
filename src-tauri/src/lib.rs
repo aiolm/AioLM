@@ -17,6 +17,7 @@ pub mod server;
 pub mod session;
 mod state;
 pub mod tuning_defaults;
+pub mod verify;
 
 pub use commands::launch::validate_launch_config;
 pub use commands::models::deletable_model_path;
@@ -67,6 +68,8 @@ pub fn run() {
             commands::documents::read_image_data,
             commands::server::start_server,
             commands::launch::preflight_launch,
+            commands::launch::verify_model_deeply,
+            commands::launch::allow_verification_override,
             commands::server::stop_server,
             commands::server::unload_model,
             commands::sessions::session_list,

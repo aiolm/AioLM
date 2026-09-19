@@ -263,6 +263,15 @@ export interface LatestInfo {
   digest?: string;
 }
 
+/** One stored answer to "does this runtime compute correctly on these GPUs?" */
+export interface VerificationRecord {
+  verdict: "pass" | "fail" | "unsupported";
+  ratio?: number;
+  detail: string;
+  suite_version: number;
+  recorded_at: string;
+}
+
 export interface RuntimeCapabilities {
   backend: string;
   build: string;

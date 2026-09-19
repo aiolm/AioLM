@@ -249,7 +249,7 @@ impl ErrBuf {
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        redact_text(&text, &secret)
+        strip_ansi(&redact_text(&text, &secret))
     }
 
     pub fn clear(&self) {
@@ -267,32 +267,66 @@ pub fn redact_text(text: &str, secret: &str) -> String {
     }
 }
 
-/// Resolve the configured managed runtime first, then PATH/WinGet.
-pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
-    if !cfg.active_backend.is_empty() || !cfg.active_build.is_empty() {
-        if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-            return Err("runtime backend and build must be selected together".into());
+/// Strip ANSI color/control sequences from native server logs so failure
+/// messages stay readable in the UI. Keeps the stored command arguments intact.
+pub fn strip_ansi(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(current) = chars.next() {
+        if current != '\u{1b}' {
+            result.push(current);
+            continue;
         }
-        let path = runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?;
-        if path.is_file() {
-            return Ok(path.to_string_lossy().into_owned());
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                let mut terminated = false;
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' {
+                        terminated = true;
+                        break;
+                    }
+                    if next == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        terminated = true;
+                        break;
+                    }
+                }
+                if !terminated {
+                    continue;
+                }
+            }
+            _ => continue,
         }
-        return Err(format!(
-            "managed runtime is missing llama-server: {}",
-            path.display()
-        ));
     }
+    result
+}
 
-    if let Ok(path) = which::which(runtime::server_executable_name()) {
+/// Resolve the managed runtime executable. Only runtimes installed in AioLM
+/// are ever used; system PATH and WinGet copies are intentionally ignored so
+/// a stale outside binary can never serve a launch.
+pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
+    if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
+        return Err(
+            "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
+        );
+    }
+    let path = runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?;
+    if path.is_file() {
         return Ok(path.to_string_lossy().into_owned());
     }
-
-    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-    let fallback = runtime::system_server_fallback(&local);
-    if fallback.is_file() {
-        return Ok(fallback.to_string_lossy().into_owned());
-    }
-    Err("llama-server was not found on PATH or in the WinGet package directory".into())
+    Err(format!(
+        "managed runtime is missing llama-server: {}",
+        path.display()
+    ))
 }
 
 /// Build the llama-server command line with no GPU placement resolved,
@@ -583,11 +617,10 @@ pub fn spawn(
     let bin = server_bin(cfg)?;
     // Resolve fallible environment setup before creating a credential file.
     // Keep early environment-setup errors outside the credential lifetime.
-    let environment = if cfg.active_backend.is_empty() && cfg.active_build.is_empty() {
-        runtime::child_environment()
-    } else {
-        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?
-    };
+    // Launch validation guarantees a managed runtime, so the system
+    // environment fallback below is unreachable in production.
+    let environment =
+        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?;
     let api_key_file = create_api_key_file(api_key)?;
     let mut args = build_args_with_gpu(cfg, api_key, resolved_gpu);
     if let Some(path) = api_key_file.as_ref() {
@@ -828,9 +861,18 @@ pub async fn wait_ready(
                 if let Ok(mut state) = shared.lock() {
                     kill(&mut state.child, None);
                 }
+                let tail = err.tail();
+                let trimmed = tail.trim();
+                let hint = if trimmed.to_uppercase().contains("SPLIT_MODE_TENSOR")
+                    || trimmed.to_lowercase().contains("tensor-split")
+                    || trimmed.to_lowercase().contains("tensor split")
+                {
+                    " This model does not support the Tensor split mode (experimental). Change GPU split mode to Automatic, layer, or row and try again."
+                } else {
+                    ""
+                };
                 return Err(format!(
-                    "server exited before ready ({code}). {}",
-                    err.tail().trim()
+                    "server exited before ready ({code}). {trimmed}{hint}"
                 ));
             }
             Ok(None) => {}

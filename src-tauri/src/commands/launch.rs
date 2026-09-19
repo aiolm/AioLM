@@ -7,6 +7,11 @@ use std::sync::{atomic::AtomicBool, Arc};
 fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
     cfg.normalize();
     cfg.validate()?;
+    if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
+        return Err(
+            "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
+        );
+    }
     if cfg.active_model.trim().is_empty() {
         return Err("select a GGUF model before starting the server".into());
     }
@@ -39,9 +44,7 @@ fn validate_start_config(cfg: &mut config::AppConfig) -> Result<(), String> {
             "DFlash2 requires a draft model. Set the draft model GGUF path in Tuning before starting the server.".into(),
         );
     }
-    if !cfg.active_backend.is_empty() {
-        runtime::validate_runtime_identifiers(&cfg.active_backend, &cfg.active_build)?;
-    }
+    runtime::validate_runtime_identifiers(&cfg.active_backend, &cfg.active_build)?;
     Ok(())
 }
 
@@ -66,43 +69,87 @@ pub(crate) async fn preflight_launch(
     Ok(cfg)
 }
 
+/// Accept a blocked GPU placement and let it start anyway.
+///
+/// The refusal prints the key for the exact combination it measured; nothing
+/// else unlocks, so agreeing to run one known-bad setup cannot quietly cover a
+/// different runtime, GPU selection, or machine.
+#[tauri::command]
+pub(crate) async fn allow_verification_override(key: String) -> Result<(), String> {
+    crate::verify::allow_override(&key)
+}
+
+/// Score the selected model's own weights on the selected devices against the
+/// host, and store the verdict.
+///
+/// Opt-in on purpose. The launch gate uses a tiny canary because it has to be
+/// cheap enough to run before every unverified start; that canary cannot reach
+/// an architecture-specific kernel, and it is not the user's quantization. This
+/// closes that gap for one model at the cost of streaming it twice, which takes
+/// minutes rather than seconds, so nothing calls it automatically.
+#[tauri::command]
+pub(crate) async fn verify_model_deeply(
+    mut cfg: config::AppConfig,
+) -> Result<crate::verify::Record, String> {
+    validate_start_config(&mut cfg)?;
+    let capabilities = runtime::probe(&cfg.active_backend, &cfg.active_build).await?;
+    let profile = hardware::detect();
+    let resolved = gpu::resolve_with_runtime_devices(
+        &cfg.gpu,
+        &cfg.active_backend,
+        &profile,
+        &capabilities.devices,
+    )?;
+    crate::verify::run_deep(
+        &cfg,
+        &resolved,
+        &profile.fingerprint,
+        &capabilities.devices,
+        None,
+    )
+    .await
+}
+
 async fn validate_launch(
     cfg: &mut config::AppConfig,
     cancel: Option<&Arc<AtomicBool>>,
     repair: bool,
 ) -> Result<gpu::ResolvedGpu, String> {
     validate_start_config(cfg)?;
-    if !cfg.active_backend.is_empty() {
-        if repair {
-            let repair_cancel = cancel
-                .cloned()
-                .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-            runtime::repair_runtime_dependencies(
-                &cfg.active_backend,
-                &cfg.active_build,
-                repair_cancel,
-            )
+    if repair {
+        let repair_cancel = cancel
+            .cloned()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        runtime::repair_runtime_dependencies(&cfg.active_backend, &cfg.active_build, repair_cancel)
             .await?;
-        }
-        let capabilities = match cancel {
-            Some(cancel) => {
-                runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, cancel).await?
-            }
-            None => runtime::probe(&cfg.active_backend, &cfg.active_build).await?,
-        };
-        validate_runtime_adapter_capabilities(cfg, &capabilities)?;
-        gpu::validate_safe_auto_placement(&cfg.gpu, &cfg.active_backend, &capabilities.devices)?;
-        let resolved = gpu::resolve_with_runtime_devices(
-            &cfg.gpu,
-            &cfg.active_backend,
-            &hardware::detect(),
-            &capabilities.devices,
-        )?;
-        gpu::validate_known_rocm_peer_issue(cfg, &resolved, &capabilities.devices)?;
-        return Ok(resolved);
     }
-    crate::server::server_bin(cfg)?;
-    gpu::resolve(&cfg.gpu, &cfg.active_backend, &hardware::detect())
+    let capabilities = match cancel {
+        Some(cancel) => {
+            runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, cancel).await?
+        }
+        None => runtime::probe(&cfg.active_backend, &cfg.active_build).await?,
+    };
+    validate_runtime_adapter_capabilities(cfg, &capabilities)?;
+    gpu::validate_safe_auto_placement(&cfg.gpu, &cfg.active_backend, &capabilities.devices)?;
+    let profile = hardware::detect();
+    let resolved = gpu::resolve_with_runtime_devices(
+        &cfg.gpu,
+        &cfg.active_backend,
+        &profile,
+        &capabilities.devices,
+    )?;
+    // Nothing above this point has checked that the runtime computes correct
+    // results here; it has only checked that it can start. Do that last, once
+    // the exact device placement is known.
+    crate::verify::ensure_verified(
+        cfg,
+        &resolved,
+        &profile.fingerprint,
+        &capabilities.devices,
+        cancel,
+    )
+    .await?;
+    Ok(resolved)
 }
 
 fn validate_adapter_file(path: &str, label: &str, extensions: &[&str]) -> Result<(), String> {
@@ -192,6 +239,8 @@ mod tests {
         fs::write(&first, b"synthetic shard").unwrap();
         let mut cfg = config::AppConfig {
             active_model: first.to_string_lossy().into_owned(),
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
             ..Default::default()
         };
         assert!(validate_start_config(&mut cfg)
@@ -216,6 +265,8 @@ mod tests {
         fs::write(&invalid_model, b"model").expect("write invalid model fixture");
         let mut invalid_cfg = config::AppConfig {
             active_model: invalid_model.to_string_lossy().into_owned(),
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
             ..config::AppConfig::default()
         };
         assert!(validate_start_config(&mut invalid_cfg)
@@ -223,6 +274,8 @@ mod tests {
             .contains("model must use"));
         let mut cfg = config::AppConfig {
             active_model: model.to_string_lossy().into_owned(),
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
             mmproj: root
                 .join("missing-mmproj.gguf")
                 .to_string_lossy()
@@ -246,6 +299,8 @@ mod tests {
             .contains("LoRA"));
         let mut dflash_cfg = config::AppConfig {
             active_model: model.to_string_lossy().into_owned(),
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
             spec_type: "draft-dflash".into(),
             ..config::AppConfig::default()
         };
@@ -264,6 +319,8 @@ mod tests {
 
         let mut mismatched_cfg = config::AppConfig {
             active_model: model.to_string_lossy().into_owned(),
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
             spec_type: "draft-mtp".into(),
             spec_draft_model: root
                 .join("Qwen3.8-27B-DFlash2-Q4_K_M.gguf")
@@ -277,6 +334,26 @@ mod tests {
             .expect_err("DFlash model cannot be launched as MTP");
         assert!(error.contains("draft-dflash"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn start_validation_requires_a_managed_runtime() {
+        let mut cfg = config::AppConfig {
+            active_model: "model.gguf".into(),
+            ..config::AppConfig::default()
+        };
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("installed in AioLM"));
+        cfg.active_backend = "cpu".into();
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("must be selected together"));
+        cfg.active_build = "b123".into();
+        // A complete runtime pair moves past the gate to the model check.
+        assert!(validate_start_config(&mut cfg)
+            .unwrap_err()
+            .contains("model file does not exist"));
     }
 
     #[test]
