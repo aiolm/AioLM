@@ -19,9 +19,9 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
   const selected = library.entries.find(entry => entry.id === original.current.profile_id) ?? resolved.profile;
   const available = library.entries.filter(entry => entry.scope === 'global' || entry.model_key === profileTargetKey(cfg.active_model));
   const setSystemPrompt = setPrompt;
-  const prepared = (nextLibrary = library, next = cfg, profile: SettingsProfile = selected, prompt = systemPrompt, applyTarget = true, saveMode?: ProfileEditorResult['saveMode']) => ({
-    config: next, applyTarget, edit: { baseRevision: library.revision, library: nextLibrary,
-      application: materializeProfileApplication(next, prompt, profile), ...(saveMode ? { saveMode } : {}) } satisfies ProfileEditorResult,
+  const prepared = (nextLibrary = library, next = cfg, profile: SettingsProfile = selected, prompt = systemPrompt, applyTarget = true, saveMode?: ProfileEditorResult['saveMode']): { config: AppConfig; applyTarget: boolean; edit: ProfileEditorResult } => ({
+    config: next, applyTarget, edit: { baseRevision: library.revision, baseLibrary: structuredClone(library), library: nextLibrary,
+      application: materializeProfileApplication(next, prompt, profile), ...(saveMode ? { saveMode } : {}) },
   });
   const prepareApply = (choice: ProfileChoice) => {
     const nextLibrary = structuredClone(library);
@@ -82,7 +82,7 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
     const nextLibrary = structuredClone(library);
     const profile = overwriteWorkingProfile(selected, cfg, systemPrompt, benchmark);
     nextLibrary.entries = nextLibrary.entries.map(item => item.id === profile.id ? profile : item);
-    return { baseRevision: library.revision, library: nextLibrary, application: materializeProfileApplication(cfg, systemPrompt, profile), saveMode: benchmark ? 'benchmark' : 'all' };
+    return { baseRevision: library.revision, baseLibrary: structuredClone(library), library: nextLibrary, application: materializeProfileApplication(cfg, systemPrompt, profile), saveMode: benchmark ? 'benchmark' : 'all' };
   };
   const acceptSaved = (saved: AppConfig, application: ProfileApplication) => {
     savedSettings.current = saved;

@@ -22,6 +22,7 @@ export function requestProfileFromApplication(application?: ProfileApplication |
 export interface ProfileEditorResult {
   baseRevision: number;
   library: SettingsProfileLibrary;
+  baseLibrary?: SettingsProfileLibrary;
   application: ProfileApplication;
   saveMode?: 'all' | 'benchmark';
 }
@@ -39,9 +40,16 @@ export function appliedProfile(cfg: AppConfig, sessionId = 'default'): ProfileAp
 /** Commit selected profile values and their target application in the same configuration write. */
 export function mergeProfileEditor(current: AppConfig, edit: ProfileEditorResult, sessionId?: string): SettingsProfileLibrary {
   const latest = current.settings_profiles ?? emptyProfileLibrary();
-  if (latest.revision !== edit.baseRevision) throw new Error('Profiles changed elsewhere. Reopen settings to review the latest profiles.');
-  if (!edit.library.entries.length) throw new Error('At least one profile must remain.');
-  const next = structuredClone(ensureProfileLibrary(edit.library));
+  let library = edit.library;
+  let baseRevision = edit.baseRevision;
+  if (latest.revision !== baseRevision) {
+    const rebased = rebaseStaleProfileEdit(edit.baseLibrary, latest, library);
+    if (!rebased) throw new Error('Profiles changed elsewhere. Reopen settings to review the latest profiles.');
+    library = rebased;
+    baseRevision = latest.revision;
+  }
+  if (!library.entries.length) throw new Error('At least one profile must remain.');
+  const next = structuredClone(ensureProfileLibrary(library));
   next.applied = { ...latest.applied, ...next.applied };
   let application = structuredClone(edit.application);
   if (edit.saveMode) {
@@ -67,6 +75,84 @@ export function mergeProfileEditor(current: AppConfig, edit: ProfileEditorResult
   next.revision = latest.revision + 1;
   next.legacy_imported = true;
   return next;
+}
+
+/** Rebase a stale library edit onto the latest saved library when it is safe.
+ * Returns the rebased library, or null when the user and another writer changed
+ * the same profile entry or default in conflicting ways. Callers without a base
+ * snapshot preserve the previous strict revision check. */
+export function rebaseStaleProfileEdit(base: SettingsProfileLibrary | undefined, latest: SettingsProfileLibrary, edited: SettingsProfileLibrary): SettingsProfileLibrary | null {
+  if (!base) return null;
+  const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+  const baseEntries = new Map(base.entries.map(entry => [entry.id, entry]));
+  const latestEntries = new Map(latest.entries.map(entry => [entry.id, entry]));
+  const editedEntries = new Map(edited.entries.map(entry => [entry.id, entry]));
+  const mergedEntries: SettingsProfileLibrary['entries'] = [];
+  // Preserve the user's entry order; background-only additions are appended.
+  for (const entry of edited.entries) {
+    const id = entry.id;
+    const baseEntry = baseEntries.get(id);
+    const latestEntry = latestEntries.get(id);
+    if (baseEntry && same(entry, baseEntry)) {
+      // The user did not touch this entry: adopt the latest version (which may
+      // have changed, or have been deleted elsewhere).
+      if (latestEntry) mergedEntries.push(structuredClone(latestEntry));
+      continue;
+    }
+    if (!baseEntry) {
+      // Added by the user. A background addition with the same id but different
+      // content is a true conflict.
+      if (latestEntry && !same(entry, latestEntry)) return null;
+      mergedEntries.push(structuredClone(entry));
+      continue;
+    }
+    if (!latestEntry) return null; // Deleted elsewhere while the user edited it.
+    if (same(latestEntry, baseEntry)) { mergedEntries.push(structuredClone(entry)); continue; }
+    if (same(latestEntry, entry)) { mergedEntries.push(structuredClone(entry)); continue; }
+    return null;
+  }
+  for (const entry of latest.entries) {
+    if (editedEntries.has(entry.id) || baseEntries.has(entry.id)) continue;
+    mergedEntries.push(structuredClone(entry));
+  }
+  if (!mergedEntries.length) return null;
+  const baseDefault = base.default_profile_id;
+  const latestDefault = latest.default_profile_id;
+  const editedDefault = edited.default_profile_id;
+  let default_profile_id = editedDefault;
+  if (editedDefault !== baseDefault) {
+    if (latestDefault !== baseDefault && latestDefault !== editedDefault) return null;
+  } else {
+    default_profile_id = latestDefault;
+  }
+  const baseApplied = base.applied ?? {};
+  const latestApplied = latest.applied ?? {};
+  const editedApplied = edited.applied ?? {};
+  const applied: SettingsProfileLibrary['applied'] = {};
+  for (const key of new Set([...Object.keys(baseApplied), ...Object.keys(latestApplied), ...Object.keys(editedApplied)])) {
+    const baseValue = baseApplied[key];
+    const latestValue = latestApplied[key];
+    const editedValue = editedApplied[key];
+    if (editedValue === undefined) {
+      // Removed by the user only if it existed in the base; otherwise adopt latest.
+      if (baseValue !== undefined) continue;
+      if (latestValue !== undefined) applied[key] = structuredClone(latestValue);
+      continue;
+    }
+    if (baseValue === undefined) {
+      if (latestValue !== undefined && !same(editedValue, latestValue)) return null;
+      applied[key] = structuredClone(editedValue);
+      continue;
+    }
+    if (same(editedValue, baseValue)) {
+      if (latestValue !== undefined) applied[key] = structuredClone(latestValue);
+      continue;
+    }
+    if (latestValue !== undefined && same(latestValue, baseValue)) { applied[key] = structuredClone(editedValue); continue; }
+    if (latestValue !== undefined && same(latestValue, editedValue)) { applied[key] = structuredClone(editedValue); continue; }
+    return null;
+  }
+  return { ...structuredClone(latest), entries: mergedEntries, applied, default_profile_id, legacy_imported: edited.legacy_imported || latest.legacy_imported };
 }
 
 /** Persist replacement settings with the library when a profile is deleted. */
