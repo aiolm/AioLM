@@ -1,5 +1,5 @@
 //! Managed runtime installation, selection, diagnostics and transfer IPC.
-use crate::{backends, config, hardware, runtime, state::AppState};
+use crate::{backends, config, gpu, hardware, runtime, state::AppState};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -274,57 +274,73 @@ pub(crate) async fn rt_uninstall(
             return Err("stop the server before changing runtimes".into());
         }
     }
-    {
-        let _config_write = state.config_write.lock().await;
-        let cfg = config::load_result()?;
-        if cfg.active_backend == backend && cfg.active_build == build {
-            return Err("select another runtime before uninstalling the active runtime".into());
-        }
-    }
+    let (removed_backend, removed_build) = (backend.clone(), build.clone());
     tokio::task::spawn_blocking(move || runtime::uninstall(&backend, &build))
         .await
-        .map_err(|error| format!("runtime uninstall task failed: {error}"))?
-}
-
-#[tauri::command]
-pub(crate) async fn rt_select(
-    state: State<'_, AppState>,
-    backend: String,
-    build: String,
-) -> Result<config::AppConfig, String> {
-    let _runtime_busy = RuntimeBusyGuard::acquire(&state.runtime_busy)?;
-    {
-        let _operation = state.operation.lock().await;
-        if runtime_resources_in_use(&state)? {
-            return Err("stop the server before selecting a different runtime".into());
-        }
-    }
-    runtime::validate_runtime_identifiers(&backend, &build)?;
-    let server = runtime::server_bin_for(&backend, &build)?;
-    let bench = runtime::bench_bin_for(&backend, &build)?;
-    if !server.is_file() || !bench.is_file() {
-        return Err("the selected runtime is not installed completely".into());
-    }
-    runtime::repair_runtime_dependencies(&backend, &build, Arc::new(AtomicBool::new(false)))
-        .await?;
-    let capabilities = runtime::probe(&backend, &build).await?;
-    if capabilities.state != "available" {
-        let details = capabilities.diagnostics.join("; ");
-        return Err(format!(
-            "the selected runtime failed preflight ({}): {}",
-            capabilities.state,
-            if details.is_empty() {
-                "no diagnostics"
-            } else {
-                &details
-            }
-        ));
-    }
+        .map_err(|error| format!("runtime uninstall task failed: {error}"))??;
+    // The runtime a model launches with is part of its profile, so removing the
+    // build has to reach every profile naming it. Done after the files are gone:
+    // a failed uninstall must leave the settings describing what is still there.
     let _config_write = state.config_write.lock().await;
     let mut cfg = config::load_result()?;
+    if config::profiles::forget_runtime(&mut cfg, &removed_backend, &removed_build) {
+        config::save(&cfg)?;
+    }
+    Ok(())
+}
+
+/// Re-point `cfg.gpu` at the backend the config is moving to.
+///
+/// A saved selection names devices inside the previous backend's own
+/// enumeration, which the new one does not answer to. Translating it here,
+/// while both device lists are available, is what keeps a placement from
+/// looking fine in settings and then failing at launch. `cfg` still carries the
+/// backend being left, so callers apply this before they overwrite it.
+async fn realign_gpu_placement(cfg: &mut config::AppConfig, backend: &str, devices: &[String]) {
+    if cfg.active_backend != backend && !cfg.gpu.is_empty() {
+        let previous = match runtime::probe(&cfg.active_backend, &cfg.active_build).await {
+            Ok(previous) => previous.devices,
+            Err(_) => Vec::new(),
+        };
+        let remapped =
+            gpu::remap_runtime_devices(&cfg.gpu, &cfg.active_backend, &previous, backend, devices);
+        cfg.gpu = remapped.placement;
+    }
+    // Leave the runtime with a placement it can actually resolve. An empty
+    // selection means "whatever the backend picks", which this app refuses for
+    // indistinguishable cards anyway, so a selection that did not survive the
+    // switch — or was never made — becomes every device this runtime reports.
+    if cfg.gpu.gpu_ids.is_empty() {
+        cfg.gpu.gpu_ids = gpu::select_all_runtime_devices(backend, devices);
+    }
+}
+
+/// Apply the same realignment to a config saved from somewhere other than the
+/// runtimes panel.
+///
+/// Model settings carries its own runtime picker, so a backend switch reaches
+/// `save_config` without ever passing through `rt_select`. Without this the
+/// placement kept the old backend's device names, which the GPU panel reported
+/// as "references a GPU that is not detected" until the user reselected by
+/// hand. A probe failure leaves the placement untouched: a config may name a
+/// runtime that is not installed yet, and guessing at devices would be worse
+/// than carrying the selection forward unchanged.
+pub(crate) async fn realign_saved_gpu_placement(
+    previous: &config::AppConfig,
+    cfg: &mut config::AppConfig,
+) {
+    if previous.active_backend == cfg.active_backend {
+        return;
+    }
+    let Ok(capabilities) = runtime::probe(&cfg.active_backend, &cfg.active_build).await else {
+        return;
+    };
+    let (backend, build) = (cfg.active_backend.clone(), cfg.active_build.clone());
+    cfg.active_backend = previous.active_backend.clone();
+    cfg.active_build = previous.active_build.clone();
+    realign_gpu_placement(cfg, &backend, &capabilities.devices).await;
     cfg.active_backend = backend;
     cfg.active_build = build;
-    config::save(&cfg)
 }
 
 #[tauri::command]

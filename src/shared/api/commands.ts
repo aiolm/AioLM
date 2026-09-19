@@ -3,7 +3,7 @@ import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transp
 import type {
   AppConfig, DeviceReport,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
-  LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelScanResult,
+  LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelMetadata, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus,
   VerificationRecord,
@@ -65,6 +65,9 @@ export function normalizeSessionList(value: SessionStatus[] | SessionListResult)
 }
 
 export const deviceProfile = () => invoke<DeviceReport>("device_profile");
+export const modelMetadata = (path: string) =>
+  invoke<ModelMetadata>("model_metadata", { path });
+
 export const rtList = () => invoke<InstalledRuntime[]>("rt_list");
 export const rtLatest = (backend: string, refresh = false) => invoke<LatestInfo>("rt_latest", { backend, refresh });
 export const rtInstall = (backend: string, build: string) =>

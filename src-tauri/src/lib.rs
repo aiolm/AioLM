@@ -5,6 +5,7 @@ mod commands;
 pub mod config;
 mod discover;
 mod gateway;
+pub mod gguf;
 pub mod gpu;
 pub mod hardware;
 mod mcp;
@@ -48,6 +49,7 @@ pub fn run() {
             commands::config::get_config,
             commands::config::save_config,
             commands::models::list_models,
+            commands::models::model_metadata,
             commands::models::delete_model,
             commands::models::pick_models_dir,
             commands::models::pick_lora_adapter,
@@ -94,7 +96,6 @@ pub fn run() {
             commands::runtimes::rt_cancel,
             commands::runtimes::rt_uninstall,
             commands::runtimes::device_profile,
-            commands::runtimes::rt_select,
             commands::runtimes::rt_probe
         ])
         .build(tauri::generate_context!())

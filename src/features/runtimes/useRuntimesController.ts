@@ -8,7 +8,7 @@ import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import { updateTask } from "../../shared/state/taskRegistry";
 import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
-import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, runReviewPullRequest, runSelect } from "./runtimesActions";
+import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, runReviewPullRequest } from "./runtimesActions";
 
 /** Owns all Runtimes panel state: backend catalog rows, device detection, the
  * two-step pull-request build flow, portable bundle import/export, and the native install-progress subscription. */
@@ -200,9 +200,6 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     }, commonDeps);
   };
 
-  const select = (backend: string, build: string) =>
-    runSelect(backend, build, runtimeBusy, commonDeps, store.loadConfig);
-
   const performUninstall = async (backend: string, build: string) => {
     if (uninstallBusy) return;
     setFailure(null);
@@ -252,6 +249,6 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     device, showAll, toggleShowAll, activeBackend, activeBuild, serverRunning, runtimeBusy,
     probe, refresh,
     cancelInstall, exportRuntime, importRuntime, install,
-    reviewPullRequest, installPullRequest, select, uninstall, confirmUninstall,
+    reviewPullRequest, installPullRequest, uninstall, confirmUninstall,
   };
 }

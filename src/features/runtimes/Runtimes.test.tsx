@@ -16,7 +16,6 @@ vi.mock("../../shared/api/index", () => ({
   rtImport: vi.fn(),
   rtCancel: vi.fn(),
   rtUninstall: vi.fn(),
-  rtSelect: vi.fn(),
   rtProbe: vi.fn(),
   deviceProfile: vi.fn(),
   onRuntimeProgress: vi.fn(),
