@@ -68,3 +68,11 @@
   .settings-profile-banner > .settings-profile-buttons { padding-left: 0; }
   .settings-profile-value { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
+
+/* What a save would rewrite, listed before it is pressed. */
+.settings-profile-changes { display: grid; gap: 2px; max-height: 40vh; overflow-y: auto; margin: 8px 0; font-size: 13px; }
+.settings-profile-changes > div { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.settings-profile-changes dt { min-width: 8rem; font-weight: 600; }
+.settings-profile-changes dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.settings-profile-change-before { color: var(--ui-muted); text-decoration: line-through; }
+.settings-profile-change-after { color: var(--ui-ink); font-weight: 600; }

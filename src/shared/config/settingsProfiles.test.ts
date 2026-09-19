@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
 import {
   applySettingsProfile, canDeleteSettingsProfile, captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication,
-  defaultSettingsProfileEntry, MODEL_PROFILE_KEYS, profileMatches, profileTargetKey, setDefaultSettingsProfile, settingsEqual, settingsSnapshot, type SettingsProfile,
+  changedSettings, defaultSettingsProfileEntry, MODEL_PROFILE_KEYS, profileMatches, profileTargetKey, setDefaultSettingsProfile, settingsEqual, settingsSnapshot, type SettingsProfile,
 } from './settingsProfiles';
 
 describe('settings profiles', () => {
@@ -167,5 +167,31 @@ describe('settings profiles', () => {
     expect(cfg.server_args).toContain('--api-key=synthetic-secret');
     profile.settings.temperature = 0.1;
     expect(application.settings.temperature).toBe(testConfig.temperature);
+  });
+});
+
+describe('settings a save would rewrite', () => {
+  it('names each changed setting with the value it comes from and goes to', () => {
+    const changes = changedSettings({ ctx_size: 4096, temperature: 0.8 }, { ctx_size: 8192, temperature: 0.8 });
+    expect(changes).toEqual([{ key: 'ctx_size', before: 4096, after: 8192 }]);
+  });
+
+  it('reports nothing exactly when the save would be a no-op', () => {
+    // The list and the "unchanged" verdict come from the same comparison, so a
+    // save cannot claim changes it would not make, or hide ones it would.
+    const left = { ctx_size: 4096, runtime_defaults: ['threads', 'parallel'] };
+    const right = { ctx_size: 4096, runtime_defaults: ['parallel', 'threads'] };
+    expect(settingsEqual(left, right)).toBe(true);
+    expect(changedSettings(left, right)).toEqual([]);
+  });
+
+  it('shows a setting handed back to the runtime as losing its value', () => {
+    const changes = changedSettings({ threads: 12 }, { threads: 12, runtime_defaults: ['threads'] });
+    expect(changes.find(change => change.key === 'threads')).toMatchObject({ before: 12, after: undefined });
+  });
+
+  it('lists an added setting and a removed one alike', () => {
+    const changes = changedSettings({ top_k: 40 }, { top_p: 0.9 });
+    expect(changes.map(change => change.key).sort()).toEqual(['top_k', 'top_p']);
   });
 });

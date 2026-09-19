@@ -274,6 +274,30 @@ export function settingsEqual(left: Partial<ExecutionSettings>, right: Partial<E
   return JSON.stringify(comparable(left)) === JSON.stringify(comparable(right));
 }
 
+export interface SettingChange {
+  key: string;
+  /** Absent when the setting is only being added, or is moving to inherited. */
+  before?: unknown;
+  after?: unknown;
+}
+
+/**
+ * Which settings a save would rewrite, and what they would go from and to.
+ *
+ * Compared through the same normalization `settingsEqual` decides on, so a save
+ * that reports no changes and a save that is refused as unchanged always agree.
+ * A key that moved to the runtime default drops out of the normalized snapshot,
+ * which is itself a change worth showing: it had a value and will not any more.
+ */
+export function changedSettings(saved: Partial<ExecutionSettings>, current: Partial<ExecutionSettings>): SettingChange[] {
+  const before = comparable(saved) as Record<string, unknown>;
+  const after = comparable(current) as Record<string, unknown>;
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .sort((left, right) => left.localeCompare(right))
+    .filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+    .map(key => ({ key, before: before[key], after: after[key] }));
+}
+
 export function profileMatches(profile: SettingsProfile, cfg: AppConfig, systemPrompt: string): boolean {
   if (profile.scope === 'model' && profile.model_key && profile.model_key !== profileTargetKey(cfg.active_model)) return false;
   if (profile.system_prompt !== undefined && profile.system_prompt.trim() !== systemPrompt.trim()) return false;
