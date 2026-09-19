@@ -20,7 +20,7 @@ export default function RuntimePortableBundle({
   t, rows, bundleBusy, bundleProgress, runtimeBusy, serverRunning, onImport, onExport,
 }: Props) {
   return (
-    <section className="mb-4 rounded-xl border app-border-success bg-success-soft/20 p-4" aria-labelledby="portable-runtime-heading" aria-busy={bundleBusy}>
+    <section className="mb-4 app-card app-card--success" aria-labelledby="portable-runtime-heading" aria-busy={bundleBusy}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 id="portable-runtime-heading" className="app-section-title">{t("ui.portableRuntimeTitle")}</h2>

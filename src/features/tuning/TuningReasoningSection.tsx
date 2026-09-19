@@ -31,7 +31,7 @@ export default function TuningReasoningSection({
   const { locale } = useI18n();
   const help = tuningHelp[locale];
   return (
-    <section className="tuning-section tuning-section--reasoning min-w-0 rounded-xl border border-line-strong app-bg-muted p-4">
+    <section className="tuning-section tuning-section--reasoning min-w-0 app-card app-card--muted">
       <p className="mb-4 text-xs text-muted">{t("extra.reasoningDescription")}</p>
       <div className="grid gap-4 app-form-grid">
         <div className="flex min-w-0 flex-col gap-1.5">

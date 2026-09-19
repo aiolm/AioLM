@@ -43,6 +43,8 @@
 .app-task-strip__copy { min-width: 0; }
 .app-task-strip__label { overflow-wrap: anywhere; }
 .app-task-strip__status, .app-task-strip__progress { color: var(--ui-muted); }
+.app-task-strip__copy > span { display: block; }
+.app-task-strip__transfer { color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .app-task-strip__progress { display: block; width: 160px; max-width: 100%; height: 4px; margin-top: 8px; overflow: hidden; border-radius: 4px; background: var(--ui-border); }
 .app-task-strip__progress > span { display: block; height: 100%; background: var(--brand-gradient); }
 .app-task-strip__error { color: var(--ui-danger); }

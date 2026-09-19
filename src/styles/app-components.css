@@ -19,8 +19,22 @@
 .app-input, .app-select, .app-textarea { width: 100%; min-height: var(--ui-control); padding: calc((var(--ui-control) - 22px) / 2) 12px; border: 1px solid var(--ui-border-strong); border-radius: 8px; background: var(--ui-input); color: var(--ui-ink); font-size: 14px; line-height: 20px; }
 .app-input:focus, .app-select:focus, .app-textarea:focus { border-color: var(--ui-accent); }
 .app-textarea { min-height: 80px; }
-.app-card { border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-panel); padding: var(--ui-row-space); }
-.app-card--raised { box-shadow: var(--ui-elev-1); }
+/* The one panel box. Every page had been spelling this out in utilities, which
+   is how Projects, MCP and Tuning ended up with three different backgrounds and
+   two paddings for what reads as the same card. Tone variants change only the
+   colour, so a warning card is still the same box. */
+.app-card { min-width: 0; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-panel); padding: var(--ui-page-padding); }
+/* Its own children supply the padding: a scrolling list, or a disclosure whose
+   summary must reach the card's edge to stay clickable across its full width. */
+.app-card--flush { padding: 0; }
+.app-card--tight { padding: calc(var(--ui-page-padding) * .75); }
+/* Floating above the page rather than sitting in it, matching the drawer and
+   the composer popovers. */
+.app-card--raised { box-shadow: var(--ui-elev-2); }
+.app-card--muted { border-color: var(--ui-border-strong); background: var(--ui-surface-muted); }
+.app-card--accent { border-color: var(--ui-border-accent); background: var(--ui-accent-soft); }
+.app-card--success { border-color: var(--tone-success-border); background: var(--tone-success-bg); }
+.app-card--warning { border-color: var(--tone-warning-border); background: var(--tone-warning-bg); }
 .app-feedback { display: flex; align-items: start; gap: 12px; padding: 12px 16px; border: 1px solid var(--tone-info-border); border-radius: 8px; background: var(--tone-info-bg); color: var(--tone-info-ink); font-size: 13px; overflow-wrap: anywhere; }
 .app-feedback--error { border-color: var(--tone-error-border); background: var(--tone-error-bg); color: var(--tone-error-ink); }
 .app-feedback--warning { border-color: var(--tone-warning-border); background: var(--tone-warning-bg); color: var(--tone-warning-ink); }

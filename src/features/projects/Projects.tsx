@@ -273,7 +273,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   };
 
   return (
-    <div className="app-page-scroll relative flex h-full min-h-0 flex-col overflow-auto p-4">
+    <div className="app-page-scroll relative flex h-full min-h-0 flex-col">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="mt-1 text-[18px] font-semibold tracking-tight ui-color-ink" >{t("ui.projectsTitle")}</h2>
@@ -306,14 +306,14 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         onCancel={() => setPendingDelete(null)}
       />
       <div className="grid shrink-0 items-start gap-4 app-master-detail">
-        <aside className="min-w-0 rounded-xl border p-3 ui-border-color-border ui-background-panel" >
+        <aside className="min-w-0 app-card app-card--tight" >
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
             {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink" >{t("ui.active")}</span>}</div>)}
           </div>
         </aside>
-        <section className="min-w-0 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
+        <section className="min-w-0 app-card" >
           <div className="grid gap-3 app-form-grid">
             <label className="text-xs ui-color-muted" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input mt-1" /></label>
             <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>

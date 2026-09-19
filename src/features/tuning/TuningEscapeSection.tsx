@@ -21,7 +21,7 @@ export default function TuningEscapeSection({
   chatOptionsDraft, onChatOptionsChange, chatOptionsDirty, onSaveChatOptions,
 }: Props) {
   return (
-    <section className="tuning-section tuning-section--escape min-w-0 rounded-xl border border-line-strong app-bg-muted p-4">
+    <section className="tuning-section tuning-section--escape min-w-0 app-card app-card--muted">
       <h2 className="app-section-title">{t("section.escape")}</h2>
       <p className="app-section-hint mb-4">{t("ui.escapeHint")}</p>
       <div className="tuning-advanced-error-slot mb-3">

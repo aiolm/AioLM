@@ -19,7 +19,7 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   return (
-    <section className="runtime-capabilities-card mb-4 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="runtime-capabilities-heading">
+    <section className="runtime-capabilities-card mb-4 app-card"  aria-labelledby="runtime-capabilities-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="runtime-capabilities-heading" className="app-section-title">{t("section.runtimes")}</h2>

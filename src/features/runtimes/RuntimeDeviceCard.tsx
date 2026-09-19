@@ -16,7 +16,7 @@ export default function RuntimeDeviceCard({ t, device, deviceSummary, showAll, h
   const displayDevice = normalizeDisplayText(deviceSummary);
   const displayCpu = device ? normalizeDisplayText(`${device.profile.cpu.name} · ${device.profile.cpu.logical_cores}T · ${device.profile.os}/${device.profile.arch}`) : "—";
   return (
-    <section className="runtime-detected-device mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="detected-device-heading">
+    <section className="runtime-detected-device mb-4 flex flex-wrap items-center justify-between gap-3 app-card"  aria-labelledby="detected-device-heading">
       <div className="min-w-0">
         <h2 id="detected-device-heading" className="app-eyebrow">{t("ui.detectedDevice")}</h2>
         <div className="mt-1 min-w-0 app-text-wrap text-sm font-medium ui-color-ink"  title={displayDevice}>{displayDevice}</div>
