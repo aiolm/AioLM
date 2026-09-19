@@ -14,6 +14,33 @@ Tuning → **All server options** lists the selected executable's `--help` outpu
 
 Tuning → **Context & memory** also includes model loading and memory options: mmap, mlock, DirectIO, load-mode, lazy-mode, NUMA, cache RAM, KV/operation offload, repacking, automatic fitting and SWA, when reported by that runtime. Defaults are inherited by omitting an override; the reference catalog does not impose defaults from another version.
 
+## Options removed or renamed upstream
+
+Saved `server_args` survive a runtime upgrade, so an argument a newer build no longer accepts stops the server before it becomes ready, with `error: invalid argument: <flag>` as the first log line. Value editors offer the documented values for `--load-mode`, which the runtime help lists as prose rather than in its signature.
+
+The raw argument editors take one option per line with its value after a space (`--load-mode none`). The runtime parser wants the flag and each value as separate process arguments and rejects `--flag=value`, so a line is split by the option's arity rather than by whitespace: everything after the flag is a single value unless the runtime's help says the option takes more, which keeps a path containing spaces intact. Only `--control-vector-layer-range START END` takes two. A value on a switch, or a missing value, is reported while editing instead of at launch.
+
+The loading switches were folded into one `-lm, --load-mode MODE` option. They are still accepted, as deprecated aliases, in `b10840`; they are gone in `b11026`, where only the replacement is parsed.
+
+| Removed switch | Replacement | Meaning |
+| --- | --- | --- |
+| `--mmap` | `--load-mode mmap` | memory-map the weights |
+| `--no-mmap` | `--load-mode none` | read the weights instead of mapping them |
+| `--mlock` | `--load-mode mlock` | keep the weights resident in RAM |
+| `--mmap --mlock` | `--load-mode mmap+mlock` | both of the above |
+| `-dio`, `--direct-io` | `--load-mode dio` | use DirectIO where supported |
+| `-ndio`, `--no-direct-io` | `--load-mode auto` | the default: mmap unless a device cannot use it |
+| `LLAMA_ARG_MMAP`, `LLAMA_ARG_MLOCK`, `LLAMA_ARG_DIO` | `LLAMA_ARG_LOAD_MODE` | environment form of the same setting |
+
+Two more upstream changes keep the older spelling working, so saved arguments containing them do not need editing: `--webui`/`--no-webui` are aliases of `--ui`/`--no-ui`, and `-dt, --defrag-thold` is marked deprecated in both builds while remaining parsable.
+
+Each runtime's own `--help` remains authoritative. To check one installed runtime for options it no longer accepts:
+
+```powershell
+& (Join-Path $env:APPDATA 'aiolm\runtimes\<build>-<backend>\llama-server.exe') --help |
+  Select-String -Pattern 'DEPRECATED' -Context 0,2
+```
+
 The runtime help is authoritative, including options from custom PR builds. If the runtime cannot be queried, the app explicitly identifies the offline reference catalog as unverified. It includes all 255 option entries from the [upstream generated server help at fa6769818708afd9807b22183ccda112fd563427](https://github.com/ggml-org/llama.cpp/blob/fa6769818708afd9807b22183ccda112fd563427/tools/server/README.md), plus the older mmap, mlock and DirectIO switches. Current upstream uses `--load-mode`; older builds expose separate switches. Option availability depends on the executable and backend.
 
 Dedicated model, adapter, GPU, context and reasoning controls remain the owners of their corresponding flags. The shared model settings dialog edits these values without saving until Apply. The server port is an application setting under Settings → Server and takes effect on the next launch. Local binding and ephemeral authentication are managed by the application. Commands that print information and exit (`--help`, `--version`, etc.) are not persistent startup settings.

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppConfig } from "../../shared/api/types";
 import type { AppStore } from "../../shared/state/store";
 import { findModelTuningProfile } from "../../shared/config/qwenDefaults";
-import { isKnownSelectValue, parseChatOptions, parseServerArgs, parseNumericInput, SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "../../shared/config/tuningValidation";
+import { isKnownSelectValue, parseChatOptions, parseNumericInput, SPEC_DRAFT_NGL_OPTIONS, SPEC_TYPE_OPTIONS } from "../../shared/config/tuningValidation";
 import { draftStillCurrent } from "./tuningAsync";
 import { projectorChangeAllowed } from "../chat/visionState";
 import type { ConfigPatch } from "../../shared/state/configSaveQueue";
-import { replaceServerOption, type OptionOccurrence, type ServerOption } from '../../shared/config/serverOptions';
+import { replaceServerOption, serverArgsFromText, serverArgsToText, type OptionOccurrence, type ServerOption } from '../../shared/config/serverOptions';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { serverOptionsText } from '../../shared/i18n/serverOptionsI18n';
 import { useI18n } from "../../shared/i18n/i18n";
@@ -35,7 +35,11 @@ export type { TuningPhase } from "./tuningControllerHelpers";
  * because that guarantee crosses a hook boundary TypeScript can't see through,
  * not because these code paths are expected to run before the config loads.
  */
-export function useTuningController(store: AppStore, options: readonly ServerOption[] = []) {
+// A shared empty default keeps the memos and callbacks below stable for callers
+// that render before the runtime help has been read.
+const NO_OPTIONS: readonly ServerOption[] = [];
+
+export function useTuningController(store: AppStore, options: readonly ServerOption[] = NO_OPTIONS) {
   const { locale, t } = useI18n();
   const cfg = store.cfg;
   const resetValues = useMemo(() => tuningResetValues(options), [options]);
@@ -64,10 +68,10 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
     setNumericDrafts({}); setChatOptionDrafts({}); setServerTextDrafts({}); setChatOptionSelectModes({});
     setServerArgsDirty(false); setChatOptionsDirty(false); setAdvancedError(null);
     const current = getConfig();
-    serverArgsDraftRef.current = current?.server_args.join('\n') ?? '';
+    serverArgsDraftRef.current = current ? serverArgsToText(current.server_args, options) : '';
     chatOptionsDraftRef.current = JSON.stringify(current?.chat_options ?? {}, null, 2);
     setServerArgsDraft(serverArgsDraftRef.current); setChatOptionsDraft(chatOptionsDraftRef.current);
-  }, [getConfig]);
+  }, [getConfig, options]);
   useEffect(() => {
     discardDrafts(); dismissFlash(); setPhase('idle'); setChangedServerFields([]); setPendingBulkChange(null);
   }, [cfg?.active_model, discardDrafts, dismissFlash]);
@@ -92,7 +96,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
           if (!field || value === null || value < field.min || value > field.max) throw new Error(`${key}: ${executionText[locale].invalidNumber}`);
           chat[key] = value;
         }
-        if (serverArgsDirty) patch.server_args = parseServerArgs(serverArgsDraftRef.current);
+        if (serverArgsDirty) patch.server_args = serverArgsFromText(serverArgsDraftRef.current, options);
         const parsedChat = chatOptionsDirty ? parseChatOptions(chatOptionsDraftRef.current) : null;
         if (patch.mmproj !== undefined && !projectorChangeAllowed(store.status.state)) throw new Error(t('ui.stopBeforeProjector'));
         await store.updateConfig(current => ({ ...patch, ...(parsedChat || Object.keys(chat).length ? { chat_options: { ...(parsedChat ?? current.chat_options), ...chat } } : {}) }));
@@ -115,7 +119,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
   useEffect(() => {
     if (!cfg) return;
     if (!serverArgsDirty) {
-      const next = cfg.server_args.join("\n");
+      const next = serverArgsToText(cfg.server_args, options);
       serverArgsDraftRef.current = next;
       setServerArgsDraft(next);
     }
@@ -124,7 +128,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
       chatOptionsDraftRef.current = next;
       setChatOptionsDraft(next);
     }
-  }, [cfg, serverArgsDirty, chatOptionsDirty]);
+  }, [cfg, options, serverArgsDirty, chatOptionsDirty]);
 
   const projectorEditable = projectorChangeAllowed(store.status.state);
   const configMutationsDisabled = phase === "applying" || store.busy || resetting;
@@ -260,7 +264,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
     if (applyLockRef.current) return;
     try {
       const submitted = serverArgsDraft;
-      const serverArgs = parseServerArgs(submitted);
+      const serverArgs = serverArgsFromText(submitted, options);
       await store.updateConfig({ server_args: serverArgs });
       const currentDraft = serverArgsDraftRef.current;
       if (draftStillCurrent(currentDraft, submitted)) setServerArgsDirty(false);
@@ -334,7 +338,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
       notify(t("ui.profileMismatch"));
       return;
     }
-    const serverArgs = profile.serverArgs.join("\n");
+    const serverArgs = serverArgsToText(profile.serverArgs, options);
     const chatOptions = JSON.stringify(profile.chatOptions, null, 2);
     serverArgsDraftRef.current = serverArgs;
     chatOptionsDraftRef.current = chatOptions;
@@ -374,7 +378,7 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
       // Clear only the reset field's drafts. Unrelated unsaved text remains intact.
       clearFieldDrafts(key);
       if (!key || !serverArgsDirty) {
-        const text = saved.server_args.join("\n");
+        const text = serverArgsToText(saved.server_args, options);
         serverArgsDraftRef.current = text; setServerArgsDraft(text); setServerArgsDirty(false);
       }
       if (!key || !chatOptionsDirty) {

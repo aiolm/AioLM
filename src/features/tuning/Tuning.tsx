@@ -92,7 +92,7 @@ export function TuningEditor({ store, section = 'server', onNavigate, runtime, t
 
   if (!cfg) {
     return (
-      <div className="app-page-scroll tuning-panel flex h-full min-h-0 flex-col p-4">
+      <div className="app-page-scroll tuning-panel flex h-full min-h-0 flex-col">
         <div className="panel-loading" role="status" aria-label={t("extra.loading")}>
           <span className="panel-spinner" aria-hidden="true" />
         </div>

@@ -1,5 +1,5 @@
 import catalog from './serverOptionsCatalog.json';
-import { canonicalServerOptionName, parseServerArgs } from './tuningValidation';
+import { assertUnmanagedServerArgs, canonicalServerOptionName } from './tuningValidation';
 
 export interface ServerOption {
   id: string;
@@ -8,6 +8,8 @@ export interface ServerOption {
   group: string;
   flags: string[];
   arity: number;
+  /** The value form the signature documents, such as `MODE` or `START END`; empty for switches. */
+  argument: string;
   choices: string[];
 }
 
@@ -24,7 +26,7 @@ export function describeServerOption(signature: string, description = '', group 
   const choices = enumeration && /[,|]/.test(enumeration) && !enumeration.includes('...')
     ? enumeration.split(/[,|]/).map(value => value.trim()) : [];
   const arity = !argument ? 0 : argument === 'START END' || argument === 'FNAME SCALE' ? 2 : 1;
-  return { id: flags.find(flag => flag.startsWith('--')) ?? flags[0], signature, description, group, flags, arity, choices };
+  return { id: flags.find(flag => flag.startsWith('--')) ?? flags[0], signature, description, group, flags, arity, argument, choices };
 }
 
 /** llama.cpp help aligns the description after two or more spaces. */
@@ -64,6 +66,96 @@ export const SERVER_OPTIONS: ServerOption[] = [...catalog.options, ...legacy].fl
 export function runtimeServerOptions(help?: string): ServerOption[] {
   const parsed = parseRuntimeHelp(help ?? '');
   return parsed.length ? parsed : SERVER_OPTIONS;
+}
+
+/**
+ * Values an option spells out as prose bullets in its help body.
+ *
+ * Only some options put their values in the signature, as `{none,layer,row}` or
+ * `[on|off]`. The rest write `MODE` or `TYPE` there and list the real values
+ * underneath, one bullet each: `- auto: ...`, `- layer (default): ...`. An
+ * editor that reads only the signature shows those options as a free-text box
+ * labelled `MODE`, which tells the user nothing about what to type. Reading the
+ * bullets covers every such option at once — today `--load-mode`, `--lazy-mode`,
+ * `--numa`, `--reasoning-format` and `--verbosity` — instead of naming them.
+ */
+function documentedChoices(description: string): string[] {
+  const bullet = /^-\s+([A-Za-z0-9][\w+.-]*)(?:\s*\([^)]*\))?:\s/;
+  const values: string[] = [];
+  for (const line of description.split(/\r?\n/)) {
+    const value = bullet.exec(line.trim())?.[1];
+    if (value && !values.includes(value)) values.push(value);
+  }
+  return values;
+}
+
+/** The values an option accepts, including ones its signature does not enumerate. */
+export function serverOptionChoices(option: ServerOption): string[] {
+  if (option.choices.length) return option.choices;
+  // Multi-value options take a tuple, not one of a set, so a bullet list in
+  // their prose would not be a menu of what to type.
+  return option.arity === 1 ? documentedChoices(option.description) : [];
+}
+
+/**
+ * One option per line, the way llama.cpp documents it: `--load-mode none`.
+ *
+ * The runtime's parser takes a flag and each of its values as separate process
+ * arguments and rejects `--flag=value` outright, so the text form has to be
+ * split back apart. How far to split is decided by the option's arity rather
+ * than by whitespace, because a single value is routinely a path containing
+ * spaces; everything after the flag stays one value unless the runtime says the
+ * option takes more. Shell syntax is still never evaluated.
+ */
+export function serverArgsFromText(text: string, options: readonly ServerOption[]): string[] {
+  const args: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const flag = trimmed.split(/\s/, 1)[0];
+    const rest = trimmed.slice(flag.length).trim();
+    // An unlisted flag from a custom build takes the rest as its single value.
+    const arity = options.find(option => option.flags.includes(flag))?.arity ?? (rest ? 1 : 0);
+    if (arity === 0) {
+      if (rest) throw new Error(`${flag} does not take a value: ${rest}`);
+      args.push(flag);
+      continue;
+    }
+    const values = arity === 1 ? [rest] : splitValues(rest, arity);
+    if (values.length !== arity || values.some(value => !value)) throw new Error(`${flag} needs ${arity} value(s) on the same line`);
+    args.push(flag, ...values);
+  }
+  return assertUnmanagedServerArgs(args);
+}
+
+function splitValues(rest: string, arity: number): string[] {
+  const values: string[] = [];
+  let remainder = rest;
+  while (values.length < arity - 1) {
+    const separator = remainder.search(/\s/);
+    if (separator < 0) break;
+    values.push(remainder.slice(0, separator));
+    remainder = remainder.slice(separator).trim();
+  }
+  values.push(remainder);
+  return values;
+}
+
+/** Render an argument vector back into the one-option-per-line text form. */
+export function serverArgsToText(args: readonly string[], options: readonly ServerOption[]): string {
+  const lines: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const flag = args[index];
+    // Mirror the parser: an unlisted flag from a custom build takes one value.
+    const arity = options.find(item => item.flags.includes(flag))?.arity ?? 1;
+    const values: string[] = [];
+    // A negative number is a value, while a following switch starts another option.
+    while (values.length < arity && index + 1 < args.length && !FLAG.test(args[index + 1])) {
+      values.push(args[++index]);
+    }
+    lines.push([flag, ...values].join(' '));
+  }
+  return lines.join('\n');
 }
 
 export function serverOptionMatches(option: ServerOption, query: string): boolean {
@@ -118,5 +210,5 @@ export function replaceServerOption(args: readonly string[], option: ServerOptio
     if (index === insertAt) next.push(...replacement);
     if (index < args.length && !remove.has(index)) next.push(args[index]);
   }
-  return parseServerArgs(next.join('\n'));
+  return assertUnmanagedServerArgs(next);
 }
