@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { chatText } from "../../shared/i18n/chatI18n";
 import type { ResponseMetrics as ResponseMetricsData } from "../../shared/lib/metrics";
@@ -36,24 +36,19 @@ describe("response metrics", () => {
   it("shows missing values as unknown and preserves measured zero values", () => {
     render(<ResponseMetrics metrics={{ pp: {}, tg: { tokens: 0, durationMs: 0, tokensPerSecond: 0 } }} locale="en" />);
     for (const value of ["— tok", "— s", "— tok/s", "0 tok", "0.00 s", "0.0 tok/s"]) {
-      expect(screen.getAllByText(value).some((element) => !element.closest("details"))).toBe(true);
+      expect(screen.getAllByText(value).length).toBeGreaterThan(0);
     }
     expect(screen.queryByText(/NaN|Infinity/)).not.toBeInTheDocument();
   });
 
-  it("reveals first-token, preparation, request and cache measurements through a native disclosure", () => {
+  it("shows first-token, preparation, request and cache measurements without anything to open", () => {
     render(<ResponseMetrics metrics={metrics} locale="en" />);
-    const summary = screen.getByText("More metrics");
-    const disclosure = summary.closest("details")!;
-    expect(disclosure).not.toHaveAttribute("open");
-    expect(screen.getByText("Time to first token (TTFT)")).not.toBeVisible();
-    fireEvent.click(summary);
-    expect(disclosure).toHaveAttribute("open");
+    const panel = screen.getByRole("group", { name: "Response metrics" });
+    expect(panel.querySelector("details")).toBeNull();
+    expect(within(panel).getByText("Time to first token (TTFT)")).toBeVisible();
     for (const value of ["0.83 s", "0.25 s", "4.90 s", "1,024 tok"]) {
-      expect(within(disclosure).getByText(value)).toBeVisible();
+      expect(within(panel).getByText(value)).toBeVisible();
     }
-    fireEvent.click(summary);
-    expect(disclosure).not.toHaveAttribute("open");
   });
 
   it.each(["ko", "ja", "zh"] as const)("localizes metric explanations and detail labels in %s", (locale) => {
@@ -61,7 +56,6 @@ describe("response metrics", () => {
     expect(screen.getByRole("group", { name: chatText[locale].metricsLabel })).toBeInTheDocument();
     expect(screen.getByText(chatText[locale].metricsPrefill)).toBeInTheDocument();
     expect(screen.getByText(chatText[locale].metricsGeneration)).toBeInTheDocument();
-    fireEvent.click(screen.getByText(chatText[locale].metricsDetails));
     for (const key of ["metricsFirstToken", "metricsPreparation", "metricsRequest", "metricsCachedTokens"] as const) {
       expect(screen.getByText(chatText[locale][key])).toBeVisible();
     }

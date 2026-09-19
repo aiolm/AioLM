@@ -42,15 +42,15 @@ export default function ResponseMetrics({ metrics, locale }: ResponseMetricsProp
           );
         })}
       </dl>
-      <details className="chat-response-metrics-details">
-        <summary>{text("metricsDetails")}</summary>
-        <dl>
-          <div><dt>{text("metricsFirstToken")}</dt><dd>{seconds(metrics.firstTokenMs)} s</dd></div>
-          <div><dt>{text("metricsPreparation")}</dt><dd>{seconds(metrics.preparationMs)} s</dd></div>
-          <div><dt>{text("metricsRequest")}</dt><dd>{seconds(metrics.requestMs)} s</dd></div>
-          <div><dt>{text("metricsCachedTokens")}</dt><dd>{formatMetric(metrics.cachedTokens, locale, 0)} tok</dd></div>
-        </dl>
-      </details>
+      {/* Shown outright rather than behind a disclosure: laid out in one strip
+          these four numbers cost a single line, which is less than the control
+          that used to hide them, and they are what a run is judged on. */}
+      <dl className="chat-response-metrics-details">
+        <div><dt>{text("metricsFirstToken")}</dt><dd>{seconds(metrics.firstTokenMs)} s</dd></div>
+        <div><dt>{text("metricsPreparation")}</dt><dd>{seconds(metrics.preparationMs)} s</dd></div>
+        <div><dt>{text("metricsRequest")}</dt><dd>{seconds(metrics.requestMs)} s</dd></div>
+        <div><dt>{text("metricsCachedTokens")}</dt><dd>{formatMetric(metrics.cachedTokens, locale, 0)} tok</dd></div>
+      </dl>
     </div>
   );
 }
