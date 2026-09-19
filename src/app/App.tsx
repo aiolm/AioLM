@@ -5,6 +5,8 @@ import { applyTheme, persistThemeMode, subscribeToSystemTheme } from "../shared/
 import "../styles/app.css";
 
 
+import * as api from "../shared/api/index";
+import { verificationOverrideKey } from "../shared/lib/serverLifecycle";
 import { useAppStore } from "../shared/state/store";
 import EmptyState from "../shared/ui/EmptyState";
 import FeedbackBanner from "../shared/ui/FeedbackBanner";
@@ -103,9 +105,20 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     return () => media.removeEventListener?.("change", close);
   }, []);
   const serverBusy = store.busy || store.status.state === "starting" || store.status.state === "stopping";
+  // A launch the correctness gate refused names an override key in its message,
+  // and that message was the only place it existed: without somewhere to accept
+  // it, being told "or start it anyway with key ..." led nowhere.
+  const [overrideAccepted, setOverrideAccepted] = useState(false);
   const serverState = store.status.state;
   const stopServer = store.stop;
   const hasError = store.bootError || store.actionError || store.statusPollError || store.status.error;
+  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "";
+  const overrideKey = verificationOverrideKey(errorText);
+  const acceptOverride = () => {
+    void api.allowVerificationOverride(overrideKey!)
+      .then(() => { setOverrideAccepted(true); store.clearErrors(); })
+      .catch(() => undefined);
+  };
 
   useEffect(() => {
     applyTheme(preferences.theme);
@@ -224,7 +237,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           <div className="app-activity-content">
         <div className="app-feedback-layer" aria-live="polite">
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
-          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "")}</FeedbackBanner>}
+          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors}
+            action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(errorText)}</FeedbackBanner>}
+          {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
         </div>
         <TaskStrip />
         <PanelFeedbackOutlet />
