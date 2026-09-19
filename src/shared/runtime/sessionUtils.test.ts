@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppConfig, GpuPlacement, SessionDefinition } from "../api/types";
-import { gpuTensorSplitDrafts, parseGpuTensorSplits, runtimeGpuDevices, sessionConfig, toggleGpuSelection } from "./sessionUtils";
+import { gpuTensorSplitDrafts, parseGpuTensorSplits, resolvedGpuPlacement, runtimeGpuDevices, sessionConfig, toggleGpuSelection } from "./sessionUtils";
 
 const placement: GpuPlacement = {
   gpu_ids: ["gpu-a", "gpu-b"],
@@ -49,5 +49,29 @@ describe("session execution settings", () => {
   it("ignores app preferences and duplicate model bindings in an untrusted override", () => {
     const selected = { ...definition, execution: { temperature: 0.2, active_model: "other.gguf", models_dir: "private", port: 9090, gpu: placement } };
     expect(sessionConfig(config, selected)).toMatchObject({ active_model: "work.gguf", models_dir: "models", port: 8080, gpu: definition.gpu, temperature: 0.2 });
+  });
+});
+
+describe("resolved GPU placement", () => {
+  it("names the first selected device and the layer split that llama.cpp already defaults to", () => {
+    // --main-gpu indexes the selected --device list, so index 0 is the first
+    // selection; both substitutions therefore launch exactly as the legacy
+    // empty values did, they just say so in the editor.
+    expect(resolvedGpuPlacement({ ...placement, main_gpu: null, split_mode: "none" }))
+      .toEqual({ ...placement, main_gpu: "gpu-a", split_mode: "layer" });
+  });
+
+  it("re-points a main GPU that is no longer selected", () => {
+    expect(resolvedGpuPlacement({ ...placement, main_gpu: "gpu-gone" }).main_gpu).toBe("gpu-a");
+  });
+
+  it("leaves an empty selection without a main GPU to name", () => {
+    const empty = resolvedGpuPlacement({ ...placement, gpu_ids: [], main_gpu: null, split_mode: "none" });
+    expect(empty.main_gpu).toBeNull();
+    expect(empty.split_mode).toBe("layer");
+  });
+
+  it("returns the same object when nothing needs resolving", () => {
+    expect(resolvedGpuPlacement(placement)).toBe(placement);
   });
 });

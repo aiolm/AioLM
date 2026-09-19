@@ -268,6 +268,128 @@ fn main_device_index(
         .ok_or_else(|| format!("main GPU '{id}' is not in the selected device list"))
 }
 
+/// Every device the selected runtime reports, named explicitly.
+///
+/// Leaving the selection empty means "let the backend decide", which is not a
+/// safe default here: `validate_safe_auto_placement` already refuses it for
+/// Vulkan with indistinguishable cards, because spanning them automatically has
+/// lost the device outright. Naming what the runtime reports keeps the same
+/// intent — use the GPUs that are there — while staying explicit enough to
+/// resolve, verify and show back to the user.
+pub fn select_all_runtime_devices(backend: &str, runtime_lines: &[String]) -> Vec<String> {
+    let Some(prefix) = device_prefix(backend) else {
+        return Vec::new();
+    };
+    parse_runtime_devices(runtime_lines, prefix)
+        .into_iter()
+        .map(|device| format!("runtime:{backend}:{}", device.name))
+        .collect()
+}
+
+/// What a backend switch did to a saved GPU selection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Remapped {
+    pub placement: GpuPlacement,
+    /// Selections that had no counterpart under the new backend and were
+    /// dropped. Empty when everything carried over.
+    pub dropped: Vec<String>,
+}
+
+/// Which physical card a runtime-scoped id names, as (identity, position among
+/// cards reporting that same identity). Two cards of the same model report the
+/// same text, so the position is what keeps them apart.
+fn device_identity(devices: &[RuntimeDevice], name: &str) -> Option<(String, usize)> {
+    let device = devices.iter().find(|item| item.name == name)?;
+    let position = devices
+        .iter()
+        .filter(|item| item.identity == device.identity)
+        .position(|item| item.name == name)?;
+    Some((device.identity.clone(), position))
+}
+
+fn device_named(devices: &[RuntimeDevice], identity: &str, position: usize) -> Option<String> {
+    devices
+        .iter()
+        .filter(|item| item.identity == identity)
+        .nth(position)
+        .map(|item| item.name.clone())
+}
+
+/// Re-point a saved GPU selection at the equivalent devices of another backend.
+///
+/// A runtime-scoped id names a device inside one backend's own enumeration, so
+/// `runtime:rocm:ROCm1` means nothing to Vulkan. Switching backends used to
+/// leave that selection in place, where it survived every settings screen and
+/// only failed at launch with "unavailable for vulkan". Each selected device is
+/// matched to the one the new backend reports with the same identity at the same
+/// position among identical cards, which is the only correspondence the two
+/// lists actually establish. Anything without a counterpart is dropped and
+/// named, never guessed at: picking the wrong card silently is the failure this
+/// module exists to prevent.
+pub fn remap_runtime_devices(
+    placement: &GpuPlacement,
+    from_backend: &str,
+    from_devices: &[String],
+    to_backend: &str,
+    to_devices: &[String],
+) -> Remapped {
+    let mut next = placement.clone();
+    let mut dropped = Vec::new();
+    if from_backend == to_backend || placement.is_empty() {
+        return Remapped {
+            placement: next,
+            dropped,
+        };
+    }
+    let from_prefix = device_prefix(from_backend);
+    let to_prefix = device_prefix(to_backend);
+    let old = from_prefix.map(|prefix| parse_runtime_devices(from_devices, prefix));
+    let new = to_prefix.map(|prefix| parse_runtime_devices(to_devices, prefix));
+    let scope = format!("runtime:{from_backend}:");
+    let mut convert = |id: &str| -> Option<String> {
+        // A hardware stable id already identifies the card itself, so it needs
+        // no translation; only a runtime-scoped name is backend-specific.
+        let Some(name) = id.strip_prefix(&scope) else {
+            return Some(id.to_string());
+        };
+        let (old, new) = (old.as_ref()?, new.as_ref()?);
+        let (identity, position) = device_identity(old, name)?;
+        let mapped = device_named(new, &identity, position)?;
+        Some(format!("runtime:{to_backend}:{mapped}"))
+    };
+
+    let mut ids = Vec::with_capacity(placement.gpu_ids.len());
+    for id in &placement.gpu_ids {
+        match convert(id) {
+            Some(mapped) => ids.push(mapped),
+            None => dropped.push(id.clone()),
+        }
+    }
+    next.main_gpu = placement.main_gpu.as_deref().and_then(&mut convert);
+    next.draft_gpu_id = placement.draft_gpu_id.as_deref().and_then(&mut convert);
+    if placement.main_gpu.is_some() && next.main_gpu.is_none() {
+        dropped.extend(placement.main_gpu.clone());
+    }
+    if placement.draft_gpu_id.is_some() && next.draft_gpu_id.is_none() {
+        dropped.extend(placement.draft_gpu_id.clone());
+    }
+    // Ratios are positional against the selected devices, so a shorter list
+    // would silently re-weight the survivors.
+    if ids.len() != placement.gpu_ids.len() {
+        next.tensor_split.clear();
+    }
+    next.gpu_ids = ids;
+    if let Some(main) = &next.main_gpu {
+        if !next.gpu_ids.is_empty() && !next.gpu_ids.iter().any(|id| id == main) {
+            next.main_gpu = None;
+        }
+    }
+    Remapped {
+        placement: next,
+        dropped,
+    }
+}
+
 /// Vulkan may eagerly span every visible adapter when no `--device` is
 /// supplied. With multiple indistinguishable cards this has caused driver
 /// device-loss failures, so require an explicit selection for that case.
@@ -294,70 +416,11 @@ pub fn validate_safe_auto_placement(
     Ok(())
 }
 
-/// Narrow guard for the Windows/runtime/device combination reproduced in live
-/// tests. Do not assume every future ROCm release or AMD GPU has this bug.
-pub fn validate_known_rocm_peer_issue(
-    cfg: &crate::config::AppConfig,
-    resolved: &ResolvedGpu,
-    runtime_lines: &[String],
-) -> Result<(), String> {
-    if !cfg!(windows)
-        || cfg.active_backend != "rocm"
-        || (cfg.ngl == 0 && !crate::tuning_defaults::inherited(cfg, "ngl"))
-        || !matches!(cfg.active_build.as_str(), "b10840" | "b10872")
-        || resolved.split_mode == Some("none")
-    {
-        return Ok(());
-    }
-    let affected = parse_runtime_devices(runtime_lines, "ROCm")
-        .into_iter()
-        .filter(|device| device.identity.contains("r9700"))
-        .filter(|device| {
-            resolved
-                .device_flag
-                .as_ref()
-                .is_none_or(|selected| selected.split(',').any(|name| name == device.name))
-        })
-        .count();
-    if affected > 1 {
-        return Err("this Windows ROCm release produced corrupted responses when splitting a model across multiple Radeon AI PRO R9700 GPUs. Select the local_b10840_nop2p compatibility runtime, use Vulkan, or assign one GPU per model/session. Existing runtimes and models were not changed.".into());
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::SplitMode;
     use crate::hardware::{CpuInfo, DEVICE_PROFILE_SCHEMA};
-
-    #[cfg(windows)]
-    #[test]
-    fn known_rocm_peer_corruption_blocks_only_affected_distributed_launches() {
-        let mut cfg = crate::config::AppConfig {
-            active_backend: "rocm".into(),
-            active_build: "b10840".into(),
-            ngl: 99,
-            ..Default::default()
-        };
-        let devices = vec![
-            "ROCm0: AMD Radeon AI PRO R9700 (32624 MiB)".into(),
-            "ROCm1: AMD Radeon AI PRO R9700 (32624 MiB)".into(),
-        ];
-        let mut resolved = ResolvedGpu::default();
-        assert!(validate_known_rocm_peer_issue(&cfg, &resolved, &devices)
-            .unwrap_err()
-            .contains("local_b10840_nop2p"));
-        resolved.device_flag = Some("ROCm1".into());
-        assert!(validate_known_rocm_peer_issue(&cfg, &resolved, &devices).is_ok());
-        resolved.device_flag = Some("ROCm0,ROCm1".into());
-        assert!(validate_known_rocm_peer_issue(&cfg, &resolved, &devices).is_err());
-        cfg.active_build = "local_b10840_nop2p".into();
-        assert!(validate_known_rocm_peer_issue(&cfg, &resolved, &devices).is_ok());
-        cfg.active_build = "b10872".into();
-        cfg.ngl = 0;
-        assert!(validate_known_rocm_peer_issue(&cfg, &resolved, &devices).is_ok());
-    }
 
     fn gpu(vendor: GpuVendor, stable_id: &str) -> GpuDevice {
         GpuDevice {
@@ -594,6 +657,97 @@ mod tests {
         assert!(
             resolve_with_runtime_devices(&invalid, "rocm", &profile(vec![]), &devices).is_err()
         );
+    }
+
+    #[test]
+    fn switching_backend_repoints_a_saved_selection_at_the_same_cards() {
+        // Two identical cards: the reported text cannot tell them apart, so the
+        // position within the list is the only thing that can.
+        let rocm = vec![
+            "ROCm0: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+            "ROCm1: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+        ];
+        let vulkan = vec![
+            "Vulkan0: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+            "Vulkan1: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+        ];
+        let placement = GpuPlacement {
+            gpu_ids: vec!["runtime:rocm:ROCm1".into(), "runtime:rocm:ROCm0".into()],
+            main_gpu: Some("runtime:rocm:ROCm1".into()),
+            tensor_split: vec![3.0, 1.0],
+            split_mode: SplitMode::Layer,
+            draft_gpu_id: None,
+        };
+
+        let moved = remap_runtime_devices(&placement, "rocm", &rocm, "vulkan", &vulkan);
+        assert_eq!(
+            moved.placement.gpu_ids,
+            vec!["runtime:vulkan:Vulkan1", "runtime:vulkan:Vulkan0"]
+        );
+        assert_eq!(
+            moved.placement.main_gpu.as_deref(),
+            Some("runtime:vulkan:Vulkan1")
+        );
+        // Order, ratios and split mode describe the same arrangement as before.
+        assert_eq!(moved.placement.tensor_split, vec![3.0, 1.0]);
+        assert_eq!(moved.placement.split_mode, SplitMode::Layer);
+        assert!(moved.dropped.is_empty());
+
+        // Selecting the same backend again changes nothing.
+        let same = remap_runtime_devices(&placement, "rocm", &rocm, "rocm", &rocm);
+        assert_eq!(same.placement, placement);
+    }
+
+    #[test]
+    fn selecting_a_runtime_names_every_device_it_reports() {
+        let devices = vec![
+            "Vulkan0: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+            "Vulkan1: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+        ];
+        assert_eq!(
+            select_all_runtime_devices("vulkan", &devices),
+            vec!["runtime:vulkan:Vulkan0", "runtime:vulkan:Vulkan1"]
+        );
+        // Lines belonging to another backend's prefix are not this backend's.
+        assert!(select_all_runtime_devices("rocm", &devices).is_empty());
+        // A backend with no per-device flag has nothing to name.
+        assert!(select_all_runtime_devices("cpu", &devices).is_empty());
+        assert!(select_all_runtime_devices("vulkan", &[]).is_empty());
+    }
+
+    #[test]
+    fn a_card_with_no_counterpart_is_dropped_and_named_rather_than_guessed() {
+        let rocm = vec![
+            "ROCm0: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+            "ROCm1: AMD Radeon AI PRO R9700 (32624 MiB)".to_string(),
+        ];
+        // The new backend only reports one of the two cards.
+        let vulkan = vec!["Vulkan0: AMD Radeon AI PRO R9700 (32624 MiB)".to_string()];
+        let placement = GpuPlacement {
+            gpu_ids: vec!["runtime:rocm:ROCm0".into(), "runtime:rocm:ROCm1".into()],
+            tensor_split: vec![1.0, 1.0],
+            ..GpuPlacement::default()
+        };
+
+        let moved = remap_runtime_devices(&placement, "rocm", &rocm, "vulkan", &vulkan);
+        assert_eq!(moved.placement.gpu_ids, vec!["runtime:vulkan:Vulkan0"]);
+        assert_eq!(moved.dropped, vec!["runtime:rocm:ROCm1"]);
+        // Ratios are positional, so a shorter list must not silently re-weight.
+        assert!(moved.placement.tensor_split.is_empty());
+
+        // With no readable list for the previous backend, nothing is invented.
+        let blind = remap_runtime_devices(&placement, "rocm", &[], "vulkan", &vulkan);
+        assert!(blind.placement.gpu_ids.is_empty());
+        assert_eq!(blind.dropped.len(), 2);
+
+        // A hardware stable id already names the card itself and carries over.
+        let hardware = GpuPlacement {
+            gpu_ids: vec!["10de:2684#0000".into()],
+            ..GpuPlacement::default()
+        };
+        let kept = remap_runtime_devices(&hardware, "rocm", &rocm, "vulkan", &vulkan);
+        assert_eq!(kept.placement.gpu_ids, vec!["10de:2684#0000"]);
+        assert!(kept.dropped.is_empty());
     }
 
     #[test]
