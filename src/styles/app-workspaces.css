@@ -146,6 +146,7 @@
 
 /* Assistant answers rendered from markdown. Sized against the surrounding chat
    text rather than the document, so a heading in an answer stays an answer. */
+.chat-reasoning-body { cursor: pointer; }
 .chat-markdown { min-width: 0; overflow-wrap: anywhere; }
 .chat-markdown > * + * { margin-top: 10px; }
 .chat-markdown p { white-space: pre-wrap; }
@@ -168,3 +169,7 @@
 .chat-markdown-table table { border-collapse: collapse; }
 .chat-markdown-table th, .chat-markdown-table td { padding: 4px 10px; border: 1px solid var(--ui-border); vertical-align: top; }
 .chat-markdown-table th { font-weight: 600; background: var(--ui-surface-muted); }
+
+/* The opt-in deep check, beside the probe it extends. */
+.runtime-deep-verify { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ui-border); }
+.runtime-deep-verify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }

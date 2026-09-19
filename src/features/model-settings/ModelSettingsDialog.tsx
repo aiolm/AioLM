@@ -330,7 +330,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           </div>
         </div>
         <footer className="model-settings-footer">
-          {confirmSave ? <div className="model-settings-confirm model-settings-confirm--save" role="alert">
+          {confirmSave ? <div className="model-settings-confirm" role="alert">
             <strong>{copy.saveConfirmTitle.replace('{name}', profileDisplayName(profiles.selected, locale))}</strong>
             {changeCount(baseline, settings, profiles.savedApplication.system_prompt, profiles.systemPrompt) === 0
               ? <p>{copy.saveConfirmUnchanged}</p>
