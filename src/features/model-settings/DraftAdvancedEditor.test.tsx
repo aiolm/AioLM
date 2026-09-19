@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nProvider, useI18n, type Locale } from '../../shared/i18n/i18n';
 import { describeServerOption } from '../../shared/config/serverOptions';
 import { testConfig } from '../../testing/appStore';
@@ -12,17 +12,45 @@ const options = [
   describeServerOption('--mlock', 'Keep model weights in RAM.')!,
   describeServerOption('--custom-mode VALUE', 'Use the named processing mode.')!,
   describeServerOption('--custom-pair START END')!,
+  // Verbatim shape from llama-server --help: the values live in the body.
+  describeServerOption('-lm, --load-mode MODE', 'model loading mode (default: auto)\n- auto: mmap, unless a device does not support it\n- none: no special loading mode\n- mmap: memory-map model\n- mlock: keep the model in RAM\n- mmap+mlock: both of the above\n- dio: use DirectIO if available')!,
 ];
 
-function mount(locale: Locale = 'en', benchmark = false) {
+function mount(locale: Locale = 'en', benchmark = false, server_args: string[] = []) {
   const onChange = vi.fn();
+  const onInvalid = vi.fn();
   function LocaleControl() {
     const { setLocale } = useI18n();
     return <button onClick={() => setLocale('ko')}>Switch language</button>;
   }
-  render(<I18nProvider initialLocale={locale}><LocaleControl /><DraftAdvancedEditor cfg={{ ...testConfig, server_args: [], chat_options: {} }} options={options} disabled={false} benchmark={benchmark} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
-  return { onChange };
+  render(<I18nProvider initialLocale={locale}><LocaleControl /><DraftAdvancedEditor cfg={{ ...testConfig, server_args, chat_options: {} }} options={options} disabled={false} benchmark={benchmark} onChange={onChange} onInvalid={onInvalid} /></I18nProvider>);
+  return { onChange, onInvalid };
 }
+
+/** A runtime reports around 255 options; this stands in for that scale. */
+const manyOptions = Array.from({ length: 120 }, (_, index) =>
+  describeServerOption(`--generated-${index} N`, `Generated option ${index}.`)!);
+
+describe('advanced options list size', () => {
+  it('puts a bounded number of rows on screen and says how many matched', () => {
+    // Every option rendered at once built a subtree of several thousand nodes
+    // that stayed mounted, and the browser re-ran layout over all of it on each
+    // keystroke and focus change. The search field is how the rest are reached.
+    render(<I18nProvider initialLocale="en"><DraftAdvancedEditor cfg={{ ...testConfig, server_args: [], chat_options: {} }}
+      options={manyOptions} disabled={false} benchmark={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    const rows = document.querySelectorAll('.model-settings-option');
+    expect(rows.length).toBeLessThan(manyOptions.length);
+    expect(screen.getByText(/Showing \d+ of 120 matching options/)).toBeVisible();
+  });
+
+  it('shows every match once the search narrows them below the bound', async () => {
+    render(<I18nProvider initialLocale="en"><DraftAdvancedEditor cfg={{ ...testConfig, server_args: [], chat_options: {} }}
+      options={manyOptions} disabled={false} benchmark={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Search runtime options'), { target: { value: 'generated-11' } });
+    await waitFor(() => expect(screen.queryByText(/Showing \d+ of/)).not.toBeInTheDocument());
+    expect(document.querySelectorAll('.model-settings-option').length).toBeGreaterThan(0);
+  });
+});
 
 describe('advanced settings explanations', () => {
   it.each<Locale>(['en', 'ko', 'ja', 'zh'])('associates raw editors with format and precedence help in %s', locale => {
@@ -85,6 +113,31 @@ describe('advanced settings explanations', () => {
     expect(screen.queryByText('Keep model weights in RAM.')).not.toBeInTheDocument();
     expect(screen.getByText(serverOptionDescription(options[1], 'ko'))).toBeVisible();
     expect(screen.getByLabelText('추가 요청 JSON')).toHaveValue('{"min_p":0.15}');
+  });
+
+  it('prompts for the value alone and suggests the modes --load-mode documents in prose', () => {
+    const { onChange } = mount('ko');
+    const card = screen.getByText('--load-mode').closest('.model-settings-option')!;
+    fireEvent.click(card.querySelector('summary')!);
+    const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
+    // The flag belongs to the app, so the box asks for MODE and never for "--load-mode none".
+    expect(input).toHaveAttribute('placeholder', 'MODE');
+    expect(Array.from(card.querySelectorAll('datalist option'), item => item.getAttribute('value')))
+      .toEqual(['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio']);
+    expect(input).toHaveAccessibleDescription(expect.stringContaining(advancedSettingsHelp.ko.single));
+    fireEvent.change(input, { target: { value: 'none' } });
+    expect(onChange).toHaveBeenLastCalledWith({ server_args: ['--load-mode', 'none'] });
+  });
+
+  it('shows a saved flag and its value on one raw line and splits an edited line back into argv', () => {
+    const { onChange, onInvalid } = mount('en', false, ['--jinja', '--load-mode', 'none']);
+    const [args] = screen.getAllByRole('textbox');
+    expect(args).toHaveValue('--jinja\n--load-mode none');
+    // Everything after the flag is one value, so a path keeps its spaces.
+    fireEvent.change(args, { target: { value: String.raw`--load-mode mmap` + '\n--custom-mode C:\\My Models\\x' } });
+    expect(onChange).toHaveBeenLastCalledWith({ server_args: ['--load-mode', 'mmap', '--custom-mode', String.raw`C:\My Models\x`] });
+    fireEvent.change(args, { target: { value: '--load-mode' } });
+    expect(onInvalid).toHaveBeenLastCalledWith('server_args', true);
   });
 
   it('keeps request JSON hidden in benchmark settings', () => {
