@@ -67,6 +67,12 @@ export interface GgufModel {
   shards?: { files: string[]; total: number; missing: number[] };
 }
 
+/** What a GGUF file's own header states about the model. */
+export interface ModelMetadata {
+  context_length?: number;
+  architecture?: string;
+}
+
 export interface ModelScanResult {
   models: GgufModel[];
   truncated: boolean;

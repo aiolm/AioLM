@@ -22,6 +22,9 @@ export function modelDisplayName(value: string): string {
 /** Removes Windows verbatim path prefixes from arbitrary displayed text. */
 export function normalizeDisplayText(value: string): string {
   return value
+    // Strip ANSI color/control sequences emitted by native server logs.
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
     // JSON and Rust debug output escape each backslash a second time.
     .replace(/\\{4}\?\\{2}UNC\\{2}/gi, "\\\\\\\\")
     .replace(/\\{4}\?\\{2}/g, "")
@@ -32,4 +35,16 @@ export function normalizeDisplayText(value: string): string {
 /** Keeps multiline argument/path editors readable without changing their stored values. */
 export function normalizeDisplayPathLines(value: string): string {
   return value.split(/\r?\n/).map(normalizeDisplayText).join("\n");
+}
+
+/**
+ * The value to store when a normalized path was shown in an editable field.
+ *
+ * Fields bound straight to the stored path displayed the verbatim `\?\` prefix
+ * Windows hands back. Showing the normalized form instead would drop that prefix
+ * the moment anything wrote the field back, so the original is kept while the
+ * text is untouched, and only a real edit replaces it.
+ */
+export function restoreDisplayPath(original: string, edited: string): string {
+  return edited === normalizeDisplayPath(original) ? original : edited;
 }

@@ -8,6 +8,7 @@ import { rememberExecution } from '../models/modelExecutionState';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import * as api from '../../shared/api';
 import { appliedProfile, mergeProfileEditor, profileLibraryConfigPatch, SettingsDeliveryError } from './profileEditor';
+import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { resetProfileSettings } from './profileResetState';
 
 vi.mock('../../shared/api', async importOriginal => ({
@@ -19,6 +20,7 @@ vi.mock('../../shared/api', async importOriginal => ({
   rtList: vi.fn(async () => [{ backend: 'cpu', build: 'b123', dir: 'runtime', size_mb: 30 }]),
   deviceProfile: vi.fn(async () => ({ profile: { gpus: [] }, backends: [] })),
   rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', devices: [], diagnostics: [], flags: [], state: 'available', server_help: '' })),
+  modelMetadata: vi.fn(async () => ({})),
 }));
 
 const cfg = { ...testConfig, active_model: 'models/a.gguf', runtime_defaults: [] };
@@ -54,6 +56,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const save = screen.getByRole('button', { name: 'Save profile' });
     expect(save).toHaveAccessibleDescription('Save to: Selected profile');
     fireEvent.click(save);
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Selected profile' })).toBeVisible());
     const [next, edit, applyTarget] = vi.mocked(onProfileCommit).mock.calls[0];
@@ -85,6 +88,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
       settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
     expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
     expect(screen.getByRole('button', { name: 'Performance & memory' })).toHaveAttribute('aria-current', 'page');
@@ -97,6 +101,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Updated prompt' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
     expect(onProfileCommit).toHaveBeenCalledTimes(2);
     expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: expect.objectContaining({ ctx_size: 8192 }) })]);
@@ -139,6 +144,41 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('offers stopping instead of launching while the target holds a server', () => {
+    // Launching again would race the process that is already up, so the footer
+    // drops the start action entirely rather than leaving a dead button on it.
+    const onStop = vi.fn();
+    mount({ liveState: 'running', liveConfig: cfg, onStop });
+    expect(screen.queryByRole('button', { name: 'Save profile & restart' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the stop action visible but inert while the target is already shutting down', () => {
+    mount({ liveState: 'stopping', onStop: vi.fn() });
+    expect(screen.getByRole('button', { name: 'Working' })).toBeDisabled();
+  });
+
+  it('restores the launch action once nothing is running', async () => {
+    mount({ liveState: 'stopped', onStop: vi.fn(), initialConfig: { ...cfg, active_backend: 'cpu', active_build: 'b123' } });
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+  });
+
+  it('withholds saving onto the profile the running server was started from', () => {
+    // Overwriting it would leave the profile describing settings the live
+    // process is not using; editing and saving elsewhere stay available.
+    const source = captureProfile(cfg, 'Selected profile', 'global', 'Saved prompt');
+    const application = materializeProfileApplication(cfg, 'Saved prompt', source);
+    mount({ initialSection: 'sampling', liveState: 'running', liveConfig: cfg, onStop: vi.fn(),
+      initialApplication: application, liveApplication: application,
+      initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
+    fireEvent.change(numeric('temperature'), { target: { value: '0.9' } });
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByText('The running model was started from this profile. Stop it, or save to another profile, to change these settings.')).toBeVisible();
+  });
+
   it('leaves inherited numeric and text values unchanged when navigating through their inputs', async () => {
     const { onClose, onApply } = mount({ initialSection: 'tuning', initialConfig: { ...cfg, ngl: 12, runtime_defaults: ['ngl', 'temperature', 'reasoning_budget_message'], reasoning_budget_message: 'old value' } });
     await waitFor(() => expect(api.rtList).toHaveBeenCalled());
@@ -171,6 +211,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.blur(numeric('ngl'));
     expect(screen.getAllByRole('button', { name: 'Save profile' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ ngl: 25, runtime_defaults: ['temperature'] }), expect.objectContaining({ application: expect.objectContaining({ settings: expect.objectContaining({ ngl: 25 }) }) }), true));
   });
 
@@ -189,6 +230,19 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
     await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: saved.active_model, ctx_size: 12288, mmproj: saved.mmproj }), 'start', expect.any(Object)));
     expect(saved.active_model).toBe('models/a.gguf');
+  });
+
+  it('requires a managed runtime before starting and never offers a system runtime', async () => {
+    mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
+    await waitFor(() => expect(api.rtList).toHaveBeenCalled());
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Model & settings' })).getByRole('button', { name: 'Runtime & GPU' }));
+    expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toHaveTextContent('Select a runtime');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime & GPU' }));
+    const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
+    expect(options).toContain('cpu · b123');
+    expect(options.some(option => /system/i.test(option))).toBe(false);
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
   });
 
   it('keeps numeric edits out of persistence until apply, and discards them on cancel', async () => {
@@ -215,6 +269,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(numeric('ctx_size').value).toBe('16384');
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'models/b.gguf', ctx_size: 12288 }), expect.any(Object), true);
     expect(cfg.ctx_size).toBe(4096);
@@ -233,6 +288,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(await screen.findByText('Error: Synthetic save failure')).toBeVisible();
     expect(numeric('ctx_size').value).toBe('8192');
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
@@ -240,6 +296,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(persisted.ctx_size).toBe(cfg.ctx_size);
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Recovered profile' })).toBeVisible());
     expect(persisted.ctx_size).toBe(8192);
     expect(screen.queryByText('Error: Synthetic save failure')).not.toBeInTheDocument();
@@ -347,6 +404,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('button', { name: 'Save profile' })).toHaveAccessibleDescription('Save to: Shared settings');
     expect(screen.getByRole('button', { name: 'Recovered settings' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     const edit = vi.mocked(onProfileCommit).mock.calls[0][1];
     expect(edit.application.profile_id).toBe(copy.id);
@@ -503,6 +561,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onProfileCommit } = mount({ initialConfig: saved, initialSection: 'profiles' });
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     const [draft, edit, applyTarget] = vi.mocked(onProfileCommit).mock.calls[0];
     expect(draft).toMatchObject(resetProfileSettings(saved, false));
@@ -515,5 +574,137 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(stored.settings).toEqual(edit.application.settings);
     expect(source.settings.ctx_size).toBe(12288);
     expect(source.system_prompt).toBe('Saved prompt');
+  });
+});
+
+const tensorLog = [
+  'server exited before ready (1).',
+  '0.00.056.525 I cmn common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)',
+  '0.00.056.609 I srv init: The UI is disabled',
+  "0.00.059.317 I srv load_model: loading model 'C:\\models\\Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64-00001-of-00033.gguf'",
+  '0.00.185.799 W common_fit_params: failed to fit params to free device memory: llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort',
+  "0.00.305.007 E llama_model_load: error loading model: LLAMA_SPLIT_MODE_TENSOR not implemented for architecture 'qwen4exp'",
+  '0.00.305.015 E llama_model_load_from_file_impl: failed to load model',
+  '0.00.306.207 E srv llama_server: exiting due to model loading error',
+].join('\n');
+
+const ansiTensorLog = `\u001b[34m${tensorLog}\u001b[0m`;
+
+describe('launch failure summary', () => {
+  it('summarizes a tensor failure without timestamps or model paths', () => {
+    const view = describeLaunchFailure(`${profileStatusCopy.ko.savedFailure}${ansiTensorLog}`, 'ko');
+    expect(view.summary).toBe('이 모델은 Tensor 분할 모드(실험적)를 지원하지 않습니다.\nGPU 설정의 분할 모드를 자동, layer 또는 row로 변경한 뒤 다시 실행해 주세요.');
+    expect(view.summary).not.toContain('설정은 저장했지만');
+    expect(view.summary).not.toMatch(/\d+\.\d+/);
+    expect(view.detail).toContain('llama_model_load');
+    expect(view.detail).not.toContain('\u001b');
+  });
+
+  it('falls back to the representative error line with a shortened model path', () => {
+    const log = [
+      'server exited before ready (9).',
+      '0.02.000.000 I srv init: The UI is disabled',
+      "0.03.000.000 E srv load_model: failed to load model, 'C:\\models\\Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64-00001-of-00033.gguf'",
+    ].join('\n');
+    const view = describeLaunchFailure(log, 'en');
+    expect(view.summary).toBe("srv load_model: failed to load model, 'Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64.gguf'");
+    expect(view.detail).toContain('server exited before ready (9)');
+  });
+
+  it('passes ordinary messages through without a details section', () => {
+    const view = describeLaunchFailure('These settings changed elsewhere.', 'ko');
+    expect(view).toEqual({ summary: 'These settings changed elsewhere.', detail: null });
+  });
+
+  it('surfaces a bare argument-parser error line', () => {
+    const log = 'server exited before ready (1).\nerror: invalid argument: --no-mmap';
+    const view = describeLaunchFailure(log, 'en');
+    expect(view.summary).toBe('error: invalid argument: --no-mmap');
+    expect(view.detail).toContain('server exited before ready (1)');
+  });
+});
+
+describe('launch failure display', { timeout: 45000 }, () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it('shows a short summary first and keeps the raw log behind details', async () => {
+    const onApply = vi.fn(async () => { throw new SettingsDeliveryError(tensorLog, cfg, appliedProfile(cfg)!); });
+    mount({ onApply }, 'ko');
+    fireEvent.click(await screen.findByRole('button', { name: /a\.gguf/ }));
+    const start = screen.getByRole('button', { name: '프로필 저장 후 실행' });
+    await waitFor(() => expect(start).toBeEnabled());
+    await act(async () => { fireEvent.click(start); });
+    const alert = await screen.findByRole('alert');
+    expect(alert).not.toHaveTextContent('설정은 저장했지만');
+    const summary = within(alert).getByText(/Tensor 분할 모드/);
+    expect(summary.textContent).not.toMatch(/\d+\.\d+\.\d+/);
+    expect(summary.textContent).not.toContain('Qwen3.8');
+    expect(within(alert).getByText(/GPU 설정의 분할 모드/)).toBeVisible();
+    expect(within(alert).getByText('자세히')).toBeVisible();
+    expect(within(alert).getByText(/llama_model_load/)).toBeInTheDocument();
+  });
+});
+
+describe('confirming a profile save', () => {
+  const source = captureProfile(cfg, 'Selected profile', 'global', 'Saved prompt');
+  const application = materializeProfileApplication(cfg, 'Saved prompt', source);
+  const withProfile = { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(cfg.active_model)]: application } } };
+
+  it('names every setting it would rewrite, with the value before and after', () => {
+    // A profile is a wide snapshot and the editor gives no sense of how much of
+    // it an edit touched; overwriting one is not undoable from here.
+    const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: withProfile });
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    const confirm = screen.getByRole('alert');
+    expect(within(confirm).getByText('Context size')).toBeVisible();
+    expect(within(confirm).getByText(String(cfg.ctx_size))).toBeVisible();
+    expect(within(confirm).getByText('8192')).toBeVisible();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the confirmation is cancelled, and keeps the edit', () => {
+    const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: withProfile });
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(numeric('ctx_size')).toHaveValue(8192);
+  });
+
+  it('says so plainly when a save would rewrite nothing', () => {
+    mount({ initialSection: 'tuning', initialConfig: withProfile });
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+    expect(within(screen.getByRole('alert')).getByText('Nothing in this profile would change.')).toBeVisible();
+  });
+});
+
+describe('context size bounds', () => {
+  it('accepts a context past the catalogue guess when nothing states a smaller one', async () => {
+    // 131072 was an app constant, not a limit llama.cpp has; refusing a larger
+    // value blocked configurations that load perfectly well.
+    mount({ initialSection: 'tuning' });
+    await waitFor(() => expect(numeric('ctx_size')).toBeInTheDocument());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '262144' } });
+    expect(screen.queryByText(/Correct invalid fields/)).not.toBeInTheDocument();
+    expect(numeric('ctx_size')).toHaveValue(262144);
+  });
+
+  it('still refuses an entry that is garbage rather than large', async () => {
+    mount({ initialSection: 'tuning' });
+    await waitFor(() => expect(numeric('ctx_size')).toBeInTheDocument());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '99999999' } });
+    await waitFor(() => expect(screen.getByText(/Correct invalid fields/)).toBeVisible());
+  });
+
+  it('bounds the control at what the model states it was trained for', async () => {
+    vi.mocked(api.modelMetadata).mockResolvedValue({ context_length: 8192 });
+    mount({ initialSection: 'tuning' });
+    await waitFor(() => expect(api.modelMetadata).toHaveBeenCalled());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '16384' } });
+    await waitFor(() => expect(screen.getByText(/Correct invalid fields/)).toBeVisible());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    await waitFor(() => expect(screen.queryByText(/Correct invalid fields/)).not.toBeInTheDocument());
   });
 });

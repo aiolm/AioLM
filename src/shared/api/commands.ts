@@ -87,8 +87,6 @@ export const rtImport = () => invoke<InstalledRuntime>("rt_import");
 export const rtCancel = () => invoke<void>("rt_cancel");
 export const rtUninstall = (backend: string, build: string) =>
   invoke<void>("rt_uninstall", { backend, build });
-export const rtSelect = (backend: string, build: string) =>
-  invoke<AppConfig>("rt_select", { backend, build });
 export const rtProbe = (backend = "", build = "") => invoke<RuntimeCapabilities>("rt_probe", { backend, build });
 
 export function onRuntimeProgress(

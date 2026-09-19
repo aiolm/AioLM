@@ -68,3 +68,11 @@
 .model-settings-profile-status p { margin: 0; }
 .model-settings-prompt { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
 .model-settings-prompt small { opacity: 0.75; }
+
+/* Applying a published command line. Sits ahead of the option list it fills in. */
+.model-settings-paste { display: grid; gap: 4px; padding-bottom: 16px; margin-bottom: 4px; border-bottom: 1px solid var(--ui-border); }
+.model-settings-paste > label { font-weight: 600; }
+.model-settings-paste textarea { margin-top: 4px; }
+.model-settings-paste-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 4px; }
+.model-settings-paste-rejected { margin-top: 4px; padding: 8px 12px; border: 1px solid var(--tone-warning-border); border-radius: 8px; background: var(--tone-warning-bg); color: var(--tone-warning-ink); font-size: 13px; }
+.model-settings-paste-rejected ul { margin: 4px 0 0; padding-inline-start: 1.25em; list-style: disc; }

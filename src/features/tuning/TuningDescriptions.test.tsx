@@ -60,7 +60,7 @@ describe('localized tuning explanations', () => {
   it('keeps the setting explanation accessible alongside a numeric validation error', () => {
     const field = SERVER_FIELDS[0];
     render(<I18nProvider initialLocale="ko"><NumericFieldGrid fields={[field]} cfg={testConfig}
-      drafts={{ ngl: '129' }} disabled={false} onChange={vi.fn()} onCommit={vi.fn()} /></I18nProvider>);
+      drafts={{ ngl: '1000' }} disabled={false} onChange={vi.fn()} onCommit={vi.fn()} /></I18nProvider>);
     const description = tuningFieldDescription(key => translate('ko', key), field);
     expect(screen.getByText(description)).toBeVisible();
     expect(screen.getByRole('spinbutton')).toHaveAccessibleDescription(`${description} ${screen.getByRole('alert').textContent}`);

@@ -38,15 +38,21 @@ export function settingsForSession(definition: SessionDefinition, cfg: AppConfig
 const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 const comparableGpu = (gpu: AppConfig['gpu']) => ({ gpu_ids: gpu?.gpu_ids ?? [], main_gpu: gpu?.main_gpu ?? null,
   split_mode: gpu?.split_mode ?? 'none', tensor_split: gpu?.tensor_split ?? [], draft_gpu_id: gpu?.draft_gpu_id ?? null });
+const normalizedRuntimeDefaults = (value: unknown) => [...new Set(Array.isArray(value) ? value.filter((name): name is string => typeof name === 'string') : [])].sort();
+const equalExecutionValue = (key: ExecutionKey, left: unknown, right: unknown) => {
+  if (key === 'runtime_defaults') return equal(normalizedRuntimeDefaults(left), normalizedRuntimeDefaults(right));
+  if (key === 'gpu') return equal(comparableGpu(left as AppConfig['gpu']), comparableGpu(right as AppConfig['gpu']));
+  return equal(left, right);
+};
 
 export function executionChanges(base: AppConfig, draft: AppConfig): Partial<ExecutionSettings> {
-  return structuredClone(Object.fromEntries(EXECUTION_KEYS.filter(key => !equal(base[key], draft[key])).map(key => [key, draft[key]])));
+  return structuredClone(Object.fromEntries(EXECUTION_KEYS.filter(key => !equalExecutionValue(key, base[key], draft[key])).map(key => [key, draft[key]])));
 }
 
 /** Merge an editor's changed fields without replacing unrelated newer configuration. */
 export function mergeExecutionChanges(base: AppConfig, draft: AppConfig, current: AppConfig): AppConfig {
   const patch = executionChanges(base, draft);
-  const conflicts = (Object.keys(patch) as ExecutionKey[]).filter(key => !equal(current[key], base[key]) && !equal(current[key], draft[key]));
+  const conflicts = (Object.keys(patch) as ExecutionKey[]).filter(key => !equalExecutionValue(key, current[key], base[key]) && !equalExecutionValue(key, current[key], draft[key]));
   if (conflicts.length) throw new ExecutionConflictError(conflicts);
   return { ...current, ...patch };
 }

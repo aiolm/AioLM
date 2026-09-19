@@ -12,6 +12,14 @@ const CURRENT_CONFIG_VERSION: u32 = 11;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
+/// Context beyond which an entry is a typo rather than an intent. llama.cpp has
+/// no such ceiling of its own; this is only here so a mistyped number is caught
+/// before a launch tries to allocate for it. The editor uses the same figure.
+const MAX_CONTEXT: u32 = 4_194_304;
+/// Offloading "all layers" is written as a number past the layer count, and 999
+/// is the form model cards hand out. Clamping to a plausible layer count turned
+/// that idiom into a partial offload without saying so.
+const MAX_GPU_LAYERS: u32 = 999;
 const MAX_CHAT_OPTIONS_BYTES: usize = 262_144;
 const CACHE_TYPES: &[&str] = &[
     "f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl",
@@ -543,9 +551,9 @@ impl AppConfig {
         if self.port == 0 {
             self.port = 8080;
         }
-        self.ngl = self.ngl.min(128);
+        self.ngl = self.ngl.min(MAX_GPU_LAYERS);
         if self.ctx_size != 0 {
-            self.ctx_size = self.ctx_size.clamp(512, 131_072);
+            self.ctx_size = self.ctx_size.clamp(512, MAX_CONTEXT);
         }
         self.batch_size = self.batch_size.clamp(1, 131_072);
         self.ubatch_size = self.ubatch_size.clamp(1, self.batch_size);
@@ -1190,9 +1198,34 @@ mod tests {
     }
 
     #[test]
-    fn normalize_clamps_tuning_ranges() {
+    fn normalize_keeps_a_context_and_layer_count_the_editor_accepted() {
+        // Saving used to hand these back changed: the editor offered the model's
+        // own trained context and the "all layers" idiom, and normalize quietly
+        // cut both down to figures this app had picked.
         let mut cfg = AppConfig {
             ngl: 999,
+            ctx_size: 262_144,
+            ..AppConfig::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.ngl, 999);
+        assert_eq!(cfg.ctx_size, 262_144);
+    }
+
+    #[test]
+    fn normalize_still_refuses_a_context_no_machine_could_hold() {
+        let mut cfg = AppConfig {
+            ctx_size: u32::MAX,
+            ..AppConfig::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.ctx_size, MAX_CONTEXT);
+    }
+
+    #[test]
+    fn normalize_clamps_tuning_ranges() {
+        let mut cfg = AppConfig {
+            ngl: 9_999,
             ctx_size: 128,
             batch_size: 0,
             ubatch_size: 999_999,
@@ -1216,7 +1249,9 @@ mod tests {
             ..AppConfig::default()
         };
         cfg.normalize();
-        assert_eq!(cfg.ngl, 128);
+        // A large layer count and a large context are both things a user means;
+        // only values below the floor, or past what a machine could hold, move.
+        assert_eq!(cfg.ngl, 999);
         assert_eq!(cfg.ctx_size, 512);
         assert_eq!(cfg.batch_size, 1);
         assert_eq!(cfg.ubatch_size, 1);
