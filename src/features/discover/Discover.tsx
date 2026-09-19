@@ -1,9 +1,11 @@
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { estimateDownloadSpeed, formatBytes, formatSpeedBps, isMmprojPath, quantLabel, validateHfRepoId, type DownloadSample } from "./discoverUtils";
+import { formatBytes, formatSpeedBps, isMmprojPath, quantLabel, validateHfRepoId } from "./discoverUtils";
+import { MODEL_DOWNLOAD_TASK_ID, useModelDownload } from "../../shared/state/modelDownloadTask";
+import { finishTask, registerTask } from "../../shared/state/taskRegistry";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
@@ -18,7 +20,7 @@ function formatCount(locale: string, value: number): string {
   return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
-export default function DiscoverPanel({ store, active = true, onSelectModel, onOpenModels }: { store: AppStore; active?: boolean; onSelectModel?: (path: string) => Promise<void>; onOpenModels?: () => void }) {
+export default function DiscoverPanel({ store, onSelectModel, onOpenModels }: { store: AppStore; active?: boolean; onSelectModel?: (path: string) => Promise<void>; onOpenModels?: () => void }) {
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const modelCopy = modelActions(locale);
@@ -33,43 +35,17 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const [searching, setSearching] = useState(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
-  const [progress, setProgress] = useState<api.ModelDownloadProgress | null>(null);
-  const [speedBps, setSpeedBps] = useState<number | null>(null);
-  const speedSamples = useRef<DownloadSample[]>([]);
+  // The progress stream is owned app-wide so it survives leaving this page;
+  // this panel just renders the record it publishes.
+  const downloadTask = useModelDownload();
+  const progress = downloadTask && downloadTask.received !== undefined
+    ? { file_path: downloadTask.label, received: downloadTask.received, total: downloadTask.total ?? 0 }
+    : null;
+  const speedBps = downloadTask?.speedBps ?? null;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const searchGeneration = useRef(0);
   const inspectGeneration = useRef(0);
-
-  useEffect(() => {
-    speedSamples.current = [];
-    setSpeedBps(null);
-  }, [downloading]);
-
-  useEffect(() => {
-    if (!active) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void api.onModelDownloadProgress((next) => {
-      if (disposed) return;
-      setProgress(next);
-      if (next.phase === "downloading") {
-        const samples = [...speedSamples.current, { received: next.received, at: Date.now() }].slice(-30);
-        speedSamples.current = samples;
-        setSpeedBps(estimateDownloadSpeed(samples));
-      } else {
-        speedSamples.current = [];
-        setSpeedBps(null);
-      }
-    }).then((cleanup) => {
-      if (disposed) cleanup();
-      else unlisten = cleanup;
-    }).catch(() => undefined);
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [active]);
 
   const search = async () => {
     const generation = ++searchGeneration.current;
@@ -123,7 +99,18 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       return;
     }
     setDownloading(file.path);
-    setProgress({ repo_id: selected.id, file_path: file.path, phase: "starting", received: 0, total: file.size_bytes });
+    // Show the row immediately, before the first native progress event, so the
+    // strip and this card both have something the moment the click lands.
+    registerTask({
+      id: MODEL_DOWNLOAD_TASK_ID,
+      kind: "model-download",
+      label: file.path,
+      phase: "starting",
+      received: 0,
+      total: file.size_bytes,
+      interruptible: true,
+      cancel: () => api.hfCancelDownload(),
+    });
     setError(null);
     setNotice(null);
     try {
@@ -147,7 +134,11 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         setNotice(t("ui.downloadedModel", { file: file.path }));
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      const message = caught instanceof Error ? caught.message : String(caught);
+      // A download that never reached the native stream ends here, so the row
+      // has to be closed from this side or it would sit there running forever.
+      finishTask(MODEL_DOWNLOAD_TASK_ID, "failed", message);
+      setError(message);
     } finally {
       setDownloading(null);
     }
@@ -166,7 +157,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     : 0;
 
   return (
-    <div className="app-page-scroll discover-panel relative flex h-full min-h-0 flex-col p-4">
+    <div className="app-page-scroll discover-panel relative flex h-full min-h-0 flex-col">
       <div className="mb-4 flex min-w-0 flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <div className="app-eyebrow">{t("section.discover")}</div>
@@ -196,7 +187,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         {error && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
         {notice && <FeedbackBanner tone="success" title={t("panel.downloadComplete")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
         {downloading && progress && (
-        <div className="discover-progress-card rounded-xl border p-4 ui-border-color-border-accent ui-background-accent-soft"  role="status">
+        <div className="discover-progress-card app-card app-card--accent"  role="status">
           <div className="flex items-center justify-between gap-3 text-xs">
             <span className="min-w-0 app-text-wrap font-medium ui-color-ink" >{t("ui.downloadingFile", { file: normalizeDisplayPath(progress.file_path) })}</span>
             <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent}%</span>
@@ -208,7 +199,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       </PanelFeedback>
 
       <div className="discover-columns grid min-h-0 flex-1 gap-3 ">
-        <section className="min-h-0 overflow-auto rounded-xl border ui-border-color-border ui-background-panel" tabIndex={0} aria-label={t("extra.searchResults")}>
+        <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("extra.searchResults")}>
           <div className="sticky top-0 z-10 border-b px-4 py-2.5 text-xs font-semibold ui-border-color-border ui-background-surface-muted ui-color-faint" >{t("extra.searchResults")} {results.length ? `(${results.length})` : ""}</div>
           {searching && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.searching")}</div>}
           {!searching && results.length === 0 && <div className="p-6 text-center text-xs leading-relaxed ui-color-faint" >{t("ui.searchHint")}</div>}
@@ -223,7 +214,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           </div>
         </section>
 
-        <section className="min-h-0 overflow-auto rounded-xl border ui-border-color-border ui-background-panel" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
+        <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed ui-color-faint" >{t("extra.selectRepository")}</div>}
           {selected && <>
             <div className="sticky top-0 z-10 border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="app-text-wrap text-sm font-semibold ui-color-ink" >{selected.id}</div><div className="mt-1 text-xs ui-color-faint" >{t("ui.repoFileHint")} · {selected.pipeline_tag || "llama.cpp"}</div></div>

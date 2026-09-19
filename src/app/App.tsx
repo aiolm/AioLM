@@ -11,6 +11,7 @@ import FeedbackBanner from "../shared/ui/FeedbackBanner";
 import TaskStrip from "../shared/ui/TaskStrip";
 import { TaskCancellationProvider } from "../shared/ui/TaskCancellation";
 import { useTasks, type AppTask } from "../shared/state/taskRegistry";
+import { useModelDownloadTask } from "../shared/state/modelDownloadTask";
 import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
@@ -84,6 +85,9 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const menuRef = useRef<HTMLDialogElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const tasks = useTasks();
+  // Held here, not in Discover, so a download keeps reporting after the user
+  // navigates away from the page that started it.
+  useModelDownloadTask();
   const copy = navigationText[locale];
   const entries = navigationGroups.flatMap(group => group.items);
   useEffect(() => {
