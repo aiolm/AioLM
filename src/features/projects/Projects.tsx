@@ -8,6 +8,8 @@ import {
   deleteProject,
   exportProject,
   importProject,
+  MAX_PROJECT_DOCUMENTS,
+  MAX_PROJECT_TOOLS,
   projectConfigPatch,
   projectFromConfig,
   PROJECTS_CHANGED_EVENT,
@@ -15,6 +17,7 @@ import {
   setActiveProjectId,
   upsertProject,
   writeProjects,
+  type ProjectDocument,
   type ProjectPreset,
 } from "./projectStore";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
@@ -23,10 +26,10 @@ import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerBusy } from "../../shared/lib/serverLifecycle";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayPathLines } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import * as api from "../../shared/api/index";
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
-import { modelActions } from '../../shared/i18n/modelActions';
 import { profileApplicationConfig, profileSettingsSnapshot, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { resolveProfileForExecution } from '../../shared/config/profileAssignments';
 import { executionSettings } from '../../shared/config/executionSettings';
@@ -48,19 +51,19 @@ function currentProjectSetup(store: AppStore) {
 export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore; onOpenTuning?: () => void }) {
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
-  const modelCopy = modelActions(locale);
   const guard = useDraftGuard();
 
   const [projects, setProjects] = useState<ProjectPreset[]>(readProjects);
   const [selectedId, setSelectedId] = useState<string | null>(() => activeProjectId());
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [initialSetup] = useState(() => currentProjectSetup(store));
-  const [systemPrompt, setSystemPrompt] = useState(initialSetup?.application.system_prompt ?? '');
-  const [configSnapshot, setConfigSnapshot] = useState<AppConfig | null>(initialSetup?.config ?? null);
-  const [profileApplication, setProfileApplication] = useState<ProfileApplication | undefined>(initialSetup?.application);
-  const [toolIds, setToolIds] = useState("");
-  const [documentPaths, setDocumentPaths] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [configSnapshot, setConfigSnapshot] = useState<AppConfig | null>(null);
+  const [profileApplication, setProfileApplication] = useState<ProfileApplication | undefined>(undefined);
+  const [selectedTools, setSelectedTools] = useState<string[]>([]);
+  const [documents, setDocuments] = useState<ProjectDocument[]>([]);
+  const [mcpCatalog, setMcpCatalog] = useState<{ serverId: string; serverName: string; toolName: string; key: string }[]>([]);
+  const [mcpLoading, setMcpLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ProjectPreset | null>(null);
@@ -83,8 +86,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       setSystemPrompt(setup?.application.system_prompt ?? '');
       setConfigSnapshot(setup?.config ?? null);
       setProfileApplication(setup?.application);
-      setToolIds("");
-      setDocumentPaths("");
+      setSelectedTools([]);
+      setDocuments([]);
       return;
     }
     setSelectedId(project.id);
@@ -93,22 +96,37 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     setSystemPrompt(project.systemPrompt);
     setConfigSnapshot(cfg ? { ...cfg, ...structuredClone(project.config) } : null);
     setProfileApplication(project.profileApplication ? structuredClone(project.profileApplication) : undefined);
-    setToolIds(project.toolIds.join("\n"));
-    setDocumentPaths(project.documentBindings.map((document) => document.path).join("\n"));
+    setSelectedTools([...project.toolIds]);
+    setDocuments(project.documentBindings.map((document) => ({ ...document })));
   };
 
   useEffect(() => {
-    loadProject(selected);
+    loadProject(projects.find((project) => project.id === selectedId) ?? null);
     // A selection change intentionally rehydrates the editor from the stored preset.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
+
+  const hydratedNewDraft = useRef(false);
+  useEffect(() => {
+    if (hydratedNewDraft.current || selectedId || configSnapshot || !cfg) return;
+    hydratedNewDraft.current = true;
+    const setup = currentProjectSetup(store);
+    setSystemPrompt(setup?.application.system_prompt ?? '');
+    setConfigSnapshot(setup?.config ?? null);
+    setProfileApplication(setup?.application);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg, selectedId, configSnapshot]);
 
   useEffect(() => {
     const refresh = () => {
       const next = readProjects();
       setProjects(next);
-      const active = activeProjectId();
-      setSelectedId(active && next.some((project) => project.id === active) ? active : next[0]?.id ?? null);
+      setSelectedId((previous) => {
+        if (previous && next.some((project) => project.id === previous)) return previous;
+        if (previous === null) return null;
+        const active = activeProjectId();
+        return active && next.some((project) => project.id === active) ? active : next[0]?.id ?? null;
+      });
     };
     window.addEventListener(PROJECTS_CHANGED_EVENT, refresh);
     return () => window.removeEventListener(PROJECTS_CHANGED_EVENT, refresh);
@@ -137,17 +155,23 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     });
   };
 
+  const openProjectEditor = () => {
+    if (modelSettings) openModelSettings("model");
+    else onOpenTuning?.();
+  };
+
   const save = () => {
     try {
-      const bindings = documentPaths.split(/\r?\n/).map((path) => path.trim()).filter(Boolean).map((path) => ({
-        path,
-        name: path.split(/[\\/]/).pop() || path,
+      const bindings = documents.slice(0, MAX_PROJECT_DOCUMENTS).map((document) => ({
+        path: document.path,
+        name: document.name || document.path.split(/[\\/]/).pop() || document.path,
       }));
       const config = buildConfig();
-      const resolved = profileApplication ? resolveProfileForExecution(config, profileLibrary(store.getConfig() ?? config), profileApplication) : undefined;
+      const incomingApplication = profileApplication;
+      const resolved = incomingApplication ? resolveProfileForExecution(config, profileLibrary(store.getConfig() ?? config), incomingApplication) : undefined;
       const savedConfig = resolved ? { ...config, ...profileApplicationConfig(resolved.application) } : config;
       const savedPrompt = resolved?.application.system_prompt ?? systemPrompt;
-      const project = projectFromConfig(name, savedPrompt, savedConfig, bindings, toolIds.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean), description, Date.now(), resolved?.application ?? profileApplication);
+      const project = projectFromConfig(name, savedPrompt, savedConfig, bindings, selectedTools.slice(0, MAX_PROJECT_TOOLS), description, Date.now(), resolved?.application ?? incomingApplication);
       const existing = selectedId ? projects.find((item) => item.id === selectedId) : null;
       const saved = existing ? { ...project, id: existing.id, createdAt: existing.createdAt } : project;
       const next = upsertProject(saved, projects);
@@ -157,7 +181,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       setActiveProjectId(saved.id);
       setConfigSnapshot(structuredClone(savedConfig)); setSystemPrompt(savedPrompt);
       if (resolved) setProfileApplication(resolved.application);
-      setNotice(t("ui.savedProjectNamed", { name: saved.name }));
+      setNotice(t(incomingApplication?.profile_id && !project.profileApplication ? "ui.projectProfileUnlinked" : "ui.savedProjectNamed", { name: saved.name }));
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -226,8 +250,10 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     const next = deleteProject(project.id, projects);
     writeProjects(next);
     setProjects(next);
-    if (selectedId === project.id) {
+    if (activeProjectId() === project.id) {
       setActiveProjectId(next[0]?.id ?? null);
+    }
+    if (selectedId === project.id) {
       setSelectedId(next[0]?.id ?? null);
     }
     setPendingDelete(null);
@@ -240,7 +266,10 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = fileName(project);
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
     anchor.click();
+    anchor.remove();
     URL.revokeObjectURL(url);
   };
 
@@ -264,12 +293,64 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     ? resolveProfileForExecution(snapshot, profileLibrary(store.getConfig() ?? snapshot), profileApplication).application : undefined;
   const displayConfig = displayedProfile && snapshot ? { ...snapshot, ...profileApplicationConfig(displayedProfile) } : snapshot;
   const displayedPrompt = displayedProfile?.system_prompt ?? systemPrompt;
+  const displayedProfileName = displayedProfile?.profile_name ?? profileApplication?.profile_name ?? null;
+  const displayedProfileRevision = displayedProfile?.profile_revision ?? profileApplication?.profile_revision;
 
-  const captureCurrent = () => {
-    const setup = currentProjectSetup(store);
-    if (!setup) return;
-    setConfigSnapshot(setup.config); setProfileApplication(setup.application); setSystemPrompt(setup.application.system_prompt);
-    setNotice(t("ui.projectSnapshotCaptured"));
+  const toolCount = selectedTools.length;
+  const docCount = documents.length;
+  const isActiveSelection = selected ? activeProjectId() === selected.id : false;
+  const catalogKeys = new Set(mcpCatalog.map((entry) => entry.key));
+  const staleTools = selectedTools.filter((key) => !catalogKeys.has(key));
+
+  const loadMcpCatalog = async (silent: boolean) => {
+    if (mcpLoading) return;
+    setMcpLoading(true);
+    try {
+      const servers = await api.mcpListServers();
+      const entries: { serverId: string; serverName: string; toolName: string; key: string }[] = [];
+      for (const server of servers.filter((item) => item.enabled)) {
+        const tools = await api.mcpListTools(server.id);
+        for (const tool of tools) entries.push({ serverId: server.id, serverName: server.name, toolName: tool.name, key: `${server.id}:${tool.name}` });
+      }
+      setMcpCatalog(entries);
+      if (!silent) setError(null);
+    } catch (caught) {
+      if (!silent) setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setMcpLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadMcpCatalog(true);
+    // Load the registered MCP catalog once for the checkbox list; failures stay silent until an explicit refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggleTool = (key: string) => {
+    setSelectedTools((current) => current.includes(key)
+      ? current.filter((item) => item !== key)
+      : [...current, key].slice(0, MAX_PROJECT_TOOLS));
+  };
+
+  const addDocument = async () => {
+    try {
+      const path = await api.pickDocument();
+      if (!path) return;
+      const name = path.split(/[\\/]/).pop() || path;
+      setDocuments((current) => {
+        if (current.some((document) => document.path === path)) return current;
+        if (current.length >= MAX_PROJECT_DOCUMENTS) return current;
+        return [...current, { name, path }];
+      });
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const removeDocument = (path: string) => {
+    setDocuments((current) => current.filter((document) => document.path !== path));
   };
 
   return (
@@ -278,6 +359,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         <div>
           <h2 className="mt-1 text-[18px] font-semibold tracking-tight ui-color-ink" >{t("ui.projectsTitle")}</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-muted" >{t("ui.projectsDescription")}</p>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-faint" >{t("ui.projectWorkflow")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => loadProject(null)} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
@@ -310,38 +392,83 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink" >{t("ui.active")}</span>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink" >{t("ui.active")}</span>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 app-card" >
-          <div className="grid gap-3 app-form-grid">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold ui-color-ink">{selected ? t("ui.projectEditorEdit") : t("ui.projectEditorNew")}</h3>
+            {isActiveSelection && <span className="rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink">{t("ui.active")}</span>}
+          </div>
+          <h4 className="app-section-title">1 · {t("ui.fieldProjectName")} / {t("ui.fieldDescription")}</h4>
+          <div className="mt-2 grid gap-3 app-form-grid">
             <label className="text-xs ui-color-muted" >{t("ui.fieldProjectName")}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("panel.projectNamePlaceholder")} className="app-input mt-1" /></label>
             <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
           </div>
-          <label className="mt-3 block text-xs ui-color-muted">{t("ui.fieldSystemPrompt")}<textarea value={displayedPrompt} readOnly aria-describedby="project-profile-prompt-hint" rows={3} className="app-textarea mt-1" /></label>
-          <p id="project-profile-prompt-hint" className="mt-1 text-xs ui-color-muted">{modelSettingsCopy[locale].projectPromptHint}</p>
-          <section className="project-config-snapshot">
-            <h3>{t("ui.projectSavedSetup")}</h3>
-            <dl>
-              <div><dt>{t("ui.fieldModelPath")}</dt><dd>{modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" disabled={!cfg} title={normalizeDisplayPath(displayConfig?.active_model ?? '')} aria-label={`${modelCopy.choose}: ${modelDisplayName(displayConfig?.active_model ?? '') || t('load.noModel')}`} onClick={() => openModelSettings('model')}><span>{modelDisplayName(displayConfig?.active_model ?? '') || modelCopy.choose}</span><span aria-hidden="true">▾</span></button> : <span title={normalizeDisplayPath(displayConfig?.active_model ?? '')}>{modelDisplayName(displayConfig?.active_model ?? '') || t('load.noModel')}</span>}</dd></div>
-              <div><dt>{t("ui.fieldBackend")}</dt><dd>{displayConfig?.active_backend || "PATH"} · {displayConfig?.active_build || "system"}</dd></div>
-              <div><dt>{t("ui.fieldContext")}</dt><dd>{displayConfig?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : displayConfig?.ctx_size.toLocaleString()}</dd></div>
-            </dl>
-            <div className="profile-snapshot-actions">
-              <button type="button" className="app-button app-button--secondary" disabled={!cfg} onClick={captureCurrent}>{t("ui.useCurrentSetup")}</button>
-              {modelSettings ? <button type="button" className="app-button app-button--ghost" disabled={!cfg} onClick={() => openModelSettings('runtime')}>{modelCopy.settings}</button> : onOpenTuning && <button type="button" className="app-button app-button--ghost" onClick={onOpenTuning}>{t("ui.editTuning")}</button>}
+          <h4 className="app-section-title mt-4">2 · {t("ui.projectProfileLabel")}</h4>
+          <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="mt-2 rounded-xl border px-3 py-2.5 ui-border-color-border ui-background-surface-muted">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium ui-color-ink">
+                {displayedProfileName ?? t("ui.projectNoProfile")}
+                {typeof displayedProfileRevision === "number" ? <span className="ml-1 ui-color-faint">r{displayedProfileRevision}</span> : null}
+              </span>
+              <button type="button" onClick={openProjectEditor} disabled={modelSettings ? !cfg : !onOpenTuning} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
             </div>
+            <dl className="mt-2 space-y-1 text-xs">
+              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}>{modelDisplayName(displayConfig?.active_model ?? '') || t("load.noModel")}</dd></div>
+              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldBackend")}</dt><dd className="ui-color-ink">{displayConfig?.active_backend || "PATH"} · {displayConfig?.active_build || "system"}</dd></div>
+              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="ui-color-ink">{displayConfig?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : displayConfig?.ctx_size.toLocaleString()}</dd></div>
+            </dl>
+            <p className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap text-xs leading-relaxed ui-color-ink">{displayedPrompt || t("ui.projectPromptEmpty")}</p>
+            <p className="mt-1 text-xs ui-color-muted">{modelSettingsCopy[locale].projectPromptHint}</p>
           </section>
           <div className="mt-4 border-t pt-3 ui-border-color-border" >
-            <h4 className="app-section-title">{t("panel.chatWorkspace")}</h4>
+            <h4 className="app-section-title">3 · {t("panel.chatWorkspace")}</h4>
+            <p className="mt-1 text-xs ui-color-muted">{t("ui.projectChatLimitsHint")}</p>
             <div className="mt-3 grid gap-4 app-form-grid">
-            <label className="text-xs ui-color-muted" >{t("ui.fieldToolIds")}<textarea value={toolIds} onChange={(event) => setToolIds(event.target.value)} rows={3} placeholder="server-id:tool-name" className="app-textarea mt-1 app-mono text-xs" /></label>
-            <label className="text-xs ui-color-muted" >{t("ui.fieldDocuments")}<textarea value={normalizeDisplayPathLines(documentPaths)} onChange={(event) => setDocumentPaths(event.target.value)} rows={3} placeholder="C:\\docs\\project.md" className="app-textarea mt-1 app-mono text-xs" /></label>
+              <div className="flex min-w-0 flex-col">
+                <div className="flex items-baseline justify-between gap-2 text-xs ui-color-muted">
+                  <span id="project-mcp-heading">{t("ui.fieldToolIds")}</span>
+                  <span className="ui-color-faint">{toolCount}</span>
+                </div>
+                <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectMcpHint")}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm">{mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")}</button>
+                </div>
+                <div role="group" aria-labelledby="project-mcp-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto rounded-lg border px-2 py-2 ui-border-color-border">
+                  {mcpCatalog.length === 0 && !mcpLoading && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoMcpTools")}</p>}
+                  {mcpCatalog.map((entry) => {
+                    const checked = selectedTools.includes(entry.key);
+                    const label = `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.toolName)}`;
+                    return <label key={entry.key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked={checked} onChange={() => toggleTool(entry.key)} className="ui-accent-color-accent-solid" /><span className="max-w-52 app-text-wrap" title={entry.key}>{label}</span></label>;
+                  })}
+                  {staleTools.map((key) => <label key={key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked onChange={() => toggleTool(key)} className="ui-accent-color-accent-solid" /><span className="max-w-52 app-text-wrap" title={key}>{key} · {t("ui.projectUnavailable")}</span></label>)}
+                </div>
+              </div>
+              <div className="flex min-w-0 flex-col">
+                <div className="flex items-baseline justify-between gap-2 text-xs ui-color-muted">
+                  <span id="project-documents-heading">{t("ui.fieldDocuments")}</span>
+                  <span className="ui-color-faint">{docCount}/{MAX_PROJECT_DOCUMENTS}</span>
+                </div>
+                <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectDocumentsHint")}</p>
+                <div className="mt-2">
+                  <button type="button" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
+                </div>
+                <div role="group" aria-labelledby="project-documents-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto rounded-lg border px-2 py-2 ui-border-color-border">
+                  {documents.length === 0 && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoDocuments")}</p>}
+                  {documents.map((document) => <div key={document.path} className="flex items-center justify-between gap-2 px-1 py-1"><span className="min-w-0 flex-1 truncate text-xs ui-color-ink" title={document.path}>{normalizeDisplayText(document.name)} <span className="ui-color-faint">· {normalizeDisplayPath(document.path)}</span></span><button type="button" onClick={() => removeDocument(document.path)} aria-label={t("ui.projectRemoveDocument", { name: document.name })} className="app-button app-button--ghost app-button--sm">×</button></div>)}
+                </div>
+              </div>
             </div>
           </div>
-          <div className="mt-4 flex flex-wrap gap-2.5">
+          <div className="mt-4 border-t pt-3 ui-border-color-border" >
+            <h4 className="app-section-title">4 · {t("panel.save")} / {t("panel.apply")}</h4>
+            <p className="mt-1 text-xs ui-color-muted">{t("ui.projectSaveApplyHint")}</p>
+          <div className="mt-2 flex flex-wrap gap-2.5">
             <button type="button" onClick={save} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
-            {selected && <><button type="button" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--primary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
+            {selected && <><button type="button" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
+          </div>
+            <p className="mt-2 text-xs ui-color-faint">{t("ui.projectsFooter")}</p>
           </div>
         </section>
       </div>
