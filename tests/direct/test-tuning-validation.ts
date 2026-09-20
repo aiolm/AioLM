@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  assertUnmanagedServerArgs,
   clampNumber,
   canonicalServerOptionName,
   isKnownSelectValue,
@@ -11,7 +12,6 @@ import {
   SPEC_TYPE_OPTIONS,
   parseChatOptions,
   parseNumericInput,
-  parseServerArgs,
 } from "../../src/shared/config/tuningValidation.ts";
 
 assert.equal(clampNumber(3, 0, 2, 0.7), 2);
@@ -36,9 +36,9 @@ assert.equal(canonicalServerOptionName("--timeout =120"), "--timeout");
 assert.equal(canonicalServerOptionName("--unknown"), null);
 for (const alias of Object.values(APP_MANAGED_SERVER_OPTION_ALIASES).flat()) {
   assert.equal(APP_MANAGED_SERVER_ARGS.has(alias), true, `${alias} should be reserved`);
-  assert.throws(() => parseServerArgs(`${alias}\nvalue`), /app-managed/);
+  assert.throws(() => assertUnmanagedServerArgs([alias, "value"]), /app-managed/);
 }
-assert.deepEqual(parseServerArgs("--min-p\n0.05"), ["--min-p", "0.05"]);
+assert.deepEqual(assertUnmanagedServerArgs(["--min-p", "0.05"]), ["--min-p", "0.05"]);
 assert.deepEqual(parseChatOptions('{"mirostat_lr":0.2}'), { mirostat_lr: 0.2 });
 assert.deepEqual(
   mapChatOptionAliases({ mirostat_lr: 0.2, mirostat_ent: 4, seed: 7 }),

@@ -28,4 +28,4 @@ export function quantLabel(path: string): string {
   return match?.[1]?.toUpperCase() ?? "unknown";
 }
 
-export { formatBytes, formatSpeedBps, estimateDownloadSpeed, type DownloadSample } from "../../shared/lib/transfer";
+export { formatBytes, formatSpeedBps, estimateDownloadSpeed, type DownloadSample } from "../../shared/lib/transfer.ts";
