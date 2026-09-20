@@ -23,7 +23,11 @@
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/aiolm/AioLM/releases) 获取最新版本。
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
+```
+
+或从 [GitHub Releases](https://github.com/aiolm/AioLM/releases) 直接获取最新安装程序。
 
 高级安装选项、验证、开发环境和 CLI 用法请参见 [install.zh.md](install.zh.md)、[development.zh.md](development.zh.md) 和 [cli.zh.md](cli.zh.md)。
 
