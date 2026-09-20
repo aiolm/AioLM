@@ -23,7 +23,7 @@
 
 ## 다운로드
 
-최신 릴리스는 [GitHub Releases](https://github.com/joowon-jang/AioLM/releases)에서 받으세요.
+최신 릴리스는 [GitHub Releases](https://github.com/aiolm/AioLM/releases)에서 받으세요.
 
 고급 설치 옵션, 검증, 개발 환경, CLI 사용법은 [install.ko.md](install.ko.md), [development.ko.md](development.ko.md), [cli.ko.md](cli.ko.md)를 참조하세요.
 

@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Repository = "joowon-jang/AioLM"
+$Repository = "aiolm/AioLM"
 $ApiHeaders = @{
     Accept = "application/vnd.github+json"
     "User-Agent" = "aiolm-installer"

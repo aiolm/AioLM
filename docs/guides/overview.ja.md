@@ -23,7 +23,7 @@
 
 ## ダウンロード
 
-最新リリースは [GitHub Releases](https://github.com/joowon-jang/AioLM/releases) から取得してください。
+最新リリースは [GitHub Releases](https://github.com/aiolm/AioLM/releases) から取得してください。
 
 高度なインストールオプション、検証、開発環境、CLI の使い方は [install.ja.md](install.ja.md)、[development.ja.md](development.ja.md)、[cli.ja.md](cli.ja.md) を参照してください。
 

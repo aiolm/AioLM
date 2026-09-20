@@ -5,13 +5,13 @@
 ## 원라이너 설치 (Windows)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/AioLM/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
 ```
 
 `cmd.exe`, Git Bash 등 PowerShell을 실행할 수 있는 모든 셸에서 동일합니다.
 
 ```bash
-powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/AioLM/releases/latest/download/install.ps1 | iex"
+powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
 ```
 
 ## 옵션
@@ -20,10 +20,10 @@ powershell.exe -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-j
 $env:AIOLM_INSTALLER = "msi"   # 기본: nsis
 $env:AIOLM_RELEASE = "v0.1.5"  # 특정 태그
 $env:AIOLM_DRY_RUN = "1"       # 검증만, 설치 안 함
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/joowon-jang/AioLM/releases/latest/download/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
 ```
 
-원라이너는 선택한 릴리스에 포함된 `install.ps1` 사본을 다운로드합니다. 현재 원본: <https://github.com/joowon-jang/AioLM/blob/main/install.ps1>
+원라이너는 선택한 릴리스에 포함된 `install.ps1` 사본을 다운로드합니다. 현재 원본: <https://github.com/aiolm/AioLM/blob/main/install.ps1>
 
 ## 다운로드 검증
 
@@ -36,7 +36,7 @@ $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -Firs
 # 같은 릴리스의 checksums.txt와 비교
 ```
 
-릴리스 페이지: <https://github.com/joowon-jang/AioLM/releases/latest>
+릴리스 페이지: <https://github.com/aiolm/AioLM/releases/latest>
 
 AioLM — All-In-One LM은 이전 앱과 별도로 설치됩니다. 첫 실행에서 기존 설정·관리 런타임·CLI 저장소·WebView 프로필을 새 `aiolm` / `com.aiolm.desktop` 경로로 복사합니다. 원본을 유지하며, 이미 존재하는 AioLM 데이터를 우선합니다. 이전 앱을 종료한 뒤 실행하고, 잠금이나 공간 부족 오류가 발생하면 문제를 해결한 뒤 재시도하세요. [이전 방식과 호환성](../reference/migration.md)을 참고하세요.
 

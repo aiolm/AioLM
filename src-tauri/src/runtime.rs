@@ -91,7 +91,7 @@ const PR_ARTIFACT_REPOSITORY: &str = match option_env!("AIOLM_PR_ARTIFACT_REPOSI
     Some(repository) => repository,
     None => match option_env!("LLAMA_BOARD_PR_ARTIFACT_REPOSITORY") {
         Some(repository) => repository,
-        None => "joowon-jang/AioLM",
+        None => "aiolm/AioLM",
     },
 };
 

@@ -23,7 +23,7 @@
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/joowon-jang/AioLM/releases) 获取最新版本。
+从 [GitHub Releases](https://github.com/aiolm/AioLM/releases) 获取最新版本。
 
 高级安装选项、验证、开发环境和 CLI 用法请参见 [install.zh.md](install.zh.md)、[development.zh.md](development.zh.md) 和 [cli.zh.md](cli.zh.md)。
 

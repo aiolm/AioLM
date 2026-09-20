@@ -4,7 +4,7 @@
 
 ## Reporting
 
-Do not open a public issue. Use [GitHub Security Advisories](https://github.com/joowon-jang/AioLM/security/advisories/new) or contact the maintainer privately. Include a minimal reproduction and no secrets (replace them with `[REDACTED]`).
+Do not open a public issue. Use [GitHub Security Advisories](https://github.com/aiolm/AioLM/security/advisories/new) or contact the maintainer privately. Include a minimal reproduction and no secrets (replace them with `[REDACTED]`).
 
 ## Scope
 

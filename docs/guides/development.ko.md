@@ -16,7 +16,7 @@
 ## 클론 및 실행
 
 ```bash
-git clone https://github.com/joowon-jang/AioLM.git aiolm
+git clone https://github.com/aiolm/AioLM.git aiolm
 cd aiolm
 npm install
 npm run tauri -- dev

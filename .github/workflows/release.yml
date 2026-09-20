@@ -18,6 +18,8 @@ env:
 
 jobs:
   prepare:
+    # Hold Windows publication until installer signing and signature verification are in place.
+    if: ${{ false }}
     name: Resolve release version
     runs-on: ubuntu-latest
     timeout-minutes: 10
