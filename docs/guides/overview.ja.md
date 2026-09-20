@@ -23,7 +23,11 @@
 
 ## ダウンロード
 
-最新リリースは [GitHub Releases](https://github.com/aiolm/AioLM/releases) から取得してください。
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
+```
+
+または [GitHub Releases](https://github.com/aiolm/AioLM/releases) から最新のインストーラーを取得してください。
 
 高度なインストールオプション、検証、開発環境、CLI の使い方は [install.ja.md](install.ja.md)、[development.ja.md](development.ja.md)、[cli.ja.md](cli.ja.md) を参照してください。
 

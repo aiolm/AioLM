@@ -23,7 +23,11 @@
 
 ## 다운로드
 
-최신 릴리스는 [GitHub Releases](https://github.com/aiolm/AioLM/releases)에서 받으세요.
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"
+```
+
+또는 [GitHub Releases](https://github.com/aiolm/AioLM/releases)에서 최신 인스톨러를 직접 받을 수 있습니다.
 
 고급 설치 옵션, 검증, 개발 환경, CLI 사용법은 [install.ko.md](install.ko.md), [development.ko.md](development.ko.md), [cli.ko.md](cli.ko.md)를 참조하세요.
 
