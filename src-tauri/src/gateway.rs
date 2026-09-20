@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    Arc, OnceLock,
 };
 use std::time::Duration;
 use tokio::{
@@ -17,9 +17,18 @@ const MAX_UPSTREAM_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_STREAM_PENDING_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_PORT: u16 = 8081;
 
-fn upstream_client() -> reqwest::Client {
+fn upstream_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| build_upstream_client(Duration::from_secs(120)))
+}
+
+fn build_upstream_client(read_timeout: Duration) -> reqwest::Client {
+    // This gateway targets the managed loopback server. Preserve connection pooling
+    // and bound stalled reads without limiting the duration of an active stream.
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(read_timeout)
         .build()
         .expect("static gateway client configuration must be valid")
 }
@@ -1078,6 +1087,40 @@ fn openai_to_anthropic(value: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn active_stream_can_outlive_the_idle_read_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            for _ in 0..8 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                socket.write_all(b"x").await.unwrap();
+            }
+        });
+        let client = build_upstream_client(Duration::from_millis(500));
+        let received = tokio::time::timeout(Duration::from_secs(5), async {
+            client
+                .get(format!("http://{address}/stream"))
+                .header(reqwest::header::CONTENT_LENGTH, "0")
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(&received[..], b"xxxxxxxx");
+        server.await.unwrap();
+    }
 
     #[test]
     fn translates_anthropic_text_and_tools_to_openai() {

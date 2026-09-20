@@ -2,7 +2,7 @@
 
 > **언어:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-개발 중 `aiolm-cli.exe`는 `.codex-target/release/aiolm-cli.exe`에 생성됩니다. 패키지 빌드에서는 Tauri 리소스로 포함되므로 설치 후 앱의 리소스 디렉터리에서 찾을 수 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
+개발 중 `aiolm-cli.exe`는 `.codex-target/release/aiolm-cli.exe`에 생성됩니다. 패키지 빌드에서는 보조 바이너리로 포함되므로 설치 후 `aiolm.exe`와 같은 설치 디렉터리에서 찾을 수 있습니다. 출력은 JSON이며 서버는 루프백 전용이고 인증 정보는 저장하지 않습니다.
 
 ```powershell
 ./aiolm-cli.exe --help

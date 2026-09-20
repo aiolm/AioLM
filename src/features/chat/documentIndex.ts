@@ -1,4 +1,4 @@
-import type { DocumentChunk } from "./chatUtils";
+import type { DocumentAttachment, DocumentChunk } from "./chatTypes";
 
 const INDEX_DB_NAME = "aiolm-document-index";
 const INDEX_DB_VERSION = 1;
@@ -122,13 +122,32 @@ export function mergeCachedVectors(
 ): number[][] | null {
   if (chunks.length === 0) return null;
   const byPath = new Map(records.filter((record) => record.model === model && record.namespace === namespace).map((record) => [record.path, record]));
+  // Cache within this lookup so each document is hashed once without retaining
+  // stale fingerprints when an attachment changes between requests.
+  const fingerprints = new Map<DocumentAttachment, string>();
+  const offsetsByRecord = new Map<DocumentIndexRecord, Map<number, number[]>>();
   const vectors: number[][] = [];
   for (const chunk of chunks) {
     const record = byPath.get(chunk.document.path);
-    if (!record || record.fingerprint !== documentFingerprint(chunk.document.text)) return null;
-    const index = record.offsets.indexOf(chunk.offset);
-    if (index < 0 || !record.vectors[index]) return null;
-    vectors.push(record.vectors[index]);
+    if (!record) return null;
+    let fingerprint = fingerprints.get(chunk.document);
+    if (fingerprint === undefined) {
+      fingerprint = documentFingerprint(chunk.document.text);
+      fingerprints.set(chunk.document, fingerprint);
+    }
+    if (record.fingerprint !== fingerprint) return null;
+    let byOffset = offsetsByRecord.get(record);
+    if (!byOffset) {
+      const offsets = new Map<number, number[]>();
+      record.offsets.forEach((offset, index) => {
+        if (!offsets.has(offset)) offsets.set(offset, record.vectors[index]);
+      });
+      offsetsByRecord.set(record, offsets);
+      byOffset = offsets;
+    }
+    const vector = byOffset.get(chunk.offset);
+    if (!vector) return null;
+    vectors.push(vector);
   }
   return vectors.length === chunks.length ? vectors : null;
 }

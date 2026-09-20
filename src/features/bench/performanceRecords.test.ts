@@ -70,7 +70,7 @@ describe('performance benchmark aggregation', () => {
 describe('performance history and export', () => {
   beforeEach(() => localStorage.clear());
 
-  it('retains the newest 20 unique runs without touching engine history', () => {
+  it('retains every unique run without touching engine history', () => {
     localStorage.setItem('aiolm-benchmark-history.v1', '["legacy"]');
     for (let index = 0; index < 22; index++) {
       const next = record();
@@ -78,11 +78,11 @@ describe('performance history and export', () => {
       savePerformanceRecord(next);
     }
     const saved = readPerformanceHistory();
-    expect(saved).toHaveLength(20);
+    expect(saved).toHaveLength(22);
     expect(saved[0].id).toBe('perf-21');
-    expect(saved[saved.length - 1]?.id).toBe('perf-2');
+    expect(saved[saved.length - 1]?.id).toBe('perf-0');
     savePerformanceRecord(saved[0]);
-    expect(readPerformanceHistory()).toHaveLength(20);
+    expect(readPerformanceHistory()).toHaveLength(22);
     expect(localStorage.getItem('aiolm-benchmark-history.v1')).toBe('["legacy"]');
   });
 

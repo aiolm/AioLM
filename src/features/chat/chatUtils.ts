@@ -8,18 +8,11 @@ function queryTerms(query: string): string[] {
   return Array.from(new Set((query.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []).slice(0, 32)));
 }
 
-function chunkDocument(document: DocumentAttachment, size = 1800): DocumentChunk[] {
-  const chunks: DocumentChunk[] = [];
-  for (let offset = 0, order = 0; offset < document.text.length; offset += size, order += 1) {
-    chunks.push({ document, text: document.text.slice(offset, offset + size), score: 0, order, offset });
-  }
-  return chunks;
-}
+const DOCUMENT_CHUNK_SIZE = 1800;
 
 export function rankDocumentChunks(documents: DocumentAttachment[], query = ""): DocumentChunk[] {
   const terms = queryTerms(query);
-  return documents
-    .flatMap((document) => chunkDocument(document))
+  return splitDocumentChunks(documents)
     .map((chunk) => {
       const lower = chunk.text.toLocaleLowerCase();
       const score = terms.reduce((total, term) => total + (lower.match(new RegExp(escapeRegExp(term), "gu"))?.length ?? 0), 0);
@@ -28,8 +21,16 @@ export function rankDocumentChunks(documents: DocumentAttachment[], query = ""):
     .sort((left, right) => right.score - left.score || left.document.name.localeCompare(right.document.name) || left.order - right.order);
 }
 
-export function splitDocumentChunks(documents: DocumentAttachment[], size = 1800): DocumentChunk[] {
-  return documents.flatMap((document) => chunkDocument(document, size));
+export function splitDocumentChunks(documents: DocumentAttachment[], size = DOCUMENT_CHUNK_SIZE, limit = Infinity): DocumentChunk[] {
+  const chunks: DocumentChunk[] = [];
+  for (const document of documents) {
+    if (chunks.length >= limit) break;
+    const text = document.text;
+    for (let offset = 0, order = 0; offset < text.length && chunks.length < limit; offset += size, order += 1) {
+      chunks.push({ document, text: text.slice(offset, offset + size), score: 0, order, offset });
+    }
+  }
+  return chunks;
 }
 
 /** Vector retrieval only searches the first N chunks per request; anything beyond
@@ -38,7 +39,12 @@ export function splitDocumentChunks(documents: DocumentAttachment[], size = 1800
 export const MAX_SEARCHABLE_DOCUMENT_CHUNKS = 64;
 
 export function documentChunksExceedSearchLimit(documents: DocumentAttachment[]): boolean {
-  return splitDocumentChunks(documents).length > MAX_SEARCHABLE_DOCUMENT_CHUNKS;
+  let count = 0;
+  for (const document of documents) {
+    count += Math.ceil(document.text.length / DOCUMENT_CHUNK_SIZE);
+    if (count > MAX_SEARCHABLE_DOCUMENT_CHUNKS) return true;
+  }
+  return false;
 }
 
 export function buildVectorDocumentContext(
@@ -48,6 +54,10 @@ export function buildVectorDocumentContext(
   maxChars = 12_000,
 ): string | null {
   const ranked = rankVectorDocumentChunks(chunks, vectors, queryIndex);
+  return rankedDocumentContext(ranked, maxChars);
+}
+
+function rankedDocumentContext(ranked: RankedDocumentChunk[], maxChars: number): string | null {
   if (ranked.length === 0) return null;
   const sections: string[] = [];
   let used = 0;
@@ -80,9 +90,11 @@ export function vectorDocumentSources(
   queryIndex: number,
   limit = 4,
 ): string[] {
-  return rankVectorDocumentChunks(chunks, vectors, queryIndex)
-    .slice(0, Math.max(1, limit))
-    .map(({ chunk, score }) => `${chunk.document.name} @ ${chunk.offset} (${score.toFixed(2)})`);
+  return rankedDocumentSources(rankVectorDocumentChunks(chunks, vectors, queryIndex).slice(0, Math.max(1, limit)));
+}
+
+function rankedDocumentSources(ranked: RankedDocumentChunk[]): string[] {
+  return ranked.map(({ chunk, score }) => `${chunk.document.name} @ ${chunk.offset} (${score.toFixed(2)})`);
 }
 
 export function vectorDocumentCitations(
@@ -91,14 +103,33 @@ export function vectorDocumentCitations(
   queryIndex: number,
   limit = 4,
 ): ChatCitation[] {
-  return rankVectorDocumentChunks(chunks, vectors, queryIndex)
-    .slice(0, Math.max(1, limit))
-    .map(({ chunk, score }) => ({
-      name: chunk.document.name,
-      path: chunk.document.path,
-      offset: chunk.offset,
-      score: Number(score.toFixed(4)),
-    }));
+  return rankedDocumentCitations(rankVectorDocumentChunks(chunks, vectors, queryIndex).slice(0, Math.max(1, limit)));
+}
+
+function rankedDocumentCitations(ranked: RankedDocumentChunk[]): ChatCitation[] {
+  return ranked.map(({ chunk, score }) => ({
+    name: chunk.document.name,
+    path: chunk.document.path,
+    offset: chunk.offset,
+    score: Number(score.toFixed(4)),
+  }));
+}
+
+/** Reuse one ranking for the prompt context and its displayed source metadata. */
+export function buildVectorDocumentRetrieval(
+  chunks: DocumentChunk[],
+  vectors: number[][],
+  queryIndex: number,
+  maxChars = 12_000,
+  limit = 4,
+) {
+  const ranked = rankVectorDocumentChunks(chunks, vectors, queryIndex);
+  const sources = ranked.slice(0, Math.max(1, limit));
+  return {
+    documentContext: rankedDocumentContext(ranked, maxChars),
+    retrievalSources: rankedDocumentSources(sources),
+    retrievalCitations: rankedDocumentCitations(sources),
+  };
 }
 
 function cosineSimilarity(left: number[], right: number[]): number {

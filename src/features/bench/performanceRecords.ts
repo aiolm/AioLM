@@ -1,8 +1,10 @@
 import type { PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkRow } from '../../shared/api/types.ts';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths.ts';
+import type { BenchmarkReceipt } from '../../shared/sharing/benchmarkClient.ts';
 
 export const PERFORMANCE_HISTORY_KEY = 'aiolm-performance-history.v1';
-export const PERFORMANCE_HISTORY_LIMIT = 20;
+export { summarizePerformanceRows } from '../../shared/contracts/benchmark/aggregation.ts';
+export type { PerformanceSummary } from '../../shared/contracts/benchmark/aggregation.ts';
 
 /** Hardware context retained with each measurement; no machine or owner identifiers. */
 export interface BenchmarkDevice {
@@ -17,6 +19,9 @@ export interface BenchmarkDevice {
 }
 
 export interface PerformanceBenchmarkRecord {
+  localState?: 'recovery' | 'cached';
+  remoteReceipt?: BenchmarkReceipt & { destination: string };
+  acknowledgedAt?: number;
   schemaVersion: 1;
   id: string;
   createdAt: number;
@@ -28,14 +33,6 @@ export interface PerformanceBenchmarkRecord {
   device?: BenchmarkDevice;
 }
 
-export interface PerformanceSummary extends PerformanceBenchmarkRow {
-  samples: number;
-  /** Sample standard deviation; unavailable with fewer than two measured trials. */
-  tg_stddev: number | null;
-  speedup: number | null;
-}
-
-const numericMetrics = ['ttft_ms', 'tpot_ms', 'pp_tps', 'tg_tps', 'total_tps', 'peak_memory_bytes'] as const;
 const isFiniteNonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const isPositiveInteger = (value: unknown): value is number => isFiniteNonnegative(value) && Number.isInteger(value) && value > 0;
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -52,12 +49,12 @@ function isRow(value: unknown): value is PerformanceBenchmarkRow {
   return isObject(value) && typeof value.id === 'string'
     && ['prompt_tokens', 'generation_length', 'concurrency', 'repetition'].every((key) => isPositiveInteger(value[key]))
     && ['completion_tokens', 'cached_tokens', 'e2e_ms'].every((key) => isFiniteNonnegative(value[key]))
-    && numericMetrics.every((key) => value[key] === null || isFiniteNonnegative(value[key]))
+    && ['ttft_ms', 'tpot_ms', 'pp_tps', 'tg_tps', 'total_tps', 'peak_memory_bytes'].every((key) => value[key] === null || isFiniteNonnegative(value[key]))
     && (value.timing_source === 'client' || value.timing_source === 'server')
     && (value.error == null || typeof value.error === 'string');
 }
 
-function isRecord(value: unknown): value is PerformanceBenchmarkRecord {
+export function isPerformanceRecord(value: unknown): value is PerformanceBenchmarkRecord {
   if (!isObject(value) || value.schemaVersion !== 1 || typeof value.id !== 'string'
       || !isFiniteNonnegative(value.createdAt) || value.createdAt > 8.64e15
       || !['model', 'backend', 'build'].every((key) => typeof value[key] === 'string')
@@ -81,75 +78,24 @@ function isRecord(value: unknown): value is PerformanceBenchmarkRecord {
     && (result.message == null || typeof result.message === 'string');
 }
 
-export function readPerformanceHistory(): PerformanceBenchmarkRecord[] {
+export function inspectLegacyPerformanceHistory(): { records: PerformanceBenchmarkRecord[]; rejected: number; unreadable: boolean } {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY) ?? '[]');
-    return Array.isArray(value) ? value.filter(isRecord).slice(0, PERFORMANCE_HISTORY_LIMIT) : [];
-  } catch { return []; }
+    if (!Array.isArray(value)) return { records: [], rejected: 0, unreadable: true };
+    const records = value.filter(isPerformanceRecord);
+    return { records, rejected: value.length - records.length, unreadable: false };
+  } catch { return { records: [], rejected: 0, unreadable: true }; }
+}
+
+export function readPerformanceHistory(): PerformanceBenchmarkRecord[] {
+  return inspectLegacyPerformanceHistory().records;
 }
 
 /** Throws on unavailable/full storage so the UI can keep the result and offer export. */
 export function savePerformanceRecord(record: PerformanceBenchmarkRecord): PerformanceBenchmarkRecord[] {
-  const next = [record, ...readPerformanceHistory().filter((item) => item.id !== record.id)].slice(0, PERFORMANCE_HISTORY_LIMIT);
+  const next = [record, ...readPerformanceHistory().filter((item) => item.id !== record.id)];
   localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify(next));
   return next;
-}
-
-const measured = (value: number | null): value is number => value !== null && Number.isFinite(value) && value >= 0;
-const mean = (values: Array<number | null>): number | null => {
-  // A missing sample makes the aggregate unmeasured too; never turn unknown into zero.
-  if (values.length === 0 || !values.every(measured)) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-};
-
-function stddev(values: Array<number | null>): number | null {
-  const average = mean(values);
-  if (average === null || values.length < 2 || !values.every(measured)) return null;
-  return Math.sqrt(values.reduce((sum, value) => sum + (value - average) ** 2, 0) / (values.length - 1));
-}
-
-/** Group only identical workloads and timing methods. Failed rows never become speed samples. */
-export function summarizePerformanceRows(rows: PerformanceBenchmarkRow[]): PerformanceSummary[] {
-  const groups = new Map<string, PerformanceBenchmarkRow[]>();
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (seen.has(row.id)) continue;
-    seen.add(row.id);
-    const key = [row.prompt_tokens, row.generation_length, row.concurrency, row.timing_source, row.error ?? ''].join('|');
-    const group = groups.get(key) ?? [];
-    group.push(row);
-    groups.set(key, group);
-  }
-  const summaries = [...groups.values()].map((group): PerformanceSummary => {
-    const first = group[0];
-    const usable = group.filter((row) => !row.error);
-    const result: PerformanceSummary = {
-      ...first,
-      id: [first.prompt_tokens, first.generation_length, first.concurrency, first.timing_source, first.error ?? ''].join('|'),
-      repetition: 0,
-      samples: usable.length,
-      completion_tokens: mean(usable.map((row) => row.completion_tokens)) ?? 0,
-      cached_tokens: mean(usable.map((row) => row.cached_tokens)) ?? 0,
-      e2e_ms: mean(usable.map((row) => row.e2e_ms)) ?? first.e2e_ms,
-      tg_stddev: stddev(usable.map((row) => row.tg_tps)),
-      speedup: null,
-    };
-    for (const key of numericMetrics) result[key] = mean(usable.map((row) => row[key]));
-    const memory = usable.map((row) => row.peak_memory_bytes);
-    result.peak_memory_bytes = memory.length > 0 && memory.every(measured) ? Math.max(...memory) : null;
-    return result;
-  }).sort((a, b) => a.prompt_tokens - b.prompt_tokens || a.concurrency - b.concurrency || a.generation_length - b.generation_length);
-
-  for (const row of summaries) {
-    const baseline = summaries.find((candidate) => candidate.concurrency === 1 && !candidate.error
-      && candidate.prompt_tokens === row.prompt_tokens && candidate.generation_length === row.generation_length
-      && candidate.timing_source === row.timing_source);
-    if (!row.error && row.cached_tokens === 0 && baseline?.cached_tokens === 0
-        && row.tg_tps !== null && baseline.tg_tps !== null && baseline.tg_tps > 0) {
-      row.speedup = row.tg_tps / baseline.tg_tps;
-    }
-  }
-  return summaries;
 }
 
 function csvCell(value: unknown): string {
@@ -165,20 +111,31 @@ export function performanceCsv(records: PerformanceBenchmarkRecord[]): string {
     'context_profile', 'warmup', 'requested_prompt_lengths', 'requested_generation_length', 'requested_batch_sizes', 'repetitions',
     'context_size', 'parallel', 'effective_args', 'device', 'cpu', 'gpu',
     'trial_id', 'prompt_tokens', 'generation_length', 'concurrency', 'repetition', 'completion_tokens', 'cached_tokens',
-    'ttft_ms', 'tpot_ms', 'pp_tps', 'tg_tps', 'e2e_ms', 'total_tps', 'peak_process_ram_bytes', 'timing_source', 'trial_error'];
+    'ttft_ms', 'tpot_ms', 'pp_tps', 'tg_tps', 'e2e_ms', 'total_tps', 'peak_process_ram_bytes', 'timing_source', 'trial_error',
+    'app_version', 'method_id', 'method_version', 'corpus_version', 'corpus_sha256', 'model_sha256', 'model_identity_status', 'model_size_bytes',
+    'os', 'arch', 'logical_cpu_cores', 'execution_mode', 'selected_gpus', 'installed_gpus', 'execution_settings'];
   const lines = [columns.join(',')];
   for (const record of records) {
     const { request, result } = record;
+    const provenance = result.provenance;
+    const environment = provenance?.environment;
+    const selectedGpus = environment?.execution?.selected_gpus;
     for (const row of result.rows.length > 0 ? result.rows : [null]) {
       lines.push([
         record.id, new Date(record.createdAt).toISOString(), record.model, record.backend, record.build,
         result.runtime_version, result.status, result.message,
         request.context_profile, request.warmup, request.prompt_lengths.join(';'), request.generation_length,
         request.batch_sizes.join(';'), request.repetitions, result.context_size, result.parallel, JSON.stringify(result.args),
-        record.device?.fingerprint, record.device?.cpu, record.device?.gpu,
+        record.device?.fingerprint, environment?.cpu?.name ?? record.device?.cpu,
+        Array.isArray(selectedGpus) ? selectedGpus.map(gpu => gpu?.name).filter(Boolean).join(';') : record.device?.gpu,
         row?.id, row?.prompt_tokens, row?.generation_length, row?.concurrency, row?.repetition,
         row?.completion_tokens, row?.cached_tokens, row?.ttft_ms, row?.tpot_ms, row?.pp_tps, row?.tg_tps,
         row?.e2e_ms, row?.total_tps, row?.peak_memory_bytes, row?.timing_source, row?.error,
+        provenance?.app_version, provenance?.method?.id, provenance?.method?.version, provenance?.corpus?.version, provenance?.corpus?.sha256,
+        provenance?.model?.sha256, provenance?.model?.status, provenance?.model?.size_bytes,
+        environment?.os ?? record.device?.os, environment?.arch ?? record.device?.arch, environment?.cpu?.logical_cores ?? record.device?.cpuThreads,
+        environment?.execution?.mode, selectedGpus ? JSON.stringify(selectedGpus) : '', environment?.installed_gpus ? JSON.stringify(environment.installed_gpus) : '',
+        provenance?.execution_config ? JSON.stringify(provenance.execution_config) : '',
       ].map(csvCell).join(','));
     }
   }

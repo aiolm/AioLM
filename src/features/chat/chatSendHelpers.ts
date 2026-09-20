@@ -1,8 +1,8 @@
 import * as api from "../../shared/api/index";
 import {
-  buildDocumentContext, buildMultimodalContent, buildVectorDocumentContext,
-  MAX_SEARCHABLE_DOCUMENT_CHUNKS, splitDocumentChunks,
-  vectorDocumentCitations, vectorDocumentSources, type DocumentAttachment, type ImageAttachment,
+  buildDocumentContext, buildMultimodalContent, buildVectorDocumentRetrieval,
+  documentChunksExceedSearchLimit, MAX_SEARCHABLE_DOCUMENT_CHUNKS, splitDocumentChunks,
+  type DocumentAttachment, type ImageAttachment,
 } from "./chatUtils";
 import type { ChatCitation, ChatHistoryMessage } from "./chatHistory";
 import { loadDocumentVectors, saveDocumentVectors } from "./documentIndex";
@@ -60,15 +60,14 @@ export interface RetrievalResult {
 
 /** Vector-ranks attached documents against `text`, falling back to lexical order when embeddings are unavailable. */
 export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string): Promise<RetrievalResult> {
-  let documentContext = buildDocumentContext(pendingDocuments, 12_000, text);
+  let documentContext: string | null = null;
   let retrievalSources = pendingDocuments.map((document) => `${document.name} (lexical fallback)`);
   let retrievalCitations: ChatCitation[] = pendingDocuments.map((document) => ({ name: document.name, path: document.path, offset: 0 }));
   let documentChunksTruncated = false;
   if (pendingDocuments.length > 0 && text) {
     try {
-      const allChunks = splitDocumentChunks(pendingDocuments);
-      documentChunksTruncated = allChunks.length > MAX_SEARCHABLE_DOCUMENT_CHUNKS;
-      const chunks = allChunks.slice(0, MAX_SEARCHABLE_DOCUMENT_CHUNKS);
+      documentChunksTruncated = documentChunksExceedSearchLimit(pendingDocuments);
+      const chunks = splitDocumentChunks(pendingDocuments, undefined, MAX_SEARCHABLE_DOCUMENT_CHUNKS);
       const cachedVectors = await loadDocumentVectors(model, chunks, baseUrl);
       let chunkVectors: number[][];
       let queryVector: number[] | undefined;
@@ -83,14 +82,18 @@ export async function retrieveDocumentContext(pendingDocuments: DocumentAttachme
       }
       if (queryVector) {
         const rankedVectors = [...chunkVectors, queryVector];
-        documentContext = buildVectorDocumentContext(chunks, rankedVectors, rankedVectors.length - 1, 12_000) ?? documentContext;
-        retrievalSources = vectorDocumentSources(chunks, rankedVectors, rankedVectors.length - 1);
-        retrievalCitations = vectorDocumentCitations(chunks, rankedVectors, rankedVectors.length - 1);
+        const retrieval = buildVectorDocumentRetrieval(chunks, rankedVectors, rankedVectors.length - 1, 12_000);
+        documentContext = retrieval.documentContext;
+        retrievalSources = retrieval.retrievalSources;
+        retrievalCitations = retrieval.retrievalCitations;
       }
     } catch {
       // Older llama.cpp builds may not expose embeddings; lexical retrieval remains the safe fallback.
     }
   }
+  // Lexical ranking scans the complete attachments, so only pay for it when
+  // vector retrieval cannot provide context.
+  documentContext ??= buildDocumentContext(pendingDocuments, 12_000, text);
   return { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated };
 }
 

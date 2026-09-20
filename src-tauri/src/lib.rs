@@ -1,5 +1,6 @@
 //! Backend modules, public client APIs and desktop application startup.
 pub mod backends;
+mod benchmark;
 pub mod branding;
 mod commands;
 pub mod config;
@@ -12,6 +13,7 @@ mod mcp;
 pub mod models;
 pub mod performance_bench;
 pub mod performance_memory;
+mod process_output;
 mod procutil;
 pub mod runtime;
 pub mod server;
@@ -50,6 +52,7 @@ pub fn run() {
             commands::config::save_config,
             commands::models::list_models,
             commands::models::model_metadata,
+            commands::models::cancel_model_scan,
             commands::models::delete_model,
             commands::models::pick_models_dir,
             commands::models::pick_lora_adapter,
@@ -76,6 +79,7 @@ pub fn run() {
             commands::server::stop_server,
             commands::server::unload_model,
             commands::sessions::session_list,
+            commands::sessions::session_summary_list,
             commands::sessions::session_start,
             commands::sessions::session_stop,
             commands::sessions::session_unload,
@@ -87,6 +91,21 @@ pub fn run() {
             commands::server::server_status,
             commands::benchmark::run_performance_bench,
             commands::benchmark::bench_cancel,
+            commands::benchmark::benchmark_history_list,
+            commands::benchmark::benchmark_history_import,
+            commands::benchmark::benchmark_identify_model,
+            commands::benchmark::benchmark_acknowledge_upload,
+            commands::benchmark_sharing::benchmark_sharing_configuration,
+            commands::benchmark_sharing::benchmark_sharing_prepare,
+            commands::benchmark_sharing::benchmark_sharing_begin_verification,
+            commands::benchmark_sharing::benchmark_sharing_poll_verification,
+            commands::benchmark_sharing::benchmark_sharing_submit,
+            commands::benchmark_sharing::benchmark_sharing_cancel,
+            commands::benchmark_sharing::benchmark_sharing_owned_list,
+            commands::benchmark_sharing::benchmark_sharing_recovery_export,
+            commands::benchmark_sharing::benchmark_sharing_recovery_import,
+            commands::benchmark_sharing::benchmark_sharing_recovery_copy,
+            commands::benchmark_sharing::benchmark_sharing_open_management,
             commands::runtimes::rt_list,
             commands::runtimes::rt_latest,
             commands::runtimes::rt_install,

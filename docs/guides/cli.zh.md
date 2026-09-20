@@ -2,7 +2,7 @@
 
 > **语言:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-开发时，`aiolm-cli.exe` 会生成在 `.codex-target/release/aiolm-cli.exe`。打包版本会将它作为 Tauri 资源包含；安装后请在应用的资源目录中查找。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
+开发时，`aiolm-cli.exe` 会生成在 `.codex-target/release/aiolm-cli.exe`。打包版本会将它作为辅助二进制文件包含；安装后请在与 `aiolm.exe` 相同的安装目录中查找。输出为 JSON，服务器仅使用 loopback，且不会持久化凭证。
 
 ```powershell
 ./aiolm-cli.exe --help

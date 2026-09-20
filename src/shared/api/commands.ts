@@ -5,7 +5,7 @@ import type {
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
   LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelMetadata, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
-  SessionListResult, SessionStatus,
+  SessionListResult, SessionStatus, SessionSummary,
   VerificationRecord,
   PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkProgress,
 } from "./types.ts";
@@ -13,7 +13,8 @@ import type {
 export const getConfig = () => invoke<AppConfig>("get_config");
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
 
-export const listModels = (modelsDir: string) => invoke<ModelScanResult>("list_models", { modelsDir });
+export const listModels = (modelsDir: string, scanId?: string) => invoke<ModelScanResult>("list_models", { modelsDir, ...(scanId ? { scanId } : {}) });
+export const cancelModelScan = (scanId: string) => invoke<void>("cancel_model_scan", { scanId });
 export const deleteModel = (path: string, paths?: string[]) => invoke<void>("delete_model", { path, ...(paths ? { paths } : {}) });
 export const pickModelsDir = () => invoke<string | null>("pick_models_dir");
 export const pickLoraAdapter = () => invoke<string | null>("pick_lora_adapter");
@@ -58,6 +59,7 @@ export const benchCancel = () => invoke<void>("bench_cancel");
 
 /** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
 export const sessionList = () => invoke<SessionStatus[] | SessionListResult>("session_list");
+export const sessionSummaryList = () => invoke<SessionSummary[]>("session_summary_list");
 export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting });
 export const sessionStop = (sessionId: string) => invoke<void>("session_stop", { sessionId });
 export const sessionUnload = (sessionId: string) => invoke<void>("session_unload", { sessionId });

@@ -162,13 +162,27 @@ pub(crate) async fn session_unload(
 pub(crate) fn session_list(
     state: State<'_, AppState>,
 ) -> Result<Vec<session::SessionStatus>, String> {
+    collect_sessions(&state, session::build_status)
+}
+
+#[tauri::command]
+pub(crate) fn session_summary_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<session::SessionSummary>, String> {
+    collect_sessions(&state, session::build_summary)
+}
+
+fn collect_sessions<T>(
+    state: &AppState,
+    snapshot: impl Fn(&str, &str, &mut server::ServerState, &std::sync::Arc<server::ErrBuf>) -> T,
+) -> Result<Vec<T>, String> {
     let mut out = Vec::new();
     {
         let mut server = state
             .server
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        out.push(session::build_status(
+        out.push(snapshot(
             session::DEFAULT_SESSION_ID,
             "default",
             &mut server,
@@ -181,12 +195,7 @@ pub(crate) fn session_list(
             .state
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        out.push(session::build_status(
-            &entry.id,
-            &name,
-            &mut server,
-            &entry.err,
-        ));
+        out.push(snapshot(&entry.id, &name, &mut server, &entry.err));
     }
     Ok(out)
 }

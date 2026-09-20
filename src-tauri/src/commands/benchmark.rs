@@ -1,7 +1,96 @@
 //! Benchmark execution, progress events and cancellation IPC.
-use crate::{config, performance_bench, procutil, runtime, state::AppState};
+use crate::{benchmark, config, performance_bench, procutil, runtime, state::AppState};
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Arc};
-use tauri::{Emitter, State};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{Emitter, Manager, State};
+
+fn store_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("benchmarks"))
+        .map_err(|error| format!("cannot resolve benchmark data directory: {error}"))
+}
+
+#[tauri::command]
+pub(crate) async fn benchmark_history_list(
+    app: tauri::AppHandle,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<benchmark::store::HistoryPage, String> {
+    let root = store_root(&app)?;
+    tokio::task::spawn_blocking(move || {
+        benchmark::store::list(&root, offset.unwrap_or(0), limit.unwrap_or(20))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn benchmark_history_import(
+    app: tauri::AppHandle,
+    records: Vec<Value>,
+) -> Result<usize, String> {
+    let root = store_root(&app)?;
+    tokio::task::spawn_blocking(move || benchmark::store::import(&root, records))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn benchmark_acknowledge_upload(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    receipt: benchmark::store::UploadReceipt,
+) -> Result<benchmark::store::Acknowledgement, String> {
+    let _operation = state
+        .operation
+        .try_lock()
+        .map_err(|_| "wait for the current operation before acknowledging a benchmark upload")?;
+    let root = store_root(&app)?;
+    tokio::task::spawn_blocking(move || benchmark::store::acknowledge(&root, &run_id, receipt))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn benchmark_identify_model(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<benchmark::identity::ModelIdentity, String> {
+    // Share the launch lock so multi-GB reads cannot start during measurements
+    // or overlap a server/session launch. The lock stays held until hashing ends.
+    let _operation = state
+        .operation
+        .try_lock()
+        .map_err(|_| "wait for the current operation before identifying a model")?;
+    if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {
+        return Err("wait for the runtime operation before identifying a model".into());
+    }
+    if state
+        .server
+        .lock()
+        .map_err(|_| "server state lock was poisoned")?
+        .lifecycle
+        .blocks_resource_change()
+        || state.sessions.entries().iter().any(|session| {
+            session
+                .state
+                .lock()
+                .map(|state| state.lifecycle.blocks_resource_change())
+                .unwrap_or(true)
+        })
+    {
+        return Err("stop all model sessions before identifying a model".into());
+    }
+    let root = store_root(&app)?;
+    tokio::task::spawn_blocking(move || benchmark::identity::identify(&root, Path::new(&path)))
+        .await
+        .map_err(|error| error.to_string())?
+}
 
 #[tauri::command]
 pub(crate) fn bench_cancel(state: State<'_, AppState>) {
@@ -62,6 +151,23 @@ pub(crate) async fn run_performance_bench(
     if let Err(error) = validation {
         return Ok(performance_bench::failed(&request, &cfg, error));
     }
+    let root = store_root(&app)?;
+    // Revoke ephemeral sharing permits the moment a measurement owns the
+    // operation lock, so publishing work overlapping this start is discarded.
+    crate::benchmark::sharing::permits::note_measurement_start();
+    let initial = performance_bench::failed(&request, &cfg, "benchmark has not completed".into());
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis() as u64;
+    let journal = Arc::new(benchmark::store::RunJournal::begin(
+        &root,
+        json!({
+            "schemaVersion": 1, "id": request.run_id, "createdAt": created,
+            "model": cfg.active_model, "backend": cfg.active_backend, "build": cfg.active_build,
+            "request": request, "result": initial,
+        }),
+    )?);
     state.bench_cancel.store(false, Ordering::Release);
     let cancel = state.bench_cancel.clone();
     let loading = performance_bench::PerformanceBenchProgress {
@@ -83,6 +189,8 @@ pub(crate) async fn run_performance_bench(
             if cancel.load(Ordering::Acquire) {
                 result.status = "cancelled";
             }
+            journal.finish(&result)?;
+            state.bench_cancel.store(false, Ordering::Release);
             return Ok(result);
         }
     };
@@ -104,6 +212,16 @@ pub(crate) async fn run_performance_bench(
             .iter()
             .any(|flag| flag == "--cache-ram" || flag == "-cram")
     });
+    let model = benchmark::identity::cached(&root, Path::new(&cfg.active_model));
+    let provenance = benchmark::provenance::capture(
+        &cfg,
+        &gpu,
+        crate::hardware::detect(),
+        model,
+        &request.context_profile,
+        performance_bench::corpus_identity(&request.context_profile),
+    );
+    let trial_journal = journal.clone();
     let progress: performance_bench::Progress = Arc::new(move |progress| {
         let _ = app.emit("performance-bench-progress", progress);
     });
@@ -117,9 +235,12 @@ pub(crate) async fn run_performance_bench(
         performance_bench::RuntimeInfo {
             version,
             cache_ram_supported,
+            provenance: Some(provenance),
+            checkpoint: Some(Arc::new(move |result| trial_journal.checkpoint(result))),
         },
     )
     .await;
     state.bench_cancel.store(false, Ordering::Release);
+    journal.finish(&result)?;
     Ok(result)
 }

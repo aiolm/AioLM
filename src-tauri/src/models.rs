@@ -3,9 +3,14 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+mod scan_jobs;
+pub use scan_jobs::ScanRegistry;
 
 const MAX_DEPTH: u32 = 8;
 const MAX_MODELS: usize = 10_000;
+const MAX_ENTRIES: usize = 100_000;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct GgufModel {
@@ -114,6 +119,44 @@ pub struct ModelScan {
 }
 
 pub fn scan(models_dir: &str) -> Result<ModelScan, String> {
+    scan_cancellable(models_dir, &AtomicBool::new(false))
+}
+
+pub fn scan_cancellable(models_dir: &str, cancel: &AtomicBool) -> Result<ModelScan, String> {
+    scan_with_limits(models_dir, cancel, MAX_ENTRIES)
+}
+
+struct ScanProgress<'a> {
+    cancel: &'a AtomicBool,
+    entries: usize,
+    max_entries: usize,
+    visited: HashSet<PathBuf>,
+    truncated: bool,
+}
+
+impl ScanProgress<'_> {
+    fn check_cancelled(&self) -> Result<(), String> {
+        if self.cancel.load(Ordering::Relaxed) {
+            Err("model scan cancelled".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn scan_with_limits(
+    models_dir: &str,
+    cancel: &AtomicBool,
+    max_entries: usize,
+) -> Result<ModelScan, String> {
+    let mut progress = ScanProgress {
+        cancel,
+        entries: 0,
+        max_entries,
+        visited: HashSet::new(),
+        truncated: false,
+    };
+    progress.check_cancelled()?;
     let root = Path::new(models_dir.trim());
     if models_dir.trim().is_empty() {
         return Err("models directory is empty".into());
@@ -129,9 +172,8 @@ pub fn scan(models_dir: &str) -> Result<ModelScan, String> {
     }
 
     let mut models = Vec::new();
-    let mut visited = HashSet::new();
-    let mut truncated = false;
-    walk(&root, &mut models, &mut visited, 0, &mut truncated)?;
+    walk(&root, &mut models, 0, &mut progress)?;
+    progress.check_cancelled()?;
     let mut models = group_shards(models);
     models.sort_by(|left, right| {
         right
@@ -140,28 +182,32 @@ pub fn scan(models_dir: &str) -> Result<ModelScan, String> {
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(left.name.cmp(&right.name))
     });
-    Ok(ModelScan { models, truncated })
+    progress.check_cancelled()?;
+    Ok(ModelScan {
+        models,
+        truncated: progress.truncated,
+    })
 }
 
 fn walk(
     dir: &Path,
     models: &mut Vec<GgufModel>,
-    visited: &mut HashSet<PathBuf>,
     depth: u32,
-    truncated: &mut bool,
+    progress: &mut ScanProgress<'_>,
 ) -> Result<(), String> {
+    progress.check_cancelled()?;
     if depth > MAX_DEPTH {
-        *truncated = true;
+        progress.truncated = true;
         return Ok(());
     }
-    if models.len() >= MAX_MODELS {
-        *truncated = true;
+    if models.len() >= MAX_MODELS || progress.entries >= progress.max_entries {
+        progress.truncated = true;
         return Ok(());
     }
     let canonical = dir
         .canonicalize()
         .map_err(|error| format!("cannot read models directory {}: {error}", dir.display()))?;
-    if !visited.insert(canonical.clone()) {
+    if !progress.visited.insert(canonical.clone()) {
         return Ok(());
     }
 
@@ -171,11 +217,16 @@ fn walk(
             canonical.display()
         )
     })?;
-    for entry in entries.flatten() {
-        if models.len() >= MAX_MODELS {
-            *truncated = true;
+    for entry in entries {
+        progress.check_cancelled()?;
+        if models.len() >= MAX_MODELS || progress.entries >= progress.max_entries {
+            progress.truncated = true;
             break;
         }
+        progress.entries += 1;
+        let Ok(entry) = entry else {
+            continue;
+        };
         let path = entry.path();
         let Ok(file_type) = entry.file_type() else {
             continue;
@@ -184,7 +235,7 @@ fn walk(
             continue;
         }
         if file_type.is_dir() {
-            walk(&path, models, visited, depth + 1, truncated)?;
+            walk(&path, models, depth + 1, progress)?;
             continue;
         }
         if !file_type.is_file() {
@@ -314,6 +365,29 @@ mod tests {
         let missing = std::env::temp_dir().join(format!("aiolm-missing-{}", std::process::id()));
         let result = scan(&missing.to_string_lossy());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cancelled_scan_stops_before_reading_the_directory() {
+        let result = scan_cancellable("", &AtomicBool::new(true));
+        assert_eq!(result.unwrap_err(), "model scan cancelled");
+    }
+
+    #[test]
+    fn scan_bounds_non_model_entries_across_nested_directories() {
+        let root = std::env::temp_dir().join(format!("aiolm-scan-limit-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("nested")).unwrap();
+        for index in 0..8 {
+            fs::write(
+                root.join("nested").join(format!("unrelated-{index}.txt")),
+                b"fixture",
+            )
+            .unwrap();
+        }
+        let result = scan_with_limits(&root.to_string_lossy(), &AtomicBool::new(false), 4).unwrap();
+        assert!(result.models.is_empty());
+        assert!(result.truncated);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -16,34 +16,9 @@ export function invoke<T>(command: string, args?: Record<string, unknown>): Prom
     : tauriInvoke<T>(command, args);
 }
 
-export { trackInitialRead };
-
 export function isNativeRuntimeAvailable(): boolean {
   return typeof window !== "undefined"
     && typeof (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== "undefined";
 }
 
-export async function readBoundedResponseText(response: Response, maxChars = 1 * 1024 * 1024): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const decoder = new TextDecoder();
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const part = decoder.decode(value, { stream: true });
-      if (text.length + part.length > maxChars) throw new Error("The response body exceeds the configured size limit.");
-      text += part;
-    }
-    const tail = decoder.decode();
-    if (text.length + tail.length > maxChars) throw new Error("The response body exceeds the configured size limit.");
-    return text + tail;
-  } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      // The stream may already be closed by the transport.
-    }
-  }
-}
+export { readBoundedResponseText } from "./http.ts";

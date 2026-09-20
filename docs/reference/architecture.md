@@ -41,6 +41,7 @@ src-tauri/src/
   lib.rs                    Public library API, Tauri registration, startup/shutdown
   state.rs                  Native shared state and initial values
   commands/                 IPC handlers and command-level coordination
+  process_output.rs         Bounded diagnostic buffers and asynchronous pipe draining
   *.rs                      Runtime, server, session and other backend services
 ```
 
@@ -68,7 +69,8 @@ Internal API modules import their dependencies directly, never through the facad
 | Module | Responsibility |
 | --- | --- |
 | `types.ts` | Native and HTTP request/response contracts |
-| `transport.ts` | Native-runtime check, invoke wrapper, initial-read tracking, bounded responses |
+| `transport.ts` | Native-runtime check, invoke wrapper and native initial-read tracking |
+| `http.ts` | UI-independent bounded responses, cancellation, deadlines and typed HTTP failures |
 | `commands.ts` | Tauri commands and event subscriptions |
 | `models.ts` | HTTP model listing, embeddings and LoRA operations |
 | `chat.ts` | Chat request building and streaming operations |
@@ -89,6 +91,63 @@ independent of frontend paths except for the shared tuning-default catalog.
 Tauri command names are registered explicitly in `lib.rs`. When moving handlers,
 preserve their IPC names and arguments. The crate root re-exports the public
 validation functions used by the CLI and integration tests.
+
+## Performance and platform boundaries
+
+- Process diagnostics use `process_output.rs` for head/tail retention. Tail
+  buffers discard old bytes without shifting the retained log on each read.
+  Readers continue draining a child's pipes after the retention limit is reached;
+  output limits must not block the child or discard diagnostics on cancellation.
+- Document retrieval splits only the searchable prefix for vector requests and
+  shares one ranking between prompt context, source labels and citations. Cache
+  lookup hashes each document once per request and indexes its stored offsets.
+  Keep these caches request-local so edited attachments are checked again.
+- Profile assignment repair indexes named profiles and session bindings once per
+  pass. Compatible assignments retain their execution snapshots and revisions;
+  legacy recovery remains separate from the normal saved-profile path. Work on a
+  detached library so editing a result cannot change a caller's saved settings.
+- OS APIs stay behind Rust conditional compilation. Direct Windows bindings are
+  target-specific dependencies. Platform-neutral helpers must not infer defaults
+  from the development machine or change persisted path identities as part of a
+  performance refactor.
+
+CI compiles the native library, binaries, examples and tests on Linux and macOS
+in addition to the Windows test gate. These compile checks guard against platform
+drift; they do not establish runtime installation, packaging or WebView support.
+
+## Benchmark persistence and sharing
+
+`src-tauri/src/benchmark/` owns native run journals, content identity caches and
+launch provenance. The runner persists each completed trial outside its timing
+interval before emitting progress. History reads decode one bounded page, hide
+active journals and recover completed trials after an interrupted run. Data lives
+under the operating system's app data directory; existing browser history is
+imported in idempotent batches while preserving its original bytes.
+
+`packages/benchmark-contracts/` owns reusable DTOs, validation, aggregation,
+JSON Schema and the service-neutral OpenAPI contract. It builds and packs independently
+for use by the future website project. `shared/contracts/benchmark/` contains the
+app's conversion adapter and compatibility exports.
+Public submissions are assembled field by field and exclude local paths, raw
+arguments, diagnostics and device identifiers. Installed GPUs and selected GPUs
+are distinct; automatic placement stays unconfirmed. Model hashing is explicit
+and cached, with unknown identities retained as unknown.
+
+`shared/sharing/` separates the HTTP client, durable outbox and desktop task
+activity adapter. Enqueue commits a reviewed snapshot without sending it. Dispatch
+requires an explicitly configured client, uses idempotency keys and transactional
+leases, honors a persisted service retry deadline, and pauses while benchmarks
+run. The website owns accepted results; the app keeps recovery data and a bounded
+cache of newly acknowledged results, while protecting existing and unuploaded data.
+IndexedDB queries use bounded cursor pages and indexes for due work. See
+[Benchmark sharing](benchmark-sharing.md) for the integration contract and limits.
+
+Visible session consumers share one polling controller. Summary consumers avoid
+log snapshots, credentials and full execution settings; detailed consumers select
+the full endpoint while active. Model scans have per-request cancellation and a
+total directory-entry budget, including files that are not models. The local
+gateway reuses its HTTP client and limits connection and idle read time without
+imposing a total duration on a progressing stream.
 
 ## Tests and maintenance
 

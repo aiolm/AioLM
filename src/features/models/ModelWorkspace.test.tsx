@@ -12,7 +12,8 @@ vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: vi
 vi.mock('../../shared/api/index', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api/index')>(),
   listModels: vi.fn(),
-  sessionList: vi.fn(),
+  cancelModelScan: vi.fn(async () => undefined),
+  sessionSummaryList: vi.fn(),
   isNativeRuntimeAvailable: vi.fn(() => false),
 }));
 const models: api.GgufModel[] = [
@@ -32,7 +33,7 @@ describe('model management and settings', () => {
     localStorage.clear(); vi.clearAllMocks(); Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(useModelSettings).mockReturnValue(settings);
     vi.mocked(api.listModels).mockResolvedValue({ models, truncated: false });
-    vi.mocked(api.sessionList).mockResolvedValue([]);
+    vi.mocked(api.sessionSummaryList).mockResolvedValue([]);
     vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(false);
   });
   it('treats all unloaded models equally even when a previous model remains saved', async () => {
@@ -47,14 +48,14 @@ describe('model management and settings', () => {
   it('marks models loaded by named sessions and clears the mark after unloading', async () => {
     vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
     const live: api.SessionStatus = { id: 'work', name: 'Work', state: 'running', model: 'b.gguf' };
-    vi.mocked(api.sessionList).mockResolvedValue([live]);
+    vi.mocked(api.sessionSummaryList).mockResolvedValue([live]);
     mount();
     const first = (await findModelButton('a.gguf')).closest('[role="listitem"]') as HTMLElement;
     const second = (await findModelButton('b.gguf')).closest('[role="listitem"]') as HTMLElement;
     expect(within(first).queryByText('Running')).not.toBeInTheDocument();
     expect(await within(second).findByText('Running')).toBeVisible();
     expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeDisabled();
-    vi.mocked(api.sessionList).mockResolvedValue([{ ...live, state: 'stopped' }]);
+    vi.mocked(api.sessionSummaryList).mockResolvedValue([{ ...live, state: 'stopped' }]);
     act(() => notifySessionStatusChanged());
     await waitFor(() => expect(within(second).queryByText('Running')).not.toBeInTheDocument());
     expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeEnabled();

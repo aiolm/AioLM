@@ -6,6 +6,7 @@ mod protocol;
 use crate::{config::AppConfig, gpu::ResolvedGpu, performance_memory::PeakMemorySampler, server};
 use futures_util::{stream::FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{
@@ -59,6 +60,8 @@ pub struct PerformanceBenchResult {
     pub runtime_version: String,
     pub context_size: u32,
     pub parallel: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) provenance: Option<crate::benchmark::provenance::BenchmarkProvenance>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -125,6 +128,7 @@ pub fn failed(
         runtime_version: "unknown".into(),
         context_size: cfg.ctx_size,
         parallel: cfg.parallel,
+        provenance: None,
     }
 }
 
@@ -383,6 +387,33 @@ async fn batch(
 pub struct RuntimeInfo {
     pub version: String,
     pub cache_ram_supported: bool,
+    pub(crate) provenance: Option<crate::benchmark::provenance::BenchmarkProvenance>,
+    pub(crate) checkpoint: Option<Checkpoint>,
+}
+
+impl RuntimeInfo {
+    /// Runtime capabilities for a standalone benchmark. Desktop persistence and
+    /// launch provenance remain internal to the application's command adapter.
+    pub fn new(version: impl Into<String>, cache_ram_supported: bool) -> Self {
+        Self {
+            version: version.into(),
+            cache_ram_supported,
+            provenance: None,
+            checkpoint: None,
+        }
+    }
+}
+
+/// Called after metadata preparation and after each trial's timer and memory
+/// sampler stop. The journal writes only newly completed rows.
+pub(crate) type Checkpoint =
+    Arc<dyn Fn(&PerformanceBenchResult) -> Result<(), String> + Send + Sync>;
+
+pub(crate) fn corpus_identity(profile: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(corpus::text(profile, 4096).as_bytes())
+    )
 }
 
 pub async fn run(
@@ -400,6 +431,7 @@ pub async fn run(
         return result;
     }
     result.runtime_version = runtime.version;
+    result.provenance = runtime.provenance;
     result.message = None;
     let mut managed: Option<IsolatedServer> = None;
     let deadline = Instant::now() + RUN_TIMEOUT;
@@ -414,6 +446,9 @@ pub async fn run(
         result.context_size = isolated.ctx_size;
         result.parallel = isolated.parallel;
         result.args = redacted_args(server::build_args_with_gpu(&isolated, "", &gpu));
+        if let Some(provenance) = &mut result.provenance {
+            provenance.execution_config = crate::benchmark::provenance::ExecutionConfig::from_args(&result.args);
+        }
         let key = format!("bench-{}", uuid::Uuid::new_v4().simple());
         let ring = Arc::new(server::ErrBuf::default());
         drop(reservation);
@@ -458,11 +493,17 @@ pub async fn run(
                 _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
                 tokens = protocol::tokenize(&client, base, &key, &text) => tokens?,
             };
-            if tokens.len() >= max_prompt { break tokens; }
+            if tokens.len() >= max_prompt {
+                if let Some(provenance) = &mut result.provenance {
+                    provenance.corpus.sha256 = format!("{:x}", Sha256::digest(text.as_bytes()));
+                }
+                break tokens;
+            }
             target_bytes *= 2;
             if target_bytes > 4 * 1024 * 1024 { return Err("could not construct enough corpus tokens within the text size limit".into()); }
         };
         let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone() };
+        if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
         if request.warmup {
             emit(&progress, &request, "warmup", 0, None, None);
             let tokens = Arc::new(all_tokens[..all_tokens.len().min(128)].to_vec());
@@ -484,6 +525,7 @@ pub async fn run(
                     let ended = Instant::now();
                     let row = aggregate(&request, prompt, concurrency, repetition, started..ended, &measured, memory.finish());
                     result.rows.push(row.clone());
+                    if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
                     emit(&progress, &request, phase, result.rows.len(), Some(row), None);
                     if cancel.load(Ordering::Acquire) { return Err("benchmark cancelled".into()); }
                     if measured.iter().any(|m| m.error.as_ref().is_some_and(|error| error.contains("timed out"))) {
@@ -711,10 +753,7 @@ mod tests {
                     event.phase, event.completed, event.total, event.message
                 );
             }),
-            RuntimeInfo {
-                version: "unknown".into(),
-                cache_ram_supported: true,
-            },
+            RuntimeInfo::new("unknown", true),
         )
         .await;
         eprintln!("{}", serde_json::to_string_pretty(&result).unwrap());

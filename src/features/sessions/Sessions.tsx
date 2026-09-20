@@ -13,9 +13,9 @@ import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
+import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import {
   DEFAULT_SESSION_ID,
-  SESSION_STATUS_CHANGED_EVENT,
   cloneGpuPlacement,
   defaultSessionDefinition,
   notifySessionStatusChanged,
@@ -135,16 +135,18 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     gpu: cloneGpuPlacement(cfg?.gpu),
   }), [cfg?.active_model, cfg?.gpu, cfg?.mmproj, cfg?.port, cfg?.spec_draft_model, legacyState, legacyUrl, legacyModel, legacyMmproj, legacyPid, legacyActiveRequests, legacyIdleSeconds, legacyLogTail, legacyError, t]);
 
-  const refresh = useCallback(async () => {
-    const defaultStatus = fallbackDefaultStatus();
-    try {
-      const listed = api.normalizeSessionList(await api.sessionList());
+  const refresh = useSessionPolling({
+    active,
+    details: true,
+    onData: listed => {
+      const defaultStatus = fallbackDefaultStatus();
       setStatuses(Object.fromEntries([defaultStatus, ...listed].map((status) => [status.id, status])));
-    } catch (error) {
+    },
+    onError: error => {
       if (!isMissingSessionFacade(error)) setFailure(errorText(error));
-      setStatuses((current) => ({ ...current, [DEFAULT_SESSION_ID]: defaultStatus }));
-    }
-  }, [fallbackDefaultStatus]);
+      setStatuses((current) => ({ ...current, [DEFAULT_SESSION_ID]: fallbackDefaultStatus() }));
+    },
+  });
 
 
   useEffect(() => {
@@ -152,23 +154,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     setDefinitions(cfg.sessions ?? []);
     setStopExisting(cfg.stop_existing_sessions_on_load ?? true);
   }, [cfg, cfg?.sessions, cfg?.stop_existing_sessions_on_load]);
-
-  useEffect(() => {
-    if (!active) return;
-    let refreshing = false;
-    const poll = () => {
-      if (refreshing) return;
-      refreshing = true;
-      void refresh().finally(() => { refreshing = false; });
-    };
-    poll();
-    const interval = window.setInterval(poll, 3000);
-    window.addEventListener(SESSION_STATUS_CHANGED_EVENT, poll);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener(SESSION_STATUS_CHANGED_EVENT, poll);
-    };
-  }, [active, refresh]);
 
   const persist = async (next: api.SessionDefinition[]) => {
     await store.updateConfig({ sessions: next });

@@ -340,6 +340,53 @@ export interface PerformanceBenchmarkResult {
   runtime_version: string;
   context_size: number;
   parallel: number;
+  /** Absent on older records; unknown provenance must not be reconstructed later. */
+  provenance?: PerformanceBenchmarkProvenance;
+}
+
+export interface BenchmarkGpuSnapshot {
+  name: string;
+  vendor: string;
+  vram_mb: number | null;
+  driver: string | null;
+  integrated: boolean;
+}
+
+export interface BenchmarkModelIdentity {
+  status: 'sha256' | 'unidentified' | 'multipart';
+  sha256: string | null;
+  size_bytes: number | null;
+}
+
+export interface PerformanceBenchmarkProvenance {
+  schema_version: 1;
+  app_version: string;
+  method: { id: 'cold-prompt-serving'; version: 1 };
+  corpus: { profile: string; version: 1; sha256: string };
+  model: BenchmarkModelIdentity;
+  execution_config?: {
+    gpu_layers: number | null;
+    threads: number | null;
+    threads_batch: number | null;
+    flash_attention: string | null;
+    cache_type_k: string | null;
+    cache_type_v: string | null;
+    split_mode: string | null;
+    tensor_split: number[] | null;
+  };
+  environment: {
+    os: string;
+    arch: string;
+    cpu: { name: string; logical_cores: number };
+    installed_gpus: BenchmarkGpuSnapshot[];
+    execution: {
+      mode: 'cpu' | 'selected' | 'automatic' | 'unknown';
+      selected_gpus: BenchmarkGpuSnapshot[];
+      devices: string[];
+      selection_complete: boolean;
+    };
+    detection: string;
+  };
 }
 
 export interface PerformanceBenchmarkProgress {
@@ -401,6 +448,9 @@ export interface SessionStatus {
 export interface SessionListResult {
   sessions: SessionStatus[];
 }
+
+/** Status for selectors and badges, without diagnostic or request credentials. */
+export type SessionSummary = Omit<SessionStatus, 'api_key' | 'log_tail' | 'error' | 'execution'>;
 
 export type ServerState = "stopped" | "starting" | "running" | "stopping" | "failed" | "crashed";
 
