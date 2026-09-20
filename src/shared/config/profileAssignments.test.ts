@@ -7,7 +7,65 @@ import {
   profileSettingsSnapshot, profileTargetKey,
 } from './settingsProfiles';
 
+function freezeTree(value: object): void {
+  for (const child of Object.values(value)) if (child && typeof child === 'object') freezeTree(child);
+  Object.freeze(value);
+}
+
 describe('required profile assignments', () => {
+  it('repairs named assignments across a large library without changing saved values or sharing mutable snapshots', () => {
+    const entries = Array.from({ length: 32 }, (_, index) => ({ ...defaultSettingsProfile(),
+      id: `profile-${index}`, name: `Updated ${index}`, revision: 3,
+      settings: { temperature: 1.5, chat_options: { stop: ['CURRENT'] } },
+    }));
+    const source = { ...emptyProfileLibrary(), entries, default_profile_id: entries[0].id };
+    for (let index = 0; index < 512; index++) {
+      const model = `models/synthetic-${index}.gguf`;
+      source.applied[profileTargetKey(model)] = { model, profile_id: entries[index % entries.length].id,
+        profile_name: 'Previous name', profile_revision: index % 2 ? 1 : undefined,
+        settings: { temperature: index / 1000, chat_options: { stop: [`SAVED ${index}`] }, server_args: ['--seed', `${index}`] },
+        system_prompt: `Saved prompt ${index}`,
+      };
+    }
+    const before = structuredClone(source);
+    freezeTree(source);
+    const result = ensureProfileAssignments({ ...testConfig, active_model: 'models/synthetic-0.gguf' }, source);
+    expect(result.entries).toEqual(entries);
+    expect(Object.keys(result.applied)).toHaveLength(512);
+    for (const [key, saved] of Object.entries(source.applied)) {
+      const profile = entries.find(entry => entry.id === saved.profile_id)!;
+      expect(result.applied[key]).toEqual({ ...saved, profile_name: profile.name, profile_revision: saved.profile_revision ?? profile.revision });
+      expect(result.applied[key].settings).not.toBe(saved.settings);
+    }
+    const firstKey = profileTargetKey('models/synthetic-0.gguf');
+    result.applied[firstKey].settings.server_args!.push('--changed');
+    result.applied[firstKey].settings.chat_options!.stop = ['CHANGED'];
+    result.entries[0].settings.chat_options!.stop = ['CHANGED PROFILE'];
+    expect(source).toEqual(before);
+  });
+
+  it('reuses a recovered profile across model and session assignments in the same repair', () => {
+    const model = 'models/shared.gguf';
+    const saved = { model, profile_id: 'removed', settings: { temperature: 0.23 }, system_prompt: 'Saved prompt' };
+    const source = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile()], applied: {
+      [profileTargetKey(model)]: structuredClone(saved),
+      'session:first': structuredClone(saved),
+      'session:second': structuredClone(saved),
+    } };
+    const cfg = { ...testConfig, active_model: model, sessions: ['first', 'second'].map(id => ({
+      id, name: id, enabled: false, models: { primary_model: model, mmproj: '', draft_model: '' }, gpu: emptyGpuPlacement(),
+    })) };
+    freezeTree(source);
+    const result = ensureProfileAssignments(cfg, source);
+    expect(result.entries).toHaveLength(2);
+    const recovered = result.entries[1];
+    for (const application of Object.values(result.applied)) {
+      expect(application).toEqual({ ...saved, profile_id: recovered.id, profile_name: recovered.name, profile_revision: recovered.revision });
+    }
+    expect(ensureProfileAssignments(cfg, result)).toEqual(result);
+    expect(source.entries).toHaveLength(1);
+  });
+
   it('uses current saved values for a new execution while retaining the previous live snapshot', () => {
     const profile = captureProfile(testConfig, 'Shared', 'model', 'Before');
     const previous = materializeProfileApplication(testConfig, 'Before', profile);

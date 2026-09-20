@@ -88,10 +88,7 @@ async fn smoke_real_benchmark_cancel_keeps_progress() {
             cancel,
             active_pid.clone(),
             progress,
-            performance_bench::RuntimeInfo {
-                version: "unknown".into(),
-                cache_ram_supported: false,
-            },
+            performance_bench::RuntimeInfo::new("unknown", false),
         ),
     )
     .await

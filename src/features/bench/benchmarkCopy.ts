@@ -1,4 +1,5 @@
 import type { Locale } from "../../shared/i18n/i18n";
+import { benchmarkSharingCopy } from './benchmarkSharingCopy';
 
 const en = {
   title: "Benchmark", description: "Compare response speed across prompt lengths and concurrent requests.",
@@ -95,4 +96,4 @@ const zh: BenchmarkCopy = {
 };
 
 const copies: Record<Locale, BenchmarkCopy> = { en, ko, ja, zh };
-export const benchmarkCopy = (locale: Locale): BenchmarkCopy => copies[locale];
+export const benchmarkCopy = (locale: Locale) => ({ ...copies[locale], ...benchmarkSharingCopy(locale) });

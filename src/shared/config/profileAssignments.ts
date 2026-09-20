@@ -16,6 +16,13 @@ function compatible(profile: SettingsProfile, model: string): boolean {
   return profile.scope === 'global' || Boolean(model && (!profile.model_key || profile.model_key === profileTargetKey(model)));
 }
 
+function assignedApplication(saved: ProfileApplication, profile: SettingsProfile): ProfileApplication {
+  const revision = saved.profile_revision;
+  const validRevision = typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0 && revision <= profile.revision;
+  return { ...saved, profile_id: profile.id, profile_name: profile.name,
+    profile_revision: validRevision ? revision : profile.revision };
+}
+
 function recoveredId(library: SettingsProfileLibrary, targetKey: string): string {
   let hash = 2166136261;
   for (let index = 0; index < targetKey.length; index++) hash = Math.imul(hash ^ targetKey.charCodeAt(index), 16777619);
@@ -73,10 +80,7 @@ export function resolveProfileApplication(
   const target = saved ? { ...cfg, ...saved.settings, active_model: saved.model } : cfg;
   const assigned = library.entries.find(entry => entry.id === saved?.profile_id && compatible(entry, target.active_model));
   if (assigned) {
-    const revision = saved?.profile_revision;
-    const validRevision = typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0 && revision <= assigned.revision;
-    return { library, profile: assigned, application: { ...structuredClone(saved!), profile_id: assigned.id,
-      profile_name: assigned.name, profile_revision: validRevision ? revision : assigned.revision } };
+    return { library, profile: assigned, application: assignedApplication(structuredClone(saved!), assigned) };
   }
   let profile = library.entries.find(entry => compatible(entry, target.active_model) && profileMatches(entry, target, prompt));
   // Before a model is chosen, the initial workspace belongs to its portable default profile.
@@ -97,21 +101,37 @@ export function resolveProfileApplication(
 /** Every persisted execution target has a profile identity, including the empty initial workspace. */
 export function ensureProfileAssignments(cfg: AppConfig, source: SettingsProfileLibrary): SettingsProfileLibrary {
   let library = structuredClone(ensureProfileLibrary(source));
+  const profiles = new Map(library.entries.map(profile => [profile.id, profile]));
+  const sessionModels = new Map((cfg.sessions ?? []).map(definition => [
+    profileTargetKey(definition.models.primary_model, definition.id), profileTargetKey(definition.models.primary_model),
+  ]));
+  // The library is detached from its source. Updating this map directly avoids
+  // copying every saved target again for each individual assignment.
+  const applyResolved = (key: string, resolved: ResolvedProfileApplication) => {
+    library = resolved.library;
+    library.applied[key] = resolved.application;
+    profiles.set(resolved.profile.id, resolved.profile);
+  };
   if (cfg.active_model) delete library.applied[profileTargetKey('')];
   for (const [key, application] of Object.entries(library.applied)) {
-    const definition = (cfg.sessions ?? []).find(session => profileTargetKey(session.models.primary_model, session.id) === key);
-    if (definition && profileTargetKey(definition.models.primary_model) !== profileTargetKey(application.model)) continue;
+    const sessionModel = sessionModels.get(key);
+    if (sessionModel !== undefined && sessionModel !== profileTargetKey(application.model)) continue;
+    const assigned = application.profile_id ? profiles.get(application.profile_id) : undefined;
+    if (assigned && compatible(assigned, application.model)) {
+      // Named snapshots retain their saved values and revision. Only recovery
+      // needs to reconstruct defaults and search profiles by their settings.
+      library.applied[key] = assignedApplication(application, assigned);
+      continue;
+    }
     const target = { ...cfg, ...profileApplicationConfig(application) };
-    const resolved = resolveProfileApplication(target, library, application, key);
-    library = { ...resolved.library, applied: { ...resolved.library.applied, [key]: resolved.application } };
+    applyResolved(key, resolveProfileApplication(target, library, application, key));
   }
   const currentKey = profileTargetKey(cfg.active_model);
   if (!library.applied[currentKey]) {
     if (!cfg.active_model) {
       library.applied[currentKey] = applyDefaultProfile(cfg, library).application;
     } else {
-      const resolved = resolveProfileApplication(cfg, library);
-      library = { ...resolved.library, applied: { ...resolved.library.applied, [currentKey]: resolved.application } };
+      applyResolved(currentKey, resolveProfileApplication(cfg, library));
     }
   }
   for (const definition of cfg.sessions ?? []) {
@@ -121,8 +141,7 @@ export function ensureProfileAssignments(cfg: AppConfig, source: SettingsProfile
     if (existing && profileTargetKey(existing.model) === profileTargetKey(definition.models.primary_model)) continue;
     const target = sessionConfig(cfg, definition);
     const saved = existing ? { ...existing, model: target.active_model, settings: profileSettingsSnapshot(target) } : undefined;
-    const resolved = resolveProfileApplication(target, library, saved, key);
-    library = { ...resolved.library, applied: { ...resolved.library.applied, [key]: resolved.application } };
+    applyResolved(key, resolveProfileApplication(target, library, saved, key));
   }
   return library;
 }

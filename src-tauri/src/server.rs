@@ -1,5 +1,6 @@
 // src-tauri/src/server.rs
 use crate::config::{AppConfig, APP_MANAGED_SERVER_ARGS};
+use crate::process_output::{OutputBuffer, Retain};
 use crate::runtime;
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -206,13 +207,21 @@ impl ServerState {
 }
 
 /// Thread-safe, bounded stderr ring — keeps the last ~4 KB so a failed start can surface why.
-#[derive(Default)]
 pub struct ErrBuf {
-    inner: Mutex<Vec<u8>>,
+    inner: Mutex<OutputBuffer>,
     secret: Mutex<String>,
 }
 
 const CAP: usize = 4096;
+
+impl Default for ErrBuf {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(OutputBuffer::new(CAP, Retain::Tail)),
+            secret: Mutex::new(String::new()),
+        }
+    }
+}
 
 impl ErrBuf {
     pub fn set_secret(&self, secret: &str) {
@@ -231,19 +240,16 @@ impl ErrBuf {
         let Ok(mut guard) = self.inner.lock() else {
             return;
         };
-        guard.extend_from_slice(chunk);
-        let len = guard.len();
-        if len > CAP {
-            guard.drain(..len - CAP);
-        }
+        guard.push(chunk);
     }
 
     pub fn tail(&self) -> String {
-        let text = self
+        let bytes = self
             .inner
             .lock()
-            .map(|guard| String::from_utf8_lossy(&guard).into_owned())
+            .map(|guard| guard.snapshot())
             .unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes);
         let secret = self
             .secret
             .lock()
@@ -1213,6 +1219,7 @@ mod tests {
             "token".to_string(),
             "model.gguf".to_string(),
             String::new(),
+            String::new(),
         );
         let err = Arc::new(ErrBuf::default());
         let result = tokio::runtime::Runtime::new()
@@ -1290,6 +1297,23 @@ mod tests {
         ring.set_secret("local-secret");
         ring.push(b"authentication failed for local-secret");
         assert_eq!(ring.tail(), "authentication failed for [REDACTED]");
+    }
+
+    #[test]
+    fn wrapped_error_logs_preserve_unicode_decoding_and_secret_redaction() {
+        let ring = ErrBuf::default();
+        ring.set_secret("session-key");
+        let payload = format!("{}session-key", "🙂".repeat(CAP / 4 + 1));
+        for chunk in payload.as_bytes().chunks(3) {
+            ring.push(chunk);
+        }
+        let expected = String::from_utf8_lossy(&payload.as_bytes()[payload.len() - CAP..])
+            .replace("session-key", "[REDACTED]");
+        assert_eq!(ring.tail(), expected);
+
+        ring.clear();
+        ring.push(b"next session-key");
+        assert_eq!(ring.tail(), "next [REDACTED]");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Shared application state and its initial values.
-use crate::{gateway, server, session};
+use crate::{gateway, models, server, session};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
@@ -20,6 +20,7 @@ pub(crate) struct AppState {
     pub(crate) runtime_cancel: Arc<AtomicBool>,
     pub(crate) discover_cancel: Arc<AtomicBool>,
     pub(crate) verify_cancel: Arc<AtomicBool>,
+    pub(crate) model_scans: Arc<models::ScanRegistry>,
     pub(crate) gateway: Arc<Mutex<Option<gateway::GatewayHandle>>>,
     pub(crate) selected_image: Mutex<Option<PathBuf>>,
     pub(crate) selected_document: Mutex<Option<PathBuf>>,
@@ -41,6 +42,7 @@ impl Default for AppState {
             runtime_cancel: Arc::new(AtomicBool::new(false)),
             discover_cancel: Arc::new(AtomicBool::new(false)),
             verify_cancel: Arc::new(AtomicBool::new(false)),
+            model_scans: Arc::new(models::ScanRegistry::default()),
             gateway: Arc::new(Mutex::new(None)),
             selected_image: Mutex::new(None),
             selected_document: Mutex::new(None),

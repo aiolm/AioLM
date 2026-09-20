@@ -9,7 +9,7 @@ import {
   type AnthropicTool,
 } from "./endpointAdapters.ts";
 import { mapChatOptionAliases, type JsonObject } from "../config/tuningValidation.ts";
-import { readBoundedResponseText } from "./transport.ts";
+import { readBoundedResponseText } from "./http.ts";
 import type { ChatDelta, ChatMessage, ChatRequestBody, ChatSampling } from "./types.ts";
 
 function asJsonObject(value: unknown): JsonObject | null {
@@ -108,7 +108,7 @@ export async function chatStream(
     signal,
   });
   if (!res.ok) {
-    const body = await res.text();
+    const body = await readBoundedResponseText(res);
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
   }
   if (!res.body) throw new Error("The server returned an empty response stream.");

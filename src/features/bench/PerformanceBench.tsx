@@ -5,7 +5,13 @@ import { finishTask, registerTask, updateTask, useTasks } from "../../shared/sta
 import { useI18n } from "../../shared/i18n/i18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { performanceCsv, readPerformanceHistory, savePerformanceRecord, summarizePerformanceRows, type BenchmarkDevice, type PerformanceBenchmarkRecord } from "./performanceRecords";
+import { performanceCsv, readPerformanceHistory, summarizePerformanceRows, type PerformanceBenchmarkRecord } from "./performanceRecords";
+import { identifyBenchmarkModel, initializeBenchmarkHistory, loadAllBenchmarkHistory, loadBenchmarkHistoryPage, rememberBenchmarkResult } from './benchmarkRepository';
+import { isNativeRuntimeAvailable } from '../../shared/api/transport';
+import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
+import { PublicBenchmarkReview } from './PublicBenchmarkReview';
+import { BenchmarkOwnedList } from './BenchmarkOwnedList';
+import { BenchmarkSharingQueue } from './BenchmarkSharingQueue';
 import { benchmarkCopy } from "./benchmarkCopy";
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { executionChanges, executionConfig } from '../../shared/config/executionSettings';
@@ -31,12 +37,6 @@ function benchmarkTarget(current: api.AppConfig, saved?: ProfileApplication | nu
   const next = materializeProfileApplication(config, resolved.application.system_prompt, resolved.profile);
   config.settings_profiles = { ...resolved.library, applied: { ...resolved.library.applied, [profileTargetKey(config.active_model)]: next } };
   return { config, application: next };
-}
-
-function deviceSnapshot(report: api.DeviceReport | null): BenchmarkDevice | undefined {
-  if (!report) return undefined;
-  const gpu = report.profile.gpus.find((item) => !item.integrated) ?? report.profile.gpus[0];
-  return { fingerprint: report.profile.fingerprint, os: report.profile.os, arch: report.profile.arch, cpu: report.profile.cpu.name, cpuThreads: report.profile.cpu.logical_cores, gpu: gpu?.name, gpuVendor: gpu?.vendor, gpuVramMb: gpu?.vram_mb };
 }
 
 function downloadCsv(text: string) {
@@ -88,7 +88,7 @@ function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; c
   </section>;
 }
 
-export default function PerformanceBench({ store }: { store: AppStore }) {
+export default function PerformanceBench({ store, active = true }: { store: AppStore; active?: boolean }) {
   const { locale } = useI18n();
   const copy = benchmarkCopy(locale);
   const modelCopy = modelActions(locale);
@@ -97,7 +97,6 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
   const [sessionsReady, setSessionsReady] = useState(false);
-  const [sessionRevision, setSessionRevision] = useState(0);
   const [stoppingSessions, setStoppingSessions] = useState(false);
   const [promptLengths, setPromptLengths] = useState([4096, 16384]);
   const [batchSizes, setBatchSizes] = useState([2, 4]);
@@ -110,7 +109,15 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const [rows, setRows] = useState<api.PerformanceBenchmarkRow[]>([]);
   const [result, setResult] = useState<api.PerformanceBenchmarkResult | null>(null);
   const [record, setRecord] = useState<PerformanceBenchmarkRecord | null>(null);
-  const [history, setHistory] = useState(readPerformanceHistory);
+  const [history, setHistory] = useState<PerformanceBenchmarkRecord[]>(() => isNativeRuntimeAvailable() ? [] : readPerformanceHistory());
+  const [historyOffset, setHistoryOffset] = useState<number | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [historyWarnings, setHistoryWarnings] = useState(false);
+  const [identifying, setIdentifying] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [queueRevision, setQueueRevision] = useState(0);
+  const [modelIdentity, setModelIdentity] = useState<{ path: string; value: api.BenchmarkModelIdentity } | null>(null);
   const [selectedHistory, setSelectedHistory] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [storageError, setStorageError] = useState(false);
@@ -120,6 +127,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const rowsRef = useRef<api.PerformanceBenchmarkRow[]>([]);
   const activeRef = useRef(false);
   const cancelRequestedRef = useRef(false);
+  const historyRevisionRef = useRef(0);
   const tasks = useTasks();
   const busy = phase !== "idle";
   const otherBenchmark = tasks.some((task) => task.kind === "benchmark" && task.id !== TASK_ID && (task.state === "running" || task.state === "cancelling"));
@@ -129,21 +137,25 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const validRepetitions = Number.isInteger(repetitionsNumber) && repetitionsNumber >= 1 && repetitionsNumber <= 10;
   const valid = promptLengths.length > 0 && validGeneration && validRepetitions;
   const serverRunning = isServerRunning(store.status.state);
-  const defaultTarget = store.cfg ? benchmarkTarget(store.cfg) : null;
-  const target = store.cfg && targetApplication ? benchmarkTarget(store.cfg, targetApplication) : defaultTarget;
+  const defaultTarget = useMemo(() => store.cfg ? benchmarkTarget(store.cfg) : null, [store.cfg]);
+  const target = useMemo(() => store.cfg && targetApplication ? benchmarkTarget(store.cfg, targetApplication) : defaultTarget, [store.cfg, targetApplication, defaultTarget]);
   const targetConfig = target?.config ?? null;
   const model = targetConfig?.active_model ?? "";
   const targetDiffers = !!defaultTarget && !!target && (defaultTarget.application.profile_id !== target.application.profile_id
     || Object.keys(executionChanges(defaultTarget.config, target.config)).length > 0);
   const displayedModel = busy && runModel ? runModel : { model, backend: targetConfig?.active_backend ?? "", build: targetConfig?.active_build ?? "" };
   const blockingSessions = sessions.filter(session => session.id !== 'default' && ['running', 'starting', 'stopping'].includes(session.state));
-  const canRun = !!targetConfig && !!model && valid && !busy && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
+  const canRun = !!targetConfig && !!model && valid && !busy && !identifying && !exporting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptLengths.length * (batchSizes.length + 1) * (validRepetitions ? repetitionsNumber : 0);
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
   const previousRecords = history.filter(item => item.id !== record?.id);
   const exportAllDiffers = history.length > 0 && (history.length > 1 || history[0].id !== selectedRecord?.id);
   const visibleRows = selectedHistory && selectedRecord ? selectedRecord.result.rows : rows;
   const visibleResult = selectedHistory && selectedRecord ? selectedRecord.result : result;
+  const provenance = selectedRecord?.result.provenance;
+  const selectedGpus = provenance?.environment?.execution?.selected_gpus;
+  const selectedGpuLabel = Array.isArray(selectedGpus) ? selectedGpus.map(gpu => typeof gpu?.name === 'string' ? gpu.name : '').filter(Boolean).join(' · ') : '';
+  const modelHash = provenance?.model?.sha256;
   const summary = useMemo(() => summarizePerformanceRows(visibleRows), [visibleRows]);
   const singleRows = summary.filter((row) => row.concurrency === 1);
   const batchRows = summary.filter((row) => row.concurrency > 1);
@@ -151,14 +163,34 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   useEffect(() => {
     if (!targetApplication && store.cfg) setTargetApplication(benchmarkTarget(store.cfg).application);
   }, [store.cfg, targetApplication]);
-  const hasSettings = !!modelSettings;
+  const refreshSessions = useSessionPolling({ active: active && !!modelSettings, intervalMs: 2000,
+    onData: value => { setSessions(value); setSessionsError(false); setSessionsReady(true); },
+    onError: () => { setSessionsError(true); setSessionsReady(false); },
+  });
+  const loadHistory = async (more = false) => {
+    if (historyLoading || (more && historyOffset === null)) return;
+    const revision = ++historyRevisionRef.current;
+    setHistoryLoading(true);
+    try {
+      const page = more ? await loadBenchmarkHistoryPage(historyOffset!) : await initializeBenchmarkHistory();
+      if (revision !== historyRevisionRef.current) return;
+      setHistory(previous => more ? [...new Map([...previous, ...page.records].map(item => [item.id, item])).values()] : page.records);
+      setHistoryOffset(page.next_offset); setHistoryError(false);
+      setHistoryWarnings(previous => (more && previous) || !!page.warnings?.length);
+    } catch { if (revision === historyRevisionRef.current) setHistoryError(true); }
+    finally { if (revision === historyRevisionRef.current) setHistoryLoading(false); }
+  };
   useEffect(() => {
-    if (!hasSettings) return;
+    if (!isNativeRuntimeAvailable()) return;
     let disposed = false;
-    const refresh = () => { void api.sessionList().then(value => { if (!disposed) { setSessions(api.normalizeSessionList(value)); setSessionsError(false); setSessionsReady(true); } }).catch(() => { if (!disposed) { setSessionsError(true); setSessionsReady(false); } }); };
-    refresh(); const timer = window.setInterval(refresh, 2000);
-    return () => { disposed = true; window.clearInterval(timer); };
-  }, [hasSettings, sessionRevision]);
+    const revision = ++historyRevisionRef.current;
+    setHistoryLoading(true);
+    void initializeBenchmarkHistory().then(page => {
+      if (!disposed && revision === historyRevisionRef.current) { setHistory(page.records); setHistoryOffset(page.next_offset); setHistoryError(false); setHistoryWarnings(!!page.warnings?.length); }
+    }).catch(() => { if (!disposed && revision === historyRevisionRef.current) setHistoryError(true); })
+      .finally(() => { if (!disposed && revision === historyRevisionRef.current) setHistoryLoading(false); });
+    return () => { disposed = true; };
+  }, []);
   const editModel = (section: string) => {
     const current = store.getConfig?.() ?? store.cfg;
     if (busy || !current) return;
@@ -169,7 +201,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
   const stopSessions = async () => {
     if (stoppingSessions) return;
     setStoppingSessions(true);
-    try { for (const session of blockingSessions) await api.sessionStop(session.id); setSessionRevision(value => value + 1); }
+    try { for (const session of blockingSessions) await api.sessionStop(session.id); await refreshSessions(); }
     catch (cause) { setError(normalizeDisplayText(String(cause))); }
     finally { setStoppingSessions(false); }
   };
@@ -231,14 +263,16 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
       finalResult = { run_id: runId, rows: rowsRef.current, status: cancelRequestedRef.current ? "cancelled" : "failed", message, args: [], runtime_version: "", context_size: 0, parallel: 0 };
     } finally {
       unlisten?.();
-      activeRef.current = false;
-      setPhase("idle");
       void store.refreshStatus();
     }
-    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: runId, createdAt, model: cfg.active_model, backend: cfg.active_backend, build: cfg.active_build, request, result: finalResult, device: deviceSnapshot(device) };
+    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: runId, createdAt, model: cfg.active_model, backend: cfg.active_backend, build: cfg.active_build, request, result: finalResult };
     setRows(finalResult.rows); setResult(finalResult); setRecord(saved);
-    try { setHistory(savePerformanceRecord(saved)); }
+    historyRevisionRef.current++;
+    setHistoryLoading(false);
+    try { const page = await rememberBenchmarkResult(saved); setHistory(page.records); setHistoryOffset(page.next_offset); }
     catch { setStorageError(true); }
+    activeRef.current = false;
+    setPhase("idle");
     if (finalResult.status === "failed") setError(finalResult.message ?? copy.failed);
     finishTask(TASK_ID, finalResult.status === "cancelled" ? "cancelled" : finalResult.status === "failed" || finalResult.status === "partial" ? "failed" : "completed", finalResult.message ?? undefined);
   };
@@ -251,9 +285,25 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
     try { await navigator.clipboard.writeText(performanceCsv([selectedRecord])); setCopied(true); }
     catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
   };
+  const identifyModel = async () => {
+    if (busy || otherBenchmark || identifying || !displayedModel.model) return;
+    const path = displayedModel.model;
+    setIdentifying(true); setError(null);
+    try { setModelIdentity({ path, value: await identifyBenchmarkModel(path) }); }
+    catch { setError(copy.identifyError); }
+    finally { setIdentifying(false); }
+  };
+  const exportHistory = async () => {
+    if (exporting || busy) return;
+    if (!isNativeRuntimeAvailable()) { downloadCsv(performanceCsv(readPerformanceHistory())); return; }
+    setExporting(true);
+    try { downloadCsv(performanceCsv(await loadAllBenchmarkHistory())); }
+    catch { setHistoryError(true); }
+    finally { setExporting(false); }
+  };
 
   return <div className="app-page-scroll performance-page">
-    <header className="performance-heading"><div><h2>{copy.title}</h2><p>{copy.description}</p></div>{device && <span className="performance-device">{device.profile.cpu.name}{device.profile.gpus[0] ? ` · ${device.profile.gpus[0].name}` : ""}</span>}</header>
+    <header className="performance-heading"><div><h2>{copy.title}</h2><p>{copy.description}</p></div>{device && <span className="performance-device">{device.profile.cpu.name}</span>}</header>
     <form className="performance-card" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-card-heading"><h3>{copy.configuration}</h3><span>{copy.totalTests}: <strong>{total}</strong></span></div>
       <div className="performance-model"><span>{copy.model}</span>
@@ -261,6 +311,7 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
         {displayedModel.model && <small>{displayedModel.backend} · {displayedModel.build}</small>}
         {modelSettings && <div className="performance-model-actions"><button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => editModel('runtime')}>{modelCopy.settings}</button>{targetDiffers && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); }}>{modelCopy.importDefault}</button>}</div>}
       </div>
+      {isNativeRuntimeAvailable() && <div className="performance-identity"><button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || otherBenchmark || identifying || !displayedModel.model} onClick={() => void identifyModel()}>{identifying ? copy.identifying : copy.identifyModel}</button><span role="status">{modelIdentity?.path === displayedModel.model ? modelIdentity.value.status === 'sha256' ? copy.identityReady : copy.identityUnknown : copy.identityHint}</span></div>}
       <fieldset disabled={busy} className="performance-fields">
         <legend className="sr-only">{copy.configuration}</legend>
         <div className="performance-input-grid">
@@ -277,11 +328,14 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
     </form>
     {serverRunning && !busy && <div className="performance-notice" role="status"><p>{copy.stopHint}</p><button type="button" className="app-button app-button--secondary app-button--sm" disabled={store.busy} onClick={() => void store.stop().catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)))}>{copy.stopServer}</button></div>}
     {blockingSessions.length > 0 && !busy && <div className="performance-notice" role="status"><p>{modelCopy.sessionsHint} {blockingSessions.map(session => normalizeDisplayText(session.name || session.id)).join(', ')}</p><button type="button" className="app-button app-button--secondary app-button--sm" disabled={stoppingSessions} onClick={() => void stopSessions()}>{modelCopy.stopSessions}</button></div>}
-    {sessionsError && <div className="performance-notice" role="alert">{modelCopy.sessionsError}<button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => setSessionRevision(value => value + 1)}>{modelCopy.retry}</button></div>}
+    {sessionsError && <div className="performance-notice" role="alert">{modelCopy.sessionsError}<button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void refreshSessions().catch(() => undefined)}>{modelCopy.retry}</button></div>}
     {otherBenchmark && <p className="performance-notice" role="status">{copy.activeElsewhere}</p>}
     {busy && <section className="performance-progress performance-card" aria-label={copy.running}><div role="status" aria-live="polite"><strong>{progressMessage}</strong><span>{progress?.completed ?? 0} / {progress?.total ?? total}</span></div><progress max={Math.max(1, progress?.total ?? total)} value={progress?.completed ?? 0} aria-label={copy.totalTests} /></section>}
     {error && <div className="performance-error" role="alert">{normalizeDisplayText(error)}</div>}
     {storageError && !selectedHistory && <div className="performance-notice" role="status">{copy.storageError}</div>}
+    {historyError && <div className="performance-notice" role="alert">{copy.historyError}<button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading} onClick={() => void loadHistory()}>{modelCopy.retry}</button></div>}
+    {historyWarnings && <p className="performance-notice" role="status">{copy.historyWarning}</p>}
+    {(history.length > 0 || record) && <p className="performance-hint">{copy.localHistoryHint}</p>}
     {(history.length > 0 || rows.length > 0 || record) && <div className="performance-history-bar">
       {previousRecords.length > 0 ? <label><span>{copy.history}</span><select className="app-input" value={selectedHistory} disabled={busy} onChange={(event) => { setSelectedHistory(event.target.value); setCopied(false); setError(null); }}>
         <option value="">{copy.current}</option>{previousRecords.map((item) => <option key={item.id} value={item.id}>{new Date(item.createdAt).toLocaleString()} · {modelDisplayName(item.model)} · {({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}</option>)}
@@ -289,10 +343,15 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
       <div>{selectedRecord && <>
         <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => downloadCsv(performanceCsv([selectedRecord]))}>{copy.exportCsv}</button>
-      </>}{exportAllDiffers && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => downloadCsv(performanceCsv(history))}>{copy.exportAllCsv}</button>}</div>
+      </>}{(exportAllDiffers || historyOffset !== null) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting} onClick={() => void exportHistory()}>{copy.exportAllCsv}</button>}</div>
     </div>}
-    {selectedRecord && <div className="performance-result-context"><strong>{modelDisplayName(selectedRecord.model)}</strong><span>{statusLabel} · {selectedRecord.backend} · {selectedRecord.build} · {copy[selectedRecord.request.context_profile]}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading} onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
+    {historyLoading && <p role="status">{copy.historyLoading}</p>}
+    {selectedRecord && <div className="performance-result-context"><strong>{modelDisplayName(selectedRecord.model)}</strong><span>{statusLabel} · {selectedRecord.backend} · {selectedRecord.build} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />
+    {selectedRecord && <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark} copy={copy} onQueued={() => setQueueRevision(value => value + 1)} />}
+    <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} />
+    <BenchmarkSharingQueue active={active} busy={busy || otherBenchmark} revision={queueRevision} copy={copy} />
     {!visibleRows.length && !visibleResult && !busy && !error && <div className="performance-empty">{copy.empty}</div>}
     {selectedRecord && <details className="performance-card performance-details"><summary>{copy.details}</summary><dl className="performance-run-config">
       <div><dt>{copy.corpus}</dt><dd>{copy[selectedRecord.request.context_profile]}</dd></div>
@@ -304,6 +363,8 @@ export default function PerformanceBench({ store }: { store: AppStore }) {
       <div><dt>{copy.contextSize}</dt><dd>{selectedRecord.result.context_size > 0 ? selectedRecord.result.context_size.toLocaleString() : copy.unavailable}</dd></div>
       <div><dt>{copy.parallel}</dt><dd>{selectedRecord.result.parallel > 0 ? selectedRecord.result.parallel : copy.unavailable}</dd></div>
       <div><dt>{copy.runtimeVersion}</dt><dd>{selectedRecord.result.runtime_version || copy.unavailable}</dd></div>
+      <div><dt>{copy.executionDevice}</dt><dd>{provenance?.environment?.execution?.mode === 'cpu' ? 'CPU' : selectedGpuLabel || copy.unavailable}</dd></div>
+      <div><dt>{copy.modelHash}</dt><dd>{typeof modelHash === 'string' ? modelHash : copy.unavailable}</dd></div>
     </dl></details>}
     {visibleResult && visibleResult.args.length > 0 && <details className="performance-card performance-details"><summary>{copy.effectiveArgs}</summary><code>{visibleResult.args.map((arg) => JSON.stringify(normalizeDisplayText(arg))).join(" ")}</code></details>}
     <details className="performance-card performance-details"><summary>{copy.metrics}</summary><p>{copy.metricsHint}</p><p>{copy.ppHint}</p><p>{copy.throughputHint}</p><p>{copy.memoryHint}</p></details>

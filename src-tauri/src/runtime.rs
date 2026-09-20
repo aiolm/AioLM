@@ -1,4 +1,7 @@
 // src-tauri/src/runtime.rs
+use crate::process_output::{
+    drain_stream, drain_stream_into, read_log, shared_log, Retain, SharedLog,
+};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,7 +18,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
@@ -88,7 +91,7 @@ const PR_ARTIFACT_REPOSITORY: &str = match option_env!("AIOLM_PR_ARTIFACT_REPOSI
     Some(repository) => repository,
     None => match option_env!("LLAMA_BOARD_PR_ARTIFACT_REPOSITORY") {
         Some(repository) => repository,
-        None => "joowon-jang/AioLM",
+        None => "aiolm/AioLM",
     },
 };
 
@@ -2255,89 +2258,6 @@ struct ProbeCommand {
     success: bool,
     text: String,
     diagnostic: Option<String>,
-}
-
-/// Which end of an over-long stream to keep once the cap is reached.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Retain {
-    /// Version banners and `--help` output are parsed from the front.
-    Head,
-    /// Build logs are only ever read to find out what failed at the end.
-    Tail,
-}
-
-/// A drain buffer both the reader task and its supervisor can see.
-///
-/// A reader that has to be abandoned at its join deadline still holds the only
-/// copy of what it read; sharing the buffer means the supervisor can recover
-/// that tail instead of reporting a failed build with no diagnostic at all.
-type SharedLog = Arc<std::sync::Mutex<Vec<u8>>>;
-
-fn shared_log() -> SharedLog {
-    Arc::new(std::sync::Mutex::new(Vec::new()))
-}
-
-/// Read the shared buffer, tolerating a poisoned lock: a partial log is still
-/// worth more to the user than nothing.
-fn read_log(log: &SharedLog) -> Vec<u8> {
-    log.lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone()
-}
-
-/// Read `reader` to EOF while keeping at most `cap` bytes of it.
-///
-/// The stream is drained even after the cap is reached. Returning early would
-/// drop the pipe handle while the child is still writing, and the child would
-/// then die on a broken pipe - or, once the OS pipe buffer filled, block
-/// forever - instead of finishing its build.
-async fn drain_stream_into<R>(mut reader: R, log: SharedLog, cap: usize, retain: Retain)
-where
-    R: AsyncRead + Unpin,
-{
-    let mut chunk = vec![0_u8; 64 * 1024];
-    loop {
-        let read = match reader.read(&mut chunk).await {
-            Ok(0) => break,
-            Ok(read) => read,
-            // A closed or broken pipe is the end of this stream, not a reason
-            // to leave the remaining handle dangling.
-            Err(_) => break,
-        };
-        let bytes = &chunk[..read];
-        // The guard never spans an await, so an abort at the deadline above
-        // cannot strand it; the poison branch is belt and braces.
-        let mut retained = log.lock().unwrap_or_else(|error| error.into_inner());
-        match retain {
-            Retain::Head => {
-                if retained.len() < cap {
-                    let room = cap - retained.len();
-                    retained.extend_from_slice(&bytes[..room.min(bytes.len())]);
-                }
-            }
-            Retain::Tail => {
-                if bytes.len() >= cap {
-                    retained.clear();
-                    retained.extend_from_slice(&bytes[bytes.len() - cap..]);
-                } else {
-                    retained.extend_from_slice(bytes);
-                    if retained.len() > cap {
-                        let excess = retained.len() - cap;
-                        retained.drain(..excess);
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn drain_stream<R>(reader: R, cap: usize, retain: Retain) -> Vec<u8>
-where
-    R: AsyncRead + Unpin,
-{
-    let log = shared_log();
-    drain_stream_into(reader, log.clone(), cap, retain).await;
-    read_log(&log)
 }
 
 async fn read_probe_output<R>(reader: R) -> Vec<u8>
@@ -5644,21 +5564,11 @@ impl BuildReaders {
         stdout: tokio::process::ChildStdout,
         stderr: Option<tokio::process::ChildStderr>,
     ) -> Self {
-        let stdout_log = shared_log();
-        let stdout_task = tokio::spawn(drain_stream_into(
-            stdout,
-            stdout_log.clone(),
-            MAX_BUILD_LOG_TAIL,
-            Retain::Tail,
-        ));
+        let stdout_log = shared_log(MAX_BUILD_LOG_TAIL, Retain::Tail);
+        let stdout_task = tokio::spawn(drain_stream_into(stdout, stdout_log.clone()));
         let stderr = stderr.map(|stderr| {
-            let log = shared_log();
-            let task = tokio::spawn(drain_stream_into(
-                stderr,
-                log.clone(),
-                MAX_BUILD_LOG_TAIL,
-                Retain::Tail,
-            ));
+            let log = shared_log(MAX_BUILD_LOG_TAIL, Retain::Tail);
+            let task = tokio::spawn(drain_stream_into(stderr, log.clone()));
             (task, log)
         });
         Self {
@@ -7346,9 +7256,9 @@ mod tests {
         // A grandchild that inherited the pipe can keep it open past the join
         // deadline. Aborting the task must not throw away the log: that is
         // exactly the case where the user needs the diagnostic.
-        let log = shared_log();
+        let log = shared_log(4096, Retain::Tail);
         let (reader, mut writer) = tokio::io::duplex(1024);
-        let task = tokio::spawn(drain_stream_into(reader, log.clone(), 4096, Retain::Tail));
+        let task = tokio::spawn(drain_stream_into(reader, log.clone()));
         writer
             .write_all(b"fatal error C1083: cannot open include file")
             .await
@@ -7361,12 +7271,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_finished_reader_is_joined_without_waiting_out_the_budget() {
-        let log = shared_log();
+        let log = shared_log(4096, Retain::Tail);
         let task = tokio::spawn(drain_stream_into(
             b"configure output".as_slice(),
             log.clone(),
-            4096,
-            Retain::Tail,
         ));
         let started = Instant::now();
         let output = finish_build_reader(task, &log, Duration::from_secs(30)).await;
@@ -8793,18 +8701,18 @@ mod tests {
         let size_after_stop = fs::metadata(&marker).map(|metadata| metadata.len());
         sleep(Duration::from_millis(120)).await;
         let size_after_wait = fs::metadata(&marker).map(|metadata| metadata.len());
-        assert_eq!(
-            size_after_stop, size_after_wait,
-            "grandchild kept writing after {context}"
-        );
 
-        // If the assertion above fails, leave no process behind to affect later
-        // tests. On the normal path this is harmless because the group kill has
-        // already made the PID invalid.
+        // Clean up before asserting so a failed check leaves no child behind.
+        // On the normal path the group kill has already made the PID invalid.
         unsafe {
             let _ = libc::kill(grandchild_pid, libc::SIGKILL);
         }
         let _ = fs::remove_dir_all(root);
+        assert_eq!(
+            size_after_stop.expect("read marker size after stopping build"),
+            size_after_wait.expect("read marker size after waiting"),
+            "grandchild kept writing after {context}"
+        );
     }
 
     /// CMake generators routinely leave a compiler wrapper or shell grandchild

@@ -1,4 +1,4 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, lazy, Suspense, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import { executionChanges, executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, settingsForSession, ExecutionConflictError } from '../../shared/config/executionSettings';
@@ -13,6 +13,7 @@ import { applyDefaultProfile, resolveProfileApplicationOrDefault, resolveProfile
 import { applyProfile } from './profileWorkspaceState';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 
 const ModelSettingsDialog = lazy(() => import('./ModelSettingsDialog'));
 export const MANAGE_MODEL_RUNTIMES = 'aiolm:manage-model-runtimes';
@@ -97,14 +98,12 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       existingSession: !!definition && !!cfg.sessions?.some(item => item.id === definition.id) });
     setSuspended(false); setError('');
   }, [copy.missing]);
-  const editorKey = editor?.key;
-  useEffect(() => {
-    if (editorKey === undefined || !api.isNativeRuntimeAvailable()) return;
-    let disposed = false;
-    const refresh = () => { void api.sessionList().then(value => { if (!disposed) setSessions(api.normalizeSessionList(value)); }).catch(() => undefined); };
-    refresh(); const timer = window.setInterval(refresh, 1500);
-    return () => { disposed = true; window.clearInterval(timer); };
-  }, [editorKey]);
+  useSessionPolling({
+    active: editor !== null && !suspended && api.isNativeRuntimeAvailable(),
+    details: true,
+    onData: setSessions,
+    intervalMs: 1500,
+  });
   const getRequestConfig = useCallback((id: string, fallback: api.AppConfig, status?: api.ServerStatus | api.SessionStatus) => {
     const cached = liveProfiles.current.get(id);
     if (cached && status?.pid !== undefined && cached.pid !== status.pid) liveProfiles.current.delete(id);

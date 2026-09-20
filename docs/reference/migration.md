@@ -4,9 +4,13 @@ AioLM is installed as a separate application (`com.aiolm.desktop`). The old appl
 
 ## Project identity
 
-The canonical repository is [joowon-jang/AioLM](https://github.com/joowon-jang/AioLM). App branding uses **AioLM — All-In-One LM**; package names, command names and new data directories use `aiolm`. Installation, source and runtime-artifact links use the canonical repository.
+The canonical repository is [aiolm/AioLM](https://github.com/aiolm/AioLM). App branding uses **AioLM — All-In-One LM**; package names, command names and new data directories use `aiolm`. Installation, source and runtime-artifact links use the canonical repository.
 
-Existing checkouts can update their remote with `git remote set-url origin https://github.com/joowon-jang/AioLM.git`. A checkout's local directory name is independent of the remote; new clones can use `git clone https://github.com/joowon-jang/AioLM.git AioLM`.
+The website repository is [aiolm/AioLm-Web](https://github.com/aiolm/AioLm-Web), and the public site is [https://aiolm.vercel.app](https://aiolm.vercel.app).
+
+Benchmark publishing uses the native build-time `AIOLM_BENCHMARK_API_URL` setting. Set the app repository Actions variable to `https://aiolm.vercel.app` before the next approved release build; the release workflow passes it to native compilation. Local native builds use the same environment variable at compile time. An absent or blank value keeps publishing disabled, and existing binaries retain the origin compiled into them.
+
+Existing checkouts can update their remote with `git remote set-url origin https://github.com/aiolm/AioLM.git`. A checkout's local directory name is independent of the remote; new clones can use `git clone https://github.com/aiolm/AioLM.git AioLM`.
 
 Previous product names below are compatibility identifiers used to discover and import existing data, environment variables and exports. They are deliberately retained so upgrading does not strand earlier installations or user data.
 

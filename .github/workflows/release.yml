@@ -18,6 +18,8 @@ env:
 
 jobs:
   prepare:
+    # Hold Windows publication until installer signing and signature verification are in place.
+    if: ${{ false }}
     name: Resolve release version
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -159,6 +161,14 @@ jobs:
     # Build and test with read-only access; publication is isolated below.
     permissions:
       contents: read
+    # The benchmark service origin is compiled into the native binary, so it
+    # must be present for every cargo invocation in this job. An unset or
+    # blank repository variable keeps anonymous publishing disabled, exactly
+    # like a developer build; a configured value that is not a usable release
+    # origin fails `cargo test` below instead of shipping installers whose
+    # publishing is silently off.
+    env:
+      AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -179,6 +189,14 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
+      - name: Report benchmark sharing configuration
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AIOLM_BENCHMARK_API_URL)) {
+            Write-Warning "AIOLM_BENCHMARK_API_URL is not configured; these installers ship with anonymous benchmark publishing disabled."
+          } else {
+            Write-Host "Anonymous benchmark publishing targets $env:AIOLM_BENCHMARK_API_URL"
+          }
       - name: Build CLI resource
         run: npm run build:cli
       - name: Verify before packaging
@@ -202,8 +220,11 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:AIOLM_SMOKE)) {
             Write-Warning "Real-model smoke test was not enabled; release verification covers unit/integration tests only."
           }
+      # Runs tauri through the packaging script so the app binary is compiled
+      # with the same build-path remapping as the CLI built above; a bare
+      # `npx tauri build` would ship runner paths in its panic metadata.
       - name: Build NSIS and MSI
-        run: npx tauri build --config src-tauri/tauri-package.conf.json --bundles nsis,msi
+        run: node scripts/package-tauri.mjs
       - name: Collect release assets
         shell: pwsh
         run: |

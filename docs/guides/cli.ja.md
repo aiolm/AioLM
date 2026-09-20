@@ -2,7 +2,7 @@
 
 > **言語:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-開発中の `aiolm-cli.exe` は `.codex-target/release/aiolm-cli.exe` に生成されます。パッケージ版では Tauri リソースとして含まれるため、インストール後はアプリのリソースディレクトリにあります。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
+開発中の `aiolm-cli.exe` は `.codex-target/release/aiolm-cli.exe` に生成されます。パッケージ版では補助バイナリとして含まれるため、インストール後は `aiolm.exe` と同じインストールディレクトリにあります。出力は JSON、サーバーは loopback 専用で、認証情報は保存されません。
 
 ```powershell
 ./aiolm-cli.exe --help

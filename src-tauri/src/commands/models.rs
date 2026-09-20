@@ -19,17 +19,30 @@ pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, 
 }
 
 #[tauri::command]
-pub(crate) async fn list_models(models_dir: String) -> Result<models::ModelScan, String> {
+pub(crate) async fn list_models(
+    state: State<'_, AppState>,
+    models_dir: String,
+    scan_id: Option<String>,
+) -> Result<models::ModelScan, String> {
+    let job = scan_id.map(|id| state.model_scans.begin(id)).transpose()?;
     tokio::task::spawn_blocking(move || {
         let dir = if models_dir.trim().is_empty() {
             config::load_result()?.models_dir
         } else {
             models_dir
         };
-        models::scan(&dir)
+        match job {
+            Some(job) => models::scan_cancellable(&dir, &job.cancel),
+            None => models::scan(&dir),
+        }
     })
     .await
     .map_err(|error| format!("model scan task failed: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) fn cancel_model_scan(state: State<'_, AppState>, scan_id: String) -> Result<(), String> {
+    state.model_scans.cancel(&scan_id)
 }
 
 #[cfg(windows)]

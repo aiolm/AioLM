@@ -1,4 +1,5 @@
-import { readBoundedResponseText, trackInitialRead } from "./transport.ts";
+import { readBoundedResponseText } from "./http.ts";
+import { trackInitialRead } from "../ui/initialLayout.ts";
 import type { LocalModelInfo, ServerLoraAdapter } from "./types.ts";
 
 export const localModels = (baseUrl: string, apiKey: string) => trackInitialRead(() => readLocalModels(baseUrl, apiKey));
@@ -38,7 +39,7 @@ export async function embedText(
     signal,
   });
   if (!response.ok) throw new Error(`Embedding endpoint HTTP ${response.status}: ${(await readBoundedResponseText(response)).slice(0, 300)}`);
-  const payload = await response.json() as { data?: Array<{ embedding?: unknown }> };
+  const payload = JSON.parse(await readBoundedResponseText(response, 32 * 1024 * 1024)) as { data?: Array<{ embedding?: unknown }> };
   const vectors = (payload.data ?? []).map((entry) => entry.embedding);
   if (vectors.length !== input.length || vectors.some((vector) => !Array.isArray(vector) || vector.some((value) => typeof value !== "number" || !Number.isFinite(value)))) {
     throw new Error("Embedding endpoint returned an invalid vector payload.");

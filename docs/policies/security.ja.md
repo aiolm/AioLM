@@ -4,7 +4,7 @@
 
 ## 報告
 
-公開 issue を作成しないでください。[GitHub Security Advisories](https://github.com/joowon-jang/AioLM/security/advisories/new) を使用するか、メンテナーに非公開で連絡してください。最小の再現を含め、シークレットは `[REDACTED]` に置き換えてください。
+公開 issue を作成しないでください。[GitHub Security Advisories](https://github.com/aiolm/AioLM/security/advisories/new) を使用するか、メンテナーに非公開で連絡してください。最小の再現を含め、シークレットは `[REDACTED]` に置き換えてください。
 
 ## 対象範囲
 

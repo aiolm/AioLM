@@ -16,6 +16,7 @@ vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi
 vi.mock("../../shared/api/index", () => ({
   deviceProfile: vi.fn(), onPerformanceBenchmarkProgress: vi.fn(), runPerformanceBench: vi.fn(), benchCancel: vi.fn(),
   sessionList: vi.fn(async () => []), normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []), sessionStop: vi.fn(async () => undefined),
+  sessionSummaryList: vi.fn(async () => []),
 }));
 
 const cfg = { active_model: "C:/models/test.gguf", active_backend: "cpu", active_build: "b1", iters: 3, runtime_defaults: [] } as unknown as api.AppConfig;
@@ -48,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(useModelSettings).mockReturnValue(null);
   mocked.sessionList.mockResolvedValue([]);
+  mocked.sessionSummaryList.mockImplementation(async () => mocked.normalizeSessionList(await mocked.sessionList()));
   localStorage.clear();
   for (const task of getTaskSnapshot()) removeTask(task.id);
   store = { cfg, status: { state: "stopped" }, busy: false, updateConfig: vi.fn(), refreshStatus: vi.fn().mockResolvedValue(undefined), stop: vi.fn().mockResolvedValue(undefined) } as unknown as AppStore;

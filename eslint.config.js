@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 
 export default [
   {
-    ignores: ["dist/**", "node_modules/**", "src-tauri/**", "*.config.js", "scripts/build-cli.mjs"],
+    ignores: ["dist/**", "packages/*/dist/**", "**/node_modules/**", "src-tauri/**", "*.config.js", "scripts/build-cli.mjs"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -49,6 +49,14 @@ export default [
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+    },
+  },
+  {
+    files: ["packages/benchmark-contracts/**/*.{ts,mjs}"],
+    languageOptions: { globals: { process: "readonly", console: "readonly", URL: "readonly", TextEncoder: "readonly", Buffer: "readonly" } },
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [{ group: ["**/src/shared/**", "**/app/**", "**/features/**", "@tauri-apps/*", "react"], message: "Benchmark contracts must build independently of the desktop application." }] }],
+      "no-control-regex": "off",
     },
   },
   {

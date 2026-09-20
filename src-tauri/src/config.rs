@@ -1097,7 +1097,7 @@ fn replace_atomically(temp: &Path, target: &Path) -> Result<(), String> {
     fs::rename(temp, target).map_err(|error| error.to_string())
 }
 
-fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "config path has no parent directory".to_string())?;

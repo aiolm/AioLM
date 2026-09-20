@@ -248,6 +248,43 @@ pub struct SessionStatus {
     pub execution: Option<crate::config::execution::ExecutionSettings>,
 }
 
+/// Lightweight local status for selectors and badges. Diagnostics and execution
+/// settings are available from `SessionStatus` when a detail consumer needs them.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub name: String,
+    pub state: String,
+    pub url: Option<String>,
+    pub model: Option<String>,
+    pub mmproj: Option<String>,
+    pub draft_model: Option<String>,
+    pub pid: Option<u32>,
+    pub active_requests: u32,
+    pub idle_seconds: u64,
+}
+
+pub fn build_summary(
+    id: &str,
+    name: &str,
+    state: &mut ServerState,
+    err: &Arc<ErrBuf>,
+) -> SessionSummary {
+    server::reap_if_exited(state, err);
+    SessionSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        state: state.lifecycle.as_str().to_string(),
+        url: (!state.url.is_empty()).then(|| state.url.clone()),
+        model: (!state.model.is_empty()).then(|| state.model.clone()),
+        mmproj: (!state.mmproj.is_empty()).then(|| state.mmproj.clone()),
+        draft_model: (!state.draft_model.is_empty()).then(|| state.draft_model.clone()),
+        pid: state.child.as_ref().map(std::process::Child::id),
+        active_requests: state.active_requests,
+        idle_seconds: state.idle_seconds(),
+    }
+}
+
 /// Reap a crashed child (see `server::reap_if_exited`) and snapshot the
 /// resulting state. Shared by the default session's status view and every
 /// entry in the registry so both report crashes identically.
@@ -257,21 +294,21 @@ pub fn build_status(
     state: &mut ServerState,
     err: &Arc<ErrBuf>,
 ) -> SessionStatus {
-    server::reap_if_exited(state, err);
+    let summary = build_summary(id, name, state, err);
     let log_tail = err.tail();
     SessionStatus {
-        id: id.to_string(),
-        name: name.to_string(),
-        state: state.lifecycle.as_str().to_string(),
-        url: (!state.url.is_empty()).then(|| state.url.clone()),
-        model: (!state.model.is_empty()).then(|| state.model.clone()),
-        mmproj: (!state.mmproj.is_empty()).then(|| state.mmproj.clone()),
-        draft_model: (!state.draft_model.is_empty()).then(|| state.draft_model.clone()),
+        id: summary.id,
+        name: summary.name,
+        state: summary.state,
+        url: summary.url,
+        model: summary.model,
+        mmproj: summary.mmproj,
+        draft_model: summary.draft_model,
         api_key: (state.lifecycle == Lifecycle::Ready && !state.api_key.is_empty())
             .then(|| state.api_key.clone()),
-        pid: state.child.as_ref().map(std::process::Child::id),
-        active_requests: state.active_requests,
-        idle_seconds: state.idle_seconds(),
+        pid: summary.pid,
+        active_requests: summary.active_requests,
+        idle_seconds: summary.idle_seconds,
         log_tail: (!log_tail.trim().is_empty()).then_some(log_tail),
         error: state
             .last_error
@@ -288,6 +325,24 @@ pub fn build_status(
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn summaries_omit_diagnostics_credentials_and_execution_settings() {
+        let mut state = ServerState::new();
+        state.model = "models/synthetic.gguf".into();
+        state.api_key = "synthetic-test-key".into();
+        state.last_error = Some("synthetic diagnostic".into());
+        let err = Arc::new(ErrBuf::default());
+        let summary =
+            serde_json::to_value(build_summary("test", "Test", &mut state, &err)).unwrap();
+        assert_eq!(summary["model"], "models/synthetic.gguf");
+        for field in ["api_key", "log_tail", "error", "execution"] {
+            assert!(summary.get(field).is_none(), "summary must omit {field}");
+        }
+        let detail = build_status("test", "Test", &mut state, &err);
+        assert_eq!(summary["state"], detail.state);
+        assert_eq!(summary["active_requests"], detail.active_requests);
+    }
 
     #[test]
     fn registry_creates_reuses_and_forgets_entries_independently() {

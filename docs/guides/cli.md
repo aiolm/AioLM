@@ -2,7 +2,7 @@
 
 > **Language:** [English](cli.md) | [한국어](cli.ko.md) | [日本語](cli.ja.md) | [中文](cli.zh.md)
 
-During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli.exe`. Packaged builds include it as a Tauri resource; locate the installed copy in the app's resource directory. Output is JSON, the server is loopback-only, and credentials are not persisted.
+During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli.exe`. Packaged builds ship it as an auxiliary binary next to `aiolm.exe`; locate the installed copy in the app's install directory. Output is JSON, the server is loopback-only, and credentials are not persisted.
 
 ```powershell
 ./aiolm-cli.exe --help

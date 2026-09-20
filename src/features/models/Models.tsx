@@ -16,7 +16,8 @@ import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
 import { executionText } from '../../shared/i18n/executionI18n';
 import { forgetExecution } from './modelExecutionState';
-import { SESSION_STATUS_CHANGED_EVENT } from '../../shared/runtime/sessionUtils';
+import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
+import { startModelScan } from '../../shared/runtime/modelScan';
 
 
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
@@ -41,28 +42,18 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [pendingConfirm, setPendingConfirm] = useState<{ title: string; description: string; confirmLabel: string; onConfirm: () => void } | null>(null);
   const scanTimer = useRef<number | null>(null);
   const scanGeneration = useRef(0);
+  const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
   const requestedScanDirRef = useRef("");
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
 
-  useEffect(() => {
-    if (!active || focus !== 'library' || !api.isNativeRuntimeAvailable()) return;
-    let disposed = false;
-    let generation = 0;
-    const refresh = async () => {
-      const request = ++generation;
-      try {
-        const result = await api.sessionList();
-        if (!disposed && request === generation) setSessions(api.normalizeSessionList(result));
-      } catch { /* Keep the last known session state until the next status update. */ }
-    };
-    void refresh();
-    const onChange = () => { void refresh(); };
-    window.addEventListener(SESSION_STATUS_CHANGED_EVENT, onChange);
-    const timer = window.setInterval(onChange, 3000);
-    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener(SESSION_STATUS_CHANGED_EVENT, onChange); };
-  }, [active, focus]);
+  useSessionPolling({
+    active: active && focus === 'library' && api.isNativeRuntimeAvailable(),
+    onData: setSessions,
+  });
 
   const scan = useCallback(async () => {
+    pendingScan.current?.cancel();
+    pendingScan.current = null;
     const generation = nextScanGeneration(scanGeneration.current);
     scanGeneration.current = generation;
     if (!dir.trim()) {
@@ -75,7 +66,9 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     setScanning(true);
     setScanError(null);
     try {
-      const result = await api.listModels(dir);
+      const job = startModelScan(dir);
+      pendingScan.current = job;
+      const result = await job.result;
       if (!isCurrentScan(generation, scanGeneration.current)) return;
       setModels(result.models);
       onModels?.(result.models);
@@ -84,16 +77,30 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       if (!isCurrentScan(generation, scanGeneration.current)) return;
       setScanError(error instanceof Error ? error.message : String(error));
     } finally {
-      if (isCurrentScan(generation, scanGeneration.current)) setScanning(false);
+      if (isCurrentScan(generation, scanGeneration.current)) {
+        pendingScan.current = null;
+        setScanning(false);
+      }
     }
   }, [dir, t, onModels]);
 
-  const cancelScan = () => {
+  const cancelScan = useCallback(() => {
     scanGeneration.current = nextScanGeneration(scanGeneration.current);
     if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
+    pendingScan.current?.cancel();
+    pendingScan.current = null;
     setScanning(false);
     setScanError(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!active) cancelScan();
+    return () => {
+      scanGeneration.current = nextScanGeneration(scanGeneration.current);
+      pendingScan.current?.cancel();
+      pendingScan.current = null;
+    };
+  }, [active, cancelScan]);
 
   useEffect(() => {
     const refresh = () => setScanRequest(value => value + 1);
@@ -110,13 +117,13 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   }, [cfg?.models_dir, dir]);
 
   useEffect(() => {
-    if (scanRequest <= 0) return;
+    if (!active || scanRequest <= 0) return;
     if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
     scanTimer.current = window.setTimeout(() => void scan(), 0);
     return () => {
       if (scanTimer.current !== null) window.clearTimeout(scanTimer.current);
     };
-  }, [scanRequest, scan]);
+  }, [active, scanRequest, scan]);
 
   const normalizedQuery = modelQuery.trim().toLowerCase();
   const visible = (models ?? []).filter((model) => {
@@ -272,14 +279,13 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       setPendingConfirm(null);
       try {
         await api.deleteModel(model.path, model.shards?.files);
-        invalidateModelCatalog();
         forgetExecution(model.path);
         if (cfg?.active_model === model.path) await store.updateConfig({ active_model: '' });
         notify(t("ui.deletedModelNamed", { name: model.name }));
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        await scan();
+        invalidateModelCatalog();
       }
     };
     if (!shouldConfirmDestructive()) { void remove(); return; }
