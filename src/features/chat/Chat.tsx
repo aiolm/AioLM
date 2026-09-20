@@ -7,7 +7,7 @@ import type { AppPreferences } from "../../shared/config/preferences";
 import { useI18n } from "../../shared/i18n/i18n";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
-import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useChatThreads } from "./useChatThreads";
 import { useChatAttachments } from "./useChatAttachments";
@@ -93,7 +93,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   const requireIdle = () => {
     if (phase === "idle" && !pendingToolCall) return true;
-    setError("Stop the current response before switching conversations.");
+    setError("Stop the current response first.");
     return false;
   };
 
@@ -104,7 +104,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   };
 
   const {
-    workspace, setWorkspace, activeThread, msgs, setMsgs,
+    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread,
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
@@ -196,7 +196,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
 
   const displayModel = normalizeDisplayPath(model);
-  const headerSubtitle = model ? modelDisplayName(model) : t("chat.newConversation");
   const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
@@ -247,7 +246,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         threadPanelOpen={threadPanelOpen}
         setThreadPanelOpen={setThreadPanelOpen}
         activeThread={activeThread}
-        headerSubtitle={headerSubtitle}
         activeProjectName={activeProjectName}
         phase={phase}
         targetBusy={pendingToolCall !== null || startingSession}
@@ -259,8 +257,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         ]}
         selectedSessionId={selectedSessionId}
         onSelectSession={(id) => { if (requireIdle()) setSelectedSessionId(id); }}
-        onOpenModelSettings={(!disabled || msgs.length > 0) && (modelSettings || onOpenModels) ? openModelSettings : undefined}
-        modelSettingsLabel={modelSettingsCopy[locale].title}
         ct={ct}
       />
 
@@ -287,8 +283,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             status={selectedStatus}
             model={model}
             serverOn={serverOn}
-            msgs={msgs}
-            streamingDraft={streamingDraft}
+            msgs={viewMessages}
+            streamingDraft={viewingLiveThread ? streamingDraft : null}
             phase={phase}
             copiedIndex={copied}
             compactMessages={preferences?.chat.compactMessages ?? false}
@@ -334,7 +330,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             canSend={canSend}
             model={model}
             displayModel={displayModel}
-            msgsLength={msgs.length}
+            msgsLength={viewMessages.length}
             ct={ct}
           />
         </div>

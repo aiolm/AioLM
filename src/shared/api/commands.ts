@@ -3,9 +3,10 @@ import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transp
 import type {
   AppConfig, DeviceReport,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
-  LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelScanResult,
+  LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelMetadata, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus,
+  VerificationRecord,
   PerformanceBenchmarkRequest, PerformanceBenchmarkResult, PerformanceBenchmarkProgress,
 } from "./types.ts";
 
@@ -37,6 +38,11 @@ export const mcpCallTool = (id: string, name: string, argumentsValue: Record<str
 
 export const startServer = (cfg: AppConfig) => invoke<string>("start_server", { cfg });
 export const preflightLaunch = (cfg: AppConfig) => invoke<AppConfig>('preflight_launch', { cfg });
+/** Accept one blocked GPU placement, using the key printed in its refusal. */
+export const allowVerificationOverride = (key: string) => invoke<void>('allow_verification_override', { key });
+export const verifyModelDeeply = (cfg: AppConfig) => invoke<VerificationRecord>('verify_model_deeply', { cfg });
+/** Ask a deep verification in flight to stop between passes. */
+export const verifyCancel = () => invoke<void>('verify_cancel');
 export const applyRequestSettings = (cfg: AppConfig, sessionId = 'default') => invoke<NonNullable<ServerStatus['execution']>>('apply_request_settings', { cfg, sessionId });
 export const stopServer = () => invoke<void>("stop_server");
 export const unloadModel = () => invoke<void>("unload_model");
@@ -61,6 +67,9 @@ export function normalizeSessionList(value: SessionStatus[] | SessionListResult)
 }
 
 export const deviceProfile = () => invoke<DeviceReport>("device_profile");
+export const modelMetadata = (path: string) =>
+  invoke<ModelMetadata>("model_metadata", { path });
+
 export const rtList = () => invoke<InstalledRuntime[]>("rt_list");
 export const rtLatest = (backend: string, refresh = false) => invoke<LatestInfo>("rt_latest", { backend, refresh });
 export const rtInstall = (backend: string, build: string) =>
@@ -80,8 +89,6 @@ export const rtImport = () => invoke<InstalledRuntime>("rt_import");
 export const rtCancel = () => invoke<void>("rt_cancel");
 export const rtUninstall = (backend: string, build: string) =>
   invoke<void>("rt_uninstall", { backend, build });
-export const rtSelect = (backend: string, build: string) =>
-  invoke<AppConfig>("rt_select", { backend, build });
 export const rtProbe = (backend = "", build = "") => invoke<RuntimeCapabilities>("rt_probe", { backend, build });
 
 export function onRuntimeProgress(

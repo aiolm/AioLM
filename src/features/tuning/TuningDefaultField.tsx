@@ -19,12 +19,15 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
   const { t, locale } = useI18n();
   if (!context) return <>{children}<TuningOptionMetadata fieldKey={fieldKey} /></>;
   const inherited = request ? !hasChatOverride(context.cfg, fieldKey) : usesRuntimeDefault(context.cfg, fieldKey);
+  const value = request
+    ? (context.cfg.chat_options as Record<string, unknown> | undefined)?.[fieldKey]
+    : (context.cfg as unknown as Record<string, unknown>)[fieldKey];
   return (
     <div className="tuning-default-field" data-default-field={fieldKey}>
       <div className="tuning-default-field__content">
       {children}
       </div>
-      <TuningOptionMetadata fieldKey={fieldKey} inherited={inherited}>
+      <TuningOptionMetadata fieldKey={fieldKey} inherited={inherited} value={value}>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={context.disabled}
           aria-label={t("ui.runtimeDefaultResetField", { label })} onClick={() => context.reset(fieldKey)}>{settingMetadataCopy[locale].reset}</button>
       </TuningOptionMetadata>

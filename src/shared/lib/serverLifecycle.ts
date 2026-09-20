@@ -63,3 +63,14 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
 export function createErrorId(now = Date.now()): string {
   return `LB-${now.toString(36).toUpperCase()}`;
 }
+
+/**
+ * The override key a refused launch printed, if this failure is one.
+ *
+ * The correctness gate names a key in its refusal so a user who knows the
+ * placement is fine can accept it. The key is only recoverable from that text,
+ * and without somewhere to enter it the refusal is a dead end.
+ */
+export function verificationOverrideKey(text: string | null | undefined): string | null {
+  return /verification override key ([0-9a-f]{64})/i.exec(text ?? "")?.[1] ?? null;
+}

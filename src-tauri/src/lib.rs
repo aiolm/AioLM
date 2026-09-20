@@ -5,6 +5,7 @@ mod commands;
 pub mod config;
 mod discover;
 mod gateway;
+pub mod gguf;
 pub mod gpu;
 pub mod hardware;
 mod mcp;
@@ -17,6 +18,7 @@ pub mod server;
 pub mod session;
 mod state;
 pub mod tuning_defaults;
+pub mod verify;
 
 pub use commands::launch::validate_launch_config;
 pub use commands::models::deletable_model_path;
@@ -47,6 +49,7 @@ pub fn run() {
             commands::config::get_config,
             commands::config::save_config,
             commands::models::list_models,
+            commands::models::model_metadata,
             commands::models::delete_model,
             commands::models::pick_models_dir,
             commands::models::pick_lora_adapter,
@@ -67,6 +70,9 @@ pub fn run() {
             commands::documents::read_image_data,
             commands::server::start_server,
             commands::launch::preflight_launch,
+            commands::launch::verify_model_deeply,
+            commands::launch::verify_cancel,
+            commands::launch::allow_verification_override,
             commands::server::stop_server,
             commands::server::unload_model,
             commands::sessions::session_list,
@@ -91,7 +97,6 @@ pub fn run() {
             commands::runtimes::rt_cancel,
             commands::runtimes::rt_uninstall,
             commands::runtimes::device_profile,
-            commands::runtimes::rt_select,
             commands::runtimes::rt_probe
         ])
         .build(tauri::generate_context!())

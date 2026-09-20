@@ -994,9 +994,16 @@ mod tests {
         let total = body.len() as u64;
         let (response, server) = download_response(body.clone(), body.len(), false).await;
         let (root, part) = download_staging_fixture();
-        let received = receive_download(response, &part, total, None, &AtomicBool::new(false), |_, _, _| {})
-            .await
-            .expect("size-checked download succeeds without LFS digest");
+        let received = receive_download(
+            response,
+            &part,
+            total,
+            None,
+            &AtomicBool::new(false),
+            |_, _, _| {},
+        )
+        .await
+        .expect("size-checked download succeeds without LFS digest");
         assert_eq!(received, total);
         assert_eq!(fs::read(&part).expect("read size-checked download"), body);
         server.await.expect("download server finished");

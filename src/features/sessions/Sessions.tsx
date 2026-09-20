@@ -425,7 +425,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   });
 
   return (
-    <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4 p-4 pb-8" data-testid="sessions-panel">
+    <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4" data-testid="sessions-panel">
       <header className="flex flex-wrap items-center justify-end gap-3">
         <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button>
       </header>
@@ -454,7 +454,10 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                 </button>
                 <span className={`session-state session-state--${rowState}`}><StableLabel value={statusCopy(rowState, t)} labels={(["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => statusCopy(state, t))} /></span>
                 <div className="session-entry-actions">
-                  <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings || controlsDisabled || rowState === "starting" || rowState === "stopping"} onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
+                  {/* Opening settings only reads; the apply itself is what has to
+                      wait for a transition, and it says so. Disabling the button
+                      here left no way to look at a session while it loaded or stopped. */}
+                  <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings} onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
                   {(loadingId === definition.id || rowState === "starting") && rowState !== "stopping"
                     ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
                     : rowState === "running"

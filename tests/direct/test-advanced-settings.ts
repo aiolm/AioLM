@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { buildChatRequestBody } from "../../src/shared/api/index.ts";
 import { QWEN38_CHAT_OPTIONS, QWEN38_DEFAULTS, QWEN38_SERVER_ARGS } from "../../src/shared/config/qwenDefaults.ts";
-import { parseChatOptions, parseServerArgs } from "../../src/shared/config/tuningValidation.ts";
+import { assertUnmanagedServerArgs, parseChatOptions } from "../../src/shared/config/tuningValidation.ts";
 
 assert.equal(QWEN38_DEFAULTS.ctx_size, 131072);
 assert.equal(QWEN38_DEFAULTS.batch_size, 1024);
@@ -26,14 +26,14 @@ assert.deepEqual(QWEN38_CHAT_OPTIONS.chat_template_kwargs, {
 });
 
 assert.deepEqual(
-  parseServerArgs("\n--min-p\n0.05\n--chat-template\nqwen\n"),
+  assertUnmanagedServerArgs(["--min-p", "0.05", "--chat-template", "qwen"]),
   ["--min-p", "0.05", "--chat-template", "qwen"],
 );
-assert.throws(() => parseServerArgs("--host\n0.0.0.0"), /app-managed/);
-assert.throws(() => parseServerArgs("--api-key=secret"), /app-managed/);
-assert.throws(() => parseServerArgs("--no-api-key"), /app-managed/);
-assert.throws(() => parseServerArgs("--mmproj\nprojector.gguf"), /app-managed/);
-assert.throws(() => parseServerArgs("-mm\nprojector.gguf"), /app-managed/);
+assert.throws(() => assertUnmanagedServerArgs(["--host", "0.0.0.0"]), /app-managed/);
+assert.throws(() => assertUnmanagedServerArgs(["--api-key=secret"]), /app-managed/);
+assert.throws(() => assertUnmanagedServerArgs(["--no-api-key"]), /app-managed/);
+assert.throws(() => assertUnmanagedServerArgs(["--mmproj", "projector.gguf"]), /app-managed/);
+assert.throws(() => assertUnmanagedServerArgs(["-mm", "projector.gguf"]), /app-managed/);
 for (const flag of [
   "--n-gpu-layers",
   "-ngl",
@@ -53,7 +53,7 @@ for (const flag of [
   "--reasoning-preserve",
   "--no-reasoning-preserve",
 ]) {
-  assert.throws(() => parseServerArgs(`${flag}\nvalue`), /app-managed/);
+  assert.throws(() => assertUnmanagedServerArgs([flag, "value"]), /app-managed/);
 }
 
 assert.deepEqual(parseChatOptions('{"min_p":0.05,"dry_sequence_breakers":["\\n",":"]}'), {

@@ -175,6 +175,9 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     lock.current = true; setBusy(true);
     let persisted: api.AppConfig | undefined;
     let application = profile.application;
+    // Set once the launch has been issued and left to finish on its own, so the
+    // shared cleanup below does not cancel the state that tracks it.
+    let handedOff = false;
     try {
       const current = latest.current.getConfig();
       if (!current) throw new Error(copy.loading);
@@ -224,10 +227,15 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         return structuredClone(result);
       }
       const id = target.kind === 'session' ? target.sessionId : 'default';
-      if (latest.current.busy || getTaskSnapshot().some(task => ['runtime', 'benchmark'].includes(task.kind) && ['running', 'cancelling'].includes(task.state))) throw new Error(copy.busy);
       const list = api.normalizeSessionList(await api.sessionList());
       const status = id === 'default' ? await api.serverStatus() : list.find(item => item.id === id);
-      if (status && ['starting', 'stopping'].includes(status.state)) throw new Error(copy.busy);
+      // Only a launch has to wait for the server to settle: two overlapping
+      // transitions race over the same process. Saving is configuration on
+      // disk, so it stays available while a model loads into VRAM or shuts
+      // down — which is the whole point of not blocking those windows.
+      if (intent === 'start' && (latest.current.busy
+        || (status && ['starting', 'stopping'].includes(status.state))
+        || getTaskSnapshot().some(task => ['runtime', 'benchmark'].includes(task.kind) && ['running', 'cancelling'].includes(task.state)))) throw new Error(copy.busy);
       const existing = target.kind === 'session' ? current.sessions?.find(item => item.id === id) : undefined;
       const definition = existing ?? editor.request.definition;
       if (target.kind === 'session' && (!definition || (editor.existingSession && !existing))) throw new Error(copy.missing);
@@ -281,9 +289,18 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       rebase(result);
       if (intent === 'start') {
         setLaunching(true);
-        if (target.kind === 'session') await api.sessionStart(id, saved, saved.stop_existing_sessions_on_load);
-        else await latest.current.start(saved, status?.state === 'running');
+        handedOff = true;
         liveProfiles.current.set(id, { model: saved.active_model, application: structuredClone(application) });
+        // Reading a model into VRAM takes minutes. Awaiting it here held a modal
+        // dialog over the whole app and kept the lock that gates reopening it, so
+        // nothing could be touched until the load finished. The launch is handed
+        // off instead; the status badge, the header's stop button and the task
+        // strip already report it, and the store records a default-target failure
+        // as its own banner rather than one this dialog has to still be open for.
+        void (target.kind === 'session'
+          ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load).catch(cause => setError(String(cause)))
+          : latest.current.start(saved, status?.state === 'running').catch(() => undefined))
+          .finally(() => { setLaunching(false); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
       } else if (requestOnly) {
         await api.applyRequestSettings(saved, id);
         liveProfiles.current.set(id, { model: saved.active_model, pid: status?.pid, application: structuredClone(application) });
@@ -295,7 +312,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     } catch (cause) {
       if (persisted) throw new SettingsDeliveryError(String(cause), persisted, application);
       throw cause;
-    } finally { lock.current = false; setBusy(false); setLaunching(false); }
+    } finally { lock.current = false; setBusy(false); if (!handedOff) setLaunching(false); }
   };
   const apply = async (draft: api.AppConfig, intent: 'save' | 'start', profile: ProfileEditorResult) => {
     await persist(draft, intent, { ...profile, saveMode: editor?.request.target.kind === 'benchmark' ? 'benchmark' : 'all' }, true);
@@ -312,6 +329,10 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     && (sessions.some(session => session.id !== id && ['running', 'starting', 'stopping'].includes(session.state))
       || (target.kind === 'session' && ['running', 'starting', 'stopping'].includes(store.status.state)));
   const targetLabel = target ? `${copy[target.kind]}${target.kind === 'session' ? `: ${store.cfg?.sessions?.find(item => item.id === id)?.name || id}` : ''}` : '';
+  // Stopping this target, whether it is still loading or already serving. The
+  // dialog offers it in place of a launch while the model is up, so there is
+  // somewhere to stop from without closing the settings first.
+  const stopTarget = () => { void (id === 'default' ? latest.current.stop() : api.sessionStop(id)).catch(cause => setError(String(cause))); };
   return <Context.Provider value={{ open, suspended, resume: () => setSuspended(false), getRequestConfig, getRequestProfile }}>
     {children}
     {error && <FeedbackBanner tone="error" onDismiss={() => setError('')}>{normalizeDisplayText(error)}</FeedbackBanner>}
@@ -323,7 +344,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         ? assignedTarget(editor.initial, { model: editor.initial.active_model, settings: profileSettingsSnapshot(editor.initial), system_prompt: editor.request.systemPrompt ?? '' }).application : appliedProfile(editor.initial, id))}
       liveApplication={liveApplication}
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
-      onCancelStart={launching ? () => { void (id === 'default' ? latest.current.stop() : api.sessionStop(id)).catch(cause => setError(String(cause))); } : undefined}
+      onCancelStart={launching ? stopTarget : undefined} onStop={stopTarget}
       onManageRuntimes={() => { setSuspended(true); window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES)); }} /></Suspense>}
   </Context.Provider>;
 }

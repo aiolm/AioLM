@@ -656,13 +656,13 @@ mod tests {
         }
         let other = state.sessions.get_or_create("other", "Other").unwrap();
         other.state.lock().unwrap().lifecycle = server::Lifecycle::Ready;
-        let result = prepare_launch(
-            &state,
-            config::AppConfig::default(),
-            true,
-            &Arc::new(AtomicBool::new(false)),
-        )
-        .await;
+        let replacement = config::AppConfig {
+            active_backend: "cpu".into(),
+            active_build: "b123".into(),
+            ..config::AppConfig::default()
+        };
+        let result =
+            prepare_launch(&state, replacement, true, &Arc::new(AtomicBool::new(false))).await;
         assert!(result.err().unwrap().contains("select a GGUF model"));
         let current = state.server.lock().unwrap();
         assert_eq!(current.lifecycle, server::Lifecycle::Ready);

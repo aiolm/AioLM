@@ -2,13 +2,21 @@ import { normalizeDisplayText } from "../lib/displayPaths";
 import StableLabel from "./StableLabel";
 import { useState } from "react";
 import { useI18n } from "../i18n/i18n";
-import { updateTask, useTasks, type AppTask } from "../state/taskRegistry";
+import { dismissTask, updateTask, useTasks, type AppTask } from "../state/taskRegistry";
 import { useLocalTaskCancellationIds } from "./TaskCancellation";
+import { formatBytes, formatSpeedBps } from "../lib/transfer";
 
 function hasPanelCancellation(task: AppTask): boolean {
   return (task.kind === "runtime" && task.id === "runtime-operation")
     || (task.kind === "benchmark" && task.id === "performance-benchmark-active")
     || (task.kind === "other" && /^session-load-.+/.test(task.id));
+}
+
+/** Transfer detail for a task that reports bytes: "1.2 GB / 4.0 GB · 88 MB/s". */
+export function transferLabel(task: AppTask): string | null {
+  if (task.received === undefined || !task.total || task.total <= 0) return null;
+  const moved = `${formatBytes(task.received)} / ${formatBytes(task.total)}`;
+  return task.speedBps ? `${moved} · ${formatSpeedBps(task.speedBps)}` : moved;
 }
 
 function statusLabel(task: AppTask, t: ReturnType<typeof useI18n>["t"]): string {
@@ -52,14 +60,17 @@ export default function TaskStrip() {
             ? Math.min(100, Math.max(0, task.received / task.total * 100))
             : undefined;
           const activeTask = task.state === "running" || task.state === "cancelling";
+          const transfer = transferLabel(task);
           return (
             <div key={task.id} className={`app-task-strip__item app-task-strip__item--${task.state}`} data-task-id={task.id}>
               <div className="app-task-strip__copy">
                 <span className="app-task-strip__label">{normalizeDisplayText(task.label)}</span>
                 <span className="app-task-strip__status">{normalizeDisplayText(statusLabel(task, t))}{task.detail ? ` · ${normalizeDisplayText(task.detail)}` : ""}</span>
+                {activeTask && transfer && <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`}>{transfer}</span>}
               </div>
               {progress !== undefined && <div className="app-task-strip__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} aria-label={normalizeDisplayText(task.label)}><span style={{ width: `${progress}%` }} /></div>}
               {activeTask && task.cancel && !(hasPanelCancellation(task) && localTaskIds.has(task.id)) && <button type="button" className="app-task-strip__cancel" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
+              {!activeTask && <button type="button" className="app-task-strip__cancel" aria-label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(task.label)}`} onClick={() => dismissTask(task.id)}>{t("ui.taskDismiss")}</button>}
             </div>
           );
         })}

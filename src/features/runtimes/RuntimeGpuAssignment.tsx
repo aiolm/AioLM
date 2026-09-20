@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
-import { cloneGpuPlacement, gpuDeviceLabel, gpuTensorSplitDrafts, parseGpuTensorSplits, toggleGpuSelection, missingGpuIds } from "../../shared/runtime/sessionUtils";
+import { cloneGpuPlacement, gpuDeviceLabel, gpuTensorSplitDrafts, parseGpuTensorSplits, resolvedGpuPlacement, toggleGpuSelection, missingGpuIds } from "../../shared/runtime/sessionUtils";
 import { useEditorDraft } from '../../shared/state/draftGuard';
 
 interface Props {
@@ -12,19 +12,22 @@ interface Props {
   device: api.DeviceReport | null;
   placement: api.GpuPlacement;
   disabled: boolean;
+  /** The selected runtime has not reported its device list yet. Until it does,
+   * an id missing from `device` says nothing about whether that device exists. */
+  devicesPending?: boolean;
   onChange: (placement: api.GpuPlacement) => Promise<void>;
 }
 
-export default function RuntimeGpuAssignment({ t, device, placement, disabled, onChange }: Props) {
+export default function RuntimeGpuAssignment({ t, device, placement, disabled, devicesPending = false, onChange }: Props) {
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState(() => cloneGpuPlacement(placement));
+  const [draft, setDraft] = useState(() => resolvedGpuPlacement(cloneGpuPlacement(placement)));
   const [splitDrafts, setSplitDrafts] = useState(() => gpuTensorSplitDrafts(placement));
   const [customSplit, setCustomSplit] = useState(placement.tensor_split.length > 0);
   const gpus = (device?.profile.gpus ?? []).filter(
     (gpu): gpu is typeof gpu & { stable_id: string } => Boolean(gpu.stable_id),
   );
   const selected = draft.gpu_ids;
-  const placementKey = JSON.stringify(placement);
+  const placementKey = JSON.stringify(resolvedGpuPlacement(placement));
   const [baselineKey, setBaselineKey] = useState(placementKey);
   const previousPlacementKey = useRef(placementKey);
   const baseline = JSON.parse(baselineKey) as api.GpuPlacement;
@@ -43,7 +46,7 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
     if (dirty) { setConflict(true); return; }
     const saved = JSON.parse(placementKey) as api.GpuPlacement;
     setBaselineKey(placementKey);
-    setDraft(cloneGpuPlacement(saved));
+    setDraft(resolvedGpuPlacement(cloneGpuPlacement(saved)));
     setSplitDrafts(gpuTensorSplitDrafts(saved));
     setCustomSplit(saved.tensor_split.length > 0);
     setError(null);
@@ -68,17 +71,17 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
     }
   };
   useEditorDraft({ dirty, save, discard: () => {
-    setBaselineKey(placementKey); setDraft(cloneGpuPlacement(placement));
+    setBaselineKey(placementKey); setDraft(resolvedGpuPlacement(cloneGpuPlacement(placement)));
     setSplitDrafts(gpuTensorSplitDrafts(placement)); setCustomSplit(placement.tensor_split.length > 0); setConflict(false); setError(null);
   } });
 
   const toggle = (stableId: string) => {
-    setDraft((current) => toggleGpuSelection(current, stableId, gpus));
+    setDraft((current) => resolvedGpuPlacement(toggleGpuSelection(current, stableId, gpus)));
     setSplitDrafts((current) => stableId in current ? current : { ...current, [stableId]: "1" });
   };
 
   return (
-    <section className="mb-4 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="gpu-assignment-heading">
+    <section className="mb-4 app-card"  aria-labelledby="gpu-assignment-heading">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 id="gpu-assignment-heading" className="app-section-title">{t("ui.gpuAssignment")}</h2>
@@ -88,9 +91,12 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
       </div>
       {error && <div className="mt-3 rounded-lg border px-3 py-2 text-sm ui-border-color-error-border ui-background-error-bg ui-color-error-ink"  role="alert">{normalizeDisplayText(error)}</div>}
       {conflict && <div className="mt-3 text-sm" role="status">{t("ui.gpuExternalChange")}</div>}
-      {missingGpuIds(draft, gpus).length > 0 && <p className="mt-3 text-sm" role="status">{t("ui.gpuMissingWarning")}</p>}
+      {/* Only an actual device list is evidence. While a freshly selected runtime
+          is still being probed the list is empty, and warning then told everyone
+          switching backends that their GPUs had vanished. */}
+      {gpus.length > 0 && missingGpuIds(draft, gpus).length > 0 && <p className="mt-3 text-sm" role="status">{t("ui.gpuMissingWarning")}</p>}
       <TuningOptionMetadata fieldKey="raw-server:--device" />
-      {gpus.length === 0 ? <p className="mt-3 text-sm ui-color-faint" >{t("ui.gpuNoDetected")}</p> : (
+      {gpus.length === 0 ? <p className="mt-3 text-sm ui-color-faint" >{t(devicesPending ? "ui.gpuDevicesPending" : "ui.gpuNoDetected")}</p> : (
         <div className="mt-3 grid gap-2 app-form-grid">
           {gpus.map((gpu, index) => (
             <label key={gpu.stable_id} className={["flex cursor-pointer items-start gap-3 rounded-lg border p-3", (selected.includes(gpu.stable_id) ? "ui-border-color-accent" : "ui-border-color-border")].filter(Boolean).join(" ")} >
@@ -106,15 +112,15 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
       <div className="mt-4 grid gap-3 app-form-grid">
         <label className="text-sm ui-color-muted" >{t("ui.gpuMain")}
           <TuningOptionMetadata fieldKey="raw-server:--main-gpu" />
-          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuMain")} value={draft.main_gpu ?? ""} disabled={disabled || selected.length === 0} onChange={value => setDraft((current) => ({ ...current, main_gpu: value || null }))} options={[{ value: "", label: t("ui.gpuAny") }, ...gpus.filter(gpu => selected.includes(gpu.stable_id)).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, gpus.indexOf(gpu)) }))]} />
+          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuMain")} value={draft.main_gpu ?? ""} disabled={disabled || selected.length === 0} onChange={value => setDraft((current) => ({ ...current, main_gpu: value }))} options={[...gpus.filter(gpu => selected.includes(gpu.stable_id)).map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, gpus.indexOf(gpu)) }))]} />
         </label>
         <label className="text-sm ui-color-muted" >{t("ui.gpuDraft")}
           <TuningOptionMetadata fieldKey="spec_draft_device" />
-          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuDraft")} value={draft.draft_gpu_id ?? ""} disabled={disabled} onChange={value => setDraft((current) => ({ ...current, draft_gpu_id: value || null }))} options={[{ value: "", label: t("ui.gpuAny") }, ...gpus.map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, gpus.indexOf(gpu)) }))]} />
+          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuDraft")} value={draft.draft_gpu_id ?? ""} disabled={disabled || gpus.length === 0} onChange={value => setDraft((current) => ({ ...current, draft_gpu_id: value || null }))} options={[{ value: "", label: t("ui.gpuAny") }, ...gpus.map(gpu => ({ value: gpu.stable_id ?? "", label: gpuDeviceLabel(gpu, gpus.indexOf(gpu)) }))]} />
         </label>
         <label className="text-sm ui-color-muted" >{t("ui.gpuSplitMode")}
           <TuningOptionMetadata fieldKey="raw-server:--split-mode" />
-          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuSplitMode")} value={draft.split_mode} disabled={disabled} onChange={value => setDraft((current) => ({ ...current, split_mode: value as api.SplitMode }))} options={[{ value: "none", label: t("ui.gpuAny") }, { value: "single", label: t("ui.gpuSplitNone") }, { value: "layer", label: t("ui.gpuSplitLayer") }, { value: "row", label: t("ui.gpuSplitRow") }, { value: "tensor", label: "Tensor (experimental)" }]} />
+          <CustomSelect className="mt-1 w-full" ariaLabel={t("ui.gpuSplitMode")} value={draft.split_mode} disabled={disabled} onChange={value => setDraft((current) => ({ ...current, split_mode: value as api.SplitMode }))} options={[{ value: "single", label: t("ui.gpuSplitNone") }, { value: "layer", label: t("ui.gpuSplitLayer") }, { value: "row", label: t("ui.gpuSplitRow") }, { value: "tensor", label: "Tensor (experimental)" }]} />
         </label>
         <fieldset className="min-w-0 text-sm" disabled={disabled || selected.length < 2}>
           <legend className="ui-color-muted" >{t("ui.gpuTensorSplit")}</legend>
@@ -129,7 +135,10 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, o
           {customSplit && <span className="mt-1 block text-xs ui-color-faint" >{t("ui.gpuTensorSplitHint")}</span>}
         </fieldset>
       </div>
-      <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => { setDraft(cloneGpuPlacement(undefined)); setSplitDrafts({}); setCustomSplit(false); }}>{t('ui.gpuAny')}</button><button type="button" className="app-button app-button--primary" disabled={disabled || !dirty} onClick={() => void save()}>{t("panel.save")}</button></div>
+      {/* No "clear to automatic" action: selecting a runtime now fills the
+          placement with the devices that runtime reports, so there is always an
+          explicit selection to edit rather than an empty one to interpret. */}
+      <div className="mt-4 flex flex-wrap justify-end gap-2"><button type="button" className="app-button app-button--primary" disabled={disabled || !dirty} onClick={() => void save()}>{t("panel.save")}</button></div>
     </section>
   );
 }

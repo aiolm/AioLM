@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
 import type { ViewId } from '../../shared/types/navigation';
-import { getOptionOccurrences, managedServerOption, serverOptionMatches, SERVER_OPTIONS_SOURCE, type OptionOccurrence, type ServerOption } from '../../shared/config/serverOptions';
+import { getOptionOccurrences, managedServerOption, serverOptionChoices, serverOptionMatches, SERVER_OPTIONS_SOURCE, type OptionOccurrence, type ServerOption } from '../../shared/config/serverOptions';
 import { serverOptionsText } from '../../shared/i18n/serverOptionsI18n';
 import { TUNING_FIELD_CATALOG, type TuningCategoryId } from './tuningFields';
 import type { useServerOptions } from './useServerOptions';
@@ -14,7 +14,6 @@ import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { serverOptionDescription } from '../../shared/i18n/serverOptionDescriptions';
 
 const MEMORY_OPTIONS = new Set(['--mmap', '--mlock', '--direct-io', '--load-mode', '--lazy-mode', '--numa', '--kv-offload', '--op-offload', '--repack', '--fit', '--fit-target', '--fit-ctx', '--cache-ram', '--swa-full']);
-const LOAD_CHOICES = ['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio'];
 const ACTION_OPTIONS = new Set(['--help', '--version', '--cache-list', '--completion-bash', '--list-devices']);
 const DESTINATIONS: Record<string, ViewId> = { '--model': 'models', '--mmproj': 'models', '--lora': 'lora', '--device': 'runtimes', '--main-gpu': 'runtimes', '--split-mode': 'runtimes', '--tensor-split': 'runtimes', '--port': 'api', '--host': 'api', '--api-key': 'api' };
 
@@ -40,7 +39,7 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options,
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState('');
-  const choices = option.id === '--load-mode' ? LOAD_CHOICES : option.choices;
+  const choices = serverOptionChoices(option);
   const scalar = defaultScalar(serverDefault(option, options).value);
   const pathArgument = /\b(?:FNAME|FILE|PATH|DIR)\b/.test(option.signature);
   const absent = typeof scalar === 'string' && !choices.includes(scalar)
@@ -76,7 +75,7 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options,
       {Array.from({ length: option.arity }, (_, argumentIndex) => <label key={argumentIndex}>
         <span>{copy.argument} {option.arity > 1 ? argumentIndex + 1 : ''}</span>
         <input className="app-input" aria-label={`${option.id} ${copy.argument} ${index + 1}.${argumentIndex + 1}`} aria-describedby={descriptionId} list={choices.length ? `choices-${option.id}` : undefined}
-          placeholder={normalizeDisplayText(option.signature)} value={normalizeDisplayText(item.values[argumentIndex] ?? '')} disabled={disabled || busy} spellCheck={false}
+          placeholder={normalizeDisplayText(option.argument.split(/\s+/)[argumentIndex] ?? option.argument)} value={normalizeDisplayText(item.values[argumentIndex] ?? '')} disabled={disabled || busy} spellCheck={false}
           onChange={event => { const values = [...item.values]; values[argumentIndex] = choices.find(value => normalizeDisplayText(value) === event.target.value) ?? event.target.value; update(index, { ...item, values }); }} />
       </label>)}
       {!inherited && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled || busy} aria-label={`${option.id} ${copy.remove} ${index + 1}`}

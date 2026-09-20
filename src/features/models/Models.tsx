@@ -292,7 +292,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   };
 
   return (
-    <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col p-4 pb-8${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
+    <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
       {focus === "lora" && <div className="mb-4"><div className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">{t("panel.models")}</div><h2 className="mt-1 text-xl font-semibold tracking-tight text-ink">{t("panel.loraAdapters")}</h2><p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">{t("ui.loraDescription")}</p></div>}
 
       {/* Rendered outside the library-only fragment so LoRA actions report too. */}
@@ -328,7 +328,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       </div>
       </div>
 
-      {!compact && serverRunning && <div className="mt-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
+      {!compact && serverRunning && <div className="mt-4 app-card" >
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
@@ -361,10 +361,10 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
       </>}
 
-      {focus !== "library" && <section className="mt-3.5 rounded-xl border p-4 ui-border-color-border ui-background-panel"  aria-labelledby="lora-heading">
+      {focus !== "library" && <section className="mt-4 app-card"  aria-labelledby="lora-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 id="lora-heading" className="text-sm font-semibold ui-color-ink" >{t("panel.loraAdapters")}</h2>
+            <h2 id="lora-heading" className="app-section-title">{t("panel.loraAdapters")}</h2>
             <p className="mt-1 text-xs ui-color-muted" >{t("ui.loraSectionHint")}</p>
             <TuningOptionMetadata fieldKey="raw-server:--lora" />
             <TuningOptionMetadata fieldKey="raw-server:--lora-scaled" />
@@ -421,16 +421,13 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 type="button"
                 aria-label={onSelectModel ? `${copy.setupAction}: ${displayName}` : t("ui.selectModelNamed", { name: displayName })}
                 title={normalizeDisplayPath(model.path)}
-                disabled={incomplete || store.busy}
-                aria-disabled={serverRunning && !onSelectModel ? "true" : undefined}
-                onClick={() => {
-                  if (serverRunning && !onSelectModel) {
-                    notify(t("ui.useRowAction"));
-                    return;
-                  }
-                  void selectModel(model);
-                }}
-                className={`models-model-name min-w-0 flex-1 rounded-lg px-3 py-2 text-left ${serverRunning && !onSelectModel ? "cursor-default opacity-80" : ""} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]`}
+                // Opening a card only reads: it hands the model to the settings
+                // dialog, which is where starting and stopping are decided. Gating
+                // it on the server made every card dead for the length of a VRAM
+                // load, while the header opened the same dialog throughout.
+                disabled={incomplete}
+                onClick={() => void selectModel(model)}
+                className="models-model-name min-w-0 flex-1 rounded-lg px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"
 
               >
                 <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{displayName}</span>

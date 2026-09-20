@@ -49,7 +49,10 @@ function ProfileManager({ store, modelPath, onOpenTuning, cfg, compact }: Props 
   }
   const server = profiles.server.find((item) => item.id === serverId) ?? profiles.server[0];
   const model = profiles.model.find((item) => item.id === modelId) ?? profiles.model[0];
-  const disabled = store.busy || applying || store.status.state === "starting" || store.status.state === "stopping";
+  // Editing a profile only writes configuration for the next load, so it stays
+  // available while a model is being read into VRAM or shut down. Anything that
+  // touches a live server keeps its own `isServerBusy` guard below.
+  const disabled = applying;
 
   const refresh = () => setProfiles(loadProfiles(cfg, modelPath));
   const select = (kind: Kind, id: string) => {

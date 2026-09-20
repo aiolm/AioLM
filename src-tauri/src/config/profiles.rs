@@ -785,10 +785,129 @@ pub fn prepare_config_update(
     Ok(prepared)
 }
 
+/// Does this settings snapshot name the runtime that is being removed?
+fn names_runtime(settings: &Map<String, Value>, backend: &str, build: &str) -> bool {
+    settings.get("active_backend").and_then(Value::as_str) == Some(backend)
+        && settings.get("active_build").and_then(Value::as_str) == Some(build)
+}
+
+fn clear_runtime(settings: &mut Map<String, Value>) {
+    settings.insert("active_backend".into(), Value::String(String::new()));
+    settings.insert("active_build".into(), Value::String(String::new()));
+}
+
+/// Forget a runtime that is no longer installed.
+///
+/// Which runtime a model launches with is carried by its profile, so removing a
+/// build has to reach the profiles that name it: one left pointing at a deleted
+/// directory looks complete in settings and fails at launch. The runtime is
+/// cleared rather than repointed at a surviving build, because which one should
+/// replace it is a choice, and guessing it would quietly change how a saved
+/// model runs.
+///
+/// Returns whether anything referred to the runtime.
+pub fn forget_runtime(cfg: &mut AppConfig, backend: &str, build: &str) -> bool {
+    let mut changed = false;
+    if cfg.active_backend == backend && cfg.active_build == build {
+        cfg.active_backend.clear();
+        cfg.active_build.clear();
+        changed = true;
+    }
+    for definition in &mut cfg.sessions {
+        if let Some(settings) = definition.execution.as_mut() {
+            if names_runtime(settings, backend, build) {
+                clear_runtime(settings);
+                changed = true;
+            }
+        }
+    }
+    if let Some(library) = cfg.settings_profiles.as_mut() {
+        let mut library_changed = false;
+        for entry in &mut library.entries {
+            if names_runtime(&entry.settings, backend, build) {
+                clear_runtime(&mut entry.settings);
+                entry.revision = entry.revision.saturating_add(1);
+                library_changed = true;
+            }
+        }
+        for application in library.applied.values_mut() {
+            if names_runtime(&application.settings, backend, build) {
+                clear_runtime(&mut application.settings);
+                library_changed = true;
+            }
+        }
+        if library_changed {
+            library.revision = library.revision.saturating_add(1);
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn uninstalling_a_runtime_clears_it_from_every_profile_that_named_it() {
+        // Which build a model runs on lives in its profile. Left behind, it looks
+        // settled in the editor and fails at launch against a deleted directory.
+        let mut cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            active_build: "b11035".into(),
+            ..AppConfig::default()
+        };
+        let mut library = library();
+        for key in ["active_backend", "active_build"] {
+            let value = if key == "active_backend" {
+                "vulkan"
+            } else {
+                "b11035"
+            };
+            library.entries[0].settings.insert(key.into(), json!(value));
+            library
+                .applied
+                .get_mut("model:models/sample.gguf")
+                .unwrap()
+                .settings
+                .insert(key.into(), json!(value));
+        }
+        let kept = library.entries[1].settings.clone();
+        let revision = library.revision;
+        cfg.settings_profiles = Some(library);
+
+        assert!(forget_runtime(&mut cfg, "vulkan", "b11035"));
+
+        assert_eq!(cfg.active_backend, "");
+        assert_eq!(cfg.active_build, "");
+        let library = cfg.settings_profiles.as_ref().unwrap();
+        assert_eq!(library.entries[0].settings["active_backend"], json!(""));
+        assert_eq!(library.entries[0].settings["active_build"], json!(""));
+        assert_eq!(
+            library.applied["model:models/sample.gguf"].settings["active_backend"],
+            json!("")
+        );
+        // A profile that named a different build is left exactly as it was.
+        assert_eq!(library.entries[1].settings, kept);
+        assert!(library.revision > revision);
+    }
+
+    #[test]
+    fn removing_an_unused_runtime_leaves_the_configuration_untouched() {
+        let mut cfg = AppConfig {
+            active_backend: "rocm".into(),
+            active_build: "b11029".into(),
+            settings_profiles: Some(library()),
+            ..AppConfig::default()
+        };
+        let before = cfg.clone();
+
+        assert!(!forget_runtime(&mut cfg, "vulkan", "b11035"));
+
+        assert_eq!(cfg.active_backend, before.active_backend);
+        assert_eq!(cfg.settings_profiles, before.settings_profiles);
+    }
 
     fn library() -> SettingsProfileLibrary {
         let mut library: SettingsProfileLibrary = serde_json::from_value(json!({

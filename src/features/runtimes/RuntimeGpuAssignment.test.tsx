@@ -45,13 +45,52 @@ describe("RuntimeGpuAssignment", () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ ...pathPlacement, tensor_split: [2, 1] }));
   });
 
-  it('can clear a previous GPU assignment when the selected runtime has no devices', async () => {
+  it('offers no clear-to-automatic action, because selecting a runtime fills the placement', () => {
     const onChange = vi.fn().mockResolvedValue(undefined);
     render(<RuntimeGpuAssignment t={t} device={{ ...device, profile: { ...device.profile, gpus: [] } }} placement={placement} disabled={false} onChange={onChange} />);
-    fireEvent.click(screen.getByRole('button', { name: 'ui.gpuAny' }));
-    expect(onChange).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'panel.save' }));
-    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ gpu_ids: [], main_gpu: null, draft_gpu_id: null, split_mode: 'none', tensor_split: [] }));
+    // An empty selection used to mean "let the backend decide", which this app
+    // refuses for indistinguishable cards; the runtime switch now populates it
+    // instead, so the panel only ever edits an explicit list.
+    expect(screen.queryByRole('button', { name: 'ui.gpuAny' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'panel.save' })).toBeInTheDocument();
+  });
+  it("stays quiet about missing devices while the selected runtime is still being probed", () => {
+    // Switching backends re-probes, and until the answer arrives there is no
+    // device list at all. Treating that gap as evidence told every user who
+    // picked a different runtime that their saved GPUs had disappeared.
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<RuntimeGpuAssignment t={t} device={{ ...device, profile: { ...device.profile, gpus: [] } }} placement={placement} disabled devicesPending onChange={onChange} />);
+    expect(screen.queryByText("ui.gpuMissingWarning")).not.toBeInTheDocument();
+    expect(screen.getByText("ui.gpuDevicesPending")).toBeInTheDocument();
+  });
+
+  it("still reports a saved device the runtime does list nothing for", () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<RuntimeGpuAssignment t={t} device={device} placement={{ ...placement, gpu_ids: ["gpu-a", "gpu-gone"], tensor_split: [] }} disabled={false} onChange={onChange} />);
+    expect(screen.getByText("ui.gpuMissingWarning")).toBeInTheDocument();
+  });
+
+  it("names a main GPU and a split mode instead of offering an automatic choice", async () => {
+    // Both fields now always say what will happen; the values they fall back to
+    // are llama.cpp's own defaults, so a legacy placement launches unchanged.
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<RuntimeGpuAssignment t={t} device={device} placement={{ ...placement, main_gpu: null, split_mode: "none" }} disabled={false} onChange={onChange} />);
+
+    expect(screen.getByRole("combobox", { name: "ui.gpuMain" })).toHaveTextContent("gpu-a");
+    expect(screen.getByRole("combobox", { name: "ui.gpuSplitMode" })).toHaveTextContent("ui.gpuSplitLayer");
+    expect(screen.getByRole("button", { name: "panel.save" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "ui.gpuSplitMode" }));
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(4));
+    expect(screen.queryByRole("option", { name: "ui.gpuAny" })).not.toBeInTheDocument();
+  });
+
+  it("disables device-linked selectors when no GPU is detected", () => {
+    const onChange = vi.fn().mockResolvedValue(undefined);
+    render(<RuntimeGpuAssignment t={t} device={{ ...device, profile: { ...device.profile, gpus: [] } }} placement={{ ...placement, gpu_ids: [] }} disabled={false} onChange={onChange} />);
+    expect(screen.getByRole("combobox", { name: "ui.gpuMain" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "ui.gpuDraft" })).toBeDisabled();
   });
   it("preserves unsaved ratios when another panel saves the placement", () => {
     const onChange = vi.fn().mockResolvedValue(undefined);

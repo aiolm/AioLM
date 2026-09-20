@@ -27,7 +27,7 @@ export default function RuntimePullRequestCard({
   serverRunning, rows, activePrProgress, onReview,
 }: Props) {
   return (
-    <section className="mb-4 rounded-xl border border-warning-line bg-warning-soft/20 p-4" aria-labelledby="pull-request-runtime-heading">
+    <section className="mb-4 app-card app-card--warning" aria-labelledby="pull-request-runtime-heading">
       <div>
         <h2 id="pull-request-runtime-heading" className="app-section-title">{t("ui.installPrTitle")}</h2>
         <p className="app-section-hint break-words">{t("ui.installPrHint")}</p>

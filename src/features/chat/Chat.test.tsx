@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import ChatPanel from "./Chat";
 import { I18nProvider } from "../../shared/i18n/i18n";
@@ -155,11 +155,15 @@ describe("ChatPanel unified attachments", () => {
     mocked.sessionList.mockResolvedValue([]);
   });
 
-  it("displays a grouped shard name while sending the original model identifier", async () => {
-    const name = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
-    const model = `${name}-00001-of-00033`;
+  it("sends the original model identifier for a sharded model", async () => {
+    // The heading no longer repeats the model name — the app header and the
+    // composer footer already carry it — but the request must still name the
+    // first shard exactly as the server knows it, not a grouped display name.
+    const model = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64-00001-of-00033";
     renderPanel({ ...store, cfg: { ...cfg, active_model: model }, status: { ...store.status, model } });
-    expect(await screen.findByText(name, { exact: true })).toBeVisible();
+    // Let the stored workspace finish hydrating first: it replaces the message
+    // buffer, and a send racing it would be overwritten before it renders.
+    await screen.findByRole("log", { name: "Conversation" });
     respondWithText("Ready");
     await sendMessage("Hello");
     await screen.findByText("Ready", { exact: true });
@@ -301,27 +305,27 @@ describe("ChatPanel document context warning", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("keeps one settings action when a ready conversation gains messages and its server stops", async () => {
+  it("keeps a conversation and offers no settings action of its own once its server stops", async () => {
+    // The heading no longer carries a model-settings button — the app header
+    // opens the same editor — so the only one the panel raises is the blocked
+    // view's, and that view is for an empty conversation with nowhere to type.
     const open = vi.fn();
     vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
     mocked.sessionList.mockResolvedValue([]);
     const view = renderPanel();
     await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" } }));
+    expect(screen.queryByRole("button", { name: "Model & settings" })).not.toBeInTheDocument();
 
     respondWithText("Conversation retained");
     await sendMessage("Hello");
     await screen.findByText("Conversation retained", { exact: true });
-    open.mockClear();
     view.rerender(createElement(I18nProvider, {
       initialLocale: "en",
       children: createElement(ChatPanel, { store: { ...store, status: { state: "stopped", model: cfg.active_model } } }),
     }));
     expect(screen.getByText("Conversation retained", { exact: true })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
-    expect(open).toHaveBeenCalledOnce();
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" } }));
+    expect(screen.queryByRole("button", { name: "Model & settings" })).not.toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("starts a stopped session with its saved settings regardless of its legacy enabled value", async () => {
@@ -376,19 +380,78 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByRole("button", { name: "Start server" })).toBeEnabled();
   });
 
-  it("opens settings for the selected session without clearing the composer or attachments", async () => {
-    const open = vi.fn();
-    vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
+  it("changes the answering session without clearing the composer or attachments", async () => {
     mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work", state: "running", port: 8091, model: "models/work.gguf", url: "http://127.0.0.1:8091", api_key: "work-key" }]);
     renderPanel();
     await attachDocument("notes.txt", SMALL_DOCUMENT);
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Keep this draft" } });
-    fireEvent.click(screen.getByLabelText("Loaded sessions"));
+    const picker = screen.getByLabelText("Loaded sessions");
+    fireEvent.click(picker);
     fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
-    fireEvent.click(screen.getByRole("button", { name: "Model & settings" }));
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "session", sessionId: "work" }, definition: expect.objectContaining({ id: "work" }) }));
+
+    expect(picker).toHaveTextContent("Work · 8091 · running");
     expect(screen.getByLabelText("Chat message")).toHaveValue("Keep this draft");
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
+  });
+
+  it("keeps one untouched conversation however often a new one is asked for", async () => {
+    // Every press used to append another identical "New conversation" row, and
+    // leaving one behind kept it in the list for good.
+    renderPanel();
+    await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
+    const list = () => within(screen.getByRole("list"));
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    for (let press = 0; press < 3; press += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+      fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    }
+    expect(list().getAllByRole("listitem")).toHaveLength(1);
+
+    // A conversation that holds something is a record worth keeping, and asking
+    // for a new one beside it is not the same as asking twice for an empty one.
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    respondWithText("Kept");
+    await sendMessage("Remember this");
+    await screen.findByText("Kept", { exact: true });
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    expect(list().getAllByRole("listitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    expect(list().getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("lets another conversation be read while a reply is still arriving, and lands the reply in the one that asked", async () => {
+    // Blocking the switch used to be the only way to keep a reply attached to
+    // its conversation. The message buffer stays pinned to the conversation that
+    // asked instead, so the view is free to move while the answer streams in.
+    const answer = "Answer for the first conversation";
+    let finish!: () => void;
+    mocked.chatStream.mockImplementationOnce(async (_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: (delta: { content?: string }) => void) => {
+      onDelta({ content: answer });
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return answer;
+    });
+    renderPanel();
+    await waitFor(() => expect(localStorage.getItem("aiolm.chat-workspace.v2")).not.toBeNull());
+    const log = () => within(screen.getByRole("log", { name: "Conversation" }));
+    await sendMessage("Question");
+    await waitFor(() => expect(log().getByText(answer)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(log().queryByText("Question")).not.toBeInTheDocument();
+    expect(log().queryByText(answer)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => { finish(); });
+    // The conversation being read stays empty; the answer belongs to the older one.
+    expect(log().queryByText(answer)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Question" }));
+    await waitFor(() => expect(log().getByText(answer)).toBeInTheDocument());
   });
 
   it("captures request settings before asynchronous preparation", async () => {

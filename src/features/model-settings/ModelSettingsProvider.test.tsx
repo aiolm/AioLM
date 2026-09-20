@@ -77,6 +77,7 @@ beforeEach(() => {
   mocks.serverStatus.mockResolvedValue({ state: 'stopped' });
   mocks.preflightLaunch.mockImplementation(async (cfg: AppConfig) => structuredClone(cfg));
   mocks.sessionStart.mockResolvedValue(undefined);
+  mocks.sessionStop.mockResolvedValue(undefined);
   mocks.applyRequestSettings.mockImplementation(async (cfg: AppConfig) => executionSettings(cfg));
 });
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); });
@@ -501,31 +502,75 @@ describe('model launch preparation', () => {
     expect(mocks.preflightLaunch).not.toHaveBeenCalled(); expect(store.start).not.toHaveBeenCalled();
   });
 
+  it('stops the default target from inside the dialog', async () => {
+    const store = createTestStore();
+    const dialog = await open(store, { target: { kind: 'default' } });
+    act(() => dialog.onStop!());
+    expect(store.stop).toHaveBeenCalledOnce();
+  });
+
+  it('stops a session target from inside the dialog', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    act(() => dialog.onStop!());
+    expect(mocks.sessionStop).toHaveBeenCalledWith('work');
+    expect(store.stop).not.toHaveBeenCalled();
+  });
+
+  it('keeps settings savable mid-transition and defers only the launch', async () => {
+    const store = createTestStore();
+    mocks.serverStatus.mockResolvedValue({ state: 'starting' });
+    const dialog = await open(store, { target: { kind: 'default' } });
+    // Two overlapping launches would race over the same process...
+    await act(async () => { await expect(apply(dialog, dialog.initialConfig, 'start')).rejects.toThrow('Wait for the current model operation'); });
+    expect(store.start).not.toHaveBeenCalled();
+    // ...but writing settings for the next load does not, and refusing that is
+    // what made the dialog useless for the length of a VRAM load.
+    await act(async () => { await apply(dialog, { ...dialog.initialConfig, temperature: 0.2 }, 'save'); });
+    expect(store.cfg?.temperature).toBe(0.2);
+  });
+
+  it('closes as soon as a launch is issued, leaving the load to finish on its own', async () => {
+    // Reading a model into VRAM takes minutes, and this dialog is modal: waiting
+    // for the load here put an unusable overlay over the whole app for that long.
+    const store = createTestStore();
+    let resolveStart = () => {};
+    vi.mocked(store.start).mockReturnValueOnce(new Promise<string>(resolve => { resolveStart = () => resolve(''); }));
+    const dialog = await open(store, { target: { kind: 'default' } });
+    await act(async () => { await apply(dialog, { ...dialog.initialConfig, active_model: 'replacement.gguf' }, 'start'); });
+    expect(store.start).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument());
+    await act(async () => { resolveStart(); });
+  });
+
   it('retains a successful save if starting the selected model fails', async () => {
     const store = createTestStore();
     vi.mocked(store.start).mockRejectedValueOnce(new Error('runtime failed'));
     const dialog = await open(store, { target: { kind: 'default' } });
-    await act(async () => { await expect(apply(dialog, { ...dialog.initialConfig, active_model: 'replacement.gguf' }, 'start')).rejects.toThrow('runtime failed'); });
+    // The launch is reported by the store's own status and error banner, so the
+    // failure no longer has to keep a dialog open to be seen.
+    await act(async () => { await apply(dialog, { ...dialog.initialConfig, active_model: 'replacement.gguf' }, 'start'); });
     expect(store.cfg?.active_model).toBe('replacement.gguf');
-    expect(mocks.dialog).not.toBeNull();
     expect(store.stop).not.toHaveBeenCalled();
   });
 
-  it('retries a failed post-save launch from the committed profile revision without duplicate profiles', async () => {
+  it('retries a failed launch from the committed profile revision without duplicate profiles', async () => {
     const store = createTestStore();
     vi.mocked(store.start).mockRejectedValueOnce(new Error('runtime failed'));
     const dialog = await open(store, { target: { kind: 'default' } });
     const draft = { ...dialog.initialConfig, active_model: 'replacement.gguf', ctx_size: 8192 };
-    let failure: unknown;
-    await act(async () => { try { await apply(dialog, draft, 'start', 'profile-new'); } catch (cause) { failure = cause; } });
-    expect(failure).toBeInstanceOf(SettingsDeliveryError);
-    const saved = failure as SettingsDeliveryError;
-    expect(saved.saved.settings_profiles?.revision).toBe(2);
-    expect(saved.application.system_prompt).toBe('New prompt');
-    const edit: ProfileEditorResult = { baseRevision: saved.saved.settings_profiles!.revision, library: structuredClone(saved.saved.settings_profiles!), application: saved.application };
-    await act(async () => { await mocks.dialog!.onApply(saved.saved, 'start', edit); });
+    await act(async () => { await apply(dialog, draft, 'start', 'profile-new'); });
+    expect(store.cfg?.settings_profiles?.revision).toBe(2);
+    await waitFor(() => expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument());
+
+    // Reopening reads the library the first attempt committed, so the retry edits
+    // that profile instead of saving a second copy of it.
+    act(() => context.open({ target: { kind: 'default' } }));
+    await waitFor(() => expect(screen.getByTestId('settings-dialog')).toBeInTheDocument());
+    const reopened = mocks.dialog!;
+    expect(reopened.initialApplication?.system_prompt).toBe('New prompt');
+    await act(async () => { await apply(reopened, reopened.initialConfig, 'start', 'profile-new'); });
     expect(store.start).toHaveBeenCalledTimes(2);
-    expect(store.cfg?.settings_profiles?.revision).toBe(3);
     expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('replacement.gguf')].system_prompt).toBe('New prompt');
     expect(store.stop).not.toHaveBeenCalled();

@@ -1,51 +1,21 @@
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
 import type { ProfileApplication } from "../../shared/config/settingsProfiles";
+import type { ExecutionKey, ExecutionSettings } from "../../shared/config/executionSettings";
 
 export const PROJECTS_KEY = "aiolm.projects.v1";
 export const ACTIVE_PROJECT_KEY = "aiolm.active-project.v1";
 export const PROJECTS_CHANGED_EVENT = "aiolm-projects-changed";
 
-export type ProjectConfigKey =
-  | "active_model"
-  | "active_backend"
-  | "active_build"
-  | "mmproj"
-  | "ctx_size"
-  | "batch_size"
-  | "ubatch_size"
-  | "keep"
-  | "cache_type_k"
-  | "cache_type_v"
-  | "ngl"
-  | "threads"
-  | "parallel"
-  | "request_timeout_seconds"
-  | "sleep_idle_seconds"
-  | "flash_attn"
-  | "n_cpu_moe"
-  | "temperature"
-  | "top_p"
-  | "top_k"
-  | "spec_type"
-  | "spec_draft_n_max"
-  | "spec_draft_n_min"
-  | "spec_draft_p_min"
-  | "spec_draft_p_split"
-  | "spec_draft_ngl"
-  | "spec_draft_device"
-  | "spec_draft_model"
-  | "reasoning"
-  | "reasoning_format"
-  | "reasoning_effort"
-  | "reasoning_budget"
-  | "reasoning_budget_message"
-  | "reasoning_preserve"
-  | "server_args"
-  | "chat_options"
-  | "lora_adapters";
+export const MAX_PROJECTS = 100;
+export const MAX_PROJECT_TOOLS = 128;
+export const MAX_PROJECT_DOCUMENTS = 16;
+export const MAX_PROJECT_RUNTIME_DEFAULTS = 128;
 
-export type ProjectConfig = Pick<AppConfig, ProjectConfigKey | "runtime_defaults" | "gpu">;
+/** Project snapshots always cover exactly the execution settings. Keep derived so a new EXECUTION_KEYS entry cannot be missed. */
+export type ProjectConfigKey = ExecutionKey;
+
+export type ProjectConfig = ExecutionSettings;
 
 export interface ProjectDocument {
   name: string;
@@ -82,15 +52,34 @@ function numberValue(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const next = Math.trunc(numberValue(value, fallback));
+  if (!Number.isFinite(next)) return fallback;
+  return Math.min(max, Math.max(min, next));
+}
+
+function clampFloat(value: unknown, fallback: number, min: number, max: number): number {
+  const next = numberValue(value, fallback);
+  return Math.min(max, Math.max(min, next));
+}
+
+function safeClone<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+}
+
 const PROJECT_CACHE_TYPES = new Set(["f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1"]);
 
-function boolArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, 128) : [];
+function stringList(value: unknown, limit: number): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, limit) : [];
 }
 
 function jsonObject(value: unknown): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return structuredClone(value) as JsonObject;
+  return safeClone(value) as JsonObject;
 }
 
 function loraAdapters(value: unknown): LoraAdapterConfig[] {
@@ -108,46 +97,46 @@ function loraAdapters(value: unknown): LoraAdapterConfig[] {
 
 function normalizeConfig(value: unknown): ProjectConfig {
   const source = value && typeof value === "object" ? value as Partial<ProjectConfig> : {};
-  const batch_size = Math.min(131072, Math.max(1, Math.trunc(numberValue(source.batch_size, 2048))));
-  const ubatch_size = Math.min(batch_size, Math.max(1, Math.trunc(numberValue(source.ubatch_size, 512))));
-  const keep = Math.min(131072, Math.max(0, Math.trunc(numberValue(source.keep, 0))));
+  const batch_size = clampInt(source.batch_size, 2048, 1, 131072);
+  const ubatch_size = Math.min(batch_size, clampInt(source.ubatch_size, 512, 1, 131072));
+  const keep = clampInt(source.keep, 0, 0, 131072);
   const cache_type_k = typeof source.cache_type_k === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_k) ? source.cache_type_k : "f16";
   const cache_type_v = typeof source.cache_type_v === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_v) ? source.cache_type_v : "f16";
   return {
-    runtime_defaults: boolArray(source.runtime_defaults),
-    ...(source.gpu ? { gpu: structuredClone(source.gpu) } : {}),
+    runtime_defaults: stringList(source.runtime_defaults, MAX_PROJECT_RUNTIME_DEFAULTS),
+    ...(source.gpu ? { gpu: safeClone(source.gpu) } : {}),
     active_model: stringValue(source.active_model),
     active_backend: stringValue(source.active_backend),
     active_build: stringValue(source.active_build),
     mmproj: stringValue(source.mmproj),
-    ctx_size: numberValue(source.ctx_size, 4096),
+    ctx_size: clampInt(source.ctx_size, 4096, 1, 1_048_576),
     batch_size,
     ubatch_size,
     keep,
     cache_type_k,
     cache_type_v,
-    ngl: numberValue(source.ngl, 0),
-    threads: numberValue(source.threads, 0),
-    parallel: numberValue(source.parallel, 0),
-    request_timeout_seconds: numberValue(source.request_timeout_seconds, 3600),
-    sleep_idle_seconds: numberValue(source.sleep_idle_seconds, -1),
+    ngl: clampInt(source.ngl, 0, 0, 100_000),
+    threads: clampInt(source.threads, 0, 0, 1024),
+    parallel: clampInt(source.parallel, 0, 0, 1024),
+    request_timeout_seconds: Math.max(0, numberValue(source.request_timeout_seconds, 3600)),
+    sleep_idle_seconds: Math.max(-1, numberValue(source.sleep_idle_seconds, -1)),
     flash_attn: stringValue(source.flash_attn, "auto"),
-    n_cpu_moe: numberValue(source.n_cpu_moe, 0),
+    n_cpu_moe: clampInt(source.n_cpu_moe, 0, 0, 1024),
     temperature: numberValue(source.temperature, 0.8),
-    top_p: numberValue(source.top_p, 0.95),
-    top_k: numberValue(source.top_k, 40),
+    top_p: clampFloat(source.top_p, 0.95, 0, 1),
+    top_k: clampInt(source.top_k, 40, 0, 1000),
     spec_type: stringValue(source.spec_type, "none"),
-    spec_draft_n_max: numberValue(source.spec_draft_n_max, 3),
-    spec_draft_n_min: numberValue(source.spec_draft_n_min, 0),
-    spec_draft_p_min: numberValue(source.spec_draft_p_min, 0),
-    spec_draft_p_split: numberValue(source.spec_draft_p_split, 0.1),
+    spec_draft_n_max: clampInt(source.spec_draft_n_max, 3, 0, 1024),
+    spec_draft_n_min: clampInt(source.spec_draft_n_min, 0, 0, 1024),
+    spec_draft_p_min: clampFloat(source.spec_draft_p_min, 0, 0, 1),
+    spec_draft_p_split: clampFloat(source.spec_draft_p_split, 0.1, 0, 1),
     spec_draft_ngl: stringValue(source.spec_draft_ngl, "auto"),
     spec_draft_device: stringValue(source.spec_draft_device),
     spec_draft_model: stringValue(source.spec_draft_model),
     reasoning: stringValue(source.reasoning, "auto"),
     reasoning_format: stringValue(source.reasoning_format, "auto"),
     reasoning_effort: stringValue(source.reasoning_effort, "default"),
-    reasoning_budget: numberValue(source.reasoning_budget, -1),
+    reasoning_budget: clampInt(source.reasoning_budget, -1, -1, 1_048_576),
     reasoning_budget_message: stringValue(source.reasoning_budget_message),
     reasoning_preserve: stringValue(source.reasoning_preserve, "auto"),
     server_args: Array.isArray(source.server_args) ? source.server_args.filter((item): item is string => typeof item === "string").slice(0, 512) : [],
@@ -172,12 +161,12 @@ function normalizeProject(value: unknown): ProjectPreset | null {
       model, profile_id: application.profile_id.trim().slice(0, 256),
       ...(typeof application.profile_name === 'string' ? { profile_name: application.profile_name.slice(0, 120) } : {}),
       ...(Number.isSafeInteger(application.profile_revision) && application.profile_revision! >= 0 ? { profile_revision: application.profile_revision } : {}),
-      settings: structuredClone(settings), system_prompt: systemPrompt,
+      settings: safeClone(settings), system_prompt: systemPrompt,
     } : undefined;
   const documents = Array.isArray(source.documentBindings)
     ? source.documentBindings
       .filter((item): item is ProjectDocument => !!item && typeof item === "object" && typeof (item as ProjectDocument).name === "string" && typeof (item as ProjectDocument).path === "string")
-      .slice(0, 16)
+      .slice(0, MAX_PROJECT_DOCUMENTS)
       .map((item) => ({ name: item.name.slice(0, 256), path: item.path.slice(0, 32_768) }))
     : [];
   return {
@@ -188,7 +177,7 @@ function normalizeProject(value: unknown): ProjectPreset | null {
     config,
     ...(profileApplication ? { profileApplication } : {}),
     documentBindings: documents,
-    toolIds: boolArray(source.toolIds),
+    toolIds: stringList(source.toolIds, MAX_PROJECT_TOOLS),
     createdAt: numberValue(source.createdAt, now),
     updatedAt: numberValue(source.updatedAt, now),
   };
@@ -196,19 +185,30 @@ function normalizeProject(value: unknown): ProjectPreset | null {
 
 export function readProjects(store: Storage | null = storage()): ProjectPreset[] {
   if (!store) return [];
+  let value: unknown;
   try {
-    const value = JSON.parse(store.getItem(PROJECTS_KEY) ?? "[]");
-    if (!Array.isArray(value)) return [];
-    return value.map(normalizeProject).filter((item): item is ProjectPreset => item !== null).slice(0, 100);
+    value = JSON.parse(store.getItem(PROJECTS_KEY) ?? "[]");
   } catch {
     return [];
   }
+  if (!Array.isArray(value)) return [];
+  const projects: ProjectPreset[] = [];
+  for (const item of value) {
+    try {
+      const project = normalizeProject(item);
+      if (project) projects.push(project);
+    } catch {
+      continue;
+    }
+    if (projects.length >= MAX_PROJECTS) break;
+  }
+  return projects;
 }
 
 export function writeProjects(projects: ProjectPreset[], store: Storage | null = storage()): void {
   if (!store) return;
   try {
-    store.setItem(PROJECTS_KEY, JSON.stringify(projects.slice(0, 100)));
+    store.setItem(PROJECTS_KEY, JSON.stringify(projects.slice(0, MAX_PROJECTS)));
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
   } catch {
     // Storage quota or restricted WebView must not break the chat client.
@@ -262,19 +262,32 @@ export function upsertProject(project: ProjectPreset, projects = readProjects())
   const normalized = normalizeProject(project);
   if (!normalized) throw new Error("Invalid project preset.");
   const byId = projects.filter((item) => item.id !== normalized.id && item.name.toLocaleLowerCase() !== normalized.name.toLocaleLowerCase());
-  return [normalized, ...byId].slice(0, 100);
+  return [normalized, ...byId].slice(0, MAX_PROJECTS);
 }
 
 export function deleteProject(id: string, projects = readProjects()): ProjectPreset[] {
   return projects.filter((project) => project.id !== id);
 }
 
+const SENSITIVE_NAME_PARTS = new Set([
+  "api-key", "apikey", "api_key", "authorization", "auth", "connection-string",
+  "connection_string", "credential", "credentials", "password", "private-key",
+  "private_key", "privatekey", "secret", "secrets", "token", "tokens",
+]);
+
 function sensitiveExportName(name: string): boolean {
-  return /api[_-]?key|authorization|connection[_-]?string|credential|password|private[_-]?key|secret|token/i.test(name);
+  const normalized = name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+  const parts = normalized.split(/[^a-z0-9]+/).filter(Boolean);
+  return parts.some((part) => SENSITIVE_NAME_PARTS.has(part))
+    || /(api[_-]?key|private[_-]?key|connection[_-]?string)/i.test(normalized);
 }
 
 function sensitiveExportFlag(value: string): boolean {
-  return /^--(?:api-key|authorization|password|private-key|secret|token)(?:=|$)/i.test(value);
+  return /^--?(?:[a-z0-9_.-]*[_-])?(api-key|api_key|apikey|authorization|password|private-key|private_key|secret|token)(?:=|$)/i.test(value);
+}
+
+function isFlagLike(value: string): boolean {
+  return /^-/.test(value);
 }
 
 function redactExportValue(value: unknown, key = ""): unknown {
@@ -284,6 +297,7 @@ function redactExportValue(value: unknown, key = ""): unknown {
     return value.map((item) => {
       if (redactNext) {
         redactNext = false;
+        if (typeof item === "string" && isFlagLike(item)) return item;
         return "[REDACTED]";
       }
       if (typeof item === "string") {
@@ -317,5 +331,5 @@ export function importProject(raw: string): ProjectPreset {
 }
 
 export function projectConfigPatch(project: ProjectPreset): Partial<AppConfig> {
-  return structuredClone(project.config);
+  return safeClone(project.config);
 }

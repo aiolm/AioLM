@@ -38,6 +38,21 @@ export function sessionPort(status: Pick<SessionStatus, "port" | "url"> | null |
   return match ? Number(match[1]) : fallback;
 }
 
+/** The placement as the editors show it, with no "automatic" left to render.
+ *
+ * The main-GPU and split-mode pickers no longer offer an empty choice, so both
+ * fields must name something concrete once devices are selected. The values
+ * chosen here are llama.cpp's own defaults — `--main-gpu` indexes the selected
+ * `--device` list, so the first selected device is index 0, and `layer` is the
+ * default split — which is why a placement saved in the legacy form launches
+ * identically. Storage keeps whatever it holds until an edit is saved. */
+export function resolvedGpuPlacement(placement: GpuPlacement): GpuPlacement {
+  const main = placement.gpu_ids.length === 0 ? null
+    : placement.main_gpu && placement.gpu_ids.includes(placement.main_gpu) ? placement.main_gpu : placement.gpu_ids[0];
+  const split = placement.split_mode === "none" ? "layer" : placement.split_mode;
+  return placement.main_gpu === main && placement.split_mode === split ? placement : { ...placement, main_gpu: main, split_mode: split };
+}
+
 export function missingGpuIds(placement: GpuPlacement | null | undefined, devices: GpuDevice[]): string[] {
   const ids = new Set(devices.map((device) => device.stable_id).filter((id): id is string => Boolean(id)));
   return [...new Set([...(placement?.gpu_ids ?? []), placement?.main_gpu, placement?.draft_gpu_id].filter((id): id is string => Boolean(id)))].filter((id) => !ids.has(id));

@@ -38,7 +38,7 @@
  .discover-columns > section { min-height: 160px; max-height: 400px; }
 }
 @container workspace (max-width: 599px) {
- .chat-conversation-heading { grid-template-columns: minmax(0,1fr); grid-template-rows: auto auto; }
+ .chat-conversation-heading { gap: 8px; }
 }
 @container workspace (max-width: 719px) {
  .chat-layout { min-height: 240px; }

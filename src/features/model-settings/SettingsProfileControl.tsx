@@ -3,6 +3,7 @@ import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
+import { valueRenderer } from './SettingsChangeList';
 import './settings-profile.css';
 
 export interface ProfileViewItem {
@@ -60,13 +61,7 @@ const settingGroups = [
 function SettingsValues({ settings, prompt }: { settings: Partial<ExecutionSettings>; prompt?: string }) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
-  const renderValue = (value: unknown): string => {
-    if (value == null || value === '') return copy.empty;
-    if (typeof value === 'boolean') return value ? copy.on : copy.off;
-    if (Array.isArray(value)) return value.length ? value.map(renderValue).join(', ') : copy.empty;
-    if (typeof value === 'object') return Object.entries(value).map(([key, child]) => `${profileFieldLabel(key, locale)}: ${renderValue(child)}`).join(' · ') || copy.empty;
-    return String(value);
-  };
+  const renderValue = valueRenderer(locale);
   const keys = new Set([...Object.keys(settings), ...(settings.runtime_defaults ?? [])]);
   const entries: [string, unknown][] = [...keys].filter(key => key !== 'active_model' && key !== 'runtime_defaults' && key !== 'chat_options').map(key => [key, settings[key as keyof ExecutionSettings]]);
   const rendered = new Set(settingGroups.flatMap(group => [...group.keys]) as string[]);

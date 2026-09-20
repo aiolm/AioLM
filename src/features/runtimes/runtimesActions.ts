@@ -9,7 +9,10 @@ import type { BackendRow } from "./runtimesHelpers";
 const RUNTIME_TASK_ID = "runtime-operation";
 
 function beginRuntimeTask(label: string, phase: string, cancel = api.rtCancel): string {
-  return registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: false, cancel });
+  // The download, extraction and build all run in the backend and keep emitting
+  // progress whichever panel is on screen, so leaving this page costs nothing.
+  // The task strip is where it stays visible.
+  return registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: true, cancel });
 }
 
 interface CommonDeps {
@@ -60,22 +63,6 @@ export async function runInstall(
 }
 
 /** Makes an already-installed build active. */
-export async function runSelect(backend: string, build: string, runtimeBusy: boolean, deps: CommonDeps, loadConfig: () => Promise<void>): Promise<void> {
-  deps.setFailure(null);
-  if (runtimeBusy) return;
-  if (deps.serverRunning) {
-    deps.flashT(translate(deps.locale, "ui.stopBeforeSelect"));
-    return;
-  }
-  try {
-    await api.rtSelect(backend, build);
-    await loadConfig();
-    deps.flashT(translate(deps.locale, "ui.activeRuntimeNow", { backend, build }));
-  } catch (error) {
-    deps.setFailure(`${translate(deps.locale, "ui.selectFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
 /** Exports one installed build as a portable archive. */
 export async function runExportRuntime(
   backend: string,

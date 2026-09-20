@@ -18,6 +18,7 @@ import RuntimeBackendList from "./RuntimeBackendList";
 import PullRequestProvenance from "./RuntimePullRequestProvenance";
 import RuntimeGpuAssignment from "./RuntimeGpuAssignment";
 import { runtimeGpuDevices } from "../../shared/runtime/sessionUtils";
+import { useDeepVerification } from "./useDeepVerification";
 import { parseRuntimeHelp, SERVER_OPTIONS } from '../../shared/config/serverOptions';
 import { TuningOptionsContext } from '../tuning/TuningOptionMetadata';
 
@@ -36,9 +37,10 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
+  const deepVerify = useDeepVerification(store, locale);
 
   return (
-    <div className="app-page-scroll relative flex h-full min-h-0 flex-col p-4">
+    <div className="app-page-scroll relative flex h-full min-h-0 flex-col">
       <p className="mb-4 break-words text-sm text-muted">{t("ui.runtimesIntro")}</p>
 
       <RuntimeDeviceCard
@@ -77,7 +79,6 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
         onBlockedAction={(msg) => rt.setFailure(msg)}
         onCancelInstall={() => void rt.cancelInstall()}
         onInstall={(backend) => void rt.install(backend)}
-        onSelect={(backend, build) => void rt.select(backend, build)}
         onUninstall={(backend, build) => void rt.uninstall(backend, build)}
       />
 
@@ -88,6 +89,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
           device={assignmentDevice}
           placement={store.cfg.gpu ?? { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null }}
           disabled={rt.serverRunning || rt.runtimeBusy || rt.probeBusy || (managedRuntime && !runtimeChoices.length)}
+          devicesPending={managedRuntime && !runtimeChoices.length}
           onChange={(gpu) => store.updateConfig({ gpu }).then(() => undefined)}
         />
         </TuningOptionsContext.Provider>
@@ -95,8 +97,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
 
       {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-button app-button--ghost app-button--sm">{t("ui.executionProfiles")}</button></p>}
 
-      <details className="runtime-advanced mb-4 rounded-xl border p-4 ui-border-color-border ui-background-panel" >
-        <summary className="cursor-pointer text-sm font-semibold ui-color-ink" >{t("settings.advanced")}</summary>
+      <details className="runtime-advanced mb-4 app-card" >
+        <summary className="app-section-title cursor-pointer">{t("settings.advanced")}</summary>
         <div className="mt-4">
           <RuntimeCapabilitiesCard
             t={t}
@@ -107,6 +109,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
             activeBackend={rt.activeBackend}
             activeBuild={rt.activeBuild}
             onProbe={() => void rt.probe()}
+            deepVerify={deepVerify}
           />
           <RuntimePullRequestCard
             t={t}

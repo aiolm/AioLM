@@ -92,7 +92,7 @@ export default function ChatThreadSidebar({
               className="chat-thread-entry min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"
               aria-current={thread.id === activeThreadId ? "true" : undefined}
             >
-              <span className="chat-thread-title app-text-wrap text-xs font-medium ui-color-ink" >{thread.title || ct("newConversation")}</span>
+              <span className="chat-thread-title text-xs font-medium ui-color-ink" title={thread.title || ct("newConversation")}>{thread.title || ct("newConversation")}</span>
             </button>
               <span className="mt-0.5 block px-2.5 text-xs tabular-nums ui-color-faint" >{thread.messages.length ? `${thread.messages.length} ${ct("messages")}` : ct("empty")}</span>
             </div>

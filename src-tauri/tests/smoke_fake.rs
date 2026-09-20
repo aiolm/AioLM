@@ -11,30 +11,40 @@ use std::sync::{Arc, Mutex};
 
 use aiolm_lib::{server, AppConfig, ErrBuf};
 
-/// Copies the compiled fake-llama-server fixture into a throwaway directory
-/// under the exact file name `server::server_bin` looks up on PATH, and
-/// prepends that directory to the current process's PATH. `server::spawn`
-/// resolves the executable via `which`, so this makes it pick up the fixture
-/// without needing a managed runtime install or touching the real PATH.
-fn stage_fake_server_on_path() -> tempfile_dir::TempDir {
+/// Copies the compiled fake-llama-server fixture into a throwaway managed
+/// runtime directory (`{build}-{backend}/llama-server[.exe]` under an
+/// isolated data root) so `server::server_bin` resolves it exactly like a
+/// real AioLM-installed runtime. Only runtimes installed in AioLM are ever
+/// used, so the fixture must not rely on the removed PATH lookup.
+fn stage_fake_managed_runtime() -> tempfile_dir::TempDir {
     let fixture = env!("CARGO_BIN_EXE_fake-llama-server");
     let dir = tempfile_dir::TempDir::new();
+    let runtime_dir = dir
+        .path()
+        .join("aiolm")
+        .join("runtimes")
+        .join("local_fake-cpu");
+    std::fs::create_dir_all(&runtime_dir).expect("create fake managed runtime dir");
     let staged_name = if cfg!(windows) {
         "llama-server.exe"
     } else {
         "llama-server"
     };
-    let staged_path = dir.path().join(staged_name);
-    fs::copy(fixture, &staged_path).expect("stage fake llama-server fixture");
+    fs::copy(fixture, runtime_dir.join(staged_name)).expect("stage fake llama-server fixture");
 
-    let existing = std::env::var_os("PATH").unwrap_or_default();
-    let mut entries = vec![dir.path().to_path_buf()];
-    entries.extend(std::env::split_paths(&existing));
-    let joined = std::env::join_paths(entries).expect("join PATH entries");
-    // SAFETY: this test binary is single-threaded at the point this runs (no
-    // other test in this file spawns threads that read/write PATH), so there
-    // is no data race with the mutation edition 2024's `set_var` guards against.
-    unsafe { std::env::set_var("PATH", joined) };
+    // `runtimes_root()` derives from the platform data directory; point it at
+    // the throwaway root. This test binary is single-threaded at the point
+    // this runs (no other test in this file spawns threads that read these
+    // variables), so there is no data race with the mutation edition 2024's
+    // `set_var` guards against.
+    unsafe {
+        #[cfg(windows)]
+        std::env::set_var("APPDATA", dir.path());
+        #[cfg(all(unix, not(target_os = "macos")))]
+        std::env::set_var("XDG_DATA_HOME", dir.path());
+        #[cfg(target_os = "macos")]
+        std::env::set_var("HOME", dir.path());
+    }
     dir
 }
 
@@ -73,12 +83,14 @@ mod tempfile_dir {
 
 #[test]
 fn smoke_fake_server_spawn_health_and_chat_stream() {
-    // Serializes with any other test in this binary that also mutates the
-    // process-wide PATH env var. There is currently only this one test here.
-    let _dir = stage_fake_server_on_path();
+    // Serializes with any other test in this binary that also mutates
+    // process-wide environment. There is currently only this one test here.
+    let _dir = stage_fake_managed_runtime();
 
     let cfg = AppConfig {
         active_model: "fake-model.gguf".to_string(),
+        active_backend: "cpu".to_string(),
+        active_build: "local_fake".to_string(),
         port: 18099,
         ngl: 0,
         ctx_size: 512,

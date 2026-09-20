@@ -692,9 +692,13 @@ pub fn sweep_orphaned_work() {
     sweep_orphaned_work_in(&download_root, &runtime_root, SystemTime::now());
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 struct Rel {
     tag_name: String,
+    /// The release listing already carries every published asset, so choosing a
+    /// build that actually has one costs no extra request.
+    #[serde(default)]
+    assets: Vec<Asset>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -841,6 +845,59 @@ pub fn server_bin_for(backend: &str, build: &str) -> Result<PathBuf, String> {
 
 pub fn bench_bin_for(backend: &str, build: &str) -> Result<PathBuf, String> {
     Ok(runtime_dir(backend, build)?.join(bench_executable_name()))
+}
+
+pub fn perplexity_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "llama-perplexity.exe"
+    } else {
+        "llama-perplexity"
+    }
+}
+
+pub fn perplexity_bin_for(backend: &str, build: &str) -> Result<PathBuf, String> {
+    Ok(runtime_dir(backend, build)?.join(perplexity_executable_name()))
+}
+
+/// Run one of a managed runtime's own tools and return its combined output.
+///
+/// The correctness gate needs the same isolation the capability probe already
+/// applies — cleared environment plus only the runtime's own library paths —
+/// so it shares that path instead of spawning the tool directly.
+pub async fn run_runtime_tool(
+    binary: &Path,
+    backend: &str,
+    build: &str,
+    args: &[&str],
+    limit: Duration,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<String, String> {
+    if !binary.is_file() {
+        return Err(format!("runtime tool is missing: {}", binary.display()));
+    }
+    let environment = child_environment_for_runtime(backend, build)?;
+    let outcome =
+        run_probe_with_cancel_and_environment(binary, args, limit, cancel, &environment).await;
+    if let Some(diagnostic) = outcome.diagnostic {
+        return Err(diagnostic);
+    }
+    if !outcome.success {
+        return Err(format!(
+            "{} exited without success: {}",
+            binary.display(),
+            tail_lines(&outcome.text, 4)
+        ));
+    }
+    Ok(outcome.text)
+}
+
+/// Keep a failure message readable without losing the operative last lines.
+fn tail_lines(text: &str, count: usize) -> String {
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    lines[lines.len().saturating_sub(count)..].join(" | ")
 }
 
 /// Names every spawned child may inherit, on every platform: enough of the OS
@@ -2835,19 +2892,6 @@ fn help_supports_dflash(help: &str) -> bool {
         .any(|token| token == "draft-dflash")
 }
 
-pub fn system_server_fallback(local_app_data: &str) -> PathBuf {
-    if cfg!(windows) {
-        PathBuf::from(local_app_data)
-            .join("Microsoft")
-            .join("WinGet")
-            .join("Packages")
-            .join("ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe")
-            .join(server_executable_name())
-    } else {
-        PathBuf::from(server_executable_name())
-    }
-}
-
 pub fn list_installed() -> Vec<InstalledRuntime> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(runtimes_root()) else {
@@ -4020,24 +4064,62 @@ fn source_archive_url(source: &RuntimeSource) -> Result<String, String> {
     ))
 }
 
-/// Newest real build tag (skips release tags that are not b##### builds).
-pub async fn latest_build() -> Result<String, String> {
-    if let Some(build) = cached_latest() {
-        return Ok(build);
+fn is_build_tag(tag: &str) -> bool {
+    tag.starts_with('b')
+        && tag.len() > 1
+        && tag.len() <= 16
+        && tag[1..].chars().all(|value| value.is_ascii_digit())
+}
+
+/// The archive one backend needs from one release, if that release published it.
+fn backend_asset<'a>(release: &'a Rel, backend: &str) -> Option<&'a Asset> {
+    let prefix = format!(
+        "llama-{}-bin-{}-{backend}",
+        release.tag_name,
+        release_platform()
+    );
+    release.assets.iter().find(|asset| {
+        asset.name == format!("{prefix}-x64.zip")
+            || (asset.name.starts_with(&prefix) && asset.name.ends_with("-x64.zip"))
+    })
+}
+
+/// The newest release that actually published this backend's archive.
+///
+/// A release tag appears as soon as the build starts, so the newest one
+/// routinely has no assets yet, or only the few its matrix has finished: on the
+/// day this was written b11030 had 2 assets and neither was ROCm, while b11028
+/// and b11027 had none at all and b11029 had all 33. Treating the newest tag as
+/// the newest download therefore fails for whichever backend happens to be
+/// mid-upload, so walk back to the newest release that has the archive.
+fn newest_with_asset<'a>(releases: &'a [Rel], backend: &str) -> Option<(&'a Rel, &'a Asset)> {
+    releases
+        .iter()
+        .filter(|release| is_build_tag(&release.tag_name))
+        .find_map(|release| backend_asset(release, backend).map(|asset| (release, asset)))
+}
+
+/// Recent llama.cpp releases with their published assets, cached briefly.
+async fn recent_releases() -> Result<Vec<Rel>, String> {
+    if let Some(releases) = cached_latest() {
+        return Ok(releases);
     }
     if let Some(error) = cached_latest_error() {
         return Err(error);
     }
     let request_lock = LATEST_REQUEST_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
     let _request = request_lock.lock().await;
-    if let Some(build) = cached_latest() {
-        return Ok(build);
+    if let Some(releases) = cached_latest() {
+        return Ok(releases);
     }
     if let Some(error) = cached_latest_error() {
         return Err(error);
     }
+    // Each release carries its whole asset list, so keep the page small enough
+    // that the response stays well inside the bounded reader's limit while
+    // still spanning several completed builds.
     let response = http()
-        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=20")
+        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10")
         .send()
         .await
         .map_err(|error| {
@@ -4059,19 +4141,18 @@ pub async fn latest_build() -> Result<String, String> {
         cache_latest_error(&message);
         message
     })?;
-    let build = releases
+    cache_latest(&releases);
+    Ok(releases)
+}
+
+/// Newest real build tag (skips release tags that are not b##### builds).
+pub async fn latest_build() -> Result<String, String> {
+    recent_releases()
+        .await?
         .into_iter()
-        .find(|release| {
-            release.tag_name.starts_with('b')
-                && release.tag_name.len() <= 16
-                && release.tag_name[1..]
-                    .chars()
-                    .all(|value| value.is_ascii_digit())
-        })
+        .find(|release| is_build_tag(&release.tag_name))
         .map(|release| release.tag_name)
-        .ok_or_else(|| "no b##### llama.cpp release found".to_owned())?;
-    cache_latest(&build);
-    Ok(build)
+        .ok_or_else(|| "no b##### llama.cpp release found".to_owned())
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -4081,7 +4162,8 @@ struct ReleaseDetail {
     assets: Vec<Asset>,
 }
 
-static LATEST_CACHE: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
+type ReleaseCache = Mutex<Option<(Instant, Vec<Rel>)>>;
+static LATEST_CACHE: OnceLock<ReleaseCache> = OnceLock::new();
 static LATEST_ERROR_CACHE: OnceLock<Mutex<Option<(Instant, String)>>> = OnceLock::new();
 static ASSET_CACHE: OnceLock<Mutex<AssetCache>> = OnceLock::new();
 static ASSET_ERROR_CACHE: OnceLock<Mutex<ErrorCache>> = OnceLock::new();
@@ -4101,13 +4183,13 @@ fn api_error(status: reqwest::StatusCode, body: &str) -> String {
     format!("GitHub API {status}: {message}")
 }
 
-fn cached_latest() -> Option<String> {
+fn cached_latest() -> Option<Vec<Rel>> {
     LATEST_CACHE
         .get()?
         .lock()
         .ok()?
         .as_ref()
-        .and_then(|(at, build)| (at.elapsed() < API_CACHE_TTL).then(|| build.clone()))
+        .and_then(|(at, releases)| (at.elapsed() < API_CACHE_TTL).then(|| releases.clone()))
 }
 
 fn cached_latest_error() -> Option<String> {
@@ -4126,10 +4208,10 @@ fn cache_latest_error(error: &str) {
     }
 }
 
-fn cache_latest(build: &str) {
+fn cache_latest(releases: &[Rel]) {
     let cache = LATEST_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut value) = cache.lock() {
-        *value = Some((Instant::now(), build.to_owned()));
+        *value = Some((Instant::now(), releases.to_vec()));
     }
 }
 
@@ -4254,23 +4336,23 @@ pub async fn latest_for(backend: &str) -> Result<LatestInfo, String> {
             "no downloadable catalog asset is defined for backend: {backend}"
         ));
     }
-    let build = latest_build().await?;
-    let assets = assets_for_build(&build).await?;
-
-    let prefix = format!("llama-{build}-bin-{}-{backend}", release_platform());
-    let asset = assets
-        .iter()
-        .find(|asset| {
-            asset.name == format!("{prefix}-x64.zip")
-                || (asset.name.starts_with(&prefix) && asset.name.ends_with("-x64.zip"))
-        })
-        .cloned()
-        .ok_or_else(|| format!("no {backend} x64 asset for {build}"))?;
+    let releases = recent_releases().await?;
+    let (release, asset) = newest_with_asset(&releases, backend).ok_or_else(|| {
+        let newest = releases
+            .iter()
+            .find(|release| is_build_tag(&release.tag_name))
+            .map(|release| release.tag_name.as_str())
+            .unwrap_or("none");
+        format!(
+            "no {backend} x64 build has been published in the {} most recent llama.cpp releases (newest is {newest}); a release appears before its archives finish uploading, so try again shortly",
+            releases.len()
+        )
+    })?;
     Ok(LatestInfo {
-        build,
-        file_name: asset.name,
-        url: asset.browser_download_url,
-        digest: asset.digest,
+        build: release.tag_name.clone(),
+        file_name: asset.name.clone(),
+        url: asset.browser_download_url.clone(),
+        digest: asset.digest.clone(),
     })
 }
 
@@ -4306,6 +4388,82 @@ fn validate_download_url(url: &str) -> Result<(), String> {
         return Err(format!("runtime download host is not trusted: {host}"));
     }
     Ok(())
+}
+
+/// Hosts allowed to serve the correctness gate's verification model. Kept
+/// separate from the runtime download allow-list: these are model weights from
+/// the model hub, not release binaries from the source forge.
+fn validate_model_download_url(url: &str) -> Result<(), String> {
+    let parsed =
+        reqwest::Url::parse(url).map_err(|error| format!("invalid download URL: {error}"))?;
+    if parsed.scheme() != "https" {
+        return Err("verification model URL must use HTTPS".into());
+    }
+    let host = parsed.host_str().unwrap_or_default();
+    if host != "huggingface.co" && !host.ends_with(".hf.co") && !host.ends_with(".huggingface.co") {
+        return Err(format!("verification model host is not trusted: {host}"));
+    }
+    Ok(())
+}
+
+pub fn file_sha256(path: &Path) -> Result<String, String> {
+    sha256_file(path)
+}
+
+/// Fetch a small pinned file and accept it only when it matches the expected
+/// size and digest exactly. A verification model that arrived corrupted would
+/// make the gate report a fault that is not in the runtime, so a mismatch is
+/// discarded rather than used.
+pub async fn download_verified(
+    url: &str,
+    path: &Path,
+    sha256: &str,
+    expected_bytes: u64,
+) -> Result<(), String> {
+    validate_model_download_url(url)?;
+    let response = download_http()
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("verification model download failed: {error}"))?;
+    validate_model_download_url(response.url().as_str())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "verification model download returned HTTP {}",
+            response.status()
+        ));
+    }
+    let mut stream = response.bytes_stream();
+    let partial = path.with_extension("part");
+    let mut file = tokio::fs::File::create(&partial)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut written: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|error| format!("verification model download failed: {error}"))?;
+        written += chunk.len() as u64;
+        if written > expected_bytes {
+            let _ = tokio::fs::remove_file(&partial).await;
+            return Err("verification model is larger than its pinned size".into());
+        }
+        file.write_all(&chunk)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    file.flush().await.map_err(|error| error.to_string())?;
+    drop(file);
+    if written != expected_bytes {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(format!(
+            "verification model is {written} bytes, expected {expected_bytes}"
+        ));
+    }
+    if sha256_file(&partial)? != sha256 {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err("verification model digest does not match its pinned value".into());
+    }
+    fs::rename(&partial, path).map_err(|error| error.to_string())
 }
 
 fn normalize_digest(value: &str) -> Result<String, String> {
@@ -8867,6 +9025,68 @@ mod tests {
         let detail = build_failure_detail(log.as_bytes(), b"");
         assert!(detail.chars().count() <= MAX_BUILD_DETAIL_CHARS);
         assert!(detail.chars().all(|character| character == 'λ'));
+    }
+
+    #[test]
+    fn the_newest_published_backend_archive_wins_over_the_newest_tag() {
+        // The shape that broke runtime management: a release tag exists before
+        // its build matrix finishes, so the newest tags carried partial asset
+        // lists or none at all while an older one was complete.
+        fn release(tag: &str, names: &[&str]) -> Rel {
+            Rel {
+                tag_name: tag.to_string(),
+                assets: names
+                    .iter()
+                    .map(|name| Asset {
+                        name: (*name).to_string(),
+                        browser_download_url: format!("https://example.invalid/{name}"),
+                        digest: None,
+                        size: 0,
+                    })
+                    .collect(),
+            }
+        }
+        let platform = release_platform();
+        let releases = vec![
+            release(
+                "b11030",
+                &[&format!("llama-b11030-bin-{platform}-cpu-x64.zip")],
+            ),
+            release("b11029", &[]),
+            release("b11028", &[]),
+            release(
+                "b11026",
+                &[
+                    &format!("llama-b11026-bin-{platform}-rocm-10.0-x64.zip"),
+                    &format!("llama-b11026-bin-{platform}-vulkan-x64.zip"),
+                ],
+            ),
+        ];
+
+        // The tag is still the newest one, which is what the tag lookup means.
+        assert!(is_build_tag("b11030"));
+        assert!(!is_build_tag("b"));
+        assert!(!is_build_tag("master-abc"));
+
+        // But the download has to come from the newest release that has it.
+        let (release, asset) =
+            newest_with_asset(&releases, "rocm").expect("an older release published rocm");
+        assert_eq!(release.tag_name, "b11026");
+        assert_eq!(
+            asset.name,
+            format!("llama-b11026-bin-{platform}-rocm-10.0-x64.zip")
+        );
+        // A backend whose archive is the newest one still gets the newest.
+        assert_eq!(
+            newest_with_asset(&releases, "cpu")
+                .expect("cpu published")
+                .0
+                .tag_name,
+            "b11030"
+        );
+        // And a backend nobody published is reported rather than mis-served.
+        assert!(newest_with_asset(&releases, "sycl").is_none());
+        assert!(newest_with_asset(&[], "rocm").is_none());
     }
 
     /// This is intentionally opt-in and ignored: it copies the locally

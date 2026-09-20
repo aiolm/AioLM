@@ -161,11 +161,8 @@ function optionName(argument: string): string {
   return argument.trim().split("=", 1)[0].trim();
 }
 
-/** Parse one literal process argument per line; no shell syntax is evaluated. */
-export function parseServerArgs(text: string): string[] {
-  const args = text
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0);
+/** Reject flags the app owns, wherever they appear in an argument vector. */
+export function assertUnmanagedServerArgs(args: string[]): string[] {
   const blocked = args
     .map((argument) => ({ argument, canonical: canonicalServerOptionName(argument) }))
     .find(({ canonical }) => canonical !== null);

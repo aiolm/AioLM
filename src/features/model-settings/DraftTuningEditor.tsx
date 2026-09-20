@@ -1,4 +1,4 @@
-import { useId, useState, type Dispatch, type SetStateAction } from 'react';
+import { useId, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { TuningIdScope } from '../tuning/TuningIdScope';
 import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -16,12 +16,23 @@ import type { useServerOptions } from '../tuning/useServerOptions';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
+/**
+ * Context beyond which an entry is a typo rather than an intent.
+ *
+ * Far past what any hardware can hold, so it never stands between a user and a
+ * configuration llama.cpp would accept; it exists only so a pasted phone number
+ * is caught here instead of at launch.
+ */
+const CONTEXT_SANITY_MAX = 4_194_304;
+
 export type DraftPatch = (patch: Partial<AppConfig>) => void;
 export { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /** All handlers edit an in-memory draft. Persistence belongs to the dialog's caller. */
-export default function DraftTuningEditor({ cfg, section, disabled, benchmark, runtime, onChange, onInvalid, onResetDrafts }: {
+export default function DraftTuningEditor({ cfg, section, disabled, benchmark, runtime, contextLimit, onChange, onInvalid, onResetDrafts }: {
   cfg: AppConfig; section: string; disabled: boolean; benchmark: boolean;
+  /** Context the selected model was trained for, when its header states one. */
+  contextLimit?: number;
   runtime: ReturnType<typeof useServerOptions>; onChange: DraftPatch;
   onInvalid: (key: string, invalid: boolean) => void;
   onResetDrafts: () => void;
@@ -34,11 +45,26 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   const [chatNumbers, setChatNumbers] = useState<Record<string, string>>({});
   const [selectModes, setSelectModes] = useState<Record<string, 'select' | 'custom'>>({});
   const [customText, setCustomText] = useState<Partial<Record<ServerTextKey, boolean>>>({});
+  /**
+   * The largest value a control accepts.
+   *
+   * Context is the one bound this app does not get to decide on its own. When
+   * the model's header states what it was trained for, that is the bound. When
+   * it does not — an unreadable header, a model not scanned yet — the app has no
+   * basis for a limit, and the catalogue's 131072 was a guess that refused
+   * perfectly loadable configurations; `CONTEXT_SANITY_MAX` only catches input
+   * that is garbage rather than large. A value already configured always
+   * qualifies: rejecting a setting for having been made is not validation.
+   */
+  const ceilingOf = (field: { key: string; max: number }) => {
+    if (field.key !== 'ctx_size') return field.max;
+    return Math.max(contextLimit ?? CONTEXT_SANITY_MAX, Number(cfg.ctx_size) || 0);
+  };
   const numeric = (key: NumericKey, raw: string) => {
     setNumbers(previous => ({ ...previous, [key]: raw }));
     const field = [...SERVER_FIELDS, ...MTP_FIELDS, ...SAMPLING_FIELDS, ...REASONING_FIELDS].find(item => item.key === key)!;
     const value = parseNumericInput(raw, field.step);
-    const valid = value !== null && value >= field.min && value <= field.max;
+    const valid = value !== null && value >= field.min && value <= ceilingOf(field);
     onInvalid(key, !valid);
     if (valid) onChange({ [key]: value });
   };
@@ -80,7 +106,13 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   const commitText = (key: ServerTextKey, value: string) => { if (value !== textValue(key)) text(key, value); };
   const optionsFor = (key: 'spec_type' | 'spec_draft_ngl'): readonly string[] => key === 'spec_type' ? SPEC_TYPE_OPTIONS : SPEC_DRAFT_NGL_OPTIONS;
   const numericProps = { numericDrafts: numbers, onNumericChange: numeric, onNumericCommit: (field: { key: NumericKey }, value: string) => numeric(field.key, value) };
-  const fields = SERVER_FIELDS.filter(field => !benchmark || !BENCHMARK_CONTROLLED_KEYS.has(field.key));
+  // The same bound the commit above validates against, so the slider can never
+  // offer a value the editor would then refuse, or refuse one it offered.
+  const fields = useMemo(() => {
+    const base = SERVER_FIELDS.filter(field => !benchmark || !BENCHMARK_CONTROLLED_KEYS.has(field.key));
+    const ceiling = Math.max(contextLimit ?? CONTEXT_SANITY_MAX, Number(cfg.ctx_size) || 0);
+    return base.map(field => field.key === 'ctx_size' && ceiling !== field.max ? { ...field, max: ceiling } : field);
+  }, [benchmark, contextLimit, cfg.ctx_size]);
   return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, reset }}>
     <div className="model-settings-presets">
       <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled} onClick={() => reset()}>{copy.reset}</button>

@@ -14,6 +14,8 @@ pub(crate) async fn save_config(
 ) -> Result<config::AppConfig, String> {
     let _config_write = state.config_write.lock().await;
     let latest = config::load_result()?;
+    let mut cfg = cfg;
+    crate::commands::runtimes::realign_saved_gpu_placement(&latest, &mut cfg).await;
     let prepared = config::profiles::prepare_config_update(&latest, &cfg)?;
     config::save(&prepared)
 }

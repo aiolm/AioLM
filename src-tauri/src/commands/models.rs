@@ -1,10 +1,22 @@
 //! Local model selection, scanning and verified deletion IPC.
 #[cfg(not(windows))]
 use super::files::open_verified_file;
-use crate::{config, models, server, state::AppState};
+use crate::{config, gguf, models, server, state::AppState};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
+
+/// What a model file's own header says about it.
+///
+/// Read for one selected model rather than during a folder scan: the answer is
+/// only needed once the editor is open on it, and opening every file in a large
+/// library to collect it would make the listing crawl.
+#[tauri::command]
+pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, String> {
+    tokio::task::spawn_blocking(move || gguf::read_metadata(Path::new(&path)))
+        .await
+        .map_err(|error| format!("model metadata task failed: {error}"))?
+}
 
 #[tauri::command]
 pub(crate) async fn list_models(models_dir: String) -> Result<models::ModelScan, String> {

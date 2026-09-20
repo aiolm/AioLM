@@ -67,6 +67,12 @@ export interface GgufModel {
   shards?: { files: string[]; total: number; missing: number[] };
 }
 
+/** What a GGUF file's own header states about the model. */
+export interface ModelMetadata {
+  context_length?: number;
+  architecture?: string;
+}
+
 export interface ModelScanResult {
   models: GgufModel[];
   truncated: boolean;
@@ -261,6 +267,15 @@ export interface LatestInfo {
   file_name: string;
   url: string;
   digest?: string;
+}
+
+/** One stored answer to "does this runtime compute correctly on these GPUs?" */
+export interface VerificationRecord {
+  verdict: "pass" | "fail" | "unsupported";
+  ratio?: number;
+  detail: string;
+  suite_version: number;
+  recorded_at: string;
 }
 
 export interface RuntimeCapabilities {

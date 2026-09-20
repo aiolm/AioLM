@@ -4,10 +4,19 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
 import { projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
+import * as api from "../../shared/api/index";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
+
+vi.mock("../../shared/api/index", () => ({
+  pickDocument: vi.fn(async () => null),
+  mcpListServers: vi.fn(async () => []),
+  mcpListTools: vi.fn(async () => []),
+}));
+
+const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 describe("Project configuration snapshots", () => {
   beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); });
@@ -19,7 +28,7 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Notes", "Keep citations", store.cfg!, [{ name: "notes.md", path: "notes.md" }], ["docs:search"]);
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole("button", { name: /^Choose model:/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit prompt in model settings" }));
     const request = vi.mocked(settings.open).mock.calls[0][0];
     expect(request.target).toEqual({ kind: "project", id: project.id });
     expect(request.systemPrompt).toBe("Keep citations");
@@ -43,7 +52,7 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Research", "Original project instruction", store.cfg!);
     writeProjects([project]); setActiveProjectId(project.id);
     const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole("button", { name: "Model settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit prompt in model settings" }));
     const request = vi.mocked(settings.open).mock.calls[0][0];
     expect(request.systemPrompt).toBe("Original project instruction");
     const next = { ...store.cfg!, active_model: "models/project.gguf", server_args: ["--jinja"], chat_options: { stop: ["finished"] } };
@@ -51,16 +60,16 @@ describe("Project configuration snapshots", () => {
     store.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), { ...captureProfile(next, 'Project profile', 'model', application.system_prompt), id: application.profile_id, revision: 3 }] };
     await act(async () => { await request.onApply?.(next, application); });
     application.system_prompt = "Later profile edit";
-    expect(screen.getByLabelText("System prompt")).toHaveValue("Use the copied instruction");
+    expect(screen.getByLabelText("System prompt")).toHaveTextContent("Use the copied instruction");
     expect(readProjects()[0].systemPrompt).toBe("Original project instruction");
-    fireEvent.click(screen.getByRole('button', { name: 'Model settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
     expect(vi.mocked(settings.open).mock.calls[1][0].application).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0]).toMatchObject({ systemPrompt: "Use the copied instruction", config: { active_model: "models/project.gguf", server_args: ["--jinja"], chat_options: { stop: ["finished"] } } });
     expect(readProjects()[0].profileApplication).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
     view.unmount();
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole('button', { name: 'Model settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
     expect(vi.mocked(settings.open).mock.calls[2][0].application).toMatchObject({ profile_id: 'project-profile', profile_revision: 3, system_prompt: 'Use the copied instruction' });
     expect(store.updateConfig).not.toHaveBeenCalled();
     expect(store.start).not.toHaveBeenCalled();
@@ -118,7 +127,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     store.cfg!.settings_profiles = { ...store.cfg!.settings_profiles, entries: [fallback] };
-    fireEvent.click(screen.getByRole('button', { name: 'Model settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
     const request = vi.mocked(settings.open).mock.calls[0][0];
     expect(request.config).toMatchObject({ active_model: project.config.active_model, ctx_size: 8192, temperature: 0.4 });
     expect(request.application).toMatchObject({ profile_id: fallback.id, profile_name: 'Everyday', system_prompt: 'Default instruction' });
@@ -145,7 +154,7 @@ describe("Project configuration snapshots", () => {
     expect(store.getConfig()!.settings_profiles!.entries).toEqual([fallback, active]);
     expect(store.getConfig()!.settings_profiles!.applied[profileTargetKey(project.config.active_model)]).toMatchObject({ profile_id: fallback.id, system_prompt: 'Default instruction' });
     expect(readProjects()[0]).toMatchObject({ config: { ctx_size: 8192, temperature: 0.4 }, systemPrompt: 'Default instruction', profileApplication: { profile_id: fallback.id } });
-    expect(screen.getByLabelText('System prompt')).toHaveValue('Default instruction');
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Default instruction');
     expect(store.start).not.toHaveBeenCalled();
   });
 
@@ -183,27 +192,6 @@ describe("Project configuration snapshots", () => {
     expect(readProjects()[0].name).toBe("Research notes");
   });
 
-  it("captures current settings explicitly while preserving workspace content", () => {
-    const gpu = { gpu_ids: ["runtime:cuda:CUDA0"], main_gpu: "runtime:cuda:CUDA0", split_mode: "none" as const, tensor_split: [], draft_gpu_id: null };
-    const store = createTestStore();
-    const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: "notes.md" }], ["docs:search"]);
-    writeProjects([project]); setActiveProjectId(project.id);
-    Object.assign(store.cfg!, { ctx_size: 32768, gpu, runtime_defaults: ["ngl", "temperature"] });
-    const profile = captureProfile(store.cfg!, 'Research settings', 'model', 'Use the saved profile instruction');
-    store.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile],
-      applied: { [profileTargetKey(store.cfg!.active_model)]: materializeProfileApplication(store.cfg!, profile.system_prompt!, profile) } };
-    const entries = structuredClone(store.cfg!.settings_profiles.entries);
-    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    fireEvent.click(screen.getByRole("button", { name: "Use current settings" }));
-    expect(screen.getByLabelText('System prompt')).toHaveAttribute('readonly');
-    expect(screen.getByLabelText('System prompt')).toHaveValue(profile.system_prompt);
-    expect(readProjects()[0].config.ctx_size).toBe(4096);
-    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
-    expect(readProjects()[0]).toMatchObject({ systemPrompt: profile.system_prompt, profileApplication: { profile_id: profile.id }, toolIds: ["docs:search"], documentBindings: [{ name: "notes.md", path: "notes.md" }], config: { ctx_size: 32768, gpu, runtime_defaults: ["ngl", "temperature"] } });
-    expect(store.cfg!.settings_profiles.entries).toEqual(entries);
-    expect(store.updateConfig).not.toHaveBeenCalled();
-  });
-
   it('initializes a new project from the assigned saved profile without modifying its source', () => {
     const store = createTestStore({ ctx_size: 4096 });
     const profile = captureProfile({ ...store.cfg!, ctx_size: 8192 }, 'Selected setup', 'model', 'Current saved instruction');
@@ -211,7 +199,7 @@ describe("Project configuration snapshots", () => {
       applied: { [profileTargetKey(store.cfg!.active_model)]: materializeProfileApplication(store.cfg!, 'Earlier instruction', profile) } };
     const entries = structuredClone(store.cfg!.settings_profiles.entries);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(screen.getByLabelText('System prompt')).toHaveValue('Current saved instruction');
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Current saved instruction');
     expect(screen.getByText('8,192')).toBeVisible();
     fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'New workspace' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save project' }));
@@ -233,7 +221,7 @@ describe("Project configuration snapshots", () => {
     const entries = structuredClone(store.cfg!.settings_profiles.entries);
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(screen.getByLabelText('System prompt')).toHaveValue('Revised profile instruction');
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile instruction');
     expect(screen.getByText('vulkan · b456')).toBeVisible();
     expect(screen.getByText('32,768')).toBeVisible();
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Old profile instruction', config: { ctx_size: 4096 } });
@@ -253,10 +241,63 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: document }]);
     writeProjects([project]); setActiveProjectId(project.id);
     const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(screen.getByLabelText("Document bindings · one path per line")).toHaveValue(displayDocument);
+    expect(screen.getByLabelText("Document bindings · one path per line")).toHaveTextContent(displayDocument);
     expect(screen.getByTitle(String.raw`C:\models\test.gguf`)).toHaveTextContent('test.gguf');
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0]).toMatchObject({ config: { active_model: model }, documentBindings: [{ name: "notes.md", path: document }] });
+  });
+
+  it("adds a document through the file picker and saves its stored path", async () => {
+    const store = createTestStore();
+    const project = projectFromConfig("Research", "Cite the source", store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    mockedApi.pickDocument.mockResolvedValueOnce("C:/docs/picked.md");
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByText("No documents yet.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Add document" }));
+    await waitFor(() => expect(screen.getByLabelText("Document bindings · one path per line")).toHaveTextContent("picked.md"));
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0]).toMatchObject({ documentBindings: [{ name: "picked.md", path: "C:/docs/picked.md" }] });
+  });
+
+  it("removes a document without touching the stored copy until saved", () => {
+    const store = createTestStore();
+    const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: "notes.md" }]);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+    expect(screen.getByText("No documents yet.")).toBeVisible();
+    expect(readProjects()[0].documentBindings).toEqual([{ name: "notes.md", path: "notes.md" }]);
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0].documentBindings).toEqual([]);
+  });
+
+  it("selects MCP tools from registered servers instead of typing IDs", async () => {
+    const store = createTestStore();
+    const project = projectFromConfig("Research", "Cite the source", store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    mockedApi.mcpListServers.mockResolvedValue([{ id: "docs", name: "Docs", command: "docs-mcp", args: [], enabled: true }]);
+    mockedApi.mcpListTools.mockResolvedValue([{ name: "search", description: "Search docs", input_schema: { type: "object", properties: {} } }]);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    const checkbox = await screen.findByRole("checkbox", { name: "Docs · search" });
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0].toolIds).toEqual(["docs:search"]);
+  });
+
+  it("keeps stale tool IDs visible until explicitly removed", async () => {
+    const store = createTestStore();
+    const project = projectFromConfig("Research", "Cite the source", store.cfg!, [], ["gone:missing"]);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    await waitFor(() => expect(mockedApi.mcpListServers).toHaveBeenCalled());
+    expect(screen.getByRole("checkbox", { name: "gone:missing · Unavailable" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0].toolIds).toEqual(["gone:missing"]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "gone:missing · Unavailable" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update project" }));
+    expect(readProjects()[0].toolIds).toEqual([]);
   });
 });
