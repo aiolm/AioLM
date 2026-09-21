@@ -536,6 +536,20 @@
             "tensor_split"
           ],
           "additionalProperties": false
+        },
+        "effective_args": {
+          "description": "llama-server options the measured run was started with, in order, as separate tokens. Options carrying a path, address or credential are removed with their values; the pattern rejects any remaining token that could hold one.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+          },
+          "minItems": 0,
+          "maxItems": 256
         }
       },
       "required": [

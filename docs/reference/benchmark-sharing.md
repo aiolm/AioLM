@@ -32,11 +32,25 @@ local diagnostic context; the public JSON export uses a separate contract.
   that constructs public fields from local measurement records.
 
 Submissions contain numeric measurements, workload and corpus identity, model
-identity, runtime version, selected execution settings and an environment snapshot.
-They exclude local filenames and paths, raw command arguments, error messages,
-machine fingerprints, persistent device identifiers and local record IDs. Unknown
-values remain null. Public labels are bounded and reject path-like content. A
-reviewed submission has its own UUID; changing its content requires a new UUID.
+identity, runtime version, selected execution settings, the measured launch
+options and an environment snapshot. They exclude local filenames and paths,
+error messages, machine fingerprints, persistent device identifiers and local
+record IDs. Unknown values remain null. Public labels are bounded and reject
+path-like content. A reviewed submission has its own UUID; changing its content
+requires a new UUID.
+
+Contract 0.5.0 additionally accepts optional `execution.effective_args`: the
+llama-server options the measured run was started with, in order, as separate
+tokens, so a reader can reproduce the setup rather than infer it from the
+curated `execution.settings` fields. The adapter publishes an option only with
+the value it was given, and drops every option that names the publisher's
+machine: model, projector, draft model, LoRA and other file arguments, the
+listening host and port, aliases, prompt text, and anything whose option name
+reads as a credential. A token that would still contain a path separator,
+scheme or address is refused by the schema, so an option a newer runtime adds
+cannot leak one either. What remains is the tuning configuration. The website
+must accept contract 0.5.0 before an app build starts sending this field: older
+validators reject fields they do not recognize.
 
 Contract 0.3.0 additionally accepts optional `model.metadata`. New runs can record
 declared GGUF name, architecture, parameter size label, weight quantization,
