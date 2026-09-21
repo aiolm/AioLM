@@ -297,6 +297,24 @@ describe("Performance benchmark workflow", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:benchmark");
   });
 
+  it("shows one effective llama-server argument per line and keeps each option with its value", async () => {
+    mocked.runPerformanceBench.mockImplementation(async (_cfg, request) => ({
+      ...result(request.run_id, [row()]),
+      args: ["--model", "C:/models/test.gguf", "--ctx-size", "4096", "--sleep-idle-seconds", "-1", "--cont-batching", "--no-webui"],
+    }));
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
+    const summary = await screen.findByText("Effective llama-server arguments");
+    // A negative value belongs to its option; a switch stays on a line of its own.
+    expect(summary.parentElement?.querySelector("code")?.textContent).toBe([
+      '"--model" "C:/models/test.gguf"',
+      '"--ctx-size" "4096"',
+      '"--sleep-idle-seconds" "-1"',
+      '"--cont-batching"',
+      '"--no-webui"',
+    ].join("\n"));
+  });
+
   it("keeps current and history exports separate when the new result could not be saved", async () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
