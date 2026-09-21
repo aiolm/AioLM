@@ -26,6 +26,10 @@ pub fn is_known(key: &str) -> bool {
     FIELDS.iter().any(|field| field.key == key)
 }
 
+pub fn keys() -> impl Iterator<Item = &'static str> {
+    FIELDS.iter().map(|field| field.key.as_str())
+}
+
 pub fn app_default_u32(key: &str) -> u32 {
     FIELDS
         .iter()

@@ -10,6 +10,7 @@ import * as api from '../../shared/api';
 import { appliedProfile, mergeProfileEditor, profileLibraryConfigPatch, SettingsDeliveryError } from './profileEditor';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { resetProfileSettings } from './profileResetState';
+import { tuningResetValues } from '../../shared/config/tuningResetValues';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -367,13 +368,16 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}'));
   });
 
-  it('preserves benchmark workload values when applying the Default profile', async () => {
+  it('preserves benchmark workload values and inherits the other tuning fields when applying the Default profile', async () => {
     const { onProfileCommit, getSaved } = mount({ mode: 'benchmark', initialSection: 'profiles' });
     expect(screen.queryByRole('button', { name: 'Generation' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     fireEvent.click(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
-    expect(getSaved()).toMatchObject({ ctx_size: cfg.ctx_size, temperature: cfg.temperature, parallel: cfg.parallel, ngl: cfg.ngl });
+    // The Default profile owns every tuning field, so GPU layers follow its
+    // runtime default while the benchmark keeps the workload values it controls.
+    expect(getSaved()).toMatchObject({ ctx_size: cfg.ctx_size, temperature: cfg.temperature, parallel: cfg.parallel, ngl: tuningResetValues().ngl });
+    expect(getSaved().runtime_defaults).toContain('ngl');
   });
 
   it('keeps failed profile saves editable without inventing a completed profile', async () => {
