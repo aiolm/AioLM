@@ -1,4 +1,5 @@
 //! Backend modules, public client APIs and desktop application startup.
+pub mod app_update;
 pub mod backends;
 mod benchmark;
 pub mod branding;
@@ -31,6 +32,60 @@ use state::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{Manager, RunEvent};
 
+/// Stop every managed child process and cancel background work, synchronously.
+///
+/// This is the same cleanup the exit handler runs, minus the `exiting` flag,
+/// which each caller sets itself: the exit handler marks a genuine exit while
+/// the update installer path gates `exiting` just before calling this, so no
+/// new server or job can start between the cleanup and the installer spawn.
+/// The update installer replaces files this process holds open and its
+/// "application is running" check can force-kill this process, so the llama
+/// servers, gateway, benchmark, build and discovery jobs must already be down
+/// before the installer starts. It runs after the installer has been verified
+/// and just before it is spawned, so a failed download or hash leaves running
+/// sessions untouched; if the spawn itself fails the app stays open and usable
+/// (servers already stopped) with an error.
+pub(crate) fn shutdown_managed_processes(state: &AppState) {
+    state.bench_cancel.store(true, Ordering::Release);
+    state.runtime_cancel.store(true, Ordering::Release);
+    state.discover_cancel.store(true, Ordering::Release);
+    state.sessions.cancel_all_pending_starts();
+    // A window close can end the async build future before it observes
+    // runtime_cancel. Kill the tracked CMake process trees while the app is
+    // still alive so Ninja/compilers do not remain behind.
+    runtime::terminate_active_builds();
+    if let Ok(mut gateway) = state.gateway.lock() {
+        if let Some(handle) = gateway.take() {
+            handle.stop.store(true, Ordering::Release);
+            handle.task.abort();
+        }
+    }
+    if let Ok(pid) = state.bench_pid.lock() {
+        if let Some(pid) = *pid {
+            procutil::terminate_pid(pid);
+        }
+    }
+    if let Ok(mut server) = state.server.lock() {
+        server.cancel_launch();
+        server::kill(&mut server.child, Some(state.err.clone()));
+        server.lifecycle = server::Lifecycle::Stopped;
+        server.api_key.clear();
+        server.redaction_secret.clear();
+    }
+    // Every additional session started alongside the default one is its own
+    // untracked-by-the-OS process tree; nothing else in the app kills these
+    // once the window is gone.
+    for entry in state.sessions.entries() {
+        if let Ok(mut server) = entry.state.lock() {
+            server.cancel_launch();
+            server::kill(&mut server.child, Some(entry.err.clone()));
+            server.lifecycle = server::Lifecycle::Stopped;
+            server.api_key.clear();
+            server.redaction_secret.clear();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     while let Err(error) = branding::prepare_desktop() {
@@ -47,6 +102,9 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
+            commands::app_update::check_app_update,
+            commands::app_update::install_app_update,
+            commands::app_update::open_app_update_release,
             commands::config::migration_paths,
             commands::config::get_config,
             commands::config::save_config,
@@ -132,46 +190,8 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
-                state.exiting.store(true, Ordering::Release);
-                state.bench_cancel.store(true, Ordering::Release);
-                state.runtime_cancel.store(true, Ordering::Release);
-                state.discover_cancel.store(true, Ordering::Release);
-                state.sessions.cancel_all_pending_starts();
-                // A window close can end the async build future before it
-                // observes runtime_cancel. Kill the tracked CMake process
-                // trees while the app is still alive so Ninja/compilers do not
-                // remain behind on the user's machine.
-                runtime::terminate_active_builds();
-                if let Ok(mut gateway) = state.gateway.lock() {
-                    if let Some(handle) = gateway.take() {
-                        handle.stop.store(true, Ordering::Release);
-                        handle.task.abort();
-                    }
-                }
-                if let Ok(pid) = state.bench_pid.lock() {
-                    if let Some(pid) = *pid {
-                        procutil::terminate_pid(pid);
-                    }
-                }
-                if let Ok(mut server) = state.server.lock() {
-                    server.cancel_launch();
-                    server::kill(&mut server.child, Some(state.err.clone()));
-                    server.lifecycle = server::Lifecycle::Stopped;
-                    server.api_key.clear();
-                    server.redaction_secret.clear();
-                }
-                // Every additional session started alongside the default one
-                // is its own untracked-by-the-OS process tree; nothing else
-                // in the app kills these once the window is gone.
-                for entry in state.sessions.entries() {
-                    if let Ok(mut server) = entry.state.lock() {
-                        server.cancel_launch();
-                        server::kill(&mut server.child, Some(entry.err.clone()));
-                        server.lifecycle = server::Lifecycle::Stopped;
-                        server.api_key.clear();
-                        server.redaction_secret.clear();
-                    }
-                }
+                state.begin_normal_exit();
+                shutdown_managed_processes(&state);
             }
         }
     });

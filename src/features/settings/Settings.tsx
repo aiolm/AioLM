@@ -1,5 +1,5 @@
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { cloneElement, createContext, isValidElement, useContext, useRef, useState, type ReactNode } from "react";
+import { cloneElement, createContext, isValidElement, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import Switch from "../../shared/ui/Switch";
 import TabNav, { type TabNavItem } from "../../shared/ui/TabNav";
@@ -10,8 +10,9 @@ import { clearChatWorkspace } from "../chat/chatHistory";
 import { clearDocumentIndex } from "../chat/documentIndex";
 import { defaultPreferences, exportPreferences, importPreferences, type AppPreferences } from "../../shared/config/preferences";
 import type { AppStore } from "../../shared/state/store";
+import AppUpdateSettings from "../updates/AppUpdateSettings";
 
-interface Props { preferences: AppPreferences; update: (patch: Partial<AppPreferences>) => void; reset: () => void; store?: AppStore; }
+interface Props { preferences: AppPreferences; update: (patch: Partial<AppPreferences>) => void; reset: () => void; store?: AppStore; updateRequest?: number; }
 
 type Section = "general" | "appearance" | "chat" | "server" | "advanced";
 const SearchContext = createContext("");
@@ -39,10 +40,17 @@ function Row({ id, label, description, children }: { id: string; label: string; 
   return <div className="settings-row"><div className="settings-copy"><label id={labelId} htmlFor={id}>{label}</label><p id={descriptionId}>{description}</p></div><div className="settings-control">{control}</div></div>;
 }
 
-export default function SettingsPanel({ preferences, update, reset, store }: Props) {
+export default function SettingsPanel({ preferences, update, reset, store, updateRequest = 0 }: Props) {
   const { t, locale, setLocale } = useI18n();
   const [section, setSection] = useState<Section>("general");
   const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!updateRequest) return;
+    setSection("general");
+    setQuery("");
+    const frame = window.requestAnimationFrame(() => document.getElementById("settings-check-update")?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [updateRequest]);
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const search = searchText[locale];
   const [confirmReset, setConfirmReset] = useState(false);
@@ -148,6 +156,7 @@ export default function SettingsPanel({ preferences, update, reset, store }: Pro
           <Row id="settings-density" label={t("settings.density")} description={t("settings.densityDesc")}>
             <CustomSelect id="settings-density" value={preferences.appearance.density} options={[{ value: "comfortable", label: t("settings.comfortable") }, { value: "compact", label: t("settings.compact") }]} onChange={(density) => patch({ appearance: { ...preferences.appearance, density } })} triggerClassName="w-[180px]" />
           </Row>
+          <AppUpdateSettings query={normalizedQuery} />
         </>}
         {(normalizedQuery || section === "appearance") && <>
           <h3>{t("settings.appearance")}</h3>

@@ -137,7 +137,13 @@ impl BenchmarkProvenance {
             "unidentified" => self.model.sha256.is_none(),
             "multipart" => self.model.sha256.is_none() && self.model.size_bytes.is_none(),
             _ => false,
-        };
+        } && self
+            .model
+            .metadata
+            .as_ref()
+            // Records written before model metadata existed carry none, and
+            // stay valid; one that carries metadata must carry a usable shape.
+            .is_none_or(super::model_metadata::BenchmarkModelMetadata::is_valid);
         if self.schema_version != 1
             || self.method.id != "cold-prompt-serving"
             || self.method.version != 1
@@ -277,6 +283,7 @@ pub(crate) fn capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
     fn profile() -> DeviceProfile {
         DeviceProfile {
             schema_version: 1,
@@ -308,6 +315,7 @@ mod tests {
                 status: "unidentified".into(),
                 sha256: None,
                 size_bytes: None,
+                metadata: None,
             },
             "novel_en",
             "synthetic".into(),
@@ -374,6 +382,98 @@ mod tests {
         assert_eq!(automatic.gpu_layers, Some(-1));
         assert_eq!(automatic.threads, Some(-1));
         assert_eq!(automatic.threads_batch, Some(-1));
+    }
+
+    #[test]
+    fn model_metadata_rides_along_and_records_written_without_it_stay_valid() {
+        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        provenance.corpus.sha256 = "a".repeat(64);
+        provenance.model.metadata = Some(super::super::model_metadata::BenchmarkModelMetadata {
+            format: "GGUF".into(),
+            name: Some("Synthetic 7B".into()),
+            architecture: Some("llama".into()),
+            size_label: Some("7B".into()),
+            quantization: Some("Q4_K_M".into()),
+            file_type: Some(15),
+            quantized_by: Some("synthetic-quantizer".into()),
+            repository: Some("synthetic-org/synthetic-model".into()),
+            base_models: vec!["synthetic-base/synthetic-weights".into()],
+            artifact: Some("quantized/synthetic.gguf".into()),
+            source: "gguf+huggingface".into(),
+        });
+        assert!(provenance.validate("novel_en").is_ok());
+
+        let encoded = serde_json::to_value(&provenance).unwrap();
+        let metadata = encoded
+            .pointer("/model/metadata")
+            .expect("metadata travels");
+        let mut keys: Vec<&String> = metadata.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "architecture",
+                "artifact",
+                "base_models",
+                "file_type",
+                "format",
+                "name",
+                "quantization",
+                "quantized_by",
+                "repository",
+                "size_label",
+                "source",
+            ]
+        );
+
+        // A record written before metadata existed carries none and is still a
+        // valid record; the field is optional, not newly required.
+        let mut legacy = encoded.clone();
+        legacy
+            .pointer_mut("/model")
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .remove("metadata");
+        let legacy: BenchmarkProvenance = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.model.metadata.is_none());
+        assert!(legacy.validate("novel_en").is_ok());
+
+        // A shape this build would not have produced is refused rather than
+        // published: an artifact path can only come from a download.
+        let mut forged = encoded;
+        *forged.pointer_mut("/model/metadata/source").unwrap() = json!("gguf");
+        assert!(serde_json::from_value::<BenchmarkProvenance>(forged)
+            .unwrap()
+            .validate("novel_en")
+            .is_err());
+    }
+
+    #[test]
+    fn a_described_shard_still_refuses_to_claim_the_whole_model_digest() {
+        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        provenance.corpus.sha256 = "a".repeat(64);
+        provenance.model = ModelIdentity {
+            status: "multipart".into(),
+            sha256: None,
+            size_bytes: None,
+            metadata: Some(super::super::model_metadata::BenchmarkModelMetadata {
+                format: "GGUF".into(),
+                name: Some("Synthetic 70B".into()),
+                architecture: Some("llama".into()),
+                size_label: Some("70B".into()),
+                quantization: Some("Q6_K".into()),
+                file_type: Some(18),
+                quantized_by: None,
+                repository: Some("synthetic-org/synthetic-model".into()),
+                base_models: vec![],
+                artifact: None,
+                source: "gguf".into(),
+            }),
+        };
+        // Describing a shard is not identifying the model it belongs to.
+        assert!(provenance.validate("novel_en").is_ok());
+        assert!(provenance.model.sha256.is_none());
+        assert!(provenance.model.size_bytes.is_none());
     }
 
     #[test]

@@ -4,14 +4,7 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager, State};
-
-fn store_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|path| path.join("benchmarks"))
-        .map_err(|error| format!("cannot resolve benchmark data directory: {error}"))
-}
+use tauri::{Emitter, State};
 
 #[tauri::command]
 pub(crate) async fn benchmark_history_list(
@@ -19,7 +12,7 @@ pub(crate) async fn benchmark_history_list(
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<benchmark::store::HistoryPage, String> {
-    let root = store_root(&app)?;
+    let root = benchmark::data_root(&app)?;
     tokio::task::spawn_blocking(move || {
         benchmark::store::list(&root, offset.unwrap_or(0), limit.unwrap_or(20))
     })
@@ -32,7 +25,7 @@ pub(crate) async fn benchmark_history_import(
     app: tauri::AppHandle,
     records: Vec<Value>,
 ) -> Result<usize, String> {
-    let root = store_root(&app)?;
+    let root = benchmark::data_root(&app)?;
     tokio::task::spawn_blocking(move || benchmark::store::import(&root, records))
         .await
         .map_err(|error| error.to_string())?
@@ -49,7 +42,7 @@ pub(crate) async fn benchmark_acknowledge_upload(
         .operation
         .try_lock()
         .map_err(|_| "wait for the current operation before acknowledging a benchmark upload")?;
-    let root = store_root(&app)?;
+    let root = benchmark::data_root(&app)?;
     tokio::task::spawn_blocking(move || benchmark::store::acknowledge(&root, &run_id, receipt))
         .await
         .map_err(|error| error.to_string())?
@@ -86,7 +79,7 @@ pub(crate) async fn benchmark_identify_model(
     {
         return Err("stop all model sessions before identifying a model".into());
     }
-    let root = store_root(&app)?;
+    let root = benchmark::data_root(&app)?;
     tokio::task::spawn_blocking(move || benchmark::identity::identify(&root, Path::new(&path)))
         .await
         .map_err(|error| error.to_string())?
@@ -151,7 +144,7 @@ pub(crate) async fn run_performance_bench(
     if let Err(error) = validation {
         return Ok(performance_bench::failed(&request, &cfg, error));
     }
-    let root = store_root(&app)?;
+    let root = benchmark::data_root(&app)?;
     // Revoke ephemeral sharing permits the moment a measurement owns the
     // operation lock, so publishing work overlapping this start is discarded.
     crate::benchmark::sharing::permits::note_measurement_start();
@@ -212,7 +205,18 @@ pub(crate) async fn run_performance_bench(
             .iter()
             .any(|flag| flag == "--cache-ram" || flag == "-cram")
     });
-    let model = benchmark::identity::cached(&root, Path::new(&cfg.active_model));
+    // Reading the identity cache and the model header both touch the disk, so
+    // they happen off the async runtime and before the first trial is set up;
+    // no tensor is read, nothing is hashed and no request leaves the machine.
+    let model_path = PathBuf::from(&cfg.active_model);
+    let model_root = root.clone();
+    let model = tokio::task::spawn_blocking(move || {
+        let mut identity = benchmark::identity::cached(&model_root, &model_path);
+        identity.metadata = benchmark::model_metadata::collect(&model_root, &model_path);
+        identity
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     let provenance = benchmark::provenance::capture(
         &cfg,
         &gpu,

@@ -38,6 +38,17 @@ machine fingerprints, persistent device identifiers and local record IDs. Unknow
 values remain null. Public labels are bounded and reject path-like content. A
 reviewed submission has its own UUID; changing its content requires a new UUID.
 
+Contract 0.3.0 additionally accepts optional `model.metadata`. New runs can record
+declared GGUF name, architecture, parameter size label, weight quantization,
+quantizer and public base-model repositories. A public repository identifies its
+distributor; the quantizer is a separate field. A file-matched download receipt
+may add a repository-relative artifact name, which is not a local filename or
+filesystem path. Filename guesses never supply a publisher or quantization.
+These declarations do not establish model quality or identical tensors; use the
+model digest to distinguish exact files. Old records and frozen publication
+snapshots keep their original metadata. Roll out the accepting web contract
+before distributing an app that submits the optional metadata.
+
 The method and corpus versions identify how a result was produced. SHA256 model
 identification is an explicit preparation action performed while execution is
 idle. Later runs read its metadata-validated cache without hashing the model

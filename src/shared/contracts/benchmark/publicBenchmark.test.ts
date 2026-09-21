@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toPublicBenchmark, validatePublicBenchmark } from './publicBenchmark';
 import { summarizePublicBenchmarkRows } from './aggregation';
 import type { PerformanceBenchmarkProvenance, PerformanceBenchmarkResult } from '../../api/types';
+import type { BenchmarkModelMetadata } from '@aiolm/benchmark-contracts';
 
 const submissionId = '00000000-0000-4000-8000-000000000001';
 const sample = (provenance?: PerformanceBenchmarkProvenance) => ({
@@ -25,7 +26,65 @@ function provenance(): PerformanceBenchmarkProvenance {
   };
 }
 
+const metadata = (): BenchmarkModelMetadata => ({
+  format: 'GGUF', name: 'Example Instruct', architecture: 'example', size_label: '8B',
+  quantization: 'Q4_K_M', file_type: 15, quantized_by: 'Example Quantizer',
+  repository: 'example-distributor/Example-8B-GGUF', base_models: ['example-author/Example-8B'],
+  artifact: 'weights/Example-8B-Q4_K_M.gguf', source: 'gguf+huggingface',
+});
+
 describe('public benchmark boundary', () => {
+  it('preserves exact public model metadata without copying native-only fields', () => {
+    const p = provenance();
+    p.model.metadata = metadata();
+    Object.assign(p.model.metadata, { local_path: '/private/renamed.gguf', access_token: 'private-token' });
+    const result = toPublicBenchmark(sample(p), submissionId);
+    expect(result.model.metadata).toEqual(metadata());
+    expect(JSON.stringify(result.model)).not.toMatch(/private|local_path|access_token/);
+    expect(p.model.metadata).toHaveProperty('local_path');
+    expect(result.model.metadata?.base_models).not.toBe(p.model.metadata.base_models);
+  });
+
+  it('keeps missing model metadata absent on old records and accepts an explicit null', () => {
+    const result = toPublicBenchmark(sample(provenance()), submissionId);
+    expect(result.model).not.toHaveProperty('metadata');
+    result.model.metadata = null;
+    expect(validatePublicBenchmark(result)).toBe(result);
+  });
+
+  it('drops private model labels, origins and artifact paths without inventing a distributor', () => {
+    const p = provenance();
+    p.model.metadata = { ...metadata(), name: 'C:\\private\\model.gguf', quantized_by: 'person@example.test',
+      repository: 'https://example.test/private', artifact: '../private/model.gguf',
+      base_models: ['example-author/Example-8B', 'example-author/Example-8B', '/private/model', 'example/../model'],
+    };
+    expect(toPublicBenchmark(sample(p), submissionId).model.metadata).toMatchObject({
+      name: null, quantized_by: null, repository: null, artifact: null,
+      base_models: ['example-author/Example-8B'], source: 'gguf',
+    });
+  });
+
+  it.each([
+    { repository: 'https://huggingface.co/example/model' },
+    { repository: 'example/../model' },
+    { repository: 'example/model?token=secret' },
+    { artifact: '/private/model.gguf' },
+    { artifact: '../model.gguf' },
+    { artifact: 'weights/../../model.gguf' },
+    { artifact: 'C:\\private\\model.gguf' },
+    { artifact: 'weights/model.gguf?token=secret' },
+    { base_models: Array(9).fill('example/model') },
+    { file_type: 65536 },
+    { name: 'bad\nlabel' },
+    { local_path: '/private/model.gguf' },
+    { source: 'filename' },
+    { source: 'gguf', artifact: 'model.gguf' },
+    { repository: null, artifact: 'model.gguf' },
+  ])('rejects unsafe or unsupported public model metadata: %j', (invalid) => {
+    const result = toPublicBenchmark(sample(provenance()), submissionId);
+    expect(() => validatePublicBenchmark({ ...result, model: { ...result.model, metadata: { ...metadata(), ...invalid } } })).toThrow();
+  });
+
   it('copies only the public allowlist, including nested hardware and raw trials', () => {
     const source = sample(provenance());
     Object.assign(source.result.provenance!.environment.execution.selected_gpus[0], { stable_id: 'private-gpu-id', secret: 'private-token' });

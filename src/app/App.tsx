@@ -30,6 +30,7 @@ import { executionText } from '../shared/i18n/executionI18n';
 import type { ExecutionSection } from '../features/models/ModelWorkspace';
 import { ModelSettingsProvider, useModelSettings, MANAGE_MODEL_RUNTIMES } from '../features/model-settings/ModelSettingsProvider';
 import { modelActions } from '../shared/i18n/modelActions';
+import AppUpdateNotice from '../features/updates/AppUpdateNotice';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
@@ -84,6 +85,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [developerSection, setDeveloperSection] = useState<"api" | "gateways" | "diagnostics">("api");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsUpdateRequest, setSettingsUpdateRequest] = useState(0);
   const menuRef = useRef<HTMLDialogElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const tasks = useTasks();
@@ -232,6 +234,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span>{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
+        <AppUpdateNotice onOpenSettings={() => { if (navigate("settings")) setSettingsUpdateRequest(current => current + 1); }} />
         <PanelFeedbackActivity hasActivity={tasks.length > 0 || !!hasError || store.bootState === 'native-unavailable'}>
           <summary><span>{t("ui.taskStripTitle")}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span><PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} /></summary>
           <div className="app-activity-content">
@@ -257,7 +260,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
           </section>
           {panel("mcp", <McpPanel store={store} />)}
-          {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} store={store} />)}
+          {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} store={store} updateRequest={settingsUpdateRequest} />)}
         </main>
       </div>
     </div>

@@ -52,6 +52,10 @@ export function validatePublicBenchmark(value: unknown): PublicBenchmarkSubmissi
   assertSchema(value, contractSchema, 'benchmark');
   const result = value as PublicBenchmarkSubmission;
   if ((result.model.status === 'sha256') !== (result.model.sha256 !== null)) throw new Error('Invalid public benchmark model identity.');
+  const metadata = result.model.metadata;
+  if (metadata?.artifact && (!metadata.repository || metadata.source === 'gguf')) {
+    throw new Error('A public model artifact requires a matched download repository.');
+  }
   return result;
 }
 

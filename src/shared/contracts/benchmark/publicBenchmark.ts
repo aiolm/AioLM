@@ -1,10 +1,31 @@
-import { validatePublicBenchmark, type PublicBenchmarkSubmission, type PublicGpu } from '@aiolm/benchmark-contracts';
+import { validatePublicBenchmark, type BenchmarkModelMetadata, type PublicBenchmarkSubmission, type PublicGpu } from '@aiolm/benchmark-contracts';
 import type { BenchmarkContextProfile, BenchmarkGpuSnapshot, PerformanceBenchmarkResult } from '../../api/types.ts';
 export * from '@aiolm/benchmark-contracts';
 
 // Hardware/runtime labels are structured descriptions, never paths or diagnostic output.
 const safeLabel = (value: unknown): string | null => typeof value === 'string' && value.length > 0 && value.length <= 256
   && /^[^\\/:@\u0000-\u001f\u007f]+$/.test(value) ? value : null;
+const safeRepository = (value: unknown): string | null => typeof value === 'string'
+  && /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value) ? value : null;
+
+function modelMetadata(value: unknown): BenchmarkModelMetadata | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const m = value as Record<string, unknown>;
+  if (m.format !== 'GGUF' || !['gguf', 'huggingface', 'gguf+huggingface'].includes(String(m.source))) return null;
+  const repository = safeRepository(m.repository);
+  if (m.source === 'huggingface' && !repository) return null;
+  // Only a matched download receipt may contribute a repository-relative artifact.
+  const artifact = repository && m.source !== 'gguf' && typeof m.artifact === 'string' && m.artifact.length <= 512
+    && /^(?:[A-Za-z0-9][A-Za-z0-9._ -]{0,127}\/)*[A-Za-z0-9][A-Za-z0-9._ -]*\.[gG][gG][uU][fF]$/.test(m.artifact) ? m.artifact : null;
+  return {
+    format: 'GGUF', name: safeLabel(m.name), architecture: safeLabel(m.architecture), size_label: safeLabel(m.size_label),
+    quantization: safeLabel(m.quantization), quantized_by: safeLabel(m.quantized_by),
+    file_type: typeof m.file_type === 'number' && Number.isSafeInteger(m.file_type) && m.file_type >= 0 && m.file_type <= 65535 ? m.file_type : null,
+    repository, artifact,
+    base_models: Array.isArray(m.base_models) ? [...new Set(m.base_models.map(safeRepository).filter((repo): repo is string => repo !== null))].slice(0, 8) : [],
+    source: m.source === 'gguf+huggingface' && !repository ? 'gguf' : m.source as BenchmarkModelMetadata['source'],
+  };
+}
 const gpu = (value: BenchmarkGpuSnapshot): PublicGpu => ({
   name: safeLabel(value.name), vendor: safeLabel(value.vendor), vram_mb: value.vram_mb,
   driver: safeLabel(value.driver), integrated: value.integrated,
@@ -26,7 +47,9 @@ export function toPublicBenchmark(record: {
     method: p ? { id: p.method.id, version: p.method.version } : null,
     workload: { corpus: request.context_profile, corpus_version: p?.corpus.version ?? null, corpus_sha256: p?.corpus.sha256 ?? null,
       prompt_lengths: [...request.prompt_lengths], generation_length: request.generation_length, batch_sizes: [...request.batch_sizes], repetitions: request.repetitions, warmup: request.warmup },
-    model: p ? { status: p.model.status, sha256: p.model.sha256, size_bytes: p.model.size_bytes } : { status: 'unidentified', sha256: null, size_bytes: null },
+    model: p ? { status: p.model.status, sha256: p.model.sha256, size_bytes: p.model.size_bytes,
+      ...(p.model.metadata ? { metadata: modelMetadata(p.model.metadata) } : {}),
+    } : { status: 'unidentified', sha256: null, size_bytes: null },
     runtime: { name: 'llama.cpp', version: safeLabel(result.runtime_version), backend: safeLabel(record.backend), build: safeLabel(record.build) },
     environment: environment ? { os: safeLabel(environment.os), arch: safeLabel(environment.arch), cpu: { name: safeLabel(environment.cpu.name), logical_cores: environment.cpu.logical_cores },
       installed_gpus: environment.installed_gpus.map(gpu), execution: { mode: environment.execution.mode, selected_gpus: environment.execution.selected_gpus.map(gpu), selection_complete: environment.execution.selection_complete } } : null,

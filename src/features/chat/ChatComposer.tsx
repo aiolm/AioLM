@@ -83,8 +83,8 @@ export default function ChatComposer({
 
       <PanelFeedback>
           {contextWarning && <div className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-relaxed ui-border-color-warning-border ui-background-warning-bg ui-color-warning-ink"  role="status" aria-label={ct("contextWarningLabel")}><span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ui-warning)]" aria-hidden="true" />{normalizeDisplayText(contextWarning)}</div>}
-          {contextSources.length > 0 && <div className="rounded-md border px-3 py-2 text-xs ui-border-color-border ui-background-surface-muted ui-color-muted"  role="status"><span className="font-medium ui-color-ink" >{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</div>}
       </PanelFeedback>
+      {contextSources.length > 0 && <div className="mb-2 rounded-md border px-3 py-2 text-xs ui-border-color-border ui-background-surface-muted ui-color-muted" role="status"><span className="font-medium ui-color-ink">{ct("contextSources")}</span><span className="mx-1.5 opacity-40">·</span>{normalizeDisplayText(contextSources.join(" · "))}</div>}
       <div className="chat-composer-actions">
       {(attachments.length > 0 || documents.length > 0 || attachmentStatus === "reading" || attachmentStatus === "failed") && <div className="chat-composer-context" tabIndex={0} role="region" aria-label={ct("pendingAttachments")}>
       <div className="chat-attachment-status-slot">

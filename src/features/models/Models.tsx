@@ -303,7 +303,6 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
       {/* Rendered outside the library-only fragment so LoRA actions report too. */}
       <PanelFeedback>
-        {focus !== "lora" && scanning && <div className="text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {focus !== "lora" && !scanning && scanError && <FeedbackBanner tone="error">{scanError}</FeedbackBanner>}
         {flash && <FeedbackBanner tone="info" onDismiss={dismissFlash}>{flash}</FeedbackBanner>}
         {focus !== "lora" && folderSaved && (
@@ -401,6 +400,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       />
 
       {focus !== "lora" && <div className="models-model-list mt-2.5 min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
+        {scanning && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
           <div className="app-empty-state">

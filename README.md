@@ -14,6 +14,7 @@ Windows desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Taur
 - Streaming chat with local threads, document context, and embeddings
 - Projects, Hugging Face Discover, and Developer/MCP gateways
 - Tuning for server and sampling parameters
+- New-version notification at startup and verified installer updates from Settings
 
 In Tuning, **Reset all tuning** removes all overrides, including raw server arguments and chat JSON; each field also has **Reset to default**. Defaults are inherited from the selected llama.cpp runtime/model, not hard-coded recommendation presets. **Set custom value** opts back into an override, and profiles retain the default-mode selection. Model files, adapters, GPU assignments, runtime selection and saved profiles are preserved. Server changes require **Apply & restart**; default context size and memory use can vary by runtime/model.
 

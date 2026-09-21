@@ -12,10 +12,17 @@ pub(crate) struct ModelIdentity {
     pub status: String,
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
+    /// How the model was packaged, when that could be established without
+    /// guessing. Absent in records written before this was collected, and
+    /// absent from the identity cache: it is gathered per run, not digested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<super::model_metadata::BenchmarkModelMetadata>,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
-struct Stamp {
+/// What a file looked like when a claim about it was made. Any change to it
+/// invalidates the claim, whether that claim is a digest or a download receipt.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct Stamp {
     size: u64,
     modified: Option<u128>,
     created: Option<u128>,
@@ -27,7 +34,7 @@ struct CachedIdentity {
     identity: ModelIdentity,
 }
 
-fn stamp(path: &Path) -> Result<Stamp, String> {
+pub(crate) fn stamp(path: &Path) -> Result<Stamp, String> {
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() {
         return Err("model identity requires a regular file".into());
@@ -77,6 +84,7 @@ fn unidentified(path: &Path) -> ModelIdentity {
         }
         .into(),
         sha256: None,
+        metadata: None,
         size_bytes: if multipart {
             None
         } else {
@@ -155,6 +163,7 @@ pub(crate) fn identify(root: &Path, path: &Path) -> Result<ModelIdentity, String
         status: "sha256".into(),
         sha256: Some(format!("{:x}", hash.finalize())),
         size_bytes: Some(before.size),
+        metadata: None,
     };
     let encoded = serde_json::to_vec(&CachedIdentity {
         stamp: before,
@@ -184,6 +193,35 @@ mod tests {
         assert_eq!(cached(&root, &model), identity);
         fs::write(&model, b"changed synthetic model").unwrap();
         assert_eq!(cached(&root, &model).status, "unidentified");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_digest_cache_predates_model_metadata_and_never_stores_it() {
+        let root = std::env::temp_dir().join(format!("aiolm-identity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let model = root.join("synthetic.gguf");
+        fs::write(&model, b"synthetic model").unwrap();
+        let resolved = model.canonicalize().unwrap();
+        identify(&root, &model).unwrap();
+
+        // Metadata is gathered per run from the header and any download
+        // receipt, so the digest cache has no business holding a copy of it.
+        let stored = fs::read_to_string(cache_path(&root, &resolved)).unwrap();
+        assert!(!stored.contains("metadata"));
+
+        // A cache an earlier build wrote has no such field at all and is still
+        // read rather than discarded.
+        let legacy: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert!(legacy.pointer("/identity/metadata").is_none());
+        crate::config::atomic_write(
+            &cache_path(&root, &resolved),
+            serde_json::to_string(&legacy).unwrap().as_bytes(),
+        )
+        .unwrap();
+        let reused = cached(&root, &model);
+        assert_eq!(reused.status, "sha256");
+        assert!(reused.metadata.is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
