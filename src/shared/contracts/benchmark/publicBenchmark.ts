@@ -26,6 +26,28 @@ function modelMetadata(value: unknown): BenchmarkModelMetadata | null {
     source: m.source === 'gguf+huggingface' && !repository ? 'gguf' : m.source as BenchmarkModelMetadata['source'],
   };
 }
+/**
+ * llama.cpp reports its version as a banner - `version: 0.3.0-dev (build 10638,
+ * commit bf9421646)` - followed by the compiler it was built with. A record
+ * written before that banner was reduced to its version line still carries the
+ * whole thing, which is diagnostic output rather than a version anyone can
+ * compare, and the contract's label pattern rejects it. Publish the version
+ * line's own text in that case, so the release the run measured survives; a
+ * banner with no version line publishes none rather than something assembled.
+ */
+function runtimeVersion(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const direct = safeLabel(value.trim());
+  if (direct) return direct;
+  const line = value.split('\n').find(entry => entry.includes('version:'));
+  return line ? safeLabel(line.slice(line.indexOf('version:') + 'version:'.length).trim()) : null;
+}
+const cpu = (value: { name: string; logical_cores: number; physical_cores?: number | null }) => ({
+  name: safeLabel(value.name), logical_cores: value.logical_cores,
+  // Absent stays absent: a record measured before the count was collected must
+  // not be published with a number this machine happens to report now.
+  ...(value.physical_cores !== undefined ? { physical_cores: value.physical_cores } : {}),
+});
 const gpu = (value: BenchmarkGpuSnapshot): PublicGpu => ({
   name: safeLabel(value.name), vendor: safeLabel(value.vendor), vram_mb: value.vram_mb,
   driver: safeLabel(value.driver), integrated: value.integrated,
@@ -111,8 +133,8 @@ export function toPublicBenchmark(record: {
     model: p ? { status: p.model.status, sha256: p.model.sha256, size_bytes: p.model.size_bytes,
       ...(p.model.metadata ? { metadata: modelMetadata(p.model.metadata) } : {}),
     } : { status: 'unidentified', sha256: null, size_bytes: null },
-    runtime: { name: 'llama.cpp', version: safeLabel(result.runtime_version), backend: safeLabel(record.backend), build: safeLabel(record.build) },
-    environment: environment ? { os: safeLabel(environment.os), arch: safeLabel(environment.arch), cpu: { name: safeLabel(environment.cpu.name), logical_cores: environment.cpu.logical_cores },
+    runtime: { name: 'llama.cpp', version: runtimeVersion(result.runtime_version), backend: safeLabel(record.backend), build: safeLabel(record.build) },
+    environment: environment ? { os: safeLabel(environment.os), arch: safeLabel(environment.arch), cpu: cpu(environment.cpu),
       ...(environment.system_memory_bytes !== undefined ? { system_memory_bytes: environment.system_memory_bytes } : {}),
       installed_gpus: environment.installed_gpus.map(gpu), execution: { mode: environment.execution.mode, selected_gpus: environment.execution.selected_gpus.map(gpu), selection_complete: environment.execution.selection_complete } } : null,
     execution: { context_size: result.context_size, parallel: result.parallel, settings: config ? {

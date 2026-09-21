@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
+import ConfirmDialog from '../../shared/ui/ConfirmDialog';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
 import { valueRenderer } from './SettingsChangeList';
 import './settings-profile.css';
@@ -130,8 +132,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
   }, [resetFeedback]);
   useEffect(() => { if (disabled) setResetFeedback(null); }, [disabled]);
   useEffect(() => {
-    if (actionKind === 'delete') cancelRef.current?.focus();
-    else if (actionKind) inputRef.current?.focus();
+    if (actionKind && actionKind !== 'delete') inputRef.current?.focus();
   }, [actionKind]);
   useEffect(() => {
     if (!action && !pending && restoreFocusRef.current) {
@@ -183,25 +184,26 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
       </div>
     </div>
 
-    {action && <div className="settings-profile-action" role="group" aria-label={action.kind === 'create' ? copy.saveAs : action.kind === 'rename' ? copy.rename : copy.remove}>
-      {action.kind === 'delete' ? <>
-        <p><strong>{copy.deleteConfirm.replace('{name}', action.name)}</strong></p>
-        <p className="settings-profile-hint">{copy.deleteHint.replace('{name}', defaultProfile?.name ?? '')}</p>
-        {deleteItem && isDefault(deleteItem) && <p id={`${formId}-delete-hint`} className="settings-profile-hint">{copy.defaultDeleteHint}</p>}
-      </> : <>
+    {action && action.kind !== 'delete' && <div className="settings-profile-action" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
+      <>
         <label htmlFor={`${formId}-name`}>{copy.name}</label>
         <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } }} />
         {action.kind === 'create' && <>
           <label className="settings-profile-scope">{copy.scope}<CustomSelect<'model' | 'global'> value={action.scope} options={[{ value: 'model', label: copy.model }, { value: 'global', label: copy.global }]} ariaLabel={copy.scope} disabled={locked} size="sm" onChange={scope => setAction({ ...action, scope })} /></label>
           {action.scope === 'global' && <p className="settings-profile-hint">{copy.saveGlobalHint}</p>}
         </>}
-      </>}
+      </>
       <div className="settings-profile-buttons">
         <button ref={cancelRef} type="button" className="app-button app-button--secondary app-button--sm" disabled={pending} onClick={closeAction}>{copy.cancel}</button>
-        <button type="button" className={`app-button app-button--${action.kind === 'delete' ? 'danger' : 'primary'} app-button--sm`} disabled={locked || deleteBlocked || (action.kind !== 'delete' && !action.name.trim()) || action.kind === 'create' && blocked || action.kind === 'rename' && action.name.trim() === items.find(item => item.id === action.id)?.name} aria-describedby={action.kind === 'delete' && deleteItem && isDefault(deleteItem) ? `${formId}-delete-hint` : undefined} onClick={submit}>{action.kind === 'delete' ? copy.remove : action.kind === 'create' ? copy.create : copy.done}</button>
+        <button type="button" className="app-button app-button--primary app-button--sm" disabled={locked || !action.name.trim() || action.kind === 'create' && blocked || action.kind === 'rename' && action.name.trim() === items.find(item => item.id === action.id)?.name} onClick={submit}>{action.kind === 'create' ? copy.create : copy.done}</button>
       </div>
     </div>}
-    {error && <p className="settings-profile-error" role="alert">{error}</p>}
+    {action?.kind === 'delete' && <ConfirmDialog open title={copy.deleteConfirm.replace('{name}', action.name)}
+      description={<><p>{copy.deleteHint.replace('{name}', defaultProfile?.name ?? '')}</p>
+        {deleteItem && isDefault(deleteItem) && <p>{copy.defaultDeleteHint}</p>}{error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}</>}
+      confirmLabel={copy.remove} cancelLabel={copy.cancel} busy={locked} confirmDisabled={deleteBlocked}
+      onConfirm={submit} onCancel={closeAction} />}
+    {error && action?.kind !== 'delete' && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
 
     {full && <>
       <div className="settings-profile-groups">

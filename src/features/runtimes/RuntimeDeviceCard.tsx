@@ -2,6 +2,7 @@ import StableLabel from "../../shared/ui/StableLabel";
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { formatCpuCores } from "../../shared/lib/units";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -14,7 +15,7 @@ interface Props {
 
 export default function RuntimeDeviceCard({ t, device, deviceSummary, showAll, hiddenCount, onToggleShowAll }: Props) {
   const displayDevice = normalizeDisplayText(deviceSummary);
-  const displayCpu = device ? normalizeDisplayText(`${device.profile.cpu.name} · ${device.profile.cpu.logical_cores}T · ${device.profile.os}/${device.profile.arch}`) : "—";
+  const displayCpu = device ? normalizeDisplayText(`${device.profile.cpu.name} · ${formatCpuCores(device.profile.cpu)} · ${device.profile.os}/${device.profile.arch}`) : "—";
   return (
     <section className="runtime-detected-device mb-4 flex flex-wrap items-center justify-between gap-3 app-card"  aria-labelledby="detected-device-heading">
       <div className="min-w-0">

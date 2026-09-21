@@ -18,10 +18,10 @@ import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
 import InitialSurface from "../shared/ui/InitialSurface";
-import { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
+import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
 
 import { useI18n } from "../shared/i18n/i18n";
-import { buildNumber } from "../shared/runtime/runtimeUtils";
+import { useRuntimeVersionLabel } from "../shared/runtime/installedRuntimes";
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
 import { DraftGuardProvider } from '../shared/state/draftGuard';
@@ -200,12 +200,13 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     }
   };
 
+  const runtimeLabel = useRuntimeVersionLabel(store.status.execution?.active_backend ?? "", store.status.execution?.active_build ?? "");
   const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "gateways" || view === "diagnostics";
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? store.status.model : undefined;
   const backendLabel = store.status.execution?.active_backend
-    ? `${store.status.execution.active_backend}${store.status.execution.active_build ? ` · ${buildNumber(store.status.execution.active_build)}` : ""}`
+    ? `${store.status.execution.active_backend}${store.status.execution.active_build ? ` · ${runtimeLabel}` : ""}`
     : t("load.pathRuntime");
 
 
@@ -238,12 +239,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <PanelFeedbackActivity hasActivity={tasks.length > 0 || !!hasError || store.bootState === 'native-unavailable'}>
           <summary><span>{t("ui.taskStripTitle")}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span><PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} /></summary>
           <div className="app-activity-content">
-        <div className="app-feedback-layer" aria-live="polite">
+        <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors}
             action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(errorText)}</FeedbackBanner>}
           {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
-        </div>
+        </PanelFeedback>
         <TaskStrip />
         <PanelFeedbackOutlet />
           </div>

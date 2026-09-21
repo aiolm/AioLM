@@ -4,6 +4,7 @@ import type * as api from "../../shared/api/types";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { buildNumber, buildPhaseLabelKey, formatRuntimeVersion, runtimeRowAction } from "../../shared/runtime/runtimeUtils";
 import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { formatBytes, formatMebibytes } from "../../shared/lib/units";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { prSourceTitle, type BackendRow } from "./runtimesHelpers";
 import { fitClassOf, fitLabelOf, fitOf, reasonText, stateOf, suitabilityOf } from "./runtimeRowPresentation";
@@ -70,7 +71,7 @@ export default function RuntimeBackendList({
         </div>
 
         {row.busy && row.progress && <div className="runtime-progress-slot mt-3" role="progressbar" aria-label={t("ui.installedBuilds", { label: row.backend })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.progress.total > 0 ? Math.round(row.progress.received / row.progress.total * 100) : undefined}>
-          <div className="mb-1 flex justify-between gap-2 text-xs text-muted"><span>{t(`ui.${buildPhaseLabelKey(row.progress.phase)}`)}</span>{row.progress.total > 0 && <span>{(row.progress.received / 1048576).toFixed(1)} / {(row.progress.total / 1048576).toFixed(1)} MB</span>}</div>
+          <div className="mb-1 flex justify-between gap-2 text-xs text-muted"><span>{t(`ui.${buildPhaseLabelKey(row.progress.phase)}`)}</span>{row.progress.total > 0 && <span>{formatBytes(row.progress.received)} / {formatBytes(row.progress.total)}</span>}</div>
           <div className="h-2 overflow-hidden rounded-full app-bg-elevated"><div className="h-full rounded-full app-bg-accent-solid transition-all" style={{ width: row.progress.total > 0 ? `${Math.min(100, row.progress.received / row.progress.total * 100)}%` : "100%" }} /></div>
         </div>}
 
@@ -80,7 +81,7 @@ export default function RuntimeBackendList({
             const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : null;
             return <div key={item.build} role="listitem" className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${isActive ? "app-border-success bg-success-soft/40" : "border-line-strong app-bg-muted"}`} title={normalizeDisplayPath(item.dir)}>
               <span className="text-ink" title={normalizeDisplayText(item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build)}>{item.source ? `${t("ui.runtimePrBuild", { pr: item.source.pull_request })} · ${item.source.commit.slice(0, 7)} · ` : ""}{normalizeDisplayText(formatRuntimeVersion(item.build, item.version))}</span>
-              <span className="text-muted">{item.size_mb.toFixed(1)} MB</span>
+              <span className="text-muted">{formatMebibytes(item.size_mb)}</span>
               {isActive && <span className="rounded bg-success-soft px-1.5 py-0.5 text-xs text-success">{t("ui.active")}</span>}
               <button type="button" onClick={() => uninstallBlockedReason ? onBlockedAction?.(uninstallBlockedReason) : onUninstall(row.backend, item.build)} disabled={row.busy} aria-disabled={uninstallBlockedReason ? "true" : undefined} title={uninstallBlockedReason ?? undefined} aria-label={`${t("panel.remove")}: ${backendName} ${item.build}`} className={`app-button app-button--danger app-button--sm ${uninstallBlockedReason ? "opacity-80" : ""}`}>{t("panel.remove")}</button>
             </div>;

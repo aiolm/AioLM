@@ -160,6 +160,7 @@ mod tests {
             cpu: CpuInfo {
                 name: "CPU".into(),
                 logical_cores: 16,
+                physical_cores: Some(8),
             },
             gpus,
             detection: "test".into(),

@@ -1,5 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
+import type { HfInstalledFile, HfSortKey } from "./models.ts";
 import type {
   AppConfig, DeviceReport,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
@@ -18,7 +19,11 @@ export const cancelModelScan = (scanId: string) => invoke<void>("cancel_model_sc
 export const deleteModel = (path: string, paths?: string[]) => invoke<void>("delete_model", { path, ...(paths ? { paths } : {}) });
 export const pickModelsDir = () => invoke<string | null>("pick_models_dir");
 export const pickLoraAdapter = () => invoke<string | null>("pick_lora_adapter");
-export const hfSearchModels = (query: string, limit = 20) => invoke<HfModel[]>("hf_search_models", { query, limit });
+/** An empty query lists the catalog itself, which is what Discover opens on. */
+export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "downloads") =>
+  invoke<HfModel[]>("hf_search_models", { query, limit, sort });
+export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: string) =>
+  invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
 export const hfModelFiles = (repoId: string) => invoke<HfFile[]>("hf_model_files", { repoId });
 export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string) =>
   invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir });

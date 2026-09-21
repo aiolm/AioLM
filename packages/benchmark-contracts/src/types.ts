@@ -102,7 +102,17 @@ export interface PublicBenchmarkSubmission {
   environment: {
     os: string | null;
     arch: string | null;
-    cpu: { name: string | null; logical_cores: number };
+    cpu: {
+      name: string | null;
+      /** Schedulable threads. */
+      logical_cores: number;
+      /**
+       * Physical cores, fewer than `logical_cores` on a processor with
+       * simultaneous multithreading. Absent on measurements made before
+       * contract 0.6, and null when the measuring machine did not report one.
+       */
+      physical_cores?: number | null;
+    };
     /** Physical system RAM in bytes. Absent on measurements made before contract 0.4. */
     system_memory_bytes?: number | null;
     installed_gpus: PublicGpu[];

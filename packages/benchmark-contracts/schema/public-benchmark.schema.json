@@ -380,6 +380,14 @@
             "logical_cores": {
               "type": "integer",
               "minimum": 0
+            },
+            "physical_cores": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "description": "Physical cores, separate from the logical_cores thread count. Absent or null when the measuring machine did not report one; never derived from the thread count."
             }
           },
           "required": [

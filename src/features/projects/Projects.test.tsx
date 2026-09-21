@@ -222,7 +222,7 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile instruction');
-    expect(screen.getByText('vulkan · b456')).toBeVisible();
+    expect(screen.getByText('vulkan · build 456')).toBeVisible();
     expect(screen.getByText('32,768')).toBeVisible();
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Old profile instruction', config: { ctx_size: 4096 } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));

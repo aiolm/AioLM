@@ -59,6 +59,33 @@ describe("desktop settings", () => {
     expect(port).toHaveValue(8090);
   });
 
+  it("closes to the tray only after the setting is saved, and keeps the old value when saving fails", async () => {
+    const store = createTestStore();
+    render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={vi.fn()} reset={vi.fn()} store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "Server" }));
+    const toggle = screen.getByRole("switch", { name: "Close to system tray" });
+    // A configuration saved before the setting existed carries no field, and
+    // the window still closes the application.
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith({ close_to_tray: true }));
+    expect(store.cfg?.close_to_tray).toBe(true);
+
+    // The backend puts the tray on screen before it writes the setting, so a
+    // machine with no usable tray reports why and changes nothing.
+    vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error("failed to create the tray icon"));
+    fireEvent.click(screen.getByRole("switch", { name: "Close to system tray" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("failed to create the tray icon");
+    expect(store.cfg?.close_to_tray).toBe(true);
+  });
+
+  it("offers the tray setting only where a real tray exists", () => {
+    render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={vi.fn()} reset={vi.fn()} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("tab", { name: "Server" }));
+    // Without a saved configuration to write to there is nothing to toggle.
+    expect(screen.queryByRole("switch", { name: "Close to system tray" })).not.toBeInTheDocument();
+  });
+
   it("explains mandatory exit cleanup instead of offering a nonfunctional toggle", () => {
     const update = vi.fn();
     render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={update} reset={vi.fn()} /></I18nProvider>);

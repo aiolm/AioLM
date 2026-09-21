@@ -284,6 +284,26 @@ pub fn parse_runtime_version(text: &str) -> Option<RuntimeVersion> {
     })
 }
 
+/// The runtime's version as one comparable line: `0.3.0-dev (build 10638,
+/// commit bf9421646)`.
+///
+/// The release name leads, because that is what a reader recognizes and what
+/// two results are compared by; the build number and commit follow, because
+/// they are what pins the exact upstream tree. A banner that cannot be parsed
+/// gives `None` rather than a line assembled out of whatever could be read, so
+/// a published version is only ever one the runtime itself reported.
+pub fn version_label(banner: &str) -> Option<String> {
+    let version = parse_runtime_version(banner)?;
+    Some(if version.commit.is_empty() {
+        format!("{} (build {})", version.semver, version.build)
+    } else {
+        format!(
+            "{} (build {}, commit {})",
+            version.semver, version.build, version.commit
+        )
+    })
+}
+
 fn write_version_manifest(dir: &Path, version: &RuntimeVersion) {
     if let Ok(json) = serde_json::to_string(version) {
         let _ = fs::write(dir.join(VERSION_MANIFEST), json);
@@ -7069,6 +7089,26 @@ mod tests {
             .expect("banner should parse");
         assert_eq!(released.semver, "0.2.0");
         assert_eq!(released.build, 10603);
+    }
+
+    #[test]
+    fn the_recorded_runtime_version_leads_with_the_release_the_runtime_named() {
+        assert_eq!(
+            version_label(
+                "version: 0.3.0-dev (build 10638, commit bf9421646)\nbuilt with Clang 20.1.8"
+            )
+            .as_deref(),
+            Some("0.3.0-dev (build 10638, commit bf9421646)")
+        );
+        // A banner without a commit still names the release and the build.
+        assert_eq!(
+            version_label("version: 0.2.0 (build 10603)").as_deref(),
+            Some("0.2.0 (build 10603)")
+        );
+        // Nothing is assembled from a banner this build cannot read, so no
+        // record ever carries a version the runtime did not state.
+        assert!(version_label("llama-server\nbuilt with Clang 20.1.8").is_none());
+        assert!(version_label("").is_none());
     }
 
     #[test]

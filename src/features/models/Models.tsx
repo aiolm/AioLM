@@ -18,6 +18,9 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { forgetExecution } from './modelExecutionState';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { startModelScan } from '../../shared/runtime/modelScan';
+import { formatMebibytes } from '../../shared/lib/units';
+import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
+import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
 
 
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
@@ -45,6 +48,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
   const requestedScanDirRef = useRef("");
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const modelSettings = useModelSettings();
 
   useSessionPolling({
     active: active && focus === 'library' && api.isNativeRuntimeAvailable(),
@@ -133,6 +137,10 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   });
   const liveModel = store.status.model ?? "";
   const serverRunning = isServerBusy(store.status.state);
+  // Starting a row applies its own model, so the only setup a row can be
+  // missing is the runtime — and without one the launch fails in the backend.
+  // Say so here and disable the rows rather than letting each click fail.
+  const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
   const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => session.model));
   if (isServerRunning(store.status.state) && store.status.model) loadedModels.add(store.status.model);
 
@@ -343,11 +351,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             <details className="models-runtime-details mt-1">
             <summary>{t("section.diagnostics")}</summary>
             <div className="models-runtime-details-content">
-            <div className="models-status-line" title={store.status.memory ? t("ui.modelsMemoryLine", { total: store.status.memory.total_mb.toLocaleString(), model: store.status.memory.model_mb.toLocaleString(), kv: store.status.memory.kv_mb.toLocaleString(), source: store.status.memory.source }) : undefined}>
-              {store.status.memory ? t("ui.modelsMemoryLine", { total: store.status.memory.total_mb.toLocaleString(), model: store.status.memory.model_mb.toLocaleString(), kv: store.status.memory.kv_mb.toLocaleString(), source: store.status.memory.source }) : "—"}
+            <div className="models-status-line" title={store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : undefined}>
+              {store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : "—"}
             </div>
-            <div className="models-status-line mt-1" title={store.status.lifecycle ? t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds}s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 }) : undefined}>
-              {store.status.lifecycle ? <>{t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds}s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 })}{store.status.lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
+            <div className="models-status-line mt-1" title={store.status.lifecycle ? t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds} s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 }) : undefined}>
+              {store.status.lifecycle ? <>{t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds} s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 })}{store.status.lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
             </div>
             </div>
             </details>
@@ -388,6 +396,14 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         <div className="flex min-w-0 flex-1 items-center gap-2.5"><h2 className="text-sm font-semibold ui-color-ink" >{t("panel.models")} {models ? `(${visible.length})` : ""}</h2><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input min-w-0 max-w-xs flex-1 h-7 text-xs" /></div>
         <label className="flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} className="ui-accent-color-accent-solid"  /> {t("panel.visionModels")}</label>
         {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
+      </div>}
+
+      {focus !== "lora" && runtimeGap && <div className="models-blocked mt-2.5" role="status">
+        <span>{runSetupGapMessage('runtime', locale)}</span>
+        <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => {
+          if (modelSettings && cfg) modelSettings.open({ target: { kind: 'default' }, config: cfg, section: 'runtime' });
+          else window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES));
+        }}>{modelSettings ? copy.needRuntimeAction : copy.manageRuntime}</button>
       </div>}
 
       <ConfirmDialog
@@ -440,11 +456,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
               <div className="models-model-actions flex min-w-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto px-1">
-                <span className="shrink-0 text-xs tabular-nums ui-color-faint" >{model.size_mb.toFixed(0)} MB</span>
+                <span className="shrink-0 text-xs tabular-nums ui-color-faint" >{formatMebibytes(model.size_mb)}</span>
                 {model.is_vision && <span className="rounded-full border px-1.5 py-0.5 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{t("ui.visionTag")}</span>}
                 {running && <span className="app-status-badge app-status-badge--success">{copy.running}</span>}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
+                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || runtimeGap} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
               <div className="models-file-actions">
                   <code>{normalizeDisplayPath(model.path)}</code>

@@ -49,6 +49,8 @@ export interface AppConfig {
   lora_adapters: LoraAdapterConfig[];
   /** Added by the multi-session config schema; optional for older app builds. */
   stop_existing_sessions_on_load?: boolean;
+  /** Hide the window to the system tray on close instead of quitting; absent on older app builds, which quit. */
+  close_to_tray?: boolean;
   sessions?: SessionDefinition[];
   gpu?: GpuPlacement;
 }
@@ -146,11 +148,25 @@ export interface GpuDevice {
   stable_id?: string;
 }
 
+/** What the machine reports about its processor. */
+export interface CpuInfo {
+  name: string;
+  /** Schedulable threads, which is what a thread-count setting is measured against. */
+  logical_cores: number;
+  /**
+   * Physical cores, fewer than `logical_cores` on a processor with
+   * simultaneous multithreading. Null when this machine does not report it, and
+   * absent from records written before it was collected; never derived from the
+   * thread count.
+   */
+  physical_cores?: number | null;
+}
+
 export interface DeviceProfile {
   schema_version: number;
   os: string;
   arch: string;
-  cpu: { name: string; logical_cores: number };
+  cpu: CpuInfo;
   gpus: GpuDevice[];
   detection: string;
   /** Stable, non-identifying device-class key for the benchmark service. */
@@ -378,7 +394,7 @@ export interface PerformanceBenchmarkProvenance {
   environment: {
     os: string;
     arch: string;
-    cpu: { name: string; logical_cores: number };
+    cpu: CpuInfo;
     /** OS-reported physical RAM at measurement launch, not process peak memory. */
     system_memory_bytes?: number | null;
     installed_gpus: BenchmarkGpuSnapshot[];

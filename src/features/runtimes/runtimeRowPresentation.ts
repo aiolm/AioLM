@@ -3,6 +3,7 @@ import type { Locale } from "../../shared/i18n/i18nCatalog";
 import type { UiTextKey } from "../../shared/i18n/uiI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { FIT_ORDER, type BackendRow } from "./runtimesHelpers";
+import { formatMebibytes } from "../../shared/lib/units";
 
 export function fitOf(device: api.DeviceReport | null, backend: string): api.BackendFit {
   return device?.backends.find((item) => item.backend === backend)?.fit ?? "compatible";
@@ -31,7 +32,7 @@ export function deviceSummaryOf(locale: Locale, device: api.DeviceReport | null)
   const gpu = device.profile.gpus.find((item) => !item.integrated) ?? device.profile.gpus[0];
   if (!gpu) return translate(locale, "ui.detectedNoGpu");
   return gpu.vram_mb
-    ? translate(locale, "ui.detectedGpu", { name: gpu.name, vram: (gpu.vram_mb / 1024).toFixed(1) })
+    ? translate(locale, "ui.detectedGpu", { name: gpu.name, vram: formatMebibytes(gpu.vram_mb) })
     : gpu.name;
 }
 

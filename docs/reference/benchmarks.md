@@ -37,7 +37,7 @@ The result table averages repeated successful trials for the same workload, show
 
 ## History and export
 
-History stores the newest 20 runs in local browser storage. Each run includes the request, raw trial measurements, runtime version, actual context and concurrency, effective arguments without credentials, available device information, and complete/partial/cancelled/failed status. Select a saved run to inspect it or export the history to CSV. Failed runs with no measurements also have a CSV row. Nothing is uploaded automatically.
+History stores the newest 20 runs in local browser storage. Each run includes the request, raw trial measurements, the runtime version as llama.cpp's own banner states it, actual context and concurrency, effective arguments without credentials, available device information including the processor's thread count and, where the operating system reports it, its physical core count, and complete/partial/cancelled/failed status. Select a saved run to inspect it or export the history to CSV. Failed runs with no measurements also have a CSV row. Nothing is uploaded automatically.
 
 Legacy engine history remains in local storage; it is not deleted, converted, or displayed as serving benchmark results.
 

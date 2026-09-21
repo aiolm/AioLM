@@ -150,7 +150,7 @@ describe("ModelsPanel CSS cascade", () => {
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
     expect(await screen.findByText("Split model · 2 files")).toBeInTheDocument();
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
-    expect(screen.getByText("300 MB")).toBeInTheDocument();
+    expect(screen.getByText("300.0 MiB")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Select large.gguf" }));
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ active_model: files[0] })));
     expect(screen.queryByLabelText("File actions: large.gguf")).not.toBeInTheDocument();
@@ -169,6 +169,16 @@ describe("ModelsPanel CSS cascade", () => {
     expect(await screen.findByText("Incomplete model · 2 of 3 files missing")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Select partial.gguf" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Start: partial.gguf" })).toBeDisabled();
+  });
+
+  it("explains an unselected runtime beside the start buttons it disables", async () => {
+    const model = { name: "ready.gguf", path: "C:/models/ready.gguf", size_mb: 100, is_vision: false };
+    mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
+    render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models", active_backend: "", active_build: "" }) }) }));
+    expect(await screen.findByText("No runtime is selected.")).toBeVisible();
+    // Without a provider the panel still offers the way to the runtime list.
+    expect(screen.getByRole("button", { name: "Manage runtimes" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Start: ready.gguf" })).toBeDisabled();
   });
 
   it("keeps loaded models visible after a rescan fails and replaces the toolbar action with Retry", async () => {

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildNumber, canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, isInstallCancellation, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
+import { buildNumber, canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, formatRecordedRuntimeVersion, isInstallCancellation, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
 
 describe("runtime build labels", () => {
+  it("preserves the measured release after the installed runtime has changed", () => {
+    expect(formatRecordedRuntimeVersion("0.3.0-dev (build 123, commit abc123)", "0.4.1")).toBe("0.3.0-dev");
+    expect(formatRecordedRuntimeVersion("compiler: test\nversion: 0.3.0-dev (build 123)", "build 123")).toBe("0.3.0-dev");
+    expect(formatRecordedRuntimeVersion("b123-abcdef", "0.4.1")).toBe("build 123-abcdef");
+    expect(formatRecordedRuntimeVersion(null, "build 123")).toBe("build 123");
+  });
   it("strips the b prefix from llama.cpp CI build tags", () => {
     expect(buildNumber("b10638")).toBe("10638");
     expect(buildNumber("b1")).toBe("1");
@@ -15,7 +21,7 @@ describe("runtime build labels", () => {
 
   it("prefers the recorded semantic version over the bare build", () => {
     expect(formatRuntimeVersion("b10638", { semver: "0.3.0-dev", build: 10638, commit: "bf9421646" }))
-      .toBe("0.3.0-dev · build 10638");
+      .toBe("0.3.0-dev");
   });
 
   it("falls back to the build number when no version was recorded", () => {

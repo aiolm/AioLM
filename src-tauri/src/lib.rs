@@ -21,6 +21,7 @@ pub mod runtime;
 pub mod server;
 pub mod session;
 mod state;
+mod tray;
 pub mod tuning_defaults;
 pub mod verify;
 
@@ -31,7 +32,7 @@ pub use server::ErrBuf;
 
 use state::AppState;
 use std::sync::atomic::Ordering;
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 /// Stop every managed child process and cancel background work, synchronously.
 ///
@@ -87,6 +88,16 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     }
 }
 
+/// Whether this close should hide the window instead of ending the session.
+///
+/// The setting is read from the saved configuration at close time rather than
+/// cached, so turning it off in Settings takes effect on the very next close.
+/// A configuration that cannot be read closes the way the application always
+/// has, and so does a build whose tray icon never appeared.
+fn closes_to_tray(app: &tauri::AppHandle) -> bool {
+    config::load_result().is_ok_and(|cfg| cfg.close_to_tray) && tray::is_present(app)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     while let Err(error) = branding::prepare_desktop() {
@@ -100,6 +111,28 @@ pub fn run() {
             return;
         }
     }
+    // A fresh installation has no model folder yet. Create the one the default
+    // configuration points at before the window exists, so the first scan the
+    // frontend runs already finds a real (empty) folder rather than a path that
+    // does not exist. A folder the user chose themselves is left untouched (see
+    // `config::ensure_default_models_dir`), and a folder that cannot be created
+    // is not fatal: `list_models` reports why when the models screen asks for
+    // it, and the user can still choose another folder. A configuration that
+    // cannot be read at all prepares nothing - the frontend's own `get_config`
+    // reports that failure rather than this startup quietly standing in for it.
+    let startup_config = match config::load_result() {
+        Ok(cfg) => {
+            if let Err(error) = config::ensure_default_models_dir(&cfg) {
+                eprintln!("{error}");
+            }
+            Some(cfg)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            None
+        }
+    };
+
     let app = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
@@ -119,6 +152,7 @@ pub fn run() {
             commands::discover::hf_model_files,
             commands::discover::hf_download_model,
             commands::discover::hf_cancel_download,
+            commands::discover::hf_installed_files,
             commands::mcp::mcp_list_servers,
             commands::mcp::mcp_save_server,
             commands::mcp::mcp_remove_server,
@@ -180,6 +214,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
+    // Only a configuration that asks to close to the tray gets a tray icon, so
+    // nobody who leaves the setting off gains one they never asked for.
+    if let Err(error) = tray::apply(
+        app.handle(),
+        startup_config.is_some_and(|cfg| cfg.close_to_tray),
+    ) {
+        eprintln!("{error}");
+    }
+
     // A force-closed PR build can leave its archive, source tree, CMake tree,
     // staging directory, or activation backup behind. Sweep only exact,
     // age-qualified names, and keep the potentially slow removals off the
@@ -188,12 +231,29 @@ pub fn run() {
     tauri::async_runtime::spawn_blocking(runtime::sweep_orphaned_work);
     tauri::async_runtime::spawn(commands::server::idle_watchdog(app.handle().clone()));
 
-    app.run(|app_handle, event| {
-        if let RunEvent::Exit = event {
+    app.run(|app_handle, event| match event {
+        // Closing the main window hides it to the tray only while the setting
+        // says so, and only while there is a tray icon to get it back from: a
+        // tray that failed to appear must not swallow the window with no way to
+        // restore it. Any other window closes as it always has, and so does the
+        // main window whenever the setting is off - the app exits and stops
+        // everything it started.
+        RunEvent::WindowEvent {
+            ref label,
+            event: WindowEvent::CloseRequested { ref api, .. },
+            ..
+        } if label == "main" && closes_to_tray(app_handle) => {
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        RunEvent::Exit => {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 state.begin_normal_exit();
                 shutdown_managed_processes(&state);
             }
         }
+        _ => {}
     });
 }

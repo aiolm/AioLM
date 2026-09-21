@@ -47,6 +47,48 @@ describe('public benchmark boundary', () => {
     expect(() => toPublicBenchmark({ ...record, result: { ...record.result, rows: [] } }, submissionId)).toThrow();
   });
 
+  it('publishes the physical core count beside the thread count and leaves an uncollected one out', () => {
+    const p = provenance();
+    p.environment.cpu.physical_cores = 8;
+    const published = toPublicBenchmark(sample(p), submissionId).environment?.cpu;
+    expect(published).toEqual({ name: 'Example CPU', logical_cores: 16, physical_cores: 8 });
+
+    // A machine that does not report the count publishes null, which is not the
+    // same claim as "this processor has no separate physical cores".
+    p.environment.cpu.physical_cores = null;
+    expect(toPublicBenchmark(sample(p), submissionId).environment?.cpu.physical_cores).toBeNull();
+
+    // A measurement taken before the count was collected stays as it was
+    // archived rather than being filled in from the machine reading it now.
+    delete p.environment.cpu.physical_cores;
+    expect(toPublicBenchmark(sample(p), submissionId).environment?.cpu).not.toHaveProperty('physical_cores');
+
+    for (const invalid of [0, -2, 1.5]) {
+      p.environment.cpu.physical_cores = invalid;
+      expect(() => toPublicBenchmark(sample(p), submissionId)).toThrow();
+    }
+  });
+
+  it('publishes the llama.cpp release the run measured, taken from the version banner', () => {
+    const record = sample(provenance());
+    // What a runtime probe records now: one comparable line, release first.
+    const named = { ...record, result: { ...record.result, runtime_version: '0.3.0-dev (build 10638, commit bf9421646)' } };
+    expect(toPublicBenchmark(named, submissionId).runtime.version).toBe('0.3.0-dev (build 10638, commit bf9421646)');
+
+    // A record stored before that normalization existed carries the whole
+    // banner. Its version line survives instead of the field publishing null.
+    const banner = { ...record, result: { ...record.result, runtime_version: 'version: 0.3.0-dev (build 10638, commit bf9421646)\nbuilt with Clang 20.1.8 for x86_64' } };
+    expect(toPublicBenchmark(banner, submissionId).runtime.version).toBe('0.3.0-dev (build 10638, commit bf9421646)');
+
+    // Diagnostics with no version line publish no version at all rather than
+    // something assembled out of the build directory or the build tag.
+    const diagnostics = { ...record, result: { ...record.result, runtime_version: 'built with Clang 20.1.8\nloaded from /home/owner/runtimes/b10638-cuda' } };
+    const published = toPublicBenchmark(diagnostics, submissionId);
+    expect(published.runtime.version).toBeNull();
+    expect(published.runtime.build).toBe('b1234');
+    expect(JSON.stringify(published)).not.toContain('/home/owner');
+  });
+
   it('shares only the RAM capacity captured with the measurement and validates its unit', () => {
     const p = provenance();
     p.environment.system_memory_bytes = 64 * 1024 ** 3;

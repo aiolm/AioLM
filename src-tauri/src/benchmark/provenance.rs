@@ -162,6 +162,11 @@ impl BenchmarkProvenance {
                 .is_some_and(|value| value == 0 || value > 9_007_199_254_740_991)
             || self.environment.execution.selected_gpus.len() > 64
             || self
+                .environment
+                .cpu
+                .physical_cores
+                .is_some_and(|value| value == 0)
+            || self
                 .execution_config
                 .gpu_layers
                 .is_some_and(|value| value < -1)
@@ -353,6 +358,7 @@ mod tests {
             cpu: crate::hardware::CpuInfo {
                 name: "Test CPU".into(),
                 logical_cores: 8,
+                physical_cores: Some(4),
             },
             gpus: vec![GpuDevice {
                 name: "Unused GPU".into(),
@@ -574,6 +580,44 @@ mod tests {
         assert!(provenance.validate("novel_en").is_ok());
         assert!(provenance.model.sha256.is_none());
         assert!(provenance.model.size_bytes.is_none());
+    }
+
+    #[test]
+    fn physical_cores_travel_with_the_thread_count_and_stay_optional() {
+        let mut provenance = capture_for(&AppConfig::default(), &ResolvedGpu::default());
+        provenance.corpus.sha256 = "a".repeat(64);
+        assert_eq!(provenance.environment.cpu.physical_cores, Some(4));
+        assert_eq!(provenance.environment.cpu.logical_cores, 8);
+        assert!(provenance.validate("novel_en").is_ok());
+
+        let encoded = serde_json::to_value(&provenance).unwrap();
+        assert_eq!(
+            encoded.pointer("/environment/cpu/physical_cores"),
+            Some(&json!(4))
+        );
+
+        // A record written before the count was collected carries no field and
+        // remains a valid record.
+        let mut legacy = encoded.clone();
+        legacy
+            .pointer_mut("/environment/cpu")
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .remove("physical_cores");
+        let legacy: BenchmarkProvenance = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.environment.cpu.physical_cores.is_none());
+        assert!(legacy.validate("novel_en").is_ok());
+
+        // Zero cores is a detection bug, not a machine; it is refused instead
+        // of being published as a measured fact.
+        let mut impossible = encoded;
+        *impossible
+            .pointer_mut("/environment/cpu/physical_cores")
+            .unwrap() = json!(0);
+        assert!(serde_json::from_value::<BenchmarkProvenance>(impossible)
+            .unwrap()
+            .validate("novel_en")
+            .is_err());
     }
 
     #[test]

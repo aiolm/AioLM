@@ -4,6 +4,7 @@ import { useI18n } from '../../shared/i18n/i18n';
 import { cloneGpuPlacement, gpuDeviceLabel, missingGpuIds, resolvedGpuPlacement, toggleGpuSelection } from '../../shared/runtime/sessionUtils';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { formatMebibytes } from '../../shared/lib/units';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
 
@@ -35,7 +36,7 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
     <p id={`${id}-devices-hint`} className="app-section-hint">{help.gpuDevices}</p>
     <div className="model-settings-gpus">{devices.map((item, index) => <label key={item.stable_id} className="model-settings-gpu">
       <input type="checkbox" aria-describedby={`${id}-devices-hint`} checked={gpu.gpu_ids.includes(item.stable_id)} disabled={disabled} onChange={() => { setWeights(null); onInvalid('gpu_tensor_split', false); onChange(resolvedGpuPlacement(toggleGpuSelection(gpu, item.stable_id, devices))); }} />
-      <span>{normalizeDisplayText(gpuDeviceLabel(item, index))}{item.vram_mb ? <small>{item.vram_mb.toLocaleString()} MiB</small> : null}</span>
+      <span>{normalizeDisplayText(gpuDeviceLabel(item, index))}{item.vram_mb ? <small>{formatMebibytes(item.vram_mb)}</small> : null}</span>
     </label>)}</div>
     <div className="model-settings-grid">
       <div><label>{t('ui.gpuMain')}<CustomSelect ariaLabel={t('ui.gpuMain')} ariaDescribedBy={`${id}-main-hint`} value={gpu.main_gpu ?? ''} options={deviceOptions.filter(option => gpu.gpu_ids.includes(option.value))} onChange={value => patch({ main_gpu: value })} disabled={disabled || gpu.gpu_ids.length === 0} /></label><p id={`${id}-main-hint`} className="app-section-hint">{help.gpuMain}</p></div>

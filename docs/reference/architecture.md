@@ -40,10 +40,33 @@ scripts/                    Build, packaging and catalog-maintenance tools
 src-tauri/src/
   lib.rs                    Public library API, Tauri registration, startup/shutdown
   state.rs                  Native shared state and initial values
+  tray.rs                   System-tray icon behind the close-to-tray setting
   commands/                 IPC handlers and command-level coordination
   process_output.rs         Bounded diagnostic buffers and asynchronous pipe draining
   *.rs                      Runtime, server, session and other backend services
 ```
+
+## Desktop startup and window close
+
+Startup resolves the user's home directory through the operating system and
+creates the application-owned model folder there when the configuration still
+points at it, so the first scan after an installation lists an empty folder
+rather than failing on a path that was never made. Running it again changes
+nothing and keeps whatever is already stored. A model folder the user chose
+themselves is never created: the picker only offers folders that already exist,
+so a missing one means the volume holding it is not attached, and an empty
+folder put in its place would hide the models behind it. `list_models` reports
+why the application's own folder could not be created.
+
+Closing the main window exits the application and stops every managed
+llama-server, the gateway and the background jobs, unless `close_to_tray` is
+on. That setting is saved in `config.json`, defaults to off, and is absent from
+configurations written before it existed, so an upgrade keeps closing the way it
+always has. While it is on, a tray icon is present and closing the main window
+hides it instead; the tray menu restores the window or quits, and quitting runs
+the same shutdown the window close would have. The window only hides while the
+tray icon is actually on screen, so a machine where the tray could not be
+created can still close the application.
 
 ## Dependency boundaries
 
