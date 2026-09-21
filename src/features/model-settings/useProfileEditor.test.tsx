@@ -6,6 +6,7 @@ import { testConfig } from '../../testing/appStore';
 import { mergeProfileEditor, profileLibraryConfigPatch } from './profileEditor';
 import { useProfileEditor } from './useProfileEditor';
 import { profileDisplayName } from '../../shared/i18n/profileNames';
+import { tuningResetValues } from '../../shared/config/tuningResetValues';
 
 function editor(entries: SettingsProfile[] = [], benchmark = false, cfg: AppConfig = structuredClone(testConfig), active?: SettingsProfile) {
   const application = active ? materializeProfileApplication(cfg, 'Current prompt', active)
@@ -37,7 +38,9 @@ describe('profile editor persistence', () => {
     expect(hook.result.current.library.entries).toEqual([defaultSettingsProfile()]);
     const saved = hook.result.current.result();
     const named = saved.library.entries.find(entry => entry.id === saved.application.profile_id)!;
-    expect(named).toMatchObject({ id: 'profile-default', name: 'Default', scope: 'global', settings: { active_backend: testConfig.active_backend, ngl: testConfig.ngl } });
+    // The runtime identity is outside the Default profile's coverage and comes
+    // from the chosen model; the tuning fields it owns keep their runtime defaults.
+    expect(named).toMatchObject({ id: 'profile-default', name: 'Default', scope: 'global', settings: { active_backend: testConfig.active_backend, ngl: tuningResetValues().ngl } });
     expect(saved.library.entries).toHaveLength(1);
     expect(saved.application.profile_name).toBe('Default');
   });

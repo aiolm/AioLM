@@ -62,11 +62,15 @@
 .performance-details { padding: 14px 18px; }
 .performance-details summary { cursor: pointer; font-size: 12px; font-weight: 500; }
 .performance-details p { font-size: 12px; color: var(--ui-muted); margin-top: 12px; line-height: 1.7; }
-.performance-details code { display: block; padding: 12px; margin-top: 12px; background: var(--ui-mono-bg); color: var(--ui-mono-ink); border-radius: var(--ui-radius-sm); font-size: 11px; overflow-wrap: anywhere; }
+.performance-details code { display: block; padding: 12px; margin-top: 12px; background: var(--ui-mono-bg); color: var(--ui-mono-ink); border-radius: var(--ui-radius-sm); font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.8; }
+.performance-metric-guide { display: grid; gap: 8px; padding-top: 12px; font-size: 12px; color: var(--ui-muted); line-height: 1.7; }
+.performance-metric-guide > div { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); gap: 2px 14px; }
+.performance-metric-guide dt { color: var(--ui-ink); font-weight: 500; }
+.performance-metric-guide dd { margin: 0; overflow-wrap: anywhere; }
 .performance-run-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 14px 24px; padding-top: 16px; font-size: 12px; }
 .performance-run-config dt { color: var(--ui-faint); margin-bottom: 5px; }
 .performance-run-config dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-@media (max-width: 620px) { .performance-input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .performance-field:first-child { grid-column: 1 / -1; } .performance-fields, .performance-model, .performance-actions { padding: 14px; } .performance-heading h2 { font-size: 20px; } .performance-actions > button { width: 100%; } }
+@media (max-width: 620px) { .performance-input-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .performance-field:first-child { grid-column: 1 / -1; } .performance-fields, .performance-model, .performance-actions { padding: 14px; } .performance-heading h2 { font-size: 20px; } .performance-actions > button { width: 100%; } .performance-metric-guide > div { grid-template-columns: minmax(0, 1fr); } }
 .performance-model-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .performance-public { display: grid; gap: 12px; padding: 16px 18px; }
 .performance-public h3 { font-size: 13px; font-weight: 600; }

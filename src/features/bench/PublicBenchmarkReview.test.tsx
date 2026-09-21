@@ -36,7 +36,9 @@ describe('public benchmark review', () => {
     expect(screen.queryByRole('button', { name: 'Save to sharing queue' })).not.toBeInTheDocument();
     await review();
     const preview = JSON.parse(screen.getByLabelText('Public result preview').textContent!);
-    expect(JSON.stringify(preview)).not.toMatch(/private|secret|args|message/);
+    expect(JSON.stringify(preview)).not.toMatch(/private|secret|message/);
+    // Launch options are published, but this record's only option is a credential.
+    expect(preview.execution.effective_args).toEqual([]);
     expect(preview.submission_id).toBe('00000000-0000-4000-8000-000000000001');
     fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
     await waitFor(() => expect(onQueued).toHaveBeenCalledOnce());

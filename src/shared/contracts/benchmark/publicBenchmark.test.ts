@@ -120,6 +120,59 @@ describe('public benchmark boundary', () => {
     expect(result.model.sha256).toBe('b'.repeat(64));
   });
 
+  it('publishes the measured launch options so a reader can reproduce the tuning setup', () => {
+    const source = sample(provenance());
+    source.result.args = ['--ctx-size', '8192', '--flash-attn', 'auto', '--sleep-idle-seconds', '-1',
+      '--cache-type-k=q8_0', '--cont-batching', '--no-webui'];
+    const result = toPublicBenchmark(source, submissionId);
+    // Ordered tokens: an option keeps the value it was given, a switch stands alone.
+    expect(result.execution.effective_args).toEqual(['--ctx-size', '8192', '--flash-attn', 'auto',
+      '--sleep-idle-seconds', '-1', '--cache-type-k=q8_0', '--cont-batching', '--no-webui']);
+    expect(validatePublicBenchmark(result)).toBe(result);
+  });
+
+  it('drops every launch option naming a file, an address or a credential together with its value', () => {
+    const source = sample(provenance());
+    source.result.args = ['--model', 'C:\\Users\\owner\\models\\private.gguf', '--host', '127.0.0.1', '--port', '54321',
+      '--api-key', 'private-token', '--mmproj', '/private/projector.gguf', '--lora', '/private/adapter.gguf',
+      '--alias', 'owner-private-alias', '--ctx-size', '4096'];
+    const result = toPublicBenchmark(source, submissionId);
+    expect(result.execution.effective_args).toEqual(['--ctx-size', '4096']);
+    expect(JSON.stringify(result)).not.toMatch(/private|owner|127\.0\.0\.1|54321/);
+  });
+
+  it('drops an unknown option whose value still reads as a path, so a newer runtime cannot leak one', () => {
+    const source = sample(provenance());
+    source.result.args = ['--future-cache-dir', '/home/owner/cache', '--future-endpoint', 'https://private.test',
+      '--future-account', 'owner@example.test', '--threads', '8'];
+    const result = toPublicBenchmark(source, submissionId);
+    expect(result.execution.effective_args).toEqual(['--threads', '8']);
+  });
+
+  it('drops an option named as a credential, whose value no pattern can tell from a setting', () => {
+    const source = sample(provenance());
+    // A secret is ordinary short text; only the option name identifies it.
+    source.result.args = ['--future-token', 'private1234', '--registry-password', 'private1234',
+      '--hf-token', 'private1234', '--ssl-key-file', 'private1234', '--top-k', '40', '--keep', '0', '--cache-type-k', 'q8_0'];
+    const result = toPublicBenchmark(source, submissionId);
+    expect(result.execution.effective_args).toEqual(['--top-k', '40', '--keep', '0', '--cache-type-k', 'q8_0']);
+  });
+
+  it('reports no launch options rather than an empty list when the record carried none', () => {
+    const source = sample(provenance());
+    source.result.args = [];
+    const result = toPublicBenchmark(source, submissionId);
+    expect(result.execution).not.toHaveProperty('effective_args');
+    expect(validatePublicBenchmark(result)).toBe(result);
+  });
+
+  it('rejects a launch option token that a publisher could not have produced', () => {
+    const result = toPublicBenchmark(sample(provenance()), submissionId);
+    for (const invalid of [['--model', '/private/model.gguf'], ['a'.repeat(129)], [''], ['bad\nvalue'], [1024]]) {
+      expect(() => validatePublicBenchmark({ ...result, execution: { ...result.execution, effective_args: invalid } })).toThrow();
+    }
+  });
+
   it('keeps legacy identity, method and environment unknown instead of using current hardware', () => {
     const result = toPublicBenchmark(sample(), submissionId);
     expect(result.environment).toBeNull();

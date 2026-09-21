@@ -52,6 +52,24 @@ function numberLabel(value: number | null | undefined, copy: Copy, digits = 1): 
   return value == null || !Number.isFinite(value) ? copy.unavailable : value.toFixed(digits);
 }
 
+const startsOption = (token: string | undefined) => token !== undefined && /^--?[a-zA-Z]/.test(token);
+
+/** One line per launch argument: an option keeps the value it was given. */
+function argumentLines(args: readonly string[]): string[] {
+  const lines: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const option = JSON.stringify(normalizeDisplayText(args[index]));
+    // A following token that does not begin another option is this option's value.
+    if (startsOption(args[index]) && args[index + 1] !== undefined && !startsOption(args[index + 1])) {
+      lines.push(`${option} ${JSON.stringify(normalizeDisplayText(args[index + 1]))}`);
+      index += 1;
+    } else {
+      lines.push(option);
+    }
+  }
+  return lines;
+}
+
 function progressLabel(phase: api.PerformanceBenchmarkProgress["phase"] | undefined, copy: Copy): string {
   switch (phase) {
     case "warmup": return copy.warming;
@@ -366,7 +384,14 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       <div><dt>{copy.executionDevice}</dt><dd>{provenance?.environment?.execution?.mode === 'cpu' ? 'CPU' : selectedGpuLabel || copy.unavailable}</dd></div>
       <div><dt>{copy.modelHash}</dt><dd>{typeof modelHash === 'string' ? modelHash : copy.unavailable}</dd></div>
     </dl></details>}
-    {visibleResult && visibleResult.args.length > 0 && <details className="performance-card performance-details"><summary>{copy.effectiveArgs}</summary><code>{visibleResult.args.map((arg) => JSON.stringify(normalizeDisplayText(arg))).join(" ")}</code></details>}
-    <details className="performance-card performance-details"><summary>{copy.metrics}</summary><p>{copy.metricsHint}</p><p>{copy.ppHint}</p><p>{copy.throughputHint}</p><p>{copy.memoryHint}</p></details>
+    {visibleResult && visibleResult.args.length > 0 && <details className="performance-card performance-details"><summary>{copy.effectiveArgs}</summary><code>{argumentLines(visibleResult.args).join("\n")}</code></details>}
+    <details className="performance-card performance-details"><summary>{copy.metrics}</summary><dl className="performance-metric-guide">
+      <div><dt>{copy.ttft}</dt><dd>{copy.ttftHint}</dd></div>
+      <div><dt>{copy.tpot}</dt><dd>{copy.tpotHint}</dd></div>
+      <div><dt>{copy.pp}</dt><dd>{copy.ppHint}</dd></div>
+      <div><dt>{copy.throughput}</dt><dd>{copy.throughputHint}</dd></div>
+      <div><dt>{copy.memory}</dt><dd>{copy.memoryHint}</dd></div>
+      <div><dt>{copy.speedup}</dt><dd>{copy.speedupHint}</dd></div>
+    </dl><p>{copy.metricsHint}</p></details>
   </div>;
 }

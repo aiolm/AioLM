@@ -96,13 +96,23 @@ pub struct ProfileApplication {
     pub system_prompt: String,
 }
 
+/// The initial Default profile owns every global field plus the tuning fields
+/// that are otherwise model-scoped, so a new installation inherits the runtime
+/// default for each one instead of leaving it on a captured value. Owning
+/// fields outside `GLOBAL_FIELDS` is the legacy coverage form.
 fn default_profile() -> SettingsProfile {
-    let mut defaults = GLOBAL_FIELDS
-        .iter()
-        .filter(|key| crate::tuning_defaults::is_known(key))
-        .copied()
+    let mut defaults = crate::tuning_defaults::keys()
+        .filter(|key| model_field(key))
         .collect::<Vec<_>>();
     defaults.sort_unstable();
+    let mut coverage = GLOBAL_FIELDS
+        .iter()
+        .copied()
+        .chain(defaults.iter().copied())
+        .filter(|key| model_field(key))
+        .collect::<Vec<_>>();
+    coverage.sort_unstable();
+    coverage.dedup();
     SettingsProfile {
         id: "profile-default".into(),
         name: "Default".into(),
@@ -117,8 +127,8 @@ fn default_profile() -> SettingsProfile {
         }))
         .expect("default settings are an object"),
         system_prompt: Some(String::new()),
-        legacy: None,
-        coverage: None,
+        legacy: Some(true),
+        coverage: Some(coverage.iter().map(|key| (*key).to_owned()).collect()),
     }
 }
 
@@ -1404,9 +1414,19 @@ mod tests {
             .unwrap();
         assert!(markers.contains(&json!("ctx_size")));
         assert!(markers.contains(&json!("temperature")));
+        // The seeded profile covers the model-scoped tuning fields as well, so
+        // a new library inherits the runtime default for every tuning field.
+        assert!(markers.contains(&json!("ngl")));
         assert!(markers
             .iter()
-            .all(|value| GLOBAL_FIELDS.contains(&value.as_str().unwrap())));
+            .all(|value| crate::tuning_defaults::is_known(value.as_str().unwrap())));
+        let coverage = profiles.entries[0].coverage.as_ref().unwrap();
+        assert!(markers
+            .iter()
+            .all(|value| coverage.contains(&value.as_str().unwrap().to_owned())));
+        assert!(GLOBAL_FIELDS
+            .iter()
+            .all(|field| coverage.contains(&(*field).to_owned())));
         assert_eq!(migrated.temperature, 0.2);
         assert_eq!(migrated.ctx_size, 16384);
         assert_eq!(migrated.active_model, "models/custom.gguf");
@@ -1426,6 +1446,42 @@ mod tests {
         with_profiles["active_model"] = json!("models/sample.gguf");
         let migrated = super::super::migrate_value(with_profiles).unwrap();
         assert_eq!(migrated.settings_profiles, Some(library()));
+    }
+
+    #[test]
+    fn the_initial_default_profile_launches_a_model_on_llama_cpp_defaults() {
+        let profile = default_profile();
+        let mut cfg = AppConfig {
+            active_model: "model.gguf".into(),
+            ..AppConfig::default()
+        };
+        cfg.runtime_defaults = profile.settings["runtime_defaults"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect();
+        // Every tuning flag is omitted so the runtime applies its own default.
+        // GPU layers and context size keep the documented app defaults, and the
+        // remaining flags are app-managed rather than tuning values.
+        assert_eq!(
+            crate::server::build_args(&cfg, "secret"),
+            [
+                "--model",
+                "model.gguf",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8080",
+                "--n-gpu-layers",
+                "99",
+                "--ctx-size",
+                "4096",
+                "--cont-batching",
+                "--no-webui",
+            ]
+            .map(String::from)
+        );
     }
 
     #[test]

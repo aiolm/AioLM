@@ -52,10 +52,19 @@ export function emptyProfileLibrary(): SettingsProfileLibrary {
 
 export const DEFAULT_SETTINGS_PROFILE_ID = 'profile-default';
 
+/**
+ * Fields the initial Default profile owns: every global field plus the tuning
+ * fields that are otherwise model-scoped, so a fresh install inherits the
+ * runtime default for each one instead of leaving it on a captured value.
+ */
+export const DEFAULT_PROFILE_KEYS: readonly ExecutionKey[] = MODEL_PROFILE_KEYS
+  .filter(key => GLOBAL_PROFILE_KEYS.includes(key) || RUNTIME_DEFAULT_KEYS.includes(key)).sort();
+
 /** A fresh profile inherits product/runtime defaults without capturing any user configuration. */
 export function defaultSettingsProfile(): SettingsProfile {
   return { id: DEFAULT_SETTINGS_PROFILE_ID, name: 'Default', scope: 'global', revision: 1, system_prompt: '',
-    settings: { runtime_defaults: GLOBAL_PROFILE_KEYS.filter(key => RUNTIME_DEFAULT_KEYS.includes(key)).sort(), chat_options: {} } };
+    settings: { runtime_defaults: DEFAULT_PROFILE_KEYS.filter(key => RUNTIME_DEFAULT_KEYS.includes(key)), chat_options: {} },
+    legacy: true, coverage: [...DEFAULT_PROFILE_KEYS] };
 }
 
 export function ensureProfileLibrary(library: SettingsProfileLibrary): SettingsProfileLibrary {

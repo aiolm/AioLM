@@ -112,7 +112,18 @@ export interface PublicBenchmarkSubmission {
       selection_complete: boolean;
     };
   } | null;
-  execution: { context_size: number; parallel: number; settings: BenchmarkExecutionSettings | null };
+  execution: {
+    context_size: number;
+    parallel: number;
+    settings: BenchmarkExecutionSettings | null;
+    /**
+     * The llama-server options the measured run was started with, in order, as
+     * separate tokens, so a reader can reproduce the setup. Options carrying a
+     * path, address or credential are removed with their values. Absent on
+     * measurements made before contract 0.5.
+     */
+    effective_args?: string[] | null;
+  };
   measurements: { status: BenchmarkRunStatus; rows: PublicBenchmarkRow[] };
 }
 
