@@ -510,9 +510,10 @@ pub async fn run(
             let warmup = batch(&endpoint, tokens, 16, isolated.parallel, &cancel, REQUEST_TIMEOUT).await;
             if let Some(error) = warmup.iter().find_map(|m| m.error.as_ref()) { return Err(format!("warmup failed: {error}")); }
         }
-        for &prompt in &request.prompt_lengths {
-            let tokens = Arc::new(all_tokens[..prompt as usize].to_vec());
-            for concurrency in std::iter::once(1).chain(request.batch_sizes.iter().copied()) {
+        // Concurrency is the outer sweep so every input length finishes at one level before the next: 1x runs for all lengths, then 2x, and so on.
+        for concurrency in std::iter::once(1).chain(request.batch_sizes.iter().copied()) {
+            for &prompt in &request.prompt_lengths {
+                let tokens = Arc::new(all_tokens[..prompt as usize].to_vec());
                 for repetition in 1..=request.repetitions {
                     if cancel.load(Ordering::Acquire) { return Err("benchmark cancelled".into()); }
                     let remaining = deadline.saturating_duration_since(Instant::now());
