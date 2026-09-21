@@ -4,7 +4,7 @@
 
 [文档目录](../README.md) — 安装、开发、代码结构及项目政策。
 
-`llama.cpp` 的 Windows 桌面运行时管理器。通过基于 `llama-server` 的 Tauri v2 桌面 UI，管理模型、运行时、聊天和基准测试。
+AioLM（All In One LM）— `llama.cpp` 的 Windows 桌面运行时管理器。通过基于 `llama-server` 的 Tauri v2 桌面 UI，管理模型、运行时、聊天和基准测试。
 
 ## 功能
 
