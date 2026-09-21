@@ -27,7 +27,13 @@ pub(crate) async fn list_models(
     let job = scan_id.map(|id| state.model_scans.begin(id)).transpose()?;
     tokio::task::spawn_blocking(move || {
         let dir = if models_dir.trim().is_empty() {
-            config::load_result()?.models_dir
+            let cfg = config::load_result()?;
+            // The folder the application owns is created on demand, so the first
+            // scan after an installation lists an empty folder instead of
+            // failing on a path that was never made. Whatever stops it from
+            // being created is reported here, where the user is looking for it.
+            config::ensure_default_models_dir(&cfg)?;
+            cfg.models_dir
         } else {
             models_dir
         };

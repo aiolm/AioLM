@@ -7,6 +7,8 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText, restoreDisplayPath } from '../../shared/lib/displayPaths';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import { CustomSelect, OverlayContainerContext } from '../../shared/ui/CustomSelect';
+import ConfirmDialog from '../../shared/ui/ConfirmDialog';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { previewExecution } from '../models/modelExecutionState';
 import { useServerOptions } from '../tuning/useServerOptions';
 import DraftTuningEditor from './DraftTuningEditor';
@@ -25,6 +27,9 @@ import { useModelCatalog } from './useModelCatalog';
 import { useModelContextLimit } from './useModelContextLimit';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
+import { formatMebibytes } from '../../shared/lib/units';
+import { formatRuntimeVersion } from '../../shared/runtime/runtimeUtils';
+import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import './model-settings.css';
 
 export interface ModelSettingsDialogProps {
@@ -79,6 +84,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [editorRevision, setEditorRevision] = useState(0);
   const [tuningRevision, setTuningRevision] = useState(0);
   const [resources, setResources] = useState<{ runtimes: api.InstalledRuntime[]; device: api.DeviceReport | null }>({ runtimes: [], device: null });
+  // Whether the installed-runtime list has answered at least once. An empty
+  // list is a real answer — no runtime installed — and must report the selected
+  // runtime as missing; only a list that has not loaded yet stays unchecked.
+  const [resourcesLoaded, setResourcesLoaded] = useState(false);
   const [resourceError, setResourceError] = useState('');
   const [resourceRevision, setResourceRevision] = useState(0);
   const [overlay, setOverlay] = useState<HTMLDivElement | null>(null);
@@ -98,6 +107,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const live = (mode === 'default' || mode === 'session') && ['running', 'starting', 'stopping'].includes(liveState ?? '');
   const serverChanged = running && serverSettingsChanged(liveConfig ?? initial.current, cfg);
   const startText = running ? (liveConfig ?? initial.current).active_model === cfg.active_model ? copy.restart : copy.switchStart : copy.start;
+  const executionCopy = executionText[locale];
   const stateText = liveState && ['stopped', 'starting', 'stopping', 'running', 'failed', 'crashed'].includes(liveState) ? executionText[locale][liveState as 'running'] : liveState;
   const valuesDirty = cfg.active_model !== initial.current.active_model || !settingsEqual(settings, executionSettings(initial.current));
   const enteredPath = restoreDisplayPath(cfg.active_model, pathDraft.trim());
@@ -121,7 +131,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     if (!open) return;
     let active = true;
     setResourceError('');
-    void Promise.all([api.rtList(), api.deviceProfile()]).then(([runtimes, device]) => { if (active) setResources({ runtimes, device }); })
+    void Promise.all([api.rtList(), api.deviceProfile()]).then(([runtimes, device]) => { if (active) { setResources({ runtimes, device }); setResourcesLoaded(true); } })
       .catch(cause => { if (active) setResourceError(String(cause)); });
     return () => { active = false; };
   }, [open, resourceRevision]);
@@ -134,7 +144,6 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     } else if (element.open) { element.close(); invoker.current?.focus(); }
   }, [open]);
   useEffect(() => { const element = dialog.current; return () => { if (element?.open) element.close(); invoker.current?.focus(); }; }, []);
-  useEffect(() => { if (pending || confirmSave) dialog.current?.querySelector<HTMLButtonElement>('.model-settings-footer .model-settings-confirm button')?.focus(); }, [pending, confirmSave]);
   const setFieldInvalid = useCallback((key: string, value: boolean) => { setInvalid(previous => {
     if (previous.has(key) === value) return previous;
     const next = new Set(previous); if (value) next.add(key); else next.delete(key); return next;
@@ -249,6 +258,17 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const models = catalog.models.filter(model => !model.is_vision && `${model.name} ${normalizeDisplayPath(model.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const selected = catalog.models.find(model => model.path === cfg.active_model);
   const incomplete = !!selected?.shards?.missing.length;
+  // What still has to be chosen before the start button can do anything. The
+  // installed list is only consulted once it has loaded, so a slow read never
+  // reports an installed runtime as missing — but a list that loaded empty is
+  // consulted too, so a selected runtime with nothing installed is reported.
+  const setupGaps = runSetupGaps({
+    activeModel: cfg.active_model,
+    activeBackend: cfg.active_backend,
+    activeBuild: cfg.active_build,
+    modelIncomplete: incomplete,
+    ...(resourcesLoaded ? { runtimeInstalled: !runtimeMissing } : {}),
+  });
   const editorKey = `${cfg.active_model}:${editorRevision}`;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
     <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), disabled: !!model.shards?.missing.length })),
@@ -298,14 +318,14 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
                 event.preventDefault(); buttons[next]?.focus();
               }}>{models.map(model => <li key={model.path}><button type="button" className={cfg.active_model === model.path ? 'is-selected' : ''} disabled={!!model.shards?.missing.length}
-                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong>{normalizeDisplayText(model.name)}</strong><small>{model.size_mb.toLocaleString(locale, { maximumFractionDigits: 0 })} MB{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <span>{copy.selected}</span>}</button></li>)}</ul>
+                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong>{normalizeDisplayText(model.name)}</strong><small>{formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <span>{copy.selected}</span>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
               <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
             </div>
             <div hidden={section !== 'runtime'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}</div>
-              <label>{copy.runtime}<CustomSelect ariaLabel={copy.runtime} ariaDescribedBy={`${id}-runtime-help`} value={`${cfg.active_backend}/${cfg.active_build}`} options={[{ value: '/', label: copy.selectRuntime, disabled: true }, ...resources.runtimes.map(item => ({ value: `${item.backend}/${item.build}`, label: `${item.backend} · ${item.build}` })), ...(runtimeMissing ? [{ value: `${cfg.active_backend}/${cfg.active_build}`, label: `${cfg.active_backend} · ${cfg.active_build}` }] : [])]}
+              <label>{copy.runtime}<CustomSelect ariaLabel={copy.runtime} ariaDescribedBy={`${id}-runtime-help`} value={`${cfg.active_backend}/${cfg.active_build}`} options={[{ value: '/', label: copy.selectRuntime, disabled: true }, ...resources.runtimes.map(item => ({ value: `${item.backend}/${item.build}`, label: `${item.backend} · ${formatRuntimeVersion(item.build, item.version)}` })), ...(runtimeMissing ? [{ value: `${cfg.active_backend}/${cfg.active_build}`, label: `${cfg.active_backend} · ${formatRuntimeVersion(cfg.active_build)}` }] : [])]}
                 onChange={value => { const item = resources.runtimes.find(item => item.backend + '/' + item.build === value); change({ active_backend: item?.backend ?? '', active_build: item?.build ?? '' }); }} /><span id={`${id}-runtime-help`} className="app-section-hint">{help.runtime}</span></label>
               {runtimeMissing && <p className="text-warning" role="status">{copy.missingRuntime}</p>}
               {(resourceError || runtime.error) && <div><p className="text-warning" role="status">{normalizeDisplayText(resourceError || runtime.error || '')}</p><button type="button" className="app-button app-button--secondary" onClick={() => { setResourceRevision(value => value + 1); runtime.refresh(); }}>{copy.refresh}</button></div>}
@@ -330,25 +350,32 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           </div>
         </div>
         <footer className="model-settings-footer">
-          {confirmSave ? <div className="model-settings-confirm" role="alert">
-            <strong>{copy.saveConfirmTitle.replace('{name}', profileDisplayName(profiles.selected, locale))}</strong>
-            {changeCount(baseline, settings, profiles.savedApplication.system_prompt, profiles.systemPrompt) === 0
-              ? <p>{copy.saveConfirmUnchanged}</p>
-              : <SettingsChangeList saved={baseline} current={settings} savedPrompt={profiles.savedApplication.system_prompt} currentPrompt={profiles.systemPrompt} />}
-            <div><button type="button" className="app-button app-button--secondary" onClick={() => setConfirmSave(false)}>{copy.cancel}</button>
-              <button type="button" className="app-button app-button--primary" onClick={() => { setConfirmSave(false); void apply('save'); }}>{copy.saveConfirmAction}</button></div>
-          </div>
-          : pending ? <div className="model-settings-confirm" role="alert"><strong>{copy.discardTitle}</strong><p>{copy.discardBody}</p><div><button type="button" className="app-button app-button--secondary" onClick={() => setPending(null)}>{copy.keep}</button><button type="button" className="app-button app-button--danger" onClick={() => { const action = pending; setPending(null); action(); }}>{copy.discard}</button></div></div>
-            : <><div className="model-settings-notices">{profileInUse && <p role="status">{copy.profileInUse}</p>}{profileDirty && <p role="status">{copy.profilePending}</p>}{pathPending && <p role="status">{copy.pathPending}</p>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <p className="text-error" role="alert">{copy.invalid} ({[...invalid].join(', ')})</p>}{incomplete && <p className="text-error">{t('ui.modelShardsMissing', { count: selected!.shards!.missing.length, total: selected!.shards!.total })}</p>}</div>
+          <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{t('ui.modelShardsMissing', { count: selected!.shards!.missing.length, total: selected!.shards!.total })}</FeedbackBanner>}
+              {!benchmark && mode !== 'project' && !live && setupGaps.length > 0 && <FeedbackBanner tone="warning" title={executionCopy.blockedTitle}><ul className="model-settings-blocked" aria-label={executionCopy.blockedTitle}>
+                {setupGaps.map(gap => <li key={gap}><span>{runSetupGapMessage(gap, locale)}</span>
+                  {gap === 'model' && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => showSection('model')}>{executionCopy.needModelAction}</button>}
+                  {gap === 'runtime' && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => showSection('runtime')}>{executionCopy.needRuntimeAction}</button>}
+                  {gap === 'runtimeMissing' && onManageRuntimes && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onManageRuntimes(structuredClone(cfg))}>{executionCopy.manageRuntime}</button>}
+                </li>)}
+              </ul></FeedbackBanner>}</div>
               <div className="model-settings-actions">
                 {!benchmark && mode !== 'project' && (live
                   ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
                   : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !cfg.active_backend || !cfg.active_build || incomplete || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
                 {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" onClick={onCancelStart}>{copy.cancel}</button>}
-              </div></>}
+              </div>
         </footer>
       </div>
       <div ref={setOverlay} className="model-settings-overlays" inert={disabled || !!pending || confirmSave} />
+      {pending && <ConfirmDialog open={open} title={copy.discardTitle} description={copy.discardBody}
+        confirmLabel={copy.discard} cancelLabel={copy.keep} busy={disabled}
+        onCancel={() => setPending(null)} onConfirm={() => { const action = pending; setPending(null); action(); }} />}
+      {confirmSave && <ConfirmDialog open={open} title={copy.saveConfirmTitle.replace('{name}', profileDisplayName(profiles.selected, locale))}
+        description={changeCount(baseline, settings, profiles.savedApplication.system_prompt, profiles.systemPrompt) === 0
+          ? copy.saveConfirmUnchanged
+          : <SettingsChangeList saved={baseline} current={settings} savedPrompt={profiles.savedApplication.system_prompt} currentPrompt={profiles.systemPrompt} />}
+        confirmLabel={copy.saveConfirmAction} cancelLabel={copy.cancel} tone="primary" busy={disabled}
+        onCancel={() => setConfirmSave(false)} onConfirm={() => { setConfirmSave(false); void apply('save'); }} />}
     </OverlayContainerContext.Provider>
   </dialog>;
 }
@@ -357,10 +384,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
 function LaunchFailureNotice({ text, locale }: { text: string; locale: Locale }) {
   const view = describeLaunchFailure(text, locale);
   const copy = modelSettingsCopy[locale];
-  if (!view.detail) return <p className="text-error" role="alert">{normalizeDisplayText(text)}</p>;
-  return <div className="text-error" role="alert">
+  if (!view.detail) return <FeedbackBanner tone="error">{normalizeDisplayText(text)}</FeedbackBanner>;
+  return <FeedbackBanner tone="error">
     {view.summary.split('\n').map((line, index) => <p key={index}>{normalizeDisplayText(line)}</p>)}
     <details><summary>{copy.failureDetails}</summary><pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-left text-xs">{normalizeDisplayText(view.detail)}</pre></details>
-  </div>;
+  </FeedbackBanner>;
 }
 export default ModelSettingsDialog;

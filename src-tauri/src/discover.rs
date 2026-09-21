@@ -23,6 +23,25 @@ const DOWNLOAD_BUFFER_BYTES: usize = 1024 * 1024;
 const DOWNLOAD_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 const DOWNLOAD_CANCELLED: &str = "model download cancelled";
 
+/// Sort orders the Hugging Face model API accepts. The API answers HTTP 400
+/// for anything else, so the set is closed here rather than forwarded blindly.
+pub const SORT_KEYS: [&str; 4] = ["downloads", "likes", "lastModified", "trendingScore"];
+pub const DEFAULT_SORT: &str = "downloads";
+
+/// Properties the listing has to ask for by name. `expand` replaces the
+/// default field set rather than adding to it, so every field `HfModel`
+/// carries is listed here — and `gated`, which the default set omits
+/// entirely, is finally reported instead of silently reading as "not gated".
+const EXPAND_FIELDS: [&str; 7] = [
+    "author",
+    "gated",
+    "downloads",
+    "likes",
+    "lastModified",
+    "pipeline_tag",
+    "tags",
+];
+
 #[derive(Serialize, Clone, Debug)]
 pub struct HfModel {
     pub id: String,
@@ -42,6 +61,20 @@ pub struct HfFile {
     pub oid: Option<String>,
     pub is_mmproj: bool,
     pub download_url: String,
+}
+
+/// A repository file that is already present at its download destination.
+#[derive(Serialize, Clone, Debug)]
+pub struct InstalledHfFile {
+    /// Repository-relative path, matching `HfFile::path`.
+    pub path: String,
+    /// Where the file sits under the configured models directory.
+    pub local_path: String,
+    pub size_bytes: u64,
+    /// Parts of this file's multi-part GGUF that are still absent. Empty for a
+    /// single-file model and for a complete set, so a caller can tell "this
+    /// file is here" from "this model is ready to run".
+    pub missing_shards: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -67,8 +100,23 @@ struct ApiModel {
     pipeline_tag: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_gated")]
     gated: bool,
+}
+
+/// The Hub reports access control as `false` or as the string naming how
+/// approval works (`"auto"`, `"manual"`). Reading it as a plain bool made a
+/// single gated repository fail the whole listing, so both spellings are
+/// accepted and anything other than "not gated" counts as gated.
+fn deserialize_gated<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Bool(value) => value,
+        serde_json::Value::String(value) => !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "false" | "none" | "no" | ""
+        ),
+        _ => false,
+    })
 }
 
 #[derive(Deserialize, Debug)]
@@ -366,21 +414,35 @@ async fn activate_download(part: &Path, target: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot clean up staged model download: {error}"))
 }
 
-pub async fn search(query: &str, limit: u32) -> Result<Vec<HfModel>, String> {
+/// List GGUF repositories in the requested order.
+///
+/// An empty query is not an error: Discover opens on the catalog itself, and
+/// the `search` parameter is then left off so the API returns its ranked list
+/// rather than the result of matching an empty term.
+pub async fn search(query: &str, limit: u32, sort: &str) -> Result<Vec<HfModel>, String> {
     let query = query.trim();
     if query.len() > MAX_QUERY_LENGTH || query.chars().any(char::is_control) {
         return Err("model search query is invalid or too long".into());
     }
+    if !SORT_KEYS.contains(&sort) {
+        return Err("model sort order is not supported".into());
+    }
     let limit = limit.clamp(1, 50).to_string();
+    let mut params = vec![
+        ("filter", "gguf"),
+        ("sort", sort),
+        ("direction", "-1"),
+        ("limit", limit.as_str()),
+    ];
+    for field in EXPAND_FIELDS {
+        params.push(("expand[]", field));
+    }
+    if !query.is_empty() {
+        params.push(("search", query));
+    }
     let response = client()?
         .get(format!("{HF_API}/models"))
-        .query(&[
-            ("search", query),
-            ("filter", "gguf"),
-            ("sort", "downloads"),
-            ("direction", "-1"),
-            ("limit", limit.as_str()),
-        ])
+        .query(&params)
         .send()
         .await
         .map_err(|error| format!("Hugging Face model search failed: {error}"))?;
@@ -437,6 +499,93 @@ pub async fn files(repo_id: &str) -> Result<Vec<HfFile>, String> {
             })
         })
         .collect()
+}
+
+/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Returns every
+/// file name in the group, in order, when `name` is one part of such a set.
+fn shard_group(name: &str) -> Option<Vec<String>> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    if !extension.eq_ignore_ascii_case("gguf") {
+        return None;
+    }
+    let (prefix, total) = stem.rsplit_once("-of-")?;
+    let (base, index) = prefix.rsplit_once('-')?;
+    if base.is_empty()
+        || index.len() != 5
+        || total.len() != 5
+        || !index.bytes().all(|byte| byte.is_ascii_digit())
+        || !total.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let index: usize = index.parse().ok()?;
+    let total: usize = total.parse().ok()?;
+    if total <= 1 || index == 0 || index > total {
+        return None;
+    }
+    Some(
+        (1..=total)
+            .map(|part| format!("{base}-{part:05}-of-{total:05}.{extension}"))
+            .collect(),
+    )
+}
+
+/// Which parts of `target`'s multi-part set are not on disk beside it.
+fn missing_shards(target: &Path) -> Vec<String> {
+    let Some(name) = target.file_name().and_then(|value| value.to_str()) else {
+        return Vec::new();
+    };
+    let Some(group) = shard_group(name) else {
+        return Vec::new();
+    };
+    let parent = target.parent().unwrap_or(Path::new(""));
+    group
+        .into_iter()
+        .filter(|part| !parent.join(part).is_file())
+        .collect()
+}
+
+/// Which of `files` this machine already holds for `repo_id`.
+///
+/// Reports only the destination a Discover download actually writes to —
+/// `<models_dir>/hf/<author>/<model>/<path>` — so a model of the same name
+/// stored elsewhere in the library is never mistaken for this repository's
+/// copy, and so the answer follows the configured directory rather than any
+/// fixed location. Purely a read: unlike the download path it creates nothing.
+pub fn installed_files(
+    models_dir: &str,
+    repo_id: &str,
+    files: &[String],
+) -> Result<Vec<InstalledHfFile>, String> {
+    validate_repo_id(repo_id)?;
+    let root = models_dir.trim();
+    if root.is_empty() {
+        return Err("models directory is empty".into());
+    }
+    if files.len() > MAX_TREE_ENTRIES {
+        return Err("too many repository files to inspect safely".into());
+    }
+    let base = Path::new(root).join("hf").join(repo_directory(repo_id));
+    let mut installed = Vec::new();
+    for file in files {
+        if validate_repo_path(file).is_err() {
+            continue;
+        }
+        let target = base.join(relative_path(file));
+        let Ok(metadata) = fs::metadata(&target) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        installed.push(InstalledHfFile {
+            path: file.clone(),
+            local_path: target.to_string_lossy().into_owned(),
+            size_bytes: metadata.len(),
+            missing_shards: missing_shards(&target),
+        });
+    }
+    Ok(installed)
 }
 
 fn expected_sha256(oid: Option<&str>) -> Option<String> {
@@ -1005,6 +1154,182 @@ mod tests {
             expected_sha256(oid.as_deref()),
             Some("849856e1e7eff8ea7425a2a4cee50f3d547165194f50ea3112c9fc07cb08daad".to_string())
         );
+    }
+
+    fn installed_fixture() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("aiolm-installed-{}", Uuid::new_v4()));
+        fs::create_dir_all(root.join("hf").join("owner").join("model"))
+            .expect("create installed fixture directory");
+        root
+    }
+
+    fn write_repo_file(root: &Path, name: &str, bytes: &[u8]) {
+        fs::write(
+            root.join("hf").join("owner").join("model").join(name),
+            bytes,
+        )
+        .expect("write installed fixture file");
+    }
+
+    #[test]
+    fn search_rejects_a_sort_order_the_api_does_not_accept() {
+        let rejected = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build test runtime")
+            .block_on(search("qwen", 5, "popularity"));
+        assert_eq!(
+            rejected.err(),
+            Some("model sort order is not supported".to_string())
+        );
+    }
+
+    #[test]
+    fn a_gated_repository_is_read_from_either_spelling_the_hub_uses() {
+        let parse = |value: serde_json::Value| {
+            serde_json::from_value::<ApiModel>(
+                serde_json::json!({ "id": "owner/model", "gated": value }),
+            )
+            .expect("parse listing entry")
+            .gated
+        };
+        assert!(parse(serde_json::json!("manual")));
+        assert!(parse(serde_json::json!("auto")));
+        assert!(!parse(serde_json::json!(false)));
+        assert!(parse(serde_json::json!(true)));
+        assert!(!parse(serde_json::json!("false")));
+        // A listing that omits the property must still parse.
+        assert!(
+            !serde_json::from_value::<ApiModel>(serde_json::json!({ "id": "owner/model" }))
+                .expect("parse listing entry without access control")
+                .gated
+        );
+    }
+
+    #[test]
+    fn the_listing_asks_for_every_property_it_reports() {
+        for field in [
+            "author",
+            "gated",
+            "downloads",
+            "likes",
+            "lastModified",
+            "pipeline_tag",
+            "tags",
+        ] {
+            assert!(EXPAND_FIELDS.contains(&field), "{field}");
+        }
+    }
+
+    #[test]
+    fn every_offered_sort_order_is_one_the_api_documents() {
+        assert!(SORT_KEYS.contains(&DEFAULT_SORT));
+        assert_eq!(
+            SORT_KEYS,
+            ["downloads", "likes", "lastModified", "trendingScore"]
+        );
+    }
+
+    #[test]
+    fn only_files_present_under_the_configured_destination_count_as_installed() {
+        let root = installed_fixture();
+        write_repo_file(&root, "model.Q4_K_M.gguf", b"present");
+        // Same file name directly in the library, not under this repository's
+        // destination: a different copy, and not this repository's download.
+        fs::write(root.join("model.Q8_0.gguf"), b"elsewhere").expect("write library file");
+        let installed = installed_files(
+            root.to_str().expect("fixture path"),
+            "owner/model",
+            &[
+                "model.Q4_K_M.gguf".to_string(),
+                "model.Q8_0.gguf".to_string(),
+            ],
+        )
+        .expect("inspect installed files");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].path, "model.Q4_K_M.gguf");
+        assert_eq!(installed[0].size_bytes, 7);
+        assert!(installed[0].missing_shards.is_empty());
+        fs::remove_dir_all(root).expect("remove installed fixture");
+    }
+
+    #[test]
+    fn an_incomplete_split_model_reports_the_parts_that_are_still_missing() {
+        let root = installed_fixture();
+        write_repo_file(&root, "big-00001-of-00003.gguf", b"one");
+        write_repo_file(&root, "big-00003-of-00003.gguf", b"three");
+        let installed = installed_files(
+            root.to_str().expect("fixture path"),
+            "owner/model",
+            &[
+                "big-00001-of-00003.gguf".to_string(),
+                "big-00002-of-00003.gguf".to_string(),
+                "big-00003-of-00003.gguf".to_string(),
+            ],
+        )
+        .expect("inspect split model");
+        assert_eq!(installed.len(), 2);
+        for entry in &installed {
+            assert_eq!(entry.missing_shards, vec!["big-00002-of-00003.gguf"]);
+        }
+        write_repo_file(&root, "big-00002-of-00003.gguf", b"two");
+        let complete = installed_files(
+            root.to_str().expect("fixture path"),
+            "owner/model",
+            &["big-00002-of-00003.gguf".to_string()],
+        )
+        .expect("inspect completed split model");
+        assert!(complete[0].missing_shards.is_empty());
+        fs::remove_dir_all(root).expect("remove installed fixture");
+    }
+
+    #[test]
+    fn inspecting_installed_files_never_creates_the_models_directory() {
+        let root = std::env::temp_dir().join(format!("aiolm-absent-{}", Uuid::new_v4()));
+        let installed = installed_files(
+            root.to_str().expect("fixture path"),
+            "owner/model",
+            &["model.gguf".to_string()],
+        )
+        .expect("inspect an absent library");
+        assert!(installed.is_empty());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn installed_lookup_refuses_unsafe_repositories_and_skips_unsafe_paths() {
+        let root = installed_fixture();
+        assert!(installed_files(root.to_str().expect("fixture path"), "owner", &[]).is_err());
+        assert!(installed_files("   ", "owner/model", &[]).is_err());
+        let skipped = installed_files(
+            root.to_str().expect("fixture path"),
+            "owner/model",
+            &["../escape.gguf".to_string()],
+        )
+        .expect("skip an unsafe path rather than failing the lookup");
+        assert!(skipped.is_empty());
+        fs::remove_dir_all(root).expect("remove installed fixture");
+    }
+
+    #[test]
+    fn only_standard_shard_suffixes_form_a_group() {
+        assert_eq!(
+            shard_group("big-00002-of-00003.gguf"),
+            Some(vec![
+                "big-00001-of-00003.gguf".to_string(),
+                "big-00002-of-00003.gguf".to_string(),
+                "big-00003-of-00003.gguf".to_string(),
+            ])
+        );
+        for name in [
+            "model.gguf",
+            "big-1-of-3.gguf",
+            "big-00000-of-00003.gguf",
+            "big-00004-of-00003.gguf",
+            "big-00001-of-00001.gguf",
+            "big-00001-of-00002.bin",
+        ] {
+            assert!(shard_group(name).is_none(), "{name}");
+        }
     }
 
     #[tokio::test]

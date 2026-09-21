@@ -35,6 +35,19 @@ describe("Workspace navigation", () => {
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
 
+  it("opens global errors above the retained activity bar and preserves dismissal", async () => {
+    store.actionError = "The model could not be started.";
+    const view = mount();
+    const drawer = view.container.querySelector<HTMLDetailsElement>("details.app-activity")!;
+    await waitFor(() => expect(drawer.open).toBe(true));
+    expect(drawer).not.toHaveAttribute("hidden");
+    const error = screen.getByRole("alert");
+    expect(error).toHaveTextContent("The model could not be started.");
+    expect(drawer.querySelector("summary")).toBeVisible();
+    fireEvent.click(within(error).getByRole("button", { name: "Dismiss" }));
+    expect(store.clearErrors).toHaveBeenCalledOnce();
+  });
+
   it("keeps global cancellation through panel loading and restores it after leaving the owner page", async () => {
     showBenchmarkCancel = true;
     let release!: () => void;

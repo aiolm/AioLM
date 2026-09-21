@@ -29,6 +29,13 @@ const serverPortText = {
   zh: { label: "默认服务器端口", description: "在默认服务器下次启动时应用。保存后，当前服务器仍使用原地址运行。", invalid: "请输入1到65535之间的整数。", current: "当前服务器", conflict: "端口已在其他位置更改。请取消编辑以重新加载已保存的值。" },
 };
 
+const closeToTrayText = {
+  en: { label: "Close to system tray", description: "Closing the window hides AioLM in the system tray and leaves running servers up. Use the tray icon to bring the window back or to quit.", failed: "The system tray is unavailable, so this setting was not changed." },
+  ko: { label: "닫을 때 시스템 트레이로 이동", description: "창을 닫으면 AioLM이 시스템 트레이로 숨고 실행 중인 서버는 계속 동작합니다. 트레이 아이콘에서 창을 다시 열거나 종료할 수 있습니다.", failed: "시스템 트레이를 사용할 수 없어 설정을 변경하지 못했습니다." },
+  ja: { label: "閉じるときにシステムトレイへ", description: "ウィンドウを閉じるとAioLMはシステムトレイに隠れ、実行中のサーバーはそのまま動きます。トレイアイコンからウィンドウを戻すか終了できます。", failed: "システムトレイを利用できないため、設定を変更できませんでした。" },
+  zh: { label: "关闭时最小化到系统托盘", description: "关闭窗口后AioLM会隐藏到系统托盘，正在运行的服务器继续运行。可通过托盘图标恢复窗口或退出。", failed: "系统托盘不可用，设置未更改。" },
+};
+
 function Row({ id, label, description, children }: { id: string; label: string; description: string; children: ReactNode }) {
   const query = useContext(SearchContext);
   if (query && !`${label} ${description}`.toLocaleLowerCase().includes(query)) return null;
@@ -63,6 +70,21 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   const [portDraft, setPortDraft] = useState<string | null>(null);
   const [portSaving, setPortSaving] = useState(false);
   const [portError, setPortError] = useState<string | null>(null);
+  const trayCopy = closeToTrayText[locale];
+  const [trayError, setTrayError] = useState<string | null>(null);
+  const [traySaving, setTraySaving] = useState(false);
+  // The backend puts the tray icon on screen before it writes the setting, so a
+  // machine with no usable tray keeps the saved value it already had.
+  const saveCloseToTray = async (value: boolean) => {
+    if (!store) return;
+    setTraySaving(true); setTrayError(null);
+    try {
+      await store.updateConfig({ close_to_tray: value });
+      setSaveState("saved");
+      window.setTimeout(() => setSaveState("idle"), 1800);
+    } catch (error) { setTrayError(error instanceof Error ? error.message : trayCopy.failed); }
+    finally { setTraySaving(false); }
+  };
   const portBase = useRef<number | undefined>(undefined);
   const portLock = useRef(false);
   const portValue = portDraft ?? String(store?.cfg?.port ?? "");
@@ -194,6 +216,12 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
           {isNativeRuntimeAvailable()
             ? <div className="settings-note"><strong>{t("ui.exitCleanupTitle")}</strong><p>{t("ui.exitCleanupDescription")}</p></div>
             : <Row id="settings-auto-stop" label={t("settings.autoStop")} description={t("settings.autoStopDesc")}>{bool("settings-auto-stop", preferences.server.autoStopOnExit, (value) => patch({ server: { ...preferences.server, autoStopOnExit: value } }))}</Row>}
+          {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
+            <div>
+              <Switch id="settings-close-to-tray" checked={store.cfg.close_to_tray === true} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
+              {trayError && <p role="alert" className="mt-2 text-xs ui-color-error-ink">{normalizeDisplayText(trayError)}</p>}
+            </div>
+          </Row>}
           <Row id="settings-polling" label={t("settings.polling")} description={t("settings.pollingDesc")}>
             <CustomSelect id="settings-polling" value={preferences.server.pollIntervalMs} options={[{ value: 500, label: "500 ms" }, { value: 1000, label: "1 s" }, { value: 2000, label: "2 s" }, { value: 5000, label: "5 s" }]} onChange={(pollIntervalMs) => patch({ server: { ...preferences.server, pollIntervalMs } })} triggerClassName="w-[180px]" />
           </Row>

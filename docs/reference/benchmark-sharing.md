@@ -39,6 +39,23 @@ record IDs. Unknown values remain null. Public labels are bounded and reject
 path-like content. A reviewed submission has its own UUID; changing its content
 requires a new UUID.
 
+Contract 0.6.0 additionally accepts optional `environment.cpu.physical_cores`
+beside the existing `logical_cores` thread count. The two differ on any
+processor with simultaneous multithreading, and a thread-count setting is
+measured against `logical_cores`, so a submission reports both rather than
+letting one stand in for the other. A machine whose operating system does not
+report the count sends null; the count is never obtained by dividing the thread
+count, which would be wrong on every processor without multithreading. The
+website must accept contract 0.6.0 before an app build starts sending this
+field, and a record archived without it keeps no value at all.
+
+The published `runtime.version` is the line llama.cpp's own version banner
+states, release name first: `0.3.0-dev (build 10638, commit bf9421646)`. The
+runtime probe reduces the banner to that line, so the compiler and build-host
+details it prints alongside are never published. A runtime whose banner states
+no version publishes none; the build tag in `runtime.build` is a separate
+field and is never reworked into a version the runtime did not report.
+
 Contract 0.5.0 additionally accepts optional `execution.effective_args`: the
 llama-server options the measured run was started with, in order, as separate
 tokens, so a reader can reproduce the setup rather than infer it from the

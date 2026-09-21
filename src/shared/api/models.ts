@@ -2,6 +2,28 @@ import { readBoundedResponseText } from "./http.ts";
 import { trackInitialRead } from "../ui/initialLayout.ts";
 import type { LocalModelInfo, ServerLoraAdapter } from "./types.ts";
 
+/**
+ * Orders the Hugging Face model listing can be ranked in. These are the
+ * `sort` values that API accepts; it answers HTTP 400 for anything else, and
+ * `discover.rs` rejects an unknown key before a request is made.
+ */
+export const HF_SORT_KEYS = ["downloads", "likes", "lastModified", "trendingScore"] as const;
+export type HfSortKey = (typeof HF_SORT_KEYS)[number];
+
+/** A repository file this machine already holds at its download destination. */
+export interface HfInstalledFile {
+  /** Repository-relative path, matching `HfFile.path`. */
+  path: string;
+  local_path: string;
+  size_bytes: number;
+  /**
+   * Parts of this file's multi-part GGUF that are still absent. Empty for a
+   * single-file model and for a complete set, so the panel can tell "this file
+   * is here" from "this model is ready to run".
+   */
+  missing_shards: string[];
+}
+
 export const localModels = (baseUrl: string, apiKey: string) => trackInitialRead(() => readLocalModels(baseUrl, apiKey));
 async function readLocalModels(baseUrl: string, apiKey: string): Promise<LocalModelInfo[]> {
   if (!baseUrl || !apiKey) throw new Error("The local server is not ready.");

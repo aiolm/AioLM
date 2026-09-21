@@ -1,8 +1,9 @@
 import StableLabel from "../../shared/ui/StableLabel";
 import type * as api from "../../shared/api/types";
-import { buildNumber, buildPhaseLabelKey } from "../../shared/runtime/runtimeUtils";
+import { buildPhaseLabelKey, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import type { BackendRow } from "./runtimesHelpers";
+import { formatBytes } from "../../shared/lib/units";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -35,7 +36,7 @@ export default function RuntimePortableBundle({
           <div role="progressbar" aria-label={t("ui.portableRuntimeTitle")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={bundleProgress.total > 0 ? Math.round((bundleProgress.received / bundleProgress.total) * 100) : undefined}>
             <div className="mb-1 flex justify-between gap-2 text-xs text-muted">
               <span>{t(`ui.${buildPhaseLabelKey(bundleProgress.phase)}`)}</span>
-              {bundleProgress.total > 0 && <span>{(bundleProgress.received / 1048576).toFixed(1)} / {(bundleProgress.total / 1048576).toFixed(1)} MB</span>}
+              {bundleProgress.total > 0 && <span>{formatBytes(bundleProgress.received)} / {formatBytes(bundleProgress.total)}</span>}
             </div>
             <div className="h-2 overflow-hidden rounded-full app-bg-elevated">
               <div className="h-full rounded-full bg-success transition-all" style={{ width: bundleProgress.total > 0 ? String(Math.min(100, bundleProgress.received / bundleProgress.total * 100)) + "%" : "100%" }} />
@@ -47,7 +48,7 @@ export default function RuntimePortableBundle({
         <div className="mt-3 flex min-w-0 flex-wrap gap-2" aria-label={t("ui.exportRuntime")}>
           {rows.flatMap((row) => row.installed.map((item) => (
             <button key={row.backend + ":" + item.build} type="button" onClick={() => onExport(row.backend, item.build)} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--secondary app-button--sm">
-              {t("ui.exportRuntime")}: {row.backend} {buildNumber(item.build)}
+              {t("ui.exportRuntime")}: {row.backend} {formatRuntimeVersion(item.build, item.version)}
             </button>
           )))}
         </div>

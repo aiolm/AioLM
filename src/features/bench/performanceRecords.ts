@@ -113,7 +113,7 @@ export function performanceCsv(records: PerformanceBenchmarkRecord[]): string {
     'trial_id', 'prompt_tokens', 'generation_length', 'concurrency', 'repetition', 'completion_tokens', 'cached_tokens',
     'ttft_ms', 'tpot_ms', 'pp_tps', 'tg_tps', 'e2e_ms', 'total_tps', 'peak_process_ram_bytes', 'timing_source', 'trial_error',
     'app_version', 'method_id', 'method_version', 'corpus_version', 'corpus_sha256', 'model_sha256', 'model_identity_status', 'model_size_bytes',
-    'os', 'arch', 'logical_cpu_cores', 'execution_mode', 'selected_gpus', 'installed_gpus', 'execution_settings'];
+    'os', 'arch', 'logical_cpu_cores', 'physical_cpu_cores', 'execution_mode', 'selected_gpus', 'installed_gpus', 'execution_settings'];
   const lines = [columns.join(',')];
   for (const record of records) {
     const { request, result } = record;
@@ -134,6 +134,9 @@ export function performanceCsv(records: PerformanceBenchmarkRecord[]): string {
         provenance?.app_version, provenance?.method?.id, provenance?.method?.version, provenance?.corpus?.version, provenance?.corpus?.sha256,
         provenance?.model?.sha256, provenance?.model?.status, provenance?.model?.size_bytes,
         environment?.os ?? record.device?.os, environment?.arch ?? record.device?.arch, environment?.cpu?.logical_cores ?? record.device?.cpuThreads,
+        // Blank rather than a guess: older records and machines that do not
+        // report core topology must not have it inferred from thread count.
+        environment?.cpu?.physical_cores ?? '',
         environment?.execution?.mode, selectedGpus ? JSON.stringify(selectedGpus) : '', environment?.installed_gpus ? JSON.stringify(environment.installed_gpus) : '',
         provenance?.execution_config ? JSON.stringify(provenance.execution_config) : '',
       ].map(csvCell).join(','));

@@ -432,6 +432,12 @@ pub struct AppConfig {
     /// written before multi-session support existed keeps behaving like the
     /// single-server app it was saved from.
     pub stop_existing_sessions_on_load: bool,
+    /// Whether closing the window hides the app to the system tray instead of
+    /// quitting it. Defaults to `false` (relying on the container-level
+    /// `#[serde(default)]` above, deliberately with no field-level override) so
+    /// a config file written before the tray existed keeps closing the window
+    /// the way it always has: the app exits and every managed server stops.
+    pub close_to_tray: bool,
     /// Saved session bundles the user can launch later. See `session.rs` for
     /// the in-memory registry of processes actually running.
     pub sessions: Vec<SessionDefinition>,
@@ -489,16 +495,19 @@ fn home_dir() -> PathBuf {
     )
 }
 
+/// The model folder the application creates and owns for a fresh installation.
+/// Resolved from the operating system's home directory every time it is asked
+/// for, so no path from the machine that built the application is ever baked in.
+pub fn default_models_dir() -> PathBuf {
+    home_dir().join(".aiolm").join("models")
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             runtime_defaults: Vec::new(),
             config_version: CURRENT_CONFIG_VERSION,
-            models_dir: home_dir()
-                .join(".aiolm")
-                .join("models")
-                .to_string_lossy()
-                .into_owned(),
+            models_dir: default_models_dir().to_string_lossy().into_owned(),
             port: 8080,
             ngl: crate::tuning_defaults::app_default_u32("ngl"),
             ctx_size: crate::tuning_defaults::app_default_u32("ctx_size"),
@@ -539,6 +548,7 @@ impl Default for AppConfig {
             sleep_idle_seconds: default_sleep_idle_seconds(),
             lora_adapters: Vec::new(),
             stop_existing_sessions_on_load: true,
+            close_to_tray: false,
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),
             settings_profiles: Some(profiles::SettingsProfileLibrary::default()),
@@ -985,6 +995,33 @@ fn migrate_with_presence(
     Ok(cfg)
 }
 
+/// Create the application-owned default model folder if the configuration
+/// still points at it, so a freshly installed app opens on a real (empty)
+/// folder instead of a path that does not exist yet.
+///
+/// Idempotent: a folder that is already there is left exactly as it is, with
+/// everything the user has stored in it. A folder the user chose themselves is
+/// never created here. The folder picker only offers folders that already
+/// exist, so a custom path that is missing means the volume holding it is not
+/// attached; creating an empty folder in its place would hide the user's models
+/// behind it. Anything that stops the folder from being created - a file of the
+/// same name, a read-only home directory - is reported rather than swallowed.
+pub fn ensure_default_models_dir(cfg: &AppConfig) -> Result<(), String> {
+    ensure_models_dir_at(cfg, &default_models_dir())
+}
+
+fn ensure_models_dir_at(cfg: &AppConfig, default: &Path) -> Result<(), String> {
+    if Path::new(cfg.models_dir.trim()) != default {
+        return Ok(());
+    }
+    fs::create_dir_all(default).map_err(|error| {
+        format!(
+            "failed to create the model folder {}: {error}",
+            default.display()
+        )
+    })
+}
+
 pub fn config_path() -> PathBuf {
     #[cfg(windows)]
     let root = PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into()));
@@ -1143,6 +1180,78 @@ fn save_to_path(cfg: &AppConfig, path: &Path) -> Result<AppConfig, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fresh_installation_gets_its_default_model_folder_and_keeps_what_is_in_it() {
+        let home = std::env::temp_dir().join(format!("aiolm-models-init-{}", Uuid::new_v4()));
+        let default = home.join(".aiolm").join("models");
+        // Nothing is read from the developer machine: a configuration that has
+        // never been saved points at the default folder, and that folder is the
+        // one created.
+        let mut cfg = load_from_path(&home.join("config.json")).unwrap();
+        assert_eq!(Path::new(&cfg.models_dir), default_models_dir());
+        // The rest of the check runs against a temporary home so it never
+        // touches the folder this machine actually uses.
+        cfg.models_dir = default.to_string_lossy().into_owned();
+        ensure_models_dir_at(&cfg, &default).unwrap();
+        assert!(default.is_dir());
+
+        // Running it again is a no-op that keeps every model already stored.
+        let model = default.join("kept.gguf");
+        fs::write(&model, b"model bytes").unwrap();
+        ensure_models_dir_at(&cfg, &default).unwrap();
+        assert_eq!(fs::read(&model).unwrap(), b"model bytes");
+
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_model_folder_the_user_chose_is_never_created_for_them() {
+        let root = std::env::temp_dir().join(format!("aiolm-models-custom-{}", Uuid::new_v4()));
+        let default = root.join("default");
+        let chosen = root.join("detached-volume").join("models");
+        let cfg = AppConfig {
+            models_dir: chosen.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+        ensure_models_dir_at(&cfg, &default).unwrap();
+        // A chosen folder that is missing means the volume holding it is not
+        // attached. Creating an empty one in its place would hide the models.
+        assert!(!chosen.exists());
+        assert!(!default.exists());
+    }
+
+    #[test]
+    fn a_default_model_folder_that_cannot_be_created_reports_why() {
+        let root = std::env::temp_dir().join(format!("aiolm-models-blocked-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let blocked = root.join("models");
+        fs::write(&blocked, b"not a folder").unwrap();
+        let cfg = AppConfig {
+            models_dir: blocked.to_string_lossy().into_owned(),
+            ..AppConfig::default()
+        };
+        let error = ensure_models_dir_at(&cfg, &blocked).unwrap_err();
+        assert!(error.contains("failed to create the model folder"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn closing_the_window_still_exits_unless_the_setting_asks_for_the_tray() {
+        assert!(!AppConfig::default().close_to_tray);
+        // A configuration written before the tray existed carries no field and
+        // must keep exiting on close.
+        let existing: AppConfig = serde_json::from_value(
+            serde_json::json!({"config_version": 11, "models_dir": "models"}),
+        )
+        .unwrap();
+        assert!(!existing.close_to_tray);
+        let opted_in: AppConfig = serde_json::from_value(
+            serde_json::json!({"config_version": 11, "models_dir": "models", "close_to_tray": true}),
+        )
+        .unwrap();
+        assert!(opted_in.close_to_tray);
+    }
 
     #[test]
     fn first_install_loads_and_saves_only_one_default_profile() {

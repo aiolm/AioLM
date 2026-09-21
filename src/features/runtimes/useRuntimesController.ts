@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { defaultPrBackendForDevice } from "../../shared/runtime/runtimeUtils";
+import { publishInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
@@ -87,6 +88,7 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     try {
       const installed = await api.rtList();
       if (generation !== refreshGeneration.current) return;
+      publishInstalledRuntimes(installed);
       const cached = force ? null : readLatestCache();
       if (cached) {
         setRows((previous) => mergeBackendRows(previous, installed).map((row) => ({

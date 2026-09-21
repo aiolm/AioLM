@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n/i18n";
 import { normalizeDisplayText } from "../lib/displayPaths";
 
@@ -9,6 +10,7 @@ type ConfirmDialogProps = {
   confirmLabel?: string;
   cancelLabel?: string;
   busy?: boolean;
+  confirmDisabled?: boolean;
   tone?: "primary" | "danger";
   onConfirm: () => void;
   onCancel: () => void;
@@ -21,6 +23,7 @@ export default function ConfirmDialog({
   confirmLabel: providedConfirmLabel,
   cancelLabel: providedCancelLabel,
   busy = false,
+  confirmDisabled = false,
   tone = "danger",
   onConfirm,
   onCancel,
@@ -38,18 +41,20 @@ export default function ConfirmDialog({
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) {
-      invokerRef.current = document.activeElement as HTMLElement | null;
-      dialog.showModal();
-      window.requestAnimationFrame(() => cancelRef.current?.focus());
-    } else if (!open && dialog.open) {
-      dialog.close();
-      window.requestAnimationFrame(() => invokerRef.current?.focus?.());
-    }
+    if (!dialog || !open) return;
+    invokerRef.current = document.activeElement as HTMLElement | null;
+    if (!dialog.open) dialog.showModal();
+    const frame = window.requestAnimationFrame(() => cancelRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (dialog.open) dialog.close();
+      const invoker = invokerRef.current;
+      if (invoker?.isConnected && !invoker.closest('[inert]')) invoker.focus();
+    };
   }, [open]);
 
-  return (
+  // Confirmations can originate inside an editor that becomes inert while saving.
+  return createPortal(
     <dialog
       ref={dialogRef}
       className="app-confirm-dialog"
@@ -58,9 +63,11 @@ export default function ConfirmDialog({
       aria-busy={busy || undefined}
       onCancel={(event) => {
         event.preventDefault();
+        event.stopPropagation();
         if (!busy) onCancel();
       }}
       onKeyDown={(event) => {
+        if (event.key === "Escape" || event.key === "Tab") event.stopPropagation();
         if (event.key !== "Tab") return;
         const dialog = dialogRef.current;
         if (!dialog) return;
@@ -88,10 +95,11 @@ export default function ConfirmDialog({
         <div id={descriptionId} className="app-confirm-dialog__description">{typeof description === "string" ? normalizeDisplayText(description) : description}</div>
         <div className="app-confirm-dialog__actions">
           <button type="button" ref={cancelRef} className="app-button app-button--secondary" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
-          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy} onClick={onConfirm}>{busy ? `${confirmLabel.replace(/^Remove\s+/i, "Removing ").replace(/^Delete\s+/i, "Deleting ").replace(/^Restart\s+/i, "Restarting ")}` : confirmLabel}</button>
+          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy || confirmDisabled} onClick={onConfirm}>{busy ? t("common.wait") : confirmLabel}</button>
         </div>
       </div>
-    </dialog>
+    </dialog>,
+    document.body,
   );
 }
 

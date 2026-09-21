@@ -50,6 +50,11 @@ pub struct PerformanceBenchRow {
     pub error: Option<String>,
 }
 
+/// Recorded when the runtime never reported a version of its own. A word
+/// rather than an empty string, so a stored record still reads as "the runtime
+/// did not say" instead of "this field was never written".
+pub const UNKNOWN_RUNTIME_VERSION: &str = "unknown";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct PerformanceBenchResult {
     pub run_id: String,
@@ -125,7 +130,7 @@ pub fn failed(
         status: "failed",
         message: Some(message),
         args: vec![],
-        runtime_version: "unknown".into(),
+        runtime_version: UNKNOWN_RUNTIME_VERSION.into(),
         context_size: cfg.ctx_size,
         parallel: cfg.parallel,
         provenance: None,
@@ -483,7 +488,14 @@ pub async fn run(
             return Err(format!("runtime context/slot mismatch: need {} slots of at least {required} tokens; got {slots} slots of {per_slot} tokens", isolated.parallel));
         }
         result.context_size = u32::try_from(per_slot * slots).map_err(|_| "runtime reported an invalid context size")?;
-        if let Some(version) = props.get("build_info").and_then(serde_json::Value::as_str).filter(|v| !v.is_empty()) { result.runtime_version = version.to_owned(); }
+        // `build_info` is a build number and commit with no release name, so it
+        // only fills in for a runtime whose `--version` banner carried nothing
+        // this build could parse; it never replaces a version that did parse.
+        if result.runtime_version.is_empty() || result.runtime_version == UNKNOWN_RUNTIME_VERSION {
+            if let Some(version) = props.get("build_info").and_then(serde_json::Value::as_str).filter(|v| !v.is_empty()) {
+                result.runtime_version = version.chars().take(256).collect();
+            }
+        }
         let max_prompt = request.prompt_lengths.iter().copied().max().unwrap_or(1) as usize;
         let mut target_bytes = (max_prompt * 8).max(4096);
         let all_tokens = loop {

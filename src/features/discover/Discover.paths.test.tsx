@@ -11,11 +11,19 @@ import { useModelSettings, type ModelSettingsContext } from "../model-settings/M
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", () => ({
-  onModelDownloadProgress: vi.fn(async () => () => undefined), hfSearchModels: vi.fn(), hfModelFiles: vi.fn(), hfDownloadModel: vi.fn(),
+  onModelDownloadProgress: vi.fn(async () => () => undefined), hfSearchModels: vi.fn(), hfModelFiles: vi.fn(), hfDownloadModel: vi.fn(), hfInstalledFiles: vi.fn(),
 }));
 
+
+/** Download stays disabled until the installed-file lookup has answered. */
+async function clickDownload(name: string) {
+  const button = await screen.findByRole("button", { name });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
+
 describe("Discover path presentation", () => {
-  beforeEach(() => { vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); localStorage.clear(); });
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); vi.mocked(api.hfInstalledFiles).mockResolvedValue([]); localStorage.clear(); });
   afterEach(() => { for (const t of getTaskSnapshot()) removeTask(t.id); });
 
   it.each([false, true])("offers downloaded files for explicit configuration without changing the active model (projector: %s)", async (projector) => {
@@ -28,10 +36,13 @@ describe("Discover path presentation", () => {
     vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: file, size_bytes: 1000, is_mmproj: projector, download_url: "" }]);
     vi.mocked(api.hfDownloadModel).mockResolvedValue({ path: downloadedPath, repo_id: "owner/model", file_path: file, size_bytes: 1000 });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    // The panel lists the catalog as soon as it opens; wait for that request
+    // to settle so the search below is the one under test.
+    await screen.findByRole("button", { name: "Search models" });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "model" } });
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
-    fireEvent.click(await screen.findByRole("button", { name: `${projector ? "Download projector" : "Download"}: ${file}` }));
+    await clickDownload(`${projector ? "Download projector" : "Download"}: ${file}`);
     fireEvent.click(await screen.findByRole("button", { name: "Configure and run" }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: "default" }, config: expect.objectContaining(projector
       ? { active_model: "models/current.gguf", mmproj: downloadedPath }
@@ -52,10 +63,11 @@ describe("Discover path presentation", () => {
     vi.mocked(api.hfDownloadModel).mockRejectedValue(new Error(`Cannot write ${raw}`));
     const { container } = render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     expect(screen.getByText(display)).toHaveAttribute("title", display);
+    await screen.findByRole("button", { name: "Search models" });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "model" } });
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Download: model.Q4_K_M.gguf" }));
+    await clickDownload("Download: model.Q4_K_M.gguf");
     await waitFor(() => expect(api.hfDownloadModel).toHaveBeenCalledWith("owner/model", "model.Q4_K_M.gguf", raw));
     expect(await screen.findByText(`Cannot write ${display}`)).toBeInTheDocument();
     expect(container.textContent).not.toContain('\\\\?\\');
@@ -83,10 +95,11 @@ describe("Discover path presentation", () => {
         </PanelFeedbackProvider>
       </I18nProvider>
     );
+    await screen.findByRole("button", { name: "Search models" });
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "model" } });
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Download: model.gguf" }));
+    await clickDownload("Download: model.gguf");
 
     const progressBar = screen.getByRole("progressbar", { name: "Download progress" });
     expect(progressBar).toBeVisible();

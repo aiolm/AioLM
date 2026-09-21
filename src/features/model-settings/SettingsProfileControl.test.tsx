@@ -242,23 +242,40 @@ describe('settings profile workspace', () => {
     const onDelete = vi.fn().mockRejectedValue(new Error('Delete failed'));
     mount({ onDelete }); fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
     expect(onDelete).not.toHaveBeenCalled();
-    const confirm = within(screen.getByRole('group', { name: 'Delete profile' }));
-    expect(confirm.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    const confirm = within(screen.getByRole('dialog', { name: /^Delete “/ }));
+    await waitFor(() => expect(confirm.getByRole('button', { name: 'Cancel' })).toHaveFocus());
     fireEvent.click(confirm.getByRole('button', { name: 'Delete profile' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Delete failed');
-    expect(screen.getByRole('group', { name: 'Delete profile' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /^Delete “/ })).toBeInTheDocument();
   });
 
   it('confirms deletion of a previewed profile without applying it', async () => {
     const props = mount(); preview('Creative');
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
-    const confirm = within(screen.getByRole('group', { name: 'Delete profile' }));
+    const confirm = within(screen.getByRole('dialog', { name: /^Delete “/ }));
     expect(confirm.getByText('Delete “Creative”?')).toBeInTheDocument();
     expect(confirm.getByText('Models using this profile will switch to the default profile, “Everyday”.')).toBeInTheDocument();
     fireEvent.click(confirm.getByRole('button', { name: 'Delete profile' }));
-    await waitFor(() => expect(screen.queryByRole('group', { name: 'Delete profile' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Delete “/ })).not.toBeInTheDocument());
     expect(props.onDelete).toHaveBeenCalledWith('creative');
     expect(props.onApply).not.toHaveBeenCalled();
+  });
+
+  it('keeps deletion modal busy until the one pending operation completes', async () => {
+    let finish!: () => void;
+    const onDelete = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    mount({ onDelete });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete “Precise”?' });
+    const remove = within(dialog).getByRole('button', { name: 'Delete profile' });
+    fireEvent.click(remove);
+    fireEvent.click(remove);
+    expect(onDelete).toHaveBeenCalledOnce();
+    expect(remove).toBeDisabled();
+    fireEvent(dialog, new Event('cancel', { bubbles: true, cancelable: true }));
+    expect(dialog).toBeVisible();
+    await act(async () => finish());
+    expect(screen.queryByRole('dialog', { name: 'Delete “Precise”?' })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -281,14 +298,14 @@ describe('settings profile workspace', () => {
     const props = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
     props.rerenderControl({ defaultProfileId: 'precise' });
-    const confirm = within(screen.getByRole('group', { name: 'Delete profile' }));
+    const confirm = within(screen.getByRole('dialog', { name: /^Delete “/ }));
     const remove = confirm.getByRole('button', { name: 'Delete profile' });
     expect(remove).toBeDisabled();
-    expect(remove).toHaveAccessibleDescription(/The default profile cannot be deleted/);
+    expect(screen.getByRole('dialog', { name: /^Delete “/ })).toHaveAccessibleDescription(/The default profile cannot be deleted/);
     fireEvent.click(remove);
     expect(props.onDelete).not.toHaveBeenCalled();
     fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('group', { name: 'Delete profile' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /^Delete “/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
   });
 
@@ -297,7 +314,7 @@ describe('settings profile workspace', () => {
     const remove = screen.getByRole('button', { name: 'Delete profile' });
     expect(remove).toBeEnabled();
     fireEvent.click(remove);
-    const confirm = within(screen.getByRole('group', { name: 'Delete profile' }));
+    const confirm = within(screen.getByRole('dialog', { name: /^Delete “/ }));
     expect(confirm.getByText('Models using this profile will switch to the default profile, “Everyday”.')).toBeVisible();
     fireEvent.click(confirm.getByRole('button', { name: 'Delete profile' }));
     await waitFor(() => expect(props.onDelete).toHaveBeenCalledWith('precise'));
@@ -352,7 +369,7 @@ describe('settings profile workspace', () => {
     const props = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Delete profile' }));
     props.rerenderControl({ items: [items[1]], activeId: 'creative' });
-    const remove = within(screen.getByRole('group', { name: 'Delete profile' })).getByRole('button', { name: 'Delete profile' });
+    const remove = within(screen.getByRole('dialog', { name: /^Delete “/ })).getByRole('button', { name: 'Delete profile' });
     expect(remove).toBeDisabled();
     fireEvent.click(remove);
     expect(props.onDelete).not.toHaveBeenCalled();

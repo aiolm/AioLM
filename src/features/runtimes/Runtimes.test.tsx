@@ -254,7 +254,7 @@ describe("RuntimesPanel pull-request builds", () => {
 
   it("offers export for each installed runtime", async () => {
     renderPanel();
-    const exportButton = await screen.findByRole("button", { name: /Export runtime: cuda 10638/ });
+    const exportButton = await screen.findByRole("button", { name: /Export runtime: cuda build 10638/ });
     fireEvent.click(exportButton);
     await waitFor(() => expect(mocked.rtExport).toHaveBeenCalledWith("cuda", "b10638"));
   });

@@ -29,11 +29,21 @@ export function buildNumber(build: string): string {
  * semantic version, so show the version when it has been recorded and fall back
  * to a spelled-out build number otherwise.
  *
- * `0.3.0-dev · build 10638` / `build 10638`
+ * `0.3.0-dev` / `build 10638`
  */
 export function formatRuntimeVersion(build: string, version?: RuntimeVersion | null): string {
-  const label = `build ${buildNumber(build)}`;
-  return version?.semver ? `${version.semver} · ${label}` : label;
+  if (version?.semver) return version.semver;
+  return `build ${buildNumber(build)}`;
+}
+
+/** A benchmark names the runtime it measured, even after that installation changes. */
+export function formatRecordedRuntimeVersion(version: string | null | undefined, fallback: string): string {
+  const text = version?.trim();
+  if (!text || text === "unknown") return fallback;
+  const release = text.match(/(?:^|\bversion:\s*)v?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)/i)?.[1];
+  if (release) return release;
+  if (/^b?\d+(?:-[\da-f]+)?$/i.test(text)) return `build ${text.replace(/^b/, "")}`;
+  return text;
 }
 
 export function extractFlagNames(help: string): string[] {

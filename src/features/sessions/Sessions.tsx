@@ -14,6 +14,7 @@ import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
+import { runtimeVersionLabel, useInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
 import {
   DEFAULT_SESSION_ID,
   cloneGpuPlacement,
@@ -61,6 +62,7 @@ function modelLabel(path: string, empty: string): string {
 }
 
 export default function SessionsPanel({ store, active = true }: { store: AppStore; active?: boolean }) {
+  const installedRuntimes = useInstalledRuntimes();
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const cfg = store.cfg;
@@ -456,7 +458,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                   <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                 </div>}
                 <div className="session-entry-diagnostics text-xs ui-color-muted">
-                  <span>{backend}{build ? ` / ${build}` : ""}</span>
+                  <span>{backend}{build ? ` / ${runtimeVersionLabel(installedRuntimes, backend, build)}` : ""}</span>
                   {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus, definition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}
                   {rowStatus?.pid && <span>{t("ui.sessionPidLabel", { pid: rowStatus.pid })}</span>}
                   {rowStatus?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: rowStatus.active_requests })}</span>}

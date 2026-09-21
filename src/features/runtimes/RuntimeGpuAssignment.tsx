@@ -6,6 +6,7 @@ import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified"
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
 import { cloneGpuPlacement, gpuDeviceLabel, gpuTensorSplitDrafts, parseGpuTensorSplits, resolvedGpuPlacement, toggleGpuSelection, missingGpuIds } from "../../shared/runtime/sessionUtils";
 import { useEditorDraft } from '../../shared/state/draftGuard';
+import { formatMebibytes } from "../../shared/lib/units";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -103,7 +104,7 @@ export default function RuntimeGpuAssignment({ t, device, placement, disabled, d
               <input type="checkbox" checked={selected.includes(gpu.stable_id)} disabled={disabled} onChange={() => toggle(gpu.stable_id)} className="mt-1" />
               <span className="min-w-0">
                 <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{normalizeDisplayText(gpuDeviceLabel(gpu, index))}</span>
-                <span className="block text-xs ui-color-faint" >{gpu.vram_mb ? `${gpu.vram_mb.toLocaleString()} MiB / ` : ""}{gpu.integrated ? "integrated / " : ""}{t("ui.gpuStableId")}: {normalizeDisplayText(gpu.stable_id)}</span>
+                <span className="block text-xs ui-color-faint" >{gpu.vram_mb ? `${formatMebibytes(gpu.vram_mb)} / ` : ""}{gpu.integrated ? "integrated / " : ""}{t("ui.gpuStableId")}: {normalizeDisplayText(gpu.stable_id)}</span>
               </span>
             </label>
           ))}

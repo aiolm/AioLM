@@ -171,6 +171,16 @@ describe("Performance benchmark workflow", () => {
     expect(vi.mocked(settings.open).mock.calls[0][0].config).toMatchObject({ ngl: 12 });
   });
 
+  it("names the setup a measurement is still missing beside the disabled run button", async () => {
+    const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, config) => config, getRequestProfile: () => null };
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    renderPanel({ ...store, cfg: { ...cfg, active_backend: "", active_build: "" } } as AppStore);
+    expect(await screen.findByText("No runtime is selected.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run benchmark" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a runtime" }));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ section: "runtime" }));
+  });
+
   it("blocks measuring while a named session is running", async () => {
     vi.mocked(useModelSettings).mockReturnValue(settings);
     mocked.sessionList.mockResolvedValue([{ id: "work", name: "Work", state: "running", model: "models/work.gguf" }]);

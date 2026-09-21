@@ -194,11 +194,13 @@ pub(crate) async fn run_performance_bench(
     } else {
         None
     };
+    // The probe keeps the whole `--version` output, which is a banner plus
+    // compiler lines. A benchmark records the version it was measured on, so
+    // take the one line that states it and leave the diagnostics behind.
     let version = capability
         .as_ref()
-        .map(|value| value.version.clone())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".into());
+        .and_then(|value| runtime::version_label(&value.version))
+        .unwrap_or_else(|| performance_bench::UNKNOWN_RUNTIME_VERSION.to_string());
     let cache_ram_supported = capability.as_ref().is_some_and(|value| {
         value
             .flags

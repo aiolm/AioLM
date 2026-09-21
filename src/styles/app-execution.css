@@ -4,6 +4,7 @@
 .models-folder { border-bottom: 1px solid var(--ui-border); padding-bottom: 12px; }
 .models-folder-actions { margin-top: 12px; }
 .models-panel .models-model-list { display: grid; gap: 10px; }
+.models-blocked { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--ui-warning); }
 .models-panel .models-model-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 10px 12px; gap: 8px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-panel); }
 .models-panel .models-model-row.is-loaded { background: var(--ui-accent-soft); border-color: var(--ui-border-accent); }
 .models-panel .models-model-row:focus-within { background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-panel)); border-color: var(--ui-border-accent); }

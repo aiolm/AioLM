@@ -1,4 +1,5 @@
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { formatBytes } from "../../shared/lib/units";
 import type * as api from "../../shared/api/types";
 import type { UiTextKey } from "../../shared/i18n/uiI18n";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
@@ -63,7 +64,7 @@ export default function PullRequestProvenance({ t, preview, backend }: { t: (key
         <p className="rounded-lg border app-border-success bg-success-soft/40 px-2.5 py-2 text-xs text-success">
           {t("ui.prPrebuiltAvailable", {
             name: normalizeDisplayText(preview.artifact.name),
-            size: (preview.artifact.bytes / 1048576).toFixed(1),
+            size: formatBytes(preview.artifact.bytes),
           })}
           <span className="mt-1 block break-all font-mono text-xs text-success/70">SHA-256: {preview.artifact.sha256}</span>
         </p>

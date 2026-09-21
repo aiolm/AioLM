@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useI18n } from "../i18n/i18n";
 import { dismissTask, updateTask, useTasks, type AppTask } from "../state/taskRegistry";
 import { useLocalTaskCancellationIds } from "./TaskCancellation";
-import { formatBytes, formatSpeedBps } from "../lib/transfer";
+import { formatBytes, formatSpeedBps } from "../lib/units";
 
 function hasPanelCancellation(task: AppTask): boolean {
   return (task.kind === "runtime" && task.id === "runtime-operation")
@@ -13,7 +13,7 @@ function hasPanelCancellation(task: AppTask): boolean {
     || (task.kind === "model-download" && task.id === "model-download");
 }
 
-/** Transfer detail for a task that reports bytes: "1.2 GB / 4.0 GB · 88 MB/s". */
+/** Transfer detail for a task that reports bytes: "1.20 GiB / 4.00 GiB · 88.0 MiB/s". */
 export function transferLabel(task: AppTask): string | null {
   if (task.received === undefined || !task.total || task.total <= 0) return null;
   const moved = `${formatBytes(task.received)} / ${formatBytes(task.total)}`;

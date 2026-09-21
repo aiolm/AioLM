@@ -240,10 +240,23 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toHaveTextContent('Select a runtime');
     fireEvent.click(screen.getByRole('combobox', { name: 'Runtime & GPU' }));
     const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
-    expect(options).toContain('cpu · b123');
+    expect(options).toContain('cpu · build 123');
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    // The disabled start says why, and offers the section that fixes it.
+    expect(screen.getByText('No runtime is selected.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose a runtime' }));
+    expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+  });
+
+  it('reports a selected runtime as missing when the installed list loads empty', async () => {
+    // An empty list is a real answer — nothing installed — not a list that has
+    // not loaded yet, so the selected runtime must be reported as missing.
+    vi.mocked(api.rtList).mockResolvedValueOnce([]);
+    mount();
+    expect(await screen.findByText('This runtime is not installed. Install it or select another runtime.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
   });
 
   it('keeps numeric edits out of persistence until apply, and discards them on cancel', async () => {
@@ -258,6 +271,25 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onClose).toHaveBeenCalledOnce();
     expect(onApply).not.toHaveBeenCalled();
     expect(writes).not.toHaveBeenCalled();
+  });
+
+  it('cancels only the discard modal and returns focus without losing the draft', async () => {
+    const { onApply, onClose } = mount({ initialSection: 'tuning' });
+    await waitFor(() => expect(api.rtList).toHaveBeenCalled());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    const close = screen.getByRole('button', { name: 'Close' });
+    close.focus();
+    fireEvent.click(close);
+    const confirmation = screen.getByRole('dialog', { name: 'Discard unsaved changes?' });
+    await waitFor(() => expect(within(confirmation).getByRole('button', { name: 'Keep editing' })).toHaveFocus());
+    expect(confirmation.closest('[inert]')).toBeNull();
+    fireEvent(confirmation, new Event('cancel', { bubbles: true, cancelable: true }));
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    expect(close).toHaveFocus();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('previews another model with its remembered configuration without changing the first model', async () => {
@@ -502,7 +534,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Original settings · Editing' })).toBeVisible();
-    expect(screen.getByRole('status')).toHaveTextContent('Reset to defaults.');
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Reset to defaults.');
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
     expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('');
     expect(numeric('ctx_size')).toHaveValue(4096);
@@ -527,7 +559,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(screen.queryByText(/Reset all options in the selected profile/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Already using defaults.');
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Already using defaults.');
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Default values · Editing' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Revert' })).not.toBeInTheDocument();
@@ -549,13 +581,13 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Reset to defaults.');
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Reset to defaults.');
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(getSaved()).toEqual(saved);
     expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Already using defaults.');
+    expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Already using defaults.');
   });
 
   it('saves a full reset and empty prompt into the selected profile without detaching its identity', async () => {
@@ -660,7 +692,7 @@ describe('confirming a profile save', () => {
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: withProfile });
     fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
-    const confirm = screen.getByRole('alert');
+    const confirm = screen.getByRole('dialog', { name: /^Save these changes/ });
     expect(within(confirm).getByText('Context size')).toBeVisible();
     expect(within(confirm).getByText(String(cfg.ctx_size))).toBeVisible();
     expect(within(confirm).getByText('8192')).toBeVisible();
@@ -673,14 +705,14 @@ describe('confirming a profile save', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onProfileCommit).not.toHaveBeenCalled();
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /^Save these changes/ })).not.toBeInTheDocument();
     expect(numeric('ctx_size')).toHaveValue(8192);
   });
 
   it('says so plainly when a save would rewrite nothing', () => {
     mount({ initialSection: 'tuning', initialConfig: withProfile });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
-    expect(within(screen.getByRole('alert')).getByText('Nothing in this profile would change.')).toBeVisible();
+    expect(within(screen.getByRole('dialog', { name: /^Save these changes/ })).getByText('Nothing in this profile would change.')).toBeVisible();
   });
 });
 
