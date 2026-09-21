@@ -4,7 +4,7 @@
 
 [Documentation index](docs/README.md) — installation, development, architecture, and policies.
 
-Windows desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
+AioLM (All-in-One LM) — Windows desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
 
 ## Features
 
