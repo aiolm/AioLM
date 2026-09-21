@@ -44,10 +44,30 @@ export interface PublicGpu {
   integrated: boolean;
 }
 
+/** Declared GGUF metadata and, when available, a file-matched download origin. */
+export interface BenchmarkModelMetadata {
+  format: 'GGUF';
+  name: string | null;
+  architecture: string | null;
+  size_label: string | null;
+  /** Weight encoding; independent of the runtime's KV-cache encoding. */
+  quantization: string | null;
+  file_type: number | null;
+  quantized_by: string | null;
+  /** Public Hugging Face namespace/repository, never a URL or local path. */
+  repository: string | null;
+  base_models: string[];
+  /** Repository-relative artifact, only when a matching download receipt exists. */
+  artifact: string | null;
+  source: 'gguf' | 'huggingface' | 'gguf+huggingface';
+}
+
 export interface BenchmarkModelIdentity {
   status: 'sha256' | 'unidentified' | 'multipart';
   sha256: string | null;
   size_bytes: number | null;
+  /** Absent on older records; unavailable facts are not inferred from filenames. */
+  metadata?: BenchmarkModelMetadata | null;
 }
 
 export interface BenchmarkExecutionSettings {

@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { DescriptionEditor, DescriptionPreview } from './DescriptionEditor';
+
+// These checks cover rendered content policy. Load the lazy renderer before
+// assertions so coverage instrumentation does not consume their DOM wait budget.
+beforeAll(async () => { await import('react-markdown'); });
 
 afterEach(() => { cleanup(); });
 

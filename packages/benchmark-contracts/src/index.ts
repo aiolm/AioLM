@@ -1,6 +1,6 @@
 export type {
   BenchmarkCorpus, BenchmarkRunStatus, BenchmarkMetricRow, BenchmarkTrial, BenchmarkSummary,
-  PublicBenchmarkRow, PublicGpu, BenchmarkModelIdentity, BenchmarkExecutionSettings,
+  PublicBenchmarkRow, PublicGpu, BenchmarkModelIdentity, BenchmarkModelMetadata, BenchmarkExecutionSettings,
   PublicBenchmarkSubmission, BenchmarkReceipt,
 } from './types.js';
 export { validatePublicBenchmark, validateBenchmarkReceipt } from './validate.js';

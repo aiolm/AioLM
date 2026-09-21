@@ -27,6 +27,17 @@
 .settings-note { background: var(--ui-surface-muted); }
 .settings-danger .app-button { margin-top: 12px; }
 .settings-wipe-slot { min-height: 48px; }
+.app-update-settings { align-items: start; }
+.app-update-settings h4 { font-size: 14px; font-weight: 550; }
+.app-update-content { flex: 1 1 22rem; min-width: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.app-update-content > p + p { margin-top: 6px; }
+.app-update-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.app-update-progress { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.app-update-progress progress { width: 100%; min-width: 0; accent-color: var(--ui-accent); }
+.app-update-notes { white-space: pre-wrap; max-height: 14rem; overflow: auto; margin-top: 8px; }
+.app-update-content details { margin-top: 8px; }
+.app-update-content summary { cursor: pointer; }
+.app-update-notice { padding: 8px 12px 0; }
 .app-switch { position: relative; width: 40px; height: 24px; border: 1px solid var(--ui-border-strong); border-radius: 12px; background: var(--ui-surface-muted); padding: 0; flex-shrink: 0; }
 .app-switch[aria-checked="true"] { background: var(--ui-accent-solid); border-color: var(--ui-accent-solid); }
 .app-switch__thumb { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--ui-muted); transition: transform 160ms ease; }

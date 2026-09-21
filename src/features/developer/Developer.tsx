@@ -103,11 +103,11 @@ export default function DeveloperPanel({ store, section = "api" }: { store: AppS
         <StatusBadge labels={[t("panel.apiReady"), t("panel.startServer")]} label={serverReady ? t("panel.apiReady") : t("panel.startServer")} tone={serverReady ? "success" : "warning"} />
       </div>
       <PanelFeedback>{error && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}</PanelFeedback>
-      <PanelFeedback>{!serverReady && !error && <div className="developer-api-status" role="status" aria-live="polite">
+      {!serverReady && !error && <div className="developer-api-status mb-4" role="status" aria-live="polite">
         <span className="developer-api-status__dot" aria-hidden="true" />
         <span className="developer-api-status__title">{t("panel.apiUnavailable")}</span>
         <span className="developer-api-status__message">{t("panel.startLocalServer")}</span>
-      </div>}</PanelFeedback>
+      </div>}
       {section === "api" && <div className="developer-summary-grid mb-4 grid gap-3 app-summary-grid" role="group" aria-label={t("panel.ariaDeveloperSummary")} aria-live="polite">
         <div className="flex flex-col justify-center rounded-lg border p-3.5 ui-border-color-border ui-background-panel" ><div className="app-eyebrow ui-font-size-12px" >{t("ui.localApi")}</div><div className="mt-1 text-sm font-medium ui-color-ink" >{serverReady ? t("panel.ready") : t("panel.offline")}</div><div className="mt-1 app-text-wrap font-mono text-xs tabular-nums ui-color-faint"  title={baseUrl || t("ui.startServerForUrl")}>{baseUrl || t("ui.startServerForUrl")}</div></div>
         <div className="flex flex-col justify-center rounded-lg border p-3.5 ui-border-color-border ui-background-panel" ><div className="app-eyebrow ui-font-size-12px" >{t("ui.loadedModels")}</div><div className="mt-1 text-sm font-medium ui-color-ink" >{models.length || "—"}</div><div className="mt-1 text-xs ui-color-faint" >{t("ui.fromModelsEndpoint")}</div></div>

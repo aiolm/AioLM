@@ -9,6 +9,7 @@ import { finishTask, registerTask } from "../../shared/state/taskRegistry";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { previewExecution } from '../models/modelExecutionState';
@@ -186,17 +187,18 @@ export default function DiscoverPanel({ store, onSelectModel, onOpenModels }: { 
         } }}>{downloadedChoice.path.split(/[\\/]/).pop()}</FeedbackBanner>}
         {error && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => setError(null)}>{error}</FeedbackBanner>}
         {notice && <FeedbackBanner tone="success" title={t("panel.downloadComplete")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
-        {downloading && progress && (
-        <div className="discover-progress-card app-card app-card--accent"  role="status">
+      </PanelFeedback>
+
+      {downloading && progress && (
+        <div className="discover-progress-card app-card app-card--accent mb-4" role="status">
           <div className="flex items-center justify-between gap-3 text-xs">
             <span className="min-w-0 app-text-wrap font-medium ui-color-ink" >{t("ui.downloadingFile", { file: normalizeDisplayPath(progress.file_path) })}</span>
             <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent}%</span>
           </div>
-          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full ui-background-border"  role="progressbar" aria-label={t("ui.downloadProgress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? progressPercent : undefined}><div className="h-full rounded-full transition-[width] ui-background-accent-solid" style={{ width: `${progressPercent}%` }} /></div>
-          <div className="mt-2.5 flex items-center justify-between gap-3"><span className="whitespace-nowrap text-xs tabular-nums ui-color-muted" >{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span><span className="flex shrink-0 items-center gap-2.5"><span className="whitespace-nowrap text-right text-sm font-semibold tabular-nums ui-color-accent ui-min-width-120px" >{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span><button type="button" onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</button></span></div>
+          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full ui-background-border" role="progressbar" aria-label={t("ui.downloadProgress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? progressPercent : undefined}><div className="h-full rounded-full transition-[width] ui-background-accent-solid" style={{ width: `${progressPercent}%` }} /></div>
+          <div className="mt-2.5 flex items-center justify-between gap-3"><span className="whitespace-nowrap text-xs tabular-nums ui-color-muted" >{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span><span className="flex shrink-0 items-center gap-2.5"><span className="whitespace-nowrap text-right text-sm font-semibold tabular-nums ui-color-accent ui-min-width-120px" >{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span><LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</LocalTaskCancelButton></span></div>
         </div>
-        )}
-      </PanelFeedback>
+      )}
 
       <div className="discover-columns grid min-h-0 flex-1 gap-3 ">
         <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("extra.searchResults")}>

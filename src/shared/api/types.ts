@@ -356,6 +356,7 @@ export interface BenchmarkModelIdentity {
   status: 'sha256' | 'unidentified' | 'multipart';
   sha256: string | null;
   size_bytes: number | null;
+  metadata?: import('@aiolm/benchmark-contracts').BenchmarkModelMetadata | null;
 }
 
 export interface PerformanceBenchmarkProvenance {

@@ -135,6 +135,142 @@
             "null"
           ],
           "minimum": 0
+        },
+        "metadata": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Optional declared GGUF fields and file-matched Hugging Face download origin. Null or absent means unavailable. Publisher is the repository namespace, not quantized_by. Weight encoding does not imply identical tensors or quality. Local paths are excluded.",
+          "properties": {
+            "format": {
+              "type": "string",
+              "const": "GGUF"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "architecture": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "size_label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "quantization": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "file_type": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "quantized_by": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 256,
+              "pattern": "^[^\\\\/:@\\u0000-\\u001f\\u007f]+$"
+            },
+            "repository": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 257,
+              "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "base_models": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "maxLength": 257,
+                "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "artifact": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 512,
+              "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._ -]{0,127}/)*[A-Za-z0-9][A-Za-z0-9._ -]*\\.[gG][gG][uU][fF]$"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "gguf",
+                "huggingface",
+                "gguf+huggingface"
+              ]
+            }
+          },
+          "required": [
+            "format",
+            "name",
+            "architecture",
+            "size_label",
+            "quantization",
+            "file_type",
+            "quantized_by",
+            "repository",
+            "base_models",
+            "artifact",
+            "source"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "type": "object",
+                "required": [
+                  "artifact"
+                ],
+                "properties": {
+                  "artifact": {
+                    "type": "string"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "repository": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "huggingface",
+                      "gguf+huggingface"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       "required": [

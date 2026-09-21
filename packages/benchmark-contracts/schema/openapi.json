@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AioLM Benchmark Sharing API",
-    "version": "1.1.0",
-    "description": "Service-neutral contract. Server URL and authentication are supplied by the website integration. Retried uploads with an identical Idempotency-Key and payload return the same stored result; reuse with a different payload returns 409. POST /v1/benchmark-runs accepts a publication wrapper or a legacy bare submission with an empty description; legacy input does not bypass owner/permit checks. Original measurements and environment are immutable after acceptance; only the current description changes via expected_revision."
+    "version": "1.2.0",
+    "description": "Service-neutral contract. Server URL and authentication are supplied by the website integration. Retried uploads with an identical Idempotency-Key and payload return the same stored result; reuse with a different payload returns 409. POST /v1/benchmark-runs accepts a publication wrapper or a legacy bare submission with an empty description; legacy input does not bypass owner/permit checks. Original measurements and environment are immutable after acceptance; only the current description changes via expected_revision. Contract 0.3.0 accepts optional model.metadata for declared GGUF fields and a matched public download origin; older submissions remain valid. Deploy the accepting service before enabling metadata uploads."
   },
   "paths": {
     "/v1/upload-sessions": {

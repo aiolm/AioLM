@@ -1,5 +1,6 @@
 //! Tauri IPC adapters grouped by application responsibility.
 
+pub(crate) mod app_update;
 pub(crate) mod benchmark;
 pub(crate) mod benchmark_sharing;
 pub(crate) mod config;

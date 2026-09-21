@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
+import { PanelFeedbackActivity, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "../../shared/ui/PanelFeedback";
+import { getTaskSnapshot, removeTask } from "../../shared/state/taskRegistry";
 import DiscoverPanel from "./Discover";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
 
@@ -14,6 +16,7 @@ vi.mock("../../shared/api/index", () => ({
 
 describe("Discover path presentation", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); localStorage.clear(); });
+  afterEach(() => { for (const t of getTaskSnapshot()) removeTask(t.id); });
 
   it.each([false, true])("offers downloaded files for explicit configuration without changing the active model (projector: %s)", async (projector) => {
     const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
@@ -57,5 +60,40 @@ describe("Discover path presentation", () => {
     expect(await screen.findByText(`Cannot write ${display}`)).toBeInTheDocument();
     expect(container.textContent).not.toContain('\\\\?\\');
     expect(store.cfg?.models_dir).toBe(raw);
+  });
+
+  it("keeps download progress card inline and does not register a drawer notice count", async () => {
+    type DownloadResult = Awaited<ReturnType<typeof api.hfDownloadModel>>;
+    let resolveDownload: (value: DownloadResult) => void;
+    const downloadPromise = new Promise<DownloadResult>((resolve) => { resolveDownload = resolve; });
+    vi.mocked(api.hfSearchModels).mockResolvedValue([{ id: "owner/model", author: "owner", downloads: 1, likes: 1, last_modified: "", tags: [], gated: false }]);
+    vi.mocked(api.hfModelFiles).mockResolvedValue([{ path: "model.gguf", size_bytes: 1000, is_mmproj: false, download_url: "" }]);
+    vi.mocked(api.hfDownloadModel).mockReturnValue(downloadPromise);
+    const store = createTestStore();
+    render(
+      <I18nProvider initialLocale="en">
+        <PanelFeedbackProvider>
+          <PanelFeedbackActivity hasActivity={false}>
+            <summary>
+              <PanelFeedbackIndicator message="Error" globalError={false} />
+            </summary>
+            <PanelFeedbackOutlet />
+          </PanelFeedbackActivity>
+          <DiscoverPanel store={store} />
+        </PanelFeedbackProvider>
+      </I18nProvider>
+    );
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "model" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search models" }));
+    fireEvent.click(await screen.findByRole("button", { name: /owner\/model/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Download: model.gguf" }));
+
+    const progressBar = screen.getByRole("progressbar", { name: "Download progress" });
+    expect(progressBar).toBeVisible();
+    expect(progressBar.closest(".app-panel-notices")).toBeNull();
+    expect(screen.queryByText(/notices/)).not.toBeInTheDocument();
+    expect(getTaskSnapshot().some((t) => t.id === "model-download" && t.state === "running")).toBe(true);
+
+    resolveDownload!({ path: "models/model.gguf", repo_id: "owner/model", file_path: "model.gguf", size_bytes: 1000 });
   });
 });
