@@ -1,6 +1,6 @@
 {
   "name": "@aiolm/benchmark-contracts",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Versioned AioLM benchmark data contracts and comparison utilities",
   "type": "module",
