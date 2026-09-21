@@ -4,7 +4,7 @@
 
 [ドキュメント一覧](../README.md) — インストール、開発、コード構成、プロジェクトポリシー。
 
-AioLM（All In One LM）— `llama.cpp` 用 Windows デスクトップランタイムマネージャー。`llama-server` を利用した Tauri v2 デスクトップ UI で、モデル、ランタイム、チャット、ベンチマークを管理します。
+AioLM（All-in-One LM）— `llama.cpp` 用 Windows デスクトップランタイムマネージャー。`llama-server` を利用した Tauri v2 デスクトップ UI で、モデル、ランタイム、チャット、ベンチマークを管理します。
 
 ## 機能
 

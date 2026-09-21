@@ -4,7 +4,7 @@
 
 [문서 목차](../README.md) — 설치·개발 가이드, 코드 구조, 프로젝트 정책을 모았습니다.
 
-AioLM(All In One LM) — `llama.cpp`용 Windows 데스크톱 런타임 매니저. `llama-server` 기반의 Tauri v2 데스크톱 UI에서 모델, 런타임, 채팅, 벤치마크를 관리합니다.
+AioLM(All-in-One LM) — `llama.cpp`용 Windows 데스크톱 런타임 매니저. `llama-server` 기반의 Tauri v2 데스크톱 UI에서 모델, 런타임, 채팅, 벤치마크를 관리합니다.
 
 ## 기능
 
