@@ -57,7 +57,7 @@ export interface BenchmarkModelMetadata {
   /** Public Hugging Face namespace/repository, never a URL or local path. */
   repository: string | null;
   base_models: string[];
-  /** Repository-relative artifact, only when a matching download receipt exists. */
+  /** Repository-relative artifact from a file-matched public origin. */
   artifact: string | null;
   source: 'gguf' | 'huggingface' | 'gguf+huggingface';
 }
@@ -103,6 +103,8 @@ export interface PublicBenchmarkSubmission {
     os: string | null;
     arch: string | null;
     cpu: { name: string | null; logical_cores: number };
+    /** Physical system RAM in bytes. Absent on measurements made before contract 0.4. */
+    system_memory_bytes?: number | null;
     installed_gpus: PublicGpu[];
     execution: {
       mode: 'cpu' | 'selected' | 'automatic' | 'unknown';

@@ -4,7 +4,7 @@
   "workspaces": [
     "packages/benchmark-contracts"
   ],
-  "version": "0.1.12",
+  "version": "0.1.13",
   "type": "module",
   "engines": {
     "node": "22.23.2",

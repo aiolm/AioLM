@@ -38,6 +38,9 @@ export function toPublicBenchmark(record: {
   result: PerformanceBenchmarkResult;
 }, submissionId: string): PublicBenchmarkSubmission {
   const { request, result } = record;
+  if (result.status !== 'complete' || result.rows.length === 0 || result.rows.some(row => Boolean(row.error))) {
+    throw new Error('Only completed benchmarks with successful measurements can be published.');
+  }
   const p = result.provenance?.schema_version === 1 ? result.provenance : undefined;
   if (p && p.corpus.profile !== request.context_profile) throw new Error('Benchmark corpus does not match its provenance.');
   const environment = p?.environment;
@@ -52,6 +55,7 @@ export function toPublicBenchmark(record: {
     } : { status: 'unidentified', sha256: null, size_bytes: null },
     runtime: { name: 'llama.cpp', version: safeLabel(result.runtime_version), backend: safeLabel(record.backend), build: safeLabel(record.build) },
     environment: environment ? { os: safeLabel(environment.os), arch: safeLabel(environment.arch), cpu: { name: safeLabel(environment.cpu.name), logical_cores: environment.cpu.logical_cores },
+      ...(environment.system_memory_bytes !== undefined ? { system_memory_bytes: environment.system_memory_bytes } : {}),
       installed_gpus: environment.installed_gpus.map(gpu), execution: { mode: environment.execution.mode, selected_gpus: environment.execution.selected_gpus.map(gpu), selection_complete: environment.execution.selection_complete } } : null,
     execution: { context_size: result.context_size, parallel: result.parallel, settings: config ? {
       gpu_layers: config.gpu_layers, threads: config.threads, threads_batch: config.threads_batch,
