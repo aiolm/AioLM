@@ -10,6 +10,7 @@ mod gateway;
 pub mod gguf;
 pub mod gpu;
 pub mod hardware;
+mod hardware_memory;
 mod mcp;
 pub mod models;
 pub mod performance_bench;

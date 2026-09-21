@@ -9,11 +9,11 @@ const sample = (provenance?: PerformanceBenchmarkProvenance) => ({
   backend: 'cuda', build: 'b1234', model: '/private/models/owner-secret.gguf', device: { fingerprint: 'owner-device-identifier' },
   request: { run_id: 'owner-private-id', context_profile: 'novel_en' as const, prompt_lengths: [1024], generation_length: 128, batch_sizes: [2], repetitions: 1, warmup: true },
   result: {
-    run_id: 'owner-private-id', status: 'partial', message: '/private/secret.log failed', args: ['--api-key', 'private-token', '-m', '/private/secret.gguf'],
+    run_id: 'owner-private-id', status: 'complete', message: '/private/secret.log failed', args: ['--api-key', 'private-token', '-m', '/private/secret.gguf'],
     runtime_version: '1234', context_size: 4096, parallel: 2, provenance,
     rows: [{ id: 'private-trial-id', prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: 1,
       completion_tokens: 128, cached_tokens: 0, ttft_ms: 40, tpot_ms: 10, pp_tps: 100, tg_tps: 100,
-      e2e_ms: 1400, total_tps: 95, peak_memory_bytes: null, timing_source: 'client', error: '/private/failed-host' }],
+      e2e_ms: 1400, total_tps: 95, peak_memory_bytes: null, timing_source: 'client', error: null }],
   } satisfies PerformanceBenchmarkResult,
 });
 const gpu = (name: string) => ({ name, vendor: 'Example GPU vendor', vram_mb: 8192, driver: 'driver 1.0', integrated: false });
@@ -34,6 +34,30 @@ const metadata = (): BenchmarkModelMetadata => ({
 });
 
 describe('public benchmark boundary', () => {
+  it('rejects incomplete runs and failed measurements without changing the local record', () => {
+    for (const status of ['partial', 'failed', 'cancelled'] as const) {
+      const record = sample();
+      const result: PerformanceBenchmarkResult = { ...record.result, status };
+      expect(() => toPublicBenchmark({ ...record, result }, submissionId)).toThrow('Only completed benchmarks');
+      expect(result.status).toBe(status);
+    }
+    const record = sample();
+    const failed: PerformanceBenchmarkResult = { ...record.result, rows: [{ ...record.result.rows[0], error: 'request failed' }] };
+    expect(() => toPublicBenchmark({ ...record, result: failed }, submissionId)).toThrow('successful measurements');
+    expect(() => toPublicBenchmark({ ...record, result: { ...record.result, rows: [] } }, submissionId)).toThrow();
+  });
+
+  it('shares only the RAM capacity captured with the measurement and validates its unit', () => {
+    const p = provenance();
+    p.environment.system_memory_bytes = 64 * 1024 ** 3;
+    expect(toPublicBenchmark(sample(p), submissionId).environment?.system_memory_bytes).toBe(64 * 1024 ** 3);
+    delete p.environment.system_memory_bytes;
+    expect(toPublicBenchmark(sample(p), submissionId).environment).not.toHaveProperty('system_memory_bytes');
+    for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      p.environment.system_memory_bytes = invalid;
+      expect(() => toPublicBenchmark(sample(p), submissionId)).toThrow();
+    }
+  });
   it('preserves exact public model metadata without copying native-only fields', () => {
     const p = provenance();
     p.model.metadata = metadata();
@@ -91,7 +115,7 @@ describe('public benchmark boundary', () => {
     const result = toPublicBenchmark(source, submissionId);
     expect(JSON.stringify(result)).not.toMatch(/private|owner|fingerprint|stable_id|diagnostic/);
     expect(result.environment?.execution.selected_gpus.map(item => item.name)).toEqual(['GPU B']);
-    expect(result.measurements.rows[0]).toMatchObject({ failed: true, tg_tps: 100, peak_memory_bytes: null });
+    expect(result.measurements.rows[0]).toMatchObject({ failed: false, tg_tps: 100, peak_memory_bytes: null });
     expect(source.result.args).toContain('private-token');
     expect(result.model.sha256).toBe('b'.repeat(64));
   });

@@ -13,7 +13,7 @@ const saved: PerformanceBenchmarkRecord = {
   schemaVersion: 1, id: 'performance-00000000-0000-4000-8000-000000000001', createdAt: 1,
   model: '/private/model.gguf', backend: 'cpu', build: 'b1',
   request: { run_id: 'performance-00000000-0000-4000-8000-000000000001', context_profile: 'novel_en', prompt_lengths: [1024], generation_length: 128, batch_sizes: [], repetitions: 1, warmup: true },
-  result: { run_id: 'performance-00000000-0000-4000-8000-000000000001', rows: [], status: 'partial', args: ['--private-token', 'secret'], message: '/private/failed.log', runtime_version: '1', context_size: 4096, parallel: 1 },
+  result: { run_id: 'performance-00000000-0000-4000-8000-000000000001', rows: [{ id: 'sample', prompt_tokens: 1024, generation_length: 128, concurrency: 1, repetition: 1, completion_tokens: 128, cached_tokens: 0, ttft_ms: 40, tpot_ms: 10, pp_tps: 100, tg_tps: 100, e2e_ms: 1400, total_tps: 95, peak_memory_bytes: null, timing_source: 'client', error: null }], status: 'complete', args: ['--private-token', 'secret'], message: null, runtime_version: '1', context_size: 4096, parallel: 1 },
 };
 beforeEach(() => {
   vi.clearAllMocks();

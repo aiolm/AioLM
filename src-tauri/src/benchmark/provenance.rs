@@ -7,7 +7,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct BenchmarkGpu {
     pub name: String,
     pub vendor: String,
@@ -41,6 +41,8 @@ pub(crate) struct Environment {
     pub os: String,
     pub arch: String,
     pub cpu: crate::hardware::CpuInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_memory_bytes: Option<u64>,
     pub installed_gpus: Vec<BenchmarkGpu>,
     pub execution: Execution,
     pub detection: String,
@@ -154,6 +156,10 @@ impl BenchmarkProvenance {
             || !["cpu", "selected", "automatic", "unknown"]
                 .contains(&self.environment.execution.mode.as_str())
             || self.environment.installed_gpus.len() > 64
+            || self
+                .environment
+                .system_memory_bytes
+                .is_some_and(|value| value == 0 || value > 9_007_199_254_740_991)
             || self.environment.execution.selected_gpus.len() > 64
             || self
                 .execution_config
@@ -264,6 +270,7 @@ pub(crate) fn capture(
             os: profile.os,
             arch: profile.arch,
             cpu: profile.cpu,
+            system_memory_bytes: crate::hardware_memory::system_memory_bytes(),
             installed_gpus: profile.gpus.iter().map(BenchmarkGpu::from).collect(),
             execution: Execution {
                 mode: mode.into(),
@@ -277,6 +284,60 @@ pub(crate) fn capture(
             },
             detection: profile.detection,
         },
+    }
+}
+
+/// Runtime indices identify the configured device, not an OS enumeration index.
+/// Publish its public specifications only if the fresh runtime name/capacity
+/// matches OS adapters whose public properties all agree. Physical identity and
+/// utilization are deliberately not claimed, including for identical cards.
+pub(crate) fn describe_runtime_selection(
+    environment: &mut Environment,
+    cfg: &AppConfig,
+    runtime_lines: &[String],
+) {
+    if environment.execution.selection_complete
+        || environment.execution.mode != "selected"
+        || !cfg.mmproj.trim().is_empty()
+        || crate::tuning_defaults::speculative_enabled(cfg)
+        || cfg.gpu.gpu_ids.is_empty()
+        || !cfg
+            .gpu
+            .gpu_ids
+            .iter()
+            .all(|id| id.starts_with(&format!("runtime:{}:", cfg.active_backend)))
+    {
+        return;
+    }
+    let devices: Option<Vec<BenchmarkGpu>> = environment
+        .execution
+        .devices
+        .iter()
+        .map(|device| {
+            let prefix = format!("{device}:");
+            let mut descriptions = runtime_lines
+                .iter()
+                .filter_map(|line| line.trim().strip_prefix(&prefix));
+            let description = descriptions.next()?.trim();
+            if descriptions.next().is_some() {
+                return None;
+            }
+            let (name, memory) = description.rsplit_once(" (")?;
+            let vram = memory.split_once(" MiB")?.0.parse::<u64>().ok()?;
+            let mut candidates = environment
+                .installed_gpus
+                .iter()
+                .filter(|gpu| gpu.name == name && gpu.vram_mb == Some(vram));
+            let candidate = candidates.next()?;
+            if !candidates.all(|other| other == candidate) {
+                return None;
+            }
+            Some(candidate.clone())
+        })
+        .collect();
+    if let Some(devices) = devices.filter(|devices| !devices.is_empty()) {
+        environment.execution.selected_gpus = devices;
+        environment.execution.selection_complete = true;
     }
 }
 
@@ -358,6 +419,45 @@ mod tests {
         assert_eq!(selected.environment.execution.mode, "selected");
         assert!(selected.environment.execution.selected_gpus.is_empty());
         assert!(!selected.environment.execution.selection_complete);
+    }
+
+    #[test]
+    fn runtime_selection_reports_specs_only_when_all_matching_adapters_agree() {
+        let mut cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            ngl: 99,
+            ..Default::default()
+        };
+        cfg.gpu.gpu_ids = vec![
+            "runtime:vulkan:Vulkan0".into(),
+            "runtime:vulkan:Vulkan1".into(),
+        ];
+        let resolved = ResolvedGpu {
+            device_flag: Some("Vulkan0,Vulkan1".into()),
+            ..Default::default()
+        };
+        let mut env = capture_for(&cfg, &resolved).environment;
+        let adapter = env.installed_gpus[0].clone();
+        env.installed_gpus.push(adapter.clone());
+        let lines = vec![
+            "Vulkan0: Unused GPU (1024 MiB, 900 MiB free)".into(),
+            "Vulkan1: Unused GPU (1024 MiB, 800 MiB free)".into(),
+        ];
+        describe_runtime_selection(&mut env, &cfg, &lines);
+        assert!(env.execution.selection_complete);
+        assert_eq!(env.execution.selected_gpus, vec![adapter.clone(), adapter]);
+
+        let mut ambiguous = capture_for(&cfg, &resolved).environment;
+        let mut other = ambiguous.installed_gpus[0].clone();
+        other.driver = Some("different-driver".into());
+        ambiguous.installed_gpus.push(other);
+        describe_runtime_selection(&mut ambiguous, &cfg, &lines);
+        assert!(!ambiguous.execution.selection_complete);
+        assert!(ambiguous.execution.selected_gpus.is_empty());
+
+        let mut missing = capture_for(&cfg, &resolved).environment;
+        describe_runtime_selection(&mut missing, &cfg, &lines[..1]);
+        assert!(!missing.execution.selection_complete);
     }
 
     #[test]

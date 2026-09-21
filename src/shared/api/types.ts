@@ -379,6 +379,8 @@ export interface PerformanceBenchmarkProvenance {
     os: string;
     arch: string;
     cpu: { name: string; logical_cores: number };
+    /** OS-reported physical RAM at measurement launch, not process peak memory. */
+    system_memory_bytes?: number | null;
     installed_gpus: BenchmarkGpuSnapshot[];
     execution: {
       mode: 'cpu' | 'selected' | 'automatic' | 'unknown';

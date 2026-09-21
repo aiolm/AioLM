@@ -217,7 +217,7 @@ pub(crate) async fn run_performance_bench(
     })
     .await
     .map_err(|error| error.to_string())?;
-    let provenance = benchmark::provenance::capture(
+    let mut provenance = benchmark::provenance::capture(
         &cfg,
         &gpu,
         crate::hardware::detect(),
@@ -225,6 +225,13 @@ pub(crate) async fn run_performance_bench(
         &request.context_profile,
         performance_bench::corpus_identity(&request.context_profile),
     );
+    if let Some(capability) = &capability {
+        benchmark::provenance::describe_runtime_selection(
+            &mut provenance.environment,
+            &cfg,
+            &capability.devices,
+        );
+    }
     let trial_journal = journal.clone();
     let progress: performance_bench::Progress = Arc::new(move |progress| {
         let _ = app.emit("performance-bench-progress", progress);
