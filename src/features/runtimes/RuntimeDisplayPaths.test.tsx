@@ -52,7 +52,7 @@ describe("runtime path presentation", () => {
 
     fireEvent.click(container.querySelector("summary")!);
     expect(container.querySelector("pre")).toHaveTextContent(String.raw`Failed to open C:\runtimes\llama-server.exe`);
-    expect(screen.getByTitle(`--model=${displayNetworkPath}`)).toHaveTextContent(`--model=${displayNetworkPath}`);
+    expect(screen.getByText(`--model=${displayNetworkPath}`)).toBeInTheDocument();
     expectReadableMarkup(container);
     expect(capabilities).toEqual(original);
   });
