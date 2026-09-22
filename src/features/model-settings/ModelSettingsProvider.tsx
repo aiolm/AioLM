@@ -6,8 +6,7 @@ import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/
 import { anySessionActivity, sessionHasActivity } from '../../shared/state/sessionActivity';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry';
 import { useI18n } from '../../shared/i18n/i18n';
-import type { ModelProfile } from '../profiles/modelProfiles';
-import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ProfileCommitResult, type ProfileEditorResult } from './profileEditor';
+import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ModelProfile, type ProfileCommitResult, type ProfileEditorResult } from './profileEditor';
 import { ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { applyDefaultProfile, resolveProfileApplicationOrDefault, resolveProfileForExecution } from '../../shared/config/profileAssignments';
 import { applyProfile } from './profileWorkspaceState';

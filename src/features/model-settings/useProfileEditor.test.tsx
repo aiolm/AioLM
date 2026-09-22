@@ -38,9 +38,10 @@ describe('profile editor persistence', () => {
     expect(hook.result.current.library.entries).toEqual([defaultSettingsProfile()]);
     const saved = hook.result.current.result();
     const named = saved.library.entries.find(entry => entry.id === saved.application.profile_id)!;
-    // The runtime identity is outside the Default profile's coverage and comes
-    // from the chosen model; the tuning fields it owns keep their runtime defaults.
-    expect(named).toMatchObject({ id: 'profile-default', name: 'Default', scope: 'global', settings: { active_backend: testConfig.active_backend, ngl: tuningResetValues().ngl } });
+    // The Default profile owns the runtime, and a fresh one names none: choosing
+    // a model no longer carries whichever runtime was selected last into it. The
+    // tuning fields it owns keep their runtime defaults.
+    expect(named).toMatchObject({ id: 'profile-default', name: 'Default', scope: 'global', settings: { active_backend: '', active_build: '', ngl: tuningResetValues().ngl } });
     expect(saved.library.entries).toHaveLength(1);
     expect(saved.application.profile_name).toBe('Default');
   });

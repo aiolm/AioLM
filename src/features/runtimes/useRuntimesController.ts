@@ -12,7 +12,11 @@ import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, 
 import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, runReviewPullRequest } from "./runtimesActions";
 
 /** Owns all Runtimes panel state: backend catalog rows, device detection, the
- * two-step pull-request build flow, portable bundle import/export, and the native install-progress subscription. */
+ * two-step pull-request build flow, portable bundle import/export, and the native install-progress subscription.
+ *
+ * The panel manages installed builds and nothing else: it probes exactly the
+ * build the user asks about and never reads the execution configuration, which
+ * belongs to the profile a model is launched with. */
 export function useRuntimesController(store: AppStore, active: boolean) {
   const { locale, t } = useI18n();
   const [rows, setRows] = useState<BackendRow[]>(initialRows);
@@ -22,6 +26,9 @@ export function useRuntimesController(store: AppStore, active: boolean) {
   const [failure, setFailure] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<api.RuntimeCapabilities | null>(null);
+  // The build the shown capabilities describe, so the card never reports one
+  // build's flags under another build's name.
+  const [probeTarget, setProbeTarget] = useState<{ backend: string; build: string } | null>(null);
   const [probeBusy, setProbeBusy] = useState(false);
   const [prBackend, setPrBackend] = useState(() => defaultPrBackendForDevice(null));
   const [prSource, setPrSource] = useState("");
@@ -43,40 +50,37 @@ export function useRuntimesController(store: AppStore, active: boolean) {
   const unsubRef = useRef<(() => void) | null>(null);
   const refreshGeneration = useRef(0);
   const probeGeneration = useRef(0);
-  const probeKeyRef = useRef("");
   const prBackendTouched = useRef(false);
   const prInstallInFlight = useRef(false);
-  const activeBackend = store.cfg?.active_backend ?? "";
-  const activeBuild = store.cfg?.active_build ?? "";
   const serverRunning = isServerRunning(store.status.state);
   const runtimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
-  probeKeyRef.current = `${activeBackend} ${activeBuild}`;
 
-  const probe = useCallback(async () => {
+  // A probe names the build it describes, so a later one always wins and a
+  // result can never be read as belonging to a different build.
+  const probe = useCallback(async (backend: string, build: string) => {
     const generation = ++probeGeneration.current;
-    const key = `${activeBackend} ${activeBuild}`;
+    setProbeTarget({ backend, build });
     setProbeBusy(true);
     try {
-      const result = await api.rtProbe(activeBackend, activeBuild);
-      if (generation === probeGeneration.current && key === probeKeyRef.current) {
-        setCapabilities(result);
-        setLoadError(null);
-      }
+      const result = await api.rtProbe(backend, build);
+      if (generation !== probeGeneration.current) return;
+      setCapabilities(result);
+      setLoadError(null);
     } catch (error) {
-      if (generation === probeGeneration.current && key === probeKeyRef.current) {
-        setCapabilities(null);
-        setLoadError(`${t("ui.preflightFailed")}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      if (generation !== probeGeneration.current) return;
+      setCapabilities(null);
+      setLoadError(`${t("ui.preflightFailed")}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       if (generation === probeGeneration.current) setProbeBusy(false);
     }
-  }, [activeBackend, activeBuild, t]);
+  }, [t]);
 
+  // Leaving the panel abandons an in-flight probe rather than applying its
+  // result to a card the user is no longer looking at.
   useEffect(() => {
-    if (active && activeBackend && activeBuild) void probe();
-    else setProbeBusy(false);
+    if (!active) setProbeBusy(false);
     return () => { probeGeneration.current += 1; };
-  }, [active, activeBackend, activeBuild, probe]);
+  }, [active]);
 
   const fail = (label: string, error: unknown) => {
     setFailure(`${label}: ${error instanceof Error ? error.message : String(error)}`);
@@ -209,7 +213,10 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     try {
       await api.rtUninstall(backend, build);
       flashT(t("ui.uninstalledOk", { backend, build }));
-      await refresh();
+      // Removing a build clears it from every profile that named it, so the
+      // panel reloads the configuration rather than keeping a selection that
+      // no longer exists on disk.
+      await Promise.all([refresh(), store.loadConfig()]);
     } catch (error) {
       fail(t("ui.uninstallFailed"), error);
     } finally {
@@ -220,10 +227,6 @@ export function useRuntimesController(store: AppStore, active: boolean) {
 
   const uninstall = async (backend: string, build: string) => {
     if (runtimeBusy) return;
-    if (activeBackend === backend && activeBuild === build) {
-      flashT(t("ui.buildIsActive"));
-      return;
-    }
     if (serverRunning) {
       flashT(t("ui.stopBeforeRemoveRuntime"));
       return;
@@ -248,7 +251,7 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     prBackend, setPrBackend, prBackendTouched,
     prSource, setPrSource, prBusy, bundleBusy, bundleProgress, activePrBackend, prReviewBusy,
     prPreview, setPrPreview, pendingUninstall, setPendingUninstall, uninstallBusy, cancelBusy,
-    device, showAll, toggleShowAll, activeBackend, activeBuild, serverRunning, runtimeBusy,
+    device, showAll, toggleShowAll, probeTarget, serverRunning, runtimeBusy,
     probe, refresh,
     cancelInstall, exportRuntime, importRuntime, install,
     reviewPullRequest, installPullRequest, uninstall, confirmUninstall,

@@ -105,23 +105,30 @@ async function startPullRequestBuild() {
 }
 
 describe("RuntimesPanel pull-request builds", () => {
-  it("automatically probes a selected runtime and never offers OS identities while pending", async () => {
-    mocked.rtList.mockResolvedValue([]);
-    mocked.rtLatest.mockResolvedValue(null);
+  it("probes only the build the user picks and reports the result under that build", async () => {
+    // Nothing is probed on entry: the panel has no runtime of its own to
+    // describe, and which build matters is the user's choice, not a setting.
     mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
     mocked.deviceProfile.mockResolvedValue(NVIDIA_REPORT);
     let finish!: (value: api.RuntimeCapabilities) => void;
     mocked.rtProbe.mockImplementation(() => new Promise<api.RuntimeCapabilities>((resolve) => { finish = resolve; }));
-    const configured = { ...store, cfg: { active_backend: "cuda", active_build: "b10638" } } as AppStore;
-    render(<I18nProvider initialLocale="en"><RuntimesPanel store={configured} /></I18nProvider>);
+    renderPanel();
+
+    const advanced = (await screen.findByText("Advanced")).closest("details")!;
+    fireEvent.click(advanced.querySelector("summary")!);
+    expect(advanced).toHaveTextContent("Choose an installed build to probe.");
+    expect(screen.getByRole("button", { name: "Probe again" })).toBeDisabled();
+    expect(mocked.rtProbe).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledWith("cuda", "b10638"));
-    expect(screen.queryByRole("checkbox", { name: /Test GPU/ })).not.toBeInTheDocument();
-    await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: [], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
-    expect(await screen.findByRole("checkbox", { name: /CUDA1.*Test GPU/ })).toBeEnabled();
-    const probe = screen.getByRole("button", { name: "Probe selected runtime" });
-    expect(probe.closest("details")).toHaveClass("runtime-advanced");
-    fireEvent.click(probe);
+    await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: ["--ctx-size"], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
+
+    expect(advanced).toHaveTextContent("Showing cuda 10638.");
+    // A re-probe repeats the same build rather than picking one for the user.
+    fireEvent.click(screen.getByRole("button", { name: "Probe again" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledTimes(2));
+    expect(mocked.rtProbe).toHaveBeenLastCalledWith("cuda", "b10638");
   });
 
   beforeEach(() => {
@@ -162,7 +169,7 @@ describe("RuntimesPanel pull-request builds", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel build" });
     expect(cancel.closest("details")).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel install" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Probe selected runtime" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" })).toBeDisabled();
     fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
   });
@@ -477,6 +484,34 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(await screen.findByRole("button", { name: "Review PR" })).toBeEnabled();
   });
 
+  it("removes the build the default execution uses after naming what loses its runtime", async () => {
+    // The runtime a model launches with lives in its profile, so a build is no
+    // longer withheld for being the one in use. Removing it clears it from
+    // everything that named it, which the confirmation states before it runs.
+    mocked.rtUninstall.mockResolvedValue(undefined);
+    const loadConfig = vi.fn(async () => undefined);
+    const configured = { ...store, loadConfig, cfg: {
+      active_backend: "cuda", active_build: "b10638",
+      settings_profiles: { version: 1, revision: 1, legacy_imported: true, default_profile_id: "profile-default",
+        entries: [{ id: "profile-default", name: "Default", scope: "global", revision: 1,
+          settings: { active_backend: "cuda", active_build: "b10638" } }],
+        applied: {} },
+    } } as unknown as AppStore;
+    render(createElement(I18nProvider, { initialLocale: "en", children: createElement(RuntimesPanel, { store: configured, active: true }) }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove: CUDA (NVIDIA) b10638" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("These use this runtime and will be left without one:");
+    expect(dialog).toHaveTextContent("Default execution");
+    expect(dialog).toHaveTextContent("Profile “Default”");
+    fireEvent.click(screen.getByRole("button", { name: "Remove runtime" }));
+
+    await waitFor(() => expect(mocked.rtUninstall).toHaveBeenCalledWith("cuda", "b10638"));
+    // The backend cleared the runtime from the saved profiles, so the panel
+    // reloads rather than keeping a selection that no longer exists.
+    await waitFor(() => expect(loadConfig).toHaveBeenCalled());
+  });
   it("surfaces a build failure without clearing the typed pull request", async () => {
     mocked.rtInstallPr.mockRejectedValue(new Error("CMake configuring failed with exit code: 1"));
     renderPanel();

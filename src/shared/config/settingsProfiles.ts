@@ -39,8 +39,15 @@ export interface SettingsProfileLibrary {
 }
 
 export const MODEL_PROFILE_KEYS = EXECUTION_KEYS.filter(key => key !== 'active_model');
+/**
+ * Fields a profile owns whatever model it is applied to. The runtime pair is
+ * one of them: a profile that did not own it left the runtime at whatever the
+ * configuration already held, so a model launched on the last runtime selected
+ * anywhere rather than on the one its profile names. Owning it here makes the
+ * profile the only place a runtime is chosen.
+ */
 export const GLOBAL_PROFILE_KEYS: readonly ExecutionKey[] = [
-  'runtime_defaults', 'ctx_size', 'batch_size', 'ubatch_size', 'keep', 'cache_type_k', 'cache_type_v',
+  'runtime_defaults', 'active_backend', 'active_build', 'ctx_size', 'batch_size', 'ubatch_size', 'keep', 'cache_type_k', 'cache_type_v',
   'flash_attn', 'threads', 'parallel', 'request_timeout_seconds', 'sleep_idle_seconds',
   'temperature', 'top_p', 'top_k', 'chat_options', 'reasoning', 'reasoning_format', 'reasoning_effort',
   'reasoning_budget', 'reasoning_budget_message', 'reasoning_preserve',

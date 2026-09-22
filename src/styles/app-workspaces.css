@@ -173,3 +173,8 @@
 /* The opt-in deep check, beside the probe it extends. */
 .runtime-deep-verify { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ui-border); }
 .runtime-deep-verify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+
+/* What a runtime removal leaves without a runtime, named in its confirmation. */
+.runtime-removal-notice > * + * { margin-top: 8px; }
+.runtime-removal-targets { margin: 0; padding-left: 18px; list-style: disc; }
+.runtime-removal-targets > li + li { margin-top: 2px; }

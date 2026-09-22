@@ -22,7 +22,6 @@ vi.mock("../features/runtimes/Runtimes", () => ({ default: ({ onOpenProfiles }: 
 vi.mock("../features/sessions/Sessions", () => ({ default: () => <p>Sessions content</p> }));
 vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover content</p> }));
 vi.mock("../features/tuning/Tuning", () => ({ default: () => <p>Parameter form</p> }));
-vi.mock("../features/profiles/ExecutionProfiles", () => ({ default: () => <p>Saved profiles</p> }));
 vi.mock("../features/bench/Bench", () => ({ default: () => {
   if (benchmarkLoading) throw benchmarkLoading;
   return <><input aria-label="Benchmark result" />{showBenchmarkCancel && <LocalTaskCancelButton taskId="performance-benchmark-active" onClick={cancelBenchmark}>Cancel benchmark</LocalTaskCancelButton>}</>;

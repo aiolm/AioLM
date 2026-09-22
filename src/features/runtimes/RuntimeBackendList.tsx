@@ -14,27 +14,28 @@ interface Props {
   locale: Locale;
   visibleRows: BackendRow[];
   device: api.DeviceReport | null;
-  activeBackend: string;
-  activeBuild: string;
   serverRunning: boolean;
   prBusy: boolean;
   bundleBusy: boolean;
   cancelBusy: boolean;
+  probeBusy: boolean;
+  probeTarget: { backend: string; build: string } | null;
   onBlockedAction?: (message: string) => void;
   onCancelInstall: () => void;
   onInstall: (backend: string) => void;
+  onProbe: (backend: string, build: string) => void;
   onUninstall: (backend: string, build: string) => void;
 }
 
 export default function RuntimeBackendList({
-  t, locale, visibleRows, device, activeBackend, activeBuild, serverRunning, prBusy, bundleBusy, cancelBusy,
-  onBlockedAction, onCancelInstall, onInstall, onUninstall,
+  t, locale, visibleRows, device, serverRunning, prBusy, bundleBusy, cancelBusy, probeBusy, probeTarget,
+  onBlockedAction, onCancelInstall, onInstall, onProbe, onUninstall,
 }: Props) {
   const installedRows = visibleRows.filter((row) => row.installed.length > 0);
   const availableRows = visibleRows.filter((row) => row.installed.length === 0);
 
   const renderRow = (row: BackendRow) => {
-    const state = stateOf(locale, row, activeBackend, activeBuild);
+    const state = stateOf(locale, row);
     const info = row.latest;
     const newestInstalled = !!info && row.installed.some((item) => item.build === info.build);
     const rowAction = runtimeRowAction({ busy: row.busy, newestInstalled });
@@ -77,12 +78,12 @@ export default function RuntimeBackendList({
 
         {row.installed.length > 0 && <div className="mt-3 flex min-w-0 flex-wrap gap-2.5" role="list" aria-label={t("ui.installedBuilds", { label: backendName })}>
           {row.installed.map((item) => {
-            const isActive = activeBackend === row.backend && activeBuild === item.build;
+            const probed = probeTarget?.backend === row.backend && probeTarget.build === item.build;
             const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : null;
-            return <div key={item.build} role="listitem" className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${isActive ? "app-border-success bg-success-soft/40" : "border-line-strong app-bg-muted"}`} title={normalizeDisplayPath(item.dir)}>
+            return <div key={item.build} role="listitem" className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${probed ? "app-border-accent bg-accent-soft/40" : "border-line-strong app-bg-muted"}`} title={normalizeDisplayPath(item.dir)}>
               <span className="text-ink" title={normalizeDisplayText(item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build)}>{item.source ? `${t("ui.runtimePrBuild", { pr: item.source.pull_request })} · ${item.source.commit.slice(0, 7)} · ` : ""}{normalizeDisplayText(formatRuntimeVersion(item.build, item.version))}</span>
               <span className="text-muted">{formatMebibytes(item.size_mb)}</span>
-              {isActive && <span className="rounded bg-success-soft px-1.5 py-0.5 text-xs text-success">{t("ui.active")}</span>}
+              <button type="button" onClick={() => onProbe(row.backend, item.build)} disabled={row.busy || probeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} aria-label={`${t("ui.probeBuild")}: ${backendName} ${item.build}`} className="app-button app-button--secondary app-button--sm">{t("ui.probeBuild")}</button>
               <button type="button" onClick={() => uninstallBlockedReason ? onBlockedAction?.(uninstallBlockedReason) : onUninstall(row.backend, item.build)} disabled={row.busy} aria-disabled={uninstallBlockedReason ? "true" : undefined} title={uninstallBlockedReason ?? undefined} aria-label={`${t("panel.remove")}: ${backendName} ${item.build}`} className={`app-button app-button--danger app-button--sm ${uninstallBlockedReason ? "opacity-80" : ""}`}>{t("panel.remove")}</button>
             </div>;
           })}

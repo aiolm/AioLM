@@ -3,10 +3,17 @@ import { emptyProfileLibrary, ensureProfileLibrary, profileApplicationConfig, pr
 import { migrateProfileLibrary } from '../../shared/config/profileMigration';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { ensureProfileAssignments } from '../../shared/config/profileAssignments';
-import type { ModelProfile } from '../profiles/modelProfiles';
 import { executionChanges, executionConfig, settingsForSession } from '../../shared/config/executionSettings';
 import { sessionConfig } from '../../shared/runtime/sessionUtils';
 import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
+
+/** The request-level settings one chat send runs with, read from the profile
+ * applied to its target. */
+export type ModelProfile = {
+  runtime_defaults?: string[];
+  id: string; name: string; temperature: number; top_p: number; top_k: number; reasoning_effort: string;
+  chat_options: AppConfig["chat_options"]; system_prompt: string; stop_strings: string[];
+};
 
 export function requestProfileFromApplication(application?: ProfileApplication | null): ModelProfile | null {
   if (!application) return null;

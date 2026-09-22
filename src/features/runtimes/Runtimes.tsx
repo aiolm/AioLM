@@ -1,12 +1,10 @@
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
-import { useMemo } from 'react';
 import type { AppStore } from "../../shared/state/store";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
-import { buildNumber } from "../../shared/runtime/runtimeUtils";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { useRuntimesController } from "./useRuntimesController";
 import { computeVisibleRows, deviceSummaryOf } from "./runtimeRowPresentation";
@@ -16,24 +14,18 @@ import RuntimePullRequestCard from "./RuntimePullRequestCard";
 import RuntimePortableBundle from "./RuntimePortableBundle";
 import RuntimeBackendList from "./RuntimeBackendList";
 import PullRequestProvenance from "./RuntimePullRequestProvenance";
-import RuntimeGpuAssignment from "./RuntimeGpuAssignment";
-import { runtimeGpuDevices } from "../../shared/runtime/sessionUtils";
+import RuntimeRemovalNotice from "./RuntimeRemovalNotice";
+import { runtimeReferences } from "./runtimeReferences";
 import { useDeepVerification } from "./useDeepVerification";
-import { parseRuntimeHelp, SERVER_OPTIONS } from '../../shared/config/serverOptions';
-import { TuningOptionsContext } from '../tuning/TuningOptionMetadata';
 
 export type { BackendRow } from "./runtimesHelpers";
 
-export default function RuntimesPanel({ store, active = true, onOpenProfiles, managementOnly = false }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; managementOnly?: boolean }) {
+/** Installed runtimes only. Which runtime a model launches with is edited in
+ * its profile, through model settings, so nothing here reads or writes the
+ * execution configuration. */
+export default function RuntimesPanel({ store, active = true, onOpenProfiles }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void }) {
   const { t, locale } = useI18n();
   const rt = useRuntimesController(store, active);
-  const runtimeHelp = rt.capabilities?.backend === store.cfg?.active_backend && rt.capabilities?.build === store.cfg?.active_build ? rt.capabilities?.server_help ?? '' : '';
-  const runtimeOptions = useMemo(() => parseRuntimeHelp(runtimeHelp), [runtimeHelp]);
-  const runtimeChoices = rt.capabilities && rt.capabilities.backend === store.cfg?.active_backend && rt.capabilities.build === store.cfg?.active_build
-    ? runtimeGpuDevices(rt.capabilities.backend, rt.capabilities.devices) : [];
-  const managedRuntime = !!(store.cfg?.active_backend && store.cfg?.active_build);
-  const assignmentDevice = rt.device && managedRuntime
-    ? { ...rt.device, profile: { ...rt.device.profile, gpus: runtimeChoices } } : rt.device;
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
@@ -68,30 +60,18 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
         locale={locale}
         visibleRows={visibleRows}
         device={rt.device}
-        activeBackend={rt.activeBackend}
-        activeBuild={rt.activeBuild}
         serverRunning={rt.serverRunning}
         prBusy={rt.prBusy}
         bundleBusy={rt.bundleBusy}
         cancelBusy={rt.cancelBusy}
+        probeBusy={rt.probeBusy}
+        probeTarget={rt.probeTarget}
         onBlockedAction={(msg) => rt.setFailure(msg)}
         onCancelInstall={() => void rt.cancelInstall()}
         onInstall={(backend) => void rt.install(backend)}
+        onProbe={(backend, build) => void rt.probe(backend, build)}
         onUninstall={(backend, build) => void rt.uninstall(backend, build)}
       />
-
-      {!managementOnly && store.cfg && (
-        <TuningOptionsContext.Provider value={{ options: runtimeOptions.length ? runtimeOptions : SERVER_OPTIONS, verified: runtimeOptions.length > 0 }}>
-        <RuntimeGpuAssignment
-          t={t}
-          device={assignmentDevice}
-          placement={store.cfg.gpu ?? { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null }}
-          disabled={rt.serverRunning || rt.runtimeBusy || rt.probeBusy || (managedRuntime && !runtimeChoices.length)}
-          devicesPending={managedRuntime && !runtimeChoices.length}
-          onChange={(gpu) => store.updateConfig({ gpu }).then(() => undefined)}
-        />
-        </TuningOptionsContext.Provider>
-      )}
 
       {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-button app-button--ghost app-button--sm">{t("ui.executionProfiles")}</button></p>}
 
@@ -104,9 +84,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
             probeBusy={rt.probeBusy}
             runtimeBusy={rt.runtimeBusy}
             serverRunning={rt.serverRunning}
-            activeBackend={rt.activeBackend}
-            activeBuild={rt.activeBuild}
-            onProbe={() => void rt.probe()}
+            probeTarget={rt.probeTarget}
+            onProbe={() => { if (rt.probeTarget) void rt.probe(rt.probeTarget.backend, rt.probeTarget.build); }}
             deepVerify={deepVerify}
           />
           <RuntimePullRequestCard
@@ -149,7 +128,10 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, ma
       <ConfirmDialog
         open={rt.pendingUninstall !== null}
         title={t("ui.removeRuntimeTitle")}
-        description={rt.pendingUninstall ? t("ui.removeRuntimeBody", { backend: rt.pendingUninstall.backend, build: buildNumber(rt.pendingUninstall.build) }) : ""}
+        description={rt.pendingUninstall
+          ? <RuntimeRemovalNotice t={t} backend={rt.pendingUninstall.backend} build={rt.pendingUninstall.build}
+              references={runtimeReferences(store.cfg, rt.pendingUninstall.backend, rt.pendingUninstall.build)} />
+          : ""}
         confirmLabel={t("ui.removeRuntime")}
         busy={rt.uninstallBusy}
         onConfirm={() => void rt.confirmUninstall()}

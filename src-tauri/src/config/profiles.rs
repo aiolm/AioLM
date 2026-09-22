@@ -9,8 +9,15 @@ const MAX_APPLICATIONS: usize = 4_096;
 const MAX_LIBRARY_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_PROMPT_BYTES: usize = 262_144;
 
+/// Fields a profile owns whatever model it is applied to. The runtime pair is
+/// one of them: a profile that did not own it left the runtime at whatever the
+/// configuration already held, so a model launched on the last runtime selected
+/// anywhere rather than on the one its profile names. Owning it here makes the
+/// profile the only place a runtime is chosen. Mirrors `GLOBAL_PROFILE_KEYS`.
 const GLOBAL_FIELDS: &[&str] = &[
     "runtime_defaults",
+    "active_backend",
+    "active_build",
     "ctx_size",
     "batch_size",
     "ubatch_size",
@@ -270,10 +277,92 @@ fn recovered_profile(
     })
 }
 
+fn text_setting(settings: &Map<String, Value>, key: &str) -> String {
+    settings
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The runtime a profile names, when it names a complete one.
+fn runtime_pair(settings: &Map<String, Value>) -> Option<(String, String)> {
+    let backend = text_setting(settings, "active_backend");
+    let build = text_setting(settings, "active_build");
+    (!backend.is_empty() && !build.is_empty()).then_some((backend, build))
+}
+
+/// Give every saved profile an explicit runtime.
+///
+/// Before the runtime pair became a field every profile owns, a profile that
+/// did not cover it left `active_backend`/`active_build` at whatever the
+/// configuration already held, so a model launched on the last runtime picked
+/// anywhere rather than on the one its profile names. Applying such a profile
+/// now clears the pair instead, which would refuse every launch after an
+/// upgrade. Each profile is therefore seeded with the runtime it was last
+/// applied with, falling back to the configuration's own selection.
+///
+/// This runs once, on the schema upgrade, so a runtime later cleared on
+/// purpose — by uninstalling its build, say — stays cleared.
+fn adopt_profile_runtimes(library: &mut SettingsProfileLibrary, backend: &str, build: &str) {
+    let ids = library
+        .entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let configured =
+        (!backend.is_empty() && !build.is_empty()).then(|| (backend.to_owned(), build.to_owned()));
+    for (index, id) in ids.iter().enumerate() {
+        let seed = library
+            .applied
+            .values()
+            .filter(|application| application.profile_id.as_deref() == Some(id.as_str()))
+            .find_map(|application| runtime_pair(&application.settings))
+            .or_else(|| configured.clone());
+        let profile = &mut library.entries[index];
+        let mut changed = false;
+        // Legacy profiles carry their coverage explicitly; the others own the
+        // pair through their scope as soon as `GLOBAL_FIELDS` lists it.
+        if let Some(coverage) = profile.coverage.as_mut() {
+            for field in ["active_backend", "active_build"] {
+                if !coverage.iter().any(|key| key == field) {
+                    coverage.push(field.to_owned());
+                    changed = true;
+                }
+            }
+            coverage.sort_unstable();
+        }
+        let current = (
+            text_setting(&profile.settings, "active_backend"),
+            text_setting(&profile.settings, "active_build"),
+        );
+        if current.0.is_empty() || current.1.is_empty() {
+            // Seeds a profile that names no runtime, and drops a half-written
+            // pair that cannot name one either: covering the fields makes an
+            // incomplete pair a rejected configuration where it used to be
+            // ignored as uncovered.
+            let next = seed.unwrap_or_default();
+            if next != current {
+                profile
+                    .settings
+                    .insert("active_backend".into(), Value::String(next.0));
+                profile
+                    .settings
+                    .insert("active_build".into(), Value::String(next.1));
+                changed = true;
+            }
+        }
+        if changed {
+            profile.revision = profile.revision.saturating_add(1);
+        }
+    }
+}
+
 /// Disk migration preserves saved values while giving every target a named owner.
 pub(super) fn initialize_profiles(
     cfg: &mut AppConfig,
     had_saved_library: bool,
+    adopt_runtimes: bool,
 ) -> Result<(), String> {
     let mut library = cfg.settings_profiles.take().unwrap_or_default();
     if library.entries.is_empty() {
@@ -395,6 +484,9 @@ pub(super) fn initialize_profiles(
             application.profile_revision = Some(profile.revision);
         }
         library.applied.insert(target, application);
+    }
+    if adopt_runtimes {
+        adopt_profile_runtimes(&mut library, &cfg.active_backend, &cfg.active_build);
     }
     cfg.settings_profiles = Some(library);
     Ok(())
@@ -917,6 +1009,90 @@ mod tests {
 
         assert_eq!(cfg.active_backend, before.active_backend);
         assert_eq!(cfg.settings_profiles, before.settings_profiles);
+    }
+
+    #[test]
+    fn upgraded_profiles_adopt_the_runtime_they_were_last_applied_with() {
+        // A profile written before it owned the runtime has none to apply, and
+        // applying it would clear the pair and refuse the next launch. Seeding
+        // keeps each profile running on what it already ran on: its own
+        // application first, the configuration's selection otherwise.
+        let mut library = library();
+        for key in ["active_backend", "active_build"] {
+            let value = if key == "active_backend" {
+                "cuda"
+            } else {
+                "b6215"
+            };
+            library
+                .applied
+                .get_mut("model:models/sample.gguf")
+                .unwrap()
+                .settings
+                .insert(key.into(), json!(value));
+        }
+        let revisions = library
+            .entries
+            .iter()
+            .map(|entry| entry.revision)
+            .collect::<Vec<_>>();
+
+        adopt_profile_runtimes(&mut library, "vulkan", "b11035");
+
+        // The applied snapshot names a runtime, so its profile keeps that one.
+        assert_eq!(library.entries[0].settings["active_backend"], json!("cuda"));
+        assert_eq!(library.entries[0].settings["active_build"], json!("b6215"));
+        // The default profile has no application of its own and falls back to
+        // the configuration, and now covers the pair so it stops inheriting it.
+        assert_eq!(
+            library.entries[1].settings["active_backend"],
+            json!("vulkan")
+        );
+        assert_eq!(library.entries[1].settings["active_build"], json!("b11035"));
+        let coverage = library.entries[1].coverage.as_ref().unwrap();
+        assert!(coverage.iter().any(|key| key == "active_backend"));
+        assert!(coverage.iter().any(|key| key == "active_build"));
+        for (entry, revision) in library.entries.iter().zip(revisions) {
+            assert!(entry.revision > revision);
+        }
+        library.validate().expect("seeded profiles stay valid");
+    }
+
+    #[test]
+    fn adopting_runtimes_leaves_a_deliberately_cleared_profile_alone() {
+        // Uninstalling a build clears it from the profiles that named it. The
+        // upgrade seeding must never put it back, so it keeps a pair it finds
+        // and adds nothing when there is no runtime to add.
+        let mut library = library();
+        library.entries[0]
+            .settings
+            .insert("active_backend".into(), json!("rocm"));
+        library.entries[0]
+            .settings
+            .insert("active_build".into(), json!("b11029"));
+
+        adopt_profile_runtimes(&mut library, "", "");
+
+        assert_eq!(library.entries[0].settings["active_backend"], json!("rocm"));
+        assert_eq!(library.entries[0].settings["active_build"], json!("b11029"));
+        assert!(!library.entries[1].settings.contains_key("active_backend"));
+    }
+
+    #[test]
+    fn adopting_runtimes_drops_a_half_written_pair_that_names_no_runtime() {
+        // A pair with only one half was ignored while the profile did not cover
+        // it. Covering it makes the same pair a configuration the app refuses to
+        // load, so the upgrade has to settle it rather than carry it forward.
+        let mut library = library();
+        library.entries[0]
+            .settings
+            .insert("active_backend".into(), json!("rocm"));
+
+        adopt_profile_runtimes(&mut library, "", "");
+
+        assert_eq!(library.entries[0].settings["active_backend"], json!(""));
+        assert_eq!(library.entries[0].settings["active_build"], json!(""));
+        library.validate().expect("settled profiles stay loadable");
     }
 
     fn library() -> SettingsProfileLibrary {

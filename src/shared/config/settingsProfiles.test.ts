@@ -101,6 +101,21 @@ describe('settings profiles', () => {
     expect(captureProfile(testConfig, 'Writing', 'model', '').id).not.toBe(profile.id);
   });
 
+  it('launches on the runtime its profile names instead of the one the configuration carries', () => {
+    // A profile that did not own the runtime left it at whatever was already
+    // selected, so a model ran on the last runtime chosen anywhere. Every scope
+    // owns the pair now, which is what makes the profile the only place it is set.
+    const pinned = captureProfile({ ...testConfig, active_backend: 'cuda', active_build: 'b6215' }, 'Pinned', 'global', '');
+    const elsewhere = { ...testConfig, active_backend: 'vulkan', active_build: 'b11035' };
+
+    expect(applySettingsProfile(elsewhere, pinned)).toMatchObject({ active_backend: 'cuda', active_build: 'b6215' });
+
+    // A profile naming no runtime leaves none behind either: an unset runtime is
+    // reported as a setup gap rather than silently filled from somewhere else.
+    const unset = defaultSettingsProfile();
+    expect(applySettingsProfile(elsewhere, unset)).toMatchObject({ active_backend: '', active_build: '' });
+  });
+
   it('keeps global profiles portable and leaves model-specific settings intact when applied', () => {
     const source = { ...testConfig, threads: 6, ctx_size: 8192, ngl: 99, spec_type: 'draft', spec_draft_model: 'draft.gguf',
       mmproj: 'vision.gguf', runtime_defaults: ['temperature', 'ngl', 'spec_draft_n_max'],
@@ -108,13 +123,17 @@ describe('settings profiles', () => {
       lora_adapters: [{ path: 'adapter.gguf', scale: 0.5, enabled: true }],
     };
     const profile = captureProfile(source, 'Portable', 'global', 'Write clearly.');
-    for (const field of ['active_backend', 'active_build', 'gpu', 'ngl', 'n_cpu_moe', 'spec_type', 'spec_draft_n_max', 'spec_draft_model', 'mmproj', 'lora_adapters', 'server_args']) {
+    for (const field of ['gpu', 'ngl', 'n_cpu_moe', 'spec_type', 'spec_draft_n_max', 'spec_draft_model', 'mmproj', 'lora_adapters', 'server_args']) {
       expect(profile.settings).not.toHaveProperty(field);
     }
+    // The runtime travels with the profile: it is what the profile launches on,
+    // not something the model it is applied to brings along.
+    expect(profile.settings.active_backend).toBe(source.active_backend);
+    expect(profile.settings.active_build).toBe(source.active_build);
     expect(profile.settings.runtime_defaults).toEqual(['temperature']);
     const target = { ...testConfig, active_model: 'second.gguf', mmproj: 'second-projector.gguf', runtime_defaults: ['ngl', 'ctx_size'] };
     const applied = applySettingsProfile(target, profile);
-    expect(applied).toMatchObject({ active_model: target.active_model, active_backend: target.active_backend, active_build: target.active_build,
+    expect(applied).toMatchObject({ active_model: target.active_model, active_backend: profile.settings.active_backend, active_build: profile.settings.active_build,
       ngl: target.ngl, mmproj: target.mmproj, threads: 6, ctx_size: 8192, server_args: target.server_args });
     expect(applied.runtime_defaults).toEqual(['ngl', 'temperature']);
     expect(profileMatches(profile, applied, 'Write clearly.')).toBe(true);

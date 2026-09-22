@@ -33,6 +33,7 @@ headless 서버를 시작하기 전에 모델을 설정하세요. 서버 실행 
 ```
 
 - `config set`은 자격 증명과 알 수 없는 필드를 거부합니다.
+- `config set`은 현재 실행 설정을 씁니다. 런타임·GPU 레이어·컨텍스트 같은 실행 필드는 프로필이 소유하므로, 앱에서 프로필을 적용하면 그 프로필의 값으로 다시 계산됩니다. CLI만 사용하는 흐름에서는 설정한 값이 그대로 `server start`에 쓰입니다.
 - `config get`은 자격 증명처럼 보이는 값을 가립니다. `server_args`, `chat_options`, `lora_adapters`는 설정 시 JSON 값이 필요합니다.
 - `models delete`는 `models_dir` 내부의 비활성 `.gguf`/`.mmproj` 파일만 삭제할 수 있습니다.
 - `runtime device`는 로컬 GPU와 권장 백엔드를 검색하고, `runtime probe`는 버전/help/device/bench 사전 점검을 실행합니다.

@@ -4,7 +4,7 @@ import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
 import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
-import type { ModelProfile } from "../profiles/modelProfiles";
+import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
 import { usesRuntimeDefault } from "../../shared/config/tuningDefaults";
 import type { AppPreferences } from "../../shared/config/preferences";
