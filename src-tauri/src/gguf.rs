@@ -1,10 +1,8 @@
 //! Reading the few GGUF header facts the app needs from a model file.
 //!
-//! Only the metadata block is read, and only until the wanted key is found —
-//! `<architecture>.context_length` sits near the front, well before the
-//! tokenizer arrays that make up most of a header. Nothing here interprets
-//! tensors: this exists so the editor can bound a model's context at what the
-//! model was actually trained for instead of an arbitrary constant.
+//! Only the bounded metadata block is read. Unused values, including tokenizer
+//! arrays, are skipped; tensors are never read. Metadata order is not assumed,
+//! so display tags after context_length remain available to model information UI.
 //!
 //! [`read_descriptor`] reads the `general.*` block the same bounded way, for
 //! describing how a model was packaged. Key names and their meanings follow the
@@ -33,12 +31,44 @@ const MAX_BASE_MODELS: usize = 64;
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct ModelMetadata {
+    /// Added by the IPC layer only when an unchanged file has a download receipt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_repository: Option<String>,
+    /// Repository inferred from the imported library's publisher/model folders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantized_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
     /// Context the model was trained for, when the header states it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u64>,
     /// The architecture the header names, for display alongside it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub architecture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finetune: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expert_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expert_used_count: Option<u64>,
 }
 
 /// The `general.*` block as the header states it, with no interpretation. A
@@ -246,29 +276,115 @@ fn open_header(path: &Path) -> Result<(Reader<BufReader<File>>, u64), String> {
 pub fn read_metadata(path: &Path) -> Result<ModelMetadata, String> {
     let (mut reader, keys) = open_header(path)?;
     let mut metadata = ModelMetadata::default();
+    let mut architecture_values = std::collections::HashMap::new();
     for _ in 0..keys {
         let key = reader.string()?;
         let kind = reader.u32()?;
-        if key == "general.architecture" {
+        if matches!(
+            key.as_str(),
+            "general.architecture"
+                | "general.size_label"
+                | "general.type"
+                | "general.finetune"
+                | "general.license"
+                | "general.author"
+                | "general.organization"
+                | "general.quantized_by"
+                | "general.repo_url"
+        ) {
             if kind == 8 {
-                metadata.architecture = Some(reader.string()?);
+                let value = Some(reader.string()?);
+                match key.as_str() {
+                    "general.architecture" => metadata.architecture = value,
+                    "general.size_label" => metadata.size_label = value,
+                    "general.type" => metadata.model_type = value,
+                    "general.finetune" => metadata.finetune = value,
+                    "general.license" => metadata.license = value,
+                    "general.author" => metadata.author = value,
+                    "general.organization" => metadata.organization = value,
+                    "general.quantized_by" => metadata.quantized_by = value,
+                    "general.repo_url" => metadata.repo_url = value,
+                    _ => unreachable!(),
+                }
             } else {
                 skip_value(&mut reader, kind)?;
             }
             continue;
         }
-        if key.ends_with(".context_length") {
-            metadata.context_length = read_unsigned(&mut reader, kind)?.filter(|value| *value > 0);
-            // The architecture is written before it, so everything wanted is in
-            // hand and the tokenizer arrays behind this can stay unread.
-            if metadata.architecture.is_some() {
-                break;
+        if key == "general.file_type" {
+            metadata.quantization = read_unsigned(&mut reader, kind)?
+                .and_then(|value| u32::try_from(value).ok())
+                .and_then(file_type_label)
+                .map(str::to_owned);
+            continue;
+        }
+        if key == "general.tags" || key == "general.languages" {
+            let values = read_string_array(&mut reader, kind)?;
+            if key == "general.tags" {
+                metadata.tags = values;
+            } else {
+                metadata.languages = values;
+            }
+            continue;
+        }
+        if key.ends_with(".context_length")
+            || key.ends_with(".expert_count")
+            || key.ends_with(".expert_used_count")
+        {
+            if let Some(value) = read_unsigned(&mut reader, kind)? {
+                architecture_values.insert(key, value);
             }
             continue;
         }
         skip_value(&mut reader, kind)?;
     }
+    if let Some(architecture) = &metadata.architecture {
+        metadata.context_length = architecture_values
+            .get(&format!("{architecture}.context_length"))
+            .copied()
+            .filter(|value| *value > 0);
+        metadata.expert_count = architecture_values
+            .get(&format!("{architecture}.expert_count"))
+            .copied();
+        metadata.expert_used_count = architecture_values
+            .get(&format!("{architecture}.expert_used_count"))
+            .copied();
+    }
     Ok(metadata)
+}
+
+fn read_string_array<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    kind: u32,
+) -> Result<Vec<String>, String> {
+    if kind != 9 {
+        skip_value(reader, kind)?;
+        return Ok(Vec::new());
+    }
+    let element = reader.u32()?;
+    let count = reader.u64()?;
+    if count > MAX_ARRAY_LEN {
+        return Err("GGUF header declares an implausible array".into());
+    }
+    if let Some(width) = scalar_width(element) {
+        reader.skip(count.checked_mul(width).ok_or("GGUF array size overflow")?)?;
+        return Ok(Vec::new());
+    }
+    if element == 9 {
+        return Err("unsupported GGUF nested array".into());
+    }
+    let mut values = Vec::new();
+    for _ in 0..count {
+        if element == 8 {
+            let value = reader.string()?;
+            if !value.trim().is_empty() {
+                values.push(value);
+            }
+        } else {
+            skip_value(reader, element)?;
+        }
+    }
+    Ok(values)
 }
 
 /// The label llama.cpp's `llama_ftype` gives `general.file_type`, without the
@@ -478,6 +594,77 @@ mod tests {
     fn leaves_the_context_unknown_when_the_header_does_not_state_one() {
         let metadata = read(&header(&[("general.architecture", 8, string("llama"))])).unwrap();
         assert_eq!(metadata.context_length, None);
+    }
+
+    #[test]
+    fn exposes_declared_architecture_and_tags_after_context_without_name_inference() {
+        let mut tags = 8u32.to_le_bytes().to_vec();
+        tags.extend_from_slice(&3u64.to_le_bytes());
+        for value in ["reasoning", "custom-model-tag", "text-generation"] {
+            tags.extend_from_slice(&string(value));
+        }
+        let mut languages = 8u32.to_le_bytes().to_vec();
+        languages.extend_from_slice(&2u64.to_le_bytes());
+        languages.extend_from_slice(&string("en"));
+        languages.extend_from_slice(&string("ko"));
+        let metadata = read(&header(&[
+            (
+                "qwen4exp.context_length",
+                4,
+                262_144u32.to_le_bytes().to_vec(),
+            ),
+            ("general.name", 8, string("Example Flash Next")),
+            ("general.architecture", 8, string("qwen4exp")),
+            ("unrelated.context_length", 4, 128u32.to_le_bytes().to_vec()),
+            ("general.tags", 9, tags),
+            ("general.languages", 9, languages),
+            ("general.size_label", 8, string("30B-A3B")),
+            ("general.file_type", 4, 15u32.to_le_bytes().to_vec()),
+            ("general.type", 8, string("model")),
+            ("general.finetune", 8, string("Instruct")),
+            ("general.license", 8, string("apache-2.0")),
+            ("general.author", 8, string("Example Authors")),
+            ("general.organization", 8, string("Example Research")),
+            ("general.quantized_by", 8, string("Example Quantizer")),
+            (
+                "general.repo_url",
+                8,
+                string("https://huggingface.co/example-publisher/example-model"),
+            ),
+            ("qwen4exp.expert_count", 4, 128u32.to_le_bytes().to_vec()),
+            ("qwen4exp.expert_used_count", 4, 8u32.to_le_bytes().to_vec()),
+        ]))
+        .unwrap();
+        assert_eq!(metadata.architecture.as_deref(), Some("qwen4exp"));
+        assert_eq!(metadata.context_length, Some(262_144));
+        assert_eq!(metadata.size_label.as_deref(), Some("30B-A3B"));
+        assert_eq!(metadata.quantization.as_deref(), Some("Q4_K_M"));
+        assert_eq!(
+            metadata.tags,
+            ["reasoning", "custom-model-tag", "text-generation"]
+        );
+        assert_eq!(metadata.languages, ["en", "ko"]);
+        assert_eq!(metadata.model_type.as_deref(), Some("model"));
+        assert_eq!(metadata.finetune.as_deref(), Some("Instruct"));
+        assert_eq!(metadata.license.as_deref(), Some("apache-2.0"));
+        assert_eq!(metadata.author.as_deref(), Some("Example Authors"));
+        assert_eq!(metadata.organization.as_deref(), Some("Example Research"));
+        assert_eq!(metadata.quantized_by.as_deref(), Some("Example Quantizer"));
+        assert_eq!(
+            metadata.repo_url.as_deref(),
+            Some("https://huggingface.co/example-publisher/example-model")
+        );
+        assert_eq!(metadata.expert_count, Some(128));
+        assert_eq!(metadata.expert_used_count, Some(8));
+    }
+
+    #[test]
+    fn skips_wrong_tag_types_and_rejects_unbounded_tag_arrays() {
+        let wrong = read(&header(&[("general.tags", 4, 2u32.to_le_bytes().to_vec())])).unwrap();
+        assert!(wrong.tags.is_empty());
+        let mut oversized = 8u32.to_le_bytes().to_vec();
+        oversized.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(read(&header(&[("general.tags", 9, oversized)])).is_err());
     }
 
     #[test]

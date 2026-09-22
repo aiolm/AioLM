@@ -150,6 +150,7 @@ pub fn run() {
             commands::models::pick_lora_adapter,
             commands::discover::hf_search_models,
             commands::discover::hf_model_files,
+            commands::discover::hf_open_model_card,
             commands::discover::hf_download_model,
             commands::discover::hf_cancel_download,
             commands::discover::hf_installed_files,

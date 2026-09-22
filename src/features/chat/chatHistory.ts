@@ -21,6 +21,8 @@ const PERSISTED_RAW_LIMIT = 4 * 1024 * 1024;
 export interface ChatHistoryMessage {
   role: "user" | "assistant";
   content: string;
+  /** Model used for this response, captured when its request starts. */
+  model?: string;
   images?: ImageAttachment[];
   documents?: DocumentAttachment[];
   reasoning?: string;
@@ -156,6 +158,9 @@ function localSafeWorkspace(workspace: ChatWorkspace): ChatWorkspace {
           role: message.role,
           content: message.content.slice(0, PERSISTED_TEXT_LIMIT),
         };
+        if (message.role === "assistant" && typeof message.model === "string" && message.model.trim()) {
+          safeMessage.model = message.model.trim().slice(0, 4096);
+        }
         if (message.reasoning !== undefined) safeMessage.reasoning = message.reasoning.slice(0, PERSISTED_REASONING_LIMIT);
         if (message.interrupted) safeMessage.interrupted = true;
         if (message.failed) safeMessage.failed = true;

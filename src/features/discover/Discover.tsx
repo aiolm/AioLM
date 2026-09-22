@@ -1,3 +1,4 @@
+import ModelBadges from '../../shared/ui/ModelBadges';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -16,6 +17,7 @@ import { useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { previewExecution } from '../models/modelExecutionState';
 import { invalidateModelCatalog } from '../model-settings/useModelCatalog';
 import { modelActions } from '../../shared/i18n/modelActions';
+import ModelIcon from '../../shared/ui/ModelIcon';
 
 
 function formatCount(locale: string, value: number): string {
@@ -319,9 +321,8 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           <div role="list">
             {results.map((model) => (
               <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={[`block w-full border-b px-4 py-3 text-left last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${selected?.id === model.id ? "" : "hover:bg-[var(--ui-surface-muted)]"}`, "ui-border-color-border", (selected?.id === model.id ? "ui-background-accent-soft" : "")].filter(Boolean).join(" ")} >
-                <div className="app-text-wrap text-sm font-medium ui-color-ink" >{model.id}</div>
+                <div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={model.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums ui-color-faint" ><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span><span aria-hidden="true">♥ </span><span className="sr-only">{t("panel.likes")} </span>{formatCount(locale, model.likes)}</span>{model.gated && <span className="ui-color-warning" >{t("panel.gated")}</span>}</div>
-                {model.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{model.tags.slice(0, 4).map((tag) => <span key={tag} className="rounded-full border px-1.5 py-0.5 text-xs ui-border-color-border ui-background-surface-muted ui-color-faint" >{tag}</span>)}</div>}
               </button></div>
             ))}
           </div>
@@ -330,7 +331,18 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed ui-color-faint" >{t("extra.selectRepository")}</div>}
           {selected && <>
-            <div className="sticky top-0 z-10 border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="app-text-wrap text-sm font-semibold ui-color-ink" >{selected.id}</div><div className="mt-1 text-xs ui-color-faint" >{t("ui.repoFileHint")} · {selected.pipeline_tag || "llama.cpp"}</div>{checkingInstalled && <div className="mt-1 text-xs ui-color-faint"  role="status">{t("ui.discoverInstalledChecking")}</div>}{installedUnknown && <div className="mt-1 text-xs ui-color-warning"  role="status">{t("ui.discoverInstalledUnknown")}</div>}</div>
+            <div className="sticky top-0 z-10 border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={selected.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
+              {validateHfRepoId(selected.id) && <a
+                className="mt-2 inline-flex items-center gap-1 text-xs font-medium underline underline-offset-4 ui-color-accent"
+                href={`https://huggingface.co/${selected.id}`} target="_blank" rel="noopener noreferrer"
+                onClick={(event) => {
+                  if (!api.isNativeRuntimeAvailable()) return;
+                  event.preventDefault();
+                  void api.hfOpenModelCard(selected.id).catch((caught: unknown) => {
+                    setError(caught instanceof Error ? caught.message : String(caught));
+                  });
+                }}
+              >{t("ui.discoverModelCard")}<span aria-hidden="true">↗</span></a>}<div className="mt-1 text-xs ui-color-faint" >{t("ui.repoFileHint")} · {selected.pipeline_tag || "llama.cpp"}</div>{checkingInstalled && <div className="mt-1 text-xs ui-color-faint"  role="status">{t("ui.discoverInstalledChecking")}</div>}{installedUnknown && <div className="mt-1 text-xs ui-color-warning"  role="status">{t("ui.discoverInstalledUnknown")}</div>}</div>
             {loadingFiles && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.readingFiles")}</div>}
             {!loadingFiles && files?.length === 0 && <div className="p-6 text-center text-xs ui-color-faint" >{t("extra.noFiles")}</div>}
             {!loadingFiles && files && files.length > 0 && <div role="list">

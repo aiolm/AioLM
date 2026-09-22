@@ -1,3 +1,6 @@
+import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelIcon from '../../shared/ui/ModelIcon';
+import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
@@ -338,7 +341,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     <form className="performance-card" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-card-heading"><h3>{copy.configuration}</h3><span>{copy.totalTests}: <strong>{total}</strong></span></div>
       <div className="performance-model"><span>{copy.model}</span>
-        {modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" title={normalizeDisplayPath(displayedModel.model)} aria-label={`${modelCopy.choose}: ${displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}`} disabled={busy} onClick={() => editModel('model')}><span>{displayedModel.model ? modelDisplayName(displayedModel.model) : modelCopy.choose}</span><span aria-hidden="true">▾</span></button> : <strong title={normalizeDisplayPath(displayedModel.model)}>{displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}</strong>}
+        {modelSettings ? <button type="button" className="app-button app-button--secondary app-button--sm model-target-button" title={normalizeDisplayPath(displayedModel.model)} aria-label={`${modelCopy.choose}: ${displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}`} disabled={busy} onClick={() => editModel('model')}><span><ModelIcon model={displayedModel.model} />{displayedModel.model ? modelDisplayName(displayedModel.model) : modelCopy.choose}<ModelBadges model={displayedModel.model} localPath={displayedModel.model} /></span><span aria-hidden="true">▾</span></button> : <strong title={normalizeDisplayPath(displayedModel.model)}><ModelIcon model={displayedModel.model} />{displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel}<ModelBadges model={displayedModel.model} localPath={displayedModel.model} /></strong>}
         {displayedModel.model && <small>{displayedModel.backend} · {formatRuntimeVersion(displayedModel.build)}</small>}
         {modelSettings && <div className="performance-model-actions"><button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => editModel('runtime')}>{modelCopy.settings}</button>{targetDiffers && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); }}>{modelCopy.importDefault}</button>}</div>}
       </div>
@@ -372,9 +375,11 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {historyWarnings && <p className="performance-notice" role="status">{copy.historyWarning}</p>}
     {(history.length > 0 || record) && <p className="performance-hint">{copy.localHistoryHint}</p>}
     {(history.length > 0 || rows.length > 0 || record) && <div className="performance-history-bar">
-      {previousRecords.length > 0 ? <label><span>{copy.history}</span><select className="app-input" value={selectedHistory} disabled={busy} onChange={(event) => { setSelectedHistory(event.target.value); setCopied(false); setError(null); }}>
-        <option value="">{copy.current}</option>{previousRecords.map((item) => <option key={item.id} value={item.id}>{new Date(item.createdAt).toLocaleString()} · {modelDisplayName(item.model)} · {({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}</option>)}
-      </select></label> : <span>{copy.current}</span>}
+      {previousRecords.length > 0 ? <label><span>{copy.history}</span><CustomSelect ariaLabel={copy.history} value={selectedHistory} disabled={busy}
+        onChange={value => { setSelectedHistory(value); setCopied(false); setError(null); }}
+        options={[{ value: '', label: copy.current }, ...previousRecords.map(item => ({ value: item.id,
+          label: `${new Date(item.createdAt).toLocaleString()} · ${modelDisplayName(item.model)} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
+          icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
         <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => downloadCsv(performanceCsv([selectedRecord]))}>{copy.exportCsv}</button>
@@ -382,7 +387,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     </div>}
     {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading} onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
-    {selectedRecord && <div className="performance-result-context"><strong>{modelDisplayName(selectedRecord.model)}</strong><span>{statusLabel} · {selectedRecord.backend} · {formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, runtimeVersionLabel(installedRuntimes, selectedRecord.backend, selectedRecord.build))} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, runtimeVersionLabel(installedRuntimes, selectedRecord.backend, selectedRecord.build))} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />
     {selectedRecord && <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark} copy={copy} onQueued={() => setQueueRevision(value => value + 1)} />}
     <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} />

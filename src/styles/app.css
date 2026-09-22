@@ -8,3 +8,14 @@
 @import "./app-workspaces.css";
 @import "./app-responsive.css";
 @import "./app-execution.css";
+
+.model-family-icon { display: inline-block; flex-shrink: 0; vertical-align: middle; object-fit: contain; padding: 2px; border-radius: 4px; background: white; margin-inline-end: 6px; }
+
+.model-badges { display: inline-flex; max-width: 100%; flex-wrap: wrap; align-items: center; gap: 4px; margin-block: 4px; vertical-align: middle; }
+.model-badge { display: inline-block; border: 1px solid var(--ui-border); border-radius: 5px; padding: 1px 5px; color: var(--ui-muted); background: var(--ui-surface-muted); font-size: 10px; font-weight: 500; line-height: 1.5; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+.model-information { display: block; min-width: 0; max-width: 100%; }
+.model-publishers { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; margin-block: 6px 3px; min-width: 0; }
+.model-publisher { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; border: 1px solid var(--ui-border); border-radius: 5px; background: var(--ui-surface-muted); padding: 3px 7px; color: var(--ui-muted); font-size: 11px; line-height: 16px; }
+.model-publisher-label { font-weight: 400; white-space: nowrap; }
+.model-publisher strong { color: var(--ui-ink); font-size: inherit; font-weight: 600; overflow-wrap: anywhere; }

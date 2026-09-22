@@ -1,3 +1,5 @@
+import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelIcon from '../../shared/ui/ModelIcon';
 import StableLabel from "../../shared/ui/StableLabel";
 import "./sessions.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -437,7 +439,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
               <div className="session-entry-main">
                 <button type="button" className="session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
                   <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
-                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted">{modelLabel(model, t("ui.sessionNoModel"))}</span></span>
+                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{modelLabel(model, t("ui.sessionNoModel"))}</span><ModelBadges model={model} localPath={model} /></span>
                 </button>
                 <span className={`session-state session-state--${rowState}`}><StableLabel value={statusCopy(rowState, t)} labels={(["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => statusCopy(state, t))} /></span>
                 <div className="session-entry-actions">
