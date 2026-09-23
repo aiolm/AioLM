@@ -300,17 +300,19 @@ export interface SettingChange {
   afterInherited?: boolean;
 }
 
-function serverArgumentGroups(value: unknown): Record<string, string[]> | null {
+function serverArgumentGroups(value: unknown): { groups: Record<string, string[]>; order: string[] } | null {
   if (!Array.isArray(value) || !value.every((token): token is string => typeof token === 'string')) return null;
   const groups: Record<string, string[]> = {};
+  const order: string[] = [];
   for (let index = 0; index < value.length; index++) {
     const flag = value[index].match(/^--?[a-zA-Z][\w.-]*/)?.[0];
     if (!flag) return null;
+    order.push(flag);
     const tokens = [value[index]];
     while (index + 1 < value.length && !/^--?[a-zA-Z][\w.-]*/.test(value[index + 1])) tokens.push(value[++index]);
     (groups[flag] ??= []).push(tokens.join(' '));
   }
-  return groups;
+  return { groups, order };
 }
 
 function loraAdapterGroups(value: unknown): Record<string, Record<string, unknown>> | null {
@@ -361,13 +363,19 @@ export function changedSettings(saved: Partial<ExecutionSettings>, current: Part
   keys.delete('runtime_defaults');
   for (const key of [...keys].sort((a, b) => a.localeCompare(b))) {
     if (key === 'server_args' || key === 'lora_adapters') {
-      const previous = key === 'server_args' ? serverArgumentGroups(before[key]) : loraAdapterGroups(before[key]);
-      const next = key === 'server_args' ? serverArgumentGroups(after[key]) : loraAdapterGroups(after[key]);
+      const previousArgs = key === 'server_args' ? serverArgumentGroups(before[key]) : null;
+      const nextArgs = key === 'server_args' ? serverArgumentGroups(after[key]) : null;
+      const previous = key === 'server_args' ? previousArgs?.groups : loraAdapterGroups(before[key]);
+      const next = key === 'server_args' ? nextArgs?.groups : loraAdapterGroups(after[key]);
       if (previous && next) {
         const start = changes.length;
         visit([key], previous, next);
-        // Order still matters even when every individual entry has the same values.
-        if (changes.length > start || JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+        // Retained flags can change precedence even alongside a value edit.
+        // Added/removed flags already have their own rows; compare their shared order only.
+        const orderChanged = previousArgs && nextArgs
+          && JSON.stringify(previousArgs.order.filter(flag => Object.prototype.hasOwnProperty.call(nextArgs.groups, flag)))
+            !== JSON.stringify(nextArgs.order.filter(flag => Object.prototype.hasOwnProperty.call(previousArgs.groups, flag)));
+        if (!orderChanged && (changes.length > start || JSON.stringify(before[key]) === JSON.stringify(after[key]))) continue;
       }
     }
     visit([key], before[key], after[key], beforeDefaults.has(key), afterDefaults.has(key));

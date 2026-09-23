@@ -227,6 +227,35 @@ describe('settings a save would rewrite', () => {
     ]);
   });
 
+  it.each([
+    { name: 'opposing flags', before: ['--mmap', '--no-mmap'], after: ['--no-mmap', '--mmap'] },
+    { name: 'repeated flags', before: ['--mmap', '--no-mmap', '--mmap'], after: ['--mmap', '--mmap', '--no-mmap'] },
+  ])('shows the full argument order alongside a value edit when $name move', ({ before, after }) => {
+    const saved = { server_args: [...before, '--cache-ram', '1'] };
+    const current = { server_args: [...after, '--cache-ram', '2'] };
+    expect(changedSettings(saved, current)).toEqual([
+      { key: 'server_args.--cache-ram', path: ['server_args', '--cache-ram'], before: ['--cache-ram 1'], after: ['--cache-ram 2'] },
+      { key: 'server_args', before: saved.server_args, after: current.server_args },
+    ]);
+  });
+
+  it('shows the full argument order when opposing flags only move', () => {
+    const saved = { server_args: ['--mmap', '--no-mmap', '--cache-ram', '1'] };
+    const current = { server_args: ['--no-mmap', '--mmap', '--cache-ram', '1'] };
+    expect(changedSettings(saved, current)).toEqual([
+      { key: 'server_args', before: saved.server_args, after: current.server_args },
+    ]);
+  });
+
+  it('keeps value-only argument edits granular without a redundant full-argument row', () => {
+    expect(changedSettings(
+      { server_args: ['--mmap', '--no-mmap', '--cache-ram', '-1'] },
+      { server_args: ['--mmap', '--no-mmap', '--cache-ram', '2'] },
+    )).toEqual([
+      { key: 'server_args.--cache-ram', path: ['server_args', '--cache-ram'], before: ['--cache-ram -1'], after: ['--cache-ram 2'] },
+    ]);
+  });
+
   it('names the adapter and field when one LoRA option changes', () => {
     expect(changedSettings(
       { lora_adapters: [{ path: 'models/adapter.gguf', enabled: true, scale: 0.5 }] },
