@@ -195,6 +195,46 @@ describe('settings a save would rewrite', () => {
     expect(changes).toEqual([{ key: 'ctx_size', before: 4096, after: 8192 }]);
   });
 
+  it('lists changed nested options separately without repeating unchanged siblings', () => {
+    const gpu = { gpu_ids: ['gpu-a'], main_gpu: 'gpu-a', split_mode: 'single' as const, tensor_split: [], draft_gpu_id: null };
+    const changes = changedSettings(
+      { chat_options: { min_p: 0.1, seed: 7 }, gpu },
+      { chat_options: { min_p: 0.2, seed: 7, max_tokens: 128 }, gpu: { ...gpu, split_mode: 'layer' } },
+    );
+    expect(changes).toEqual([
+      { key: 'chat_options.max_tokens', path: ['chat_options', 'max_tokens'], before: undefined, after: 128 },
+      { key: 'chat_options.min_p', path: ['chat_options', 'min_p'], before: 0.1, after: 0.2 },
+      { key: 'gpu.split_mode', path: ['gpu', 'split_mode'], before: 'single', after: 'layer' },
+    ]);
+  });
+
+  it('keeps both values when a nested option changes from an object to a scalar', () => {
+    expect(changedSettings(
+      { chat_options: { response_format: { type: 'json_object' } } },
+      { chat_options: { response_format: 'text' } },
+    )).toEqual([{ key: 'chat_options.response_format', path: ['chat_options', 'response_format'],
+      before: { type: 'json_object' }, after: 'text' }]);
+  });
+
+  it('shows changed runtime flags separately while keeping each flag with its values', () => {
+    expect(changedSettings(
+      { server_args: ['--cache-ram', '1', '--jinja'] },
+      { server_args: ['--cache-ram', '2', '--mmap'] },
+    )).toEqual([
+      { key: 'server_args.--cache-ram', path: ['server_args', '--cache-ram'], before: ['--cache-ram 1'], after: ['--cache-ram 2'] },
+      { key: 'server_args.--jinja', path: ['server_args', '--jinja'], before: ['--jinja'], after: undefined },
+      { key: 'server_args.--mmap', path: ['server_args', '--mmap'], before: undefined, after: ['--mmap'] },
+    ]);
+  });
+
+  it('names the adapter and field when one LoRA option changes', () => {
+    expect(changedSettings(
+      { lora_adapters: [{ path: 'models/adapter.gguf', enabled: true, scale: 0.5 }] },
+      { lora_adapters: [{ path: 'models/adapter.gguf', enabled: true, scale: 0.75 }] },
+    )).toEqual([{ key: 'lora_adapters.models/adapter.gguf.scale',
+      path: ['lora_adapters', 'models/adapter.gguf', 'scale'], before: 0.5, after: 0.75 }]);
+  });
+
   it('reports nothing exactly when the save would be a no-op', () => {
     // The list and the "unchanged" verdict come from the same comparison, so a
     // save cannot claim changes it would not make, or hide ones it would.
@@ -206,7 +246,23 @@ describe('settings a save would rewrite', () => {
 
   it('shows a setting handed back to the runtime as losing its value', () => {
     const changes = changedSettings({ threads: 12 }, { threads: 12, runtime_defaults: ['threads'] });
-    expect(changes.find(change => change.key === 'threads')).toMatchObject({ before: 12, after: undefined });
+    expect(changes).toEqual([{ key: 'threads', before: 12, after: undefined, afterInherited: true }]);
+  });
+
+  it('shows each inherited option once, including a default without a saved override', () => {
+    const changes = changedSettings(
+      { threads: 12, top_k: 40, runtime_defaults: ['top_k'] },
+      { threads: 12, top_k: 40, runtime_defaults: ['threads'] },
+    );
+    expect(changes).toEqual([
+      { key: 'threads', before: 12, after: undefined, afterInherited: true },
+      { key: 'top_k', before: undefined, after: 40, beforeInherited: true },
+    ]);
+  });
+
+  it('names a default transition even when neither snapshot stores an override', () => {
+    expect(changedSettings({ runtime_defaults: ['threads'] }, {}))
+      .toEqual([{ key: 'threads', before: undefined, after: undefined, beforeInherited: true }]);
   });
 
   it('lists an added setting and a removed one alike', () => {

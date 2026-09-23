@@ -376,7 +376,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
       {confirmSave && <ConfirmDialog open={open} title={copy.saveConfirmTitle.replace('{name}', profileDisplayName(profiles.selected, locale))}
         description={changeCount(baseline, settings, profiles.savedApplication.system_prompt, profiles.systemPrompt) === 0
           ? copy.saveConfirmUnchanged
-          : <SettingsChangeList saved={baseline} current={settings} savedPrompt={profiles.savedApplication.system_prompt} currentPrompt={profiles.systemPrompt} />}
+          : <SettingsChangeList saved={baseline} current={settings} savedPrompt={profiles.savedApplication.system_prompt} currentPrompt={profiles.systemPrompt}
+            runtimeOptions={runtime.options} runtimeVerified={runtime.verified} />}
+        scrollableDescription
         confirmLabel={copy.saveConfirmAction} cancelLabel={copy.cancel} tone="primary" busy={disabled}
         onCancel={() => setConfirmSave(false)} onConfirm={() => { setConfirmSave(false); void apply('save'); }} />}
     </OverlayContainerContext.Provider>

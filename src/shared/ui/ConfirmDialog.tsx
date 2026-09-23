@@ -11,6 +11,7 @@ type ConfirmDialogProps = {
   cancelLabel?: string;
   busy?: boolean;
   confirmDisabled?: boolean;
+  scrollableDescription?: boolean;
   tone?: "primary" | "danger";
   onConfirm: () => void;
   onCancel: () => void;
@@ -24,6 +25,7 @@ export default function ConfirmDialog({
   cancelLabel: providedCancelLabel,
   busy = false,
   confirmDisabled = false,
+  scrollableDescription = false,
   tone = "danger",
   onConfirm,
   onCancel,
@@ -57,7 +59,7 @@ export default function ConfirmDialog({
   return createPortal(
     <dialog
       ref={dialogRef}
-      className="app-confirm-dialog"
+      className={`app-confirm-dialog${scrollableDescription ? " app-confirm-dialog--scrollable" : ""}`}
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       aria-busy={busy || undefined}
@@ -92,7 +94,7 @@ export default function ConfirmDialog({
         {/* A div, not a p: `description` is a ReactNode, and callers that
             pass structured content (a provenance table, a warning block)
             would otherwise nest block elements inside a paragraph. */}
-        <div id={descriptionId} className="app-confirm-dialog__description">{typeof description === "string" ? normalizeDisplayText(description) : description}</div>
+        <div id={descriptionId} className="app-confirm-dialog__description" tabIndex={scrollableDescription ? 0 : undefined}>{typeof description === "string" ? normalizeDisplayText(description) : description}</div>
         <div className="app-confirm-dialog__actions">
           <button type="button" ref={cancelRef} className="app-button app-button--secondary" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
           <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy || confirmDisabled} onClick={onConfirm}>{busy ? t("common.wait") : confirmLabel}</button>

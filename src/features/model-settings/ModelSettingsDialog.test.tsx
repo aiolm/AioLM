@@ -686,16 +686,21 @@ describe('confirming a profile save', () => {
   const application = materializeProfileApplication(cfg, 'Saved prompt', source);
   const withProfile = { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(cfg.active_model)]: application } } };
 
-  it('names every setting it would rewrite, with the value before and after', () => {
+  it('shows each edited option with its own before and after arrow', () => {
     // A profile is a wide snapshot and the editor gives no sense of how much of
     // it an edit touched; overwriting one is not undoable from here.
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: withProfile });
     fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.change(numeric('ngl'), { target: { value: '25' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     const confirm = screen.getByRole('dialog', { name: /^Save these changes/ });
-    expect(within(confirm).getByText('Context size')).toBeVisible();
-    expect(within(confirm).getByText(String(cfg.ctx_size))).toBeVisible();
-    expect(within(confirm).getByText('8192')).toBeVisible();
+    const changes = within(confirm).getAllByRole('term').map(term => term.parentElement!);
+    expect(changes.map(row => row.querySelector('dt')?.textContent)).toEqual(['Context size', 'GPU layers']);
+    expect(changes.map(row => [row.querySelector('.settings-profile-change-before')?.textContent,
+      row.querySelector('.settings-profile-change-after')?.textContent])).toEqual([
+      [String(cfg.ctx_size), '8192'], [String(cfg.ngl), '25'],
+    ]);
+    for (const row of changes) expect(row.querySelector('.settings-profile-change-arrow')).toHaveTextContent('→');
     expect(onProfileCommit).not.toHaveBeenCalled();
   });
 

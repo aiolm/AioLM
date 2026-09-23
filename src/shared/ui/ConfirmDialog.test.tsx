@@ -76,4 +76,22 @@ describe("ConfirmDialog accessibility", () => {
 
     expect(sourceLink).toHaveFocus();
   });
+
+  it("lets keyboard users reach a scrollable change summary", async () => {
+    render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ConfirmDialog, {
+      open: true,
+      title: "Save profile",
+      description: createElement("div", null, "Changed options"),
+      scrollableDescription: true,
+      onConfirm: () => undefined,
+      onCancel: () => undefined,
+    }) }));
+    const dialog = await screen.findByRole("dialog");
+    const description = document.getElementById(dialog.getAttribute("aria-describedby")!);
+    expect(description).toHaveAttribute("tabindex", "0");
+
+    screen.getByRole("button", { name: "Confirm" }).focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(description).toHaveFocus();
+  });
 });

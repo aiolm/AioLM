@@ -69,6 +69,10 @@
 .app-confirm-dialog h2 { font-size: 20px; margin-bottom: 12px; }
 .app-confirm-dialog__description { color: var(--ui-muted); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
 .app-confirm-dialog__actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; margin-top: 24px; }
+.app-confirm-dialog--scrollable { overflow: hidden; }
+.app-confirm-dialog--scrollable .app-confirm-dialog__panel { display: flex; flex-direction: column; max-height: calc(100dvh - 32px); min-height: 0; }
+.app-confirm-dialog--scrollable .app-confirm-dialog__description { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.app-confirm-dialog--scrollable .app-confirm-dialog__actions { flex-shrink: 0; }
 .app-tooltip { position: relative; display: inline-flex; flex-shrink: 0; vertical-align: middle; }
 .app-tooltip-trigger { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: 0 0 24px; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); padding: 3px; }
 .app-tooltip-trigger:hover, .app-tooltip-trigger[aria-expanded="true"] { background: var(--ui-accent-soft); color: var(--ui-accent); }

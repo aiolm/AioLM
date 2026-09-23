@@ -292,9 +292,37 @@ export function settingsEqual(left: Partial<ExecutionSettings>, right: Partial<E
 
 export interface SettingChange {
   key: string;
+  path?: string[];
   /** Absent when the setting is only being added, or is moving to inherited. */
   before?: unknown;
   after?: unknown;
+  beforeInherited?: boolean;
+  afterInherited?: boolean;
+}
+
+function serverArgumentGroups(value: unknown): Record<string, string[]> | null {
+  if (!Array.isArray(value) || !value.every((token): token is string => typeof token === 'string')) return null;
+  const groups: Record<string, string[]> = {};
+  for (let index = 0; index < value.length; index++) {
+    const flag = value[index].match(/^--?[a-zA-Z][\w.-]*/)?.[0];
+    if (!flag) return null;
+    const tokens = [value[index]];
+    while (index + 1 < value.length && !/^--?[a-zA-Z][\w.-]*/.test(value[index + 1])) tokens.push(value[++index]);
+    (groups[flag] ??= []).push(tokens.join(' '));
+  }
+  return groups;
+}
+
+function loraAdapterGroups(value: unknown): Record<string, Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  const groups: Record<string, Record<string, unknown>> = {};
+  for (const adapter of value) {
+    if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) return null;
+    const { path, ...settings } = adapter as Record<string, unknown>;
+    if (typeof path !== 'string' || !path || Object.prototype.hasOwnProperty.call(groups, path)) return null;
+    groups[path] = settings;
+  }
+  return groups;
 }
 
 /**
@@ -308,10 +336,43 @@ export interface SettingChange {
 export function changedSettings(saved: Partial<ExecutionSettings>, current: Partial<ExecutionSettings>): SettingChange[] {
   const before = comparable(saved) as Record<string, unknown>;
   const after = comparable(current) as Record<string, unknown>;
-  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
-    .sort((left, right) => left.localeCompare(right))
-    .filter(key => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
-    .map(key => ({ key, before: before[key], after: after[key] }));
+  const beforeDefaults = new Set(before.runtime_defaults as string[]);
+  const afterDefaults = new Set(after.runtime_defaults as string[]);
+  const changes: SettingChange[] = [];
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  const visit = (path: string[], previous: unknown, next: unknown, beforeInherited = false, afterInherited = false) => {
+    if (JSON.stringify(previous) === JSON.stringify(next) && beforeInherited === afterInherited) return;
+    if ((record(previous) && (record(next) || next === undefined)) || (previous === undefined && record(next))) {
+      const left = record(previous) ? previous : {};
+      const right = record(next) ? next : {};
+      const children = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort((a, b) => a.localeCompare(b));
+      if (children.length) {
+        for (const child of children) visit([...path, child], left[child], right[child], beforeInherited, afterInherited);
+        return;
+      }
+    }
+    changes.push({ key: path.join('.'), ...(path.length > 1 ? { path } : {}),
+      before: previous, after: next,
+      ...(beforeInherited ? { beforeInherited: true } : {}),
+      ...(afterInherited ? { afterInherited: true } : {}) });
+  };
+  const keys = new Set([...Object.keys(before), ...Object.keys(after), ...beforeDefaults, ...afterDefaults]);
+  keys.delete('runtime_defaults');
+  for (const key of [...keys].sort((a, b) => a.localeCompare(b))) {
+    if (key === 'server_args' || key === 'lora_adapters') {
+      const previous = key === 'server_args' ? serverArgumentGroups(before[key]) : loraAdapterGroups(before[key]);
+      const next = key === 'server_args' ? serverArgumentGroups(after[key]) : loraAdapterGroups(after[key]);
+      if (previous && next) {
+        const start = changes.length;
+        visit([key], previous, next);
+        // Order still matters even when every individual entry has the same values.
+        if (changes.length > start || JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+      }
+    }
+    visit([key], before[key], after[key], beforeDefaults.has(key), afterDefaults.has(key));
+  }
+  return changes;
 }
 
 export function profileMatches(profile: SettingsProfile, cfg: AppConfig, systemPrompt: string): boolean {
