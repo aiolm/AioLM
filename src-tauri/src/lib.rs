@@ -102,39 +102,6 @@ fn closes_to_tray(app: &tauri::AppHandle) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    while let Err(error) = branding::prepare_desktop() {
-        let retry = rfd::MessageDialog::new()
-            .set_title("AioLM — Data migration")
-            .set_description(format!("{error}\n\nYour original data has been preserved. Resolve the problem and select OK to retry, or Cancel to exit."))
-            .set_buttons(rfd::MessageButtons::OkCancel)
-            .set_level(rfd::MessageLevel::Error)
-            .show();
-        if retry != rfd::MessageDialogResult::Ok {
-            return;
-        }
-    }
-    // A fresh installation has no model folder yet. Create the one the default
-    // configuration points at before the window exists, so the first scan the
-    // frontend runs already finds a real (empty) folder rather than a path that
-    // does not exist. A folder the user chose themselves is left untouched (see
-    // `config::ensure_default_models_dir`), and a folder that cannot be created
-    // is not fatal: `list_models` reports why when the models screen asks for
-    // it, and the user can still choose another folder. A configuration that
-    // cannot be read at all prepares nothing - the frontend's own `get_config`
-    // reports that failure rather than this startup quietly standing in for it.
-    let startup_config = match config::load_result() {
-        Ok(cfg) => {
-            if let Err(error) = config::ensure_default_models_dir(&cfg) {
-                eprintln!("{error}");
-            }
-            Some(cfg)
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            None
-        }
-    };
-
     let context = tauri::generate_context!();
     #[cfg(windows)]
     let instance_startup = startup::InstanceStartupLock::acquire(&context.config().identifier)
@@ -247,6 +214,43 @@ pub fn run() {
 
     #[cfg(windows)]
     drop(instance_startup);
+
+    // The plugin has now rejected secondary launches. Only the primary may
+    // prepare user data; otherwise another launch could stop at a migration
+    // error instead of restoring it. Tauri creates the webview in `run`, so
+    // this still completes before WebView2 can open the profile being copied.
+    while let Err(error) = branding::prepare_desktop() {
+        let retry = rfd::MessageDialog::new()
+            .set_title("AioLM — Data migration")
+            .set_description(format!("{error}\n\nYour original data has been preserved. Resolve the problem and select OK to retry, or Cancel to exit."))
+            .set_buttons(rfd::MessageButtons::OkCancel)
+            .set_level(rfd::MessageLevel::Error)
+            .show();
+        if retry != rfd::MessageDialogResult::Ok {
+            return;
+        }
+    }
+    // A fresh installation has no model folder yet. Create the one the default
+    // configuration points at before the window exists, so the first scan the
+    // frontend runs already finds a real (empty) folder rather than a path that
+    // does not exist. A folder the user chose themselves is left untouched (see
+    // `config::ensure_default_models_dir`), and a folder that cannot be created
+    // is not fatal: `list_models` reports why when the models screen asks for
+    // it, and the user can still choose another folder. A configuration that
+    // cannot be read at all prepares nothing - the frontend's own `get_config`
+    // reports that failure rather than this startup quietly standing in for it.
+    let startup_config = match config::load_result() {
+        Ok(cfg) => {
+            if let Err(error) = config::ensure_default_models_dir(&cfg) {
+                eprintln!("{error}");
+            }
+            Some(cfg)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            None
+        }
+    };
 
     // Only a configuration that asks to close to the tray gets a tray icon, so
     // nobody who leaves the setting off gains one they never asked for.

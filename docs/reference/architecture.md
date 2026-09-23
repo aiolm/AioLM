@@ -72,6 +72,9 @@ Only one copy of the application runs at a time. Opening AioLM while it is
 already running, including while its window is hidden in the tray, shows and
 focuses the existing window. The new process exits while the application is
 being built, before it creates a window or a tray icon of its own.
+User-data preparation also runs only after that check, so a secondary launch
+cannot be held up by an initialization error instead of restoring the primary.
+Preparation still finishes before the webview opens its data directory.
 
 On Windows, plugin initialization is serialized across simultaneous launches
 until the first process has registered its instance notification window. The
