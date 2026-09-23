@@ -4,6 +4,7 @@ pub(crate) mod app_update;
 pub(crate) mod benchmark;
 pub(crate) mod benchmark_sharing;
 pub(crate) mod config;
+pub(crate) mod conversations;
 pub(crate) mod discover;
 pub(crate) mod documents;
 pub(crate) mod files;

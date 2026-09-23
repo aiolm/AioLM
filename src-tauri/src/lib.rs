@@ -5,6 +5,7 @@ mod benchmark;
 pub mod branding;
 mod commands;
 pub mod config;
+mod conversations;
 mod discover;
 mod gateway;
 pub mod gguf;
@@ -127,6 +128,11 @@ pub fn run() {
             commands::config::migration_paths,
             commands::config::get_config,
             commands::config::save_config,
+            commands::conversations::conversations_load,
+            commands::conversations::conversation_save,
+            commands::conversations::conversation_delete,
+            commands::conversations::conversations_import,
+            commands::conversations::conversations_clear,
             commands::models::list_models,
             commands::models::model_metadata,
             commands::models::cancel_model_scan,

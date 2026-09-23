@@ -47,9 +47,10 @@ AioLM keeps its data in one folder: `.aiolm` in the user's home folder (`%USERPR
 | `verification.json`, `verification` | Numerical verification records and overrides, the canary model and its baseline |
 | `benchmarks` | Benchmark journals, model identities and download receipts |
 | `cli` | CLI server state and log |
+| `conversations` | Conversations: one folder each, with `thread.json` and its images in `attachments` |
 | `downloads` | Transient downloads |
 
-The WebView profile (`%LOCALAPPDATA%\com.aiolm.desktop\EBWebView`) keeps interface preferences and browser storage. Credentials stay in the operating system's credential store.
+The WebView profile (`%LOCALAPPDATA%\com.aiolm.desktop\EBWebView`) keeps interface preferences, projects, the document embedding cache and other browser storage. Credentials stay in the operating system's credential store.
 
 Earlier releases kept this data in `%APPDATA%\aiolm`, `%APPDATA%\com.aiolm.desktop` and `%LOCALAPPDATA%\aiolm`. At startup, after the import from the previous application, AioLM brings it into the data folder:
 
@@ -65,7 +66,11 @@ Each item is complete once it exists in the data folder. Existing data there tak
 
 Transient downloads and CLI process state are not carried over. `aiolm-cli` still finds, reports and stops a server started before the upgrade through its earlier state file; its log is not shown until the server is restarted.
 
-An older release keeps reading the earlier locations. It shows the configuration as it was when the data folder was prepared and needs its runtimes installed again.
+Conversations earlier releases kept in the WebView profile (`aiolm-storage`, `aiolm-chat` and the `aiolm.chat-workspace.v1`/`v2` localStorage entries) are moved into `conversations` the first time the chat opens. A conversation already in the data folder is never overwritten. The browser copies are removed only after every conversation is found in the data folder, so a deleted conversation cannot come back from them; until then they are kept and the move is tried again at the next start. The `aiolm.chat-storage.v1` localStorage entry records the completed move.
+
+Conversations keep the existing limits: the newest 100, each with its last 100 messages. Message text, reasoning and system prompts are cut at 16 KiB, and an image whose data URL exceeds 512 KiB is not kept. A conversation past the limit is deleted from the data folder, as it was from browser storage. A file edited while AioLM is running can be overwritten by the next save of that conversation.
+
+An older release keeps reading the earlier locations. It shows the configuration as it was when the data folder was prepared, needs its runtimes installed again and does not see conversations moved into the data folder.
 
 ## Compatibility
 

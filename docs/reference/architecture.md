@@ -152,6 +152,18 @@ CI compiles the native library, binaries, examples and tests on Linux and macOS
 in addition to the Windows test gate. These compile checks guard against platform
 drift; they do not establish runtime installation, packaging or WebView support.
 
+## Conversation persistence
+
+`src-tauri/src/conversations.rs` stores each conversation as
+`conversations/<id>/thread.json` in the data folder, with its images as
+content-addressed files in `attachments` instead of base64 inside the JSON.
+Writes are atomic per conversation, unreferenced images are removed after a
+save, and a folder that cannot be read, or was written by a newer format, is
+reported and left untouched. `features/chat/chatHistory.ts` keeps the
+conversation format and retention limits: it writes only conversations that
+changed since the last save, deletes removed ones, and remembers the open
+conversation in the browser profile. The browser preview keeps using IndexedDB.
+
 ## Benchmark persistence and sharing
 
 `src-tauri/src/benchmark/` owns native run journals, content identity caches and

@@ -1,4 +1,5 @@
 import type { ChatCitation, DocumentAttachment, ImageAttachment } from "./chatTypes.ts";
+import { invoke, isNativeRuntimeAvailable } from "../../shared/api/transport.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
 import { sanitizeResponseMetrics, type ResponseMetrics } from "../../shared/lib/metrics.ts";
 
@@ -6,6 +7,10 @@ export type { ChatCitation } from "./chatTypes.ts";
 
 export const CHAT_WORKSPACE_KEY = "aiolm.chat-workspace.v2";
 const LEGACY_CHAT_WORKSPACE_KEY = "aiolm.chat-workspace.v1";
+/** The open conversation. It is interface state, kept in the browser profile. */
+const ACTIVE_THREAD_KEY = "aiolm.chat-active-thread.v1";
+/** Set once this browser profile's conversations have moved into the data folder. */
+const NATIVE_STORAGE_KEY = "aiolm.chat-storage.v1";
 const CHAT_DB_NAME = "aiolm-chat";
 const CHAT_DB_VERSION = 1;
 const CHAT_STORE = "workspace";
@@ -53,7 +58,7 @@ export interface ChatStorage {
   removeItem?: (key: string) => void;
 }
 
-export type ChatPersistenceResult = "indexeddb" | "local" | "unavailable";
+export type ChatPersistenceResult = "native" | "indexeddb" | "local" | "unavailable";
 
 function sameWorkspace(left: ChatWorkspace, right: ChatWorkspace): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -143,6 +148,41 @@ function parseWorkspace(raw: string | null): ChatWorkspace | null {
   }
 }
 
+function safeThread(thread: ChatThread): ChatThread {
+  return {
+    ...thread,
+    systemPrompt: thread.systemPrompt.slice(0, PERSISTED_TEXT_LIMIT),
+    messages: thread.messages.slice(-PERSISTED_MESSAGES_LIMIT).map((message) => {
+      const safeMessage: ChatHistoryMessage = {
+        role: message.role,
+        content: message.content.slice(0, PERSISTED_TEXT_LIMIT),
+      };
+      if (message.role === "assistant" && typeof message.model === "string" && message.model.trim()) {
+        safeMessage.model = message.model.trim().slice(0, 4096);
+      }
+      if (message.reasoning !== undefined) safeMessage.reasoning = message.reasoning.slice(0, PERSISTED_REASONING_LIMIT);
+      if (message.interrupted) safeMessage.interrupted = true;
+      if (message.failed) safeMessage.failed = true;
+      if (message.images !== undefined) {
+        safeMessage.images = message.images.slice(0, 4).map((image) => ({
+          name: image.name,
+          dataUrl: image.dataUrl.length <= LOCAL_IMAGE_LIMIT ? image.dataUrl : "",
+        }));
+      }
+      if (message.documents !== undefined) {
+        safeMessage.documents = message.documents.slice(0, 4).map((document) => ({
+          ...document,
+          text: document.text.slice(0, LOCAL_DOCUMENT_LIMIT),
+        }));
+      }
+      if (message.citations !== undefined) safeMessage.citations = message.citations.slice(0, 64);
+      const metrics = sanitizeResponseMetrics(message.metrics);
+      if (metrics) safeMessage.metrics = metrics;
+      return safeMessage;
+    }),
+  };
+}
+
 function localSafeWorkspace(workspace: ChatWorkspace): ChatWorkspace {
   const active = workspace.threads.find((thread) => thread.id === workspace.activeThreadId);
   const orderedThreads = active
@@ -150,38 +190,7 @@ function localSafeWorkspace(workspace: ChatWorkspace): ChatWorkspace {
     : workspace.threads;
   return {
     ...workspace,
-    threads: orderedThreads.slice(0, PERSISTED_THREADS_LIMIT).map((thread) => ({
-      ...thread,
-      systemPrompt: thread.systemPrompt.slice(0, PERSISTED_TEXT_LIMIT),
-      messages: thread.messages.slice(-PERSISTED_MESSAGES_LIMIT).map((message) => {
-        const safeMessage: ChatHistoryMessage = {
-          role: message.role,
-          content: message.content.slice(0, PERSISTED_TEXT_LIMIT),
-        };
-        if (message.role === "assistant" && typeof message.model === "string" && message.model.trim()) {
-          safeMessage.model = message.model.trim().slice(0, 4096);
-        }
-        if (message.reasoning !== undefined) safeMessage.reasoning = message.reasoning.slice(0, PERSISTED_REASONING_LIMIT);
-        if (message.interrupted) safeMessage.interrupted = true;
-        if (message.failed) safeMessage.failed = true;
-        if (message.images !== undefined) {
-          safeMessage.images = message.images.slice(0, 4).map((image) => ({
-            name: image.name,
-            dataUrl: image.dataUrl.length <= LOCAL_IMAGE_LIMIT ? image.dataUrl : "",
-          }));
-        }
-        if (message.documents !== undefined) {
-          safeMessage.documents = message.documents.slice(0, 4).map((document) => ({
-            ...document,
-            text: document.text.slice(0, LOCAL_DOCUMENT_LIMIT),
-          }));
-        }
-        if (message.citations !== undefined) safeMessage.citations = message.citations.slice(0, 64);
-        const metrics = sanitizeResponseMetrics(message.metrics);
-        if (metrics) safeMessage.metrics = metrics;
-        return safeMessage;
-      }),
-    })),
+    threads: orderedThreads.slice(0, PERSISTED_THREADS_LIMIT).map(safeThread),
   };
 }
 
@@ -323,13 +332,25 @@ export function dropLegacyChatWorkspace(storage: ChatStorage | null = browserSto
 }
 
 /**
- * Erases every stored conversation from all three copies (IndexedDB, the
- * localStorage mirror, and the pre-migration key) and returns a fresh
- * workspace. Deleting a single thread already rewrites the saved blob; this is
- * the "leave nothing behind" path exposed in Settings.
+ * Erases every stored conversation - the files in the data folder and all
+ * three browser copies (IndexedDB, the localStorage mirror, and the
+ * pre-migration key) - and returns a fresh workspace. Deleting a single thread
+ * already removes it from storage; this is the "leave nothing behind" path
+ * exposed in Settings.
  */
 export async function clearChatWorkspace(): Promise<ChatWorkspace> {
   const fresh = defaultChatWorkspace();
+  await clearBrowserConversations();
+  if (isNativeRuntimeAvailable()) {
+    await inNativeQueue(async () => {
+      await invoke("conversations_clear");
+      nativeWritten = new Map();
+    });
+  }
+  return fresh;
+}
+
+async function clearBrowserConversations(): Promise<void> {
   const storage = browserStorage();
   try {
     storage?.removeItem?.(CHAT_WORKSPACE_KEY);
@@ -347,7 +368,6 @@ export async function clearChatWorkspace(): Promise<ChatWorkspace> {
   } catch {
     // No IndexedDB copy to clear.
   }
-  return fresh;
 }
 
 export function loadChatWorkspace(storage: ChatStorage | null = browserStorage()): ChatWorkspace {
@@ -373,7 +393,18 @@ export function saveChatWorkspace(
   }
 }
 
+/** Never rejects: a store that cannot be read yields what the browser holds. */
 export async function loadChatWorkspaceAsync(): Promise<ChatWorkspace> {
+  if (!isNativeRuntimeAvailable()) return loadBrowserWorkspace();
+  try {
+    return await loadNativeWorkspace();
+  } catch (error) {
+    console.error("Conversations could not be read from the data folder.", error);
+    return loadBrowserWorkspace();
+  }
+}
+
+async function loadBrowserWorkspace(): Promise<ChatWorkspace> {
   try {
     const stored = await storageAdapter.get<unknown>(CHAT_WORKSPACE_KEY);
     const normalized = normalizeWorkspace(stored);
@@ -400,6 +431,7 @@ export async function loadChatWorkspaceAsync(): Promise<ChatWorkspace> {
 }
 
 export async function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
+  if (isNativeRuntimeAvailable()) return saveNativeWorkspace(workspace);
   const safe = persistedWorkspace(workspace);
   saveChatWorkspace(safe);
   try {
@@ -412,6 +444,117 @@ export async function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<
     } catch {
       return browserStorage() ? "local" : "unavailable";
     }
+  }
+}
+
+interface StoredConversations {
+  threads: unknown[];
+  /** Conversation folders the data folder holds but could not read. */
+  warnings: string[];
+}
+
+/** Each conversation as last written to the data folder, so a save writes only what changed. */
+let nativeWritten = new Map<string, string>();
+let nativeQueue: Promise<void> = Promise.resolve();
+
+function inNativeQueue<T>(task: () => Promise<T>): Promise<T> {
+  const operation = nativeQueue.then(task, task);
+  nativeQueue = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+/** Nothing has been put into it yet; such a conversation gets no file. */
+function untouched(thread: ChatThread): boolean {
+  return thread.messages.length === 0 && !thread.systemPrompt.trim() && thread.title === "New conversation";
+}
+
+function readActiveThreadId(): string | null {
+  try {
+    return browserStorage()?.getItem(ACTIVE_THREAD_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeActiveThreadId(id: string): void {
+  try {
+    browserStorage()?.setItem(ACTIVE_THREAD_KEY, id);
+  } catch {
+    // The newest conversation opens instead.
+  }
+}
+
+async function loadNativeWorkspace(): Promise<ChatWorkspace> {
+  await moveBrowserConversations();
+  const stored = await invoke<StoredConversations>("conversations_load");
+  for (const warning of stored.warnings) console.warn(`A conversation file was left untouched: ${warning}`);
+  // New conversations come first, as the workspace keeps them.
+  const threads = stored.threads
+    .map(normalizeThread)
+    .filter((thread): thread is ChatThread => thread !== null)
+    .sort((left, right) => right.createdAt - left.createdAt);
+  nativeWritten = new Map(threads.map((thread) => [thread.id, JSON.stringify(safeThread(thread))]));
+  if (!threads.length) return defaultChatWorkspace();
+  const active = readActiveThreadId();
+  return persistedWorkspace({
+    activeThreadId: threads.find((thread) => thread.id === active)?.id ?? threads[0].id,
+    threads,
+  });
+}
+
+/**
+ * Moves the conversations an earlier release kept in this browser profile
+ * into the data folder, once, never overwriting one stored there. The browser
+ * copies are removed only after every conversation is found in the data
+ * folder; from then on they cannot bring back one deleted there.
+ */
+async function moveBrowserConversations(): Promise<void> {
+  const storage = browserStorage();
+  if (storage?.getItem(NATIVE_STORAGE_KEY) === "native") return;
+  const browser = await loadBrowserWorkspace();
+  const threads = browser.threads.filter((thread) => !untouched(thread));
+  if (threads.length) {
+    await invoke<number>("conversations_import", { threads });
+    const stored = await invoke<StoredConversations>("conversations_load");
+    const ids = new Set(stored.threads.map((thread) => normalizeThread(thread)?.id));
+    if (!threads.every((thread) => ids.has(thread.id))) {
+      console.warn("Some conversations could not be moved to the data folder; the browser copies are kept.");
+      return;
+    }
+    if (readActiveThreadId() === null) writeActiveThreadId(browser.activeThreadId);
+  }
+  try {
+    storage?.setItem(NATIVE_STORAGE_KEY, "native");
+  } catch {
+    // Importing again finds every conversation already stored.
+  }
+  await clearBrowserConversations();
+}
+
+async function saveNativeWorkspace(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
+  const safe = persistedWorkspace(workspace);
+  writeActiveThreadId(safe.activeThreadId);
+  const threads = safe.threads.filter((thread) => !untouched(thread));
+  try {
+    await inNativeQueue(async () => {
+      for (const thread of threads) {
+        const written = JSON.stringify(thread);
+        if (nativeWritten.get(thread.id) === written) continue;
+        await invoke("conversation_save", { thread });
+        nativeWritten.set(thread.id, written);
+      }
+      // Deleted conversations, and the oldest ones past the kept limit.
+      const kept = new Set(threads.map((thread) => thread.id));
+      for (const id of [...nativeWritten.keys()]) {
+        if (kept.has(id)) continue;
+        await invoke("conversation_delete", { id });
+        nativeWritten.delete(id);
+      }
+    });
+    return "native";
+  } catch (error) {
+    console.error("Conversations could not be saved to the data folder.", error);
+    return "unavailable";
   }
 }
 
