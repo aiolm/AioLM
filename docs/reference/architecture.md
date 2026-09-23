@@ -68,6 +68,17 @@ the same shutdown the window close would have. The window only hides while the
 tray icon is actually on screen, so a machine where the tray could not be
 created can still close the application.
 
+Only one copy of the application runs at a time. Opening AioLM while it is
+already running, including while its window is hidden in the tray, shows and
+focuses the existing window. The new process exits while the application is
+being built, before it creates a window or a tray icon of its own.
+
+On Windows, plugin initialization is serialized across simultaneous launches
+until the first process has registered its instance notification window. The
+main window is created hidden and shown with focus once its webview exists, so
+minimizing immediately after launch cannot interrupt webview attachment.
+On macOS, Dock and Finder reopen events restore the existing window as well.
+
 ## Dependency boundaries
 
 - `app` composes features and shared modules. Feature navigation is passed through

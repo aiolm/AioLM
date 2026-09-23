@@ -20,6 +20,8 @@ mod procutil;
 pub mod runtime;
 pub mod server;
 pub mod session;
+#[cfg(windows)]
+mod startup;
 mod state;
 mod tray;
 pub mod tuning_defaults;
@@ -133,7 +135,22 @@ pub fn run() {
         }
     };
 
+    let context = tauri::generate_context!();
+    #[cfg(windows)]
+    let instance_startup = startup::InstanceStartupLock::acquire(&context.config().identifier)
+        .expect("error coordinating application startup");
+
     let app = tauri::Builder::default()
+        // Opening AioLM while it is already running - most visibly while its
+        // window is hidden in the tray - brings that window back instead of
+        // starting a second copy with a tray icon of its own. The new process
+        // exits while the application is built, before `run` creates its window
+        // and before the tray icon below exists, so it leaves neither behind.
+        // It stays the first plugin so that no other plugin sets anything up in
+        // a process that is about to exit.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::restore_main_window(app);
+        }))
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_update::check_app_update,
@@ -212,8 +229,24 @@ pub fn run() {
             commands::runtimes::device_profile,
             commands::runtimes::rt_probe
         ])
-        .build(tauri::generate_context!())
+        // The main window is created hidden (`visible: false` in the
+        // configuration) and only shown here, after its webview exists.
+        // WebView2 cannot attach to a window that gets minimized while the
+        // webview is still being created; the runtime then drops the window but
+        // keeps the process, which would leave AioLM running with no window and
+        // hand every later launch to that process.
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            Ok(())
+        })
+        .build(context)
         .expect("error while building tauri application");
+
+    #[cfg(windows)]
+    drop(instance_startup);
 
     // Only a configuration that asks to close to the tray gets a tray icon, so
     // nobody who leaves the setting off gains one they never asked for.
@@ -233,6 +266,8 @@ pub fn run() {
     tauri::async_runtime::spawn(commands::server::idle_watchdog(app.handle().clone()));
 
     app.run(|app_handle, event| match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => tray::restore_main_window(app_handle),
         // Closing the main window hides it to the tray only while the setting
         // says so, and only while there is a tray icon to get it back from: a
         // tray that failed to appear must not swallow the window with no way to

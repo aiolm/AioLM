@@ -20,9 +20,10 @@ const QUIT_ITEM: &str = "aiolm-tray-quit";
 const SHOW_LABEL: &str = "Show AioLM";
 const QUIT_LABEL: &str = "Quit AioLM";
 
-/// Bring the window back from the tray. Restoring covers all three states a
+/// Bring the window back from the tray, or when the application is opened
+/// again while it is already running. Restoring covers all three states a
 /// hidden window can be in: hidden, minimized, and merely behind other windows.
-fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
