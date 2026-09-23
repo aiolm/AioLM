@@ -1003,6 +1003,8 @@ const RUNTIME_DEVICE_ENVIRONMENT: &[&str] = &[
     "HSA_XNACK",
     "ROCBLAS_TENSILE_LIBPATH",
     "HIPBLASLT_TENSILE_LIBPATH",
+    "ROCM_KPACK_PATH",
+    "ROCM_KPACK_PATH_PREFIX",
     "ONEAPI_DEVICE_SELECTOR",
     "SYCL_DEVICE_FILTER",
     "ZE_AFFINITY_MASK",
@@ -1162,6 +1164,8 @@ const STAGED_RUNTIME_HOST_ENVIRONMENT: &[&str] = &[
     "CMAKE_TOOLCHAIN_FILE",
     "ROCBLAS_TENSILE_LIBPATH",
     "HIPBLASLT_TENSILE_LIBPATH",
+    "ROCM_KPACK_PATH",
+    "ROCM_KPACK_PATH_PREFIX",
     "CC",
     "CXX",
     "CFLAGS",
@@ -1215,8 +1219,25 @@ fn add_packaged_gpu_library_paths(environment: &mut Vec<(OsString, OsString)>, r
         ),
     ];
     for (name, path) in paths {
-        if path.is_dir() {
+        // Newer BLAS libraries select an architecture subdirectory themselves.
+        // Setting the legacy override to its parent disables that selection.
+        if directory_has_files(&path) && !has_gpu_architecture_directories(&path) {
             set_environment_value(environment, name, path.into_os_string());
+        }
+    }
+    // SDK DLLs move from bin/ to the managed runtime root. Their embedded
+    // ../.kpack references must therefore resolve inside this same bundle.
+    let mut archives = fs::read_dir(root.join(".kpack"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path.extension() == Some(OsStr::new("kpack")))
+        .collect::<Vec<_>>();
+    archives.sort();
+    if !archives.is_empty() {
+        if let Ok(paths) = std::env::join_paths(archives) {
+            set_environment_value(environment, "ROCM_KPACK_PATH", paths);
         }
     }
 }
@@ -1244,6 +1265,8 @@ pub fn child_environment_for_runtime(
         "ONEAPI_ROOT",
         "ROCBLAS_TENSILE_LIBPATH",
         "HIPBLASLT_TENSILE_LIBPATH",
+        "ROCM_KPACK_PATH",
+        "ROCM_KPACK_PATH_PREFIX",
     ] {
         environment.retain(|(key, _)| key != OsStr::new(name));
     }
@@ -4437,6 +4460,69 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Track local runtime replacement even when the llama.cpp build tag stays the
+/// same. File metadata keeps launch-time work bounded for multi-GB GPU bundles;
+/// archive integrity is checked separately when importing/installing a bundle.
+pub fn verification_identity(backend: &str, build: &str) -> String {
+    runtime_dir(backend, build)
+        .map(|root| runtime_file_identity(&root))
+        .unwrap_or_default()
+}
+
+fn runtime_file_identity(root: &Path) -> String {
+    fn collect(root: &Path, directory: &Path, nested: bool, entries: &mut Vec<String>) {
+        let Ok(children) = fs::read_dir(directory) else {
+            entries.push(format!(
+                "unavailable:{}",
+                directory.strip_prefix(root).unwrap_or(directory).display()
+            ));
+            return;
+        };
+        for entry in children.flatten() {
+            let path = entry.path();
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if metadata.is_dir() {
+                if nested || matches!(name.as_str(), "rocblas" | "hipblaslt" | ".kpack") {
+                    collect(root, &path, true, entries);
+                }
+            } else if nested
+                || name.ends_with(".dll")
+                || name.ends_with(".exe")
+                || name.ends_with(".dylib")
+                || name.contains(".so")
+                || name.starts_with("llama-")
+                || name == VERSION_MANIFEST
+                || name == SOURCE_MANIFEST
+                || name == RUNTIME_BUNDLE_MANIFEST
+            {
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map(|time| time.as_nanos())
+                    .unwrap_or_default();
+                entries.push(format!(
+                    "{}|{}|{modified}",
+                    path.strip_prefix(root).unwrap_or(&path).display(),
+                    metadata.len()
+                ));
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    collect(root, root, false, &mut entries);
+    entries.sort();
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(entry.as_bytes());
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 pub async fn install(
     app: AppHandle,
     backend: &str,
@@ -5403,10 +5489,6 @@ fn source_build_configure_args(
             "Ninja".to_string(),
             "-DCMAKE_C_COMPILER=clang".to_string(),
             "-DCMAKE_CXX_COMPILER=clang++".to_string(),
-            // Windows HIP peer copies can corrupt multi-GPU inference.
-            // Validated on two gfx1201 devices; host-mediated copies retain
-            // GPU compute without depending on driver peer-memory support.
-            "-DGGML_CUDA_NO_PEER_COPY=ON".to_string(),
         ];
         toolchain.append(&mut args);
         args = toolchain;
@@ -6095,6 +6177,12 @@ fn is_backend_runtime_library(backend: &str, file_name: &str) -> bool {
             "libamd_comgr",
             "rocprofiler-register",
             "librocprofiler-register",
+            "rocm_kpack",
+            "librocm_kpack",
+            "tensilelite-host",
+            "libtensilelite-host",
+            "origami",
+            "liborigami",
         ],
         _ => &[],
     };
@@ -6111,6 +6199,31 @@ fn directory_has_files(directory: &Path) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+fn has_gpu_architecture_directories(directory: &Path) -> bool {
+    gpu_architecture_directories(directory).next().is_some()
+}
+
+fn gpu_architecture_directories(directory: &Path) -> impl Iterator<Item = PathBuf> {
+    fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            let architecture = name.strip_prefix("gfx")?;
+            (!architecture.is_empty()
+                && architecture.chars().all(|c| c.is_ascii_alphanumeric())
+                && entry.file_type().ok()?.is_dir())
+            .then(|| entry.path())
+        })
+}
+
+fn blas_library_has_data(directory: &Path) -> bool {
+    directory_has_files(directory)
+        || gpu_architecture_directories(directory).any(|path| directory_has_files(&path))
 }
 
 fn directory_has_named_runtime_library(destination: &Path, prefix: &str) -> bool {
@@ -6139,9 +6252,9 @@ fn rocm_runtime_dependencies_complete(destination: &Path) -> bool {
         return false;
     }
     let rocblas_ok = !directory_has_named_runtime_library(destination, "rocblas")
-        || directory_has_files(&destination.join("rocblas").join("library"));
+        || blas_library_has_data(&destination.join("rocblas").join("library"));
     let hipblaslt_ok = !directory_has_named_runtime_library(destination, "hipblaslt")
-        || directory_has_files(&destination.join("hipblaslt").join("library"));
+        || blas_library_has_data(&destination.join("hipblaslt").join("library"));
     rocblas_ok && hipblaslt_ok
 }
 
@@ -6185,6 +6298,20 @@ fn copy_backend_runtime_dependencies(
     destination: &Path,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    copy_backend_runtime_dependencies_from_roots(
+        backend,
+        destination,
+        cancel,
+        &backend_sdk_roots(backend),
+    )
+}
+
+fn copy_backend_runtime_dependencies_from_roots(
+    backend: &str,
+    destination: &Path,
+    cancel: &Arc<AtomicBool>,
+    roots: &[PathBuf],
+) -> Result<(), String> {
     if !matches!(backend, "cuda" | "rocm") {
         return Ok(());
     }
@@ -6194,10 +6321,17 @@ fn copy_backend_runtime_dependencies(
     if backend_runtime_dependencies_complete(backend, destination) {
         return Ok(());
     }
-    let roots = backend_sdk_roots(backend);
     let mut found = 0_usize;
     let mut found_data = 0_usize;
-    for root in &roots {
+    for root in roots {
+        if cfg!(windows)
+            && backend == "rocm"
+            && !["bin", "lib", "lib64", "lib/x64"]
+                .iter()
+                .any(|relative| rocm_runtime_dependencies_complete(&root.join(relative)))
+        {
+            continue;
+        }
         for relative in ["bin", "lib", "lib64", "lib/x64"] {
             let directory = root.join(relative);
             let Ok(entries) = fs::read_dir(&directory) else {
@@ -6220,6 +6354,9 @@ fn copy_backend_runtime_dependencies(
                 found += 1;
                 let target = destination.join(entry.file_name());
                 if target.exists() {
+                    if backend == "rocm" && sha256_file(&target)? != sha256_file(&path)? {
+                        return Err("the installed ROCm libraries do not match the configured SDK. Import a complete runtime bundle built with that SDK instead of mixing vendor libraries.".into());
+                    }
                     continue;
                 }
                 fs::copy(&path, &target).map_err(|error| {
@@ -6239,6 +6376,9 @@ fn copy_backend_runtime_dependencies(
                 ("lib/rocblas", "rocblas"),
                 ("bin/hipblaslt", "hipblaslt"),
                 ("lib/hipblaslt", "hipblaslt"),
+                (".kpack", ".kpack"),
+                ("share/therock", "share/therock"),
+                ("share/doc", "share/doc"),
             ] {
                 let source = root.join(relative);
                 if !source.is_dir() {
@@ -6248,6 +6388,11 @@ fn copy_backend_runtime_dependencies(
                 copy_runtime_tree(&source, &target, cancel)?;
                 found_data = found_data.saturating_add(count_files_recursive(&target));
             }
+        }
+        // Do not overwrite one complete SDK's kernel data with another SDK's
+        // files merely because both SDK roots are configured on the host.
+        if backend_runtime_dependencies_complete(backend, destination) {
+            break;
         }
     }
     if found == 0 {
@@ -6787,6 +6932,10 @@ mod tests {
             "librocblas.so.4",
             "hipblaslt.dll",
             "libhsa-runtime64.so.1",
+            "rocm_kpack.dll",
+            "librocm_kpack.so.1",
+            "libtensilelite-host.dll",
+            "origami.dll",
         ] {
             assert!(is_backend_runtime_library("rocm", name), "{name}");
         }
@@ -6794,6 +6943,151 @@ mod tests {
             assert!(!is_backend_runtime_library("cuda", name), "{name}");
             assert!(!is_backend_runtime_library("rocm", name), "{name}");
         }
+    }
+
+    #[test]
+    fn rocm_bundle_keeps_architecture_data_and_transitive_libraries() {
+        let root = test_directory("rocm-sdk-layout");
+        let sdk = root.join("sdk");
+        let other_sdk = root.join("other-sdk");
+        let bundle = root.join("bundle");
+        fs::create_dir_all(sdk.join("bin/hipblaslt/library/gfx1201")).unwrap();
+        fs::create_dir_all(other_sdk.join("bin/hipblaslt/library/gfx1201")).unwrap();
+        fs::create_dir_all(sdk.join(".kpack")).unwrap();
+        fs::create_dir_all(sdk.join("share/doc/hip")).unwrap();
+        fs::create_dir_all(sdk.join("share/therock")).unwrap();
+        fs::create_dir_all(&bundle).unwrap();
+        for name in [
+            "amdhip64_7.dll",
+            "amd_comgr.dll",
+            "hipblas.dll",
+            "libhipblaslt.dll",
+            "libtensilelite-host.dll",
+            "origami.dll",
+            "rocm_kpack.dll",
+        ] {
+            fs::write(sdk.join("bin").join(name), name).unwrap();
+            fs::write(other_sdk.join("bin").join(name), name).unwrap();
+        }
+        fs::write(
+            sdk.join("bin/hipblaslt/library/gfx1201/TensileLibrary.dat"),
+            b"kernel data",
+        )
+        .unwrap();
+        fs::write(sdk.join(".kpack/blas_gfx1201.kpack"), b"packed kernels").unwrap();
+        fs::write(sdk.join("share/doc/hip/LICENSE"), b"synthetic notice").unwrap();
+        fs::write(sdk.join("share/therock/therock_manifest.json"), b"{}").unwrap();
+        fs::write(
+            other_sdk.join("bin/hipblaslt/library/gfx1201/TensileLibrary.dat"),
+            b"different SDK",
+        )
+        .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_backend_runtime_dependencies_from_roots(
+            "rocm",
+            &bundle,
+            &cancel,
+            &[sdk.clone(), other_sdk],
+        )
+        .unwrap();
+        assert!(rocm_runtime_dependencies_complete(&bundle));
+        for name in [
+            "rocm_kpack.dll",
+            "libtensilelite-host.dll",
+            "origami.dll",
+            ".kpack/blas_gfx1201.kpack",
+            "share/doc/hip/LICENSE",
+            "share/therock/therock_manifest.json",
+        ] {
+            assert!(bundle.join(name).is_file(), "{name}");
+        }
+        assert_eq!(
+            fs::read(bundle.join("hipblaslt/library/gfx1201/TensileLibrary.dat")).unwrap(),
+            b"kernel data"
+        );
+        // A complete modern bundle remains portable without the original SDK.
+        copy_backend_runtime_dependencies_from_roots("rocm", &bundle, &cancel, &[]).unwrap();
+        fs::remove_file(bundle.join("hipblaslt/library/gfx1201/TensileLibrary.dat")).unwrap();
+        assert!(!rocm_runtime_dependencies_complete(&bundle));
+        fs::write(bundle.join("amdhip64_7.dll"), b"different HIP runtime").unwrap();
+        let error = copy_backend_runtime_dependencies_from_roots("rocm", &bundle, &cancel, &[sdk])
+            .unwrap_err();
+        assert!(error.contains("do not match the configured SDK"), "{error}");
+        assert_eq!(
+            fs::read(bundle.join("amdhip64_7.dll")).unwrap(),
+            b"different HIP runtime"
+        );
+        assert!(!bundle
+            .join("hipblaslt/library/gfx1201/TensileLibrary.dat")
+            .exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn packaged_blas_paths_preserve_architecture_selection_and_relocate_kpack() {
+        let root = test_directory("rocm-environment");
+        fs::create_dir_all(root.join("hipblaslt/library/gfx1201")).unwrap();
+        fs::create_dir_all(root.join("rocblas/library")).unwrap();
+        fs::create_dir_all(root.join(".kpack")).unwrap();
+        fs::write(
+            root.join("hipblaslt/library/gfx1201/TensileLibrary.dat"),
+            b"modern",
+        )
+        .unwrap();
+        fs::write(
+            root.join("hipblaslt/library/README"),
+            b"not a legacy layout",
+        )
+        .unwrap();
+        fs::write(root.join("rocblas/library/TensileLibrary.dat"), b"legacy").unwrap();
+        let archive = root.join(".kpack/blas_gfx1201.kpack");
+        fs::write(&archive, b"kernels").unwrap();
+        let environment = staged_runtime_environment_from(
+            vec![
+                ("HIPBLASLT_TENSILE_LIBPATH".into(), "host/library".into()),
+                ("ROCM_KPACK_PATH".into(), "host.kpack".into()),
+                ("ROCM_KPACK_PATH_PREFIX".into(), "host-prefix.kpack".into()),
+            ],
+            &root,
+        );
+        let value = |name: &str| {
+            environment
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(value("HIPBLASLT_TENSILE_LIBPATH"), None);
+        assert_eq!(value("ROCM_KPACK_PATH_PREFIX"), None);
+        assert_eq!(
+            value("ROCBLAS_TENSILE_LIBPATH"),
+            Some(root.join("rocblas").join("library").into_os_string())
+        );
+        assert_eq!(
+            std::env::split_paths(&value("ROCM_KPACK_PATH").unwrap()).collect::<Vec<_>>(),
+            vec![archive]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verification_identity_changes_when_vendor_code_or_kernel_data_changes() {
+        let root = test_directory("runtime-identity");
+        fs::create_dir_all(root.join(".kpack")).unwrap();
+        fs::write(root.join("llama-server.exe"), b"same engine").unwrap();
+        fs::write(root.join("amdhip64_7.dll"), b"old HIP").unwrap();
+        let before = runtime_file_identity(&root);
+        assert_eq!(before, runtime_file_identity(&root));
+        fs::write(root.join("amdhip64_7.dll"), b"fixed HIP runtime").unwrap();
+        let fixed = runtime_file_identity(&root);
+        assert_ne!(before, fixed);
+        fs::write(root.join("diagnostic.log"), b"irrelevant").unwrap();
+        assert_eq!(fixed, runtime_file_identity(&root));
+        fs::write(root.join(".kpack/blas.kpack"), b"new kernels").unwrap();
+        let kernels = runtime_file_identity(&root);
+        assert_ne!(fixed, kernels);
+        fs::remove_file(root.join("amdhip64_7.dll")).unwrap();
+        assert_ne!(kernels, runtime_file_identity(&root));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -7390,7 +7684,9 @@ mod tests {
             .any(|pair| pair[0] == "-G" && pair[1] == "Ninja"));
         assert!(args.iter().any(|arg| arg == "-DCMAKE_C_COMPILER=clang"));
         assert!(args.iter().any(|arg| arg == "-DCMAKE_CXX_COMPILER=clang++"));
-        assert!(args.iter().any(|arg| arg == "-DGGML_CUDA_NO_PEER_COPY=ON"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.starts_with("-DGGML_CUDA_NO_PEER_COPY=")));
     }
 
     #[test]
@@ -9090,5 +9386,100 @@ mod tests {
         .await;
         std::env::set_var("APPDATA", original_appdata);
         let _ = fs::remove_dir_all(isolated_appdata);
+    }
+
+    /// Explicit real-environment check: the caller supplies an empty APPDATA
+    /// sandbox, an engine directory, an SDK and the pinned canary weights.
+    /// The resulting portable bundle is kept there for inspection/import.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires a ROCm SDK, two GPUs and an isolated APPDATA directory"]
+    async fn live_rocm_sdk_bundle_passes_dual_gpu_verification() {
+        let input = |name: &str| PathBuf::from(std::env::var_os(name).expect(name));
+        let engine = input("AIOLM_LIVE_ROCM_ENGINE");
+        let sdk = input("AIOLM_LIVE_ROCM_SDK");
+        let canary = input("AIOLM_LIVE_ROCM_CANARY");
+        let isolated = input("AIOLM_LIVE_ROCM_APPDATA");
+        assert_eq!(
+            std::env::var_os("APPDATA"),
+            Some(isolated.clone().into_os_string())
+        );
+        assert!(
+            !isolated.join("aiolm").exists(),
+            "use an empty test APPDATA"
+        );
+        let build = "local_rocm_verified";
+        let destination = runtime_dir("rocm", build).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        for entry in fs::read_dir(&engine).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if entry.file_type().unwrap().is_file()
+                && (name.starts_with("ggml")
+                    || name.starts_with("llama")
+                    || matches!(name.as_str(), "mtmd.dll" | "libomp.dll")
+                    || name.starts_with("license"))
+            {
+                fs::copy(entry.path(), destination.join(entry.file_name())).unwrap();
+            }
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_backend_runtime_dependencies_from_roots("rocm", &destination, &cancel, &[sdk])
+            .unwrap();
+        copy_msvc_runtime_dependencies(&destination, &cancel).unwrap();
+        assert_eq!(
+            sha256_file(&engine.join("ggml-hip.dll")).unwrap(),
+            sha256_file(&destination.join("ggml-hip.dll")).unwrap()
+        );
+        let progress: ProgressSink = &|_, _, _| {};
+        println!("ROCm bundle: packaged SDK dependencies; running preflight");
+        let version = preflight_staged_runtime(&destination, progress, &cancel)
+            .await
+            .unwrap()
+            .expect("engine version");
+        write_version_manifest(&destination, &version);
+        let verification = isolated.join("aiolm/verification");
+        fs::create_dir_all(&verification).unwrap();
+        fs::copy(canary, verification.join("stories15M-q4_0.gguf")).unwrap();
+        let cfg = crate::config::AppConfig {
+            active_backend: "rocm".into(),
+            active_build: build.into(),
+            ngl: 99,
+            ..Default::default()
+        };
+        let placement = crate::gpu::ResolvedGpu {
+            device_flag: Some("ROCm0,ROCm1".into()),
+            split_mode: Some("layer"),
+            tensor_split: vec![1.0, 1.0],
+            ..Default::default()
+        };
+        let devices = probe("rocm", build).await.unwrap().devices;
+        crate::verify::ensure_verified(
+            &cfg,
+            &placement,
+            "explicit-live-test",
+            &devices,
+            Some(&cancel),
+        )
+        .await
+        .unwrap();
+        let archive = isolated.join("rocm-verified.zip");
+        println!("ROCm bundle: dual GPU gate passed; exporting");
+        let exported = export_bundle(&archive, "rocm", build, progress, &cancel).unwrap();
+        println!("ROCm bundle: exported; importing and verifying again");
+        let imported = import_bundle(&archive, progress, cancel.clone())
+            .await
+            .unwrap();
+        assert_eq!(imported.build, build);
+        assert_eq!(imported.backend, "rocm");
+        crate::verify::ensure_verified(
+            &cfg,
+            &placement,
+            "explicit-live-test",
+            &devices,
+            Some(&cancel),
+        )
+        .await
+        .unwrap();
+        println!("Verified ROCm bundle SHA-256: {}", exported.archive_sha256);
     }
 }

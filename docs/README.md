@@ -15,6 +15,7 @@ Guides, technical reference, and policies for the current AioLM implementation.
 
 - [Functional specification (한국어)](reference/functional-spec.ko.md): concise overview of current features and operating conditions.
 - [Source architecture](reference/architecture.md): folder layout, module responsibilities, and dependency rules.
+- [Windows ROCm runtimes](reference/windows-rocm.md): vendor dependencies, multi-GPU correctness, portable packaging, and validation.
 - [Server options](reference/server-options.md): tuning controls and runtime option behavior.
 - [Model selection and settings](reference/model-settings.md): shared settings dialog, named profiles, and model and session execution.
 - [Chat response metrics](reference/chat-metrics.md): PP/TG counts, durations, throughput, request timing, and persistence.

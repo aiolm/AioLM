@@ -299,6 +299,22 @@ pub fn cache_key(
     hardware_fingerprint: &str,
     runtime_devices: &[String],
 ) -> String {
+    cache_key_with_runtime_identity(
+        cfg,
+        resolved,
+        hardware_fingerprint,
+        runtime_devices,
+        &runtime::verification_identity(&cfg.active_backend, &cfg.active_build),
+    )
+}
+
+fn cache_key_with_runtime_identity(
+    cfg: &AppConfig,
+    resolved: &ResolvedGpu,
+    hardware_fingerprint: &str,
+    runtime_devices: &[String],
+    runtime_identity: &str,
+) -> String {
     let mut hasher = Sha256::new();
     for part in [
         SUITE_VERSION.to_string().as_str(),
@@ -306,6 +322,7 @@ pub fn cache_key(
         CANARY.sha256,
         cfg.active_backend.as_str(),
         cfg.active_build.as_str(),
+        runtime_identity,
         resolved.device_flag.as_deref().unwrap_or(""),
         resolved.split_mode.unwrap_or(""),
         &resolved
@@ -1199,6 +1216,21 @@ mod tests {
         assert_eq!(
             base,
             cache_key(&cfg, &placement("ROCm0,ROCm1"), "fingerprint", &devices)
+        );
+    }
+
+    #[test]
+    fn replacing_vendor_libraries_invalidates_verdicts_for_the_same_engine_build() {
+        let cfg = AppConfig::default();
+        let placement = placement("ROCm0,ROCm1");
+        let before =
+            cache_key_with_runtime_identity(&cfg, &placement, "hardware", &[], "old-vendor");
+        let after =
+            cache_key_with_runtime_identity(&cfg, &placement, "hardware", &[], "fixed-vendor");
+        assert_ne!(before, after);
+        assert_eq!(
+            after,
+            cache_key_with_runtime_identity(&cfg, &placement, "hardware", &[], "fixed-vendor")
         );
     }
 
