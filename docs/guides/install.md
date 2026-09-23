@@ -52,7 +52,7 @@ The updater matches the running application's Windows uninstall registration to 
 
 ## Uninstall
 
-Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **Control Panel → Programs and Features**. Removing the application does not automatically delete user-managed model, runtime, project, or chat data; remove those folders separately if desired.
+Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **Control Panel → Programs and Features**. Removing the application keeps your data unless you select **Delete the application data** in the NSIS uninstaller. That option removes the WebView profile and the data folder `%USERPROFILE%\.aiolm`, together with the `%APPDATA%\aiolm` and `%LOCALAPPDATA%\aiolm` folders earlier releases used, but keeps a `models` folder in them. It never removes a folder set with `AIOLM_HOME` or models stored elsewhere, and the MSI uninstaller removes no data; delete those folders separately if desired.
 
 ## Linux / macOS (planned)
 
