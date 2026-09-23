@@ -62,7 +62,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml --lib verify::tests
 The opt-in Windows integration test requires two ROCm GPUs, an engine with
 `llama-server`, `llama-bench`, and `llama-perplexity`, a complete matching AMD SDK,
 and the pinned canary model identified in `src-tauri/src/verify.rs`. Run it in a
-separate shell with an **empty test APPDATA directory**:
+separate shell with an **empty test data folder** (`AIOLM_HOME`):
 
 Use a short test output path. The tested Windows TensileLite library failed to
 load its data when the complete data-file path exceeded 260 characters, even
@@ -73,8 +73,8 @@ in mind when choosing a custom data directory.
 $env:AIOLM_LIVE_ROCM_ENGINE = 'C:\test-inputs\engine'
 $env:AIOLM_LIVE_ROCM_SDK = 'C:\test-inputs\rocm-sdk'
 $env:AIOLM_LIVE_ROCM_CANARY = 'C:\test-inputs\stories15M-q4_0.gguf'
-$env:AIOLM_LIVE_ROCM_APPDATA = 'C:\test-output\rocm-validation'
-$env:APPDATA = $env:AIOLM_LIVE_ROCM_APPDATA
+$env:AIOLM_LIVE_ROCM_HOME = 'C:\test-output\rocm-validation'
+$env:AIOLM_HOME = $env:AIOLM_LIVE_ROCM_HOME
 cargo test --locked --manifest-path src-tauri/Cargo.toml --lib live_rocm_sdk_bundle_passes_dual_gpu_verification -- --ignored --nocapture --test-threads=1
 ```
 

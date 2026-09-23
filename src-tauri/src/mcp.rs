@@ -5,7 +5,6 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::task::JoinHandle;
@@ -87,15 +86,12 @@ fn validate_server(server: &McpServer) -> Result<(), String> {
     Ok(())
 }
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_config_dir()
-        .map(|directory| directory.join(MCP_FILE))
-        .map_err(|error| format!("cannot resolve MCP config directory: {error}"))
+fn config_path() -> Result<PathBuf, String> {
+    crate::home::resolve_aiolm_home().map(|home| home.join(MCP_FILE))
 }
 
-async fn load_servers(app: &AppHandle) -> Result<Vec<McpServer>, String> {
-    let path = config_path(app)?;
+async fn load_servers() -> Result<Vec<McpServer>, String> {
+    let path = config_path()?;
     if !tokio::fs::try_exists(&path)
         .await
         .map_err(|error| format!("cannot inspect MCP config: {error}"))?
@@ -113,11 +109,11 @@ async fn load_servers(app: &AppHandle) -> Result<Vec<McpServer>, String> {
     Ok(servers)
 }
 
-async fn save_servers(app: &AppHandle, servers: &[McpServer]) -> Result<(), String> {
+async fn save_servers(servers: &[McpServer]) -> Result<(), String> {
     for server in servers {
         validate_server(server)?;
     }
-    let path = config_path(app)?;
+    let path = config_path()?;
     let directory = path
         .parent()
         .ok_or_else(|| "MCP config has no parent directory".to_string())?;
@@ -387,13 +383,13 @@ async fn close_session(mut session: McpSession) {
     }
 }
 
-pub async fn list(app: AppHandle) -> Result<Vec<McpServer>, String> {
-    load_servers(&app).await
+pub async fn list() -> Result<Vec<McpServer>, String> {
+    load_servers().await
 }
 
-pub async fn save(app: AppHandle, server: McpServer) -> Result<Vec<McpServer>, String> {
+pub async fn save(server: McpServer) -> Result<Vec<McpServer>, String> {
     let _config_guard = config_lock().lock().await;
-    let mut servers = load_servers(&app).await?;
+    let mut servers = load_servers().await?;
     validate_server(&server)?;
     if let Some(existing) = servers
         .iter_mut()
@@ -403,23 +399,23 @@ pub async fn save(app: AppHandle, server: McpServer) -> Result<Vec<McpServer>, S
     } else {
         servers.push(server);
     }
-    save_servers(&app, &servers).await?;
+    save_servers(&servers).await?;
     Ok(servers)
 }
 
-pub async fn remove(app: AppHandle, id: &str) -> Result<Vec<McpServer>, String> {
+pub async fn remove(id: &str) -> Result<Vec<McpServer>, String> {
     if !valid_id(id) {
         return Err("invalid MCP server id".into());
     }
     let _config_guard = config_lock().lock().await;
-    let mut servers = load_servers(&app).await?;
+    let mut servers = load_servers().await?;
     servers.retain(|server| server.id != id);
-    save_servers(&app, &servers).await?;
+    save_servers(&servers).await?;
     Ok(servers)
 }
 
-pub async fn tools(app: AppHandle, id: &str) -> Result<Vec<McpTool>, String> {
-    let server = load_servers(&app)
+pub async fn tools(id: &str) -> Result<Vec<McpTool>, String> {
+    let server = load_servers()
         .await?
         .into_iter()
         .find(|server| server.id == id)
@@ -522,12 +518,7 @@ async fn confirm_tool_call(
     }
 }
 
-pub async fn call_tool(
-    app: AppHandle,
-    id: &str,
-    name: &str,
-    arguments: Value,
-) -> Result<Value, String> {
+pub async fn call_tool(id: &str, name: &str, arguments: Value) -> Result<Value, String> {
     if name.is_empty() || name.len() > 256 || contains_forbidden_control(name) {
         return Err("invalid MCP tool name".into());
     }
@@ -539,7 +530,7 @@ pub async fn call_tool(
     if argument_bytes.len() > MAX_TOOL_ARGUMENT_BYTES {
         return Err("MCP tool arguments exceed the 256 KiB safety limit".into());
     }
-    let server = load_servers(&app)
+    let server = load_servers()
         .await?
         .into_iter()
         .find(|server| server.id == id)

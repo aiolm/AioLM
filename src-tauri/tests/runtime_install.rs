@@ -3,7 +3,7 @@
 //! sidecar and the staged preflight.
 //!
 //! Gated behind AIOLM_RUNTIME_INSTALL=1 because it downloads hundreds of
-//! megabytes and writes into the real app data directory.
+//! megabytes and writes into the real data folder (`~/.aiolm`).
 //!
 //! Run:
 //!   $env:AIOLM_RUNTIME_INSTALL = "1"
@@ -84,33 +84,33 @@ fn installs_each_requested_backend_end_to_end() {
     );
 }
 
-/// Uses a disposable app-data root, never the user's installed runtimes.
+/// Uses a disposable data folder, never the user's installed runtimes.
 #[cfg(windows)]
 #[test]
 #[ignore = "live download cancellation; set AIOLM_RUNTIME_INSTALL=1 and run alone"]
 fn cancelled_download_removes_staging() {
     use std::sync::atomic::Ordering;
     assert!(enabled(), "set AIOLM_RUNTIME_INSTALL=1");
-    struct IsolatedAppData {
+    struct IsolatedHome {
         original: Option<std::ffi::OsString>,
         root: std::path::PathBuf,
     }
-    impl Drop for IsolatedAppData {
+    impl Drop for IsolatedHome {
         fn drop(&mut self) {
             match &self.original {
-                Some(value) => std::env::set_var("APPDATA", value),
-                None => std::env::remove_var("APPDATA"),
+                Some(value) => std::env::set_var("AIOLM_HOME", value),
+                None => std::env::remove_var("AIOLM_HOME"),
             }
             let _ = std::fs::remove_dir_all(&self.root);
         }
     }
     let root = std::env::temp_dir().join(format!("aiolm-download-test-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&root).expect("create isolated app data");
-    let isolated = IsolatedAppData {
-        original: std::env::var_os("APPDATA"),
+    std::fs::create_dir(&root).expect("create isolated data folder");
+    let isolated = IsolatedHome {
+        original: std::env::var_os("AIOLM_HOME"),
         root,
     };
-    std::env::set_var("APPDATA", &isolated.root);
+    std::env::set_var("AIOLM_HOME", &isolated.root);
     let cancel = Arc::new(AtomicBool::new(false));
     let saw_bytes = Arc::new(AtomicBool::new(false));
     let executor = tokio::runtime::Runtime::new().unwrap();
@@ -134,7 +134,7 @@ fn cancelled_download_removes_staging() {
         "no download bytes received: {result:?}"
     );
     assert!(result.is_err(), "cancelled download was installed");
-    let runtime_root = isolated.root.join("aiolm").join("runtimes");
+    let runtime_root = isolated.root.join("runtimes");
     if runtime_root.exists() {
         assert_eq!(
             std::fs::read_dir(runtime_root).unwrap().count(),

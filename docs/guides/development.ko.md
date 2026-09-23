@@ -20,7 +20,7 @@ git clone https://github.com/aiolm/AioLM.git aiolm
 cd aiolm
 npm install
 npm run tauri -- dev
-# 런타임: %APPDATA%/aiolm/runtimes/{build}-{backend}/
+# 런타임: ~/.aiolm/runtimes/{build}-{backend}/
 ```
 
 ## 검증

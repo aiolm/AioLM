@@ -2,40 +2,30 @@
 use crate::mcp;
 
 #[tauri::command]
-pub(crate) async fn mcp_list_servers(app: tauri::AppHandle) -> Result<Vec<mcp::McpServer>, String> {
-    mcp::list(app).await
+pub(crate) async fn mcp_list_servers() -> Result<Vec<mcp::McpServer>, String> {
+    mcp::list().await
 }
 
 #[tauri::command]
-pub(crate) async fn mcp_save_server(
-    app: tauri::AppHandle,
-    server: mcp::McpServer,
-) -> Result<Vec<mcp::McpServer>, String> {
-    mcp::save(app, server).await
+pub(crate) async fn mcp_save_server(server: mcp::McpServer) -> Result<Vec<mcp::McpServer>, String> {
+    mcp::save(server).await
 }
 
 #[tauri::command]
-pub(crate) async fn mcp_remove_server(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<Vec<mcp::McpServer>, String> {
-    mcp::remove(app, &id).await
+pub(crate) async fn mcp_remove_server(id: String) -> Result<Vec<mcp::McpServer>, String> {
+    mcp::remove(&id).await
 }
 
 #[tauri::command]
-pub(crate) async fn mcp_list_tools(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<Vec<mcp::McpTool>, String> {
-    mcp::tools(app, &id).await
+pub(crate) async fn mcp_list_tools(id: String) -> Result<Vec<mcp::McpTool>, String> {
+    mcp::tools(&id).await
 }
 
 #[tauri::command]
 pub(crate) async fn mcp_call_tool(
-    app: tauri::AppHandle,
     id: String,
     name: String,
     arguments: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    mcp::call_tool(app, &id, &name, arguments).await
+    mcp::call_tool(&id, &name, arguments).await
 }

@@ -194,11 +194,7 @@ struct Cache {
 }
 
 fn cache_path() -> PathBuf {
-    runtime::runtimes_root()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(runtime::runtimes_root)
-        .join("verification.json")
+    crate::home::aiolm_home().join("verification.json")
 }
 
 fn load_cache() -> Cache {
@@ -448,10 +444,7 @@ pub fn uses_accelerator(cfg: &AppConfig, resolved: &ResolvedGpu) -> bool {
 }
 
 fn canary_dir() -> PathBuf {
-    cache_path()
-        .parent()
-        .map(|parent| parent.join("verification"))
-        .unwrap_or_else(|| PathBuf::from("verification"))
+    crate::home::aiolm_home().join("verification")
 }
 
 async fn ensure_canary() -> Result<PathBuf, String> {

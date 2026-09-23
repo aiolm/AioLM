@@ -11,6 +11,7 @@ pub mod gguf;
 pub mod gpu;
 pub mod hardware;
 mod hardware_memory;
+pub mod home;
 mod mcp;
 pub mod models;
 pub mod performance_bench;

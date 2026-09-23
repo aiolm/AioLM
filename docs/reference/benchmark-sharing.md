@@ -9,8 +9,8 @@ server, database migrations or database credentials. The website owns its
 PostgreSQL schema, migrations and runtime roles. Repository ownership is
 described in [Project boundaries](project-boundaries.md).
 
-Benchmark recovery data is saved by the native runner in `benchmarks/runs` under Tauri's
-OS app data directory. Each journal contains launch metadata, completed trials
+Benchmark recovery data is saved by the native runner in `benchmarks/runs` under the
+data folder (`~/.aiolm`). Each journal contains launch metadata, completed trials
 and final status. A completed trial is synced outside the timed interval before
 the progress event is emitted. Local results are loaded in pages of at most 100
 records. An interrupted journal recovers its

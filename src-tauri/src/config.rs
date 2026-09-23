@@ -487,19 +487,11 @@ fn default_chat_options() -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-fn home_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_else(|_| ".".into()),
-    )
-}
-
 /// The model folder the application creates and owns for a fresh installation.
-/// Resolved from the operating system's home directory every time it is asked
-/// for, so no path from the machine that built the application is ever baked in.
+/// Resolved from the data folder every time it is asked for, so no path from
+/// the machine that built the application is ever baked in.
 pub fn default_models_dir() -> PathBuf {
-    home_dir().join(".aiolm").join("models")
+    crate::home::aiolm_home().join("models")
 }
 
 impl Default for AppConfig {
@@ -1027,15 +1019,7 @@ fn ensure_models_dir_at(cfg: &AppConfig, default: &Path) -> Result<(), String> {
 }
 
 pub fn config_path() -> PathBuf {
-    #[cfg(windows)]
-    let root = PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into()));
-    #[cfg(target_os = "macos")]
-    let root = home_dir().join("Library").join("Application Support");
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    let root = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home_dir().join(".config"));
-    root.join("aiolm").join("config.json")
+    crate::home::aiolm_home().join("config.json")
 }
 
 pub fn load_result() -> Result<AppConfig, String> {
@@ -1066,7 +1050,7 @@ fn load_from_path(path: &Path) -> Result<AppConfig, String> {
     Ok(migrated)
 }
 
-fn recover_legacy_backup(path: &Path) -> Result<bool, String> {
+pub(crate) fn recover_legacy_backup(path: &Path) -> Result<bool, String> {
     let Some(parent) = path.parent() else {
         return Ok(false);
     };
@@ -1418,10 +1402,11 @@ mod tests {
     #[test]
     fn defaults_are_model_neutral() {
         let cfg = AppConfig::default();
-        assert!(cfg
-            .models_dir
-            .replace('\\', "/")
-            .ends_with("/.aiolm/models"));
+        // Where the data folder itself resolves to is covered by `home`'s tests.
+        assert_eq!(
+            Path::new(&cfg.models_dir),
+            crate::home::aiolm_home().join("models")
+        );
         assert_eq!(cfg.ngl, 99);
         assert_eq!(cfg.ctx_size, 4096);
         assert_eq!(cfg.batch_size, 2048);

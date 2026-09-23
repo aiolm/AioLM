@@ -18,19 +18,21 @@ pub struct MigratedPath {
     pub to: String,
 }
 
+/// The replaced application's data folders and where they are imported to.
+/// Both sides are fixed earlier layouts, independent of where AioLM keeps its
+/// data now: `home::prepare_home` moves the imported data on from there.
 pub fn managed_paths() -> Vec<MigratedPath> {
-    let mut roots = vec![crate::config::config_path().parent().unwrap().to_path_buf()];
-    let runtime = crate::runtime::runtimes_root()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    if !roots.contains(&runtime) {
-        roots.push(runtime);
+    crate::home::PreviousLayout::current()
+        .map(|previous| legacy_paths(&previous))
+        .unwrap_or_default()
+}
+
+fn legacy_paths(previous: &crate::home::PreviousLayout) -> Vec<MigratedPath> {
+    let mut roots = vec![previous.config.clone()];
+    if !roots.contains(&previous.data) {
+        roots.push(previous.data.clone());
     }
-    #[cfg(windows)]
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        roots.push(PathBuf::from(local).join("aiolm"));
-    }
+    roots.extend(previous.local.clone());
     roots
         .into_iter()
         .map(|to| MigratedPath {
@@ -43,7 +45,7 @@ pub fn managed_paths() -> Vec<MigratedPath> {
         .collect()
 }
 
-fn is_link(metadata: &fs::Metadata) -> bool {
+pub(crate) fn is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -82,12 +84,16 @@ fn migration_lock(target: &Path) -> Result<File, String> {
     let parent = target
         .parent()
         .ok_or("Missing migration destination parent")?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let path = parent.join(format!(
+    lock_file(&parent.join(format!(
         ".{}.migration.lock",
         target.file_name().unwrap().to_string_lossy()
-    ));
-    if path.exists() && is_link(&fs::symlink_metadata(&path).map_err(|e| e.to_string())?) {
+    )))
+}
+
+pub(crate) fn lock_file(path: &Path) -> Result<File, String> {
+    let parent = path.parent().ok_or("Missing migration lock parent")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    if path.exists() && is_link(&fs::symlink_metadata(path).map_err(|e| e.to_string())?) {
         return Err("Migration lock path is a link".into());
     }
     let file = OpenOptions::new()
@@ -103,7 +109,7 @@ fn migration_lock(target: &Path) -> Result<File, String> {
     Ok(file)
 }
 
-fn check_tree_links(root: &Path) -> Result<(), String> {
+pub(crate) fn check_tree_links(root: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(root).map_err(|e| e.to_string())?;
     if is_link(&metadata) {
         return Err(format!(
@@ -146,7 +152,7 @@ fn lock_profile(root: &Path, locks: &mut Vec<File>) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
     let metadata =
         fs::symlink_metadata(source).map_err(|e| format!("{}: {e}", source.display()))?;
     if is_link(&metadata) {
@@ -188,6 +194,10 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
             })?;
             let mut output = File::create(&destination).map_err(|e| e.to_string())?;
             let bytes = std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+            // Runtime verification records are keyed by file modification times.
+            if let Ok(modified) = metadata.modified() {
+                output.set_modified(modified).map_err(|e| e.to_string())?;
+            }
             output.sync_all().map_err(|e| e.to_string())?;
             if bytes != metadata.len() {
                 return Err(format!(
@@ -315,7 +325,7 @@ pub fn prepare_managed_data() -> Result<(), String> {
             true,
         )?;
     }
-    Ok(())
+    crate::home::prepare_home()
 }
 
 pub fn prepare_desktop() -> Result<(), String> {
@@ -384,6 +394,34 @@ mod tests {
             .contains("aiolm/models"));
         assert!(!new.join("headless-state.json").exists());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn the_replaced_application_is_imported_into_the_previous_layout() {
+        // Where AioLM keeps its data now must not change where the replaced
+        // application's data is looked for, or where the first import put it.
+        let root = std::env::temp_dir().join("layout");
+        let previous = crate::home::PreviousLayout::under(
+            &root.join("Roaming"),
+            &root.join("Roaming"),
+            Some(root.join("Local")),
+        );
+        let pairs = legacy_paths(&previous)
+            .into_iter()
+            .map(|path| (PathBuf::from(path.from), PathBuf::from(path.to)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pairs,
+            vec![
+                (
+                    root.join("Roaming").join("llama-board"),
+                    root.join("Roaming").join("aiolm")
+                ),
+                (
+                    root.join("Local").join("llama-board"),
+                    root.join("Local").join("aiolm")
+                ),
+            ]
+        );
     }
     #[test]
     fn existing_data_wins_and_repeated_startup_is_idempotent() {

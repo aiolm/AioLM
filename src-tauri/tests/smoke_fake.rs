@@ -19,11 +19,7 @@ use aiolm_lib::{server, AppConfig, ErrBuf};
 fn stage_fake_managed_runtime() -> tempfile_dir::TempDir {
     let fixture = env!("CARGO_BIN_EXE_fake-llama-server");
     let dir = tempfile_dir::TempDir::new();
-    let runtime_dir = dir
-        .path()
-        .join("aiolm")
-        .join("runtimes")
-        .join("local_fake-cpu");
+    let runtime_dir = dir.path().join("runtimes").join("local_fake-cpu");
     std::fs::create_dir_all(&runtime_dir).expect("create fake managed runtime dir");
     let staged_name = if cfg!(windows) {
         "llama-server.exe"
@@ -32,18 +28,13 @@ fn stage_fake_managed_runtime() -> tempfile_dir::TempDir {
     };
     fs::copy(fixture, runtime_dir.join(staged_name)).expect("stage fake llama-server fixture");
 
-    // `runtimes_root()` derives from the platform data directory; point it at
-    // the throwaway root. This test binary is single-threaded at the point
-    // this runs (no other test in this file spawns threads that read these
-    // variables), so there is no data race with the mutation edition 2024's
+    // `runtimes_root()` derives from the data folder; point it at the
+    // throwaway root. This test binary is single-threaded at the point this
+    // runs (no other test in this file spawns threads that read this
+    // variable), so there is no data race with the mutation edition 2024's
     // `set_var` guards against.
     unsafe {
-        #[cfg(windows)]
-        std::env::set_var("APPDATA", dir.path());
-        #[cfg(all(unix, not(target_os = "macos")))]
-        std::env::set_var("XDG_DATA_HOME", dir.path());
-        #[cfg(target_os = "macos")]
-        std::env::set_var("HOME", dir.path());
+        std::env::set_var("AIOLM_HOME", dir.path());
     }
     dir
 }

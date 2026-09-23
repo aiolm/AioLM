@@ -11,11 +11,8 @@ use tauri::State;
 /// Read on demand for selected or visible models, separately from folder scans,
 /// so opening a large library does not require reading every file's header.
 #[tauri::command]
-pub(crate) async fn model_metadata(
-    app: tauri::AppHandle,
-    path: String,
-) -> Result<gguf::ModelMetadata, String> {
-    let receipt_root = crate::benchmark::data_root(&app).ok();
+pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, String> {
+    let receipt_root = crate::benchmark::data_root().ok();
     tokio::task::spawn_blocking(move || {
         let models_root = config::load_result()
             .ok()

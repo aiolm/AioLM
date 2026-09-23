@@ -622,8 +622,8 @@ fn hash_file(path: &Path) -> Result<String, String> {
 /// file, or the file already there matched the digest the repository publishes.
 /// A receipt that cannot be written costs provenance on a later run and nothing
 /// else, so it never turns a finished download into a failure.
-fn note_download(app: &AppHandle, target: &Path, repo_id: &str, file_path: &str) {
-    if let Ok(root) = crate::benchmark::data_root(app) {
+fn note_download(target: &Path, repo_id: &str, file_path: &str) {
+    if let Ok(root) = crate::benchmark::data_root() {
         let _ = crate::benchmark::download_receipt::record(&root, target, repo_id, file_path);
     }
 }
@@ -773,7 +773,7 @@ pub async fn download(
                     .await
                     .map_err(|error| format!("existing model checksum task failed: {error}"))??;
                 if actual == expected {
-                    note_download(&app, &target, repo_id, file_path);
+                    note_download(&target, repo_id, file_path);
                     emit_progress(&app, repo_id, file_path, "complete", total, total);
                     return Ok(DownloadedModel {
                         repo_id: repo_id.to_owned(),
@@ -856,7 +856,7 @@ pub async fn download(
         let _ = tokio::fs::remove_file(&part).await;
         return Err(error);
     }
-    note_download(&app, &target, repo_id, file_path);
+    note_download(&target, repo_id, file_path);
     emit_progress(
         &app,
         repo_id,

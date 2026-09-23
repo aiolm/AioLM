@@ -45,12 +45,11 @@ $childEnvironment = @{
     APPDATA = (Join-Path $root 'Roaming')
     LOCALAPPDATA = (Join-Path $root 'Local')
     USERPROFILE = (Join-Path $root 'home')
+    AIOLM_HOME = (Join-Path $root 'aiolm-home')
     WEBVIEW2_USER_DATA_FOLDER = (Join-Path $root 'webview2')
 }
 foreach ($directory in $childEnvironment.Values) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
-$configDirectory = Join-Path $childEnvironment.APPDATA 'aiolm'
-New-Item -ItemType Directory -Path $configDirectory -Force | Out-Null
-$configPath = Join-Path $configDirectory 'config.json'
+$configPath = Join-Path $childEnvironment.AIOLM_HOME 'config.json'
 [IO.File]::WriteAllText($configPath, '{"config_version":12,"close_to_tray":true}')
 $processes = [Collections.Generic.List[Diagnostics.Process]]::new()
 $legacyLock = $null

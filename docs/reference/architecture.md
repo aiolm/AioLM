@@ -158,7 +158,7 @@ drift; they do not establish runtime installation, packaging or WebView support.
 launch provenance. The runner persists each completed trial outside its timing
 interval before emitting progress. History reads decode one bounded page, hide
 active journals and recover completed trials after an interrupted run. Data lives
-under the operating system's app data directory; existing browser history is
+in `benchmarks` under the data folder (`~/.aiolm`); existing browser history is
 imported in idempotent batches while preserving its original bytes.
 
 `packages/benchmark-contracts/` owns reusable DTOs, validation, aggregation,

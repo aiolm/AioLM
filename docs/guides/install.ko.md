@@ -40,6 +40,8 @@ $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -Firs
 
 AioLM — All-In-One LM은 이전 앱과 별도로 설치됩니다. 첫 실행에서 기존 설정·관리 런타임·CLI 저장소·WebView 프로필을 새 `aiolm` / `com.aiolm.desktop` 경로로 복사합니다. 원본을 유지하며, 이미 존재하는 AioLM 데이터를 우선합니다. 이전 앱을 종료한 뒤 실행하고, 잠금이나 공간 부족 오류가 발생하면 문제를 해결한 뒤 재시도하세요. [이전 방식과 호환성](../reference/migration.md)을 참고하세요.
 
+AioLM은 데이터를 `%USERPROFILE%\.aiolm`에 보관하며, `AIOLM_HOME` 환경변수로 다른 폴더를 지정할 수 있습니다. 이전 AioLM 버전의 데이터는 시작할 때 이 폴더로 가져오고, 관리 런타임은 복사하지 않고 이동합니다. [데이터 폴더](../reference/migration.md#data-folder)를 참고하세요.
+
 ## 제거
 
 **설정 → 앱 → 설치된 앱 → AioLM → 제거**를 선택하거나 **제어판 → 프로그램 및 기능**에서 제거하세요. 앱을 제거해도 사용자가 관리하는 모델·런타임·프로젝트·채팅 데이터는 자동으로 삭제되지 않으므로, 필요하면 해당 폴더를 별도로 삭제하세요.

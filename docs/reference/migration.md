@@ -20,7 +20,7 @@ Before Tauri creates a WebView, AioLM copies these roots when their destinations
 
 | Previous root | AioLM root | Contents |
 | --- | --- | --- |
-| `%APPDATA%\llama-board` | `%APPDATA%\aiolm` | Configuration, managed runtimes and MCP settings |
+| `%APPDATA%\llama-board` | `%APPDATA%\aiolm` | Configuration and managed runtimes |
 | `%LOCALAPPDATA%\llama-board` | `%LOCALAPPDATA%\aiolm` | CLI storage; live process state is excluded |
 | `%LOCALAPPDATA%\com.llamaboard.desktop\EBWebView` | `%LOCALAPPDATA%\com.aiolm.desktop\EBWebView` | WebView profile, including localStorage and IndexedDB |
 
@@ -31,6 +31,41 @@ Each root is copied into a sibling staging directory and committed by rename onl
 The copied browser profile is migrated before application modules read settings or initialize stores. The `llama-board-storage`, `llama-board-chat` and `llama-board-document-index` databases and prefixed localStorage entries are copied to `aiolm` names, preserving structured values and binary attachments. The `aiolm.migration.v1` journal records `copying`, `complete` or `existing`. Web Locks serialize concurrent windows; incomplete copies can retry. Existing AioLM browser data takes priority as a whole, without merging older preferences or conversations.
 
 If copying fails, the application stops at a retry screen/dialog before default settings, automatic server startup or runtime cleanup can run. Close the previous application, release a locked profile, free disk space or repair invalid JSON, then retry. Neither uninstalling AioLM nor retrying migration should be used to delete the old data.
+
+The previous application kept its MCP servers in `%APPDATA%\com.llamaboard.desktop\mcp-servers.json`, which this import does not cover. They are brought over when the data folder is prepared (below), unless AioLM already has its own MCP servers.
+
+## Data folder
+
+AioLM keeps its data in one folder: `.aiolm` in the user's home folder (`%USERPROFILE%\.aiolm` on Windows), or the absolute path in the `AIOLM_HOME` environment variable. A relative `AIOLM_HOME`, or a home folder that cannot be determined, stops startup with an error instead of writing into the working directory.
+
+| Path | Contents |
+| --- | --- |
+| `config.json` | Configuration, settings profiles and sessions |
+| `mcp-servers.json` | MCP servers |
+| `models` | Default model folder |
+| `runtimes` | Managed runtimes |
+| `verification.json`, `verification` | Numerical verification records and overrides, the canary model and its baseline |
+| `benchmarks` | Benchmark journals, model identities and download receipts |
+| `cli` | CLI server state and log |
+| `downloads` | Transient downloads |
+
+The WebView profile (`%LOCALAPPDATA%\com.aiolm.desktop\EBWebView`) keeps interface preferences and browser storage. Credentials stay in the operating system's credential store.
+
+Earlier releases kept this data in `%APPDATA%\aiolm`, `%APPDATA%\com.aiolm.desktop` and `%LOCALAPPDATA%\aiolm`. At startup, after the import from the previous application, AioLM brings it into the data folder:
+
+| Earlier location | Data folder | Transfer |
+| --- | --- | --- |
+| `%APPDATA%\aiolm\config.json` | `config.json` | Copied |
+| `%APPDATA%\com.aiolm.desktop\mcp-servers.json` | `mcp-servers.json` | Copied; the previous application's file when AioLM has none |
+| `%APPDATA%\aiolm\verification.json` and `verification` | Same names | Copied |
+| `%APPDATA%\com.aiolm.desktop\benchmarks` | `benchmarks` | Copied |
+| `%APPDATA%\aiolm\runtimes` | `runtimes` | Moved |
+
+Each item is complete once it exists in the data folder. Existing data there takes priority and is never merged or replaced, and copies leave their originals in place. Runtimes can take gigabytes, so they are moved instead. A rename keeps every file's modification time, which verification records are keyed by; when the data folder is on another volume, runtimes are copied with their modification times and the original folder is removed afterwards. A server started from the earlier runtime folder blocks the move: stop it, including one started with `aiolm-cli server start`, and retry. Models are not moved, not even a model folder inside `%APPDATA%\aiolm`; the configuration keeps pointing at it.
+
+Transient downloads and CLI process state are not carried over. `aiolm-cli` still finds, reports and stops a server started before the upgrade through its earlier state file; its log is not shown until the server is restarted.
+
+An older release keeps reading the earlier locations. It shows the configuration as it was when the data folder was prepared and needs its runtimes installed again.
 
 ## Compatibility
 

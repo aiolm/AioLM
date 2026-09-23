@@ -8,11 +8,10 @@ use tauri::{Emitter, State};
 
 #[tauri::command]
 pub(crate) async fn benchmark_history_list(
-    app: tauri::AppHandle,
     offset: Option<usize>,
     limit: Option<usize>,
 ) -> Result<benchmark::store::HistoryPage, String> {
-    let root = benchmark::data_root(&app)?;
+    let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || {
         benchmark::store::list(&root, offset.unwrap_or(0), limit.unwrap_or(20))
     })
@@ -21,11 +20,8 @@ pub(crate) async fn benchmark_history_list(
 }
 
 #[tauri::command]
-pub(crate) async fn benchmark_history_import(
-    app: tauri::AppHandle,
-    records: Vec<Value>,
-) -> Result<usize, String> {
-    let root = benchmark::data_root(&app)?;
+pub(crate) async fn benchmark_history_import(records: Vec<Value>) -> Result<usize, String> {
+    let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || benchmark::store::import(&root, records))
         .await
         .map_err(|error| error.to_string())?
@@ -33,7 +29,6 @@ pub(crate) async fn benchmark_history_import(
 
 #[tauri::command]
 pub(crate) async fn benchmark_acknowledge_upload(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     run_id: String,
     receipt: benchmark::store::UploadReceipt,
@@ -42,7 +37,7 @@ pub(crate) async fn benchmark_acknowledge_upload(
         .operation
         .try_lock()
         .map_err(|_| "wait for the current operation before acknowledging a benchmark upload")?;
-    let root = benchmark::data_root(&app)?;
+    let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || benchmark::store::acknowledge(&root, &run_id, receipt))
         .await
         .map_err(|error| error.to_string())?
@@ -50,7 +45,6 @@ pub(crate) async fn benchmark_acknowledge_upload(
 
 #[tauri::command]
 pub(crate) async fn benchmark_identify_model(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
 ) -> Result<benchmark::identity::ModelIdentity, String> {
@@ -79,7 +73,7 @@ pub(crate) async fn benchmark_identify_model(
     {
         return Err("stop all model sessions before identifying a model".into());
     }
-    let root = benchmark::data_root(&app)?;
+    let root = benchmark::data_root()?;
     tokio::task::spawn_blocking(move || benchmark::identity::identify(&root, Path::new(&path)))
         .await
         .map_err(|error| error.to_string())?
@@ -144,7 +138,7 @@ pub(crate) async fn run_performance_bench(
     if let Err(error) = validation {
         return Ok(performance_bench::failed(&request, &cfg, error));
     }
-    let root = benchmark::data_root(&app)?;
+    let root = benchmark::data_root()?;
     // Revoke ephemeral sharing permits the moment a measurement owns the
     // operation lock, so publishing work overlapping this start is discarded.
     crate::benchmark::sharing::permits::note_measurement_start();

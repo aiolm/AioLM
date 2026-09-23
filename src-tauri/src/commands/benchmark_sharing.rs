@@ -24,17 +24,14 @@ use crate::state::AppState;
 use serde::Serialize;
 use std::future::Future;
 use std::path::PathBuf;
-use tauri::{Manager, State};
+use tauri::State;
 
 use futures_util::future::{AbortHandle, Abortable};
 
-fn benchmarks_root(app: &tauri::AppHandle) -> Result<PathBuf, SharingError> {
-    app.path()
-        .app_data_dir()
-        .map(|path| path.join("benchmarks"))
-        .map_err(|_| {
-            SharingError::vault_unavailable_msg("The local benchmark storage is unavailable.")
-        })
+fn benchmarks_root() -> Result<PathBuf, SharingError> {
+    crate::benchmark::data_root().map_err(|_| {
+        SharingError::vault_unavailable_msg("The local benchmark storage is unavailable.")
+    })
 }
 
 /// Configured service origin, failing closed with a structured error.
@@ -337,14 +334,13 @@ fn prepare_inner(
 
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_prepare(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
     body: String,
 ) -> Result<PrepareResponse, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let (_, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     tokio::task::spawn_blocking(move || {
         prepare_inner(&vault::OsVault, &benchmarks, &origin, &submission_id, &body).map(
             |prepared| PrepareResponse {
@@ -400,14 +396,13 @@ fn open_browser(url: &str) -> Result<(), SharingError> {
 
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_begin_verification(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
 ) -> Result<BeginResponse, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let live = snapshot_live(&submission_id);
     let (base, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     let (secret, binding) = tokio::task::spawn_blocking({
         let origin = origin.clone();
         let submission_id = submission_id.clone();
@@ -449,7 +444,6 @@ pub(crate) async fn benchmark_sharing_begin_verification(
 
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_poll_verification(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
     session_id: String,
@@ -457,7 +451,7 @@ pub(crate) async fn benchmark_sharing_poll_verification(
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let live = snapshot_live(&submission_id);
     let (base, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     let (secret, _) = tokio::task::spawn_blocking({
         let origin = origin.clone();
         let submission_id = submission_id.clone();
@@ -490,7 +484,6 @@ pub(crate) async fn benchmark_sharing_poll_verification(
 
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_submit(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
     body: String,
@@ -498,7 +491,7 @@ pub(crate) async fn benchmark_sharing_submit(
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let live = snapshot_live(&submission_id);
     let (base, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     let submission = submission_id.clone();
     let request_body = body.clone();
     let (secret, _) = tokio::task::spawn_blocking({
@@ -556,7 +549,6 @@ pub(crate) async fn benchmark_sharing_cancel(submission_id: String) -> Result<()
 /// independent of queue/history cache. Reads never mutate storage.
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_owned_list(
-    app: tauri::AppHandle,
     after: Option<String>,
     limit: Option<i64>,
 ) -> Result<OwnedListResponse, SharingError> {
@@ -564,7 +556,7 @@ pub(crate) async fn benchmark_sharing_owned_list(
         None => registry::DEFAULT_LIST_LIMIT,
         Some(value) => value.clamp(1, 100) as usize,
     };
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     let (items, next_cursor) = tokio::task::spawn_blocking(move || {
         registry::list_owned(&benchmarks, after.as_deref(), limit)
     })
@@ -604,14 +596,13 @@ fn default_recovery_name(submission_id: &str) -> String {
 
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_recovery_export(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
 ) -> Result<bool, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let live = snapshot_live(&submission_id);
     let (_, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     let contents = tokio::task::spawn_blocking({
         let origin = origin.clone();
         let submission_id = submission_id.clone();
@@ -738,7 +729,6 @@ fn import_path_inner(
 
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_recovery_import(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<ImportResponse>, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
@@ -752,7 +742,7 @@ pub(crate) async fn benchmark_sharing_recovery_import(
     .await
     .map_err(|_| join_error())?;
     let Some(path) = path else { return Ok(None) };
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     // Vault and registry writes are privileged: re-check liveness after the
     // dialog before touching them.
     if guard::measurement_active(&state) {
@@ -768,14 +758,13 @@ pub(crate) async fn benchmark_sharing_recovery_import(
 /// Copy the recovery string to the OS clipboard without handing the key to JS.
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_recovery_copy(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
 ) -> Result<bool, SharingError> {
     guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let live = snapshot_live(&submission_id);
     let (_, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     let contents = tokio::task::spawn_blocking({
         let origin = origin.clone();
         let submission_id = submission_id.clone();
@@ -800,13 +789,12 @@ pub(crate) async fn benchmark_sharing_recovery_copy(
 /// Open the fixed service management page. Carries no secret parameters.
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_open_management(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     submission_id: String,
 ) -> Result<(), SharingError> {
     let live = snapshot_live(&submission_id);
     let (_, origin) = service_origin()?;
-    let benchmarks = benchmarks_root(&app)?;
+    let benchmarks = benchmarks_root()?;
     tokio::task::spawn_blocking({
         let origin = origin.clone();
         let submission_id = submission_id.clone();

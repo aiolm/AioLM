@@ -40,6 +40,8 @@ $installer = Get-ChildItem -File "./AioLM_*_x64-setup.exe" | Select-Object -Firs
 
 AioLM — All-In-One LM与旧应用独立安装。首次启动会将原有设置、托管运行时、CLI数据和WebView配置复制到新的 `aiolm` / `com.aiolm.desktop` 目录。原始数据保留，已有AioLM数据优先。迁移前请关闭旧应用；解除锁定或释放磁盘空间后可重试。[迁移详情](../reference/migration.md)。
 
+AioLM将数据保存在 `%USERPROFILE%\.aiolm`，也可以通过环境变量 `AIOLM_HOME` 指定其他文件夹。早期AioLM版本的数据会在启动时导入该文件夹，托管运行时会被移动而非复制。参见[数据文件夹](../reference/migration.md#data-folder)。
+
 ## Linux / macOS (计划中)
 
 计划提供 `curl | tar` 分发。tar 路径无需 OS 签名。详见 [overview.zh.md](overview.zh.md#平台支持)。

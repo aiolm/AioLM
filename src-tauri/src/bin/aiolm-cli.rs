@@ -43,15 +43,38 @@ impl Drop for CommandLock {
 }
 
 fn state_path() -> PathBuf {
-    let root = env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    root.join("aiolm").join("headless-state.json")
+    aiolm_lib::home::aiolm_home()
+        .join("cli")
+        .join("headless-state.json")
+}
+
+/// The current location, followed by where releases before the `.aiolm` data
+/// folder kept the state. A server such a release started keeps running
+/// across the upgrade and must still be found, reported and stopped.
+fn state_paths() -> Vec<PathBuf> {
+    let previous = env::var_os("LOCALAPPDATA").map(|root| {
+        PathBuf::from(root)
+            .join("aiolm")
+            .join("headless-state.json")
+    });
+    std::iter::once(state_path()).chain(previous).collect()
 }
 
 fn read_state() -> Result<Option<HeadlessState>, String> {
-    let path = state_path();
-    let metadata = match fs::symlink_metadata(&path) {
+    read_first_state(&state_paths())
+}
+
+fn read_first_state(paths: &[PathBuf]) -> Result<Option<HeadlessState>, String> {
+    for path in paths {
+        if let Some(state) = read_state_at(path)? {
+            return Ok(Some(state));
+        }
+    }
+    Ok(None)
+}
+
+fn read_state_at(path: &Path) -> Result<Option<HeadlessState>, String> {
+    let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -72,7 +95,7 @@ fn read_state() -> Result<Option<HeadlessState>, String> {
             "headless state exceeds {MAX_HEADLESS_STATE_BYTES} bytes"
         ));
     }
-    let file = fs::File::open(&path)
+    let file = fs::File::open(path)
         .map_err(|error| format!("cannot read headless state {}: {error}", path.display()))?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_HEADLESS_STATE_BYTES + 1)
@@ -128,7 +151,9 @@ fn write_state(state: &HeadlessState) -> Result<(), String> {
 }
 
 fn remove_state() {
-    let _ = fs::remove_file(state_path());
+    for path in state_paths() {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn log_path() -> PathBuf {
@@ -1149,5 +1174,31 @@ mod tests {
         let retained = bounded_log_bytes(b"old", &[b'x'; MAX_HEADLESS_LOG_BYTES + 3]);
         assert_eq!(retained.len(), MAX_HEADLESS_LOG_BYTES);
         assert!(retained.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[test]
+    fn a_server_started_before_the_data_folder_moved_is_still_found() {
+        let root = env::temp_dir().join(format!("aiolm-cli-state-{}", uuid::Uuid::new_v4()));
+        let current = root.join("home").join("cli").join("headless-state.json");
+        let previous = root.join("Local").join("aiolm").join("headless-state.json");
+        let state = |pid| HeadlessState {
+            pid,
+            url: "http://127.0.0.1:8080/v1".into(),
+            model: "model.gguf".into(),
+            started_at: 1,
+            executable: String::new(),
+            log_path: String::new(),
+        };
+        let paths = [current.clone(), previous.clone()];
+        assert!(read_first_state(&paths).unwrap().is_none());
+
+        fs::create_dir_all(previous.parent().unwrap()).unwrap();
+        fs::write(&previous, serde_json::to_vec(&state(7)).unwrap()).unwrap();
+        assert_eq!(read_first_state(&paths).unwrap().unwrap().pid, 7);
+
+        fs::create_dir_all(current.parent().unwrap()).unwrap();
+        fs::write(&current, serde_json::to_vec(&state(9)).unwrap()).unwrap();
+        assert_eq!(read_first_state(&paths).unwrap().unwrap().pid, 9);
+        fs::remove_dir_all(root).unwrap();
     }
 }

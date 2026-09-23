@@ -40,6 +40,8 @@ Release page: <https://github.com/aiolm/AioLM/releases/latest>
 
 AioLM — All-In-One LM installs separately from the previous application. On first launch it copies the previous configuration, managed runtimes, CLI storage and WebView profile into the new `aiolm` / `com.aiolm.desktop` locations. Original data stays intact; existing AioLM data takes priority. Close the previous app before migration and retry if a profile is locked or disk space is insufficient. See [migration details](../reference/migration.md).
 
+AioLM keeps its data in `%USERPROFILE%\.aiolm`, or in the folder named by the `AIOLM_HOME` environment variable. Data from earlier AioLM releases is brought there at startup; managed runtimes are moved rather than copied. See [data folder](../reference/migration.md#data-folder).
+
 ## Update from the app
 
 AioLM checks its public GitHub release metadata once each time the desktop app starts. A newer stable version appears in a dismissible notification; **View update** opens **Settings → General → Application updates**. You can also use **Check for updates** there at any time. A failed startup check does not interrupt normal use; settings shows the error and allows another check.

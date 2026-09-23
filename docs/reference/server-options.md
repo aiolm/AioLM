@@ -37,7 +37,7 @@ Two more upstream changes keep the older spelling working, so saved arguments co
 Each runtime's own `--help` remains authoritative. To check one installed runtime for options it no longer accepts:
 
 ```powershell
-& (Join-Path $env:APPDATA 'aiolm\runtimes\<build>-<backend>\llama-server.exe') --help |
+& (Join-Path $HOME '.aiolm\runtimes\<build>-<backend>\llama-server.exe') --help |
   Select-String -Pattern 'DEPRECATED' -Context 0,2
 ```
 

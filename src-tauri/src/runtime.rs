@@ -710,7 +710,7 @@ fn sweep_orphaned_work_in(download_root: &Path, runtime_root: &Path, now: System
 /// are intentionally ignored; managed runtimes and user directories are not
 /// touched by the exact-name allowlists above.
 pub fn sweep_orphaned_work() {
-    let download_root = app_data_root().join("aiolm").join("downloads");
+    let download_root = crate::home::aiolm_home().join("downloads");
     let runtime_root = runtimes_root();
     sweep_orphaned_work_in(&download_root, &runtime_root, SystemTime::now());
 }
@@ -776,30 +776,8 @@ struct PullRequestDetail {
     user: Option<PullRequestUser>,
 }
 
-fn app_data_root() -> PathBuf {
-    #[cfg(windows)]
-    {
-        PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into()))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-            .join("Library")
-            .join("Application Support");
-    }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
-    {
-        if let Ok(path) = std::env::var("XDG_DATA_HOME") {
-            return PathBuf::from(path);
-        }
-        return PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-            .join(".local")
-            .join("share");
-    }
-}
-
 pub fn runtimes_root() -> PathBuf {
-    app_data_root().join("aiolm").join("runtimes")
+    crate::home::aiolm_home().join("runtimes")
 }
 
 pub fn validate_runtime_identifiers(backend: &str, build: &str) -> Result<(), String> {
@@ -4560,7 +4538,7 @@ pub async fn install_with(
     let companions = companion_assets(build, &info.file_name).await?;
 
     let root = runtimes_root();
-    let download_root = app_data_root().join("aiolm").join("downloads");
+    let download_root = crate::home::aiolm_home().join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     let nonce = short_nonce();
@@ -4724,7 +4702,7 @@ async fn install_pr_artifact_with(
     cancel: Arc<AtomicBool>,
 ) -> Result<InstalledRuntime, String> {
     let root = runtimes_root();
-    let download_root = app_data_root().join("aiolm").join("downloads");
+    let download_root = crate::home::aiolm_home().join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     if let Some(error) = free_space_error(
@@ -4828,7 +4806,7 @@ pub async fn install_pr_with(
     })?;
 
     let root = runtimes_root();
-    let download_root = app_data_root().join("aiolm").join("downloads");
+    let download_root = crate::home::aiolm_home().join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     // Checked before the first byte is downloaded. Running out of disk halfway
@@ -9334,7 +9312,7 @@ mod tests {
     }
 
     /// This is intentionally opt-in and ignored: it copies the locally
-    /// installed multi-GB ROCm PR runtime into an isolated APPDATA tree, then
+    /// installed multi-GB ROCm PR runtime into an isolated data folder, then
     /// exercises the same export/import path a second PC uses.
     #[cfg(windows)]
     #[tokio::test]
@@ -9347,28 +9325,20 @@ mod tests {
         {
             return;
         }
-        let Some(original_appdata) = std::env::var_os("APPDATA") else {
-            return;
-        };
-        let installed = PathBuf::from(&original_appdata)
-            .join("aiolm")
-            .join("runtimes")
-            .join("pr27342-rocm");
+        let installed = runtimes_root().join("pr27342-rocm");
         if !installed.is_dir() {
             return;
         }
-        let isolated_appdata = test_directory("live-bundle-appdata");
-        let isolated_runtime = isolated_appdata
-            .join("aiolm")
-            .join("runtimes")
-            .join("pr27342-rocm");
+        let original_home = std::env::var_os("AIOLM_HOME");
+        let isolated_home = test_directory("live-bundle-home");
+        let isolated_runtime = isolated_home.join("runtimes").join("pr27342-rocm");
         fs::create_dir_all(isolated_runtime.parent().expect("runtime parent"))
             .expect("create isolated runtime parent");
         let cancel = Arc::new(AtomicBool::new(false));
         copy_runtime_tree(&installed, &isolated_runtime, &cancel).expect("copy live runtime");
-        std::env::set_var("APPDATA", &isolated_appdata);
+        std::env::set_var("AIOLM_HOME", &isolated_home);
         let progress: ProgressSink = &|_, _, _| {};
-        let archive = isolated_appdata.join("pr27342-rocm-portable.zip");
+        let archive = isolated_home.join("pr27342-rocm-portable.zip");
         let _result = async {
             let exported = export_bundle(&archive, "rocm", "pr27342", progress, &cancel)
                 .expect("export live ROCm runtime");
@@ -9384,29 +9354,32 @@ mod tests {
             assert!(isolated_runtime.join("vcomp140.dll").is_file());
         }
         .await;
-        std::env::set_var("APPDATA", original_appdata);
-        let _ = fs::remove_dir_all(isolated_appdata);
+        match original_home {
+            Some(home) => std::env::set_var("AIOLM_HOME", home),
+            None => std::env::remove_var("AIOLM_HOME"),
+        }
+        let _ = fs::remove_dir_all(isolated_home);
     }
 
-    /// Explicit real-environment check: the caller supplies an empty APPDATA
-    /// sandbox, an engine directory, an SDK and the pinned canary weights.
+    /// Explicit real-environment check: the caller supplies an empty data
+    /// folder, an engine directory, an SDK and the pinned canary weights.
     /// The resulting portable bundle is kept there for inspection/import.
     #[cfg(windows)]
     #[tokio::test]
-    #[ignore = "requires a ROCm SDK, two GPUs and an isolated APPDATA directory"]
+    #[ignore = "requires a ROCm SDK, two GPUs and an isolated AIOLM_HOME directory"]
     async fn live_rocm_sdk_bundle_passes_dual_gpu_verification() {
         let input = |name: &str| PathBuf::from(std::env::var_os(name).expect(name));
         let engine = input("AIOLM_LIVE_ROCM_ENGINE");
         let sdk = input("AIOLM_LIVE_ROCM_SDK");
         let canary = input("AIOLM_LIVE_ROCM_CANARY");
-        let isolated = input("AIOLM_LIVE_ROCM_APPDATA");
+        let isolated = input("AIOLM_LIVE_ROCM_HOME");
         assert_eq!(
-            std::env::var_os("APPDATA"),
+            std::env::var_os("AIOLM_HOME"),
             Some(isolated.clone().into_os_string())
         );
         assert!(
-            !isolated.join("aiolm").exists(),
-            "use an empty test APPDATA"
+            fs::read_dir(&isolated).map_or(true, |mut entries| entries.next().is_none()),
+            "use an empty test AIOLM_HOME"
         );
         let build = "local_rocm_verified";
         let destination = runtime_dir("rocm", build).unwrap();
@@ -9437,7 +9410,7 @@ mod tests {
             .unwrap()
             .expect("engine version");
         write_version_manifest(&destination, &version);
-        let verification = isolated.join("aiolm/verification");
+        let verification = isolated.join("verification");
         fs::create_dir_all(&verification).unwrap();
         fs::copy(canary, verification.join("stories15M-q4_0.gguf")).unwrap();
         let cfg = crate::config::AppConfig {
