@@ -64,6 +64,20 @@ function controlledStream() {
 }
 
 describe("request-scoped response metrics", () => {
+  it("retains the request model when the selected model changes during generation", async () => {
+    const stream = controlledStream();
+    const options = { model: "Qwen-example.gguf" };
+    const { result, rerender } = setup(options);
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    expect(result.current.msgs.at(-1)?.model).toBe("Qwen-example.gguf");
+    options.model = "gemma-example.gguf";
+    rerender();
+    stream.emit({ content: "Answer" });
+    await stream.finish("Answer");
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Answer", model: "Qwen-example.gguf" });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     now = 1000;

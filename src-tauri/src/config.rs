@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub mod execution;
 pub mod profiles;
 
-const CURRENT_CONFIG_VERSION: u32 = 11;
+const CURRENT_CONFIG_VERSION: u32 = 12;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
@@ -975,17 +975,21 @@ fn migrate_with_presence(
         // type default, so a config written before either existed migrates
         // for free through the container-level `#[serde(default)]` on
         // `AppConfig` itself; no per-field repair is needed here.
-        2..=10 => {}
+        2..=11 => {}
         CURRENT_CONFIG_VERSION => {}
         _ => unreachable!("future config versions are rejected above"),
     }
     migrate_server_args(&mut cfg, raw);
     cfg.normalize();
+    // Profiles written before schema 12 did not own the runtime pair, so they
+    // carry no runtime to apply and have to adopt the one they last ran on.
+    let adopt_runtimes = cfg.config_version < 12;
     if let Some(raw) = raw {
         profiles::initialize_profiles(
             &mut cfg,
             raw.get("settings_profiles")
                 .is_some_and(|value| !value.is_null()),
+            adopt_runtimes,
         )?;
     } else if cfg.settings_profiles.is_none() {
         cfg.settings_profiles = Some(profiles::SettingsProfileLibrary::default());
@@ -1282,7 +1286,7 @@ mod tests {
             "sessions": [{"id":"legacy","models":{"primary_model":"model.gguf"}}]
         }))
         .unwrap();
-        assert_eq!(cfg.config_version, 11);
+        assert_eq!(cfg.config_version, CURRENT_CONFIG_VERSION);
         assert!(cfg.sessions[0].execution.is_none());
         let migrated = migrate_value(serde_json::json!({
             "config_version":11,

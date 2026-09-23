@@ -46,7 +46,8 @@ describe('native benchmark history UI', () => {
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [recovered], total: 2, next_offset: null, warnings: ['Stored file could not be read'] });
     renderPanel();
     const history = await screen.findByRole('combobox', { name: 'Result history' });
-    fireEvent.change(history, { target: { value: 'recovered' } });
+    fireEvent.click(history);
+    fireEvent.click(screen.getByRole('option', { name: /recovered.gguf/ }));
     expect(screen.getByText('Recovered interrupted run')).toBeInTheDocument();
     expect(screen.getByText(/Some records could not be read/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Review public result' })).toBeEnabled();
@@ -59,6 +60,7 @@ describe('native benchmark history UI', () => {
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Load older results' }));
     await waitFor(() => expect(repository.loadBenchmarkHistoryPage).toHaveBeenCalledWith(1));
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Result history' }));
     expect(await screen.findByRole('option', { name: /older.gguf/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load older results' })).not.toBeInTheDocument();
   });
@@ -66,7 +68,8 @@ describe('native benchmark history UI', () => {
   it('distinguishes a website-owned result from an unacknowledged local copy', async () => {
     vi.mocked(repository.initializeBenchmarkHistory).mockResolvedValue({ records: [{ ...recovered, localState: 'cached' }], total: 1, next_offset: null });
     renderPanel();
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Result history' }), { target: { value: 'recovered' } });
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Result history' }));
+    fireEvent.click(screen.getByRole('option', { name: /recovered.gguf/ }));
     expect(screen.getByText('Saved on the website · local copy')).toBeInTheDocument();
     expect(screen.getByText(/Existing and unuploaded records are retained/)).toBeInTheDocument();
     expect(screen.queryByText('Stored on this device')).not.toBeInTheDocument();

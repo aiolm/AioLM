@@ -4,7 +4,7 @@ import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
 import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
-import type { ModelProfile } from "../profiles/modelProfiles";
+import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
 import { usesRuntimeDefault } from "../../shared/config/tuningDefaults";
 import type { AppPreferences } from "../../shared/config/preferences";
@@ -223,10 +223,10 @@ export function useChatSend({
         const last = current[current.length - 1];
         const replaceAssistant = (retry || toolFollowup) && last?.role === "assistant";
         const withoutDanglingAssistant = replaceAssistant ? current.slice(0, -1) : current;
-        if (toolFollowup) return [...withoutDanglingAssistant, { role: "assistant" as const, content: "", reasoning: "" }];
+        if (toolFollowup) return [...withoutDanglingAssistant, { role: "assistant" as const, content: "", reasoning: "", model: turn.model }];
         const previous = withoutDanglingAssistant[withoutDanglingAssistant.length - 1];
         const hasUserBubble = previous?.role === "user" && previous.content === text && sameImages(previous.images, images) && sameDocuments(previous.documents, pendingDocuments);
-        return [...withoutDanglingAssistant, ...(hasUserBubble ? [] : [{ role: "user" as const, content: text, images, documents: pendingDocuments }]), { role: "assistant" as const, content: "", reasoning: "" }];
+        return [...withoutDanglingAssistant, ...(hasUserBubble ? [] : [{ role: "user" as const, content: text, images, documents: pendingDocuments }]), { role: "assistant" as const, content: "", reasoning: "", model: turn.model }];
       });
       assistantAppended = true;
       const sampling = {

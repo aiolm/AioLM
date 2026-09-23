@@ -8,14 +8,58 @@ use tauri::State;
 
 /// What a model file's own header says about it.
 ///
-/// Read for one selected model rather than during a folder scan: the answer is
-/// only needed once the editor is open on it, and opening every file in a large
-/// library to collect it would make the listing crawl.
+/// Read on demand for selected or visible models, separately from folder scans,
+/// so opening a large library does not require reading every file's header.
 #[tauri::command]
-pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, String> {
-    tokio::task::spawn_blocking(move || gguf::read_metadata(Path::new(&path)))
-        .await
-        .map_err(|error| format!("model metadata task failed: {error}"))?
+pub(crate) async fn model_metadata(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<gguf::ModelMetadata, String> {
+    let receipt_root = crate::benchmark::data_root(&app).ok();
+    tokio::task::spawn_blocking(move || {
+        let models_root = config::load_result()
+            .ok()
+            .map(|cfg| PathBuf::from(cfg.models_dir));
+        read_model_metadata(
+            Path::new(&path),
+            receipt_root.as_deref(),
+            models_root.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("model metadata task failed: {error}"))?
+}
+
+fn read_model_metadata(
+    path: &Path,
+    receipt_root: Option<&Path>,
+    models_root: Option<&Path>,
+) -> Result<gguf::ModelMetadata, String> {
+    let mut metadata = gguf::read_metadata(path)?;
+    metadata.download_repository = receipt_root
+        .and_then(|root| crate::benchmark::download_receipt::read(root, path))
+        .map(|receipt| receipt.repository);
+    metadata.directory_repository = models_root.and_then(|root| directory_repository(root, path));
+    Ok(metadata)
+}
+
+/// Import libraries preserve repository identity as root/publisher/model/file.
+/// Resolve both paths before interpreting only components inside the library.
+fn directory_repository(root: &Path, path: &Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    let relative = path.strip_prefix(root).ok()?;
+    let parts: Vec<_> = relative
+        .iter()
+        .map(|part| part.to_str())
+        .collect::<Option<_>>()?;
+    let repo = match parts.as_slice() {
+        ["hf", owner, model, ..] if parts.len() >= 4 => format!("{owner}/{model}"),
+        [owner, model, _file] => format!("{owner}/{model}"),
+        _ => return None,
+    };
+    crate::discover::validate_repo_id(&repo).ok()?;
+    Some(repo)
 }
 
 #[tauri::command]
@@ -291,6 +335,85 @@ pub fn deletable_model_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_model_publisher_comes_from_repository_folders_inside_library() {
+        let root = std::env::temp_dir().join(format!("aiolm-import-{}", uuid::Uuid::new_v4()));
+        let mut header = b"GGUF".to_vec();
+        header.extend_from_slice(&3u32.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        for (relative, expected) in [
+            (
+                "community-publisher/example-GGUF/model.gguf",
+                Some("community-publisher/example-GGUF"),
+            ),
+            (
+                "ExamplePublisher/example-GGUF/mmproj.gguf",
+                Some("ExamplePublisher/example-GGUF"),
+            ),
+            ("hf/example/model/quant/model.gguf", Some("example/model")),
+            ("model.gguf", None),
+            ("quant/model.gguf", None),
+            ("arbitrary/nested/folders/model.gguf", None),
+            ("invalid owner/model/file.gguf", None),
+        ] {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &header).unwrap();
+            let metadata = super::read_model_metadata(&path, None, Some(&root)).unwrap();
+            assert_eq!(
+                metadata.directory_repository.as_deref(),
+                expected,
+                "{relative}"
+            );
+            assert!(metadata.download_repository.is_none());
+        }
+        let narrower_root = root.join("community-publisher");
+        assert!(super::directory_repository(
+            &narrower_root,
+            &root.join("ExamplePublisher/example-GGUF/mmproj.gguf")
+        )
+        .is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_publisher_uses_only_a_receipt_for_the_current_file() {
+        let root = std::env::temp_dir().join(format!("aiolm-publisher-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("example.gguf");
+        let mut header = b"GGUF".to_vec();
+        header.extend_from_slice(&3u32.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        std::fs::write(&path, &header).unwrap();
+        assert!(super::read_model_metadata(&path, Some(&root), None)
+            .unwrap()
+            .download_repository
+            .is_none());
+        crate::benchmark::download_receipt::record(
+            &root,
+            &path,
+            "example-publisher/example-model",
+            "example.gguf",
+        )
+        .unwrap();
+        assert_eq!(
+            super::read_model_metadata(&path, Some(&root), None)
+                .unwrap()
+                .download_repository
+                .as_deref(),
+            Some("example-publisher/example-model")
+        );
+        header.extend_from_slice(b"replacement");
+        std::fs::write(&path, &header).unwrap();
+        assert!(super::read_model_metadata(&path, Some(&root), None)
+            .unwrap()
+            .download_repository
+            .is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
 
     #[test]

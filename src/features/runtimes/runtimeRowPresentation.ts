@@ -51,10 +51,16 @@ export function reasonText(locale: Locale, suitability?: api.BackendSuitability)
   return translate(locale, `ui.${key}`, { device: suitability.device ?? "" });
 }
 
-export function stateOf(locale: Locale, row: BackendRow, activeBackend: string, activeBuild: string): { label: string; cls: string } {
+/**
+ * What a backend row is, as installation state alone.
+ *
+ * Which runtime a model launches with belongs to its profile, so no row is
+ * singled out as the one in use: profiles can name several installed builds at
+ * once, and calling one of them the active runtime described none of them.
+ */
+export function stateOf(locale: Locale, row: BackendRow): { label: string; cls: string } {
   if (row.busy) return { label: translate(locale, "ui.runtimeInstalling"), cls: "bg-warning-soft/60 text-warning" };
-  const active = activeBackend === row.backend && activeBuild !== "";
-  if (row.installed.length === 0) return { label: active ? translate(locale, "ui.runtimeActiveSystem") : translate(locale, "ui.none"), cls: "app-bg-muted text-muted" };
-  if (row.latest && row.installed.some((item) => item.build === row.latest?.build)) return { label: active ? translate(locale, "ui.runtimeActiveUpToDate") : translate(locale, "ui.runtimeUpToDate"), cls: "bg-success-soft/60 text-success" };
-  return { label: active ? translate(locale, "ui.active") : row.latest ? translate(locale, "ui.runtimeUpdateAvailable") : translate(locale, "ui.runtimeInstalled"), cls: active ? "bg-success-soft/60 text-success" : "app-bg-elevated text-ink" };
+  if (row.installed.length === 0) return { label: translate(locale, "ui.none"), cls: "app-bg-muted text-muted" };
+  if (row.latest && row.installed.some((item) => item.build === row.latest?.build)) return { label: translate(locale, "ui.runtimeUpToDate"), cls: "bg-success-soft/60 text-success" };
+  return { label: row.latest ? translate(locale, "ui.runtimeUpdateAvailable") : translate(locale, "ui.runtimeInstalled"), cls: "app-bg-elevated text-ink" };
 }

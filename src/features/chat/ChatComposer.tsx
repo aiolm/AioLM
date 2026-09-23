@@ -1,3 +1,5 @@
+import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelIcon from '../../shared/ui/ModelIcon';
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import StableLabel from "../../shared/ui/StableLabel";
 import PanelFeedback from "../../shared/ui/PanelFeedback";
@@ -99,7 +101,7 @@ export default function ChatComposer({
       </div>
 
       <div tabIndex={0} className="chat-composer-status text-xs ui-color-faint" >
-        <span className="min-w-0 app-text-wrap tabular-nums" title={displayModel}>{model ? displayModel : ct("empty")}</span>
+        <span className="min-w-0 app-text-wrap tabular-nums" title={displayModel}><ModelIcon model={model} />{model ? displayModel : ct("empty")}<ModelBadges model={model} localPath={model} /></span>
         <div className="chat-status-actions">
         <span className="shrink-0 tabular-nums" role="status" aria-live="polite"><StableLabel value={conversationStatus} labels={statusLabels} /></span>
         </div>

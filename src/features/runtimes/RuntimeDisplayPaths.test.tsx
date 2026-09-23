@@ -48,11 +48,11 @@ describe("runtime path presentation", () => {
       devices: [`plugin ${path}`], diagnostics: [`Failed to open ${path}`, JSON.stringify({ path: networkPath })],
     };
     const original = structuredClone(capabilities);
-    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} probeBusy={false} serverRunning={false} activeBackend="cpu" activeBuild="b123" onProbe={vi.fn()} />);
+    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} probeBusy={false} serverRunning={false} probeTarget={{ backend: "cpu", build: "b123" }} onProbe={vi.fn()} />);
 
     fireEvent.click(container.querySelector("summary")!);
     expect(container.querySelector("pre")).toHaveTextContent(String.raw`Failed to open C:\runtimes\llama-server.exe`);
-    expect(screen.getByTitle(`--model=${displayNetworkPath}`)).toHaveTextContent(`--model=${displayNetworkPath}`);
+    expect(screen.getByText(`--model=${displayNetworkPath}`)).toBeInTheDocument();
     expectReadableMarkup(container);
     expect(capabilities).toEqual(original);
   });

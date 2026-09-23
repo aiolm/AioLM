@@ -1,3 +1,5 @@
+import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelIcon from '../../shared/ui/ModelIcon';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -452,7 +454,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 className="models-model-name min-w-0 flex-1 rounded-lg px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"
 
               >
-                <span className="block app-text-wrap text-sm font-medium ui-color-ink" >{displayName}</span>
+                <span className="block app-text-wrap text-sm font-medium ui-color-ink" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges model={model.name} localPath={model.path} />
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
               <div className="models-model-actions flex min-w-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto px-1">

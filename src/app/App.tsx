@@ -1,3 +1,4 @@
+import ModelIcon from '../shared/ui/ModelIcon';
 import StableLabel from "../shared/ui/StableLabel";
 import { version } from '../../package.json';
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -231,7 +232,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{shortModel(liveModel, modelCopy.choose)}</button><button type="button" className="aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel ? `${backendLabel} · ` : ''}⚙</button></div>
+        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}><ModelIcon model={liveModel ?? ''} />{shortModel(liveModel, modelCopy.choose)}</button><button type="button" className="aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel ? `${backendLabel} · ` : ''}⚙</button></div>
         <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span>{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
@@ -255,7 +256,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
-          {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} managementOnly /></>)}
+          {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} /></>)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>

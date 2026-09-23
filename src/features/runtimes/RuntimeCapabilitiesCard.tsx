@@ -12,14 +12,14 @@ interface Props {
   probeBusy: boolean;
   runtimeBusy?: boolean;
   serverRunning: boolean;
-  activeBackend: string;
-  activeBuild: string;
+  /** The build the shown capabilities describe, and the one a re-probe reads. */
+  probeTarget: { backend: string; build: string } | null;
   onProbe: () => void;
   /** The opt-in deep check of this runtime against the selected model. */
   deepVerify?: { busy: boolean; record: { verdict: string; detail: string } | null; error: string | null; start: () => void; cancel: () => void };
 }
 
-export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, activeBackend, activeBuild, onProbe, deepVerify }: Props) {
+export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, probeTarget, onProbe, deepVerify }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   return (
@@ -29,7 +29,7 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
           <h2 id="runtime-capabilities-heading" className="app-section-title">{t("section.runtimes")}</h2>
           <p className="app-section-hint">{t("ui.probeHint")}</p>
         </div>
-        <button type="button" onClick={onProbe} disabled={probeBusy || runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeRuntime")} labels={[t("ui.probing"), t("ui.probeRuntime")]} /></button>
+        <button type="button" onClick={onProbe} disabled={!probeTarget || probeBusy || runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeAgain")} labels={[t("ui.probing"), t("ui.probeAgain")]} /></button>
       </div>
       {deepVerify && <div className="runtime-deep-verify">
         <p className="app-section-hint">{t("ui.deepVerifyHint")}</p>
@@ -42,12 +42,12 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
         {deepVerify.record && <p className="app-section-hint">{normalizeDisplayText(deepVerify.record.detail)}</p>}
         {deepVerify.error && <p className="text-error" role="alert">{normalizeDisplayText(deepVerify.error)}</p>}
       </div>}
-      {!capabilities && <p className="mt-3 text-xs ui-color-faint" >{activeBackend && activeBuild ? t("ui.probeReady", { backend: activeBackend, build: buildNumber(activeBuild) }) : t("ui.probeNoRuntime")}</p>}
+      <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: buildNumber(probeTarget.build) }) : t("ui.probeChooseBuild")}</p>
       {capabilities && (
         <div className="mt-3.5 grid gap-2.5 app-summary-grid">
           <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeState")}</div><div className={["mt-1 text-xs font-semibold", (capabilities.state === "available" ? "ui-color-success" : "ui-color-warning")].filter(Boolean).join(" ")} >{capabilityLabel(capabilities.state)}</div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {capabilities.build}</div></div>
           <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 max-h-20 overflow-auto whitespace-pre-wrap break-words font-mono text-xs ui-color-ink" >{normalizeDisplayText(capabilities.version || t("ui.notReported"))}</div></div>
-          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 app-text-wrap font-mono text-xs ui-color-faint"  title={displayFlags}>{displayFlags || t("ui.none")}</div></div>
+          <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 max-h-20 overflow-auto app-text-wrap font-mono text-xs ui-color-faint" >{displayFlags || t("ui.none")}</div></div>
           <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: capabilities.devices.length })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>
           <div className="rounded-lg border p-3 ui-border-color-border ui-background-mono-bg" ><div className="app-eyebrow">{t("ui.probeBench")}</div><div className={["mt-1 text-xs font-semibold", (capabilities.bench_available ? "ui-color-success" : "ui-color-warning")].filter(Boolean).join(" ")} >{capabilities.bench_available ? t("ui.benchAvailable") : t("ui.benchMissing")}</div><div className="mt-1 text-xs ui-color-faint" >llama-bench --help</div></div>
         </div>

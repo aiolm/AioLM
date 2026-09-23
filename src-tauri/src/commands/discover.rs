@@ -3,6 +3,14 @@ use crate::{config, discover, state::AppState};
 use std::sync::atomic::Ordering;
 use tauri::State;
 
+/// Open only validated Hugging Face repositories in the system browser.
+#[tauri::command]
+pub(crate) async fn hf_open_model_card(repo_id: String) -> Result<(), String> {
+    discover::validate_repo_id(&repo_id)?;
+    open::that(format!("https://huggingface.co/{}", repo_id.trim()))
+        .map_err(|error| format!("The model card could not be opened: {error}"))
+}
+
 /// Discover's listing. `query` may be empty — the panel opens on the catalog
 /// before anything is typed — and `sort` picks the order the API ranks it in.
 #[tauri::command]

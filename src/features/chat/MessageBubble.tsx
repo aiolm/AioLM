@@ -2,7 +2,8 @@ import { memo } from "react";
 import type { ChatHistoryMessage } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
-import { normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import ModelIcon from "../../shared/ui/ModelIcon";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import ChatMarkdown from "./ChatMarkdown";
 import ResponseMetrics from "./ResponseMetrics";
@@ -68,6 +69,13 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{text("partialFailed")}</div>}
         </div>
+        {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">
+          {message.model && <ModelIcon model={message.model} />}
+          <span className="min-w-0 break-all">
+            <span className="sr-only">{translate(locale, "ui.responseModel")}: </span>
+            {message.model ? modelDisplayName(message.model) : translate(locale, "ui.responseModelUnknown")}
+          </span>
+        </div>}
         {/* One closing row for the answer: measurements along the left, the copy
             action at the right edge. The button is shown outright rather than
             revealed on hover, because hidden it still reserved a row of its own

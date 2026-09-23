@@ -25,6 +25,7 @@ export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "dow
 export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: string) =>
   invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
 export const hfModelFiles = (repoId: string) => invoke<HfFile[]>("hf_model_files", { repoId });
+export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
 export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string) =>
   invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir });
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");

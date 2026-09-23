@@ -71,8 +71,23 @@ export interface GgufModel {
 
 /** What a GGUF file's own header states about the model. */
 export interface ModelMetadata {
+  download_repository?: string;
+  directory_repository?: string;
+  author?: string;
+  organization?: string;
+  quantized_by?: string;
+  repo_url?: string;
   context_length?: number;
   architecture?: string;
+  size_label?: string;
+  quantization?: string;
+  model_type?: string;
+  finetune?: string;
+  license?: string;
+  tags?: string[];
+  languages?: string[];
+  expert_count?: number;
+  expert_used_count?: number;
 }
 
 export interface ModelScanResult {

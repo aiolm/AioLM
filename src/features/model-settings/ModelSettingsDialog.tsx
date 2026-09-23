@@ -1,3 +1,5 @@
+import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelIcon from '../../shared/ui/ModelIcon';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
 import { executionConfig, executionSettings, serverSettingsChanged, type ExecutionSettings } from '../../shared/config/executionSettings';
@@ -24,7 +26,7 @@ import { profileDisplayName } from '../../shared/i18n/profileNames';
 import { resetProfileSettings } from './profileResetState';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { useModelCatalog } from './useModelCatalog';
-import { useModelContextLimit } from './useModelContextLimit';
+import { useSelectedModelMetadata } from './useModelContextLimit';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
 import { formatMebibytes } from '../../shared/lib/units';
@@ -96,7 +98,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const invoker = useRef<HTMLElement | null>(null);
   const runtime = useServerOptions(cfg.active_backend, cfg.active_build, open);
   const catalog = useModelCatalog(initialConfig.models_dir, open);
-  const contextLimit = useModelContextLimit(cfg.active_model, open);
+  const selectedMetadata = useSelectedModelMetadata(cfg.active_model, open);
+  const contextLimit = selectedMetadata?.context_length;
   const disabled = busy || applying;
   const benchmark = mode === 'benchmark';
   const profiles = useProfileEditor(initialConfig, cfg, initialApplication ?? appliedProfile(initialConfig, sessionId), benchmark, entry => profileDisplayName(entry, locale));
@@ -271,8 +274,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   });
   const editorKey = `${cfg.active_model}:${editorRevision}`;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
-    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), disabled: !!model.shards?.missing.length })),
-      ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]) }] : [])]} onChange={value => change({ [key]: value })} />
+    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
+      ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]), icon: <ModelIcon model={cfg[key]} /> }] : [])]} onChange={value => change({ [key]: value })} />
     <input className="app-input" aria-label={`${label} — ${copy.path}`} aria-describedby={`${id}-${key}-help`} value={normalizeDisplayPath(cfg[key])} disabled={disabled} onChange={event => change({ [key]: restoreDisplayPath(cfg[key], event.target.value) })} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
   </label>;
@@ -289,7 +292,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     onCancel={event => { event.preventDefault(); if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) setPending(null); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell">
-        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}>{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p></div>
+        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p><ModelBadges model={cfg.active_model} metadata={selectedMetadata} /></div>
           <button type="button" className="app-button app-button--ghost" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}>×</button></header>
         <div className="model-settings-layout" inert={!!pending || confirmSave || disabled}>
           <nav className="model-settings-nav" aria-label={copy.title}>{sections.map(value => <button type="button" key={value} className={section === value ? 'is-active' : ''} aria-current={section === value ? 'page' : undefined} onClick={() => showSection(value)}>{copy[value]}</button>)}</nav>
@@ -318,7 +321,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
                 event.preventDefault(); buttons[next]?.focus();
               }}>{models.map(model => <li key={model.path}><button type="button" className={cfg.active_model === model.path ? 'is-selected' : ''} disabled={!!model.shards?.missing.length}
-                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong>{normalizeDisplayText(model.name)}</strong><small>{formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <span>{copy.selected}</span>}</button></li>)}</ul>
+                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} /><small>{formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <span>{copy.selected}</span>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
               <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
@@ -336,7 +339,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               <div hidden={section !== 'adapters'} className="model-settings-fields">
                 {sidecar('mmproj', copy.projector, true)}{sidecar('spec_draft_model', copy.draftModel, false)}
                 <h3>LoRA</h3><p id={`${id}-lora-help`} className="app-section-hint">{help.loraPath}</p>
-                {cfg.lora_adapters.map((adapter, index) => <div key={adapter.path} className="model-settings-lora"><strong title={normalizeDisplayPath(adapter.path)}>{modelDisplayName(adapter.path)}</strong><label>{copy.enabled}<input type="checkbox" aria-describedby={`${id}-lora-enabled-help`} checked={adapter.enabled} onChange={event => change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item) })} /></label>
+                {cfg.lora_adapters.map((adapter, index) => <div key={adapter.path} className="model-settings-lora"><strong title={normalizeDisplayPath(adapter.path)}><ModelIcon model={adapter.path} />{modelDisplayName(adapter.path)}<ModelBadges model={adapter.path} localPath={adapter.path} /></strong><label>{copy.enabled}<input type="checkbox" aria-describedby={`${id}-lora-enabled-help`} checked={adapter.enabled} onChange={event => change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item) })} /></label>
                   <label>{copy.scale}<input className="app-input" aria-describedby={`${id}-lora-scale-help`} type="number" min="0" max="4" step="0.05" value={adapter.scale} onChange={event => { const scale = Number(event.target.value); if (Number.isFinite(scale) && scale >= 0 && scale <= 4) change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, scale } : item) }); }} /></label>
                   <button type="button" className="app-button app-button--ghost" onClick={() => change({ lora_adapters: cfg.lora_adapters.filter((_, i) => i !== index) })}>{copy.remove}</button></div>)}
                 {cfg.lora_adapters.length > 0 && <div className="app-section-hint"><p id={`${id}-lora-enabled-help`}>{help.loraEnabled}</p><p id={`${id}-lora-scale-help`}>{help.loraScale}</p></div>}

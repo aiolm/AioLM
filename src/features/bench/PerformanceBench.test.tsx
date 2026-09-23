@@ -344,7 +344,9 @@ describe("Performance benchmark workflow", () => {
     expect(csv.mock.calls[0][0][0].id).not.toBe(prior[0].id);
     fireEvent.click(screen.getByRole("button", { name: "Export all history" }));
     expect(csv.mock.calls[1][0]).toEqual(prior);
-    expect(within(screen.getByRole("combobox", { name: "Result history" })).getAllByRole("option")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
   });
 
   it("loads saved results, shows matching speedups, and copies raw trials", async () => {
@@ -355,7 +357,8 @@ describe("Performance benchmark workflow", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     renderPanel();
     expect(screen.getByRole("button", { name: "Export all history" })).toBeEnabled();
-    fireEvent.change(screen.getByRole("combobox", { name: "Result history" }), { target: { value: "saved" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
+    fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1]);
     expect(screen.getByRole("button", { name: "Export CSV" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Export all history" })).not.toBeInTheDocument();
     expect(screen.getByText("1.80×")).toBeInTheDocument();
@@ -391,8 +394,11 @@ describe("Performance benchmark workflow", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Current benchmark failed to start");
-    expect(within(screen.getByRole("combobox", { name: "Result history" })).getAllByRole("option")).toHaveLength(2);
-    fireEvent.change(screen.getByRole("combobox", { name: "Result history" }), { target: { value: "previous" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Result history" }));
+    fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1]);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("Current benchmark failed to start")).not.toBeInTheDocument();
     const disclosure = screen.getByText("Run configuration").closest("details")!;
