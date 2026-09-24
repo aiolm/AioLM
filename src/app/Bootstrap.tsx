@@ -10,26 +10,11 @@ const copy = {
     preserved: "Your original data is preserved. Resolve the problem and retry.",
     retry: "Retry",
   },
-  ko: {
-    failed: "데이터를 이전하지 못했습니다",
-    preserved: "원본 데이터는 보존되어 있습니다. 문제를 해결한 뒤 다시 시도해 주세요.",
-    retry: "다시 시도",
-  },
-  ja: {
-    failed: "データを移行できませんでした",
-    preserved: "元のデータは保持されています。問題を解決して再試行してください。",
-    retry: "再試行",
-  },
-  zh: {
-    failed: "无法迁移数据",
-    preserved: "原始数据已保留。请解决问题后重试。",
-    retry: "重试",
-  },
 };
 
 export default function Bootstrap() {
-  const locale = navigator.language.slice(0, 2);
-  const text = copy[locale as keyof typeof copy] ?? copy.en;
+  // No language has been loaded or selected before migration finishes.
+  const text = copy.en;
   const [content, setContent] = useState<ReactNode>(null);
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);

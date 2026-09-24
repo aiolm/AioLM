@@ -1,5 +1,5 @@
 import type { ThemeMode } from "./theme";
-import { detectLocale, type Locale } from "../i18n/i18nCatalog";
+import { type Locale } from "../i18n/i18nCatalog";
 
 export interface AppPreferences {
   locale: Locale;
@@ -14,7 +14,7 @@ interface StoredPreferences { version: 1; values: AppPreferences }
 const KEY = "aiolm-preferences";
 
 export const defaultPreferences = (): AppPreferences => ({
-  locale: detectLocale(), theme: "system",
+  locale: "en", theme: "system",
   chat: { enterToSend: true, showTimestamps: true, streamResponses: true, compactMessages: false },
   server: { autoStart: false, autoStopOnExit: false, pollIntervalMs: 1000 },
   appearance: { reduceMotion: false, density: "comfortable" },
@@ -37,18 +37,19 @@ export function validatePreferences(input: Partial<AppPreferences> | null | unde
   };
 }
 
-export function loadPreferences(): AppPreferences {
-  if (typeof window === "undefined") return defaultPreferences();
+export function loadPreferences(fallbackLocale: Locale = 'en'): AppPreferences {
+  const defaults = { ...defaultPreferences(), locale: fallbackLocale };
+  if (typeof window === "undefined") return defaults;
   try {
     const raw = JSON.parse(window.localStorage.getItem(KEY) ?? "null") as StoredPreferences | null;
-    if (raw?.version === 1) return validatePreferences(raw.values);
+    if (raw?.version === 1) return validatePreferences({ ...raw.values, locale: isLocale(raw.values?.locale) ? raw.values.locale : fallbackLocale });
     const legacyTheme = window.localStorage.getItem("aiolm-theme");
     const legacyLocale = window.localStorage.getItem("aiolm-locale");
     return validatePreferences({
       theme: isTheme(legacyTheme) ? legacyTheme : "system",
-      locale: isLocale(legacyLocale) ? legacyLocale : undefined,
+      locale: isLocale(legacyLocale) ? legacyLocale : fallbackLocale,
     });
-  } catch { return defaultPreferences(); }
+  } catch { return defaults; }
 }
 
 /**
@@ -61,8 +62,13 @@ export function shouldConfirmDestructive(): boolean {
   return loadPreferences().advanced.confirmDestructiveActions;
 }
 
-export function savePreferences(values: AppPreferences): void {
-  try { window.localStorage.setItem(KEY, JSON.stringify({ version: 1, values: validatePreferences(values) } satisfies StoredPreferences)); } catch { /* storage is optional */ }
+export function savePreferences(values: AppPreferences, options: { required?: boolean } = {}): void {
+  try {
+    window.localStorage.setItem(KEY, JSON.stringify({ version: 1, values: validatePreferences(values) } satisfies StoredPreferences));
+  } catch (error) {
+    // Initial setup must not be marked complete if its preferences were lost.
+    if (options.required) throw error;
+  }
 }
 export function resetPreferences(): AppPreferences { const next = defaultPreferences(); savePreferences(next); return next; }
 

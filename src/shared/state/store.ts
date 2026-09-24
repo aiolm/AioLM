@@ -278,6 +278,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   }, [options.pollIntervalMs, refreshStatus]);
 
   useEffect(() => {
+    if (cfg?.onboarding_completed === false) return;
     if (!shouldAutoStart(Boolean(options.autoStart), status.state, busy, autoStartConsumedRef.current, configRevisionRef.current)) return;
     autoStartConsumedRef.current = true;
     void start(cfg ?? undefined).catch(() => undefined);

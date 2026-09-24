@@ -42,6 +42,12 @@ AioLM — All-In-One LM installs separately from the previous application. On fi
 
 AioLM keeps its data in `%USERPROFILE%\.aiolm`, or in the folder named by the `AIOLM_HOME` environment variable. Data from earlier AioLM releases is brought there at startup; managed runtimes are moved rather than copied. See [data folder](../reference/migration.md#data-folder).
 
+## First-run setup
+
+A fresh installation opens an English welcome screen before the workspace. Choose your language first, then preview a light, dark, or system theme and choose the folder for local models and new downloads. The default model folder is resolved for your user account at runtime. You can use an existing GGUF folder or download a model later.
+
+Select **Start using AioLM** to save and open the workspace. Setup stays open if saving fails. Completed setup is retained across restarts and updates; existing configurations from earlier releases skip it. Language and theme remain editable in **Settings**, and the model folder in the model library.
+
 ## Update from the app
 
 AioLM checks its public GitHub release metadata once each time the desktop app starts. A newer stable version appears in a dismissible notification; **View update** opens **Settings → General → Application updates**. You can also use **Check for updates** there at any time. A failed startup check does not interrupt normal use; settings shows the error and allows another check.

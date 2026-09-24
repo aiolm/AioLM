@@ -34,6 +34,88 @@ describe("Workspace navigation", () => {
   const mount = () => render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
   const mainTab = (name: string) => within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name });
 
+  it('waits for configuration and completes first-run setup before mounting the workspace', async () => {
+    store = createTestStore({ onboarding_completed: false });
+    const pendingConfig = store.cfg;
+    store.cfg = null; store.bootState = 'loading';
+    const view = mount();
+    expect(screen.queryByRole('navigation', { name: 'Primary navigation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+    store.cfg = pendingConfig; store.bootState = 'ready';
+    view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+    expect(screen.getByRole('heading', { name: 'Choose your language' })).toBeVisible();
+    expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Dark/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
+    expect(store.updateConfig).toHaveBeenCalledWith({ models_dir: 'models', onboarding_completed: true });
+    expect(JSON.parse(localStorage.getItem('aiolm-preferences')!).values).toMatchObject({ locale: 'en', theme: 'dark' });
+    expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
+    view.unmount();
+    mount();
+    expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Choose your language' })).not.toBeInTheDocument();
+  });
+
+  it('preserves the system language of an existing user who never saved a language preference', async () => {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('ko-KR');
+    mount();
+    expect(await screen.findByRole('navigation', { name: '기본 탐색' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: '언어를 선택하세요' })).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('aiolm-preferences')!).values.locale).toBe('ko');
+  });
+
+  it('keeps setup pending when native persistence fails and enters the workspace only after retry', async () => {
+    store = createTestStore({ onboarding_completed: false });
+    vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error('disk full'));
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
+    expect(screen.getByRole('alert')).toHaveTextContent('disk full');
+    expect(store.cfg?.onboarding_completed).toBe(false);
+    expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
+    expect(await screen.findByLabelText('Conversation draft')).toBeVisible();
+    expect(store.cfg?.onboarding_completed).toBe(true);
+  });
+
+  it('does not persist completion if language and theme could not be saved', async () => {
+    store = createTestStore({ onboarding_completed: false });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable'); });
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ })); });
+    expect(screen.getByRole('alert')).toHaveTextContent('storage unavailable');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.cfg?.onboarding_completed).toBe(false);
+  });
+
+  it('keeps the current setup step mounted while an optimistic config save is pending or rejected', async () => {
+    store = createTestStore({ onboarding_completed: false });
+    let rejectSave!: (cause: Error) => void;
+    vi.mocked(store.updateConfig).mockImplementationOnce(() => {
+      store.cfg = { ...store.cfg!, onboarding_completed: true };
+      return new Promise((_, reject) => { rejectSave = reject; });
+    });
+    const view = mount();
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Start using AioLM/ }));
+    view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+    expect(screen.getByRole('button', { name: /Saving/ })).toBeDisabled();
+    expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
+    await act(async () => {
+      store.cfg = { ...store.cfg!, onboarding_completed: false };
+      rejectSave(new Error('disk full'));
+    });
+    expect(screen.getByRole('heading', { name: 'Give your models a home' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('disk full');
+    expect(screen.queryByLabelText('Conversation draft')).not.toBeInTheDocument();
+  });
+
   it("opens global errors above the retained activity bar and preserves dismissal", async () => {
     store.actionError = "The model could not be started.";
     const view = mount();

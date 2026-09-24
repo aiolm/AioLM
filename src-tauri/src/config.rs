@@ -438,6 +438,15 @@ pub struct AppConfig {
     /// a config file written before the tray existed keeps closing the window
     /// the way it always has: the app exits and every managed server stops.
     pub close_to_tray: bool,
+    /// Whether first-run onboarding has been finished. A fresh installation
+    /// starts at `false` (see `Default`), but a config file written before
+    /// onboarding existed belongs to someone already using the app, so this
+    /// field deliberately overrides the container-level default and reads an
+    /// absent field as `true`. An explicit `false` is saved like any other
+    /// value, so onboarding interrupted after a save is still pending on the
+    /// next launch.
+    #[serde(default = "default_onboarding_completed")]
+    pub onboarding_completed: bool,
     /// Saved session bundles the user can launch later. See `session.rs` for
     /// the in-memory registry of processes actually running.
     pub sessions: Vec<SessionDefinition>,
@@ -485,6 +494,10 @@ fn default_server_args() -> Vec<String> {
 
 fn default_chat_options() -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
+}
+
+fn default_onboarding_completed() -> bool {
+    true
 }
 
 /// The model folder the application creates and owns for a fresh installation.
@@ -541,6 +554,7 @@ impl Default for AppConfig {
             lora_adapters: Vec::new(),
             stop_existing_sessions_on_load: true,
             close_to_tray: false,
+            onboarding_completed: false,
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),
             settings_profiles: Some(profiles::SettingsProfileLibrary::default()),
@@ -1239,6 +1253,123 @@ mod tests {
         )
         .unwrap();
         assert!(opted_in.close_to_tray);
+    }
+
+    fn write_config(path: &Path, value: &serde_json::Value) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    }
+
+    fn onboarding_on_disk(path: &Path) -> Option<serde_json::Value> {
+        let raw: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        raw.get("onboarding_completed").cloned()
+    }
+
+    #[test]
+    fn a_fresh_installation_keeps_onboarding_pending_until_it_is_completed() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-onboarding-fresh-{}", Uuid::new_v4()));
+        let path = directory.join("config.json");
+        // A missing config file is the only sign of a first run.
+        assert!(!AppConfig::default().onboarding_completed);
+        let mut cfg = load_from_path(&path).unwrap();
+        assert!(!cfg.onboarding_completed);
+
+        // Onboarding interrupted after a save writes an explicit `false`, so the
+        // next launch does not read the file as one that predates onboarding.
+        cfg.models_dir = "models".into();
+        assert!(!save_to_path(&cfg, &path).unwrap().onboarding_completed);
+        assert_eq!(onboarding_on_disk(&path), Some(serde_json::json!(false)));
+        let mut pending = load_from_path(&path).unwrap();
+        assert!(!pending.onboarding_completed);
+        pending.normalize();
+        assert!(!pending.onboarding_completed);
+        pending.port = 9090;
+        save_to_path(&pending, &path).unwrap();
+        assert!(!load_from_path(&path).unwrap().onboarding_completed);
+
+        // Once completed, later unrelated saves and reloads keep it completed.
+        let mut completed = load_from_path(&path).unwrap();
+        completed.onboarding_completed = true;
+        save_to_path(&completed, &path).unwrap();
+        let mut updated = load_from_path(&path).unwrap();
+        assert!(updated.onboarding_completed);
+        updated.port = 9091;
+        save_to_path(&updated, &path).unwrap();
+        assert!(load_from_path(&path).unwrap().onboarding_completed);
+        assert_eq!(onboarding_on_disk(&path), Some(serde_json::json!(true)));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn configs_written_before_onboarding_existed_count_as_completed() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-onboarding-legacy-{}", Uuid::new_v4()));
+        for version in [None, Some(7), Some(11), Some(CURRENT_CONFIG_VERSION)] {
+            let mut legacy = serde_json::json!({ "models_dir": "models" });
+            if let Some(version) = version {
+                legacy["config_version"] = version.into();
+            }
+            let path = directory
+                .join(format!("v{}", version.unwrap_or_default()))
+                .join("config.json");
+            write_config(&path, &legacy);
+            // An existing user updating the app must not be sent through
+            // onboarding again.
+            let loaded = load_from_path(&path).unwrap();
+            assert!(loaded.onboarding_completed, "{version:?}");
+            // Loading an older schema rewrites the file, and the rewrite must
+            // record completion rather than the fresh-install default.
+            let rewritten_on_load = version != Some(CURRENT_CONFIG_VERSION);
+            assert_eq!(
+                onboarding_on_disk(&path),
+                rewritten_on_load.then_some(serde_json::json!(true)),
+                "{version:?}"
+            );
+            save_to_path(&loaded, &path).unwrap();
+            assert_eq!(
+                onboarding_on_disk(&path),
+                Some(serde_json::json!(true)),
+                "{version:?}"
+            );
+            let reloaded = load_from_path(&path).unwrap();
+            assert!(reloaded.onboarding_completed, "{version:?}");
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn schema_migration_keeps_a_saved_onboarding_state() {
+        // After a later schema bump, files that already carry the field go
+        // through migration, which must keep the saved answer instead of
+        // falling back to either default.
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-onboarding-migrate-{}", Uuid::new_v4()));
+        let path = directory.join("config.json");
+        for completed in [false, true] {
+            write_config(
+                &path,
+                &serde_json::json!({
+                    "config_version": CURRENT_CONFIG_VERSION - 1,
+                    "models_dir": "models",
+                    "onboarding_completed": completed
+                }),
+            );
+            assert_eq!(
+                load_from_path(&path).unwrap().onboarding_completed,
+                completed
+            );
+            assert_eq!(
+                onboarding_on_disk(&path),
+                Some(serde_json::json!(completed))
+            );
+            assert_eq!(
+                load_from_path(&path).unwrap().onboarding_completed,
+                completed
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

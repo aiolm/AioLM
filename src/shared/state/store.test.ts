@@ -30,6 +30,20 @@ beforeEach(() => {
 
 afterEach(() => { vi.useRealTimers(); });
 
+it('blocks auto-start during setup and honors the preference on the next completed launch', async () => {
+  vi.mocked(api.getConfig).mockResolvedValue({ ...testConfig, onboarding_completed: false });
+  vi.mocked(api.startServer).mockResolvedValue('http://127.0.0.1:8080');
+  const { result, unmount } = renderHook(() => useAppStore({ autoStart: true, pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  expect(api.startServer).not.toHaveBeenCalled();
+  expect(result.current.cfg?.onboarding_completed).toBe(false);
+  await act(async () => { await result.current.updateConfig({ onboarding_completed: true }); });
+  vi.mocked(api.getConfig).mockResolvedValue(result.current.cfg!);
+  unmount();
+  renderHook(() => useAppStore({ autoStart: true, pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(api.startServer).toHaveBeenCalledOnce());
+});
+
 it("publishes migrated profiles only after their native save succeeds", async () => {
   const original = JSON.stringify({ version: 1, models: { 'archived.gguf': { temperature: 0.3 } } });
   localStorage.setItem('aiolm-model-execution', original);

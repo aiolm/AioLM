@@ -18,10 +18,11 @@ import { useModelDownloadTask } from "../shared/state/modelDownloadTask";
 import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
-import InitialSurface from "../shared/ui/InitialSurface";
+import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
+import Onboarding, { type SetupChoices } from "../features/onboarding/Onboarding";
 import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
 
-import { useI18n } from "../shared/i18n/i18n";
+import { detectLocale, useI18n } from "../shared/i18n/i18n";
 import { useRuntimeVersionLabel } from "../shared/runtime/installedRuntimes";
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
@@ -72,6 +73,47 @@ export default function App() {
 function AppContent() {
   const [preferences, setPreferences] = useState<AppPreferences>(() => loadPreferences());
   const baseStore = useAppStore({ pollIntervalMs: preferences.server.pollIntervalMs, autoStart: preferences.server.autoStart });
+  const { t } = useI18n();
+  if (baseStore.bootState === 'loading') return <SurfaceLoading />;
+  if (baseStore.bootState === 'error') return <div className="app-runtime-empty"><EmptyState title={t('error.attention')} description={baseStore.bootError ?? t('error.wrong')} action={{ label: t('common.retry'), onClick: () => { void baseStore.loadConfig().catch(() => undefined); } }} /></div>;
+  return <InitializedApp preferences={preferences} setPreferences={setPreferences} baseStore={baseStore} />;
+}
+
+type InitializedAppProps = { preferences: AppPreferences; setPreferences: React.Dispatch<React.SetStateAction<AppPreferences>>; baseStore: ReturnType<typeof useAppStore> };
+
+function InitializedApp({ preferences, setPreferences, baseStore }: InitializedAppProps) {
+  // The config queue publishes optimistic values. Only a successful native save
+  // may open the workspace; a pending save must keep this wizard mounted.
+  const [needsSetup, setNeedsSetup] = useState(() => baseStore.cfg?.onboarding_completed === false);
+  const [preferencesReady, setPreferencesReady] = useState(needsSetup);
+  const { setLocale } = useI18n();
+  useEffect(() => {
+    if (preferencesReady) return;
+    // Earlier releases followed the OS until a language was explicitly saved.
+    // Preserve that choice for returning users, after native config distinguishes
+    // them from a fresh installation whose first screen must stay in English.
+    const restored = loadPreferences(detectLocale());
+    savePreferences(restored);
+    setPreferences(restored);
+    setLocale(restored.locale);
+    setPreferencesReady(true);
+  }, [preferencesReady, setPreferences, setLocale]);
+  if (!preferencesReady) return <SurfaceLoading />;
+  if (needsSetup && baseStore.cfg) {
+    const completeSetup = async (choices: SetupChoices) => {
+      const next = { ...preferences, locale: choices.locale, theme: choices.theme };
+      savePreferences(next, { required: true });
+      persistThemeMode(next.theme);
+      setPreferences(next);
+      await baseStore.updateConfig({ models_dir: choices.modelsDir, onboarding_completed: true });
+      setNeedsSetup(false);
+    };
+    return <Onboarding preferences={preferences} modelsDir={baseStore.cfg.models_dir} onComplete={completeSetup} />;
+  }
+  return <ReadyApp preferences={preferences} setPreferences={setPreferences} baseStore={baseStore} />;
+}
+
+function ReadyApp({ preferences, setPreferences, baseStore }: InitializedAppProps) {
   const { store, selectModel } = useExecutionStore(baseStore);
   return <ModelSettingsProvider store={store}><AppShell preferences={preferences} setPreferences={setPreferences} store={store} selectModel={selectModel} /></ModelSettingsProvider>;
 }

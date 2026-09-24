@@ -74,6 +74,8 @@ An older release keeps reading the earlier locations. It shows the configuration
 
 ## Compatibility
 
+First-run setup uses `onboarding_completed` in `config.json`, independently of the application or configuration version. A missing configuration starts with `false`; an existing configuration without the field is treated as completed so upgrades skip setup. Explicit `false` survives saves and schema migrations until setup finishes. The completion flag is saved only after language and theme preferences have been persisted. Resetting appearance or other UI preferences does not reset this flag.
+
 - New environment variables use `AIOLM_`. Existing `LLAMA_BOARD_` inputs remain accepted; the new name wins when both are present. This includes the CUDA override, CLI smoke inputs, PR artifact repository override and installation-script options.
 - New exports use `aiolm.project.v1` and `aiolm-runtime*.json`. Existing project JSON and `llama-board-runtime*.json` manifests remain readable. Previously published PR artifact names remain accepted with the same digest and provenance checks.
 - Existing IPC command names remain available. New commands support launch validation and session-scoped request settings.
