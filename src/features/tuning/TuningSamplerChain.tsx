@@ -1,5 +1,5 @@
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
 import { useTuningId } from './TuningIdScope';
 import { tuningHelp } from '../../shared/i18n/tuningHelp';
@@ -39,6 +39,8 @@ export interface TuningSamplerChainProps {
   onChange?: (samplers: string[]) => void;
   onReorder?: (samplers: string[]) => void;
   onSamplersChange?: (samplers: string[]) => void;
+  /** Field-scoped action, such as reset, kept in the chain's title row. */
+  headerAction?: ReactNode;
 }
 
 function sameValues(left: readonly string[], right: readonly string[]): boolean {
@@ -60,6 +62,7 @@ export default function TuningSamplerChain({
   onChange,
   onReorder,
   onSamplersChange,
+  headerAction,
 }: TuningSamplerChainProps) {
   const { t, locale } = useI18n();
   const help = tuningHelp[locale];
@@ -103,11 +106,14 @@ export default function TuningSamplerChain({
 
   return (
     <div className="tuning-sampler-chain" data-testid="tuning-sampler-chain">
-      <div className="tuning-sampler-chain__header">
-        <div>
+      <div className="tuning-sampler-chain__header flex-wrap">
+        <div className="tuning-field-title">
           <h3 className="tuning-sampler-chain__title">{t("extra.samplerChainTitle")}</h3>
+          {headerAction}
         </div>
-        <span className="tuning-sampler-chain__count">{t("extra.samplerChainCount", { count: draft.length })}</span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="tuning-sampler-chain__count">{t("extra.samplerChainCount", { count: draft.length })}</span>
+        </div>
       </div>
 
       {draft.length > 0 ? (

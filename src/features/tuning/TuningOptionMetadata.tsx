@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext } from 'react';
 import { useI18n } from '../../shared/i18n/i18n';
 import { SERVER_OPTIONS, SERVER_OPTIONS_SOURCE, type ServerOption } from '../../shared/config/serverOptions';
 import { serverDefault, type OptionDefault } from '../../shared/config/optionDefaults';
@@ -29,7 +29,7 @@ export function ServerOptionDefault({ option, options, verified }: { option: Ser
   return <DefaultValue defaults={serverDefault(option, options)} verified={verified} />;
 }
 
-export default function TuningOptionMetadata({ fieldKey, inherited = false, value, children }: { fieldKey: string; inherited?: boolean; value?: unknown; children?: ReactNode }) {
+export default function TuningOptionMetadata({ fieldKey, inherited = false, value }: { fieldKey: string; inherited?: boolean; value?: unknown }) {
   const runtime = useContext(TuningOptionsContext);
   const { locale } = useI18n();
   const copy = serverOptionsText[locale];
@@ -50,10 +50,11 @@ export default function TuningOptionMetadata({ fieldKey, inherited = false, valu
   const signature = metadata.signature;
   return <div className="tuning-option-metadata" data-option-metadata={fieldKey}>
     <div className="tuning-option-summary">
-      {signature
-        ? <code className="tuning-option-flag">{normalizeDisplayText(signature)}</code>
-        : <span className="tuning-option-flag tuning-option-flag--none">{metadata.requestKey ? copy.requestOnly : copy.noCliMapping}</span>}
-      {metadata.requestKey && <code className="tuning-option-flag" title={copy.requestKey}>{normalizeDisplayText(metadata.requestKey)}</code>}
+      {metadata.requestKey
+        ? <code className="tuning-option-flag" title={signature ? `${copy.requestKey} · ${normalizeDisplayText(signature)}` : copy.requestKey}>{normalizeDisplayText(metadata.requestKey)}</code>
+        : signature
+          ? <code className="tuning-option-flag">{normalizeDisplayText(signature)}</code>
+          : <span className="tuning-option-flag tuning-option-flag--none">{copy.noCliMapping}</span>}
       <span className="option-default-value">
         <span>{copy.defaultValue}: </span><code>{normalizeDisplayText(defaultText)}</code>
         {/* Where the default came from, in one word beside it: whose number is on
@@ -63,7 +64,6 @@ export default function TuningOptionMetadata({ fieldKey, inherited = false, valu
           : <span className="tuning-default-note">{metadata.defaults.source === 'app' ? text.sourceApp : text.sourceRuntime}</span>)}
         {atDefault && <span className="tuning-default-active">{text.inUse}</span>}
       </span>
-      {children}
     </div>
     {automatic && <p className="tuning-option-note">{copy.defaultAutomatic}</p>}
     {metadata.missing && <p className="tuning-option-note">{copy.notInRuntime}</p>}

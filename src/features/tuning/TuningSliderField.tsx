@@ -29,6 +29,8 @@ export interface TuningSliderFieldProps {
   onCommit: (value: string) => void | Promise<void>;
   labelExtra?: ReactNode;
   valueMeta?: ReactNode;
+  /** Field-scoped action, such as reset, kept in this field's title row. */
+  headerAction?: ReactNode;
 }
 
 function finiteValue(value: string, fallback: number): number {
@@ -56,6 +58,7 @@ export default function TuningSliderField({
   onCommit,
   labelExtra,
   valueMeta,
+  headerAction,
 }: TuningSliderFieldProps) {
   const { locale } = useI18n();
   const resolvedLabel = label ?? field?.label ?? field?.key ?? "Value";
@@ -94,6 +97,7 @@ export default function TuningSliderField({
         <div className="tuning-slider-field__label-wrap">
           <label id={labelId} htmlFor={inputId} className="tuning-slider-field__label">{resolvedLabel}</label>
           {labelExtra}
+          {headerAction}
         </div>
         <div className="tuning-slider-field__value-wrap">
           <output className="tuning-slider-field__value" htmlFor={inputId}>{value}</output>

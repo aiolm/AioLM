@@ -40,7 +40,7 @@
 .model-settings-options .model-settings-option > details { padding: 0; margin: 0; border: 0; border-radius: 0; }
 .model-settings-option > details[open] > summary { margin-bottom: 10px; }
 .model-settings-option > .app-section-hint { margin: 8px 0 0; }
-.model-settings-option-format { display: block; margin-top: 4px; }
+.model-settings-option-format, .model-settings-option-default { display: block; margin-top: 4px; }
 .model-settings-option > details:not([open]) + p .model-settings-option-format { display: none; }
 .model-settings-shared label { margin: 14px 0; }
 .model-settings-footer { flex-shrink: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow-y: auto; }

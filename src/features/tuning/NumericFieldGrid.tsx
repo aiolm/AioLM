@@ -26,7 +26,7 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
         const label = tuningFieldLabel(t, field);
         const description = tuningFieldDescription(t, field);
         return (
-          <TuningDefaultField key={field.key} fieldKey={field.key} label={label}><TuningSliderField
+          <TuningDefaultField key={field.key} fieldKey={field.key} label={label}>{(resetAction) => <TuningSliderField
             id={inputId}
             label={label}
             min={field.min}
@@ -40,7 +40,8 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
             valueMeta={<span className={`shrink-0 text-xs ${field.server ? "text-warning" : "text-success"}`}>
               {field.server ? t("extra.serverSide") : t("extra.perRequest")}
             </span>}
-          /></TuningDefaultField>
+            headerAction={resetAction}
+          />}</TuningDefaultField>
         );
       })}
     </>

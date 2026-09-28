@@ -131,6 +131,15 @@ describe("TuningPanel phase-1 shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
     expect(screen.getAllByRole("button", { name: "Apply & restart server" })).toHaveLength(1);
   });
+  it("shows concrete defaults in reasoning placeholders and sentinel selects", async () => {
+    render(<I18nProvider initialLocale="en"><TuningPanel store={store()} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
+    const budget = await screen.findByLabelText("Budget exhausted message");
+    expect(budget.getAttribute("placeholder")).toMatch(/optional · .*Default/);
+    // Selected sentinels communicate inheritance, while the empty input describes its default.
+    expect(screen.getAllByRole('combobox').filter(element => /· Default/.test(element.textContent ?? ''))).toHaveLength(2);
+    expect(screen.queryByText(/using runtime default/)).not.toBeInTheDocument();
+  });
 });
 
 describe("Tuning defaults controls", () => {

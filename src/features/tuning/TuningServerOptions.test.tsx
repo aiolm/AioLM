@@ -196,4 +196,41 @@ describe('server option editing', () => {
     expect(chatOptionValue({ server_args: ['--min-p', '0.17'] }, field)).toBe(0.17);
     expect(chatOptionValue({ server_args: ['--min-p=0.17'], chat_options: { min_p: 0.1 } }, field)).toBe(0.1);
   });
+  it('shows concrete documented defaults instead of bare inherited labels', () => {
+    const options = parseRuntimeHelp('--custom-limit N             custom limit (default: 32)');
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: [] }}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const option = openOption('--custom-limit');
+    // Summary state and editor both name the source and the documented value.
+    expect(container.textContent).toContain('32 (using runtime default)');
+    expect(option.getAllByText('32 (using runtime default)')).toHaveLength(2);
+    expect(container.textContent).not.toContain('Runtime default:');
+  });
+  it('qualifies reference defaults when the runtime is unverified', () => {
+    const options = parseRuntimeHelp('--custom-limit N             custom limit (default: 32)');
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: [] }}
+      runtime={{ options, verified: false, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const option = openOption('--custom-limit');
+    expect(option.getAllByText('using runtime default (Reference value: 32)')).toHaveLength(2);
+    expect(option.queryByText('32 (using runtime default)')).not.toBeInTheDocument();
+  });
+  it.each([
+    ['--ui, --webui, --no-webui, --no-ui', 'enabled', 'disabled', '--webui'],
+    ['-cb, --cont-batching, --no-cont-batching, -nocb', 'disabled', 'enabled', '--no-cont-batching'],
+  ])('shows the app-injected %s default only until a raw override is selected', (signature, runtimeValue, appValue, flag) => {
+    const options = parseRuntimeHelp(`${signature}             toggle (default: ${runtimeValue})`);
+    const view = (args: string[]) => <I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: args }}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={vi.fn()} onCategory={vi.fn()} /></I18nProvider>;
+    const { container, rerender } = render(view([]));
+    const state = () => container.querySelector('.server-option-state');
+    expect(state()).toHaveTextContent(`${appValue} (using app default)`);
+    rerender(view([flag]));
+    expect(state()).not.toHaveTextContent('using app default');
+    expect(state()).toHaveTextContent('Configured · 1');
+  });
 });

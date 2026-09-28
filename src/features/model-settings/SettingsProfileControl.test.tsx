@@ -2,6 +2,10 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, expect, it, vi } from 'vitest';
 import { I18nProvider, type Locale } from '../../shared/i18n/i18n';
 import SettingsProfileControl, { type ProfileViewItem, type SettingsProfileControlProps } from './SettingsProfileControl';
+import * as api from '../../shared/api';
+import { parseRuntimeHelp } from '../../shared/config/serverOptions';
+
+vi.mock('../../shared/api', async original => ({ ...await original<typeof api>(), rtProbe: vi.fn() }));
 
 const items: ProfileViewItem[] = [
   { id: 'balanced', name: 'Balanced', scope: 'preset', settings: { temperature: 0.7, ctx_size: 4096 }, description: 'Balanced output.' },
@@ -52,6 +56,45 @@ describe('settings profile workspace', () => {
     expect(screen.getByRole('heading', { name: 'Current values' })).toBeVisible();
     preview('Creative');
     expect(within(screen.getByRole('region', { name: 'Preview' })).getByRole('heading', { name: 'Creative' })).toBeVisible();
+  });
+
+  it('pairs runtime options with their values in current settings, previews and defaults', () => {
+    const args = ['--jinja', '--load-mode', 'mmap', '--lazy-mode', 'on', '--override-tensor', 'per_layer_token_embd.weight=CPU'];
+    const props = mount({
+      currentSettings: { server_args: args },
+      items: items.map(item => item.id === 'creative' ? { ...item, settings: { server_args: ['--load-mode', 'none'] } } : item),
+      defaults: { server_args: ['--lazy-mode', 'off'] },
+    });
+    const current = screen.getByRole('region', { name: 'Current values' });
+    const rows = within(current).getAllByRole('listitem');
+    expect(rows.map(row => [...row.querySelectorAll('code')].map(code => code.textContent))).toEqual([
+      ['--jinja'], ['--load-mode', 'mmap'], ['--lazy-mode', 'on'], ['--override-tensor', 'per_layer_token_embd.weight=CPU'],
+    ]);
+    preview('Creative');
+    expect([...within(screen.getByRole('region', { name: 'Preview' })).getByRole('listitem').querySelectorAll('code')].map(code => code.textContent)).toEqual(['--load-mode', 'none']);
+    fireEvent.click(document.querySelector('.settings-profile-defaults > summary')!);
+    expect([...document.querySelectorAll('.settings-profile-defaults .settings-profile-arguments code')].map(code => code.textContent)).toEqual(['--lazy-mode', 'off']);
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
+    expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('mmap')).toBeVisible();
+    expect(props.currentSettings.server_args).toEqual(args);
+    expect(props.onApply).not.toHaveBeenCalled();
+  });
+
+  it('preserves argument order, repeats and complete values when grouping runtime arguments', () => {
+    const path = 'models/My Models/adapter file.gguf';
+    const tensor = 'blk\\.\\d+\\.ffn.*=CPU,per_layer_token_embd.weight=CPU';
+    const args = ['--control-vector-layer-range', '-1', '8', '--override-tensor', tensor, '--control-vector', path,
+      '--override-tensor=output.weight=CPU', '--future-option', 'value with spaces, commas=kept', '-0.5', '--jinja', '--cache-ram', '--no-warmup'];
+    mount({ currentSettings: { server_args: args }, runtimeOptions: parseRuntimeHelp([
+      '--control-vector-layer-range START END  range', '--override-tensor PATTERN  placement', '--control-vector FNAME  path',
+      '--jinja  use templates', '--cache-ram N  cache', '--no-warmup  skip warmup',
+    ].join('\n')) });
+    const rows = within(screen.getByRole('region', { name: 'Current values' })).getAllByRole('listitem');
+    expect(rows.map(row => [...row.querySelectorAll('code')].map(code => code.textContent))).toEqual([
+      ['--control-vector-layer-range', '-1', '8'], ['--override-tensor', tensor], ['--control-vector', path],
+      ['--override-tensor', 'output.weight=CPU'], ['--future-option', 'value with spaces, commas=kept', '-0.5'],
+      ['--jinja'], ['--cache-ram'], ['--no-warmup'],
+    ]);
   });
   it('resets the selected profile draft without applying the preview or changing saved profiles', () => {
     const props = mount({ blocked: true });
@@ -192,7 +235,8 @@ describe('settings profile workspace', () => {
   it('keeps the defaults summary read only', () => {
     mount();
     const defaults = screen.getByText('Defaults').closest('details')!;
-    expect(within(defaults).getByText('Runtime default')).toBeInTheDocument();
+    expect(within(defaults).getByText(/Default \(Upstream reference\): 0\.8/)).toBeInTheDocument();
+    expect(within(defaults).queryByText(/using .* default/)).not.toBeInTheDocument();
     expect(within(defaults).queryByRole('button')).not.toBeInTheDocument();
   });
 
@@ -200,9 +244,79 @@ describe('settings profile workspace', () => {
     mount({ items: [{ id: 'default', name: 'Default', scope: 'global', settings: { runtime_defaults: ['temperature', 'top_p', 'ctx_size'], chat_options: {} }, deletable: false }], activeId: 'default', defaultProfileId: 'default' });
     preview('Default · Selected · Default profile');
     const card = within(screen.getByRole('region', { name: 'Preview' }));
-    for (const label of ['Temperature', 'Top P', 'Context size']) {
-      expect(card.getByText(label).nextElementSibling).toHaveTextContent('Runtime default');
-    }
+    expect(card.getByText('Temperature').nextElementSibling).toHaveTextContent(/Default \(Upstream reference\): 0\.8/);
+    expect(card.getByText('Top P').nextElementSibling).toHaveTextContent(/Default \(Upstream reference\): 0\.9/);
+    expect(card.getByText('Context size').nextElementSibling).toHaveTextContent('App default: 4096');
+    expect(card.queryByText(/using .* default/)).not.toBeInTheDocument();
+  });
+
+  it('shows inherited app and runtime values without replacing overrides or saving them', () => {
+    const props = mount({
+      currentSettings: { ctx_size: 777, batch_size: 888, threads: 99, temperature: 0.2, ubatch_size: 512, runtime_defaults: ['ctx_size', 'batch_size', 'threads'] },
+      runtimeOptions: parseRuntimeHelp('--batch-size N        batch (default: 1024)\n--threads N        threads (default: -1)'), runtimeVerified: true,
+    }, 'ko');
+    const card = within(screen.getByRole('region', { name: '현재 설정' }));
+    expect(card.getByText('컨텍스트 크기').nextElementSibling).toHaveTextContent('4096 (앱 기본값 사용 중)');
+    expect(card.getByText('배치 크기').nextElementSibling).toHaveTextContent('1024 (런타임 기본값 사용 중)');
+    expect(card.getByText('CPU 스레드').nextElementSibling).toHaveTextContent('-1 (자동 선택)');
+    expect(card.getByText('온도').nextElementSibling).toHaveTextContent('0.2');
+    expect(card.getByText('온도').nextElementSibling).not.toHaveTextContent('사용 중');
+    expect(card.getByText('컨텍스트 크기').nextElementSibling?.querySelector('.default-value-number')).toHaveTextContent('4096');
+    expect(card.getByText('컨텍스트 크기').nextElementSibling?.querySelector('.default-value-badge')).toHaveTextContent(/^기본$/);
+    expect(card.getByText('컨텍스트 크기').closest('.settings-profile-value')).not.toHaveClass('settings-profile-value--custom');
+    expect(card.getByText('온도').closest('.settings-profile-value')).toHaveClass('settings-profile-value--custom');
+    expect(card.getByText('물리 배치 크기').closest('.settings-profile-value')).not.toHaveClass('settings-profile-value--custom');
+    expect(props.onApply).not.toHaveBeenCalled();
+    expect(props.onSaveAs).not.toHaveBeenCalled();
+    expect(props.currentSettings.batch_size).toBe(888);
+  });
+
+  it('switches between the current and preview runtime defaults without mixing their values', async () => {
+    let resolve!: (value: api.RuntimeCapabilities) => void;
+    vi.mocked(api.rtProbe).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    const gpu = { gpu_ids: ['runtime:vulkan:Vulkan0'], main_gpu: 'runtime:vulkan:Vulkan0', split_mode: 'single' as const, tensor_split: [] };
+    const alternate = { id: 'alternate', name: 'Another runtime', scope: 'global' as const,
+      settings: { active_backend: 'vulkan', active_build: 'other', batch_size: 111, runtime_defaults: ['batch_size'], gpu } };
+    mount({ items: [...items, alternate], currentSettings: { active_backend: 'vulkan', active_build: 'current', batch_size: 777, runtime_defaults: ['batch_size'], gpu },
+      gpuDevices: [{ name: 'Vulkan0 · Current device', stable_id: 'runtime:vulkan:Vulkan0', vendor: 'unknown', integrated: false }],
+      runtimeOptions: parseRuntimeHelp('--batch-size N        batch (default: 1024)'), runtimeVerified: true });
+    preview('Another runtime');
+    expect(api.rtProbe).toHaveBeenLastCalledWith('vulkan', 'other');
+    const card = within(screen.getByRole('region', { name: 'Preview' }));
+    expect(card.getByText('Batch size').nextElementSibling).not.toHaveTextContent('1024');
+    expect(card.queryByText('Vulkan0 · Current device')).not.toBeInTheDocument();
+    expect(card.getAllByText('Vulkan0')).toHaveLength(2);
+    await act(async () => resolve({ backend: 'vulkan', build: 'other', flags: [], devices: ['Vulkan0: Preview device'], diagnostics: [],
+      server_help: '--batch-size N        batch (default: 512)' } as unknown as api.RuntimeCapabilities));
+    expect(card.getByText('Batch size').nextElementSibling).toHaveTextContent('Runtime default: 512');
+    expect(card.getAllByText('Vulkan0 · Preview device')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
+    expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('Batch size').nextElementSibling).toHaveTextContent('1024 (using runtime default)');
+    expect(within(screen.getByRole('region', { name: 'Current values' })).getAllByText('Vulkan0 · Current device')).toHaveLength(2);
+  });
+
+  it('lists GPU placement fields on separate rows by device name without losing unreported ids', () => {
+    const gpu = { draft_gpu_id: 'runtime:vulkan:Vulkan1', gpu_ids: ['runtime:vulkan:Vulkan0', 'runtime:vulkan:Vulkan1'], main_gpu: 'runtime:vulkan:Vulkan0', split_mode: 'layer' as const, tensor_split: [] };
+    const saved = { id: 'placed', name: 'Placed', scope: 'model' as const, settings: { gpu: { ...gpu, gpu_ids: ['pci:0000:03:00.0'], main_gpu: null, draft_gpu_id: null } } };
+    const props = mount({ items: [...items, saved], currentSettings: { gpu }, defaults: { gpu },
+      gpuDevices: [{ name: 'Vulkan0 · Example GPU', stable_id: 'runtime:vulkan:Vulkan0', vendor: 'amd', integrated: false }] });
+    const summary = (region: HTMLElement) => within(within(region).getByText('GPU placement').nextElementSibling as HTMLElement);
+    const devices = (list: ReturnType<typeof summary>, label: string) => [...list.getByText(label).nextElementSibling!.children].map(item => [item.textContent, item.getAttribute('title')]);
+    const current = screen.getByRole('region', { name: 'Current values' });
+    const rows = summary(current);
+    expect(rows.getAllByRole('term').map(term => term.textContent)).toEqual(['Selected GPUs', 'Main GPU', 'Split mode', 'Tensor split', 'Draft GPU']);
+    expect(devices(rows, 'Selected GPUs')).toEqual([['Vulkan0 · Example GPU', 'runtime:vulkan:Vulkan0'], ['Vulkan1', 'runtime:vulkan:Vulkan1']]);
+    expect(devices(rows, 'Draft GPU')).toEqual([['Vulkan1', 'runtime:vulkan:Vulkan1']]);
+    expect(rows.getByText('Split mode').nextElementSibling).toHaveTextContent('layer');
+    expect(rows.getByText('Tensor split').nextElementSibling).toHaveTextContent('None');
+    expect(within(current).getByText('GPU placement').closest('.settings-profile-value')).toHaveClass('settings-profile-value--custom');
+    expect(within(current).queryByText(/runtime:vulkan/)).not.toBeInTheDocument();
+    expect(summary(screen.getByText('Defaults').closest('details')!).getByText('Main GPU').nextElementSibling).toHaveTextContent('Vulkan0 · Example GPU');
+    preview('Placed');
+    const previewRows = summary(screen.getByRole('region', { name: 'Preview' }));
+    expect(devices(previewRows, 'Selected GPUs')).toEqual([['pci:0000:03:00.0', 'pci:0000:03:00.0']]);
+    expect(previewRows.getByText('Main GPU').nextElementSibling).toHaveTextContent('None');
+    expect(props.currentSettings.gpu).toEqual(gpu);
   });
 
   it.each(['Model', 'Global'] as const)('creates a %s profile only through a successfully saved name form', async scope => {

@@ -13,18 +13,19 @@ describe('visible setting defaults', () => {
     expect(screen.getByText("'auto'")).toBeVisible();
     expect(screen.getByText('자동 선택 · 실제 값은 실행 환경에 따라 결정됩니다.')).toBeVisible();
   });
-  it('keeps inherited controls editable alongside their default and CLI/JSON names', () => {
+  it('keeps inherited controls editable with a single request identifier and their default', () => {
     const runtime = { options: parseRuntimeHelp('--min-p N           minimum (default: 0.12)'), verified: true };
     render(<I18nProvider initialLocale="ko"><TuningOptionsContext.Provider value={runtime}>
       <TuningDefaultsContext.Provider value={{ cfg: { ...testConfig, chat_options: {}, server_args: [] }, disabled: false, reset: vi.fn() }}>
         <TuningDefaultField fieldKey="min_p" label="Min-p" request><input aria-label="Min-p" defaultValue="0.12" /></TuningDefaultField>
       </TuningDefaultsContext.Provider>
     </TuningOptionsContext.Provider></I18nProvider>);
-    // Everything a setting is described by is on one line: the command-line form,
-    // the request key, the default and where it came from. Nothing is behind a
-    // disclosure, because a panel that has to be opened may as well not be read.
-    expect(screen.getByText('--min-p N')).toBeVisible();
+    // Request settings show their JSON key; the equivalent CLI mapping stays in
+    // its hover description instead of occupying a second badge.
+    expect(screen.queryByText('--min-p N')).not.toBeInTheDocument();
     expect(screen.getByText('min_p')).toBeVisible();
+    expect(screen.getByText('min_p')).toHaveAttribute('title', expect.stringContaining('--min-p N'));
+    expect(document.querySelectorAll('[data-option-metadata="min_p"] .tuning-option-flag')).toHaveLength(1);
     expect(screen.getByText('0.12')).toBeVisible();
     expect(screen.queryByText('기술 정보')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /직접 설정/ })).not.toBeInTheDocument();

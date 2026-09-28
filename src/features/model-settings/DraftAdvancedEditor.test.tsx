@@ -71,7 +71,10 @@ describe('advanced settings explanations', () => {
     expect(card.querySelector('details')).not.toHaveAttribute('open');
     fireEvent.click(card.querySelector('summary')!);
     const checkbox = screen.getByRole('checkbox', { name: '--mlock Enabled' });
-    expect(checkbox).toHaveAccessibleDescription(`Keep model weights in RAM. ${advancedSettingsHelp.en.toggle}`);
+    // Concrete documented defaults replace bare labels; the toggle help stays.
+    expect(checkbox).toHaveAccessibleDescription(expect.stringContaining(`Keep model weights in RAM. ${advancedSettingsHelp.en.toggle}`));
+    expect(checkbox).toHaveAccessibleDescription(expect.stringContaining('using runtime default'));
+    expect(card.textContent).toMatch(/using runtime default/);
     fireEvent.click(checkbox);
   });
 
@@ -92,7 +95,9 @@ describe('advanced settings explanations', () => {
     const description = screen.getByText(missing);
     expect(description).toBeVisible();
     fireEvent.click(description.closest('.model-settings-option')!.querySelector('summary')!);
-    expect(screen.getByRole('textbox', { name: '--custom-pair START END' })).toHaveAccessibleDescription(`${missing} ${advancedSettingsHelp.en.multiple}`);
+    // Genuine unknowns stay explicit instead of a bare default.
+    expect(screen.getByRole('textbox', { name: '--custom-pair START END' })).toHaveAccessibleDescription(expect.stringContaining(`${missing} ${advancedSettingsHelp.en.multiple}`));
+    expect(screen.getByRole('textbox', { name: '--custom-pair START END' })).toHaveAccessibleDescription(expect.stringContaining('using runtime default (Not specified in runtime help)'));
   });
 
   it.each<Locale>(['ko', 'ja', 'zh'])('localizes known and unregistered option help in %s', locale => {
@@ -121,12 +126,15 @@ describe('advanced settings explanations', () => {
     fireEvent.click(card.querySelector('summary')!);
     const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
     // The flag belongs to the app, so the box asks for MODE and never for "--load-mode none".
-    expect(input).toHaveAttribute('placeholder', 'MODE');
+    // Empty means the documented default, so the placeholder names it instead of a bare label.
+    expect(input.getAttribute('placeholder')).toMatch(/^MODE · /);
+    expect(input.getAttribute('placeholder')).toContain('auto');
     expect(Array.from(card.querySelectorAll('datalist option'), item => item.getAttribute('value')))
       .toEqual(['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio']);
     expect(input).toHaveAccessibleDescription(expect.stringContaining(advancedSettingsHelp.ko.single));
     fireEvent.change(input, { target: { value: 'none' } });
     expect(onChange).toHaveBeenLastCalledWith({ server_args: ['--load-mode', 'none'] });
+    expect(card.querySelector('.model-settings-option-default')).not.toHaveTextContent('사용 중');
   });
 
   it('shows a saved flag and its value on one raw line and splits an edited line back into argv', () => {

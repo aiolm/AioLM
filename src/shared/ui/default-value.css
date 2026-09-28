@@ -1,0 +1,3 @@
+.default-value { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: inherit; gap: 3px 5px; max-width: 100%; color: var(--ui-muted); font-weight: 400; }
+.default-value-number { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.default-value-badge { flex: none; padding: 0 4px; border: 1px solid var(--ui-border); border-radius: 4px; font-size: 9px; line-height: 1.5; font-weight: 400; text-decoration: none; white-space: nowrap; }

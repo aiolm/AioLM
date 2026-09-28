@@ -34,12 +34,15 @@ export default function TuningChatOptionField({
     ? (chatOptionSelectModes[field.key] === "custom" || !field.options.some((option) => String(option.value) === draft) ? "custom" : draft)
     : null;
   return (
-    <TuningDefaultField fieldKey={field.key} label={label} request><div className="flex min-w-0 flex-col gap-1.5">
-      {field.options && <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
+    <TuningDefaultField fieldKey={field.key} label={label} request>{(resetAction) => <div className="flex min-w-0 flex-col gap-1.5">
+      {field.options && <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="tuning-field-title">
           <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
+          {resetAction}
         </div>
-        <span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>
+        </div>
       </div>}
       {field.options ? (
         <>
@@ -101,9 +104,10 @@ export default function TuningChatOptionField({
           onCommit={(value) => onCommit(field, value)}
           disabled={disabled}
           valueMeta={<span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>}
+          headerAction={resetAction}
         />
       )}
       {field.options && <span id={`${inputId}-hint`} className="text-xs text-muted">{description}</span>}
-    </div></TuningDefaultField>
+    </div>}</TuningDefaultField>
   );
 }

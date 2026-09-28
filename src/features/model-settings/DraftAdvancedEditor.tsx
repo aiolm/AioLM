@@ -6,6 +6,8 @@ import { getOptionOccurrences, managedServerOption, replaceServerOption, serverA
 import { modelSettingsCopy } from './modelSettingsCopy';
 import type { DraftPatch } from './DraftTuningEditor';
 import { advancedOptionDescription, advancedSettingsHelp } from './advancedSettingsHelp';
+import { serverDefaultInfo, type DefaultValueInfo } from '../../shared/config/defaultValueDisplay';
+import DefaultValue from '../../shared/ui/DefaultValue';
 
 const EXCLUDED = new Set(['--help', '--version', '--cache-list', '--completion-bash', '--list-devices']);
 /**
@@ -31,24 +33,26 @@ type Help = (typeof advancedSettingsHelp)['en'];
  * keystroke anywhere in the dialog was what made typing here stutter.
  */
 const AdvancedOptionRow = memo(function AdvancedOptionRow({
-  option, description, choices, value, checked, disabled, idPrefix, help, enabledLabel, onSet, onDraft, onInvalid,
+  option, description, choices, value, checked, disabled, idPrefix, help, enabledLabel, defaultInfo, onSet, onDraft, onInvalid,
 }: {
   option: ServerOption; description: string; choices: string[]; value: string; checked: boolean;
-  disabled: boolean; idPrefix: string; help: Help; enabledLabel: string;
+  disabled: boolean; idPrefix: string; help: Help; enabledLabel: string; defaultInfo: DefaultValueInfo;
   onSet: (option: ServerOption, entries: Occurrence[]) => void;
   onDraft: (id: string, raw: string) => void;
   onInvalid: (key: string, invalid: boolean) => void;
 }) {
   const descriptionId = `${idPrefix}-${option.id}-description`;
   const formatId = `${idPrefix}-${option.id}-format`;
-  const describedBy = `${descriptionId} ${formatId}`;
+  const defaultId = `${idPrefix}-${option.id}-default`;
+  const describedBy = `${descriptionId} ${formatId} ${defaultId}`;
   const choicesId = `${idPrefix}-${option.id}-choices`;
+  const placeholder = option.arity === 0 ? undefined : `${option.argument} · ${defaultInfo.value}`;
   return <div className="model-settings-option"><details><summary><code>{option.id}</code></summary>
     {option.arity === 0
       ? <label><input type="checkbox" aria-label={`${option.id} ${enabledLabel}`} aria-describedby={describedBy} checked={checked} disabled={disabled}
           onChange={event => onSet(option, event.target.checked ? [{ flag: option.id, values: [] }] : [])} />{enabledLabel}</label>
       : <label><span>{option.signature}</span><input className="app-input" aria-describedby={describedBy} value={value} disabled={disabled}
-          placeholder={option.argument} list={choices.length ? choicesId : undefined} onChange={event => {
+          placeholder={placeholder} list={choices.length ? choicesId : undefined} onChange={event => {
             const raw = event.target.value;
             onDraft(option.id, raw);
             const values = option.arity === 1 ? [raw] : raw.trim().split(/\s+/);
@@ -59,11 +63,12 @@ const AdvancedOptionRow = memo(function AdvancedOptionRow({
   </details><p className="app-section-hint whitespace-pre-line break-words"><span id={descriptionId}>{description}</span>
     <span id={formatId} className="model-settings-option-format">{option.arity === 0 ? help.toggle : option.arity === 1 ? help.single : help.multiple}
       {choices.length > 0 && <> {help.choices}: {choices.join(', ')}.</>}</span>
+    <span id={defaultId} className="model-settings-option-default"><DefaultValue info={defaultInfo} /></span>
   </p></div>;
 });
 
-export default function DraftAdvancedEditor({ cfg, options, disabled, benchmark, onChange, onInvalid }: {
-  cfg: AppConfig; options: readonly ServerOption[]; disabled: boolean; benchmark: boolean; onChange: DraftPatch; onInvalid: (key: string, invalid: boolean) => void;
+export default function DraftAdvancedEditor({ cfg, options, verified = false, disabled, benchmark, onChange, onInvalid }: {
+  cfg: AppConfig; options: readonly ServerOption[]; verified?: boolean; disabled: boolean; benchmark: boolean; onChange: DraftPatch; onInvalid: (key: string, invalid: boolean) => void;
 }) {
   const { locale, t } = useI18n();
   const id = useId();
@@ -86,8 +91,8 @@ export default function DraftAdvancedEditor({ cfg, options, disabled, benchmark,
     .filter(option => !managedServerOption(option) && !EXCLUDED.has(option.id) && (!benchmark || !BENCHMARK_FLAGS.test(option.id)))
     .map(option => {
       const description = advancedOptionDescription(option, locale, t);
-      return { option, description, choices: serverOptionChoices(option), haystack: { ...option, description: `${option.description} ${description}` } };
-    }), [options, locale, benchmark, t]);
+      return { option, description, choices: serverOptionChoices(option), defaultInfo: serverDefaultInfo(option, options, verified, locale), inheritedInfo: serverDefaultInfo(option, options, verified, locale, { selected: true }), haystack: { ...option, description: `${option.description} ${description}` } };
+    }), [options, verified, locale, benchmark, t]);
 
   // Searching stays off the keystroke's critical path; the field itself never waits.
   const search = useDeferredValue(query);
@@ -121,11 +126,11 @@ export default function DraftAdvancedEditor({ cfg, options, disabled, benchmark,
     <div><h3>{copy.options}</h3><p className="app-section-hint">{help.options}</p></div>
     <div><input className="app-input" type="search" aria-label={copy.optionSearch} aria-describedby={`${id}-search-help`} placeholder={copy.optionSearch} value={query} onChange={event => setQuery(event.target.value)} />
       <p id={`${id}-search-help`} className="app-section-hint">{help.search}</p></div>
-    <div className="model-settings-options">{visible.map(({ option, description, choices }) => {
+    <div className="model-settings-options">{visible.map(({ option, description, choices, defaultInfo, inheritedInfo }) => {
       const occurrences = stored.get(option.id) ?? [];
       return <AdvancedOptionRow key={option.id} option={option} description={description} choices={choices}
         value={optionDrafts[option.id] ?? occurrences.map(item => item.values.join(' ')).join('\n')}
-        checked={occurrences.length > 0} disabled={disabled} idPrefix={id} help={help} enabledLabel={copy.enabled}
+        checked={occurrences.length > 0} disabled={disabled} idPrefix={id} help={help} enabledLabel={copy.enabled} defaultInfo={occurrences.length || optionDrafts[option.id] ? defaultInfo : inheritedInfo}
         onSet={setOption} onDraft={draftOption} onInvalid={markInvalid} />;
     })}{visible.length === 0 && <p className="app-section-hint" role="status">{help.noResults}</p>}
       {matching.length > visible.length && <p className="app-section-hint" role="status">{copy.optionsTruncated.replace('{shown}', String(visible.length)).replace('{total}', String(matching.length))}</p>}</div>

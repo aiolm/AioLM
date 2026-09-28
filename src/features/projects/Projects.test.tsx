@@ -14,6 +14,9 @@ vi.mock("../../shared/api/index", () => ({
   pickDocument: vi.fn(async () => null),
   mcpListServers: vi.fn(async () => []),
   mcpListTools: vi.fn(async () => []),
+  rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', executable: 'llama-server', state: 'available', version: 'test', flags: [], devices: [], diagnostics: [], server_help: '' })),
+  isNativeRuntimeAvailable: vi.fn(() => false),
+  rtList: vi.fn(async () => []),
 }));
 
 const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -299,5 +302,15 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "gone:missing · Unavailable" }));
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0].toolIds).toEqual([]);
+  });
+
+  it("shows a concrete app default for inherited context size instead of a bare label", async () => {
+    const store = createTestStore({ runtime_defaults: ["ctx_size"] });
+    const project = projectFromConfig("Research", "Cite the source", store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    // Documented app default (4096) with its source, never a stale stored number.
+    expect(await screen.findByText("4096 (using app default)")).toBeVisible();
+    expect(screen.queryByText("default", { exact: true })).not.toBeInTheDocument();
   });
 });

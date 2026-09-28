@@ -7,8 +7,11 @@ import TuningOptionMetadata from './TuningOptionMetadata';
 import { SERVER_FIELDS, SERVER_TEXT_FIELDS, tuningFieldDescription, tuningFieldLabel, type NumericField, type NumericKey, type ServerTextKey } from "./tuningFields";
 import TuningSpeculativeSection from "./TuningSpeculativeSection";
 import { useTuningId } from './TuningIdScope';
+import { useContext } from 'react';
 import { useI18n } from '../../shared/i18n/i18n';
 import { tuningHelp } from '../../shared/i18n/tuningHelp';
+import { TuningOptionsContext } from './TuningOptionMetadata';
+import { settingDefaultLabel } from '../../shared/config/defaultValueDisplay';
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -43,6 +46,8 @@ export default function TuningServerSection({
 }: Props) {
   const id = useTuningId();
   const { locale } = useI18n();
+  const runtime = useContext(TuningOptionsContext);
+  const mmprojDefault = settingDefaultLabel('mmproj', runtime.options, runtime.verified, locale);
   const cacheKeyField = SERVER_TEXT_FIELDS.find((field) => field.key === "cache_type_k");
   const cacheValueField = SERVER_TEXT_FIELDS.find((field) => field.key === "cache_type_v");
   const cacheFields = [cacheKeyField, cacheValueField].filter((field): field is NonNullable<typeof field> => Boolean(field));
@@ -50,13 +55,16 @@ export default function TuningServerSection({
     <section className="tuning-section tuning-section--server">
       {fields.length > 0 && <div className="tuning-field-list"><NumericFieldGrid fields={fields} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} /></div>}
       {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 w-full max-w-lg">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
+        <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="tuning-field-title">
             <label htmlFor={`${id}-flash-attn`} className="text-sm text-ink">{t("ui.flashAttention")}</label>
+            {resetAction}
           </div>
-          <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+          </div>
         </div>
-        <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}><CustomSelect
+        <CustomSelect
           id={`${id}-flash-attn`}
           ariaDescribedBy={`${id}-flash-attn-hint`}
           value={cfg.flash_attn === "on" || cfg.flash_attn === "off" ? cfg.flash_attn : "auto"}
@@ -68,7 +76,7 @@ export default function TuningServerSection({
           onChange={updateFlash}
           disabled={disabled}
           className="w-full"
-        /><span id={`${id}-flash-attn-hint`} className="text-xs text-muted">{tuningHelp[locale].flashAttention}</span></TuningDefaultField>
+        /><span id={`${id}-flash-attn-hint`} className="text-xs text-muted">{tuningHelp[locale].flashAttention}</span></>}</TuningDefaultField>
       </div>}
 
       {showCacheTypes && showAdvanced && cacheFields.length > 0 && (
@@ -80,10 +88,11 @@ export default function TuningServerSection({
             const description = tuningFieldDescription(t, field);
             return (
               <div key={field.key} className="flex min-w-0 flex-col gap-1.5">
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
+                <TuningDefaultField fieldKey={field.key} label={label}>{(resetAction) => <><div className="tuning-field-title">
+                    <label htmlFor={inputId} className="app-text-wrap text-sm text-ink">{label}</label>
+                  {resetAction}
                 </div>
-                <TuningDefaultField fieldKey={field.key} label={label}><CustomSelect
+                <CustomSelect
                   id={inputId}
                   ariaDescribedBy={`${inputId}-hint`}
                   value={field.options?.includes(value) ? value : (field.options?.[0] ?? value)}
@@ -94,7 +103,7 @@ export default function TuningServerSection({
                   }}
                   disabled={disabled}
                   className="w-full"
-                /><span id={`${inputId}-hint`} className="text-xs text-muted">{description}</span></TuningDefaultField>
+                /><span id={`${inputId}-hint`} className="text-xs text-muted">{description}</span></>}</TuningDefaultField>
               </div>
             );
           })}
@@ -118,7 +127,7 @@ export default function TuningServerSection({
               onBlur={(event) => commitServerText("mmproj", event.currentTarget.value)}
               onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
               disabled={!projectorEditable || disabled}
-              placeholder={t("ui.mmprojPlaceholder")}
+              placeholder={`${t("ui.mmprojPlaceholder")} · ${mmprojDefault}`}
               className="app-input mt-1"
             />
             <span id={`${id}-mmproj-hint`} className="text-xs text-muted">{tuningHelp[locale].projector}</span>

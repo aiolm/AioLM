@@ -38,10 +38,27 @@
 .settings-profile-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 18px 28px; margin-top: 18px; }
 .settings-profile-value-group { min-width: 0; }
 .settings-profile-value-group h4 { margin: 0 0 8px; font-size: 11px; font-weight: 600; }
-.settings-profile-value-group dl { display: grid; gap: 7px; margin: 0; }
-.settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; font-size: 11px; line-height: 1.5; }
+.settings-profile-value-group dl { display: grid; gap: 3px; margin: 0; }
+.settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 2px 6px; border-inline-start: 2px solid transparent; border-radius: 3px; color: var(--ui-muted); font-size: 11px; line-height: 1.5; }
 .settings-profile-value dt { color: var(--ui-muted); }
 .settings-profile-value dd { margin: 0; text-align: right; overflow-wrap: anywhere; white-space: pre-wrap; }
+.settings-profile-value dd .default-value { justify-content: flex-end; }
+.settings-profile-value--custom { border-inline-start-color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 7%, transparent); }
+.settings-profile-value--custom dt { color: var(--ui-ink); font-weight: 600; }
+.settings-profile-value--custom dd { color: var(--ui-accent); font-weight: 650; }
+/* Structured values use the full row beneath their label. */
+.settings-profile-value.settings-profile-value--stacked { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+.settings-profile-value--stacked > dd { text-align: left; }
+.settings-profile-gpu { display: grid; gap: 2px; margin: 0; }
+.settings-profile-gpu > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 10px; }
+.settings-profile-value .settings-profile-gpu dt { color: var(--ui-muted); font-weight: 400; }
+.settings-profile-value .settings-profile-gpu dd { font-weight: 500; text-align: left; white-space: normal; }
+.settings-profile-gpu dd > span { display: block; }
+.settings-profile-arguments { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-weight: 400; }
+.settings-profile-arguments > li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: baseline; gap: 10px; }
+.settings-profile-arguments code { min-inline-size: 0; font: inherit; font-family: var(--font-mono, monospace); overflow-wrap: anywhere; white-space: pre-wrap; }
+.settings-profile-argument-key { color: var(--ui-muted); }
+.settings-profile-argument-values { display: flex; flex-wrap: wrap; gap: 0 1ch; min-inline-size: 0; font-weight: 600; }
 .settings-profile-inherited { color: var(--ui-muted); font-size: 10px; }
 .settings-profile-prompt { grid-column: 1 / -1; }
 .settings-profile-prompt p { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: 11px; color: var(--ui-muted); }

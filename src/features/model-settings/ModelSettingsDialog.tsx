@@ -299,7 +299,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           <div className="model-settings-body" ref={body}>
             <SettingsProfileControl items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
               defaultProfileId={defaultSettingsProfileEntry(profiles.library).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
-              modelPath={cfg.active_model} currentSettings={settings} currentPrompt={profiles.systemPrompt} defaults={{ ...executionSettings(resetProfileSettings(cfg, false)), runtime_defaults: [] }} full={section === 'profiles'}
+              modelPath={cfg.active_model} currentSettings={settings} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={section === 'profiles'}
               disabled={disabled} blocked={invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
               onApply={id => commitProfile(() => { const profile = profiles.available.find(item => item.id === id); if (!profile) throw new Error('This profile is no longer available.'); return profiles.prepareApply(profile); })}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
@@ -348,7 +348,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               <DraftTuningEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} section={section} disabled={disabled} benchmark={benchmark} runtime={runtime} contextLimit={contextLimit} onChange={change} onInvalid={setFieldInvalid}
                 onResetDrafts={() => { setTuningRevision(value => value + 1); setInvalid(previous => new Set([...previous].filter(key => key.startsWith('gpu_')))); }} />
             </div>
-            <div hidden={section !== 'advanced'}><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></div>
+            <div hidden={section !== 'advanced'}><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></div>
             </SettingsProfileControl>
           </div>
         </div>

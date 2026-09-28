@@ -79,6 +79,30 @@ describe('reset then edit', () => {
     await waitFor(() => expect(test.saved().chat_options).not.toHaveProperty('min_p'));
     expect(field('min_p').getByRole('spinbutton')).toHaveValue(0.12);
   });
+  it('keeps each reset in its own field title row, ahead of the control it resets', async () => {
+    // Below the metadata, DRY multiplier's reset sat directly above the next
+    // setting's title and read as that setting's action.
+    const test = mount({ chat_options: { dry_multiplier: 0.8 }, reasoning_format: 'none' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sampling' }));
+    document.querySelector<HTMLDetailsElement>('.tuning-section--sampling details')!.open = true;
+    const dryReset = field('dry_multiplier').getByRole('button', { name: 'Reset DRY multiplier to default' });
+    const dryInput = field('dry_multiplier').getByRole('spinbutton', { name: 'DRY multiplier' });
+    expect(field('dry_multiplier').getAllByText('DRY multiplier')).toHaveLength(1);
+    expect(dryReset.compareDocumentPosition(dryInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(dryReset);
+    await waitFor(() => expect(test.saved().chat_options).not.toHaveProperty('dry_multiplier'));
+    expect(dryInput).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+    const formatReset = field('reasoning_format').getByRole('button', { name: 'Reset Reasoning format to default' });
+    const formatSelect = field('reasoning_format').getByRole('combobox', { name: 'Reasoning format' });
+    expect(field('reasoning_format').getAllByText('Reasoning format')).toHaveLength(1);
+    expect(formatReset.compareDocumentPosition(formatSelect) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(formatReset);
+    await waitFor(() => expect(test.saved().runtime_defaults).toContain('reasoning_format'));
+    expect(formatSelect).toBeEnabled();
+  });
   it('reopens a catalog option at its default instead of an old saved argument', async () => {
     const test = mount({ server_args: ['--cache-ram', '123'] });
     fireEvent.click(screen.getByRole('button', { name: 'All server options' }));

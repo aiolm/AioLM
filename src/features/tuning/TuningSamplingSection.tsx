@@ -41,7 +41,7 @@ export default function TuningSamplingSection({
       {showAdvanced && (
         <>
           <div className="mt-4"><TuningDefaultField fieldKey="samplers" label={t("ui.samplerChain")} request>
-            <TuningSamplerChain samplers={samplerChain} disabled={disabled} onChange={onSamplerChainChange} />
+            {(resetAction) => <TuningSamplerChain samplers={samplerChain} disabled={disabled} onChange={onSamplerChainChange} headerAction={resetAction} />}
           </TuningDefaultField></div>
           <details className="mt-5 rounded-lg border border-line-strong/80 bg-surface/40 p-3">
             <summary className="cursor-pointer text-sm font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line">{t("extra.moreSampling")}</summary>

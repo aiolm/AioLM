@@ -8,6 +8,8 @@ import { TUNING_FIELD_CATALOG, type TuningCategoryId } from './tuningFields';
 import type { useServerOptions } from './useServerOptions';
 import { ServerOptionDefault } from './TuningOptionMetadata';
 import { serverDefault } from '../../shared/config/optionDefaults';
+import { serverDefaultInfo, serverDefaultLabel } from '../../shared/config/defaultValueDisplay';
+import DefaultValue from '../../shared/ui/DefaultValue';
 import { defaultScalar } from '../../shared/config/tuningResetValues';
 import { useEditorDraft } from '../../shared/state/draftGuard';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
@@ -29,8 +31,8 @@ interface Props {
   onNavigate?: (view: ViewId) => void;
 }
 
-function OptionEditor({ option, args, disabled, onSave, single = false, options, descriptionId }: {
-  option: ServerOption; args: string[]; disabled: boolean; onSave: Props['onSave']; single?: boolean; options: readonly ServerOption[]; descriptionId: string;
+function OptionEditor({ option, args, disabled, onSave, single = false, options, verified, descriptionId }: {
+  option: ServerOption; args: string[]; disabled: boolean; onSave: Props['onSave']; single?: boolean; options: readonly ServerOption[]; verified: boolean; descriptionId: string;
 }) {
   const { locale } = useI18n();
   const copy = serverOptionsText[locale];
@@ -64,11 +66,11 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options,
   const invalid = occurrences.some(item => item.values.length !== option.arity || item.values.some(value => !value.trim()));
   useEditorDraft({ dirty: draft !== null, save: async () => { if (invalid) { setError(copy.required); return false; } return save(occurrences); }, discard: () => { setDraft(null); setError(''); } });
   return <div className="server-option-editor">
-    {inherited && <p className="server-option-default">{copy.inherited}</p>}
+    {inherited && <p className="server-option-default"><DefaultValue info={serverDefaultInfo(option, options, verified, locale, { selected: true })} /></p>}
     {items.map((item, index) => <div className="server-option-occurrence" key={index}>
       <label><span>{copy.flag}</span><select className="app-select" aria-label={`${option.id} ${copy.flag} ${index + 1}`} aria-describedby={descriptionId} value={inherited && option.arity === 0 ? '' : item.flag} disabled={disabled || busy}
         onChange={event => event.target.value ? update(index, { ...item, flag: event.target.value }) : setDraft(items.filter((_, i) => i !== index))}>
-        {option.arity === 0 && <option value="">{copy.inherited}</option>}
+        {option.arity === 0 && <option value="">{serverDefaultLabel(option, options, verified, locale, { selected: inherited, compact: true })}</option>}
         {option.flags.filter(flag => flag.startsWith('--') || !option.flags.some(value => value.startsWith('--'))).map(flag => <option key={flag}>{flag}</option>)}
         {!item.flag.startsWith('--') && <option>{item.flag}</option>}
       </select></label>
@@ -122,14 +124,14 @@ export default function TuningServerOptions({ cfg, runtime, disabled, rawDirty, 
         const destination = managed ? DESTINATIONS[managed] : undefined;
         const occurrences = getOptionOccurrences(cfg.server_args, option);
         return <details className="server-option" key={option.id} data-server-option={option.id}>
-          <summary><code>{normalizeDisplayText(option.signature)}</code><span className="server-option-state">{managed ? copy.managed : occurrences.length ? `${copy.custom} · ${occurrences.length}` : copy.inherited}</span>
-            <ServerOptionDefault option={option} options={runtime.options} verified={runtime.verified} />
+          <summary><code>{normalizeDisplayText(option.signature)}</code><span className="server-option-state">{managed ? copy.managed : occurrences.length ? `${copy.custom} · ${occurrences.length}` : <DefaultValue info={serverDefaultInfo(option, runtime.options, runtime.verified, locale, { selected: true })} />}</span>
+            {(managed || occurrences.length > 0) && <ServerOptionDefault option={option} options={runtime.options} verified={runtime.verified} />}
           </summary>
-          {managed === '--port' ? <OptionEditor key={`port:${cfg.port}`} option={option} options={runtime.options} args={['--port', String(cfg.port)]} disabled={disabled || rawDirty} onSave={onSave} single descriptionId={`${id}-${option.id}-description`} /> : managed ? <div className="server-option-actions"><span>{copy.managed}</span>
+          {managed === '--port' ? <OptionEditor key={`port:${cfg.port}`} option={option} options={runtime.options} verified={runtime.verified} args={['--port', String(cfg.port)]} disabled={disabled || rawDirty} onSave={onSave} single descriptionId={`${id}-${option.id}-description`} /> : managed ? <div className="server-option-actions"><span>{copy.managed}</span>
             {field ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onCategory(field.category)}>{copy.dedicated}</button>
               : destination && onNavigate ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onNavigate(destination)}>{copy.dedicated}</button> : <p>{copy.lifecycle}</p>}
           </div> : ACTION_OPTIONS.has(option.id) ? <p className="app-section-hint">{copy.command}</p>
-            : <OptionEditor key={`${option.id}:${JSON.stringify(occurrences)}`} option={option} options={runtime.options} args={cfg.server_args} disabled={disabled || rawDirty} onSave={onSave} descriptionId={`${id}-${option.id}-description`} />}
+            : <OptionEditor key={`${option.id}:${JSON.stringify(occurrences)}`} option={option} options={runtime.options} verified={runtime.verified} args={cfg.server_args} disabled={disabled || rawDirty} onSave={onSave} descriptionId={`${id}-${option.id}-description`} />}
           <p id={`${id}-${option.id}-description`} className="server-option-description">{normalizeDisplayText(serverOptionDescription(option, locale))}</p>
         </details>;
       })}

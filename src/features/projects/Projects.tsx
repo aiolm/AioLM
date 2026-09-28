@@ -38,6 +38,9 @@ import { executionSettings } from '../../shared/config/executionSettings';
 import { appliedProfile, mergeProfileEditor, profileLibrary } from '../model-settings/profileEditor';
 import { modelSettingsCopy } from '../model-settings/modelSettingsCopy';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
+import { SERVER_OPTIONS } from '../../shared/config/serverOptions';
+import { settingDefaultInfo } from '../../shared/config/defaultValueDisplay';
+import DefaultValue from '../../shared/ui/DefaultValue';
 
 
 function fileName(project: ProjectPreset): string {
@@ -421,7 +424,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <dl className="mt-2 space-y-1 text-xs">
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{modelDisplayName(displayConfig?.active_model ?? '') || t("load.noModel")}<ModelBadges model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldBackend")}</dt><dd className="ui-color-ink">{displayConfig?.active_backend || "PATH"} · {displayConfig?.active_build ? runtimeVersionLabel(installedRuntimes, displayConfig.active_backend, displayConfig.active_build) : "system"}</dd></div>
-              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="ui-color-ink">{displayConfig?.runtime_defaults?.includes("ctx_size") ? t("ui.runtimeDefaultShort") : displayConfig?.ctx_size.toLocaleString()}</dd></div>
+              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="ui-color-ink">{displayConfig?.runtime_defaults?.includes("ctx_size") ? <DefaultValue info={settingDefaultInfo("ctx_size", SERVER_OPTIONS, false, locale, { selected: true })} /> : displayConfig?.ctx_size.toLocaleString()}</dd></div>
             </dl>
             <p className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap text-xs leading-relaxed ui-color-ink">{displayedPrompt || t("ui.projectPromptEmpty")}</p>
             <p className="mt-1 text-xs ui-color-muted">{modelSettingsCopy[locale].projectPromptHint}</p>

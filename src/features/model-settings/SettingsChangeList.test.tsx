@@ -8,6 +8,7 @@ const runtimeOptions = parseRuntimeHelp([
   '--threads N               threads (default: 6)',
   '--top-k N                 top k (default: 41)',
 ].join('\n'));
+const description = (element: Element | null | undefined) => element?.querySelector('.default-value .sr-only')?.textContent ?? element?.textContent;
 
 describe('profile save change list', () => {
   it('shows an arrow and values for each changed option in its own row', () => {
@@ -20,12 +21,12 @@ describe('profile save change list', () => {
     const rows = screen.getAllByRole('term').map(term => term.parentElement!);
     expect(rows).toHaveLength(4);
     expect(rows.map(row => [row.querySelector('dt')?.textContent,
-      row.querySelector('.settings-profile-change-before')?.textContent,
-      row.querySelector('.settings-profile-change-after')?.textContent])).toEqual([
+      description(row.querySelector('.settings-profile-change-before')),
+      description(row.querySelector('.settings-profile-change-after'))])).toEqual([
       ['Chat options · Maximum output tokens', 'None', '128'],
       ['Chat options · Min P', '0.1', '0.2'],
-      ['CPU threads', '12', 'Runtime default: 6'],
-      ['Top K', 'Runtime default: 41', '40'],
+      ['CPU threads', '12', '6 (using runtime default)'],
+      ['Top K', '41 (using runtime default)', '40'],
     ]);
     for (const row of rows) expect(row.querySelector('.settings-profile-change-arrow')).toHaveTextContent('→');
     expect(changeCount(saved, current, '', '')).toBe(rows.length);
@@ -71,14 +72,14 @@ describe('profile save change list', () => {
       savedPrompt="" currentPrompt="" runtimeOptions={options} runtimeVerified
     /></I18nProvider>);
     const rows = screen.getAllByRole('term').map(term => term.parentElement!);
-    const after = (label: string) => rows.find(row => row.querySelector('dt')?.textContent === label)
-      ?.querySelector('.settings-profile-change-after')?.textContent;
-    const before = (label: string) => rows.find(row => row.querySelector('dt')?.textContent === label)
-      ?.querySelector('.settings-profile-change-before')?.textContent;
-    expect(after('컨텍스트 크기')).toBe('앱 기본값: 4096');
-    expect(after('CPU 스레드')).toBe('런타임 기본값: -1 (자동 선택)');
-    expect(after('CPU 전문가 레이어')).toBe('런타임 기본값 (값 확인 불가)');
-    expect(before('Top K')).toBe('이전 런타임 기본값 (값 확인 불가)');
+    const after = (label: string) => description(rows.find(row => row.querySelector('dt')?.textContent === label)
+      ?.querySelector('.settings-profile-change-after'));
+    const before = (label: string) => description(rows.find(row => row.querySelector('dt')?.textContent === label)
+      ?.querySelector('.settings-profile-change-before'));
+    expect(after('컨텍스트 크기')).toBe('4096 (앱 기본값 사용 중)');
+    expect(after('CPU 스레드')).toBe('-1 (자동 선택) (런타임 기본값 사용 중)');
+    expect(after('CPU 전문가 레이어')).toBe('런타임 기본값 사용 중 (참고값: 0)');
+    expect(before('Top K')).toBe('런타임 기본값 사용 중 (참고값: 40, 0 = 사용 안 함)');
   });
 
   it('does not present reference defaults as verified runtime values', () => {
@@ -86,7 +87,7 @@ describe('profile save change list', () => {
       saved={{ top_k: 12 }} current={{ runtime_defaults: ['top_k'] }}
       savedPrompt="" currentPrompt="" runtimeOptions={SERVER_OPTIONS} runtimeVerified={false}
     /></I18nProvider>);
-    expect(screen.getByText('Runtime default (value unavailable)')).toBeInTheDocument();
-    expect(screen.queryByText('Runtime default: 40')).not.toBeInTheDocument();
+    expect(screen.getByText('using runtime default (Reference value: 40, 0 = disabled)')).toBeInTheDocument();
+    expect(screen.queryByText('40 (using runtime default)')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import type { GpuDevice } from '../../shared/api/types';
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -6,6 +7,14 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
 import { valueRenderer } from './SettingsChangeList';
+import { settingDefaultInfo } from '../../shared/config/defaultValueDisplay';
+import DefaultValue from '../../shared/ui/DefaultValue';
+import { isCustomizedSetting } from './profileValueState';
+import { SERVER_OPTIONS, type ServerOption } from '../../shared/config/serverOptions';
+import { useServerOptions } from '../tuning/useServerOptions';
+import GpuPlacementSummary from './GpuPlacementSummary';
+import ServerArgumentsSummary from './ServerArgumentsSummary';
+import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import './settings-profile.css';
 
 export interface ProfileViewItem {
@@ -31,6 +40,10 @@ export interface SettingsProfileControlProps {
   currentSettings: Partial<ExecutionSettings>;
   currentPrompt: string;
   defaults: Partial<ExecutionSettings>;
+  runtimeOptions?: readonly ServerOption[];
+  runtimeVerified?: boolean;
+  /** Devices the selected runtime reports, used to name stored GPU ids. */
+  gpuDevices?: readonly GpuDevice[];
   disabled: boolean;
   blocked?: boolean;
   full: boolean;
@@ -60,10 +73,21 @@ const settingGroups = [
   { label: 'advanced', keys: ['server_args'] },
 ] as const;
 
-function SettingsValues({ settings, prompt }: { settings: Partial<ExecutionSettings>; prompt?: string }) {
+type DefaultRuntime = { options: readonly ServerOption[]; verified: boolean; backend?: string; build?: string };
+
+function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; prompt?: string; runtime: DefaultRuntime; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const renderValue = valueRenderer(locale);
+  const backend = settings.active_backend ?? runtime.backend ?? '';
+  const build = settings.active_build ?? runtime.build ?? '';
+  const sameRuntime = backend === (runtime.backend ?? '') && build === (runtime.build ?? '');
+  // A preview may name a different runtime. Its defaults must come from that
+  // build, while the current/default cards reuse the editor's existing probe.
+  const previewRuntime = useServerOptions(backend, build, !sameRuntime && !!backend && !!build);
+  const source = sameRuntime ? runtime : previewRuntime;
+  const displayDevices = sameRuntime ? gpuDevices
+    : previewRuntime.capabilities?.backend === backend ? runtimeGpuDevices(backend, previewRuntime.capabilities.devices) : [];
   const keys = new Set([...Object.keys(settings), ...(settings.runtime_defaults ?? [])]);
   const entries: [string, unknown][] = [...keys].filter(key => key !== 'active_model' && key !== 'runtime_defaults' && key !== 'chat_options').map(key => [key, settings[key as keyof ExecutionSettings]]);
   const rendered = new Set(settingGroups.flatMap(group => [...group.keys]) as string[]);
@@ -75,10 +99,18 @@ function SettingsValues({ settings, prompt }: { settings: Partial<ExecutionSetti
       if (!rows.length) return null;
       return <section key={group.label} className="settings-profile-value-group" aria-label={copy[group.label]}>
         <h4>{copy[group.label]}</h4>
-        <dl>{rows.map(([key, value]) => <div key={key} className="settings-profile-value">
-          <dt>{profileFieldLabel(key, locale)}</dt>
-          <dd>{settings.runtime_defaults?.includes(key) ? <span className="settings-profile-inherited">{copy.runtimeDefault}</span> : renderValue(value)}</dd>
-        </div>)}</dl>
+        <dl>{rows.map(([key, value]) => {
+          const inherited = settings.runtime_defaults?.includes(key);
+          const customized = mode !== 'reference' && isCustomizedSetting(key, value, settings, source.options, source.verified);
+          const placement = key === 'gpu' && !inherited && value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length ? value as Record<string, unknown> : null;
+          const args = key === 'server_args' && !inherited && Array.isArray(value) && value.length && value.every(token => typeof token === 'string') ? value as string[] : null;
+          return <div key={key} className={`settings-profile-value${placement || args ? ' settings-profile-value--stacked' : ''}${customized ? ' settings-profile-value--custom' : ''}`}>
+            <dt>{profileFieldLabel(key, locale)}</dt>
+            <dd>{inherited ? <DefaultValue info={settingDefaultInfo(key, source.options, source.verified, locale, { selected: mode === 'current' })} />
+              : placement ? <GpuPlacementSummary placement={placement} devices={displayDevices} />
+                : args ? <ServerArgumentsSummary args={args} options={source.options} /> : renderValue(value)}</dd>
+          </div>;
+        })}</dl>
       </section>;
     })}
     {prompt !== undefined && <section className="settings-profile-value-group settings-profile-prompt" aria-label={copy.prompt}>
@@ -87,9 +119,10 @@ function SettingsValues({ settings, prompt }: { settings: Partial<ExecutionSetti
   </div>;
 }
 
-export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, currentPrompt, defaults, disabled, blocked = false, full, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children }: SettingsProfileControlProps) {
+export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children }: SettingsProfileControlProps) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
+  const runtime = { options: runtimeOptions, verified: runtimeVerified, backend: currentSettings.active_backend, build: currentSettings.active_build };
   const labelId = useId();
   const detailId = useId();
   const formId = useId();
@@ -246,10 +279,10 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
         {detailItem?.scope === 'model' && !isDefault(detailItem) && <p id={`${detailId}-default-hint`} className="settings-profile-hint">{copy.modelDefaultHint}</p>}
         {preview && <p className="settings-profile-hint">{copy.previewHint}</p>}
         {preview?.description && <p className="settings-profile-hint">{preview.description}</p>}
-        <SettingsValues settings={preview?.settings ?? currentSettings} prompt={preview ? preview.system_prompt : currentPrompt} />
+        <SettingsValues settings={preview?.settings ?? currentSettings} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
       </section>
       <details className="settings-profile-defaults"><summary>{copy.defaults}<span>{copy.readonly}</span></summary>
-        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} />
+        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} runtime={runtime} gpuDevices={gpuDevices} mode="reference" />
       </details>
     </>}
     {children && <div className="settings-profile-editor">{children}</div>}
