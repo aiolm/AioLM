@@ -517,6 +517,30 @@ export interface MemoryEstimate {
   source: "metadata" | "filesystem" | "unknown";
 }
 
+/**
+ * Pre-load point estimates for the edited configuration, never live usage readings.
+ * `null` means unavailable; `0` is a valid estimate. RAM/SSD include configured placement
+ * and capacity overflow. `disk_bytes`, `model_bytes` and `auxiliary_bytes` are stored file sizes only.
+ */
+export interface ResourceEstimate {
+  vram_bytes: number | null;
+  ram_offload_bytes: number | null;
+  ssd_offload_bytes: number | null;
+  /** VRAM the configuration requests before it is limited by physical capacity. */
+  required_vram_bytes: number | null;
+  /** Fixed host memory reserved by the runtime, excluding RAM offload. */
+  host_memory_bytes: number | null;
+  /** Physical totals, not current free memory. */
+  vram_capacity_bytes: number | null;
+  ram_capacity_bytes: number | null;
+  disk_bytes: number;
+  disk_complete: boolean;
+  model_bytes: number;
+  auxiliary_bytes: number;
+  kv_bytes: number | null;
+  notes: string[];
+}
+
 export interface LifecycleDiagnostics {
   idle_seconds?: number;
   sleep_idle_seconds: number;

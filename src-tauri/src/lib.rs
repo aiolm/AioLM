@@ -19,6 +19,7 @@ pub mod performance_bench;
 pub mod performance_memory;
 mod process_output;
 mod procutil;
+mod resource_estimate;
 pub mod runtime;
 pub mod server;
 pub mod session;
@@ -135,6 +136,7 @@ pub fn run() {
             commands::conversations::conversations_clear,
             commands::models::list_models,
             commands::models::model_metadata,
+            commands::models::estimate_model_resources,
             commands::models::cancel_model_scan,
             commands::models::delete_model,
             commands::models::pick_models_dir,

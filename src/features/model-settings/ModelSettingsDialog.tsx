@@ -17,6 +17,7 @@ import DraftTuningEditor from './DraftTuningEditor';
 import DraftGpuEditor from './DraftGpuEditor';
 import DraftAdvancedEditor from './DraftAdvancedEditor';
 import SettingsPasteBox from './SettingsPasteBox';
+import ResourceEstimatePanel from './ResourceEstimatePanel';
 import SettingsProfileControl from './SettingsProfileControl';
 import SettingsChangeList, { changeCount } from './SettingsChangeList';
 import { useProfileEditor } from './useProfileEditor';
@@ -361,12 +362,15 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                   {gap === 'runtimeMissing' && onManageRuntimes && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onManageRuntimes(structuredClone(cfg))}>{executionCopy.manageRuntime}</button>}
                 </li>)}
               </ul></FeedbackBanner>}</div>
+          <div className="model-settings-footer-bar">
+            <ResourceEstimatePanel cfg={cfg} options={runtime.options} verified={runtime.verified} runtimeDevices={runtime.capabilities?.devices} open={open} invalid={invalid.size > 0 || pathPending} benchmark={benchmark} />
               <div className="model-settings-actions">
                 {!benchmark && mode !== 'project' && (live
                   ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
                   : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !cfg.active_backend || !cfg.active_build || incomplete || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
                 {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" onClick={onCancelStart}>{copy.cancel}</button>}
               </div>
+          </div>
         </footer>
       </div>
       <div ref={setOverlay} className="model-settings-overlays" inert={disabled || !!pending || confirmSave} />

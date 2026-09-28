@@ -32,7 +32,7 @@ pub struct ModelShards {
 // GGUF's standard suffix is -00001-of-00033.gguf. Include the directory,
 // quantization/base name and total in the key; similarly named models elsewhere
 // and different quantizations must remain independent entries.
-fn shard_name(name: &str) -> Option<(&str, usize, usize)> {
+pub(crate) fn shard_name(name: &str) -> Option<(&str, usize, usize)> {
     let (stem, extension) = name.rsplit_once('.')?;
     if !extension.eq_ignore_ascii_case("gguf") {
         return None;

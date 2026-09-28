@@ -27,6 +27,24 @@ pub(crate) async fn model_metadata(path: String) -> Result<gguf::ModelMetadata, 
     .map_err(|error| format!("model metadata task failed: {error}"))?
 }
 
+/// Pre-load VRAM and RAM/SSD offload plan for the configuration being edited.
+///
+/// Only file metadata and bounded GGUF headers are read, off the async
+/// runtime; no model is loaded and no runtime is started.
+#[tauri::command]
+pub(crate) async fn estimate_model_resources(
+    config: config::AppConfig,
+    runtime_devices: Option<Vec<String>>,
+) -> Result<crate::resource_estimate::ResourceEstimate, String> {
+    tokio::task::spawn_blocking(move || {
+        let devices = runtime_devices.unwrap_or_default();
+        let environment = crate::resource_estimate::Environment::detect(&config, &devices);
+        crate::resource_estimate::estimate(&config, &environment)
+    })
+    .await
+    .map_err(|error| format!("resource estimate task failed: {error}"))
+}
+
 fn read_model_metadata(
     path: &Path,
     receipt_root: Option<&Path>,

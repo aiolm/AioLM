@@ -22,6 +22,9 @@ vi.mock('../../shared/api', async importOriginal => ({
   deviceProfile: vi.fn(async () => ({ profile: { gpus: [] }, backends: [] })),
   rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', devices: [], diagnostics: [], flags: [], state: 'available', server_help: '' })),
   modelMetadata: vi.fn(async () => ({})),
+  estimateModelResources: vi.fn(async () => ({ vram_bytes: 0, ram_offload_bytes: 2 * 1024 ** 3, ssd_offload_bytes: 0,
+    required_vram_bytes: 0, host_memory_bytes: 512 * 1024 ** 2, vram_capacity_bytes: null, ram_capacity_bytes: null,
+    disk_bytes: 3 * 1024 ** 3, disk_complete: true, model_bytes: 3 * 1024 ** 3, auxiliary_bytes: 0, kv_bytes: null, notes: ['approximate'] })),
 }));
 
 const cfg = { ...testConfig, active_model: 'models/a.gguf', runtime_defaults: [] };
@@ -47,6 +50,23 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it('refreshes resource estimates as execution settings change before applying them', async () => {
+    const { onApply, onProfileCommit } = mount({ initialSection: 'tuning' });
+    await waitFor(() => expect(screen.getByTestId('resource-ram')).toHaveTextContent('2.00 GiB'));
+    expect(screen.getByTestId('resource-disk')).toHaveTextContent('0 B');
+    numeric('ctx_size').focus();
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    await waitFor(() => expect(api.estimateModelResources).toHaveBeenLastCalledWith(expect.objectContaining({ ctx_size: 8192 }), expect.any(Array)));
+    // Refreshed estimates must not take focus or input away from the edited control.
+    await waitFor(() => expect(screen.getByTestId('resource-ram')).toHaveTextContent('2.00 GiB'));
+    expect(numeric('ctx_size')).toHaveFocus();
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    fireEvent.change(numeric('ngl'), { target: { value: '25' } });
+    await waitFor(() => expect(api.estimateModelResources).toHaveBeenLastCalledWith(expect.objectContaining({ ngl: 25, ctx_size: 8192 }), expect.any(Array)));
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+  });
 
   it.each(['default', 'session', 'benchmark', 'project'] as const)('saves edited options into the named selected profile from the %s target', async mode => {
     const source = captureProfile(cfg, 'Selected profile', 'global', 'Saved prompt');

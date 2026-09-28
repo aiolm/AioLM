@@ -7,8 +7,13 @@
 //! [`read_descriptor`] reads the `general.*` block the same bounded way, for
 //! describing how a model was packaged. Key names and their meanings follow the
 //! GGUF specification (`ggml/docs/gguf.md`).
+//!
+//! [`read_model_facts`] additionally walks the tensor info table that follows
+//! the metadata, for sizing a launch before it happens. Only names, shapes and
+//! data offsets are read; tensor data is still never touched.
 
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
@@ -203,29 +208,39 @@ fn skip_value<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<(), S
         9 => {
             let element = reader.u32()?;
             let count = reader.u64()?;
-            if count > MAX_ARRAY_LEN {
-                return Err("GGUF header declares an implausible array".into());
-            }
-            if let Some(width) = scalar_width(element) {
-                let bytes = width
-                    .checked_mul(count)
-                    .ok_or_else(|| "GGUF header declares an implausible array".to_string())?;
-                return reader.skip(bytes);
-            }
-            if element != 8 {
-                return Err(format!("unsupported GGUF array element type {element}"));
-            }
-            // Strings are individually sized, so the only way past them is
-            // through them.
-            reader.account_strings(count)?;
-            for _ in 0..count {
-                let length = reader.u64()?;
-                reader.skip(length)?;
-            }
-            Ok(())
+            skip_array_body(reader, element, count)
         }
         _ => Err(format!("unsupported GGUF value type {kind}")),
     }
+}
+
+/// Steps over the elements of an array whose element type and count were
+/// already read.
+fn skip_array_body<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    element: u32,
+    count: u64,
+) -> Result<(), String> {
+    if count > MAX_ARRAY_LEN {
+        return Err("GGUF header declares an implausible array".into());
+    }
+    if let Some(width) = scalar_width(element) {
+        let bytes = width
+            .checked_mul(count)
+            .ok_or_else(|| "GGUF header declares an implausible array".to_string())?;
+        return reader.skip(bytes);
+    }
+    if element != 8 {
+        return Err(format!("unsupported GGUF array element type {element}"));
+    }
+    // Strings are individually sized, so the only way past them is
+    // through them.
+    reader.account_strings(count)?;
+    for _ in 0..count {
+        let length = reader.u64()?;
+        reader.skip(length)?;
+    }
+    Ok(())
 }
 
 fn read_unsigned<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Option<u64>, String> {
@@ -251,6 +266,13 @@ fn read_unsigned<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Op
 /// returns the reader positioned at the first key with the key count.
 #[allow(clippy::type_complexity)]
 fn open_header(path: &Path) -> Result<(Reader<BufReader<File>>, u64), String> {
+    let (reader, _tensors, keys) = open_header_with_tensors(path)?;
+    Ok((reader, keys))
+}
+
+/// [`open_header`], also returning how many tensor infos follow the keys.
+#[allow(clippy::type_complexity)]
+fn open_header_with_tensors(path: &Path) -> Result<(Reader<BufReader<File>>, u64, u64), String> {
     let file = File::open(path).map_err(|error| format!("cannot open the model: {error}"))?;
     let mut reader = Reader {
         inner: BufReader::new(file),
@@ -265,12 +287,12 @@ fn open_header(path: &Path) -> Result<(Reader<BufReader<File>>, u64), String> {
     if !(2..=3).contains(&version) {
         return Err(format!("unsupported GGUF version {version}"));
     }
-    let _tensors = reader.u64()?;
+    let tensors = reader.u64()?;
     let keys = reader.u64()?;
     if keys > MAX_KEYS {
         return Err("GGUF header declares an implausible key count".into());
     }
-    Ok((reader, keys))
+    Ok((reader, tensors, keys))
 }
 
 pub fn read_metadata(path: &Path) -> Result<ModelMetadata, String> {
@@ -502,6 +524,556 @@ pub fn read_descriptor(path: &Path) -> Result<ModelDescriptor, String> {
     }
     descriptor.base_model_repo_urls = base_models.into_iter().map(|(_, url)| url).collect();
     Ok(descriptor)
+}
+
+/// Tensor infos one header may declare. Real models stay far below this, and
+/// the metadata span bound limits the walk as well.
+const MAX_TENSORS: u64 = 1 << 20;
+/// `GGML_MAX_NAME` is 64 bytes; some slack is left for forks, but a longer
+/// name cannot belong to a tensor llama.cpp loads.
+const MAX_TENSOR_NAME_BYTES: u64 = 256;
+/// `GGML_MAX_DIMS`.
+const MAX_TENSOR_DIMS: u32 = 4;
+/// Layer indices and per-layer arrays beyond this are not a real model
+/// (`LLAMA_MAX_LAYERS` is 512 upstream).
+pub const MAX_MODEL_LAYERS: usize = 4_096;
+/// `GGUF_DEFAULT_ALIGNMENT`, used when `general.alignment` is absent.
+const DEFAULT_ALIGNMENT: u64 = 32;
+
+/// Keys, after the `{arch}.` prefix, whose values size a launch. Names follow
+/// `LLM_KV_NAMES` in llama.cpp's `src/llama-arch.cpp`.
+const FACT_SUFFIXES: &[&str] = &[
+    "block_count",
+    "nextn_predict_layers",
+    "context_length",
+    "embedding_length",
+    "vocab_size",
+    "feed_forward_length",
+    "expert_feed_forward_length",
+    "expert_shared_feed_forward_length",
+    "expert_used_count",
+    "attention.head_count",
+    "attention.head_count_kv",
+    "attention.key_length",
+    "attention.value_length",
+    "attention.sliding_window",
+    "attention.kv_lora_rank",
+    "attention.recurrent_layers",
+    "full_attention_interval",
+    "ssm.conv_kernel",
+    "ssm.inner_size",
+    "ssm.state_size",
+    "ssm.group_count",
+    "attention.indexer.key_length",
+    "hyper_connection.count",
+    "ple.layers",
+    "ple.conv_kernel",
+    "ple.ngram_size",
+];
+
+/// Key families only recurrent state carries: `ssm.*` (Mamba-style layers),
+/// `wkv.*` and the time-mix sizes (RWKV), `shortconv.*` (LFM2).
+const RECURRENT_KEYS: &[&str] = &[
+    "ssm.",
+    "wkv.",
+    "shortconv.",
+    "time_mix_extra_dim",
+    "time_decay_extra_dim",
+];
+
+/// A hyperparameter llama.cpp reads with `get_key_or_arr`: one value shared by
+/// every layer, or one value per layer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PerLayer {
+    Uniform(u64),
+    Layers(Vec<u64>),
+}
+
+impl PerLayer {
+    /// The value for layer `il`, or `None` past the end of a short array.
+    pub fn at(&self, il: usize) -> Option<u64> {
+        match self {
+            Self::Uniform(value) => Some(*value),
+            Self::Layers(values) => values.get(il).copied(),
+        }
+    }
+
+    pub fn max(&self) -> u64 {
+        match self {
+            Self::Uniform(value) => *value,
+            Self::Layers(values) => values.iter().copied().max().unwrap_or(0),
+        }
+    }
+}
+
+/// Weight bytes of one repeating layer (`blk.N.*`), split the way llama.cpp's
+/// CPU override flags split it (`common/common.h`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayerBytes {
+    /// `LLM_FFN_EXPS_REGEX`, `\.ffn_(up|down|gate|gate_up)_(ch|)exps`, which
+    /// `--cpu-moe` and `--n-cpu-moe` keep on the CPU.
+    pub experts: u64,
+    /// `LLM_FFN_DENSE_REGEX`, `\.ffn_(up|down|gate)\.`, which `--n-cpu-ffn`
+    /// keeps on the CPU.
+    pub dense_ffn: u64,
+    pub other: u64,
+}
+
+impl LayerBytes {
+    pub fn total(&self) -> u64 {
+        self.experts
+            .saturating_add(self.dense_ffn)
+            .saturating_add(self.other)
+    }
+}
+
+/// Tensor data bytes grouped by the layer llama.cpp assigns them to
+/// (`LLM_TENSOR_INFOS` in `src/llama-arch.cpp`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TensorBytes {
+    /// Input-layer tensors other than `token_embd.weight`; kept on the CPU.
+    pub input: u64,
+    /// Subset of `input` eligible for on-demand disk reads in PLE models.
+    pub per_layer_token_embd: u64,
+    /// `token_embd.weight`, also an input-layer tensor. A model without
+    /// `output.weight` loads it a second time as its output
+    /// (`TENSOR_DUPLICATED`).
+    pub token_embd: u64,
+    /// Output-layer tensors, plus the few tiny non-repeating ones (rope
+    /// factors, embedding norms) that are placed with them here.
+    pub output: u64,
+    pub layers: Vec<LayerBytes>,
+    pub has_output_weight: bool,
+    /// Rows of `token_embd.weight` or `output.weight`: the vocabulary size.
+    pub vocab: Option<u64>,
+}
+
+impl TensorBytes {
+    pub fn total(&self) -> u64 {
+        self.layers
+            .iter()
+            .fold(self.input.saturating_add(self.token_embd), |sum, layer| {
+                sum.saturating_add(layer.total())
+            })
+            .saturating_add(self.output)
+    }
+
+    /// Adds the tensors of another shard of the same model.
+    pub fn absorb(&mut self, other: &TensorBytes) {
+        self.input = self.input.saturating_add(other.input);
+        self.per_layer_token_embd = self
+            .per_layer_token_embd
+            .saturating_add(other.per_layer_token_embd);
+        self.token_embd = self.token_embd.saturating_add(other.token_embd);
+        self.output = self.output.saturating_add(other.output);
+        if self.layers.len() < other.layers.len() {
+            self.layers
+                .resize(other.layers.len(), LayerBytes::default());
+        }
+        for (mine, theirs) in self.layers.iter_mut().zip(&other.layers) {
+            mine.experts = mine.experts.saturating_add(theirs.experts);
+            mine.dense_ffn = mine.dense_ffn.saturating_add(theirs.dense_ffn);
+            mine.other = mine.other.saturating_add(theirs.other);
+        }
+        self.has_output_weight |= other.has_output_weight;
+        self.vocab = self.vocab.or(other.vocab);
+    }
+}
+
+/// What one GGUF header says about the memory a model needs once loaded.
+/// Every value is exactly as the header states it; which of them a runtime
+/// honours is decided where the facts are consumed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelFacts {
+    pub architecture: Option<String>,
+    pub block_count: Option<u64>,
+    pub nextn_layers: Option<u64>,
+    pub context_length: Option<u64>,
+    pub embedding_length: Option<u64>,
+    pub vocab_size: Option<u64>,
+    pub feed_forward_length: Option<PerLayer>,
+    pub expert_feed_forward_length: Option<PerLayer>,
+    pub expert_shared_feed_forward_length: Option<u64>,
+    pub expert_used_count: Option<PerLayer>,
+    pub head_count: Option<PerLayer>,
+    pub head_count_kv: Option<PerLayer>,
+    pub key_length: Option<u64>,
+    pub value_length: Option<u64>,
+    /// Present on models with sliding-window attention layers.
+    pub sliding_window: Option<u64>,
+    /// Present on multi-head latent attention (MLA) models.
+    pub kv_lora_rank: Option<u64>,
+    /// The header carries keys only recurrent layers use.
+    pub recurrent_state: bool,
+    pub recurrent_layers: Option<PerLayer>,
+    pub full_attention_interval: Option<u64>,
+    pub ssm_conv_kernel: Option<u64>,
+    pub ssm_inner_size: Option<u64>,
+    pub ssm_state_size: Option<u64>,
+    pub ssm_group_count: Option<u64>,
+    pub indexer_key_length: Option<u64>,
+    pub hyper_connections: Option<u64>,
+    pub ple_layers: Vec<u64>,
+    pub ple_conv_kernel: Option<u64>,
+    pub ple_ngram_size: Option<u64>,
+    /// `split.count`: how many files a sharded model spans.
+    pub split_count: Option<u64>,
+    /// `None` when the tensor table does not describe the file consistently.
+    pub tensors: Option<TensorBytes>,
+}
+
+enum RawValue {
+    Int(u64),
+    Ints(Vec<u64>),
+}
+
+/// Reads any integer or boolean scalar. Other types, and negative values,
+/// are stepped over and reported as absent.
+fn read_integer<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Option<u64>, String> {
+    Ok(match kind {
+        0 => Some(u64::from(reader.bytes::<1>()?[0])),
+        1 => u64::try_from(i8::from_le_bytes(reader.bytes::<1>()?)).ok(),
+        2 => Some(u64::from(u16::from_le_bytes(reader.bytes::<2>()?))),
+        3 => u64::try_from(i16::from_le_bytes(reader.bytes::<2>()?)).ok(),
+        4 => Some(u64::from(reader.u32()?)),
+        5 => u64::try_from(i32::from_le_bytes(reader.bytes::<4>()?)).ok(),
+        7 => Some(u64::from(reader.bytes::<1>()?[0] != 0)),
+        10 => Some(reader.u64()?),
+        11 => u64::try_from(i64::from_le_bytes(reader.bytes::<8>()?)).ok(),
+        _ => {
+            skip_value(reader, kind)?;
+            None
+        }
+    })
+}
+
+fn read_raw<R: Read + Seek>(reader: &mut Reader<R>, kind: u32) -> Result<Option<RawValue>, String> {
+    if kind != 9 {
+        return Ok(read_integer(reader, kind)?.map(RawValue::Int));
+    }
+    let element = reader.u32()?;
+    let count = reader.u64()?;
+    let integer = matches!(element, 0..=5 | 7 | 10 | 11);
+    if !integer || count > MAX_MODEL_LAYERS as u64 {
+        skip_array_body(reader, element, count)?;
+        return Ok(None);
+    }
+    let mut values = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        values.push(read_integer(reader, element)?);
+    }
+    // A negative entry has no meaning as a size; drop the whole array rather
+    // than shift the layers after it.
+    let Some(values) = values.into_iter().collect::<Option<Vec<_>>>() else {
+        return Ok(None);
+    };
+    Ok(Some(RawValue::Ints(values)))
+}
+
+enum LayerPart {
+    Experts,
+    DenseFfn,
+    Other,
+}
+
+enum TensorClass {
+    Input,
+    TokenEmbd,
+    Output,
+    Layer(usize, LayerPart),
+}
+
+/// Groups a tensor by name the way llama.cpp's tensor table and CPU override
+/// patterns do. Repeating tensors are `blk.{il}.*`; the input layer is the
+/// set `LLM_TENSOR_INFOS` marks `LLM_TENSOR_LAYER_INPUT`.
+fn classify_tensor(name: &str) -> TensorClass {
+    if let Some(rest) = name.strip_prefix("blk.") {
+        let digits = rest.split('.').next().unwrap_or_default();
+        if let Some(il) = digits
+            .parse::<usize>()
+            .ok()
+            .filter(|il| *il < MAX_MODEL_LAYERS)
+        {
+            let tail = &rest[digits.len()..];
+            const EXPERTS: [&str; 8] = [
+                ".ffn_up_exps",
+                ".ffn_down_exps",
+                ".ffn_gate_exps",
+                ".ffn_gate_up_exps",
+                ".ffn_up_chexps",
+                ".ffn_down_chexps",
+                ".ffn_gate_chexps",
+                ".ffn_gate_up_chexps",
+            ];
+            const DENSE: [&str; 3] = [".ffn_up.", ".ffn_down.", ".ffn_gate."];
+            let part = if EXPERTS.iter().any(|part| tail.starts_with(part)) {
+                LayerPart::Experts
+            } else if DENSE.iter().any(|part| tail.starts_with(part)) {
+                LayerPart::DenseFfn
+            } else {
+                LayerPart::Other
+            };
+            return TensorClass::Layer(il, part);
+        }
+    }
+    if name == "token_embd.weight" {
+        return TensorClass::TokenEmbd;
+    }
+    let base = name.split('.').next().unwrap_or_default();
+    if matches!(
+        base,
+        "token_embd"
+            | "position_embd"
+            | "token_types"
+            | "per_layer_token_embd"
+            | "masked_embd_centroids"
+            | "masked_embd_ordering"
+    ) || name.starts_with("hrm.z_l_init")
+    {
+        TensorClass::Input
+    } else {
+        TensorClass::Output
+    }
+}
+
+/// Walks the tensor info table and sizes every tensor from the gap to the
+/// next data offset (the last one runs to the end of the file). Sizes include
+/// alignment padding, at most `alignment - 1` bytes each, which keeps the
+/// result independent of the quantisation types a build knows about.
+fn read_tensor_bytes<R: Read + Seek>(
+    reader: &mut Reader<R>,
+    count: u64,
+    alignment: u64,
+    file_len: u64,
+) -> Result<Option<TensorBytes>, String> {
+    let mut summary = TensorBytes::default();
+    let mut entries = Vec::new();
+    let mut name = Vec::new();
+    for _ in 0..count {
+        let length = reader.u64()?;
+        if length > MAX_TENSOR_NAME_BYTES {
+            return Err("GGUF tensor name is implausibly long".into());
+        }
+        reader.account(length)?;
+        name.resize(length as usize, 0);
+        reader
+            .inner
+            .read_exact(&mut name)
+            .map_err(|error| format!("unreadable GGUF header: {error}"))?;
+        let dims = reader.u32()?;
+        if dims > MAX_TENSOR_DIMS {
+            return Err("GGUF tensor declares too many dimensions".into());
+        }
+        let mut shape = [1u64; MAX_TENSOR_DIMS as usize];
+        for dim in shape.iter_mut().take(dims as usize) {
+            *dim = reader.u64()?;
+        }
+        let _type = reader.u32()?;
+        let offset = reader.u64()?;
+        let name = String::from_utf8_lossy(&name);
+        if name == "output.weight" {
+            summary.has_output_weight = true;
+        }
+        if (name == "token_embd.weight" || name == "output.weight") && dims >= 2 {
+            summary.vocab.get_or_insert(shape[1]);
+        }
+        entries.push((
+            offset,
+            classify_tensor(&name),
+            name == "per_layer_token_embd.weight",
+        ));
+    }
+    let data_start = reader
+        .consumed
+        .div_ceil(alignment)
+        .checked_mul(alignment)
+        .ok_or_else(|| "GGUF header declares an implausible data offset".to_string())?;
+    let Some(data_len) = file_len.checked_sub(data_start) else {
+        return Ok(None);
+    };
+    entries.sort_by_key(|(offset, _, _)| *offset);
+    for index in 0..entries.len() {
+        let offset = entries[index].0;
+        let end = entries
+            .get(index + 1)
+            .map_or(data_len, |(next, _, _)| *next);
+        if offset >= data_len || end <= offset {
+            return Ok(None);
+        }
+        let bytes = end - offset;
+        if entries[index].2 {
+            summary.per_layer_token_embd = summary.per_layer_token_embd.saturating_add(bytes);
+        }
+        match &entries[index].1 {
+            TensorClass::Input => summary.input = summary.input.saturating_add(bytes),
+            TensorClass::TokenEmbd => summary.token_embd = summary.token_embd.saturating_add(bytes),
+            TensorClass::Output => summary.output = summary.output.saturating_add(bytes),
+            TensorClass::Layer(il, part) => {
+                if summary.layers.len() <= *il {
+                    summary.layers.resize(il + 1, LayerBytes::default());
+                }
+                let layer = &mut summary.layers[*il];
+                let slot = match part {
+                    LayerPart::Experts => &mut layer.experts,
+                    LayerPart::DenseFfn => &mut layer.dense_ffn,
+                    LayerPart::Other => &mut layer.other,
+                };
+                *slot = slot.saturating_add(bytes);
+            }
+        }
+    }
+    Ok(Some(summary))
+}
+
+/// Reads the hyperparameters and tensor sizes that decide a model's memory,
+/// through the same bounded reader as [`read_metadata`].
+pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
+    let file_len = std::fs::metadata(path)
+        .map_err(|error| format!("cannot open the model: {error}"))?
+        .len();
+    let (mut reader, tensors, keys) = open_header_with_tensors(path)?;
+    if tensors > MAX_TENSORS {
+        return Err("GGUF header declares an implausible tensor count".into());
+    }
+    let mut facts = ModelFacts::default();
+    let mut alignment = DEFAULT_ALIGNMENT;
+    let mut values = HashMap::new();
+    let mut recurrent_prefixes = HashSet::new();
+    for _ in 0..keys {
+        let key = reader.string()?;
+        let kind = reader.u32()?;
+        match key.as_str() {
+            "general.architecture" if kind == 8 => facts.architecture = Some(reader.string()?),
+            "general.alignment" => {
+                if let Some(value) = read_integer(&mut reader, kind)? {
+                    alignment = value;
+                }
+            }
+            "split.count" => facts.split_count = read_integer(&mut reader, kind)?,
+            _ => {
+                let (prefix, rest) = key.split_once('.').unwrap_or((key.as_str(), ""));
+                if RECURRENT_KEYS.iter().any(|marker| rest.starts_with(marker)) {
+                    recurrent_prefixes.insert(prefix.to_owned());
+                }
+                if FACT_SUFFIXES.contains(&rest) {
+                    if let Some(value) = read_raw(&mut reader, kind)? {
+                        values.insert(key.clone(), value);
+                    }
+                    continue;
+                }
+                skip_value(&mut reader, kind)?;
+            }
+        }
+    }
+    // gguf.cpp refuses an alignment that is zero or not a power of two.
+    if alignment == 0 || !alignment.is_power_of_two() {
+        return Err("GGUF header declares an invalid alignment".into());
+    }
+    facts.tensors = read_tensor_bytes(&mut reader, tensors, alignment, file_len)?;
+
+    let Some(architecture) = facts.architecture.clone() else {
+        return Ok(facts);
+    };
+    facts.recurrent_state = recurrent_prefixes.contains(&architecture);
+    let value = |suffix: &str| values.get(&format!("{architecture}.{suffix}"));
+    let int = |suffix: &str| match value(suffix) {
+        Some(RawValue::Int(value)) => Some(*value),
+        _ => None,
+    };
+    let per_layer = |suffix: &str| match value(suffix) {
+        Some(RawValue::Int(value)) => Some(PerLayer::Uniform(*value)),
+        Some(RawValue::Ints(values)) => Some(PerLayer::Layers(values.clone())),
+        _ => None,
+    };
+    facts.block_count = int("block_count");
+    facts.nextn_layers = int("nextn_predict_layers");
+    facts.context_length = int("context_length");
+    facts.embedding_length = int("embedding_length");
+    facts.vocab_size = int("vocab_size");
+    facts.feed_forward_length = per_layer("feed_forward_length");
+    facts.expert_feed_forward_length = per_layer("expert_feed_forward_length");
+    facts.expert_shared_feed_forward_length = int("expert_shared_feed_forward_length");
+    facts.expert_used_count = per_layer("expert_used_count");
+    facts.head_count = per_layer("attention.head_count");
+    facts.head_count_kv = per_layer("attention.head_count_kv");
+    facts.key_length = int("attention.key_length");
+    facts.value_length = int("attention.value_length");
+    facts.sliding_window = int("attention.sliding_window");
+    facts.kv_lora_rank = int("attention.kv_lora_rank");
+    facts.recurrent_layers = per_layer("attention.recurrent_layers");
+    facts.full_attention_interval = int("full_attention_interval");
+    facts.ssm_conv_kernel = int("ssm.conv_kernel");
+    facts.ssm_inner_size = int("ssm.inner_size");
+    facts.ssm_state_size = int("ssm.state_size");
+    facts.ssm_group_count = int("ssm.group_count");
+    facts.indexer_key_length = int("attention.indexer.key_length");
+    facts.hyper_connections = int("hyper_connection.count");
+    if let Some(RawValue::Ints(layers)) = value("ple.layers") {
+        facts.ple_layers = layers.clone();
+    }
+    facts.ple_conv_kernel = int("ple.conv_kernel");
+    facts.ple_ngram_size = int("ple.ngram_size");
+    Ok(facts)
+}
+
+/// Synthetic GGUF files for tests: metadata plus a tensor table whose data
+/// is zero-filled, so every tensor's size is exactly what the test declares.
+#[cfg(test)]
+pub(crate) mod fixture {
+    pub(crate) enum Value {
+        U32(u32),
+        Str(&'static str),
+        U32s(Vec<u32>),
+    }
+
+    fn string(out: &mut Vec<u8>, value: &str) {
+        out.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        out.extend_from_slice(value.as_bytes());
+    }
+
+    /// Tensors are `(name, shape, bytes)`; sizes that are multiples of the
+    /// default 32-byte alignment come back exactly.
+    pub(crate) fn file(values: &[(String, Value)], tensors: &[(String, Vec<u64>, u64)]) -> Vec<u8> {
+        let mut out = b"GGUF".to_vec();
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(values.len() as u64).to_le_bytes());
+        for (key, value) in values {
+            string(&mut out, key);
+            match value {
+                Value::U32(value) => {
+                    out.extend_from_slice(&4u32.to_le_bytes());
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+                Value::Str(value) => {
+                    out.extend_from_slice(&8u32.to_le_bytes());
+                    string(&mut out, value);
+                }
+                Value::U32s(values) => {
+                    out.extend_from_slice(&9u32.to_le_bytes());
+                    out.extend_from_slice(&4u32.to_le_bytes());
+                    out.extend_from_slice(&(values.len() as u64).to_le_bytes());
+                    for value in values {
+                        out.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        let mut offset = 0u64;
+        for (name, shape, bytes) in tensors {
+            string(&mut out, name);
+            out.extend_from_slice(&(shape.len() as u32).to_le_bytes());
+            for dim in shape {
+                out.extend_from_slice(&dim.to_le_bytes());
+            }
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&offset.to_le_bytes());
+            offset += bytes.div_ceil(32) * 32;
+        }
+        out.resize(out.len().div_ceil(32) * 32, 0);
+        out.resize(out.len() + offset as usize, 0);
+        out
+    }
 }
 
 #[cfg(test)]
@@ -820,5 +1392,98 @@ mod tests {
             .unwrap_err()
             .contains("string entry budget"));
         assert_eq!(reader.consumed, 12);
+    }
+
+    fn tensor(name: &str, shape: &[u64], bytes: u64) -> (String, Vec<u64>, u64) {
+        (name.into(), shape.to_vec(), bytes)
+    }
+
+    #[test]
+    fn model_facts_size_tensors_by_the_layer_llama_cpp_places_them_on() {
+        use fixture::Value;
+        let values = vec![
+            ("general.architecture".to_string(), Value::Str("qwen3moe")),
+            ("qwen3moe.block_count".to_string(), Value::U32(2)),
+            ("qwen3moe.context_length".to_string(), Value::U32(32_768)),
+            ("qwen3moe.attention.head_count".to_string(), Value::U32(8)),
+            (
+                "qwen3moe.attention.head_count_kv".to_string(),
+                Value::U32s(vec![2, 4]),
+            ),
+            ("qwen3moe.attention.key_length".to_string(), Value::U32(128)),
+            ("qwen3moe.expert_used_count".to_string(), Value::U32(8)),
+        ];
+        let tensors = vec![
+            tensor("token_embd.weight", &[256, 1_000], 4_096),
+            tensor("blk.0.attn_q.weight", &[256, 256], 1_024),
+            tensor("blk.0.ffn_up_exps.weight", &[256, 64, 8], 8_192),
+            tensor("blk.0.ffn_gate_up_exps.weight", &[256, 128, 8], 2_048),
+            tensor("blk.0.ffn_up_shexp.weight", &[256, 64], 512),
+            tensor("blk.1.ffn_up.weight", &[256, 512], 2_048),
+            tensor("blk.1.ffn_down.bias", &[256], 32),
+            tensor("output_norm.weight", &[256], 32),
+            tensor("position_embd.weight", &[256, 64], 64),
+            tensor("token_embd_norm.weight", &[256], 32),
+        ];
+        let facts = in_temporary_file(&fixture::file(&values, &tensors), read_model_facts).unwrap();
+        assert_eq!(facts.block_count, Some(2));
+        assert_eq!(facts.context_length, Some(32_768));
+        assert_eq!(facts.head_count_kv, Some(PerLayer::Layers(vec![2, 4])));
+        assert_eq!(facts.key_length, Some(128));
+        assert_eq!(facts.expert_used_count, Some(PerLayer::Uniform(8)));
+        assert!(!facts.recurrent_state);
+        let bytes = facts.tensors.unwrap();
+        assert_eq!(bytes.token_embd, 4_096);
+        assert_eq!(bytes.input, 64);
+        // The norm tensors are tiny and ride with the output layer.
+        assert_eq!(bytes.output, 64);
+        assert!(!bytes.has_output_weight);
+        assert_eq!(bytes.vocab, Some(1_000));
+        assert_eq!(
+            bytes.layers,
+            vec![
+                LayerBytes {
+                    experts: 10_240,
+                    dense_ffn: 0,
+                    other: 1_536,
+                },
+                LayerBytes {
+                    experts: 0,
+                    dense_ffn: 2_080,
+                    other: 0,
+                },
+            ]
+        );
+        assert_eq!(bytes.total(), 18_080);
+    }
+
+    #[test]
+    fn model_facts_mark_recurrent_keys_and_refuse_an_implausible_tensor_table() {
+        use fixture::Value;
+        let recurrent = fixture::file(
+            &[
+                ("general.architecture".to_string(), Value::Str("newhybrid")),
+                ("newhybrid.ssm.state_size".to_string(), Value::U32(16)),
+            ],
+            &[],
+        );
+        assert!(
+            in_temporary_file(&recurrent, read_model_facts)
+                .unwrap()
+                .recurrent_state
+        );
+        let long_name = "x".repeat(300);
+        let refused = fixture::file(&[], &[tensor(&long_name, &[1], 32)]);
+        assert!(in_temporary_file(&refused, read_model_facts).is_err());
+        // Data that stops short of a declared tensor leaves sizes unknown
+        // instead of guessing them.
+        let mut truncated = fixture::file(&[], &[tensor("blk.0.attn_q.weight", &[8], 64)]);
+        truncated.truncate(truncated.len() - 64);
+        assert_eq!(
+            in_temporary_file(&truncated, read_model_facts)
+                .unwrap()
+                .tensors,
+            None
+        );
     }
 }

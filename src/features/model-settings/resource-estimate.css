@@ -1,0 +1,25 @@
+/* Two short lines beside the launch action: values, then status or the details toggle. */
+.resource-estimate { min-width: 0; font-size: 12px; line-height: 18px; }
+.resource-estimate-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; }
+.resource-estimate-title { color: var(--ui-muted); font-weight: 650; }
+.resource-estimate-summary dl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin: 0; }
+.resource-estimate-summary dl > div { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.resource-estimate-summary dt { color: var(--ui-muted); font-size: 11px; }
+.resource-estimate-summary dd { margin: 0; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.resource-estimate-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 24px; margin-top: 2px; color: var(--ui-muted); }
+.resource-estimate-details { flex: 1 1 100%; min-width: 0; line-height: 1.5; }
+.resource-estimate-details summary { width: fit-content; padding-block: 3px; line-height: 18px; cursor: pointer; }
+.resource-estimate-details dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 6px 0; }
+.resource-estimate-details dl > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; }
+.resource-estimate-details dd { margin: 0; font-variant-numeric: tabular-nums; }
+/* Stored file sizes sit apart from the memory figures so they are not read as SSD Offload. */
+.resource-estimate-details .resource-estimate-files { padding-top: 6px; border-top: 1px solid var(--ui-border); }
+.resource-estimate-details p { margin: 6px 0; }
+.resource-estimate-details ul { margin: 6px 0; padding-inline-start: 18px; list-style: disc; }
+@media (max-width: 720px) {
+  /* The region keeps its name through aria-labelledby; the values need the width. */
+  .resource-estimate-title { display: none; }
+  .resource-estimate-summary dl { column-gap: 10px; }
+  .resource-estimate-summary dd { font-size: 12px; }
+  .resource-estimate-details dl { grid-template-columns: minmax(0, 1fr); }
+}

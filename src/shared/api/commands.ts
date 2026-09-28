@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
 import type { HfInstalledFile, HfSortKey } from "./models.ts";
 import type {
-  AppConfig, DeviceReport,
+  AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
   LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelMetadata, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
@@ -77,6 +77,8 @@ export function normalizeSessionList(value: SessionStatus[] | SessionListResult)
 export const deviceProfile = () => invoke<DeviceReport>("device_profile");
 export const modelMetadata = (path: string) =>
   invoke<ModelMetadata>("model_metadata", { path });
+export const estimateModelResources = (config: AppConfig, runtimeDevices: readonly string[] = []) =>
+  invoke<ResourceEstimate>("estimate_model_resources", { config, runtimeDevices });
 
 export const rtList = () => invoke<InstalledRuntime[]>("rt_list");
 export const rtLatest = (backend: string, refresh = false) => invoke<LatestInfo>("rt_latest", { backend, refresh });

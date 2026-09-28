@@ -48,7 +48,11 @@
 .model-settings-notices:empty { display: none; }
 .model-settings-blocked { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .model-settings-blocked li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--ui-warning); }
-.model-settings-actions { display: flex; gap: 9px; justify-content: flex-end; flex-wrap: wrap; }
+/* The resource summary shares the launch row; top alignment keeps the action in place while its details are open. */
+.model-settings-footer-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; }
+.model-settings-footer-bar > .resource-estimate { flex: 1 1 360px; }
+.model-settings-actions { display: flex; gap: 9px; justify-content: flex-end; flex-wrap: wrap; margin-inline-start: auto; }
+.model-settings-actions:empty { display: none; }
 .model-settings-confirm { font-size: 13px; line-height: 1.5; }
 .model-settings-confirm p { margin: 5px 0 12px; }
 .model-settings-confirm > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
@@ -64,6 +68,7 @@
   .model-settings-grid, .model-settings-gpus { grid-template-columns: minmax(0, 1fr); }
   .model-settings-lora { grid-template-columns: minmax(0, 1fr) 80px; }
   .model-settings-footer { padding: 12px 16px; }
+  .model-settings-actions { flex: 1 1 100%; }
   .model-settings-actions > button { flex: 1 1 120px; }
 }
 .model-settings-profile-status { display: grid; gap: 0.25rem; margin-block: 0.6rem 1.1rem; font-size: 0.75rem; color: var(--ui-muted); overflow-wrap: anywhere; }
