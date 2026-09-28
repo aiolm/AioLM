@@ -654,7 +654,15 @@ async fn server_start_unlocked() -> Result<Value, String> {
         state.lifecycle = server::Lifecycle::Starting;
     }
     let err = Arc::new(server::ErrBuf::default());
-    if let Err(error) = server::wait_ready(Arc::clone(&shared), &url, "", 45, &err).await {
+    if let Err(error) = server::wait_ready(
+        Arc::clone(&shared),
+        &url,
+        "",
+        server::SERVER_START_TIMEOUT_SECS,
+        &err,
+    )
+    .await
+    {
         if let Ok(mut state) = shared.lock() {
             server::kill(&mut state.child, Some(Arc::clone(&err)));
         }

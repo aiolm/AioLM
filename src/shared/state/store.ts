@@ -37,7 +37,6 @@ function isProfileRevisionConflict(error: unknown): boolean {
 }
 
 
-const START_TIMEOUT_MS = 120_000;
 const STOP_TIMEOUT_MS = 20_000;
 let configurationLoads: Promise<unknown> = Promise.resolve();
 
@@ -193,7 +192,9 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     setBusy(true); setActionError(null); setStatus({ state: "starting" }); operationInFlight.current = true; statusGeneration.current += 1;
     const generation = statusGeneration.current;
     try {
-      const url = await withTimeout(api.startServer(current), START_TIMEOUT_MS, "Server start timed out after 120 seconds.");
+      // The backend owns the start deadline. A shorter UI timer would report a
+      // failure while a large model is still loading; Stop cancels a hung start.
+      const url = await api.startServer(current);
       await refreshStatus();
       return url;
     } catch (error) {

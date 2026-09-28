@@ -11,6 +11,10 @@ use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Loading large models and warming up the backend can take several minutes.
+/// Desktop sessions, the CLI and benchmarks share one readiness deadline.
+pub const SERVER_START_TIMEOUT_SECS: u64 = 600;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Lifecycle {
     Stopped,
@@ -953,7 +957,7 @@ pub async fn wait_ready(
         ""
     };
     Err(format!(
-        "server did not become ready within {timeout_s}s. {} {}",
+        "server start timed out after {timeout_s}s while waiting for model loading and warmup. {} {}",
         ownership,
         tail.trim()
     ))
@@ -1589,6 +1593,7 @@ mod tests {
             String::new(),
         );
         let err = Arc::new(ErrBuf::default());
+        err.push(b"loading model tensors");
         let result = tokio::runtime::Runtime::new().unwrap().block_on(wait_ready(
             shared.clone(),
             "http://127.0.0.1:59999/v1",
@@ -1596,7 +1601,58 @@ mod tests {
             1,
             &err,
         ));
-        assert!(result.is_err());
+        let error = result.expect_err("an unresponsive server must time out");
+        assert!(error.contains("server start timed out after 1s"));
+        assert!(error.contains("loading model tensors"));
         assert!(shared.lock().unwrap().child.is_none());
+    }
+
+    #[test]
+    fn readiness_reports_process_exit_without_waiting_for_the_start_deadline() {
+        let child = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit", "7"])
+                .spawn()
+                .unwrap()
+        } else {
+            Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap()
+        };
+        let shared = Arc::new(Mutex::new(ServerState::default()));
+        let url = "http://127.0.0.1:59999/v1";
+        shared.lock().unwrap().attach_starting(
+            child,
+            url.into(),
+            "token".into(),
+            "model.gguf".into(),
+            String::new(),
+            String::new(),
+        );
+        let err = Arc::new(ErrBuf::default());
+        err.push(b"failed to allocate model buffer");
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                wait_ready(
+                    shared.clone(),
+                    url,
+                    "token",
+                    SERVER_START_TIMEOUT_SECS,
+                    &err,
+                ),
+            )
+            .await
+        });
+        let child_reaped = {
+            let mut state = shared.lock().unwrap();
+            let reaped = state.child.is_none();
+            kill(&mut state.child, None);
+            reaped
+        };
+        let error = result
+            .expect("an exited server must fail promptly")
+            .expect_err("a failed process must not become ready");
+        assert!(error.contains("server exited before ready (7)"));
+        assert!(error.contains("failed to allocate model buffer"));
+        assert!(child_reaped);
     }
 }

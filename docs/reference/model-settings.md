@@ -19,6 +19,8 @@ Execution options are editable immediately, including values inherited from the 
 
 The header Close button or Escape closes the editor. If pending changes exist, the dialog offers to keep editing or discard them. Completed profile saves, renames, default designations, deletions and applications remain saved after closing. A failed save preserves the draft. During model loading, Cancel stops the pending launch; settings that were saved before loading remain available for correction and retry.
 
+Model startup allows up to 10 minutes for loading and warmup in desktop sessions, the CLI and benchmarks. The desktop waits for the backend result instead of imposing an earlier deadline. A runtime process that exits fails immediately; a startup timeout stops the child and includes the latest runtime output in the error. The **Request timeout** setting controls runtime HTTP requests and does not change this startup deadline. A startup timeout alone does not establish that the model or GPU configuration is incompatible; check the last runtime log entries to distinguish slow loading from an allocation or backend failure.
+
 ## Settings profiles
 
 The **Profiles** section displays reusable **Global profiles** and **Model profiles** for the selected model. A new installation starts with one editable **Default** global profile, named in the selected interface language. Its values inherit runtime defaults and its system prompt is empty. No additional presets are generated. Select a chip to preview its saved settings without changing the editor or the model's saved settings. Selecting the same chip again or closing the preview returns to the current settings card.

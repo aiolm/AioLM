@@ -468,7 +468,7 @@ pub async fn run(
         tokio::select! {
             biased;
             _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
-            ready = server::wait_ready(shared, &url, &key, 600, &ring) => ready?,
+            ready = server::wait_ready(shared, &url, &key, server::SERVER_START_TIMEOUT_SECS, &ring) => ready?,
         }
         let base = url.trim_end_matches("/v1");
         let client = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5))

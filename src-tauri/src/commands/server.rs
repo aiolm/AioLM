@@ -186,7 +186,15 @@ pub(super) async fn start_on_target(
         );
     }
 
-    match server::wait_ready(target.clone(), &url, &api_key, 120, err).await {
+    match server::wait_ready(
+        target.clone(),
+        &url,
+        &api_key,
+        server::SERVER_START_TIMEOUT_SECS,
+        err,
+    )
+    .await
+    {
         Ok(()) => {
             let mut server = target
                 .lock()

@@ -275,3 +275,66 @@ it("ignores a cancelled start settling after a new start begins", async () => {
   expect(result.current.status.state).toBe("running");
   expect(result.current.busy).toBe(false);
 });
+
+// The backend owns the start deadline; a large model can load for minutes.
+const PAST_FORMER_UI_START_TIMEOUT_MS = 180_000;
+
+it("lets a slow model start run past 120 seconds and succeed", async () => {
+  const start = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValueOnce(start.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  vi.useFakeTimers();
+  let run!: Promise<string>;
+  act(() => { run = result.current.start(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(PAST_FORMER_UI_START_TIMEOUT_MS); });
+  expect(result.current.status.state).toBe("starting");
+  expect(result.current.busy).toBe(true);
+  expect(result.current.actionError).toBeNull();
+  vi.mocked(api.serverStatus).mockResolvedValue({ state: "running", url: "http://localhost:8080/v1" });
+  await act(async () => { start.resolve("http://localhost:8080/v1"); await expect(run).resolves.toBe("http://localhost:8080/v1"); });
+  expect(result.current.status.state).toBe("running");
+  expect(result.current.busy).toBe(false);
+  expect(result.current.actionError).toBeNull();
+});
+
+it("keeps a late failure from a stopped slow start from reporting an error", async () => {
+  const first = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValueOnce(first.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  vi.useFakeTimers();
+  let firstRun!: Promise<unknown>;
+  act(() => { firstRun = result.current.start().catch(() => undefined); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(PAST_FORMER_UI_START_TIMEOUT_MS); });
+  await act(async () => { await result.current.stop(); });
+  await act(async () => { first.reject(new Error("Server start timed out after 600 seconds.")); await firstRun; });
+  expect(api.stopServer).toHaveBeenCalledOnce();
+  expect(result.current.status.state).toBe("stopped");
+  expect(result.current.busy).toBe(false);
+  expect(result.current.actionError).toBeNull();
+});
+
+it("keeps a late failure from a stopped slow start from overwriting a newer launch", async () => {
+  const first = deferred<string>();
+  const second = deferred<string>();
+  vi.mocked(api.startServer).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  vi.useFakeTimers();
+  let firstRun!: Promise<unknown>;
+  act(() => { firstRun = result.current.start().catch(() => undefined); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(PAST_FORMER_UI_START_TIMEOUT_MS); });
+  await act(async () => { await result.current.stop(); });
+  expect(api.stopServer).toHaveBeenCalledOnce();
+  let secondRun!: Promise<string>;
+  act(() => { secondRun = result.current.start(); });
+  await act(async () => { first.reject(new Error("Server start timed out after 600 seconds.")); await firstRun; });
+  expect(result.current.status.state).toBe("starting");
+  expect(result.current.busy).toBe(true);
+  expect(result.current.actionError).toBeNull();
+  vi.mocked(api.serverStatus).mockResolvedValue({ state: "running", url: "http://localhost:8080/v1" });
+  await act(async () => { second.resolve("http://localhost:8080/v1"); await secondRun; });
+  expect(result.current.status.state).toBe("running");
+  expect(result.current.busy).toBe(false);
+});
