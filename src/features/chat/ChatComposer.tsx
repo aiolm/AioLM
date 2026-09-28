@@ -1,5 +1,3 @@
-import ModelBadges from '../../shared/ui/ModelBadges';
-import ModelIcon from '../../shared/ui/ModelIcon';
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import StableLabel from "../../shared/ui/StableLabel";
 import PanelFeedback from "../../shared/ui/PanelFeedback";
@@ -37,8 +35,6 @@ interface ChatComposerProps {
   aborting: boolean;
   onSend: () => void;
   canSend: boolean;
-  model: string;
-  displayModel: string;
   msgsLength: number;
   ct: (key: ChatTextKey) => string;
 }
@@ -47,15 +43,9 @@ export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
-  aborting, onSend, canSend, model, displayModel, msgsLength, ct,
+  aborting, onSend, canSend, msgsLength, ct,
 }: ChatComposerProps) {
   const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken") : msgsLength === 0 ? ct("emptyConversation") : `${ct("responseReady")} · ${msgsLength} ${ct("messages")}`;
-  // Reserve only the status text's intrinsic width, including the pending reply,
-  // so completion does not move the path while an empty chat stays compact.
-  const statusLabels = msgsLength === 0 && phase === "idle" ? [ct("emptyConversation")] : [
-    ct("generating"), ct("waitingFirstToken"),
-    `${ct("responseReady")} · ${"9".repeat(String(msgsLength + 1).length)} ${ct("messages")}`,
-  ];
   return (
     <>
 
@@ -97,15 +87,10 @@ export default function ChatComposer({
       </div>}
         <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={disabled || phase !== "idle"} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct("offline") : ct("placeholder")} className="app-textarea min-h-[52px] min-w-0 flex-1 resize-y p-3 text-sm leading-relaxed" />
         <button type="button" onClick={onAddAttachment} disabled={disabled || phase !== "idle" || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}>{ct("attachFile")}</button>
+        <span className="chat-composer-status text-xs tabular-nums ui-color-faint" role="status" aria-live="polite">{conversationStatus}</span>
         <button type="button" onClick={phase !== "idle" ? onStop : onSend} disabled={phase !== "idle" ? aborting : !canSend} className={"app-button app-button--sm shrink-0 " + (phase !== "idle" ? "app-button--danger" : "app-button--primary")} aria-label={phase !== "idle" ? ct("stop") : ct("send")}><StableLabel value={phase !== "idle" ? aborting ? ct("stopping") : ct("stop") : ct("send")} labels={[ct("send"), ct("stop"), ct("stopping")]} /></button>
       </div>
 
-      <div tabIndex={0} className="chat-composer-status text-xs ui-color-faint" >
-        <span className="min-w-0 app-text-wrap tabular-nums" title={displayModel}><ModelIcon model={model} />{model ? displayModel : ct("empty")}<ModelBadges model={model} localPath={model} /></span>
-        <div className="chat-status-actions">
-        <span className="shrink-0 tabular-nums" role="status" aria-live="polite"><StableLabel value={conversationStatus} labels={statusLabels} /></span>
-        </div>
-      </div>
     </>
   );
 }

@@ -156,8 +156,7 @@ describe("ChatPanel unified attachments", () => {
   });
 
   it("sends the original model identifier for a sharded model", async () => {
-    // The heading no longer repeats the model name — the app header and the
-    // composer footer already carry it — but the request must still name the
+    // The app header identifies the selected model, while the request must name the
     // first shard exactly as the server knows it, not a grouped display name.
     const model = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64-00001-of-00033";
     renderPanel({ ...store, cfg: { ...cfg, active_model: model }, status: { ...store.status, model } });
@@ -283,6 +282,7 @@ describe("ChatPanel document context warning", () => {
     renderPanel();
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
     fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    expect(screen.getByText('work.gguf')).toBeInTheDocument();
     respondWithText("Session answer");
     await sendMessage("Hello");
     await screen.findByText("Session answer");

@@ -7,7 +7,6 @@ import type { AppPreferences } from "../../shared/config/preferences";
 import { useI18n } from "../../shared/i18n/i18n";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
-import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useChatThreads } from "./useChatThreads";
 import { useChatAttachments } from "./useChatAttachments";
@@ -195,7 +194,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     };
   }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
 
-  const displayModel = normalizeDisplayPath(model);
   const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
@@ -256,6 +254,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
         ]}
         selectedSessionId={selectedSessionId}
+        model={model || configuredModel}
         onSelectSession={(id) => { if (requireIdle()) setSelectedSessionId(id); }}
         ct={ct}
       />
@@ -328,8 +327,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             aborting={aborting}
             onSend={sendMessage}
             canSend={canSend}
-            model={model}
-            displayModel={displayModel}
             msgsLength={viewMessages.length}
             ct={ct}
           />

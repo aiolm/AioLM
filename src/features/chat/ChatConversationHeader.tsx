@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import type { ChatThread } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
+import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import ModelIcon from "../../shared/ui/ModelIcon";
 
 interface ChatConversationHeaderProps {
   threadPanelOpen: boolean;
@@ -14,13 +16,14 @@ interface ChatConversationHeaderProps {
   sessionLabel: string;
   sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
   selectedSessionId: string;
+  model: string;
   onSelectSession: (id: string) => void;
   ct: (key: ChatTextKey) => string;
 }
 
 export default function ChatConversationHeader({
   threadPanelOpen, setThreadPanelOpen, activeThread, activeProjectName, phase, onUpdateThread,
-  sessionLabel, sessionOptions, selectedSessionId, onSelectSession, ct, targetBusy = false,
+  sessionLabel, sessionOptions, selectedSessionId, model, onSelectSession, ct, targetBusy = false,
 }: ChatConversationHeaderProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
@@ -48,9 +51,7 @@ export default function ChatConversationHeader({
         >
           {ct("conversations")}
         </button>
-        {/* One line, ellipsised, and no model subtitle: an auto-titled thread can
-            be a whole paragraph, and the model is already named in the app header
-            and under the composer. Both together squeezed the controls out. */}
+        {/* Keep long conversation titles to one line so the controls stay visible. */}
         <div className="chat-conversation-title">
           <h2 title={activeThread?.title ?? ct("newConversation")} className="text-sm font-semibold ui-color-ink" >{activeThread?.title ?? ct("newConversation")}{activeProjectName ? ` · ${activeProjectName}` : ""}</h2>
         </div>
@@ -79,6 +80,7 @@ export default function ChatConversationHeader({
           <div>
             <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-session-target">{sessionLabel}</label>
             <CustomSelect id="chat-session-target" className="chat-session-picker mt-1.5" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
+            {model && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted" title={normalizeDisplayPath(model)}><ModelIcon model={model} />{modelDisplayName(model)}</p>}
           </div>
           <div>
             <label className="block text-xs font-medium ui-color-ink"  htmlFor="chat-thread-title">{ct("title")}</label>
