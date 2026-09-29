@@ -1,25 +1,47 @@
+//! Loopback API listener owned by the app, independent of any model process.
+//!
+//! One listener serves the OpenAI routes, the Anthropic `/v1/messages` route
+//! and the Responses routes. It authenticates callers with an app-lifetime key
+//! that is unrelated to the private key of any model process, and resolves the
+//! model process for every request at request time (see `routing`), so models
+//! can be loaded, unloaded or replaced while the listener keeps running.
+#[cfg(test)]
+mod api_tests;
+mod http;
+mod routing;
+
+pub use routing::ModelSource;
+
 use futures_util::StreamExt;
+#[cfg(test)]
+use http::read_request;
+use http::{
+    allowed_origin, discard_unread, read_body, read_head, with_cors_origin, write_api_error,
+    write_event, write_json_response, write_preflight, write_stream_head, Api, ApiError, Head,
+    Request,
+};
+use routing::{Lease, RouteError};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, OnceLock,
-};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
-    task::JoinHandle,
+    sync::Notify,
+    task::{JoinHandle, JoinSet},
 };
 
-const MAX_BODY: usize = 4 * 1024 * 1024;
 const MAX_UPSTREAM_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_STREAM_PENDING_BYTES: usize = 4 * 1024 * 1024;
-const DEFAULT_PORT: u16 = 8081;
+/// A non-streaming generation sends nothing until it finishes, so this idle
+/// bound has to outlast the longest request a model process accepts (its own
+/// `--timeout` defaults to one hour).
+const UPSTREAM_READ_TIMEOUT: Duration = Duration::from_secs(3600);
 
 fn upstream_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| build_upstream_client(Duration::from_secs(120)))
+    CLIENT.get_or_init(|| build_upstream_client(UPSTREAM_READ_TIMEOUT))
 }
 
 fn build_upstream_client(read_timeout: Duration) -> reqwest::Client {
@@ -73,11 +95,23 @@ async fn bounded_upstream_json(response: reqwest::Response) -> Result<Value, Str
         .map_err(|error| format!("invalid OpenAI upstream response: {error}"))
 }
 
+/// A running API listener. Stopping it closes the socket and every open
+/// connection; it never touches a model process.
 pub struct GatewayHandle {
-    pub stop: Arc<AtomicBool>,
-    pub task: JoinHandle<()>,
     pub port: u16,
-    pub active_requests: Arc<AtomicUsize>,
+    shutdown: Arc<Notify>,
+    task: JoinHandle<()>,
+}
+
+impl GatewayHandle {
+    pub fn is_running(&self) -> bool {
+        !self.task.is_finished()
+    }
+
+    /// Drop the listener and its connections without waiting, for the exit path.
+    pub fn abort(&self) {
+        self.task.abort();
+    }
 }
 
 const MAX_RESPONSES: usize = 128;
@@ -88,204 +122,392 @@ struct StoredResponse {
     messages: Vec<Value>,
 }
 
-struct ActiveRequestGuard(Arc<AtomicUsize>);
-
-impl Drop for ActiveRequestGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
+struct Ctx {
+    models: ModelSource,
+    api_key: Arc<str>,
+    responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
 }
 
-pub async fn start(upstream: String, upstream_key: String) -> Result<GatewayHandle, String> {
-    let listener = TcpListener::bind(("127.0.0.1", DEFAULT_PORT))
+/// Bind `127.0.0.1:port` (`0` picks a free port) and serve until stopped.
+/// `api_key` is what clients must present; it is never logged.
+pub async fn start(
+    models: ModelSource,
+    api_key: Arc<str>,
+    port: u16,
+) -> Result<GatewayHandle, String> {
+    let listener = TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| {
-            format!("cannot bind Anthropic gateway on 127.0.0.1:{DEFAULT_PORT}: {error}")
+            format!(
+                "cannot listen on 127.0.0.1:{port}: {error}. Choose another API port in Settings or close the program using it."
+            )
         })?;
     let port = listener
         .local_addr()
-        .map_err(|error| format!("cannot inspect Anthropic gateway address: {error}"))?
+        .map_err(|error| format!("cannot inspect the API listener address: {error}"))?
         .port();
-    let stop = Arc::new(AtomicBool::new(false));
-    let responses = Arc::new(tokio::sync::Mutex::new(
-        HashMap::<String, StoredResponse>::new(),
-    ));
-    let active_requests = Arc::new(AtomicUsize::new(0));
-    let task_stop = Arc::clone(&stop);
-    let task_responses = Arc::clone(&responses);
-    let task_active_requests = Arc::clone(&active_requests);
-    let task = tokio::spawn(async move {
-        run(
-            listener,
-            upstream,
-            upstream_key,
-            task_stop,
-            task_responses,
-            task_active_requests,
-        )
-        .await;
+    let shutdown = Arc::new(Notify::new());
+    let ctx = Arc::new(Ctx {
+        models,
+        api_key,
+        responses: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     });
+    let task = tokio::spawn(run(listener, ctx, Arc::clone(&shutdown)));
     Ok(GatewayHandle {
-        stop,
-        task,
         port,
-        active_requests,
+        shutdown,
+        task,
     })
 }
 
 pub async fn stop(handle: GatewayHandle) {
-    handle.stop.store(true, Ordering::Release);
+    handle.shutdown.notify_one();
     let _ = handle.task.await;
 }
 
-async fn run(
-    listener: TcpListener,
-    upstream: String,
-    upstream_key: String,
-    stop: Arc<AtomicBool>,
-    responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
-    active_requests: Arc<AtomicUsize>,
-) {
+async fn run(listener: TcpListener, ctx: Arc<Ctx>, shutdown: Arc<Notify>) {
+    let mut connections = JoinSet::new();
     loop {
-        if stop.load(Ordering::Acquire) {
-            break;
+        tokio::select! {
+            _ = shutdown.notified() => break,
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    connections.spawn(handle_connection(stream, Arc::clone(&ctx)));
+                }
+                // Out of descriptors and the like: back off instead of spinning.
+                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            },
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
-        let accepted =
-            tokio::time::timeout(std::time::Duration::from_millis(250), listener.accept()).await;
-        let Ok(Ok((stream, _))) = accepted else {
-            continue;
-        };
-        let upstream = upstream.clone();
-        let upstream_key = upstream_key.clone();
-        let stop = Arc::clone(&stop);
-        let responses = Arc::clone(&responses);
-        let active_requests = Arc::clone(&active_requests);
-        tokio::spawn(async move {
-            let _ = handle_connection(
-                stream,
-                &upstream,
-                &upstream_key,
-                stop,
-                responses,
-                active_requests,
-            )
-            .await;
-        });
+    }
+    drop(listener);
+    // Aborting drops each connection's model lease, so nothing keeps counting
+    // as an active request once the listener is gone.
+    connections.abort_all();
+    while connections.join_next().await.is_some() {}
+}
+
+enum Failure {
+    /// Nothing has been written yet; the caller renders this to the client.
+    Api(ApiError),
+    /// The connection failed or a stream broke after its head was sent, so
+    /// there is nobody left to tell.
+    Connection,
+}
+
+impl From<ApiError> for Failure {
+    fn from(error: ApiError) -> Self {
+        Self::Api(error)
     }
 }
 
-async fn handle_connection(
-    mut stream: TcpStream,
-    upstream: &str,
-    upstream_key: &str,
-    stop: Arc<AtomicBool>,
-    responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
-    active_requests: Arc<AtomicUsize>,
-) -> Result<(), String> {
-    if stop.load(Ordering::Acquire) {
-        return Ok(());
+impl From<String> for Failure {
+    fn from(_: String) -> Self {
+        Self::Connection
     }
-    active_requests.fetch_add(1, Ordering::AcqRel);
-    let _active_request = ActiveRequestGuard(active_requests);
-    let (method, path, headers, body) = read_http_request(&mut stream).await?;
-    if path == "/v1/responses" || path.starts_with("/v1/responses/") {
-        return handle_responses(ResponsesRequest {
-            stream: &mut stream,
-            method: &method,
-            path: &path,
-            headers: &headers,
-            body: &body,
-            upstream,
-            upstream_key,
-            responses,
+}
+
+type Handled = Result<(), Failure>;
+
+async fn handle_connection(mut stream: TcpStream, ctx: Arc<Ctx>) {
+    let _ = stream.set_nodelay(true);
+    let head = match read_head(&mut stream).await {
+        Ok(head) => head,
+        Err(error) => {
+            let _ = write_api_error(&mut stream, Api::OpenAi, &error).await;
+            discard_unread(&mut stream).await;
+            return;
+        }
+    };
+    if head.method == "OPTIONS" && head.headers.contains_key("access-control-request-method") {
+        let _ = write_preflight(&mut stream, &head.headers).await;
+        return;
+    }
+    let origin = allowed_origin(&head.headers);
+    with_cors_origin(origin, serve(stream, ctx, head)).await;
+}
+
+async fn serve(mut stream: TcpStream, ctx: Arc<Ctx>, head: Head) {
+    let api = if head.path == "/v1/messages" {
+        Api::Anthropic
+    } else {
+        Api::OpenAi
+    };
+    // Authenticate before reading the body, so a caller without the key cannot
+    // make the app buffer what it sends.
+    if !authorized(&head.headers, &ctx.api_key) {
+        let error = ApiError::new(
+            401,
+            "invalid_api_key",
+            "missing or invalid API key; send it as `Authorization: Bearer <key>` or `x-api-key`",
+        );
+        let _ = write_api_error(&mut stream, api, &error).await;
+        discard_unread(&mut stream).await;
+        return;
+    }
+    let request = match read_body(&mut stream, head).await {
+        Ok(request) => request,
+        Err(error) => {
+            let _ = write_api_error(&mut stream, api, &error).await;
+            return;
+        }
+    };
+    if let Err(Failure::Api(error)) = route(&mut stream, &ctx, request).await {
+        let _ = write_api_error(&mut stream, api, &error).await;
+    }
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    left.len() == right.len()
+        && left
+            .bytes()
+            .zip(right.bytes())
+            .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
+            == 0
+}
+
+/// The app-lifetime key, presented as a Bearer token (OpenAI style) or as
+/// `x-api-key` (Anthropic style).
+fn authorized(headers: &HashMap<String, String>, key: &str) -> bool {
+    let bearer = headers.get("authorization").and_then(|value| {
+        let (scheme, token) = value.split_once(' ')?;
+        scheme.eq_ignore_ascii_case("bearer").then(|| token.trim())
+    });
+    [bearer, headers.get("x-api-key").map(String::as_str)]
+        .into_iter()
+        .flatten()
+        .any(|presented| constant_time_eq(presented, key))
+}
+
+/// Resolves once the client has closed its side of the connection. The request
+/// has been read in full and every response ends the connection, so nothing
+/// more is expected from the client; stray bytes are ignored.
+async fn client_left(client: &TcpStream) {
+    let mut probe = [0_u8; 1];
+    loop {
+        match client.peek(&mut probe).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => tokio::time::sleep(Duration::from_millis(250)).await,
+        }
+    }
+}
+
+/// Wait for `work` unless the client goes away first. Abandoning the wait
+/// drops the upstream request, and the caller's lease ends with the handler, so
+/// a cancelled request never keeps its model pinned - not while the model is
+/// still processing the prompt, and not between streamed chunks.
+async fn unless_client_leaves<F: std::future::Future>(
+    client: &TcpStream,
+    work: F,
+) -> Result<F::Output, String> {
+    tokio::select! {
+        output = work => Ok(output),
+        _ = client_left(client) => Err("the client disconnected before the response finished".into()),
+    }
+}
+
+async fn route(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
+    let method = request.method.clone();
+    let path = request.path.clone();
+    match (method.as_str(), path.as_str()) {
+        ("GET", "/v1/models") => list_models(stream, ctx).await,
+        ("POST", "/v1/chat/completions") => {
+            proxy_openai(stream, ctx, request, "chat/completions").await
+        }
+        ("POST", "/v1/completions") => proxy_openai(stream, ctx, request, "completions").await,
+        ("POST", "/v1/embeddings") => proxy_openai(stream, ctx, request, "embeddings").await,
+        ("POST", "/v1/messages") => handle_messages(stream, ctx, request).await,
+        (_, "/v1/responses") => handle_responses(stream, ctx, request).await,
+        (_, path) if path.starts_with("/v1/responses/") => {
+            handle_responses(stream, ctx, request).await
+        }
+        (
+            _,
+            "/v1/models"
+            | "/v1/chat/completions"
+            | "/v1/completions"
+            | "/v1/embeddings"
+            | "/v1/messages",
+        ) => Err(ApiError::new(
+            405,
+            "method_not_allowed",
+            format!("{path} does not support {method}"),
+        )
+        .into()),
+        _ => Err(ApiError::new(404, "not_found", format!("unknown route {method} {path}")).into()),
+    }
+}
+
+fn requested_model(body: &Value) -> Result<Option<&str>, ApiError> {
+    let Some(object) = body.as_object() else {
+        return Err(ApiError::new(
+            400,
+            "invalid_request",
+            "request body must be a JSON object",
+        ));
+    };
+    match object.get("model") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => Ok(Some(name)),
+        Some(_) => Err(
+            ApiError::new(400, "invalid_request", "`model` must be a string").with_param("model"),
+        ),
+    }
+}
+
+fn upstream_post(lease: &Lease, endpoint: &str) -> reqwest::RequestBuilder {
+    upstream_client()
+        .post(format!(
+            "{}/{endpoint}",
+            lease.upstream().trim_end_matches('/')
+        ))
+        .header("Authorization", format!("Bearer {}", lease.upstream_key()))
+}
+
+/// Report a model process that could not be reached without naming its
+/// private loopback port.
+fn upstream_failure(error: reqwest::Error) -> ApiError {
+    let error = error.without_url();
+    if error.is_timeout() {
+        ApiError::new(
+            504,
+            "upstream_timeout",
+            "the model process did not answer in time",
+        )
+    } else {
+        ApiError::new(
+            502,
+            "upstream_unavailable",
+            format!("the model process could not be reached: {error}"),
+        )
+    }
+}
+
+async fn list_models(stream: &mut TcpStream, ctx: &Ctx) -> Handled {
+    let created = chrono_like_timestamp();
+    let data: Vec<Value> = ctx
+        .models
+        .snapshot()
+        .ready
+        .iter()
+        .map(|candidate| {
+            json!({"id":candidate.advertised,"object":"model","created":created,"owned_by":"aiolm"})
         })
-        .await;
+        .collect();
+    write_json_response(stream, 200, json!({"object":"list","data":data})).await?;
+    Ok(())
+}
+
+/// Relay an OpenAI request untouched to the model it names and relay the
+/// answer back as it arrives: status, body and SSE chunks all pass through,
+/// including the model process's own error responses.
+async fn proxy_openai(
+    stream: &mut TcpStream,
+    ctx: &Ctx,
+    request: Request,
+    endpoint: &str,
+) -> Handled {
+    let parsed: Value = serde_json::from_slice(&request.body).map_err(|error| {
+        ApiError::new(
+            400,
+            "invalid_json",
+            format!("request body is not valid JSON: {error}"),
+        )
+    })?;
+    // The lease counts this request as active on its model until the handler
+    // returns, however the answer ends, so the model cannot be unloaded or
+    // replaced underneath a response that is still being delivered.
+    let lease = ctx
+        .models
+        .acquire(requested_model(&parsed)?)
+        .map_err(RouteError::into_api_error)?;
+    let response = unless_client_leaves(
+        stream,
+        upstream_post(&lease, endpoint)
+            .header("Content-Type", "application/json")
+            .body(request.body)
+            .send(),
+    )
+    .await?
+    .map_err(upstream_failure)?;
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    write_stream_head(stream, status, &content_type, response.content_length()).await?;
+    let mut body = response.bytes_stream();
+    while let Some(chunk) = unless_client_leaves(stream, body.next()).await? {
+        let chunk = chunk
+            .map_err(|error| format!("upstream response read failed: {}", error.without_url()))?;
+        stream
+            .write_all(&chunk)
+            .await
+            .map_err(|error| format!("gateway response write failed: {error}"))?;
     }
-    if method != "POST" || path != "/v1/messages" {
-        write_json_response(&mut stream, 404, json!({"type":"error","error":{"type":"not_found","message":"POST /v1/messages is the only supported route"}})).await?;
-        return Ok(());
+    stream
+        .shutdown()
+        .await
+        .map_err(|error| format!("gateway shutdown failed: {error}"))?;
+    Ok(())
+}
+
+async fn handle_messages(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
+    if !request.headers.contains_key("anthropic-version") {
+        return Err(ApiError::new(
+            400,
+            "invalid_request",
+            "anthropic-version header is required",
+        )
+        .into());
     }
-    if headers.get("x-api-key").map(String::as_str) != Some(upstream_key) {
-        write_json_response(&mut stream, 401, json!({"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}})).await?;
-        return Ok(());
-    }
-    if !headers.contains_key("anthropic-version") {
-        write_json_response(&mut stream, 400, json!({"type":"error","error":{"type":"invalid_request_error","message":"anthropic-version header is required"}})).await?;
-        return Ok(());
-    }
-    let request: Value = serde_json::from_slice(&body)
-        .map_err(|error| format!("invalid Anthropic JSON: {error}"))?;
-    let stream_requested = request
-        .get("stream")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let openai_request = anthropic_to_openai(&request)?;
-    let client = upstream_client();
-    let endpoint = format!("{}/chat/completions", upstream.trim_end_matches('/'));
-    let mut request_builder = client
-        .post(endpoint)
-        .header("Authorization", format!("Bearer {upstream_key}"))
-        .json(&openai_request);
+    let body: Value = serde_json::from_slice(&request.body).map_err(|error| {
+        ApiError::new(
+            400,
+            "invalid_request",
+            format!("invalid Anthropic JSON: {error}"),
+        )
+    })?;
+    let stream_requested = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let openai_request = anthropic_to_openai(&body)
+        .map_err(|message| ApiError::new(400, "invalid_request", message))?;
+    // The lease counts this request as active on its model until the handler
+    // returns, however the answer ends, so the model cannot be unloaded or
+    // replaced underneath a response that is still being delivered.
+    let lease = ctx
+        .models
+        .acquire(requested_model(&body)?)
+        .map_err(RouteError::into_api_error)?;
+    let mut request_builder = upstream_post(&lease, "chat/completions").json(&openai_request);
     if stream_requested {
         request_builder = request_builder.header("Accept", "text/event-stream");
     }
-    let response = request_builder
-        .send()
-        .await
-        .map_err(|error| format!("OpenAI upstream request failed: {error}"))?;
+    let response = unless_client_leaves(stream, request_builder.send())
+        .await?
+        .map_err(upstream_failure)?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = bounded_upstream_text(response).await;
-        write_json_response(&mut stream, status, json!({"type":"error","error":{"type":"api_error","message":text.chars().take(2000).collect::<String>()}})).await?;
+        write_json_response(stream, status, json!({"type":"error","error":{"type":"api_error","message":text.chars().take(2000).collect::<String>()}})).await?;
         return Ok(());
     }
     if stream_requested {
-        stream_response(&mut stream, response, &request).await
+        stream_response(stream, response, &body).await?;
     } else {
-        let value = bounded_upstream_json(response).await?;
-        write_json_response(&mut stream, 200, openai_to_anthropic(&value)).await
+        let value = unless_client_leaves(stream, bounded_upstream_json(response))
+            .await?
+            .map_err(|message| ApiError::new(502, "bad_upstream_response", message))?;
+        write_json_response(stream, 200, openai_to_anthropic(&value)).await?;
     }
+    Ok(())
 }
 
-struct ResponsesRequest<'a> {
-    stream: &'a mut TcpStream,
-    method: &'a str,
-    path: &'a str,
-    headers: &'a std::collections::HashMap<String, String>,
-    body: &'a [u8],
-    upstream: &'a str,
-    upstream_key: &'a str,
-    responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
-}
-
-async fn handle_responses(request: ResponsesRequest<'_>) -> Result<(), String> {
-    let ResponsesRequest {
-        stream,
-        method,
-        path,
-        headers,
-        body,
-        upstream,
-        upstream_key,
-        responses,
-    } = request;
-    let bearer_ok = headers
-        .get("authorization")
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|value| value == upstream_key);
-    let key_ok = headers
-        .get("x-api-key")
-        .is_some_and(|value| value == upstream_key);
-    if !bearer_ok && !key_ok {
-        write_json_response(
-            stream,
-            401,
-            json!({"error":{"type":"authentication_error","message":"invalid local API key"}}),
-        )
-        .await?;
-        return Ok(());
-    }
-
+async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
+    let responses = &ctx.responses;
+    let method = request.method.as_str();
+    let path = request.path.as_str();
     if let Some(id) = path.strip_prefix("/v1/responses/") {
         if let Some(cancel_id) = id.strip_suffix("/cancel") {
             if cancel_id.is_empty() || cancel_id.contains('/') || method != "POST" {
@@ -327,10 +549,15 @@ async fn handle_responses(request: ResponsesRequest<'_>) -> Result<(), String> {
         write_json_response(stream, 404, json!({"error":{"type":"not_found","message":"supported response route is POST /v1/responses"}})).await?;
         return Ok(());
     }
-    let request: Value =
-        serde_json::from_slice(body).map_err(|error| format!("invalid Responses JSON: {error}"))?;
+    let body: Value = serde_json::from_slice(&request.body).map_err(|error| {
+        ApiError::new(
+            400,
+            "invalid_request",
+            format!("invalid Responses JSON: {error}"),
+        )
+    })?;
     let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
-    let previous_id = request.get("previous_response_id").and_then(Value::as_str);
+    let previous_id = body.get("previous_response_id").and_then(Value::as_str);
     let history = if let Some(previous_id) = previous_id {
         let history = responses
             .lock()
@@ -346,25 +573,27 @@ async fn handle_responses(request: ResponsesRequest<'_>) -> Result<(), String> {
         Vec::new()
     };
     let mut messages = history;
-    messages.extend(responses_input_to_openai(&request)?);
-    let openai_request = responses_to_openai(&request, messages.clone())?;
-    let stream_requested = request
-        .get("stream")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let endpoint = format!("{}/chat/completions", upstream.trim_end_matches('/'));
-    let client = upstream_client();
-    let mut request_builder = client
-        .post(endpoint)
-        .header("Authorization", format!("Bearer {upstream_key}"))
-        .json(&openai_request);
+    messages.extend(
+        responses_input_to_openai(&body)
+            .map_err(|message| ApiError::new(400, "invalid_request", message))?,
+    );
+    let openai_request = responses_to_openai(&body, messages.clone())
+        .map_err(|message| ApiError::new(400, "invalid_request", message))?;
+    let stream_requested = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    // The lease counts this request as active on its model until the handler
+    // returns, however the answer ends, so the model cannot be unloaded or
+    // replaced underneath a response that is still being delivered.
+    let lease = ctx
+        .models
+        .acquire(requested_model(&body)?)
+        .map_err(RouteError::into_api_error)?;
+    let mut request_builder = upstream_post(&lease, "chat/completions").json(&openai_request);
     if stream_requested {
         request_builder = request_builder.header("Accept", "text/event-stream");
     }
-    let response = request_builder
-        .send()
-        .await
-        .map_err(|error| format!("Responses upstream request failed: {error}"))?;
+    let response = unless_client_leaves(stream, request_builder.send())
+        .await?
+        .map_err(upstream_failure)?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = bounded_upstream_text(response).await;
@@ -372,15 +601,26 @@ async fn handle_responses(request: ResponsesRequest<'_>) -> Result<(), String> {
         return Ok(());
     }
     if stream_requested {
-        stream_responses(stream, response, &request, response_id, messages, responses).await
+        stream_responses(
+            stream,
+            response,
+            &body,
+            response_id,
+            messages,
+            Arc::clone(responses),
+        )
+        .await?;
     } else {
-        let value = bounded_upstream_json(response).await?;
+        let value = unless_client_leaves(stream, bounded_upstream_json(response))
+            .await?
+            .map_err(|message| ApiError::new(502, "bad_upstream_response", message))?;
         let assistant = openai_assistant_message(&value);
         messages.push(assistant);
-        let response_value = openai_to_responses(&value, &request, &response_id);
-        remember_response(&responses, response_id, response_value.clone(), messages).await;
-        write_json_response(stream, 200, response_value).await
+        let response_value = openai_to_responses(&value, &body, &response_id);
+        remember_response(responses, response_id, response_value.clone(), messages).await;
+        write_json_response(stream, 200, response_value).await?;
     }
+    Ok(())
 }
 
 fn responses_input_to_openai(request: &Value) -> Result<Vec<Value>, String> {
@@ -581,7 +821,7 @@ async fn stream_responses(
     mut messages: Vec<Value>,
     responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
 ) -> Result<(), String> {
-    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n").await.map_err(|error| format!("Responses SSE header failed: {error}"))?;
+    write_stream_head(stream, 200, "text/event-stream", None).await?;
     let model = request
         .get("model")
         .and_then(Value::as_str)
@@ -596,7 +836,7 @@ async fn stream_responses(
     let mut state = ResponseStreamState::default();
     let mut pending = String::new();
     let mut body_stream = response.bytes_stream();
-    while let Some(chunk) = body_stream.next().await {
+    while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk =
             chunk.map_err(|error| format!("Responses upstream SSE read failed: {error}"))?;
         pending.push_str(&String::from_utf8_lossy(&chunk));
@@ -700,113 +940,18 @@ impl ResponseStreamState {
     }
 }
 
-async fn read_http_request(
-    stream: &mut TcpStream,
-) -> Result<
-    (
-        String,
-        String,
-        std::collections::HashMap<String, String>,
-        Vec<u8>,
-    ),
-    String,
-> {
-    let mut bytes = Vec::with_capacity(8192);
-    let mut header_end = None;
-    let mut buffer = [0_u8; 8192];
-    while header_end.is_none() && bytes.len() <= MAX_BODY {
-        let count = stream
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("gateway read failed: {error}"))?;
-        if count == 0 {
-            return Err("gateway client closed before headers".into());
-        }
-        bytes.extend_from_slice(&buffer[..count]);
-        header_end = bytes
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .map(|index| index + 4);
-    }
-    let header_end =
-        header_end.ok_or_else(|| "gateway headers exceeded the safety limit".to_string())?;
-    let header_text = String::from_utf8_lossy(&bytes[..header_end]);
-    let mut lines = header_text.split("\r\n");
-    let request_line = lines
-        .next()
-        .ok_or_else(|| "gateway request line is missing".to_string())?;
-    let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().unwrap_or_default().to_string();
-    let path = request_parts.next().unwrap_or_default().to_string();
-    let mut headers = std::collections::HashMap::new();
-    for line in lines.filter(|line| !line.is_empty()) {
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-        }
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .ok_or_else(|| "Content-Length header is required".to_string())?;
-    if content_length > MAX_BODY {
-        return Err("gateway request body exceeds the 4 MiB limit".into());
-    }
-    let mut body = bytes[header_end..].to_vec();
-    while body.len() < content_length {
-        let count = stream
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("gateway body read failed: {error}"))?;
-        if count == 0 {
-            return Err("gateway client closed before body completed".into());
-        }
-        body.extend_from_slice(&buffer[..count]);
-    }
-    body.truncate(content_length);
-    Ok((method, path, headers, body))
-}
-
-async fn write_json_response(
-    stream: &mut TcpStream,
-    status: u16,
-    value: Value,
-) -> Result<(), String> {
-    let body = serde_json::to_vec(&value)
-        .map_err(|error| format!("gateway response encode failed: {error}"))?;
-    let reason = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        _ => "Upstream Error",
-    };
-    let header = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
-    stream
-        .write_all(header.as_bytes())
-        .await
-        .map_err(|error| format!("gateway response header failed: {error}"))?;
-    stream
-        .write_all(&body)
-        .await
-        .map_err(|error| format!("gateway response body failed: {error}"))?;
-    stream
-        .shutdown()
-        .await
-        .map_err(|error| format!("gateway shutdown failed: {error}"))
-}
-
 async fn stream_response(
     stream: &mut TcpStream,
     response: reqwest::Response,
     request: &Value,
 ) -> Result<(), String> {
-    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n").await.map_err(|error| format!("gateway SSE header failed: {error}"))?;
+    write_stream_head(stream, 200, "text/event-stream", None).await?;
     let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
     write_event(stream, "message_start", json!({"type":"message_start","message":{"id":message_id,"type":"message","role":"assistant","model":request.get("model").and_then(Value::as_str).unwrap_or("local-model"),"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}})).await?;
     let mut parser = OpenAiStream::default();
     let mut pending = String::new();
     let mut body_stream = response.bytes_stream();
-    while let Some(chunk) = body_stream.next().await {
+    while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk = chunk.map_err(|error| format!("upstream SSE read failed: {error}"))?;
         pending.push_str(&String::from_utf8_lossy(&chunk));
         if pending.len() > MAX_STREAM_PENDING_BYTES {
@@ -833,15 +978,6 @@ async fn stream_response(
         }
     }
     parser.finish(stream).await
-}
-
-async fn write_event(stream: &mut TcpStream, event: &str, value: Value) -> Result<(), String> {
-    let data = serde_json::to_string(&value)
-        .map_err(|error| format!("gateway SSE encode failed: {error}"))?;
-    stream
-        .write_all(format!("event: {event}\ndata: {data}\n\n").as_bytes())
-        .await
-        .map_err(|error| format!("gateway SSE write failed: {error}"))
 }
 
 #[derive(Default)]
@@ -1094,7 +1230,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            read_http_request(&mut socket).await.unwrap();
+            read_request(&mut socket).await.unwrap();
             socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
                 .await

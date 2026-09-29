@@ -1,7 +1,6 @@
-//! Default server IPC, shared session lifecycle operations and idle tracking.
-use super::gateway::abort_gateway_now;
+//! Model process IPC, shared session lifecycle operations and idle tracking.
 use super::launch::validate_launch_config_with_cancel;
-use crate::{config, gateway, gpu, server, session, state::AppState, tuning_defaults};
+use crate::{config, gpu, server, session, state::AppState, tuning_defaults};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -85,13 +84,56 @@ pub(super) fn ensure_no_active_requests(
     Ok(())
 }
 
+/// Admit a replacement under the stop-existing policy as one operation. Every
+/// target is locked before checking activity, so a late API request cannot make
+/// a later session refuse after an earlier session has already been stopped.
+/// The caller holds `state.operation`, which serializes model launches.
+pub(super) fn stop_models_for_replacement(state: &AppState, target_id: &str) -> Result<(), String> {
+    let mut targets = vec![(
+        session::DEFAULT_SESSION_ID.to_string(),
+        state.server.clone(),
+        state.err.clone(),
+    )];
+    targets.extend(
+        state
+            .sessions
+            .entries()
+            .into_iter()
+            .map(|entry| (entry.id.clone(), entry.state.clone(), entry.err.clone())),
+    );
+    targets.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut locked = targets
+        .iter()
+        .map(|(_, target, _)| {
+            target
+                .lock()
+                .map_err(|_| "server state lock was poisoned".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for ((id, _, _), model) in targets.iter().zip(&locked) {
+        if model.lifecycle.blocks_resource_change() && model.active_requests > 0 {
+            return Err(format!(
+                "finish or stop the active response in session '{id}' before loading a model"
+            ));
+        }
+    }
+    // All checks passed. Keep the locks through teardown so neither a client
+    // lease nor a manual stop can interleave with the accepted replacement.
+    for ((id, _, err), model) in targets.iter().zip(&mut locked) {
+        if id != target_id {
+            state.sessions.cancel_pending_start(id);
+        }
+        stop_target(model, err);
+    }
+    Ok(())
+}
+
 /// Launch a previously validated configuration on one session target.
 pub(super) async fn start_on_target(
     state: &AppState,
     target: &Arc<Mutex<server::ServerState>>,
     err: &Arc<server::ErrBuf>,
     prepared: PreparedLaunch,
-    abort_gateway: bool,
     launch_cancel: &Arc<AtomicBool>,
 ) -> Result<String, String> {
     ensure_launch_allowed(state, launch_cancel)?;
@@ -99,13 +141,16 @@ pub(super) async fn start_on_target(
         cfg: saved,
         gpu: resolved_gpu,
     } = prepared;
-    let launch_generation = {
+    let (launch_generation, worker_cfg) = {
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
         if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
             return Err("finish or stop the active response before replacing this model".into());
         }
+        // The saved port belongs to the external API. Internal chat and the
+        // API router use this process's live URL, never the configured port.
+        let worker_cfg = private_worker_config(&saved)?;
         let generation = server.begin_launch();
         server.last_error = None;
         server.url.clear();
@@ -115,7 +160,7 @@ pub(super) async fn start_on_target(
         server.mmproj.clear();
         server.draft_model.clear();
         server::kill(&mut server.child, Some(err.clone()));
-        generation
+        (generation, worker_cfg)
     };
     err.clear();
 
@@ -127,12 +172,9 @@ pub(super) async fn start_on_target(
             return Err("server start cancelled".into());
         }
     }
-    if abort_gateway {
-        abort_gateway_now(state);
-    }
-
     let api_key = format!("lb-{}", Uuid::new_v4().simple());
-    let (child, url, api_key_file) = match server::spawn(&saved, &api_key, err, &resolved_gpu) {
+    let (child, url, api_key_file) = match server::spawn(&worker_cfg, &api_key, err, &resolved_gpu)
+    {
         Ok(value) => value,
         Err(error) => {
             let mut server = target
@@ -248,6 +290,12 @@ pub(super) async fn start_on_target(
     }
 }
 
+fn private_worker_config(saved: &config::AppConfig) -> Result<config::AppConfig, String> {
+    let mut worker = saved.clone();
+    worker.port = session::effective_port(0, &[saved.port])?;
+    Ok(worker)
+}
+
 #[tauri::command]
 pub(crate) async fn start_server(
     state: State<'_, AppState>,
@@ -273,21 +321,15 @@ pub(crate) async fn start_server(
         prepared.cfg.stop_existing_sessions_on_load,
     )?;
     if prepared.cfg.stop_existing_sessions_on_load {
-        let ids = state.sessions.ids();
-        for id in session::ids_to_stop_for_policy(&ids, session::DEFAULT_SESSION_ID) {
-            ensure_no_active_requests(&state, session::DEFAULT_SESSION_ID, true)?;
-            stop_session_by_id(&state, &id).await?;
-        }
+        stop_models_for_replacement(&state, session::DEFAULT_SESSION_ID)?;
     }
     let target = state.server.clone();
     let err = state.err.clone();
-    start_on_target(&state, &target, &err, prepared, true, &launch_cancel).await
+    start_on_target(&state, &target, &err, prepared, &launch_cancel).await
 }
 
 /// Tear down one session's process and reset it to `Stopped`. Shared by the
-/// legacy `stop_server` command (the default session, which also owns the
-/// Anthropic gateway proxying it) and `session_stop`/`session_unload` (an
-/// extra session, which never has a gateway of its own).
+/// default and named model sessions. The external API has its own lifecycle.
 fn stop_target(server: &mut server::ServerState, err: &Arc<server::ErrBuf>) {
     server.lifecycle = server::Lifecycle::Stopping;
     server::kill(&mut server.child, Some(err.clone()));
@@ -311,18 +353,11 @@ pub(super) async fn stop_session_by_id(state: &AppState, id: &str) -> Result<(),
     // operation lock, otherwise they could launch after the replacement.
     state.sessions.cancel_pending_start(id);
     if id == session::DEFAULT_SESSION_ID {
-        let gateway = state
-            .gateway
-            .lock()
-            .map_err(|_| "gateway state lock was poisoned".to_string())?
-            .take();
-        if let Some(gateway) = gateway {
-            gateway::stop(gateway).await;
-        }
         let mut server = state
             .server
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
+        ensure_can_unload(&server)?;
         stop_target(&mut server, &state.err);
         return Ok(());
     }
@@ -333,7 +368,15 @@ pub(super) async fn stop_session_by_id(state: &AppState, id: &str) -> Result<(),
         .state
         .lock()
         .map_err(|_| "server state lock was poisoned".to_string())?;
+    ensure_can_unload(&server)?;
     stop_target(&mut server, &entry.err);
+    Ok(())
+}
+
+fn ensure_can_unload(server: &server::ServerState) -> Result<(), String> {
+    if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
+        return Err("finish or stop the active response before unloading this model".into());
+    }
     Ok(())
 }
 
@@ -358,7 +401,6 @@ pub(crate) async fn server_activity(
     phase: String,
     session_id: Option<String>,
 ) -> Result<(), String> {
-    let _operation = state.operation.lock().await;
     let target = activity_target(&state, session_id.as_deref())?;
     let mut server = target
         .lock()
@@ -415,27 +457,11 @@ pub(crate) async fn apply_request_settings(
 
 async fn unload_idle_server(state: &AppState) -> bool {
     let _operation = state.operation.lock().await;
-    let (gateway_running, gateway_active) = {
-        let gateway = state.gateway.lock().ok();
-        (
-            gateway.as_ref().is_some_and(|value| value.is_some()),
-            gateway
-                .as_ref()
-                .and_then(|value| {
-                    value
-                        .as_ref()
-                        .map(|handle| handle.active_requests.load(Ordering::Acquire))
-                })
-                .unwrap_or(0),
-        )
-    };
     let should_unload = {
         let Ok(mut server) = state.server.lock() else {
             return false;
         };
         if server.lifecycle != server::Lifecycle::Ready
-            || gateway_running
-            || gateway_active > 0
             || !server
                 .execution
                 .as_ref()
@@ -443,33 +469,13 @@ async fn unload_idle_server(state: &AppState) -> bool {
         {
             return false;
         }
-        server.lifecycle = server::Lifecycle::Stopping;
-        server::kill(&mut server.child, Some(state.err.clone()));
-        server.url.clear();
-        server.api_key.clear();
-        server.redaction_secret.clear();
-        server.model.clear();
-        server.mmproj.clear();
-        server.draft_model.clear();
-        server.execution = None;
-        server.active_requests = 0;
-        server.touch_activity();
-        server.last_error = None;
-        server.lifecycle = server::Lifecycle::Stopped;
+        stop_target(&mut server, &state.err);
         true
     };
     if !should_unload {
         return false;
     }
-    let gateway = state
-        .gateway
-        .lock()
-        .ok()
-        .and_then(|mut gateway| gateway.take());
     state.err.clear();
-    if let Some(gateway) = gateway {
-        gateway::stop(gateway).await;
-    }
     true
 }
 
@@ -578,15 +584,222 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
             }),
         );
     }
-    if server.lifecycle == server::Lifecycle::Crashed {
-        abort_gateway_now(&state);
-    }
     Ok(response.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_worker_uses_a_private_port_without_changing_saved_api_settings() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let api_port = listener.local_addr().unwrap().port();
+        let cfg = config::AppConfig {
+            port: api_port,
+            active_model: "synthetic.gguf".into(),
+            ..Default::default()
+        };
+        let worker = private_worker_config(&cfg).unwrap();
+        assert_ne!(worker.port, 0);
+        assert_ne!(worker.port, api_port);
+        assert_eq!(cfg.port, api_port);
+        assert_eq!(worker.active_model, cfg.active_model);
+        assert_eq!(
+            config::execution::snapshot(&worker),
+            config::execution::snapshot(&cfg)
+        );
+        assert!(std::net::TcpListener::bind(("127.0.0.1", worker.port)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn manual_unload_rejects_active_responses_in_default_and_named_models() {
+        let state = AppState::default();
+        let named = state.sessions.get_or_create("named", "Named").unwrap();
+        for target in [&state.server, &named.state] {
+            let mut model = target.lock().unwrap();
+            model.lifecycle = server::Lifecycle::Ready;
+            model.model = "synthetic.gguf".into();
+            model.begin_request();
+        }
+        for (id, target) in [("default", &state.server), ("named", &named.state)] {
+            let error = stop_session_by_id(&state, id).await.unwrap_err();
+            assert!(error.contains("active response"));
+            {
+                let mut model = target.lock().unwrap();
+                assert_eq!(model.lifecycle, server::Lifecycle::Ready);
+                assert_eq!(model.model, "synthetic.gguf");
+                assert_eq!(model.active_requests, 1);
+                model.end_request();
+            }
+            stop_session_by_id(&state, id).await.unwrap();
+            assert_eq!(target.lock().unwrap().lifecycle, server::Lifecycle::Stopped);
+        }
+    }
+
+    #[tokio::test]
+    async fn model_unload_still_cancels_a_pending_load() {
+        let state = AppState::default();
+        let pending = state.sessions.begin_pending_start("default").unwrap();
+        state.server.lock().unwrap().begin_launch();
+        stop_session_by_id(&state, "default").await.unwrap();
+        assert!(pending.cancel_flag().load(Ordering::Acquire));
+        assert_eq!(
+            state.server.lock().unwrap().lifecycle,
+            server::Lifecycle::Stopped
+        );
+    }
+
+    #[tokio::test]
+    async fn loading_after_a_crash_can_be_cancelled_without_stale_request_counts() {
+        let state = AppState::default();
+        {
+            let mut model = state.server.lock().unwrap();
+            model.lifecycle = server::Lifecycle::Ready;
+            model.active_requests = 2;
+            server::reap_if_exited(&mut model, &state.err);
+            assert_eq!(model.lifecycle, server::Lifecycle::Crashed);
+            assert_eq!(model.active_requests, 0);
+            // A recovered older state must also be cleared at the start of a
+            // new generation, before spawning and attaching the child.
+            model.active_requests = 1;
+            model.begin_launch();
+        }
+        stop_session_by_id(&state, "default").await.unwrap();
+        assert_eq!(
+            state.server.lock().unwrap().lifecycle,
+            server::Lifecycle::Stopped
+        );
+    }
+
+    #[test]
+    fn replacing_all_models_refuses_before_stopping_any_active_session() {
+        let state = AppState::default();
+        let named = state.sessions.get_or_create("named", "Named").unwrap();
+        state.server.lock().unwrap().lifecycle = server::Lifecycle::Ready;
+        {
+            let mut model = named.state.lock().unwrap();
+            model.lifecycle = server::Lifecycle::Ready;
+            model.begin_request();
+        }
+        assert!(stop_models_for_replacement(&state, "default").is_err());
+        assert_eq!(
+            state.server.lock().unwrap().lifecycle,
+            server::Lifecycle::Ready
+        );
+        assert_eq!(
+            named.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Ready
+        );
+        assert_eq!(named.state.lock().unwrap().active_requests, 1);
+    }
+
+    #[test]
+    fn replacing_all_models_cancels_other_pending_loads_but_preserves_its_own() {
+        let state = AppState::default();
+        let named = state.sessions.get_or_create("named", "Named").unwrap();
+        let current = state.sessions.begin_pending_start("default").unwrap();
+        let other = state.sessions.begin_pending_start("named").unwrap();
+        state.server.lock().unwrap().lifecycle = server::Lifecycle::Ready;
+        named.state.lock().unwrap().lifecycle = server::Lifecycle::Ready;
+        stop_models_for_replacement(&state, "default").unwrap();
+        assert!(!current.cancel_flag().load(Ordering::Acquire));
+        assert!(other.cancel_flag().load(Ordering::Acquire));
+        assert_eq!(
+            state.server.lock().unwrap().lifecycle,
+            server::Lifecycle::Stopped
+        );
+        assert_eq!(
+            named.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Stopped
+        );
+    }
+
+    #[tokio::test]
+    async fn default_idle_unload_spares_active_responses_and_clears_execution() {
+        let state = AppState::default();
+        {
+            let mut model = state.server.lock().unwrap();
+            model.lifecycle = server::Lifecycle::Ready;
+            model.execution = Some(config::AppConfig {
+                sleep_idle_seconds: 1,
+                ..Default::default()
+            });
+            model.begin_request();
+            model.last_activity_at = std::time::Instant::now() - Duration::from_secs(10);
+        }
+        assert!(!unload_idle_server(&state).await);
+        {
+            let mut model = state.server.lock().unwrap();
+            model.end_request();
+            model.last_activity_at = std::time::Instant::now() - Duration::from_secs(10);
+        }
+        assert!(unload_idle_server(&state).await);
+        let model = state.server.lock().unwrap();
+        assert_eq!(model.lifecycle, server::Lifecycle::Stopped);
+        assert!(model.execution.is_none());
+        assert!(model.api_key.is_empty());
+        assert!(model.url.is_empty());
+    }
+
+    #[tokio::test]
+    async fn public_api_and_its_key_survive_manual_and_idle_model_unload() {
+        let state = AppState::default();
+        let handle = crate::gateway::start(state.model_source(), state.api_key.clone(), 0)
+            .await
+            .unwrap();
+        let url = format!("http://127.0.0.1:{}/v1/models", handle.port);
+        state.gateway.lock().unwrap().replace(handle);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+        for idle in [false, true] {
+            {
+                let mut model = state.server.lock().unwrap();
+                model.lifecycle = server::Lifecycle::Ready;
+                model.url = "http://127.0.0.1:9/v1".into();
+                model.api_key = "synthetic-worker-key".into();
+                model.model = "synthetic.gguf".into();
+                model.execution = Some(config::AppConfig {
+                    sleep_idle_seconds: 1,
+                    ..Default::default()
+                });
+                model.last_activity_at = std::time::Instant::now() - Duration::from_secs(10);
+            }
+            let loaded: serde_json::Value = client
+                .get(&url)
+                .bearer_auth(&*state.api_key)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(loaded["data"].as_array().unwrap().len(), 1);
+
+            if idle {
+                assert!(unload_idle_server(&state).await);
+            } else {
+                stop_session_by_id(&state, "default").await.unwrap();
+            }
+            assert!(state.gateway.lock().unwrap().as_ref().unwrap().is_running());
+            let empty: serde_json::Value = client
+                .get(&url)
+                .bearer_auth(&*state.api_key)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(empty["data"], serde_json::json!([]));
+        }
+        let handle = state.gateway.lock().unwrap().take().unwrap();
+        crate::gateway::stop(handle).await;
+    }
 
     #[test]
     fn launch_activity_guard_respects_target_and_stop_existing_policy() {
@@ -639,7 +852,6 @@ mod tests {
             &state.server,
             &state.err,
             prepared,
-            false,
             &Arc::new(AtomicBool::new(false)),
         )
         .await;

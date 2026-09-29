@@ -61,12 +61,7 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     // runtime_cancel. Kill the tracked CMake process trees while the app is
     // still alive so Ninja/compilers do not remain behind.
     runtime::terminate_active_builds();
-    if let Ok(mut gateway) = state.gateway.lock() {
-        if let Some(handle) = gateway.take() {
-            handle.stop.store(true, Ordering::Release);
-            handle.task.abort();
-        }
-    }
+    commands::gateway::abort_gateway_now(state);
     if let Ok(pid) = state.bench_pid.lock() {
         if let Some(pid) = *pid {
             procutil::terminate_pid(pid);
@@ -170,6 +165,9 @@ pub fn run() {
             commands::sessions::session_start,
             commands::sessions::session_stop,
             commands::sessions::session_unload,
+            commands::gateway::start_api_server,
+            commands::gateway::stop_api_server,
+            commands::gateway::api_server_status,
             commands::gateway::start_anthropic_gateway,
             commands::gateway::stop_anthropic_gateway,
             commands::gateway::anthropic_gateway_status,

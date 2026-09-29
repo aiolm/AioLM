@@ -1,13 +1,18 @@
 # Chat response metrics
 
 Each new assistant response shows two rows with token count, duration in seconds,
-and throughput in tokens per second. Measurements update during streaming and
+and rate in tokens per second. Measurements update during streaming and
 remain attached to the response in conversation history.
 
-| Stage | Token count | Duration | Throughput |
+| Stage | Token count | Duration | Rate |
 | --- | --- | --- | --- |
-| PP (prompt processing) | Server `timings.prompt_n`, excluding cached tokens | Server `timings.prompt_ms` | Server `timings.prompt_per_second` |
-| TG (token generation) | Server `timings.predicted_n`, including reasoning tokens | Server `timings.predicted_ms` | Server `timings.predicted_per_second` |
+| Input processing (Prefill / PP) | Server `timings.prompt_n`, excluding cached tokens | Server `timings.prompt_ms` | Server `timings.prompt_per_second` |
+| Output generation (Decode / TG) | Server `timings.predicted_n`, including reasoning tokens | Server `timings.predicted_ms` | Server `timings.predicted_per_second` |
+
+Compact rows display PP/TG. Their accessible names and tooltips use the same
+localized phase names as benchmark tables, sharing and exports, from
+`src/shared/i18n/inferenceMetricCopy.ts`. Benchmark PP is explicitly an estimate;
+chat PP uses runtime phase timings.
 
 When a server rate is missing, AioLM divides the corresponding stage's token count
 by its duration. Usage fields can supply the TG count from `completion_tokens`,
@@ -17,7 +22,7 @@ Missing, invalid, or unobservable values display as `—`. Zero counts and durat
 remain zero; a zero duration cannot supply a calculated rate. Counts are never
 estimated from response text.
 
-**More metrics** reveals these details:
+The response also shows these details:
 
 - **Time to first token (TTFT):** time from starting the chat request to the first
   nonempty text, reasoning, or tool name/arguments received by the client.

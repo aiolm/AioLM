@@ -19,17 +19,12 @@
 .aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .aiolm-heading h1 { font-size: 24px; overflow-wrap: anywhere; max-height: 48px; overflow-y: auto; }
 .aiolm-runtime-context { display: flex; align-items: center; min-width: 0; gap: 8px; max-height: 48px; overflow-y: auto; padding: 4px 8px; border: 1px solid var(--ui-border); border-radius: 8px; }
-.aiolm-runtime-context button { border: 0; background: transparent; min-width: 0; padding: 4px; overflow-wrap: anywhere; white-space: normal; font-size: 12px; text-align: left; }
-.aiolm-context-model { flex: 1 1 auto; color: var(--ui-ink); }
-.aiolm-context-runtime { flex: 0 1 auto; color: var(--ui-muted); }
-.aiolm-runtime-context button:hover { color: var(--ui-accent); }
+.aiolm-runtime-context button { min-width: 0; text-align: left; }
+.aiolm-context-model { flex: 1 1 auto; justify-content: flex-start; }
+.aiolm-context-runtime { flex: 0 1 auto; }
 .aiolm-server { display: grid; grid-template-columns: 80px 88px; align-items: center; gap: 16px; }
-.aiolm-server > button { width: 88px; height: var(--ui-control); padding: 4px 8px; overflow-y: auto; }
-.aiolm-status { display: flex; align-items: center; gap: 6px; height: var(--ui-control); overflow-y: auto; overflow-wrap: anywhere; font-size: 12px; color: var(--ui-muted); }
-.aiolm-status i, .developer-api-status__dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-faint); }
-.aiolm-status.is-running i, .developer-api-status__dot.is-on { background: var(--ui-success); }
-.aiolm-status.is-failed i, .aiolm-status.is-crashed i { background: var(--ui-danger); }
-.aiolm-status.is-starting i, .aiolm-status.is-stopping i { background: var(--ui-warning); }
+.aiolm-server > button { width: 88px; }
+.aiolm-status { justify-self: start; max-height: 48px; overflow-y: auto; }
 .app-main { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .app-panel-host { height: 100%; min-width: 0; min-height: 0; position: relative; }
 .app-panel-host > .app-page-scroll { height: 100%; }

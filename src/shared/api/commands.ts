@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
 import type { HfInstalledFile, HfSortKey } from "./models.ts";
 import type {
-  AppConfig, DeviceReport, ResourceEstimate,
+  ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
   LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelMetadata, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
@@ -55,6 +55,10 @@ export const stopServer = () => invoke<void>("stop_server");
 export const unloadModel = () => invoke<void>("unload_model");
 export const serverActivity = (phase: "start" | "end" | "touch", sessionId?: string) => invoke<void>("server_activity", { phase, ...(sessionId ? { sessionId } : {}) });
 export const serverStatus = () => invoke<ServerStatus>("server_status");
+/** The public API listener has its own lifecycle; loading or unloading a model never touches it. */
+export const startApiServer = () => invoke<ApiServerStatus>("start_api_server");
+export const stopApiServer = () => invoke<void>("stop_api_server");
+export const apiServerStatus = () => invoke<ApiServerStatus>("api_server_status");
 export const startAnthropicGateway = () => invoke<string>("start_anthropic_gateway");
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");
 export const anthropicGatewayStatus = () => invoke<{ running: boolean; url?: string }>("anthropic_gateway_status");

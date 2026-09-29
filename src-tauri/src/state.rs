@@ -2,6 +2,7 @@
 use crate::{gateway, models, server, session};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use uuid::Uuid;
 
 pub(crate) struct AppState {
     pub(crate) server: Arc<Mutex<server::ServerState>>,
@@ -21,7 +22,18 @@ pub(crate) struct AppState {
     pub(crate) discover_cancel: Arc<AtomicBool>,
     pub(crate) verify_cancel: Arc<AtomicBool>,
     pub(crate) model_scans: Arc<models::ScanRegistry>,
+    /// The external API listener. It is independent of every model process:
+    /// starting, stopping or replacing models never touches it, and stopping
+    /// it never unloads a model.
     pub(crate) gateway: Arc<Mutex<Option<gateway::GatewayHandle>>>,
+    /// Serialises API listener start and stop only. It is deliberately not the
+    /// global `operation` mutex, so the API stays controllable while a model
+    /// is loading.
+    pub(crate) api_control: tokio::sync::Mutex<()>,
+    /// The key external API clients present. It exists once per application
+    /// run, so it survives model replacement and API stop/start, and is never
+    /// persisted or logged.
+    pub(crate) api_key: Arc<str>,
     pub(crate) selected_image: Mutex<Option<PathBuf>>,
     pub(crate) selected_document: Mutex<Option<PathBuf>>,
     pub(crate) exiting: Arc<AtomicBool>,
@@ -51,6 +63,8 @@ impl Default for AppState {
             verify_cancel: Arc::new(AtomicBool::new(false)),
             model_scans: Arc::new(models::ScanRegistry::default()),
             gateway: Arc::new(Mutex::new(None)),
+            api_control: tokio::sync::Mutex::new(()),
+            api_key: new_api_key(),
             selected_image: Mutex::new(None),
             selected_document: Mutex::new(None),
             exiting: Arc::new(AtomicBool::new(false)),
@@ -60,7 +74,21 @@ impl Default for AppState {
     }
 }
 
+fn new_api_key() -> Arc<str> {
+    format!(
+        "sk-aiolm-{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
+    .into()
+}
+
 impl AppState {
+    /// What the API listener routes to: the default session plus every named one.
+    pub(crate) fn model_source(&self) -> gateway::ModelSource {
+        gateway::ModelSource::new(self.server.clone(), self.err.clone(), self.sessions.clone())
+    }
+
     pub(crate) fn begin_normal_exit(&self) {
         let mut normal_exit = self
             .normal_exit
@@ -69,5 +97,19 @@ impl AppState {
         *normal_exit = true;
         self.exiting
             .store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_application_run_gets_its_own_unguessable_api_key() {
+        let first = AppState::default();
+        let second = AppState::default();
+        assert_ne!(first.api_key, second.api_key);
+        assert!(first.api_key.starts_with("sk-aiolm-"));
+        assert!(first.api_key.len() >= 64, "key must carry real entropy");
     }
 }

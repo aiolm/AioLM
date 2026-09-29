@@ -20,7 +20,6 @@ export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
  ] },
  { id: 'integrations', items: [
   { id: 'api', label: 'section.api', icon: 'm8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18' },
-  { id: 'gateways', label: 'section.gateways', icon: 'M3 7h16m-4-4 4 4-4 4M21 17H5m4-4-4 4 4 4' },
   { id: 'mcp', label: 'section.mcp', icon: 'M8 3v5m8-5v5M6 8h12v4a6 6 0 0 1-12 0V8Zm6 10v4' },
  ] },
  { id: 'tools', items: [

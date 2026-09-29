@@ -131,7 +131,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       pollFailures.current = 0;
     } catch (error) {
       pollFailures.current += 1;
-      if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(`Server status unavailable: ${errorMessage(error)}`);
+      if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(`Model status unavailable: ${errorMessage(error)}`);
     } finally {
       pollInFlight.current = false;
     }
@@ -226,7 +226,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     setBusy(true); setActionError(null); setStatus((current) => ({ ...current, state: "stopping" })); operationInFlight.current = true; statusGeneration.current += 1;
     const generation = statusGeneration.current;
     try {
-      await withTimeout(api.stopServer(), STOP_TIMEOUT_MS, "Server stop timed out after 20 seconds.");
+      await withTimeout(api.stopServer(), STOP_TIMEOUT_MS, "Model unload timed out after 20 seconds.");
       if (generation === statusGeneration.current) setStatus({ state: "stopped" });
     } catch (error) {
       if (generation !== statusGeneration.current) throw error;

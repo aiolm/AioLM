@@ -89,4 +89,19 @@ describe("ModelsPanel layout", () => {
     expect(screen.queryByRole("button", { name: "Stop server" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unload model" })).toBeDisabled();
   });
+
+  it("does not show the model's private server address next to the loaded model", () => {
+    const runningStore = {
+      ...store,
+      status: { state: "running", url: "http://127.0.0.1:49152/v1", api_key: "private-key", model: cfg.active_model },
+    } as unknown as AppStore;
+    const { container } = render(createElement(I18nProvider, {
+      initialLocale: "en",
+      children: createElement(ModelsPanel, { store: runningStore }),
+    }));
+
+    expect(screen.getByRole("button", { name: "Unload model" })).toBeEnabled();
+    expect(container.textContent).not.toContain("127.0.0.1");
+    expect(container.textContent).not.toContain("private-key");
+  });
 });

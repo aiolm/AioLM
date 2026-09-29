@@ -8,6 +8,7 @@ import { getTaskSnapshot, registerTask, removeTask } from "../shared/state/taskR
 import { LocalTaskCancelButton } from "../shared/ui/TaskCancellation";
 import { setSessionActivity } from "../shared/state/sessionActivity";
 import type { ModelSettingsDialogProps } from "../features/model-settings/ModelSettingsDialog";
+import type { ViewId } from "../shared/types/navigation";
 
 let store: AppStore;
 let showBenchmarkCancel = false;
@@ -21,6 +22,7 @@ vi.mock('../features/models/ModelWorkspace', () => ({ default: ({ section }: { s
 vi.mock("../features/runtimes/Runtimes", () => ({ default: ({ onOpenProfiles }: { onOpenProfiles: () => void }) => <button onClick={onOpenProfiles}>Saved runtime settings</button> }));
 vi.mock("../features/sessions/Sessions", () => ({ default: () => <p>Sessions content</p> }));
 vi.mock("../features/discover/Discover", () => ({ default: () => <p>Discover content</p> }));
+vi.mock("../features/developer/Developer", () => ({ default: ({ section, onNavigate }: { section?: string; onNavigate?: (view: ViewId) => void }) => <><p>Developer section: {section}</p><button onClick={() => onNavigate?.("models")}>Load a model</button></> }));
 vi.mock("../features/tuning/Tuning", () => ({ default: () => <p>Parameter form</p> }));
 vi.mock("../features/bench/Bench", () => ({ default: () => {
   if (benchmarkLoading) throw benchmarkLoading;
@@ -236,11 +238,32 @@ describe("Workspace navigation", () => {
     expect(screen.getByLabelText("Project draft")).toHaveValue("New workspace");
   });
 
-  it("keeps twelve destinations and opens model selection over the current screen", async () => {
+  it("offers one API server destination and no separate gateways page", async () => {
+    mount();
+    const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
+    expect(within(navigation).getAllByRole("button", { name: /API server|Gateways|Local API/ })).toHaveLength(1);
+    expect(within(navigation).queryByRole("button", { name: /Gateways/ })).not.toBeInTheDocument();
+    fireEvent.click(mainTab("API server"));
+    expect(await screen.findByText("Developer section: api")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "API server" })).toBeVisible();
+    fireEvent.click(mainTab("Diagnostics"));
+    expect(await screen.findByText("Developer section: diagnostics")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Diagnostics" })).toBeVisible();
+  });
+
+  it("lets the API server page send people to the model library to load a model", async () => {
+    mount();
+    fireEvent.click(mainTab("API server"));
+    fireEvent.click(await screen.findByRole("button", { name: "Load a model" }));
+    expect(await screen.findByText("Model library")).toBeVisible();
+    expect(mainTab("Run a model")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("keeps eleven destinations and opens model selection over the current screen", async () => {
     mount();
     fireEvent.click(mainTab("Run a model"));
     await screen.findByText("Model library");
-    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(12);
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(11);
     fireEvent.click(mainTab("Manage runtimes"));
     await screen.findByText("Saved runtime settings");
     fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
@@ -248,23 +271,25 @@ describe("Workspace navigation", () => {
     expect(mainTab("Manage runtimes")).toHaveAttribute("aria-current", "page");
   });
 
-  it("provides a single global stop action even during startup", async () => {
+  it("provides a single global unload action even during model load", async () => {
     store.status = { state: "starting" }; store.busy = true;
     mount();
-    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(document.querySelector(".aiolm-status")).toHaveTextContent("loading model");
+    const stop = screen.getByRole("button", { name: "Unload" });
     expect(stop).toBeEnabled();
     fireEvent.click(stop);
     expect(store.stop).toHaveBeenCalledOnce();
     fireEvent.click(mainTab("Run a model"));
     await screen.findByText("Model library");
-    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Unload" })).toHaveLength(1);
   });
 
-  it("stops the running server while a response is active", () => {
+  it("describes the header in model terms and unloads the model while a response is active", () => {
     store.status = { state: "running" };
     setSessionActivity("default", true);
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(document.querySelector(".aiolm-status")).toHaveTextContent("model loaded");
+    fireEvent.click(screen.getByRole("button", { name: "Unload" }));
     expect(store.stop).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog", { name: "Model settings editor" })).not.toBeInTheDocument();
     expect(store.start).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import ModelIcon from '../shared/ui/ModelIcon';
 import StableLabel from "../shared/ui/StableLabel";
+import StatusBadge from "../shared/ui/StatusBadge";
 import { version } from '../../package.json';
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { applyTheme, persistThemeMode, subscribeToSystemTheme } from "../shared/config/theme";
@@ -7,7 +8,7 @@ import "../styles/app.css";
 
 
 import * as api from "../shared/api/index";
-import { verificationOverrideKey } from "../shared/lib/serverLifecycle";
+import { modelStatusKey, verificationOverrideKey } from "../shared/lib/serverLifecycle";
 import { useAppStore } from "../shared/state/store";
 import EmptyState from "../shared/ui/EmptyState";
 import FeedbackBanner from "../shared/ui/FeedbackBanner";
@@ -126,7 +127,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [executionSection, setExecutionSection] = useState<{ id: ExecutionSection; revision: number }>({ id: 'setup', revision: 0 });
   const [view, setView] = useState<ViewId>("chat");
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
-  const [developerSection, setDeveloperSection] = useState<"api" | "gateways" | "diagnostics">("api");
+  const [developerSection, setDeveloperSection] = useState<"api" | "diagnostics">("api");
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsUpdateRequest, setSettingsUpdateRequest] = useState(0);
   const menuRef = useRef<HTMLDialogElement>(null);
@@ -220,7 +221,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     if (executionTarget) setExecutionSection(current => ({ id: executionTarget, revision: current.revision + 1 }));
     window.dispatchEvent(new Event("aiolm:navigate"));
     setVisited(current => current.has(next) ? current : new Set([...current, next]));
-    if (next === "api" || next === "gateways" || next === "diagnostics") setDeveloperSection(next);
+    if (next === "api" || next === "diagnostics") setDeveloperSection(next);
     setView(next);
     setMenuOpen(false);
     return true;
@@ -246,7 +247,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const runtimeLabel = useRuntimeVersionLabel(store.status.execution?.active_backend ?? "", store.status.execution?.active_build ?? "");
   const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
   const title = labelFor(view);
-  const showDeveloper = view === "api" || view === "gateways" || view === "diagnostics";
+  const showDeveloper = view === "api" || view === "diagnostics";
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? store.status.model : undefined;
   const backendLabel = store.status.execution?.active_backend
     ? `${store.status.execution.active_backend}${store.status.execution.active_build ? ` · ${runtimeLabel}` : ""}`
@@ -274,8 +275,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}><ModelIcon model={liveModel ?? ''} />{shortModel(liveModel, modelCopy.choose)}</button><button type="button" className="aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel ? `${backendLabel} · ` : ''}⚙</button></div>
-        <div className="aiolm-server"><span className={"aiolm-status is-" + serverState} role="status"><i aria-hidden="true" />{serverState === "running" ? t("status.ready") : serverState === "stopped" ? t("status.stopped") : serverState}</span>{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
+        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}><ModelIcon model={liveModel ?? ''} />{shortModel(liveModel, modelCopy.choose)}</button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel ? `${backendLabel} · ` : ''}⚙</button></div>
+        <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
         <AppUpdateNotice onOpenSettings={() => { if (navigate("settings")) setSettingsUpdateRequest(current => current + 1); }} />
@@ -301,7 +302,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} /></>)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
-            <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("gateways") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
+            <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} onNavigate={navigate} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
           </section>
           {panel("mcp", <McpPanel store={store} />)}
           {panel("settings", <SettingsPanel preferences={preferences} update={updatePreferences} reset={resetAllPreferences} store={store} updateRequest={settingsUpdateRequest} />)}

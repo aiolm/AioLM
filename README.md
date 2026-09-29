@@ -12,11 +12,18 @@ AioLM (All-in-One LM) — Windows desktop runtime manager for `llama.cpp`. Uses 
 - Managed runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO) with portable ZIP support
 - PR builds by number/URL with provenance review
 - Streaming chat with local threads, document context, and embeddings
-- Projects, Hugging Face Discover, and Developer/MCP gateways
+- Projects, Hugging Face Discover, and MCP servers
+- Independent model loading and one API server page for OpenAI- and Anthropic-compatible clients
 - Tuning for server and sampling parameters
 - New-version notification at startup and verified installer updates from Settings
 
 In Tuning, **Reset all tuning** removes all overrides, including raw server arguments and chat JSON; each field also has **Reset to default**. Defaults are inherited from the selected llama.cpp runtime/model, not hard-coded recommendation presets. **Set custom value** opts back into an override, and profiles retain the default-mode selection. Model files, adapters, GPU assignments, runtime selection and saved profiles are preserved. Server changes require **Apply & restart**; default context size and memory use can vary by runtime/model.
+
+Loading a model makes it available to internal chat. Start the API server separately
+from **API server** in the sidebar to use loaded models from other applications: copy
+the URL, key and model ID, and pick the OpenAI or Anthropic example on the same page.
+The API stays up when models are unloaded or replaced, and stopping it leaves internal
+chat and loaded models available. See [API server and model lifecycle](docs/guides/local-api.md).
 
 ## Platform support
 

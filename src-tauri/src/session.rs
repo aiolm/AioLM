@@ -3,10 +3,10 @@
 //! A "session" is one llama-server process bundle: a primary model plus an
 //! optional vision projector and an optional speculative draft model, each
 //! with its own port, child process, API key, and lifecycle. The legacy
-//! single-server `start_server`/`stop_server`/`server_status`/`unload_model`
-//! commands in `commands/server.rs` keep operating on exactly one session —
-//! `DEFAULT_SESSION_ID` — completely unchanged, so existing frontend code and
-//! tests see no behavior change. This module tracks any *additional*
+//! model `start_server`/`stop_server`/`server_status`/`unload_model`
+//! commands in `commands/server.rs` operate on `DEFAULT_SESSION_ID`.
+//! Desktop model processes use private loopback ports; the external API
+//! listener is controlled independently. This module tracks any additional
 //! sessions started alongside it, keyed by a caller-chosen (typically UUID)
 //! string id.
 

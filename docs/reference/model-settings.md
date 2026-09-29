@@ -80,4 +80,4 @@ Per-model remembered settings and existing profiles remain available. Previous s
 
 Downloading a model adds it to the library. **Configure and run** then opens its settings; cancelling that dialog leaves the downloaded file intact. Runtime installation remains on the runtime management page. Going there from settings preserves the draft and offers a return action; runtime capabilities are refreshed on return.
 
-The application's server port is a global setting rather than a model override. Changing it takes effect on the next launch. Running status continues to show the current server's address and model.
+The external API port is a global setting rather than a model override, edited on the API server page. Changing it takes effect on the next API server start, without reloading models. Model processes use private loopback ports, and internal chat uses their live session addresses. Model loading and API server controls are independent; see [API server and model lifecycle](../guides/local-api.md).

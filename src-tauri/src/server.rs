@@ -150,6 +150,7 @@ impl Default for ServerState {
 impl ServerState {
     pub fn begin_launch(&mut self) -> u64 {
         self.execution = None;
+        self.active_requests = 0;
         self.launch_generation = self.launch_generation.wrapping_add(1);
         self.lifecycle = Lifecycle::Starting;
         self.launch_generation
@@ -1013,6 +1014,7 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
                 state.redaction_secret.clear();
                 state.mmproj.clear();
                 state.lifecycle = Lifecycle::Crashed;
+                state.active_requests = 0;
                 state.execution = None;
                 state.last_error = Some(if tail.trim().is_empty() {
                     format!("failed to inspect server process: {error}")
@@ -1032,6 +1034,7 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
     state.redaction_secret.clear();
     state.mmproj.clear();
     state.lifecycle = Lifecycle::Crashed;
+    state.active_requests = 0;
     state.execution = None;
     let tail = err.tail();
     let code = status

@@ -9,6 +9,7 @@ const en = {
   add: 'Add occurrence', remove: 'Remove occurrence', argument: 'Argument', flag: 'Flag',
   saved: 'Saved. Applies at the next server start.', pending: 'Save or reset your raw server arguments before editing individual options.',
   managed: 'Controlled by the application', dedicated: 'Open setting', lifecycle: 'Managed by the application for local connections, authentication or model selection.',
+  privatePort: 'The app assigns a private port to each model. Configure the public listener port on the API page.',
   command: 'This command prints information and exits; it is not a persistent server setting.',
   noResults: 'No matching options.', required: 'Enter every argument before saving.',
   unverified: 'These are reference options. Use “Read runtime options” to check the installed version.',
@@ -31,6 +32,7 @@ export const serverOptionsText: Record<Locale, typeof en> = {
     add: '인수 추가', remove: '인수 삭제', argument: '인수', flag: '플래그',
     saved: '저장했습니다. 다음 서버 시작부터 적용됩니다.', pending: '개별 옵션을 편집하기 전에 작성 중인 서버 인수를 저장하거나 초기화해 주세요.',
     managed: '앱에서 관리하는 옵션', dedicated: '설정으로 이동', lifecycle: '로컬 연결, 인증 또는 모델 선택을 위해 앱에서 관리합니다.',
+    privatePort: '모델마다 내부 포트를 앱이 자동으로 지정합니다. 외부 연결용 포트는 API 화면에서 설정하세요.',
     command: '정보를 출력한 뒤 종료하는 명령입니다. 서버 실행 설정으로 저장하지 않습니다.',
     noResults: '일치하는 옵션이 없습니다.', required: '모든 인수의 값을 입력해 주세요.',
     unverified: '참조용 옵션 목록입니다. ‘런타임 옵션 읽기’로 설치된 버전을 확인할 수 있습니다.',
@@ -43,6 +45,7 @@ export const serverOptionsText: Record<Locale, typeof en> = {
   },
   ja: {
     ...en,
+    privatePort: 'モデルごとの内部ポートはアプリが自動設定します。外部接続用のポートはAPI画面で設定してください。',
     defaultValue: '既定値', defaultRuntime: '選択したランタイム', defaultReference: '公式ソースの参照値',
     defaultApp: 'アプリの既定値',
     defaultAutomatic: '自動選択 · 実際の値は実行環境によって決まります。',
@@ -55,6 +58,7 @@ export const serverOptionsText: Record<Locale, typeof en> = {
   },
   zh: {
     ...en,
+    privatePort: '应用会为每个模型自动分配内部端口。外部连接端口请在 API 页面设置。',
     defaultValue: '默认值', defaultRuntime: '所选运行时', defaultReference: '官方源码参考值',
     defaultApp: '应用默认值',
     defaultAutomatic: '自动选择 · 实际值由运行环境决定。',

@@ -27,6 +27,10 @@ vi.mock("../../shared/api/index", () => ({
   sessionList: vi.fn(async () => []),
   sessionStart: vi.fn(async () => ({ id: "work", state: "running" })),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
+  // The public API listener is independent of chat; nothing here may reach it.
+  apiServerStatus: vi.fn(async () => ({ running: false, port: 8080 })),
+  startApiServer: vi.fn(),
+  stopApiServer: vi.fn(),
 }));
 
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
@@ -169,6 +173,20 @@ describe("ChatPanel unified attachments", () => {
     expect(mocked.chatStream.mock.calls[0][2]).toBe(model);
   });
 
+  it("chats through the model's own session URL and key while the API server is stopped", async () => {
+    const sessionStore = { ...store, status: { ...store.status, url: "http://127.0.0.1:49152/v1", api_key: "session-key" } } as AppStore;
+    renderPanel(sessionStore);
+    await screen.findByRole("log", { name: "Conversation" });
+    respondWithText("Ready");
+    await sendMessage("Hello");
+    await screen.findByText("Ready", { exact: true });
+
+    expect(mocked.chatStream.mock.calls[0].slice(0, 2)).toEqual(["http://127.0.0.1:49152/v1", "session-key"]);
+    expect(mocked.apiServerStatus).not.toHaveBeenCalled();
+    expect(mocked.startApiServer).not.toHaveBeenCalled();
+    expect(mocked.stopApiServer).not.toHaveBeenCalled();
+  });
+
   it("attaches documents and images with one button and blocks another selection while reading", async () => {
     renderPanel(visionStore);
     await attachDocument("notes.txt", SMALL_DOCUMENT);
@@ -299,7 +317,7 @@ describe("ChatPanel document context warning", () => {
     vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
     renderPanel({ ...store, status: { state: 'stopped', model: cfg.active_model }, start });
     expect(screen.queryByText('Model ready')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Start server' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Model & settings' }));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' } }));
     expect(start).not.toHaveBeenCalled();
@@ -339,7 +357,7 @@ describe("ChatPanel document context warning", () => {
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
     fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/work.gguf", ctx_size: 8192, temperature: 0.2 }), false));
     expect(panelStore.start).not.toHaveBeenCalled();
   });
@@ -351,7 +369,7 @@ describe("ChatPanel document context warning", () => {
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
     fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({
       active_model: "models/work.gguf", ctx_size: 16384, temperature: 0.5, ngl: 17,
     }), false));
@@ -372,12 +390,12 @@ describe("ChatPanel document context warning", () => {
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
     fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Start server" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     expect(await screen.findByText(/Profile save failed/)).toBeInTheDocument();
     expect(mocked.sessionStart).not.toHaveBeenCalled();
     expect(panelStore.start).not.toHaveBeenCalled();
     expect(panelStore.cfg).toEqual(before);
-    expect(screen.getByRole("button", { name: "Start server" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Load model" })).toBeEnabled();
   });
 
   it("changes the answering session without clearing the composer or attachments", async () => {

@@ -1,5 +1,6 @@
 import type { Locale } from "./i18nCatalog";
 import { tuningFieldText, tuningShellText } from './tuningFieldText.ts';
+import { inferenceMetricCopy } from './inferenceMetricCopy.ts';
 
 /**
  * `extra.<key>` namespace data (see `i18nUnified.ts`'s `translate()`) —
@@ -30,7 +31,7 @@ const en: ExtraCatalog = {
   download: "Download", downloadProjector: "Download projector", downloading: "Downloading", tuningPresets: "Presets",
   reasoningDescription: "These controls map to llama.cpp reasoning template options. The effort value is also sent per chat request when it is not default.",
   saved: "Saved", restartRequired: "Restart required", applying: "Applying", applyFailed: "Apply failed", serverSide: "server-side",
-  perRequest: "per-request", applyRestart: "Apply & restart server", serverRunning: "server is running", serverStopped: "server is stopped", loading: "Loading", restartNeeded: "Restart required", savedNextMessage: "Saved to config; used on the next message.", moreSampling: "More llama.cpp sampling controls", serverSettingsChanged: "server settings changed", previousValues: "The running server still uses the previous values.", restartNow: "Apply & restart", presetLoaded: "{name} preset loaded. Apply & restart to use server-side changes.", defaultsLoaded: "Qwen3.8-27B defaults loaded. Apply & restart to use server-side changes.", savedNextStart: "Saved — changes take effect on the next Start.", advancedSaved: "Advanced settings saved. Apply & restart to use them.", advancedSavedDraftPending: "Advanced settings saved; newer draft edits remain unsaved.", conversationsRemainSaved: "conversations remain saved while the server restarts.", saveServerArguments: "Save server arguments", saveChatOptions: "Save chat options",
+  perRequest: "per-request", applyRestart: "Apply & reload model", serverRunning: "server is running", serverStopped: "server is stopped", loading: "Loading", restartNeeded: "Restart required", savedNextMessage: "Saved to config; used on the next message.", moreSampling: "More llama.cpp sampling controls", serverSettingsChanged: "server settings changed", previousValues: "The loaded model still uses the previous values.", restartNow: "Apply & restart", presetLoaded: "{name} preset loaded. Apply & restart to use server-side changes.", defaultsLoaded: "Qwen3.8-27B defaults loaded. Apply & restart to use server-side changes.", savedNextStart: "Saved — changes take effect on the next Start.", advancedSaved: "Advanced settings saved. Apply & restart to use them.", advancedSavedDraftPending: "Advanced settings saved; newer draft edits remain unsaved.", conversationsRemainSaved: "conversations remain saved while the model reloads.", saveServerArguments: "Save server arguments", saveChatOptions: "Save chat options",
   tuningNavigationLabel: "Tuning navigation", quickMode: "Quick", advancedMode: "Advanced", tuningDetailLevel: "Tuning detail level", searchTuningSettingsLabel: "Search tuning settings", searchSettingsPlaceholder: "Search settings", clearTuningSearch: "Clear tuning search", categories: "Categories", tuningCategoriesLabel: "Tuning categories", noMatchingSettings: "No matching settings.", noSettingsMatchQuery: "No tuning settings match “{query}”.", tuningSubtitle: "Shape llama.cpp server defaults and per-request sampling from one focused workspace.",
   tuningFieldNglLabel: "GPU layers (ngl)",
   tuningFieldNglHint: "0–128. 0 keeps inference on CPU.",
@@ -225,7 +226,7 @@ const en: ExtraCatalog = {
   tuningFieldMmprojTooltipTitle: "Vision projector",
   tuningFieldMmprojTooltipDesc: "Compatible mmproj GGUF file that converts images into model input.",
   tuningFieldBatchSizeLabel: "Batch size",
-  tuningFieldBatchSizeHint: "Logical batch size for prompt processing.",
+  tuningFieldBatchSizeHint: `Logical batch size for ${inferenceMetricCopy('en').prefill}.`,
   tuningFieldBatchSizeTooltipTitle: "Batch size",
   tuningFieldBatchSizeTooltipDesc: "Maximum prompt tokens evaluated together. Reload to apply.",
   tuningFieldUbatchSizeLabel: "Micro batch size",
@@ -262,8 +263,8 @@ const ko: ExtraCatalog = {
   readingFiles: "저장소 파일을 읽는 중", selectRepository: "저장소를 선택해 GGUF 파일을 확인하고 양자화를 선택하세요.", noFiles: "이 저장소에 GGUF 파일이 없습니다.",
   reasoningDescription: "llama.cpp의 추론 템플릿 옵션에 대응합니다. effort 값은 기본값이 아닐 때 채팅 요청에도 함께 전송됩니다.",
   download: "다운로드", downloadProjector: "프로젝터 다운로드", downloading: "다운로드 중", tuningPresets: "프리셋", saved: "저장됨",
-  restartRequired: "재시작 필요", applying: "적용 중", applyFailed: "적용 실패", serverSide: "서버 측", perRequest: "요청별", applyRestart: "적용 및 서버 재시작",
-  serverRunning: "서버 실행 중", serverStopped: "서버 중지됨", loading: "로딩 중", restartNeeded: "재시작 필요", savedNextMessage: "설정에 저장되며 다음 메시지부터 사용됩니다.", moreSampling: "추가 llama.cpp 샘플링 제어", serverSettingsChanged: "서버 설정 변경됨", previousValues: "실행 중인 서버는 이전 값을 사용합니다.", restartNow: "적용 및 재시작", presetLoaded: "{name} 프리셋을 불러왔습니다. 서버 측 변경사항을 적용하려면 재시작하세요.", defaultsLoaded: "Qwen3.8-27B 기본값을 불러왔습니다. 서버 측 변경사항을 적용하려면 재시작하세요.", savedNextStart: "저장했습니다. 다음 시작부터 적용됩니다.", advancedSaved: "고급 설정을 저장했습니다. 적용 및 재시작하세요.", advancedSavedDraftPending: "고급 설정을 저장했지만 최신 초안 변경사항은 아직 저장되지 않았습니다.", conversationsRemainSaved: "서버가 재시작되는 동안 대화는 저장된 상태로 유지됩니다.", saveServerArguments: "서버 인자 저장", saveChatOptions: "채팅 옵션 저장",
+  restartRequired: "재시작 필요", applying: "적용 중", applyFailed: "적용 실패", serverSide: "서버 측", perRequest: "요청별", applyRestart: "적용 및 모델 다시 로드",
+  serverRunning: "서버 실행 중", serverStopped: "서버 중지됨", loading: "로딩 중", restartNeeded: "재시작 필요", savedNextMessage: "설정에 저장되며 다음 메시지부터 사용됩니다.", moreSampling: "추가 llama.cpp 샘플링 제어", serverSettingsChanged: "서버 설정 변경됨", previousValues: "로드된 모델은 이전 값을 사용합니다.", restartNow: "적용 및 재시작", presetLoaded: "{name} 프리셋을 불러왔습니다. 서버 측 변경사항을 적용하려면 재시작하세요.", defaultsLoaded: "Qwen3.8-27B 기본값을 불러왔습니다. 서버 측 변경사항을 적용하려면 재시작하세요.", savedNextStart: "저장했습니다. 다음 시작부터 적용됩니다.", advancedSaved: "고급 설정을 저장했습니다. 적용 및 재시작하세요.", advancedSavedDraftPending: "고급 설정을 저장했지만 최신 초안 변경사항은 아직 저장되지 않았습니다.", conversationsRemainSaved: "모델이 다시 로드되는 동안 대화는 저장된 상태로 유지됩니다.", saveServerArguments: "서버 인자 저장", saveChatOptions: "채팅 옵션 저장",
   tuningNavigationLabel: "튜닝 탐색", quickMode: "간편", advancedMode: "고급", tuningDetailLevel: "튜닝 상세 수준", searchTuningSettingsLabel: "튜닝 설정 검색", searchSettingsPlaceholder: "설정 검색", clearTuningSearch: "튜닝 검색 지우기", categories: "카테고리", tuningCategoriesLabel: "튜닝 카테고리", noMatchingSettings: "일치하는 설정이 없습니다.", noSettingsMatchQuery: "“{query}”에 해당하는 튜닝 설정이 없습니다.", tuningSubtitle: "하나의 작업 공간에서 llama.cpp 서버 기본값과 요청별 샘플링을 조정하세요.",
   tuningCategoryRuntime: "런타임", tuningCategoryRuntimeDesc: "GPU 오프로드, CPU 실행, 슬롯 및 라이프사이클 설정.",
   tuningCategoryContext: "컨텍스트·메모리", tuningCategoryContextDesc: "컨텍스트 용량과 메모리 사용에 영향을 주는 값.",
@@ -468,7 +469,7 @@ const ko: ExtraCatalog = {
   tuningFieldMmprojTooltipTitle: "비전 프로젝터",
   tuningFieldMmprojTooltipDesc: "이미지를 모델 입력으로 변환할 호환 mmproj GGUF 파일입니다.",
   tuningFieldBatchSizeLabel: "배치 크기",
-  tuningFieldBatchSizeHint: "프롬프트 처리용 논리 배치 크기.",
+  tuningFieldBatchSizeHint: `${inferenceMetricCopy('ko').prefill}용 논리 배치 크기.`,
   tuningFieldBatchSizeTooltipTitle: "배치 크기",
   tuningFieldBatchSizeTooltipDesc: "프롬프트에서 한 번에 평가할 최대 토큰 수입니다. 적용하려면 다시 로드하세요.",
   tuningFieldUbatchSizeLabel: "마이크로 배치 크기",
@@ -489,8 +490,8 @@ const ko: ExtraCatalog = {
   tuningFieldCacheTypeVTooltipDesc: "KV 캐시 값의 데이터 형식입니다. 작은 형식은 메모리를 절약하며, 정확도와 지원 여부는 모델·백엔드에 따라 다릅니다.",
  };
 
-const ja: ExtraCatalog = { ...en, discoverTitle: "Hugging FaceでGGUFモデルを探す", discoverDescription: "公開されたllama.cpp互換リポジトリを検索し、ファイルを確認して設定済みのモデルライブラリへ直接ダウンロードします。", searchPlaceholder: "例: Qwen GGUF、Llama 3、Mistral", searching: "検索中", search: "検索", searchResults: "リポジトリ", readingFiles: "リポジトリファイルを読み込み中", selectRepository: "リポジトリを選択してGGUFファイルを確認し、量子化を選択してください。", noFiles: "このリポジトリにGGUFファイルはありません。", download: "ダウンロード", downloadProjector: "プロジェクターをダウンロード", tuningPresets: "プリセット", saved: "保存済み", restartRequired: "再起動が必要", applying: "適用中", applyFailed: "適用に失敗しました", serverSide: "サーバー側", perRequest: "リクエストごと", applyRestart: "適用してサーバーを再起動", serverRunning: "サーバー実行中", serverStopped: "サーバー停止", loading: "読み込み中", restartNeeded: "再起動が必要", savedNextMessage: "設定に保存され、次のメッセージから使用されます。", moreSampling: "その他のllama.cppサンプリング設定", serverSettingsChanged: "サーバー設定が変更されました", previousValues: "実行中のサーバーは以前の値を使用しています", restartNow: "適用して再起動", downloading: "ダウンロード中" };
-const zh: ExtraCatalog = { ...en, discoverTitle: "在 Hugging Face 查找 GGUF 模型", discoverDescription: "搜索公开的 llama.cpp 兼容仓库，检查文件并直接下载到已配置的模型库。", searchPlaceholder: "例如：Qwen GGUF、Llama 3、Mistral", searching: "正在搜索", search: "搜索", searchResults: "仓库", readingFiles: "正在读取仓库文件", selectRepository: "选择仓库以查看 GGUF 文件并选择量化版本。", noFiles: "此仓库中没有 GGUF 文件。", download: "下载", downloadProjector: "下载投影器", tuningPresets: "预设", saved: "已保存", restartRequired: "需要重启", applyRestart: "应用并重启服务器", serverRunning: "服务器运行中", serverStopped: "服务器已停止" };
+const ja: ExtraCatalog = { ...en, discoverTitle: "Hugging FaceでGGUFモデルを探す", discoverDescription: "公開されたllama.cpp互換リポジトリを検索し、ファイルを確認して設定済みのモデルライブラリへ直接ダウンロードします。", searchPlaceholder: "例: Qwen GGUF、Llama 3、Mistral", searching: "検索中", search: "検索", searchResults: "リポジトリ", readingFiles: "リポジトリファイルを読み込み中", selectRepository: "リポジトリを選択してGGUFファイルを確認し、量子化を選択してください。", noFiles: "このリポジトリにGGUFファイルはありません。", download: "ダウンロード", downloadProjector: "プロジェクターをダウンロード", tuningPresets: "プリセット", saved: "保存済み", restartRequired: "再起動が必要", applying: "適用中", applyFailed: "適用に失敗しました", serverSide: "サーバー側", perRequest: "リクエストごと", applyRestart: "適用してモデルを再読み込み", serverRunning: "サーバー実行中", serverStopped: "サーバー停止", loading: "読み込み中", restartNeeded: "再起動が必要", savedNextMessage: "設定に保存され、次のメッセージから使用されます。", moreSampling: "その他のllama.cppサンプリング設定", serverSettingsChanged: "サーバー設定が変更されました", previousValues: "読み込み済みのモデルは以前の値を使用しています", restartNow: "適用して再起動", downloading: "ダウンロード中" };
+const zh: ExtraCatalog = { ...en, discoverTitle: "在 Hugging Face 查找 GGUF 模型", discoverDescription: "搜索公开的 llama.cpp 兼容仓库，检查文件并直接下载到已配置的模型库。", searchPlaceholder: "例如：Qwen GGUF、Llama 3、Mistral", searching: "正在搜索", search: "搜索", searchResults: "仓库", readingFiles: "正在读取仓库文件", selectRepository: "选择仓库以查看 GGUF 文件并选择量化版本。", noFiles: "此仓库中没有 GGUF 文件。", download: "下载", downloadProjector: "下载投影器", tuningPresets: "预设", saved: "已保存", restartRequired: "需要重启", applyRestart: "应用并重新加载模型", serverRunning: "服务器运行中", serverStopped: "服务器已停止" };
 
 export const extraText: Record<Locale, ExtraCatalog> = {
   en, ko,

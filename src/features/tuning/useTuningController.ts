@@ -282,19 +282,13 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
   const saveServerOption = async (option: ServerOption, occurrences: OptionOccurrence[]) => {
     if (applyLockRef.current || serverArgsDirty) throw new Error(serverOptionsText[locale].pending);
     // Use the save queue's current config so concurrent field saves cannot erase each other.
-    if (option.flags.includes('--port')) {
-      const port = occurrences.length ? Number(occurrences[0].values[0]) : 8080;
-      if (occurrences.length > 1 || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port: 1–65535');
-      await store.updateConfig({ port });
-    } else {
-      await store.updateConfig(current => {
-        const server_args = replaceServerOption(current.server_args, option, occurrences);
-        // Raw edits synchronize the three primary sampling fields in withManualOverrides.
-        // Reset must release those mirrors too, or the next chat would still send the old value.
-        const samplingKey = option.flags.includes('--temp') ? 'temperature' : option.flags.includes('--top-p') ? 'top_p' : option.flags.includes('--top-k') ? 'top_k' : undefined;
-        return occurrences.length === 0 && samplingKey ? { ...resetTuningField(current, samplingKey, resetValues), server_args } : { server_args };
-      });
-    }
+    await store.updateConfig(current => {
+      const server_args = replaceServerOption(current.server_args, option, occurrences);
+      // Raw edits synchronize the three primary sampling fields in withManualOverrides.
+      // Reset must release those mirrors too, or the next chat would still send the old value.
+      const samplingKey = option.flags.includes('--temp') ? 'temperature' : option.flags.includes('--top-p') ? 'top_p' : option.flags.includes('--top-k') ? 'top_k' : undefined;
+      return occurrences.length === 0 && samplingKey ? { ...resetTuningField(current, samplingKey, resetValues), server_args } : { server_args };
+    });
     if (occurrences.length === 0) clearFieldDrafts(`raw-server:${option.id}`);
     setPhase('dirty');
     setChangedServerFields(fields => fields.includes(option.id) ? fields : [...fields, option.id]);

@@ -506,6 +506,18 @@ export interface ServerStatus {
   execution?: Partial<ExecutionSettings>;
 }
 
+/**
+ * The public API listener, which runs independently of any loaded model.
+ * `url` is the OpenAI base URL and ends in `/v1`; `port` is the configured
+ * public port, reported even while the listener is stopped.
+ */
+export interface ApiServerStatus {
+  running: boolean;
+  url?: string | null;
+  api_key?: string | null;
+  port: number;
+}
+
 export interface MemoryEstimate {
   model_mb: number;
   context_mb: number;

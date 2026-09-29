@@ -1,11 +1,13 @@
+import { inferenceMetricCopy } from './inferenceMetricCopy.ts';
+
 /** Korean, Japanese and Chinese descriptions keyed by the canonical CLI flag. */
 export const serverOptionDescriptionCatalog: Record<string, readonly [string, string, string]> = {
   "--help": ["명령줄 사용법과 지원하는 옵션을 출력한 뒤 종료합니다.","コマンドの使い方と対応オプションを表示して終了します。","显示命令用法和支持的选项，然后退出。"],
   "--version": ["런타임의 버전과 빌드 정보를 출력합니다.","ランタイムのバージョンとビルド情報を表示します。","显示运行时的版本和构建信息。"],
   "--cache-list": ["로컬 캐시에 저장된 모델 목록을 출력합니다.","ローカルキャッシュに保存されているモデルの一覧を表示します。","显示本地缓存中保存的模型列表。"],
   "--completion-bash": ["Bash에서 불러와 명령줄 자동 완성에 사용할 스크립트를 출력합니다.","Bashで読み込んでコマンド補完に使用するスクリプトを出力します。","输出可在 Bash 中加载的命令补全脚本。"],
-  "--threads": ["토큰 생성에 사용할 CPU 스레드 수를 지정합니다.","トークン生成に使用するCPUスレッド数を指定します。","指定生成词元时使用的 CPU 线程数。"],
-  "--threads-batch": ["프롬프트와 배치를 처리할 때 사용할 CPU 스레드 수를 지정합니다.","プロンプトとバッチの処理に使用するCPUスレッド数を指定します。","指定处理提示词和批次时使用的 CPU 线程数。"],
+  "--threads": [`${inferenceMetricCopy('ko').decode}에 사용할 CPU 스레드 수를 지정합니다.`,`${inferenceMetricCopy('ja').decode}に使用するCPUスレッド数を指定します。`,`指定${inferenceMetricCopy('zh').decode}时使用的 CPU 线程数。`],
+  "--threads-batch": [`${inferenceMetricCopy('ko').prefill}와 배치 처리에 사용할 CPU 스레드 수를 지정합니다.`,`${inferenceMetricCopy('ja').prefill}とバッチ処理に使用するCPUスレッド数を指定します。`,`指定${inferenceMetricCopy('zh').prefill}和批次处理时使用的 CPU 线程数。`],
   "--cpu-mask": ["작업을 실행할 CPU를 16진수 비트 마스크로 지정합니다. CPU 범위 설정과 함께 사용할 수 있습니다.","処理に使用するCPUを16進数のビットマスクで指定します。CPU範囲の指定と併用できます。","用十六进制位掩码指定执行任务的 CPU，可与 CPU 范围设置配合使用。"],
   "--cpu-range": ["작업을 실행할 CPU 번호 범위를 지정합니다. CPU 마스크와 함께 사용할 수 있습니다.","処理に使用するCPU番号の範囲を指定します。CPUマスクと併用できます。","指定执行任务的 CPU 编号范围，可与 CPU 掩码配合使用。"],
   "--cpu-strict": ["스레드를 지정한 CPU에 엄격하게 배치할지 설정합니다.","スレッドを指定したCPUに厳密に配置するかを設定します。","设置是否将线程严格绑定到指定的 CPU。"],

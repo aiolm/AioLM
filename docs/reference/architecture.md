@@ -19,7 +19,7 @@ src/
     profiles/               Saved execution profiles
     projects/               Project bindings and persistence
     bench/                  Benchmark UI and result records
-    developer/              API, gateway and diagnostic views
+    developer/              API server and diagnostics views
     mcp/                    Tool servers and approval policy
     settings/               User preference editor
   shared/
@@ -81,6 +81,29 @@ until the first process has registered its instance notification window. The
 main window is created hidden and shown with focus once its webview exists, so
 minimizing immediately after launch cannot interrupt webview attachment.
 On macOS, Dock and Finder reopen events restore the existing window as well.
+
+## Model processes and the local API
+
+Desktop model sessions and the external API listener have separate lifecycles.
+`start_server` and the session commands load models into private `llama-server`
+processes. Their ports are selected at launch, and their live URLs are used by
+internal chat. The configured `port` belongs to the external API; private ports
+are never written back to saved configuration or execution profiles.
+
+The app-owned API listener starts without a loaded model, routes each inference
+request to a ready session, and authenticates clients with an app-lifetime key
+independent of the per-process credentials. Model reload, unload, idle expiry,
+or process failure does not tear down the listener. Stopping the API does not
+unload models. Anthropic and Responses adapters share the API listener.
+
+Each API inference request holds an activity guard on its selected model through
+the response stream. Model replacement and manual unloading check that activity
+under the same model-state mutex; idle unloading uses the same request counter.
+API start/stop has its own serialization so a long model load does not block API
+controls. Application exit still stops all managed resources.
+
+See [API server and model lifecycle](../guides/local-api.md) for client migration
+and the distinction from the standalone CLI.
 
 ## Dependency boundaries
 

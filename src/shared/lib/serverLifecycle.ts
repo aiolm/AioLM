@@ -1,3 +1,6 @@
+import type { ServerState } from "../api/types.ts";
+import type { UnifiedKey } from "../i18n/i18nUnified.ts";
+
 export type LifecycleErrorKind = "timeout" | "port" | "executable" | "model" | "memory" | "unknown";
 
 export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
@@ -13,7 +16,7 @@ export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
 export function lifecycleErrorMessage(action: "start" | "stop", error: unknown): string {
   const kind = classifyLifecycleError(error);
   const detail = error instanceof Error ? error.message : String(error);
-  const prefix = action === "start" ? "Server start failed" : "Server stop failed";
+  const prefix = action === "start" ? "Model load failed" : "Model unload failed";
   const hint = {
     timeout: "The operation timed out. Check runtime diagnostics and try again.",
     port: "The configured port is already in use. Choose another port or stop the conflicting process.",
@@ -41,6 +44,14 @@ export function shouldPoll(visibility: DocumentVisibilityState | "unknown"): boo
 
 export function shouldAutoStart(enabled: boolean, state: string, busy: boolean, consumed: boolean, configRevision: number): boolean {
   return enabled && !consumed && !busy && state === "stopped" && configRevision === 1;
+}
+
+/** Header and page copy describe the model, never the API listener, which has its own status. */
+export function modelStatusKey(state: ServerState): UnifiedKey {
+  return ({
+    running: "status.ready", stopped: "status.stopped", starting: "status.loading",
+    stopping: "status.unloading", failed: "status.failed", crashed: "status.crashed",
+  } as const)[state];
 }
 
 export function isServerRunning(state: string): boolean {

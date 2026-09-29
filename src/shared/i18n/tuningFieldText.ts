@@ -1,7 +1,9 @@
+import { inferenceMetricCopy } from './inferenceMetricCopy.ts';
+
 const ja = {
   ngl: ['GPU レイヤー数 (ngl)', 'GPU に配置するモデルのレイヤー数です。0 は CPU のみで推論します。'],
   ctx_size: ['コンテキストサイズ', 'プロンプトと生成結果を保持する最大トークン数です。0 はモデルのコンテキストサイズを使用します。変更には再読み込みが必要です。'],
-  batch_size: ['バッチサイズ', 'プロンプト処理でまとめて評価するトークン数の上限です。変更には再読み込みが必要です。'],
+  batch_size: ['バッチサイズ', `${inferenceMetricCopy('ja').prefill}でまとめて評価するトークン数の上限です。変更には再読み込みが必要です。`],
   ubatch_size: ['マイクロバッチサイズ', '一度にバックエンドへ渡すトークン数です。小さくすると最大メモリー使用量が減ります。バッチサイズ以下にしてください。'],
   keep: ['保持するプロンプトトークン数', 'コンテキストを移動するときに保持する、最初のプロンプトのトークン数です。変更には再読み込みが必要です。'],
   n_cpu_moe: ['CPU の MoE レイヤー数', 'CPU に配置する MoE のエキスパートレイヤー数です。'],
@@ -57,7 +59,7 @@ const ja = {
 const zh: Record<keyof typeof ja, readonly [string, string]> = {
   ngl: ['GPU 层数 (ngl)', '放入 GPU 的模型层数。0 表示仅使用 CPU 推理。'],
   ctx_size: ['上下文大小', '保存提示词和生成结果的最大 token 数。0 使用模型的上下文大小，修改后需要重新加载。'],
-  batch_size: ['批次大小', '提示词处理时一次共同评估的最大 token 数。修改后需要重新加载。'],
+  batch_size: ['批次大小', `${inferenceMetricCopy('zh').prefill}时一次共同评估的最大令牌数。修改后需要重新加载。`],
   ubatch_size: ['微批次大小', '一次交给后端的物理批次大小。减小可降低峰值内存使用量，请勿超过批次大小。'],
   keep: ['保留的提示词 token 数', '上下文窗口移动时保留的初始提示词 token 数。修改后需要重新加载。'],
   n_cpu_moe: ['CPU MoE 层数', '保留在 CPU 上的 MoE 专家层数。'],

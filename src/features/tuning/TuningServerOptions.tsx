@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
 import type { ViewId } from '../../shared/types/navigation';
@@ -14,6 +14,8 @@ import { defaultScalar } from '../../shared/config/tuningResetValues';
 import { useEditorDraft } from '../../shared/state/draftGuard';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { serverOptionDescription } from '../../shared/i18n/serverOptionDescriptions';
+import { CustomSelect } from '../../shared/ui/CustomSelect';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 
 const MEMORY_OPTIONS = new Set(['--mmap', '--mlock', '--direct-io', '--load-mode', '--lazy-mode', '--numa', '--kv-offload', '--op-offload', '--repack', '--fit', '--fit-target', '--fit-ctx', '--cache-ram', '--swa-full']);
 const ACTION_OPTIONS = new Set(['--help', '--version', '--cache-list', '--completion-bash', '--list-devices']);
@@ -31,8 +33,8 @@ interface Props {
   onNavigate?: (view: ViewId) => void;
 }
 
-function OptionEditor({ option, args, disabled, onSave, single = false, options, verified, descriptionId }: {
-  option: ServerOption; args: string[]; disabled: boolean; onSave: Props['onSave']; single?: boolean; options: readonly ServerOption[]; verified: boolean; descriptionId: string;
+function OptionEditor({ option, args, disabled, onSave, options, verified, descriptionId }: {
+  option: ServerOption; args: string[]; disabled: boolean; onSave: Props['onSave']; options: readonly ServerOption[]; verified: boolean; descriptionId: string;
 }) {
   const { locale } = useI18n();
   const copy = serverOptionsText[locale];
@@ -52,6 +54,9 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options,
   const inherited = occurrences.length === 0;
   const items = inherited ? [initialItem] : occurrences;
   const update = (index: number, item: OptionOccurrence) => setDraft(items.map((value, i) => i === index ? item : value));
+  const setArgument = (index: number, item: OptionOccurrence, argumentIndex: number, value: string) => {
+    const values = [...item.values]; values[argumentIndex] = value; update(index, { ...item, values });
+  };
   const append = () => {
     setDraft(inherited && option.arity === 0 ? [initialItem]
       : [...items, { flag: option.id, values: Array.from({ length: option.arity }, () => '') }]);
@@ -68,30 +73,35 @@ function OptionEditor({ option, args, disabled, onSave, single = false, options,
   return <div className="server-option-editor">
     {inherited && <p className="server-option-default"><DefaultValue info={serverDefaultInfo(option, options, verified, locale, { selected: true })} /></p>}
     {items.map((item, index) => <div className="server-option-occurrence" key={index}>
-      <label><span>{copy.flag}</span><select className="app-select" aria-label={`${option.id} ${copy.flag} ${index + 1}`} aria-describedby={descriptionId} value={inherited && option.arity === 0 ? '' : item.flag} disabled={disabled || busy}
-        onChange={event => event.target.value ? update(index, { ...item, flag: event.target.value }) : setDraft(items.filter((_, i) => i !== index))}>
-        {option.arity === 0 && <option value="">{serverDefaultLabel(option, options, verified, locale, { selected: inherited, compact: true })}</option>}
-        {option.flags.filter(flag => flag.startsWith('--') || !option.flags.some(value => value.startsWith('--'))).map(flag => <option key={flag}>{flag}</option>)}
-        {!item.flag.startsWith('--') && <option>{item.flag}</option>}
-      </select></label>
+      <label><span>{copy.flag}</span><CustomSelect className="w-full" aria-label={`${option.id} ${copy.flag} ${index + 1}`} aria-describedby={descriptionId} value={inherited && option.arity === 0 ? '' : item.flag} disabled={disabled || busy}
+        options={[
+          ...(option.arity === 0 ? [{ value: '', label: serverDefaultLabel(option, options, verified, locale, { selected: inherited, compact: true }) }] : []),
+          // A stored short or unlisted spelling stays selectable once instead of being replaced by the first flag.
+          ...[...new Set([...option.flags.filter(flag => flag.startsWith('--') || !option.flags.some(value => value.startsWith('--'))), item.flag])].map(flag => ({ value: flag, label: flag })),
+        ]}
+        onChange={flag => flag ? update(index, { ...item, flag }) : setDraft(items.filter((_, i) => i !== index))} /></label>
       {Array.from({ length: option.arity }, (_, argumentIndex) => <label key={argumentIndex}>
         <span>{copy.argument} {option.arity > 1 ? argumentIndex + 1 : ''}</span>
-        <input className="app-input" aria-label={`${option.id} ${copy.argument} ${index + 1}.${argumentIndex + 1}`} aria-describedby={descriptionId} list={choices.length ? `choices-${option.id}` : undefined}
-          placeholder={normalizeDisplayText(option.argument.split(/\s+/)[argumentIndex] ?? option.argument)} value={normalizeDisplayText(item.values[argumentIndex] ?? '')} disabled={disabled || busy} spellCheck={false}
-          onChange={event => { const values = [...item.values]; values[argumentIndex] = choices.find(value => normalizeDisplayText(value) === event.target.value) ?? event.target.value; update(index, { ...item, values }); }} />
+        {choices.length > 0 ? <CustomSelect className="w-full" aria-label={`${option.id} ${copy.argument} ${index + 1}.${argumentIndex + 1}`} aria-describedby={descriptionId}
+          placeholder={normalizeDisplayText(option.argument.split(/\s+/)[argumentIndex] ?? option.argument)} value={item.values[argumentIndex] ?? ''} disabled={disabled || busy} spellCheck={false}
+          options={choices.map(value => ({ value, label: normalizeDisplayText(value) }))}
+          onChange={value => setArgument(index, item, argumentIndex, value)}
+          onInputChange={value => setArgument(index, item, argumentIndex, choices.find(choice => normalizeDisplayText(choice) === value) ?? value)} />
+          : <input className="app-input" aria-label={`${option.id} ${copy.argument} ${index + 1}.${argumentIndex + 1}`} aria-describedby={descriptionId}
+            placeholder={normalizeDisplayText(option.argument.split(/\s+/)[argumentIndex] ?? option.argument)} value={normalizeDisplayText(item.values[argumentIndex] ?? '')} disabled={disabled || busy} spellCheck={false}
+            onChange={event => setArgument(index, item, argumentIndex, event.target.value)} />}
       </label>)}
       {!inherited && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled || busy} aria-label={`${option.id} ${copy.remove} ${index + 1}`}
         onClick={() => setDraft(items.filter((_, i) => i !== index))}>{copy.remove}</button>}
     </div>)}
-    {choices.length > 0 && <datalist id={`choices-${option.id}`}>{choices.map(value => <option key={value} value={normalizeDisplayText(value)} />)}</datalist>}
     <div className="server-option-actions">
-      {!single && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={append}>{copy.add}</button>}
+      <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={append}>{copy.add}</button>
       {draft && <button type="button" className="app-button app-button--primary app-button--sm" disabled={disabled || busy || invalid} onClick={() => void save(occurrences)}>{copy.save}</button>}
       {(draft !== null || stored.length > 0) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || busy} onClick={() => void save([])}>{copy.reset}</button>}
     </div>
     {invalid && <p className="app-section-hint">{copy.required}</p>}
     {feedback && <p className="server-option-default" role="status">{feedback}</p>}
-    {error && <p className="text-error" role="alert">{normalizeDisplayText(error)}</p>}
+    {error && <FeedbackBanner tone="error">{normalizeDisplayText(error)}</FeedbackBanner>}
   </div>;
 }
 
@@ -101,10 +111,13 @@ export default function TuningServerOptions({ cfg, runtime, disabled, rawDirty, 
   const copy = serverOptionsText[locale];
   const [localQuery, setLocalQuery] = useState('');
   const [configuredOnly, setConfiguredOnly] = useState(false);
+  // Options already overridden when first shown start expanded; later saves or resets
+  // never toggle them, so a reader's own collapse survives re-renders.
+  const initiallyOpen = useRef(new Map<string, boolean>());
   const options = runtime.options.filter(option => (!memoryOnly || MEMORY_OPTIONS.has(option.id))
     && [query, localQuery].every(value => serverOptionMatches({ ...option, description: `${serverOptionDescription(option, locale)} ${option.description}` }, value))
     && (!configuredOnly || getOptionOccurrences(cfg.server_args, option).length > 0));
-  return <section className="server-options tuning-section" aria-label={memoryOnly ? copy.memory : copy.title}>
+  return <section className="server-options tuning-section app-card" aria-label={memoryOnly ? copy.memory : copy.title}>
     <div className="server-options-heading">
       {memoryOnly && <div><h3>{copy.memory}</h3><p className="app-section-hint">{copy.memoryHint}</p></div>}
       <button className="app-button app-button--secondary app-button--sm" type="button" disabled={runtime.loading} onClick={runtime.refresh}>{runtime.loading ? copy.loading : copy.refresh}</button>
@@ -123,11 +136,12 @@ export default function TuningServerOptions({ cfg, runtime, disabled, rawDirty, 
         const field = managed ? TUNING_FIELD_CATALOG.find(item => item.aliases?.includes(managed)) : undefined;
         const destination = managed ? DESTINATIONS[managed] : undefined;
         const occurrences = getOptionOccurrences(cfg.server_args, option);
-        return <details className="server-option" key={option.id} data-server-option={option.id}>
+        if (!initiallyOpen.current.has(option.id)) initiallyOpen.current.set(option.id, !managed && occurrences.length > 0);
+        return <details className="server-option" key={option.id} data-server-option={option.id} open={initiallyOpen.current.get(option.id)}>
           <summary><code>{normalizeDisplayText(option.signature)}</code><span className="server-option-state">{managed ? copy.managed : occurrences.length ? `${copy.custom} · ${occurrences.length}` : <DefaultValue info={serverDefaultInfo(option, runtime.options, runtime.verified, locale, { selected: true })} />}</span>
             {(managed || occurrences.length > 0) && <ServerOptionDefault option={option} options={runtime.options} verified={runtime.verified} />}
           </summary>
-          {managed === '--port' ? <OptionEditor key={`port:${cfg.port}`} option={option} options={runtime.options} verified={runtime.verified} args={['--port', String(cfg.port)]} disabled={disabled || rawDirty} onSave={onSave} single descriptionId={`${id}-${option.id}-description`} /> : managed ? <div className="server-option-actions"><span>{copy.managed}</span>
+          {managed ? <div className="server-option-actions"><span>{managed === '--port' ? copy.privatePort : copy.managed}</span>
             {field ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onCategory(field.category)}>{copy.dedicated}</button>
               : destination && onNavigate ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onNavigate(destination)}>{copy.dedicated}</button> : <p>{copy.lifecycle}</p>}
           </div> : ACTION_OPTIONS.has(option.id) ? <p className="app-section-hint">{copy.command}</p>

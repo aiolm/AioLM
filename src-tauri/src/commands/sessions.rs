@@ -1,26 +1,13 @@
-//! Named session IPC and port selection.
+//! Named model session IPC.
 use super::server::{
-    ensure_no_active_requests, prepare_launch, start_on_target, stop_session_by_id,
+    ensure_no_active_requests, prepare_launch, start_on_target, stop_models_for_replacement,
+    stop_session_by_id,
 };
 use crate::{config, server, session, state::AppState};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use tauri::State;
 use uuid::Uuid;
-
-fn session_ports_excluding(state: &AppState, exclude_id: &str) -> Vec<u16> {
-    let mut ports = state.sessions.claimed_ports_excluding(exclude_id);
-    if exclude_id != session::DEFAULT_SESSION_ID {
-        if let Ok(server) = state.server.lock() {
-            if server.lifecycle != server::Lifecycle::Stopped {
-                if let Some(port) = server::port_from_url(&server.url) {
-                    ports.push(port);
-                }
-            }
-        }
-    }
-    ports
-}
 
 /// Load one session's model bundle, honoring the "stop existing sessions on
 /// load" policy (`stop_existing` overrides the persisted default for this
@@ -60,26 +47,16 @@ pub(crate) async fn session_start(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| id.clone());
 
-    let mut prepared = prepare_launch(
+    let prepared = prepare_launch(
         &state,
         cfg,
         id == session::DEFAULT_SESSION_ID,
         &launch_cancel,
     )
     .await?;
-    if id != session::DEFAULT_SESSION_ID {
-        prepared.cfg.port =
-            session::effective_port(prepared.cfg.port, &session_ports_excluding(&state, &id))?;
-    }
-
     ensure_no_active_requests(&state, &id, policy)?;
     if policy {
-        let mut all_ids = state.sessions.ids();
-        all_ids.push(session::DEFAULT_SESSION_ID.to_string());
-        for other in session::ids_to_stop_for_policy(&all_ids, &id) {
-            ensure_no_active_requests(&state, &id, true)?;
-            stop_session_by_id(&state, &other).await?;
-        }
+        stop_models_for_replacement(&state, &id)?;
     }
     if launch_cancel.load(Ordering::Acquire) {
         return Err("server start cancelled".into());
@@ -88,7 +65,7 @@ pub(crate) async fn session_start(
     if id == session::DEFAULT_SESSION_ID {
         let target = state.server.clone();
         let err = state.err.clone();
-        start_on_target(&state, &target, &err, prepared, true, &launch_cancel).await?;
+        start_on_target(&state, &target, &err, prepared, &launch_cancel).await?;
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
@@ -105,15 +82,7 @@ pub(crate) async fn session_start(
         .name
         .lock()
         .map_err(|_| "session name lock was poisoned".to_string())? = name.clone();
-    start_on_target(
-        &state,
-        &entry.state,
-        &entry.err,
-        prepared,
-        false,
-        &launch_cancel,
-    )
-    .await?;
+    start_on_target(&state, &entry.state, &entry.err, prepared, &launch_cancel).await?;
     let mut server = entry
         .state
         .lock()

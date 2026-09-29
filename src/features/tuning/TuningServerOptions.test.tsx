@@ -62,10 +62,45 @@ describe('server option editing', () => {
       runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
       disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
     const option = openOption('--custom-flag');
-    expect(option.getByRole('combobox')).toHaveValue('');
-    fireEvent.change(option.getByRole('combobox'), { target: { value: '--custom-flag' } });
+    const flag = option.getByRole('combobox', { name: '--custom-flag Flag 1' });
+    expect(flag).not.toHaveTextContent('--custom-flag');
+    fireEvent.click(flag);
+    // The inherited entry and the flag are each offered once.
+    expect(screen.getAllByRole('option').map(item => item.textContent)).toEqual([flag.textContent, '--custom-flag']);
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('option', { name: '--custom-flag' }));
+    expect(flag).toHaveTextContent('--custom-flag');
     fireEvent.click(option.getByRole('button', { name: 'Save option' }));
     await waitFor(() => expect(save).toHaveBeenCalledWith(options[0], [{ flag: '--custom-flag', values: [] }]));
+  });
+
+  it('keeps a stored short flag selectable once alongside the long spellings', () => {
+    const options = parseRuntimeHelp('-cb, --cont-batching, --no-cont-batching, -nocb             toggle');
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: ['-nocb'] }}
+      runtime={{ options, verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={vi.fn()} onCategory={vi.fn()} /></I18nProvider>);
+    const flag = openOption('--cont-batching').getByRole('combobox', { name: '--cont-batching Flag 1' });
+    expect(flag).toHaveTextContent('-nocb');
+    fireEvent.click(flag);
+    const labels = screen.getAllByRole('option').map(item => item.textContent);
+    expect(labels.filter(label => label === '-nocb')).toHaveLength(1);
+    expect(labels).toEqual(expect.arrayContaining(['--cont-batching', '--no-cont-batching']));
+    expect(labels).not.toContain('-cb');
+    expect(screen.getByRole('option', { name: '-nocb' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('disables flag and suggestion comboboxes while editing is locked', () => {
+    const [base] = parseRuntimeHelp('--cache-path FILE             cache file');
+    const option = { ...base, choices: ['a.bin', 'b.bin'] };
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: ['--cache-path', 'a.bin'] }}
+      runtime={{ options: [option], verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled rawDirty={false} onSave={vi.fn()} onCategory={vi.fn()} /></I18nProvider>);
+    const editor = openOption('--cache-path');
+    for (const combobox of editor.getAllByRole('combobox')) {
+      expect(combobox).toBeDisabled();
+      fireEvent.click(combobox);
+    }
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
   it('keeps a default input after removing the last occurrence and saves an empty override list', async () => {
@@ -98,13 +133,41 @@ describe('server option editing', () => {
       disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
     const editor = openOption('--cache-path');
     expect(container.textContent).toContain(`--cache-path FILE (default: ${display})`);
-    const suggestion = container.querySelector('datalist option');
-    expect(suggestion).toHaveAttribute('value', display);
+    expect(container.querySelector('select, datalist')).not.toBeInTheDocument();
     const input = editor.getByRole('combobox', { name: '--cache-path Argument 1.1' });
-    fireEvent.change(input, { target: { value: display } });
+    expect(input).toHaveValue('old.bin');
+    fireEvent.click(input);
+    fireEvent.click(screen.getByRole('option', { name: display }));
+    expect(input).toHaveValue(display);
     fireEvent.click(editor.getByRole('button', { name: 'Save option' }));
     await waitFor(() => expect(save).toHaveBeenCalledWith(option, [{ flag: '--cache-path', values: [raw] }]));
     expect(container.textContent).not.toContain('\\\\?\\');
+    expect(document.body.textContent).not.toContain('\\\\?\\');
+  });
+
+  it('keeps typed text beyond suggested paths and maps a typed display path back to its raw value', async () => {
+    const raw = String.raw`\\?\C:\models\cache.bin`;
+    const display = String.raw`C:\models\cache.bin`;
+    const [base] = parseRuntimeHelp('--cache-path FILE             cache file');
+    const option = { ...base, choices: [raw] };
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={{ ...testConfig, server_args: ['--cache-path', 'old.bin'] }}
+      runtime={{ options: [option], verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={save} onCategory={vi.fn()} /></I18nProvider>);
+    const editor = openOption('--cache-path');
+    const input = editor.getByRole('combobox', { name: '--cache-path Argument 1.1' });
+    expect(input).toHaveAttribute('placeholder', 'FILE');
+    expect(input).toHaveAttribute('spellcheck', 'false');
+    fireEvent.change(input, { target: { value: String.raw`D:\My Models\other cache.bin` } });
+    expect(input).toHaveValue(String.raw`D:\My Models\other cache.bin`);
+    fireEvent.click(editor.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith(option, [{ flag: '--cache-path', values: [String.raw`D:\My Models\other cache.bin`] }]));
+    fireEvent.change(input, { target: { value: display } });
+    fireEvent.click(editor.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith(option, [{ flag: '--cache-path', values: [raw] }]));
+    fireEvent.change(input, { target: { value: '' } });
+    expect(editor.getByRole('button', { name: 'Save option' })).toBeDisabled();
+    expect(editor.getByText('Enter every argument before saving.')).toBeInTheDocument();
   });
 
   it.each([
@@ -154,27 +217,45 @@ describe('server option editing', () => {
     await waitFor(() => expect(document.querySelector('[data-server-option="--future-pr-option"]')).toBeInTheDocument());
     expect(document.querySelector('[data-server-option="--load-mode"]')).not.toBeInTheDocument();
     const mmap = openOption('--mmap');
-    fireEvent.change(mmap.getByRole('combobox'), { target: { value: '--no-mmap' } });
+    const inheritedLabel = mmap.getByRole('combobox').textContent;
+    fireEvent.click(mmap.getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: '--no-mmap' }));
+    fireEvent.click(mmap.getByRole('button', { name: 'Save option' }));
+    await waitFor(() => expect(cfg().server_args).toEqual(['--cache-ram', '-1', '--no-mmap']));
+    expect(mmap.getByRole('combobox')).toHaveTextContent('--no-mmap');
+    fireEvent.click(mmap.getByRole('button', { name: 'Reset to default' }));
+    await waitFor(() => expect(cfg().server_args).toEqual(['--cache-ram', '-1']));
+    expect(mmap.getByRole('combobox')).toHaveTextContent(inheritedLabel!);
+    expect(mmap.queryByRole('button', { name: 'Set custom value' })).not.toBeInTheDocument();
+  });
+  it('starts overridden options expanded and keeps the reader\'s collapse across saves and resets', async () => {
+    const cfg = mount();
+    fireEvent.click(screen.getByRole('button', { name: 'All server options' }));
+    await waitFor(() => expect(document.querySelector('[data-server-option="--future-pr-option"]')).toBeInTheDocument());
+    const details = (flag: string) => document.querySelector<HTMLDetailsElement>(`[data-server-option="${flag}"]`)!;
+    expect(details('--cache-ram').open).toBe(true);
+    expect(details('--mmap').open).toBe(false);
+    details('--cache-ram').open = false;
+    const mmap = openOption('--mmap');
+    fireEvent.click(mmap.getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: '--no-mmap' }));
     fireEvent.click(mmap.getByRole('button', { name: 'Save option' }));
     await waitFor(() => expect(cfg().server_args).toEqual(['--cache-ram', '-1', '--no-mmap']));
     fireEvent.click(mmap.getByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(cfg().server_args).toEqual(['--cache-ram', '-1']));
-    expect(mmap.getByRole('combobox')).toHaveValue('');
-    expect(mmap.queryByRole('button', { name: 'Set custom value' })).not.toBeInTheDocument();
+    expect(details('--cache-ram').open).toBe(false);
+    expect(details('--mmap').open).toBe(true);
   });
-  it('saves port through the dedicated config and rejects an invalid port', async () => {
-    const cfg = mount();
-    fireEvent.click(screen.getByRole('button', { name: 'All server options' }));
-    await waitFor(() => expect(document.querySelector('[data-server-option="--port"]')).toBeInTheDocument());
+  it('directs port changes to the API instead of editing a model worker port', () => {
+    const navigate = vi.fn();
+    render(<I18nProvider initialLocale="en"><TuningServerOptions cfg={testConfig}
+      runtime={{ options: parseRuntimeHelp(help), verified: true, loading: false, refresh: vi.fn(), error: undefined, capabilities: undefined }}
+      disabled={false} rawDirty={false} onSave={vi.fn()} onCategory={vi.fn()} onNavigate={navigate} /></I18nProvider>);
     const port = openOption('--port');
-    fireEvent.change(port.getByRole('textbox'), { target: { value: '9000' } });
-    fireEvent.click(port.getByRole('button', { name: 'Save option' }));
-    await waitFor(() => expect(cfg().port).toBe(9000));
-    expect(cfg().server_args).toEqual(['--cache-ram', '-1']);
-    fireEvent.change(port.getByRole('textbox'), { target: { value: '65536' } });
-    fireEvent.click(port.getByRole('button', { name: 'Save option' }));
-    await waitFor(() => expect(port.getByRole('alert')).toHaveTextContent('1–65535'));
-    expect(cfg().port).toBe(9000);
+    expect(port.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(port.getByText(/assigns a private port to each model/)).toBeInTheDocument();
+    fireEvent.click(port.getByRole('button', { name: 'Open setting' }));
+    expect(navigate).toHaveBeenCalledWith('api');
   });
   it('restores request inheritance when resetting a raw sampling override', async () => {
     const cfg = mount();

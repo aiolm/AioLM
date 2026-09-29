@@ -127,9 +127,9 @@ describe("TuningPanel phase-1 shell", () => {
   });
   it("provides one restart action across parameter categories", () => {
     render(<I18nProvider initialLocale="en"><TuningPanel store={{ ...store(), status: { state: "running" } }} /></I18nProvider>);
-    expect(screen.getAllByRole("button", { name: "Apply & restart server" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Apply & reload model" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Reasoning" }));
-    expect(screen.getAllByRole("button", { name: "Apply & restart server" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Apply & reload model" })).toHaveLength(1);
   });
   it("shows concrete defaults in reasoning placeholders and sentinel selects", async () => {
     render(<I18nProvider initialLocale="en"><TuningPanel store={store()} /></I18nProvider>);

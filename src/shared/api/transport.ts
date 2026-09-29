@@ -4,7 +4,7 @@ import { trackInitialRead } from "../ui/initialLayout.ts";
 const layoutReads = new Set([
   "get_config", "server_status", "session_list", "list_models", "device_profile",
   "rt_list", "rt_latest", "rt_probe", "mcp_list_servers", "mcp_list_tools",
-  "anthropic_gateway_status", "hf_search_models", "hf_model_files", "read_document_binding",
+  "api_server_status", "anthropic_gateway_status", "hf_search_models", "hf_model_files", "read_document_binding",
 ]);
 
 export const NATIVE_RUNTIME_ERROR = "Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.";

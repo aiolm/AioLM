@@ -65,28 +65,7 @@
 .tuning-custom-input-slot { display: flex; min-height: 34px; align-items: stretch; }
 .tuning-custom-input-slot > input { min-width: 0; }
 .tuning-advanced-error-slot { min-height: 36px; overflow: auto; }
-.developer-summary-grid > * { min-height: 88px; }
-.developer-header { flex-wrap: wrap; min-height: 34px; }
-.developer-header-copy { flex: 1 1 20rem; }
-.developer-header > .app-status-badge { flex: 0 0 auto; align-self: flex-start; }
-.developer-api-status { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; }
-.developer-section--connection > div { min-width: 0; }
-.developer-loaded-models { display: flex; flex-direction: column; align-self: stretch; }
-.developer-loaded-models-list { flex: 1 1 0; height: 0; min-height: 80px; overflow-y: auto; scrollbar-gutter: stable; }
-.developer-runtime-details { position: relative; font-size: 12px; color: var(--ui-muted); }
-.developer-runtime-details summary { cursor: pointer; }
-.developer-runtime-details-content { position: absolute; top: calc(100% + 4px); inset-inline: 0; z-index: 20; max-height: 160px; overflow-y: auto; padding: 12px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-panel); box-shadow: var(--ui-elev-2); }
-.developer-model-status { min-height: 16px; margin-top: 8px; }
-.developer-api-status__dot { width: 6px; height: 6px; flex: 0 0 auto; }
-.developer-api-status__title { white-space: normal; overflow-wrap: anywhere; }
-.developer-api-status__message { min-width: 0; overflow-wrap: anywhere; }
-.developer-panel > .developer-section { min-width: 0; flex: 0 0 auto; }
-.developer-section-header, .developer-section-copy, .developer-section-status, .developer-responses-grid, .developer-code-block { min-width: 0; }
-.developer-section-copy { flex: 1 1 20rem; }
-.developer-section-action, .developer-section-status { flex: 0 0 auto; }
 .tuning-preset-bar { min-height: 32px; overflow-x: auto; }
-.session-list-row { display: flex; width: 100%; min-width: 0; align-items: center; }
-.session-state { flex: 0 0 auto; white-space: normal; overflow-wrap: anywhere; }
 .app-workspace-content { min-height: 0; min-width: 0; flex: 1; overflow: hidden; }
 .app-workspace-content[hidden] { display: none; }
 .tuning-apply-footer { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,260px); align-items: center; justify-content: space-between; flex: 0 0 auto; }

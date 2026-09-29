@@ -352,8 +352,8 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
             {liveModel && <div className="app-text-wrap text-[15px] font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{modelDisplayName(models?.find((model) => model.path === liveModel)?.name ?? liveModel)}</div>}
-            <div className="mt-1 break-words text-xs ui-color-muted">{store.status.url ?? '—'}</div>
-            <details className="models-runtime-details mt-1">
+            {/* Memory and slot status of the running model is what this card is for, so it starts expanded. */}
+            <details className="models-runtime-details mt-1" open>
             <summary>{t("section.diagnostics")}</summary>
             <div className="models-runtime-details-content">
             <div className="models-status-line" title={store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : undefined}>

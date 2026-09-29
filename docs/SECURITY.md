@@ -12,11 +12,11 @@ Runtime archive verification, path traversal, PR source-build provenance, proces
 
 ## Local authentication
 
-The desktop-managed server binds to `127.0.0.1` with a per-start bearer token delivered through a temporary `--api-key-file`. The temporary file is removed after startup and the token is cleared on stop. A process running as the same Windows user may still inspect or interact with the server — this is expected. Do not share the endpoint or key.
+Desktop-managed model processes bind to private `127.0.0.1` ports with per-start bearer tokens delivered through temporary `--api-key-file` files. These files are removed after startup and the tokens are cleared when the models stop. The separately controlled external API also binds to `127.0.0.1`, using its own in-memory key that remains valid until the app exits, across model replacement and API stop/start. A process running as the same Windows user may still inspect or interact with these services — this is expected. Do not share the endpoint or key.
 
 The headless CLI's `server start` mode is different: it intentionally passes `--no-api-key` and relies on the `127.0.0.1` bind. Any local process that can reach that port can call it, so use this mode only on a trusted machine and do not expose or forward the port.
 
-Developer gateways are local-only as well. MCP servers are third-party executables launched with the user's permissions; add only trusted executables and review tool calls under the configured approval policy.
+The API server is local-only as well. MCP servers are third-party executables launched with the user's permissions; add only trusted executables and review tool calls under the configured approval policy.
 
 ## Prebuilt PR artifacts
 
@@ -37,4 +37,3 @@ Latest release and `main` receive fixes. Older releases may require upgrade.
 ## Privacy
 
 See [privacy.md](policies/privacy.md) for network requests, local data, credentials, and third-party service handling.
-

@@ -139,7 +139,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     name: t("ui.defaultSession"),
     state: legacyState,
     url: legacyUrl,
-    port: sessionPort({ url: legacyUrl }, cfg?.port ?? 0),
+    port: sessionPort({ url: legacyUrl }),
     model: legacyModel ?? cfg?.active_model,
     mmproj: legacyMmproj ?? cfg?.mmproj,
     draft_model: cfg?.spec_draft_model,
@@ -149,7 +149,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     log_tail: legacyLogTail,
     error: legacyError,
     gpu: cloneGpuPlacement(cfg?.gpu),
-  }), [cfg?.active_model, cfg?.gpu, cfg?.mmproj, cfg?.port, cfg?.spec_draft_model, legacyState, legacyUrl, legacyModel, legacyMmproj, legacyPid, legacyActiveRequests, legacyIdleSeconds, legacyLogTail, legacyError, t]);
+  }), [cfg?.active_model, cfg?.gpu, cfg?.mmproj, cfg?.spec_draft_model, legacyState, legacyUrl, legacyModel, legacyMmproj, legacyPid, legacyActiveRequests, legacyIdleSeconds, legacyLogTail, legacyError, t]);
 
   const refresh = useSessionPolling({
     active,
@@ -466,14 +466,14 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                       : <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
                 </div>
               </div>
-              {rowStatus?.error && <p className="session-entry-error text-xs ui-color-error-ink" role="alert">{normalizeDisplayText(rowStatus.error)}</p>}
+              {rowStatus?.error && <FeedbackBanner tone="error" className="session-entry-error">{normalizeDisplayText(rowStatus.error)}</FeedbackBanner>}
               {expanded && <div id={`session-details-${definition.id}`} className="session-entry-details">
                 {definition.id !== DEFAULT_SESSION_ID && <div className="grid gap-3 app-form-grid">
                   <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                 </div>}
                 <div className="session-entry-diagnostics text-xs ui-color-muted">
                   <span>{backend}{build ? ` / ${runtimeVersionLabel(installedRuntimes, backend, build)}` : ""}</span>
-                  {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus, definition.id === DEFAULT_SESSION_ID ? cfg?.port ?? 0 : 0) || "—" })}</span>}
+                  {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus) || "—" })}</span>}
                   {rowStatus?.pid && <span>{t("ui.sessionPidLabel", { pid: rowStatus.pid })}</span>}
                   {rowStatus?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: rowStatus.active_requests })}</span>}
                 </div>

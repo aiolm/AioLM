@@ -165,14 +165,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('offers stopping instead of launching while the target holds a server', () => {
+  it('offers unloading instead of loading while the target holds a model', () => {
     // Launching again would race the process that is already up, so the footer
     // drops the start action entirely rather than leaving a dead button on it.
     const onStop = vi.fn();
     mount({ liveState: 'running', liveConfig: cfg, onStop });
     expect(screen.queryByRole('button', { name: 'Save profile & restart' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unload' }));
     expect(onStop).toHaveBeenCalledOnce();
   });
 
@@ -183,7 +183,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it('restores the launch action once nothing is running', async () => {
     mount({ liveState: 'stopped', onStop: vi.fn(), initialConfig: { ...cfg, active_backend: 'cpu', active_build: 'b123' } });
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unload' })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
   });
 
