@@ -40,6 +40,16 @@ export default [
     },
   },
   {
+    files: ["src/**/*.tsx"],
+    ignores: ["**/*.test.tsx", "src/testing/**"],
+    rules: {
+      "no-restricted-syntax": ["error", {
+        selector: "JSXOpeningElement[name.name=/^(select|datalist)$/]",
+        message: "Use the shared CustomSelect for dropdowns (its editable variant for free-text suggestions) instead of native <select> or <datalist>.",
+      }],
+    },
+  },
+  {
     files: ["scripts/**/*.ts", "tests/direct/**/*.ts", "vite.config.ts"],
     languageOptions: {
       globals: {
