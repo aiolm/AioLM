@@ -9,6 +9,8 @@ import {
 } from '../../shared/api/benchmarkSharing.ts';
 import { isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry.ts';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
+import { benchmarkManagementError } from './benchmarkManagementError';
 
 type Copy = ReturnType<typeof import('./benchmarkCopy.ts').benchmarkCopy>;
 
@@ -23,14 +25,23 @@ function displayHost(destination: string): string {
   }
 }
 
-/** Permanent ownership records, paginated from the native registry independent of queue/history. */
+function itemLabel(template: string, createdAtMs: number): string {
+  return template.replace('{date}', new Date(createdAtMs).toLocaleString());
+}
+
+/** Stored management access, including prepared bindings and restored backups. */
 export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean; copy: Copy; revision?: number }) {
   const [items, setItems] = useState<OwnedEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const inFlight = useRef(false);
   const generation = useRef(0);
   const initialAttempted = useRef(false);
@@ -81,7 +92,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
     void loadPage().then((applied) => { if (!applied) initialAttempted.current = false; });
   }, [loadPage, busy]);
 
-  // Refresh after prepare/import so new bindings appear even from an empty first load.
+  // Refresh after publish/import so new bindings appear even from an empty first load.
   const lastRevision = useRef(revision);
   useEffect(() => {
     if (revision === lastRevision.current) return;
@@ -95,55 +106,74 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
   }, [revision, loadPage]);
 
   const importRecovery = async () => {
-    if (busy || loading) return;
-    setError(false);
+    if (busy || importing || loading || working) return;
+    setImporting(true);
+    setActionError(null);
+    setNotice(null);
     try {
       const result = await benchmarkSharingRecoveryImport();
       if (!result) return;
+      setNotice(copy.recoveryImported);
       generation.current += 1;
       setItems([]);
       setCursor(null);
       setStarted(false);
       await loadPage();
     } catch {
-      setError(true);
+      setActionError(copy.ownedActionError);
+    } finally {
+      setImporting(false);
     }
   };
 
-  const act = async (submissionId: string, action: 'copy' | 'export' | 'manage') => {    if (busy || working) return;
+  const backup = async (submissionId: string, action: 'copy' | 'export') => {
+    if (busy || working || importing) return;
     setWorking(submissionId);
+    setActionError(null);
+    setNotice(null);
     try {
-      if (action === 'copy') await benchmarkSharingRecoveryCopy(submissionId);
-      else if (action === 'export') await benchmarkSharingRecoveryExport(submissionId);
-      else await benchmarkSharingOpenManagement(submissionId);
-      setError(false);
+      if (action === 'copy') {
+        if (await benchmarkSharingRecoveryCopy(submissionId)) setNotice(copy.recoveryCopied);
+      } else {
+        if (await benchmarkSharingRecoveryExport(submissionId)) setNotice(copy.recoverySaved);
+      }
     } catch {
-      setError(true);
+      setActionError(copy.ownedActionError);
     } finally {
       setWorking(null);
+    }
+  };
+
+  const manage = async (submissionId: string) => {
+    if (busy || working || importing) return;
+    setWorking(submissionId);
+    setOpening(submissionId);
+    setActionError(null);
+    try {
+      await benchmarkSharingOpenManagement(submissionId);
+    } catch (error) {
+      setActionError(benchmarkManagementError(error, copy));
+    } finally {
+      setWorking(null);
+      setOpening(null);
     }
   };
 
   if (!isNativeRuntimeAvailable()) return null;
   if (!started && !loading && !error) return null;
   return (
-    <section className="performance-card performance-details" aria-label={copy.ownedListTitle}>
-      <h4>{copy.ownedListTitle}</h4>
+    <details className="app-card app-card--flush performance-card performance-details" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary>{copy.ownedListTitle}{items.length > 0 ? ` · ${items.length}${cursor ? '+' : ''}` : ''}</summary>
       <p>{copy.ownedListHint}</p>
-      <div className="performance-actions">
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || loading} onClick={() => void importRecovery()}>{copy.recoveryImport}</button>
-      </div>
       {items.length > 0 && (
-        <ul className="performance-queue-list">
+        <ul className="performance-owned-list">
           {items.map((entry) => (
             <li key={entry.submission_id}>
               <span>
-                {entry.submission_id.slice(0, 8)} · {displayHost(entry.destination)} · {new Date(entry.created_at_ms).toLocaleString()}
+                {itemLabel(copy.ownedItemTitle, entry.created_at_ms)} · {displayHost(entry.destination)}
               </span>
               <span className="performance-owned-actions">
-                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null} onClick={() => void act(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
-                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null} onClick={() => void act(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
-                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null} onClick={() => void act(entry.submission_id, 'manage')}>{copy.openManagement}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} onClick={() => void manage(entry.submission_id)}>{opening === entry.submission_id ? copy.managementOpening : copy.openManagement}</button>
               </span>
             </li>
           ))}
@@ -157,13 +187,32 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
       )}
       {loading && <p role="status">{copy.historyLoading}</p>}
       {error && (
-        <p role="alert">
-          {copy.recoveryError}{' '}
-          <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || loading} onClick={() => void loadPage()}>
-            {copy.queueRetry}
-          </button>
-        </p>
+        <FeedbackBanner tone="error" className="performance-notice" action={{ label: copy.retry, disabled: busy || loading, onClick: () => void loadPage() }}>
+          {copy.ownedListError}
+        </FeedbackBanner>
       )}
-    </section>
+      {actionError && <FeedbackBanner tone="error" className="performance-notice">{actionError}</FeedbackBanner>}
+      {notice && <FeedbackBanner tone="success" className="performance-notice">{notice}</FeedbackBanner>}
+      <details className="performance-backup" open>
+        <summary>{copy.backupTitle}</summary>
+        <p>{copy.backupHint}</p>
+        <div className="performance-actions">
+          <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || importing || loading || working !== null} onClick={() => void importRecovery()}>{copy.recoveryImport}</button>
+        </div>
+        {items.length > 0 && (
+          <ul className="performance-owned-list">
+            {items.map((entry) => (
+              <li key={entry.submission_id}>
+                <span>{itemLabel(copy.ownedItemTitle, entry.created_at_ms)}</span>
+                <span className="performance-owned-actions">
+                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} onClick={() => void backup(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
+                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} onClick={() => void backup(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </details>
+    </details>
   );
 }

@@ -85,14 +85,17 @@ nightly 专用，固定的 1.98.0 工具链会拒绝。直接运行 `npx tauri b
 `CFLAGS` 与 `CXXFLAGS`，包括 `CFLAGS_x86_64-pc-windows-msvc` 这类按目标区分的变体，
 都是追加而非替换。
 
-`AIOLM_BENCHMARK_API_URL` 在原生构建时读取，决定打包应用使用的基准共享服务。
-不设置时构建出的版本会禁用匿名发布，而审阅、导出与队列仍照常工作。要启用发布，
-请指定根 HTTPS 源：
+`AIOLM_BENCHMARK_API_URL` 在原生构建时读取，用于覆盖所构建应用的基准共享服务。
+不设置或留空时发布到官方 AioLM 网站 `https://aiolm.vercel.app`。要使用其他服务，
+请指定根 HTTPS 源；要构建禁用匿名发布的版本，请设为 `off`（不区分大小写），此时
+共享摘要与本地结果导出仍可使用：
 
 ```powershell
 $env:AIOLM_BENCHMARK_API_URL = "https://benchmarks.example.com"
 npm run package:tauri
 ```
 
-Windows 发布工作流从仓库变量 `AIOLM_BENCHMARK_API_URL` 读取该值。若配置了发布
-构建无法使用的值，`cargo test` 会失败，从而避免产出发布功能被静默禁用的安装包。
+Windows 发布工作流从仓库变量 `AIOLM_BENCHMARK_API_URL` 读取该值，变量为空时构建
+使用官方网站的安装包。带路径的 URL 或普通 HTTP 等发布构建无法使用的其他值会被
+`cargo test` 拒绝，因此拼写错误会表现为验证失败，而不是产出发布功能被静默禁用的
+安装包。无效值不会回退到官方网站。

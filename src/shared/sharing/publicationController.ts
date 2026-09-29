@@ -163,16 +163,18 @@ export function createPublicationController(options: {
      * ownership_missing means the owner key is gone or mismatched and needs key
      * recovery, not another CAPTCHA round, so it surfaces to the recovery UI.
      */
-    async publishSelected(id: string, transport: SelectedEntryTransport, signal?: AbortSignal): Promise<number> {
+    async publishSelected(id: string, transport: SelectedEntryTransport, signal?: AbortSignal, onPhase?: (phase: PublicationPhase) => void): Promise<number> {
       ensureIdle();
       const sent = await outbox.dispatchSelected(id, transport, signal);
       if (sent === 1) return 1;
       const entry = await outbox.get(id);
       const code = entry?.error?.code;
       if (code !== "verification_required") return 0;
+      onPhase?.("verifying");
       const verification = await raceWorkflow(id, native.beginVerification(id), signal, 60_000);
       await this.pollUntilVerified(id, verification.session_id, signal);
       ensureIdle();
+      onPhase?.("submitting");
       return outbox.dispatchSelected(id, transport, signal);
     },
     async cancel(submissionId: string): Promise<void> {

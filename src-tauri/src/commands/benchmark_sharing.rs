@@ -64,7 +64,7 @@ fn snapshot_live(submission_id: &str) -> LiveGuard {
 /// user cancel; a bumped epoch or active measurement means benchmark work
 /// started. Stale completions must not start new work.
 fn ensure_live(
-    state: &State<'_, AppState>,
+    state: &AppState,
     submission_id: &str,
     guard: &LiveGuard,
 ) -> Result<(), SharingError> {
@@ -786,38 +786,68 @@ pub(crate) async fn benchmark_sharing_recovery_copy(
     .map_err(|_| join_error())?
 }
 
-/// Open the fixed service management page. Carries no secret parameters.
+/// Exchange the owner proof for a one-time ticket and open the bound
+/// origin's management page with it. The ticket and the page URL stay in
+/// native code; the WebView only learns success or a structured failure,
+/// and no page opens on any failure. `base` is the configured origin the
+/// caller already matched against the saved ownership binding.
+async fn open_management_with(
+    state: &AppState,
+    client: &reqwest::Client,
+    base: &reqwest::Url,
+    submission_id: &str,
+    live: &LiveGuard,
+    secret: &[u8; OWNER_SECRET_LEN],
+    open: impl FnOnce(&str) -> Result<(), SharingError>,
+) -> Result<(), SharingError> {
+    ensure_live(state, submission_id, live)?;
+    let handoff = abortable_request(
+        submission_id,
+        live,
+        transport::create_management_handoff(client, base, secret, submission_id),
+    )
+    .await?;
+    let url = config::management_handoff_url(
+        &config::origin_of(base),
+        &handoff.handoff_id,
+        &handoff.handoff_token,
+    )
+    .map_err(|_| SharingError::invalid_response())?;
+    // A cancel or measurement start during the request must not still
+    // open a page carrying a live ticket.
+    ensure_live(state, submission_id, live)?;
+    open(&url)
+}
+
 #[tauri::command]
 pub(crate) async fn benchmark_sharing_open_management(
     state: State<'_, AppState>,
     submission_id: String,
 ) -> Result<(), SharingError> {
+    guard::ensure_idle(&state).map_err(|_| SharingError::measurement_active())?;
     let live = snapshot_live(&submission_id);
-    let (_, origin) = service_origin()?;
+    let (base, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
-    tokio::task::spawn_blocking({
+    // Ownership records restored from a backup have no known body but still
+    // carry full owner authority, so management does not require one.
+    let (secret, _) = tokio::task::spawn_blocking({
         let origin = origin.clone();
         let submission_id = submission_id.clone();
-        move || {
-            valid_submission_id(&submission_id)?;
-            let binding =
-                registry::read_binding(&benchmarks, &submission_id)?.ok_or_else(|| {
-                    SharingError::binding_conflict_msg("This submission has no saved ownership.")
-                })?;
-            if binding.origin != origin {
-                return Err(SharingError::binding_conflict_msg(
-                    "This submission is bound to a different service.",
-                ));
-            }
-            Ok::<_, SharingError>(())
-        }
+        move || load_bound_secret(&vault::OsVault, &benchmarks, &origin, &submission_id, None)
     })
     .await
     .map_err(|_| join_error())??;
-    let url = config::management_url_for_origin(&origin);
-    ensure_live(&state, &submission_id, &live)?;
-    open_browser(&url)
-        .map_err(|_| SharingError::vault_unavailable_msg("The system browser could not be opened."))
+    let client = transport::shared_client()?;
+    open_management_with(
+        &state,
+        &client,
+        &base,
+        &submission_id,
+        &live,
+        &secret,
+        open_browser,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1309,6 +1339,231 @@ mod tests {
         let fresh = snapshot_live(&id);
         assert!(abortable_request(&id, &fresh, probe).await.is_ok());
         assert!(polled.load(Ordering::SeqCst));
+    }
+
+    const HANDOFF_ID: &str = "0b7c5f0e-3d1a-4c2b-9e8f-1a2b3c4d5e6f";
+    const HANDOFF_TOKEN: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
+    /// Synthetic loopback service answering one request with `response`,
+    /// returning the raw request head it received.
+    async fn serve_once(
+        response: Vec<u8>,
+    ) -> (reqwest::Url, tokio::task::JoinHandle<Option<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.ok()?;
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).await.ok()?;
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let length = head
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            let mut body = vec![0u8; length.min(64 * 1024)];
+            socket.read_exact(&mut body).await.ok()?;
+            let _ = socket.write_all(&response).await;
+            Some(head)
+        });
+        (config::validate_base_url(&base).unwrap(), handle)
+    }
+
+    fn http_json(status: &str, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    fn owned_submission(origin: &str, tag: u128) -> (PathBuf, MockVault, String) {
+        let root = benchmarks();
+        let vault = MockVault::open();
+        let id = submission(tag);
+        prepare_inner(&vault, &root, origin, &id, &wrapper_body(&id)).unwrap();
+        (root, vault, id)
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn management_opens_bound_origin_with_one_time_ticket() {
+        let _serial = permits::test_serial();
+        let ticket = format!(
+            r#"{{"handoff_id":"{HANDOFF_ID}","handoff_token":"{HANDOFF_TOKEN}","expires_at":"2030-01-01T00:05:00Z"}}"#
+        );
+        let (base, server) = serve_once(http_json("201 Created", &ticket)).await;
+        let origin = config::origin_of(&base);
+        let (root, vault, id) = owned_submission(&origin, 300);
+        // A binding saved for another service never unlocks this origin.
+        assert_eq!(
+            load_bound_secret(&vault, &root, ORIGIN, &id, None)
+                .unwrap_err()
+                .code,
+            code::BINDING_CONFLICT
+        );
+        let (secret, _) = load_bound_secret(&vault, &root, &origin, &id, None).unwrap();
+        let mut opened = Vec::new();
+        open_management_with(
+            &AppState::default(),
+            &transport::http_client().unwrap(),
+            &base,
+            &id,
+            &snapshot_live(&id),
+            &secret,
+            |url| {
+                opened.push(url.to_string());
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            opened,
+            vec![format!(
+                "{origin}/manage#handoff={HANDOFF_ID}.{HANDOFF_TOKEN}"
+            )]
+        );
+        let head = server.await.unwrap().unwrap();
+        assert!(head.starts_with("POST /v1/management-handoffs HTTP/1.1"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn management_failures_never_open_a_page() {
+        let _serial = permits::test_serial();
+        let secret = [3u8; OWNER_SECRET_LEN];
+        let secret_text = {
+            use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+            URL_SAFE_NO_PAD.encode(secret)
+        };
+        let foreign = format!(
+            r#"{{"handoff_id":"{HANDOFF_ID}","handoff_token":"{HANDOFF_TOKEN}/../x","expires_at":"2030-01-01T00:05:00Z"}}"#
+        );
+        for (tag, response, expected) in [
+            (
+                310,
+                http_json(
+                    "404 Not Found",
+                    r#"{"error":{"code":"not_found","message":"unpublished"}}"#,
+                ),
+                code::NETWORK_ERROR,
+            ),
+            (311, http_json("200 OK", &foreign), code::INVALID_RESPONSE),
+        ] {
+            let (base, server) = serve_once(response).await;
+            let id = submission(tag);
+            let mut opened = false;
+            let error = open_management_with(
+                &AppState::default(),
+                &transport::http_client().unwrap(),
+                &base,
+                &id,
+                &snapshot_live(&id),
+                &secret,
+                |_| {
+                    opened = true;
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, expected);
+            assert!(!opened);
+            let serialized = serde_json::to_string(&error).unwrap();
+            assert!(!serialized.contains(HANDOFF_TOKEN));
+            assert!(!serialized.contains(&secret_text));
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn management_respects_cancel_and_measurement() {
+        let _serial = permits::test_serial();
+        let secret = [4u8; OWNER_SECRET_LEN];
+        // An active measurement blocks before anything reaches the wire.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let idle_base = config::validate_base_url(&format!(
+            "http://127.0.0.1:{}",
+            listener.local_addr().unwrap().port()
+        ))
+        .unwrap();
+        let state = AppState::default();
+        let id = submission(320);
+        let held = state.operation.try_lock().unwrap();
+        let error = open_management_with(
+            &state,
+            &transport::http_client().unwrap(),
+            &idle_base,
+            &id,
+            &snapshot_live(&id),
+            &secret,
+            |_| panic!("no page may open during a measurement"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, code::MEASUREMENT_ACTIVE);
+        drop(held);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "no request may be sent during a measurement"
+        );
+        // Cancel or measurement start while the request is pending aborts
+        // it promptly and opens nothing.
+        for (tag, measurement) in [(321, false), (322, true)] {
+            let hanging = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = config::validate_base_url(&format!(
+                "http://127.0.0.1:{}",
+                hanging.local_addr().unwrap().port()
+            ))
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = hanging.accept().await.unwrap();
+                let mut buffer = [0u8; 4096];
+                use tokio::io::AsyncReadExt;
+                let _ = socket.read(&mut buffer).await;
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            });
+            let id = submission(tag);
+            let live = snapshot_live(&id);
+            let canceller = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                if measurement {
+                    permits::note_measurement_start();
+                } else {
+                    permits::cancel_submission(&canceller);
+                }
+            });
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                open_management_with(
+                    &AppState::default(),
+                    &transport::http_client().unwrap(),
+                    &base,
+                    &id,
+                    &live,
+                    &secret,
+                    |_| panic!("no page may open after a cancel"),
+                ),
+            )
+            .await
+            .expect("the pending handoff must abort promptly");
+            assert_eq!(outcome.unwrap_err().code, code::CANCELLED);
+            server.abort();
+        }
     }
 
     #[test]

@@ -204,6 +204,8 @@ export interface BackendSuitability {
 export interface DeviceReport {
   profile: DeviceProfile;
   backends: BackendSuitability[];
+  /** OS-reported physical RAM; absent on older desktop builds. */
+  system_memory_bytes?: number | null;
 }
 
 export interface RuntimeVersion {

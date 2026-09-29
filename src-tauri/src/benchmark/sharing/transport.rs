@@ -1,8 +1,8 @@
 //! Fixed-origin bounded native HTTP for the publishing handshake.
 //!
-//! All requests derive from the configured service origin; only two fixed
-//! paths are ever requested (`/v1/upload-sessions[/<id>]` and
-//! `/v1/benchmark-runs`). One restricted client is shared across polls and
+//! All requests derive from the configured service origin; only fixed paths
+//! are ever requested (`/v1/upload-sessions[/<id>]`, `/v1/benchmark-runs`
+//! and `/v1/management-handoffs`). One restricted client is shared across polls and
 //! submits for connection/TLS pooling; only successful initialization is
 //! cached, failures retry on the next call. The client follows no redirects,
 //! keeps no cookies, applies a bound timeout and enforces response/URL size
@@ -311,6 +311,68 @@ pub(crate) async fn submit_benchmark_run(
         status,
         body,
         retry_after,
+    })
+}
+
+#[derive(Deserialize)]
+struct HandoffCreated {
+    handoff_id: String,
+    handoff_token: String,
+    expires_at: String,
+}
+
+/// Validated one-time management ticket from
+/// `POST <origin>/v1/management-handoffs`. It stays in native memory until
+/// the fixed management URL is built; `Debug` never prints the token.
+pub(crate) struct ManagementHandoff {
+    pub handoff_id: String,
+    pub handoff_token: String,
+    pub expires_at: String,
+}
+
+impl std::fmt::Debug for ManagementHandoff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagementHandoff")
+            .field("handoff_id", &self.handoff_id)
+            .field("handoff_token", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// Exchange the owner proof for a short-lived management ticket. The body
+/// names only the submission; the owner secret travels only in the bearer
+/// header. Any non-2xx (including redirects) is a structured handshake
+/// error. Unknown submissions and invalid ownership proofs both surface
+/// `ownership_missing` without opening a page or disclosing record existence.
+pub(crate) async fn create_management_handoff(
+    client: &reqwest::Client,
+    base: &Url,
+    secret: &[u8; OWNER_SECRET_LEN],
+    submission_id: &str,
+) -> Result<ManagementHandoff, SharingError> {
+    let response = client
+        .post(config::management_handoff_endpoint(base))
+        .header("Authorization", bearer_header(secret))
+        .json(&serde_json::json!({ "submission_id": submission_id }))
+        .send()
+        .await
+        .map_err(|_| SharingError::network_error())?;
+    let (status, retry_after, body) = read_bounded(response, MAX_SESSION_RESPONSE_BYTES).await?;
+    if !(200..300).contains(&status) {
+        return Err(handshake_error(status, retry_after, &body));
+    }
+    let created: HandoffCreated =
+        serde_json::from_slice(&body).map_err(|_| SharingError::invalid_response())?;
+    config::validate_handoff_id(&created.handoff_id)
+        .map_err(|_| SharingError::invalid_response())?;
+    config::validate_handoff_token(&created.handoff_token)
+        .map_err(|_| SharingError::invalid_response())?;
+    validate_token_field(&created.expires_at, 64)?;
+    Ok(ManagementHandoff {
+        handoff_id: created.handoff_id,
+        handoff_token: created.handoff_token,
+        expires_at: created.expires_at,
     })
 }
 
@@ -790,6 +852,179 @@ mod tests {
         assert!(submission_bytes(&"x".repeat(MAX_BODY_BYTES + 1)).is_err());
         let bytes = submission_bytes(r#"{"a":1}"#).unwrap();
         assert_eq!(body_sha256_hex(&bytes).len(), 64);
+    }
+
+    const HANDOFF_ID: &str = "0b7c5f0e-3d1a-4c2b-9e8f-1a2b3c4d5e6f";
+    const HANDOFF_TOKEN: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+
+    fn handoff_body(id: &str, token: &str, expires_at: &str) -> Vec<u8> {
+        serde_json::json!({
+            "handoff_id": id,
+            "handoff_token": token,
+            "expires_at": expires_at,
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn management_handoff_sends_owner_proof_and_validates_ticket() {
+        let expected_bearer = format!("Bearer {}", URL_SAFE_NO_PAD.encode(test_secret()));
+        let (base_url, server) = mock_server(1, move |head, body| {
+            assert!(head.starts_with("POST /v1/management-handoffs HTTP/1.1"));
+            let auth = head
+                .lines()
+                .find(|line| line.to_lowercase().starts_with("authorization:"))
+                .and_then(|line| line.split_once(':'))
+                .map(|(_, value)| value.trim())
+                .unwrap_or("");
+            assert_eq!(auth, expected_bearer);
+            let lower = head.to_lowercase();
+            assert!(!lower.contains("cookie:"));
+            assert!(!lower.contains("idempotency-key:"));
+            // The body names only the submission, never the secret.
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({"submission_id": "123e4567-e89b-42d3-a456-426614174000"})
+            );
+            (
+                201,
+                vec![],
+                handoff_body(HANDOFF_ID, HANDOFF_TOKEN, "2030-01-01T00:05:00Z"),
+            )
+        })
+        .await;
+        let handoff = create_management_handoff(
+            &http_client().unwrap(),
+            &test_base(&base_url),
+            &test_secret(),
+            "123e4567-e89b-42d3-a456-426614174000",
+        )
+        .await
+        .unwrap();
+        assert_eq!(handoff.handoff_id, HANDOFF_ID);
+        assert_eq!(handoff.handoff_token, HANDOFF_TOKEN);
+        assert_eq!(handoff.expires_at, "2030-01-01T00:05:00Z");
+        // Diagnostics never print the ticket token.
+        assert!(!format!("{handoff:?}").contains(HANDOFF_TOKEN));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_management_handoffs_are_rejected_without_leaking() {
+        let client = http_client().unwrap();
+        let secret_text = URL_SAFE_NO_PAD.encode(test_secret());
+        let noncanonical = format!("{}9", &HANDOFF_TOKEN[..42]);
+        type Case = (u16, Vec<(&'static str, String)>, Vec<u8>);
+        let cases: Vec<Case> = vec![
+            (200, vec![], b"not json".to_vec()),
+            (200, vec![], br#"{"handoff_id":"x"}"#.to_vec()),
+            (
+                200,
+                vec![],
+                handoff_body(
+                    &HANDOFF_ID.to_uppercase(),
+                    HANDOFF_TOKEN,
+                    "2030-01-01T00:00:00Z",
+                ),
+            ),
+            (
+                200,
+                vec![],
+                handoff_body(
+                    "0b7c5f0e-3d1a-1c2b-9e8f-1a2b3c4d5e6f",
+                    HANDOFF_TOKEN,
+                    "2030-01-01T00:00:00Z",
+                ),
+            ),
+            (
+                200,
+                vec![],
+                handoff_body(
+                    HANDOFF_ID,
+                    &format!("{HANDOFF_TOKEN}="),
+                    "2030-01-01T00:00:00Z",
+                ),
+            ),
+            (
+                200,
+                vec![],
+                handoff_body(HANDOFF_ID, &noncanonical, "2030-01-01T00:00:00Z"),
+            ),
+            (
+                200,
+                vec![],
+                handoff_body(HANDOFF_ID, "../../evil?x=1#", "2030-01-01T00:00:00Z"),
+            ),
+            (200, vec![], handoff_body(HANDOFF_ID, HANDOFF_TOKEN, "")),
+            (
+                200,
+                vec![],
+                handoff_body(HANDOFF_ID, HANDOFF_TOKEN, "2030\n01"),
+            ),
+            (200, vec![], vec![b' '; MAX_SESSION_RESPONSE_BYTES + 1]),
+            // Redirects are never followed toward another origin.
+            (
+                302,
+                vec![(
+                    "Location",
+                    format!(
+                        "https://evil.example.test/manage#handoff={HANDOFF_ID}.{HANDOFF_TOKEN}"
+                    ),
+                )],
+                Vec::new(),
+            ),
+        ];
+        for (status, headers, body) in cases {
+            let (base_url, server) =
+                mock_server(1, move |_, _| (status, headers.clone(), body.clone())).await;
+            let error = create_management_handoff(
+                &client,
+                &test_base(&base_url),
+                &test_secret(),
+                "123e4567-e89b-42d3-a456-426614174000",
+            )
+            .await
+            .unwrap_err();
+            let serialized = serde_json::to_string(&error).unwrap();
+            assert!(!serialized.contains(HANDOFF_TOKEN), "{serialized}");
+            assert!(!serialized.contains(&secret_text), "{serialized}");
+            if status == 302 {
+                assert_eq!(error.code, "network_error");
+                assert_eq!(error.status, Some(302));
+            } else {
+                assert_eq!(error.code, "invalid_response", "{serialized}");
+            }
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn unpublished_management_handoff_reports_missing_ownership() {
+        // Unknown submissions and invalid proofs have the same response.
+        let (base_url, server) = mock_server(1, |_, _| {
+            (
+                401,
+                vec![],
+                br#"{"error":{"code":"ownership_missing","message":"ownership unavailable"}}"#
+                    .to_vec(),
+            )
+        })
+        .await;
+        let error = create_management_handoff(
+            &http_client().unwrap(),
+            &test_base(&base_url),
+            &test_secret(),
+            "123e4567-e89b-42d3-a456-426614174000",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "ownership_missing");
+        assert_eq!(error.status, Some(401));
+        assert_eq!(error.service_code.as_deref(), Some("ownership_missing"));
+        assert!(!error.message.contains("ownership unavailable"));
+        server.await.unwrap();
     }
 
     #[tokio::test]

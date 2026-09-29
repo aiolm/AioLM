@@ -57,6 +57,7 @@
   "dependencies": {
     "@aiolm/benchmark-contracts": "file:packages/benchmark-contracts",
     "@tauri-apps/api": "^2",
+    "exceljs": "^4.4.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0"

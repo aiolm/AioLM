@@ -1,7 +1,7 @@
 //! Benchmark execution, progress events and cancellation IPC.
 use crate::{benchmark, config, performance_bench, procutil, runtime, state::AppState};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, State};
@@ -27,6 +27,16 @@ pub(crate) async fn benchmark_history_import(records: Vec<Value>) -> Result<usiz
         .map_err(|error| error.to_string())?
 }
 
+/// Delete one local history record. Active runs are rejected by the store's
+/// OS locks; public submissions and upload receipts are left untouched.
+#[tauri::command]
+pub(crate) async fn benchmark_history_delete(run_id: String) -> Result<(), String> {
+    let root = benchmark::data_root()?;
+    tokio::task::spawn_blocking(move || benchmark::store::delete(&root, &run_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) async fn benchmark_acknowledge_upload(
     state: State<'_, AppState>,
@@ -43,40 +53,49 @@ pub(crate) async fn benchmark_acknowledge_upload(
         .map_err(|error| error.to_string())?
 }
 
+/// Save benchmark CSV text through a native save dialog. Returns `false` when
+/// the user cancels; the destination is only ever chosen in that dialog.
+/// `file_name` only pre-fills the dialog and falls back to the default when it
+/// is missing or not a plain `.csv` base name.
 #[tauri::command]
-pub(crate) async fn benchmark_identify_model(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<benchmark::identity::ModelIdentity, String> {
-    // Share the launch lock so multi-GB reads cannot start during measurements
-    // or overlap a server/session launch. The lock stays held until hashing ends.
-    let _operation = state
-        .operation
-        .try_lock()
-        .map_err(|_| "wait for the current operation before identifying a model")?;
-    if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {
-        return Err("wait for the runtime operation before identifying a model".into());
-    }
-    if state
-        .server
-        .lock()
-        .map_err(|_| "server state lock was poisoned")?
-        .lifecycle
-        .blocks_resource_change()
-        || state.sessions.entries().iter().any(|session| {
-            session
-                .state
-                .lock()
-                .map(|state| state.lifecycle.blocks_resource_change())
-                .unwrap_or(true)
+pub(crate) async fn benchmark_export_csv(
+    contents: String,
+    file_name: Option<String>,
+) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        let file_name = benchmark::csv_export::suggested_file_name(file_name.as_deref());
+        benchmark::csv_export::save(&contents, || {
+            rfd::FileDialog::new()
+                .set_file_name(file_name)
+                .add_filter("CSV", &["csv"])
+                .save_file()
         })
-    {
-        return Err("stop all model sessions before identifying a model".into());
-    }
-    let root = benchmark::data_root()?;
-    tokio::task::spawn_blocking(move || benchmark::identity::identify(&root, Path::new(&path)))
-        .await
-        .map_err(|error| error.to_string())?
+    })
+    .await
+    .map_err(|error| format!("The benchmark CSV export task failed: {error}"))?
+}
+
+/// Save a finished benchmark XLSX workbook through a native save dialog. The
+/// bytes are written exactly as received. Returns `false` when the user
+/// cancels; the destination is only ever chosen in that dialog. `file_name`
+/// only pre-fills the dialog and falls back to the default when it is missing
+/// or not a plain `.xlsx` base name.
+#[tauri::command]
+pub(crate) async fn benchmark_export_xlsx(
+    contents: Vec<u8>,
+    file_name: Option<String>,
+) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        let file_name = benchmark::csv_export::suggested_xlsx_file_name(file_name.as_deref());
+        benchmark::csv_export::save_xlsx(&contents, || {
+            rfd::FileDialog::new()
+                .set_file_name(file_name)
+                .add_filter("Excel workbook", &["xlsx"])
+                .save_file()
+        })
+    })
+    .await
+    .map_err(|error| format!("The benchmark XLSX export task failed: {error}"))?
 }
 
 #[tauri::command]

@@ -91,10 +91,11 @@ rustup, 작업 폴더에 대한 rustc `--remap-path-prefix` 플래그와 함께 
 `CXXFLAGS`는 `CFLAGS_x86_64-pc-windows-msvc` 같은 타깃별 변형을 포함해 교체하지
 않고 뒤에 덧붙입니다.
 
-`AIOLM_BENCHMARK_API_URL`은 네이티브 빌드 시점에 읽혀 패키지 앱의 벤치마크 공유
-서비스를 결정합니다. 설정하지 않으면 익명 게시가 비활성화된 빌드가 만들어지고,
-검토·내보내기·대기열은 그대로 동작합니다. 게시를 활성화하려면 루트 HTTPS 원본을
-지정합니다.
+`AIOLM_BENCHMARK_API_URL`은 네이티브 빌드 시점에 읽혀 빌드된 앱의 벤치마크 공유
+서비스를 재정의합니다. 설정하지 않거나 비워 두면 공식 AioLM 웹사이트
+`https://aiolm.vercel.app`에 게시합니다. 다른 서비스를 쓰려면 루트 HTTPS 원본을
+지정하고, 익명 게시를 비활성화한 빌드를 만들려면 `off`(대소문자 무관)를 지정합니다.
+이 경우에도 공유 요약과 로컬 결과 내보내기는 그대로 사용할 수 있습니다.
 
 ```powershell
 $env:AIOLM_BENCHMARK_API_URL = "https://benchmarks.example.com"
@@ -102,5 +103,7 @@ npm run package:tauri
 ```
 
 Windows 릴리스 워크플로는 이 값을 `AIOLM_BENCHMARK_API_URL` 저장소 변수에서
-가져옵니다. 릴리스 빌드가 사용할 수 없는 값이 설정되면 `cargo test`가 실패하므로,
-게시가 조용히 비활성화된 설치 파일이 만들어지지 않습니다.
+가져오며, 변수가 비어 있으면 공식 웹사이트를 사용하는 설치 파일이 만들어집니다.
+경로가 붙은 URL이나 일반 HTTP처럼 릴리스 빌드가 사용할 수 없는 그 밖의 값은
+`cargo test`가 거부하므로, 오타가 있으면 게시가 조용히 비활성화된 설치 파일 대신
+검증 실패로 드러납니다. 잘못된 값은 공식 웹사이트로 대체되지 않습니다.

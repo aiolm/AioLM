@@ -52,6 +52,7 @@ impl Drop for RuntimeBusyGuard {
 pub(crate) struct DeviceReport {
     profile: hardware::DeviceProfile,
     backends: Vec<backends::BackendSuitability>,
+    system_memory_bytes: Option<u64>,
 }
 
 /// Local hardware plus the backend verdicts derived from it. Detection is a
@@ -61,7 +62,11 @@ pub(crate) struct DeviceReport {
 pub(crate) fn device_profile() -> DeviceReport {
     let profile = hardware::detect();
     let backends = backends::recommend(&profile);
-    DeviceReport { profile, backends }
+    DeviceReport {
+        profile,
+        backends,
+        system_memory_bytes: crate::hardware_memory::system_memory_bytes(),
+    }
 }
 
 #[tauri::command]

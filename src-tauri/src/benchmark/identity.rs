@@ -1,5 +1,6 @@
-//! Content identification is explicit, runs while idle, and never reads a model
-//! during a measured trial. The cache is invalidated by file metadata changes.
+//! The app does not hash models. This module only reads digests that an earlier
+//! build cached, and never reads a model. The cache is invalidated by file
+//! metadata changes.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -136,60 +137,40 @@ pub(crate) fn cached(root: &Path, path: &Path) -> ModelIdentity {
         .unwrap_or(fallback)
 }
 
-pub(crate) fn identify(root: &Path, path: &Path) -> Result<ModelIdentity, String> {
-    let fallback = unidentified(path);
-    if fallback.status == "multipart" {
-        return Err("multipart models require a complete shard manifest; a first-shard digest cannot identify the model".into());
-    }
-    let path = path.canonicalize().map_err(|error| error.to_string())?;
-    let before = stamp(&path)?;
-    let mut file = File::open(&path).map_err(|error| error.to_string())?;
-    let mut hash = Sha256::new();
-    let mut buffer = vec![0; 1024 * 1024];
-    loop {
-        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    if before != stamp(&path)? {
-        return Err(
-            "model changed while computing its content identity; retry after file writes finish"
-                .into(),
-        );
-    }
-    let identity = ModelIdentity {
-        status: "sha256".into(),
-        sha256: Some(format!("{:x}", hash.finalize())),
-        size_bytes: Some(before.size),
-        metadata: None,
-    };
-    let encoded = serde_json::to_vec(&CachedIdentity {
-        stamp: before,
-        identity: identity.clone(),
-    })
-    .map_err(|error| error.to_string())?;
-    crate::config::atomic_write(&cache_path(root, &path), &encoded)?;
-    Ok(identity)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Writes the cache entry an earlier build stored after hashing `model`.
+    /// The app no longer hashes models, so tests seed that legacy shape directly.
+    fn seed_legacy_cache(root: &Path, model: &Path, contents: &[u8]) -> ModelIdentity {
+        let resolved = model.canonicalize().unwrap();
+        let identity = ModelIdentity {
+            status: "sha256".into(),
+            sha256: Some(format!("{:x}", Sha256::digest(contents))),
+            size_bytes: Some(contents.len() as u64),
+            metadata: None,
+        };
+        let entry = serde_json::json!({
+            "stamp": stamp(&resolved).unwrap(),
+            "identity": { "status": identity.status, "sha256": identity.sha256, "size_bytes": identity.size_bytes },
+        });
+        crate::config::atomic_write(
+            &cache_path(root, &resolved),
+            serde_json::to_string(&entry).unwrap().as_bytes(),
+        )
+        .unwrap();
+        identity
+    }
+
     #[test]
-    fn explicit_digest_is_reused_until_model_changes() {
+    fn legacy_digest_is_reused_until_model_changes() {
         let root = std::env::temp_dir().join(format!("aiolm-identity-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let model = root.join("synthetic.gguf");
         fs::write(&model, b"synthetic model").unwrap();
         assert_eq!(cached(&root, &model).status, "unidentified");
-        let identity = identify(&root, &model).unwrap();
-        assert_eq!(
-            identity.sha256,
-            Some(format!("{:x}", Sha256::digest(b"synthetic model")))
-        );
+        let identity = seed_legacy_cache(&root, &model, b"synthetic model");
         assert_eq!(cached(&root, &model), identity);
         fs::write(&model, b"changed synthetic model").unwrap();
         assert_eq!(cached(&root, &model).status, "unidentified");
@@ -197,28 +178,17 @@ mod tests {
     }
 
     #[test]
-    fn the_digest_cache_predates_model_metadata_and_never_stores_it() {
+    fn the_digest_cache_predates_model_metadata() {
         let root = std::env::temp_dir().join(format!("aiolm-identity-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let model = root.join("synthetic.gguf");
         fs::write(&model, b"synthetic model").unwrap();
-        let resolved = model.canonicalize().unwrap();
-        identify(&root, &model).unwrap();
 
-        // Metadata is gathered per run from the header and any download
-        // receipt, so the digest cache has no business holding a copy of it.
-        let stored = fs::read_to_string(cache_path(&root, &resolved)).unwrap();
+        // A cache an earlier build wrote has no metadata field at all and is
+        // still read rather than discarded.
+        seed_legacy_cache(&root, &model, b"synthetic model");
+        let stored = fs::read_to_string(cache_path(&root, &model.canonicalize().unwrap())).unwrap();
         assert!(!stored.contains("metadata"));
-
-        // A cache an earlier build wrote has no such field at all and is still
-        // read rather than discarded.
-        let legacy: serde_json::Value = serde_json::from_str(&stored).unwrap();
-        assert!(legacy.pointer("/identity/metadata").is_none());
-        crate::config::atomic_write(
-            &cache_path(&root, &resolved),
-            serde_json::to_string(&legacy).unwrap().as_bytes(),
-        )
-        .unwrap();
         let reused = cached(&root, &model);
         assert_eq!(reused.status, "sha256");
         assert!(reused.metadata.is_none());

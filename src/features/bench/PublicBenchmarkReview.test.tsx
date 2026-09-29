@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import type { ReactElement, ReactNode } from 'react';
+import { I18nProvider } from '../../shared/i18n/i18n';
 import { PublicBenchmarkReview } from './PublicBenchmarkReview';
 import { benchmarkCopy } from './benchmarkCopy';
-import { enqueuePublicationBenchmark, getQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox';
+import { dispatchSelectedBenchmark, enqueuePublicationBenchmark, getQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox';
 import type { PerformanceBenchmarkRecord } from './performanceRecords';
-import * as native from '../../shared/api/transport';
 import { toPublicBenchmark } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import { serializePublicationRequest } from '@aiolm/benchmark-contracts';
 
-vi.mock('../../shared/sharing/benchmarkOutbox', () => ({ enqueuePublicationBenchmark: vi.fn(), getQueuedBenchmark: vi.fn(async () => undefined), dispatchSelectedBenchmark: vi.fn(async () => 0) }));
+// Shared feedback banners read the active locale for their dismiss label.
+const English = ({ children }: { children: ReactNode }) => <I18nProvider initialLocale="en">{children}</I18nProvider>;
+const render = (ui: ReactElement) => renderView(ui, { wrapper: English });
+
+vi.mock('../../shared/sharing/benchmarkOutbox', () => ({ enqueuePublicationBenchmark: vi.fn(), getQueuedBenchmark: vi.fn(async () => undefined), dispatchSelectedBenchmark: vi.fn(async () => 0), retryQueuedBenchmark: vi.fn(async () => undefined) }));
 const saved: PerformanceBenchmarkRecord = {
   schemaVersion: 1, id: 'performance-00000000-0000-4000-8000-000000000001', createdAt: 1,
   model: '/private/model.gguf', backend: 'cpu', build: 'b1',
@@ -17,174 +22,122 @@ const saved: PerformanceBenchmarkRecord = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(enqueuePublicationBenchmark).mockResolvedValue({} as Awaited<ReturnType<typeof enqueuePublicationBenchmark>>);
   // Pin the queue lookup default every test: per-test overrides must not leak
   // across cases and gate (or fail) hydration.
   vi.mocked(getQueuedBenchmark).mockResolvedValue(undefined);
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-async function review() {
-  fireEvent.click(screen.getByRole('button', { name: 'Review public result' }));
-  await screen.findByLabelText('Public result preview');
+async function waitForShare() {
+  await screen.findByLabelText('Shared details');
 }
 
 describe('public benchmark review', () => {
-  it('requires opening the public preview before saving exactly that snapshot to the queue', async () => {
-    const onQueued = vi.fn();
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} onQueued={onQueued} />);
-    expect(screen.queryByRole('button', { name: 'Save to sharing queue' })).not.toBeInTheDocument();
-    await review();
-    const preview = JSON.parse(screen.getByLabelText('Public result preview').textContent!);
-    expect(JSON.stringify(preview)).not.toMatch(/private|secret|message/);
-    // Launch options are published, but this record's only option is a credential.
-    expect(preview.execution.effective_args).toEqual([]);
-    expect(preview.submission_id).toBe('00000000-0000-4000-8000-000000000001');
-    fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
-    await waitFor(() => expect(onQueued).toHaveBeenCalledOnce());
-    // Offline queueing keeps the description wrapper with the snapshot; no legacy fallback.
-    expect(enqueuePublicationBenchmark).toHaveBeenCalledWith({ benchmark: preview, description_md: '' }, undefined);
-    expect(screen.getByRole('button', { name: 'Saved to sharing queue' })).toBeDisabled();
-    expect(screen.getByText(/Upload will be available/)).toBeInTheDocument();
+  it('opens and prepares the review without publishing automatically', async () => {
+    const copy = benchmarkCopy('en');
+    render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
+    expect(screen.getByText('Share result').closest('details')).toHaveAttribute('open');
+    // No separate prepare, export, or queue actions exist.
+    expect(screen.queryByText('Review what will be shared')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Export public JSON/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sharing queue/i)).not.toBeInTheDocument();
+    await waitForShare();
+    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeInTheDocument();
+    expect(enqueuePublicationBenchmark).not.toHaveBeenCalled();
+    expect(dispatchSelectedBenchmark).not.toHaveBeenCalled();
   });
 
-  it('queues the edited effective description and freezes the review to it', async () => {
+  it('shows a human-readable summary without local paths, raw hashes, IDs or JSON', async () => {
     render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    await review();
-    fireEvent.change(screen.getByLabelText('Public description (Markdown)', { exact: true }), { target: { value: 'review notes' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
-    await waitFor(() => expect(enqueuePublicationBenchmark).toHaveBeenCalledOnce());
-    const [request] = vi.mocked(enqueuePublicationBenchmark).mock.calls[0];
-    // The persisted wrapper carries the edited text, not the stale empty draft.
-    expect(request).toHaveProperty('description_md', 'review notes');
-    const editor = screen.getByDisplayValue('review notes');
-    expect(editor).toBeDisabled();
+    await waitForShare();
+    const summary = screen.getByLabelText('Shared details');
+    expect(summary).toHaveTextContent('Model');
+    expect(summary).toHaveTextContent('Hardware');
+    expect(summary).toHaveTextContent('Runtime');
+    expect(summary).toHaveTextContent('Results');
+    // Unknown provenance stays unknown; the local filename never leaks.
+    expect(summary).toHaveTextContent('Not identified');
+    expect(document.body.textContent).not.toMatch(/private|model\.gguf|secret/);
+    expect(document.body.textContent).not.toContain('00000000-0000-4000-8000-000000000001');
+    expect(screen.queryByText(/submission_id/)).not.toBeInTheDocument();
+    expect(document.querySelector('pre.performance-public-json')).not.toBeInTheDocument();
   });
 
-  it('keeps the reviewed JSON export available after queue storage failure', async () => {
-    vi.mocked(enqueuePublicationBenchmark).mockRejectedValue(new Error('quota'));
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    await review();
-    fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
-    await screen.findByRole('alert');
-    expect(screen.getByRole('button', { name: 'Export public JSON' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Save to sharing queue' })).toBeEnabled();
-  });
-
-  it('surfaces binding conflicts instead of falling back to a bare legacy entry', async () => {
-    vi.mocked(enqueuePublicationBenchmark).mockRejectedValue(new Error('This submission is already bound to a different credential.'));
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    await review();
-    fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('already bound to a different credential');
-    expect(enqueuePublicationBenchmark).toHaveBeenCalledTimes(1);
-  });
-
-  it('links a desktop recovery record outside the reviewed public payload', async () => {
-    vi.spyOn(native, 'isNativeRuntimeAvailable').mockReturnValue(true);
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    await review();
-    fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
-    await waitFor(() => expect(enqueuePublicationBenchmark).toHaveBeenCalledOnce());
-    const [request, source] = vi.mocked(enqueuePublicationBenchmark).mock.calls[0];
-    expect(source).toEqual({ source: { runId: saved.id } });
-    expect(JSON.stringify(request)).not.toContain(saved.id);
-    expect(request).not.toHaveProperty('source');
-    expect(request).toHaveProperty('description_md', '');
-  });
-
-  it('disables hashing-independent publication work while a measurement is active', async () => {
+  it('keeps the same snapshot when closed and reopened with a stable submission ID', async () => {
     const { rerender } = render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    await review();
+    await waitForShare();
+    expect(vi.mocked(getQueuedBenchmark)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getQueuedBenchmark)).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001');
+    fireEvent.click(screen.getByText('Share result'));
+    await waitFor(() => expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument());
     rerender(<PublicBenchmarkReview record={saved} busy copy={benchmarkCopy('en')} />);
-    expect(screen.getByRole('button', { name: 'Save to sharing queue' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Export public JSON' })).toBeDisabled();
+    expect(screen.getByText('Share result').closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Share result'));
+    await screen.findByLabelText('Shared details');
+    // Reopening reuses the frozen snapshot instead of hydrating again.
+    expect(vi.mocked(getQueuedBenchmark)).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Shared details')).toHaveTextContent('Not identified');
   });
 
-  it('gates actions on hydration and never shows the draft as publishable first', async () => {
-    let resolveLookup!: (value: undefined) => void;
-    vi.mocked(getQueuedBenchmark).mockImplementation(() => new Promise((resolve) => { resolveLookup = resolve; }));
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Review public result' }));
-    await screen.findByText('Loading saved snapshot…');
-    // While hydration is pending there is no preview, export, queue, or publish UI.
-    expect(screen.queryByLabelText('Public result preview')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Save to sharing queue' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Export public JSON' })).not.toBeInTheDocument();
-    resolveLookup(undefined);
-    await screen.findByLabelText('Public result preview');
-    expect(screen.getByRole('button', { name: 'Save to sharing queue' })).toBeInTheDocument();
-  });
-
-  it('restores the exact frozen benchmark and description when reviewing an offline-queued wrapper', async () => {
+  it('restores the exact frozen benchmark and description when bound', async () => {
     const frozenBenchmark = toPublicBenchmark(saved, '00000000-0000-4000-8000-000000000001');
     const frozenBody = serializePublicationRequest({ benchmark: frozenBenchmark, description_md: 'saved notes' });
     vi.mocked(getQueuedBenchmark).mockResolvedValue({ requestBody: frozenBody, descriptionMd: 'saved notes' } as Awaited<ReturnType<typeof getQueuedBenchmark>>);
     render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Review public result' }));
     const editor = await screen.findByDisplayValue('saved notes');
     expect(editor).toBeDisabled();
-    // The preview shows the exact frozen benchmark bytes, not a re-derived draft.
-    const preview = JSON.parse(screen.getByLabelText('Public result preview').textContent!);
-    expect(preview.submission_id).toBe('00000000-0000-4000-8000-000000000001');
-    expect(JSON.stringify(preview)).toBe(JSON.stringify(frozenBenchmark));
+    const summary = await screen.findByLabelText('Shared details');
+    expect(summary).toHaveTextContent('Not identified');
+    expect(document.body.textContent).not.toContain('00000000-0000-4000-8000-000000000001');
   });
 
-  it('requeues the restored frozen wrapper instead of a re-derived draft', async () => {
-    const frozenBenchmark = toPublicBenchmark(saved, '00000000-0000-4000-8000-000000000001');
-    const frozenBody = serializePublicationRequest({ benchmark: frozenBenchmark, description_md: 'saved notes' });
-    vi.mocked(getQueuedBenchmark).mockResolvedValue({ requestBody: frozenBody, descriptionMd: 'saved notes' } as Awaited<ReturnType<typeof getQueuedBenchmark>>);
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Review public result' }));
-    await screen.findByDisplayValue('saved notes');
-    fireEvent.click(screen.getByRole('button', { name: 'Save to sharing queue' }));
-    await waitFor(() => expect(enqueuePublicationBenchmark).toHaveBeenCalledOnce());
-    const [request] = vi.mocked(enqueuePublicationBenchmark).mock.calls[0];
-    expect(request).toEqual({ benchmark: frozenBenchmark, description_md: 'saved notes' });
-  });
-
-  it('blocks export and publishing when the stored snapshot is corrupt', async () => {
+  it('blocks publishing when the stored snapshot is corrupt', async () => {
     vi.mocked(getQueuedBenchmark).mockResolvedValue({ requestBody: '{corrupt', descriptionMd: 'old notes' } as Awaited<ReturnType<typeof getQueuedBenchmark>>);
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Review public result' }));
+    const copy = benchmarkCopy('en');
+    render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('could not be read');
-    // No export, queue, preview, or publish UI for a different body.
-    expect(screen.queryByLabelText('Public result preview')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Export public JSON' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Save to sharing queue' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish selected result' })).not.toBeInTheDocument();
-    expect(enqueuePublicationBenchmark).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();
   });
 
-  it('blocks export and publishing when the stored snapshot cannot be read', async () => {
+  it('blocks publishing when the stored snapshot cannot be read', async () => {
+    const copy = benchmarkCopy('en');
     vi.mocked(getQueuedBenchmark).mockRejectedValue(new Error('unavailable'));
-    render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Review public result' }));
+    render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
     await screen.findByRole('alert');
-    expect(screen.queryByLabelText('Public result preview')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Export public JSON' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Publish selected result' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();
   });
 
-  it('exports the publication wrapper with the effective description', async () => {
-    const createUrl = vi.fn((_blob: Blob) => 'blob:wrapper');
-    const revokeUrl = vi.fn();
-    vi.stubGlobal('URL', { createObjectURL: createUrl, revokeObjectURL: revokeUrl });
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
-    try {
-      render(<PublicBenchmarkReview record={saved} busy={false} copy={benchmarkCopy('en')} />);
-      await review();
-      fireEvent.click(screen.getByRole('button', { name: 'Export public JSON' }));
-      expect(createUrl).toHaveBeenCalledOnce();
-      const blob = createUrl.mock.calls[0]?.[0] as unknown as Blob;
-      const text = await blob.text();
-      const wrapper = JSON.parse(text);
-      expect(wrapper.benchmark.submission_id).toBe('00000000-0000-4000-8000-000000000001');
-      expect(wrapper).toHaveProperty('description_md', '');
-    } finally {
-      clickSpy.mockRestore();
-    }
+  it('rejects records that cannot be converted without offering publication', async () => {
+    const copy = benchmarkCopy('en');
+    const partial = { ...saved, result: { ...saved.result, status: 'partial' as const } };
+    render(<PublicBenchmarkReview record={partial} busy={false} copy={copy} />);
+    await screen.findByText(copy.publicInvalid);
+    expect(screen.queryByLabelText('Shared details')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();
+  });
+
+  it('exposes an optional description alongside the publish panel', async () => {
+    const copy = benchmarkCopy('en');
+    const onPublished = vi.fn();
+    render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} onPublished={onPublished} />);
+    await waitForShare();
+    const editor = screen.getByLabelText(copy.descriptionLabel, { exact: false });
+    expect(editor).toBeEnabled();
+    fireEvent.change(editor, { target: { value: 'review notes' } });
+    expect(screen.getByDisplayValue('review notes')).toBeInTheDocument();
+    // Publishing stays available with or without a description.
+    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeInTheDocument();
+    expect(onPublished).not.toHaveBeenCalled();
+  });
+
+  it('disables editing while a measurement is active', async () => {
+    const copy = benchmarkCopy('en');
+    const { rerender } = render(<PublicBenchmarkReview record={saved} busy={false} copy={copy} />);
+    await waitForShare();
+    rerender(<PublicBenchmarkReview record={saved} busy copy={copy} />);
+    expect(screen.getByLabelText(copy.descriptionLabel, { exact: false })).toBeDisabled();
   });
 });

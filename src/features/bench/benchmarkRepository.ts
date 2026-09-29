@@ -1,8 +1,8 @@
 import { invoke, isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
-import type { BenchmarkModelIdentity } from '../../shared/api/types.ts';
-import { inspectLegacyPerformanceHistory, readPerformanceHistory, savePerformanceRecord, type PerformanceBenchmarkRecord } from './performanceRecords.ts';
+import { deletePerformanceRecord, inspectLegacyPerformanceHistory, readPerformanceHistory, savePerformanceRecord, type PerformanceBenchmarkRecord } from './performanceRecords.ts';
 import { reconcileAcceptedBenchmarks } from '../../shared/sharing/benchmarkOutbox.ts';
 import { takeBenchmarkMaintenanceWarnings } from '../../shared/sharing/desktopBenchmarkStorage.ts';
+import { visibleBenchmarkRecords } from './benchmarkCancellation';
 
 export interface BenchmarkHistoryPage {
   records: PerformanceBenchmarkRecord[];
@@ -21,8 +21,10 @@ const nativeStore: BenchmarkHistoryStore = {
   import: records => invoke('benchmark_history_import', { records }),
 };
 
+const visiblePage = (page: BenchmarkHistoryPage): BenchmarkHistoryPage => ({ ...page, records: visibleBenchmarkRecords(page.records) });
+
 export function loadBenchmarkHistoryPage(offset = 0, limit = 50): Promise<BenchmarkHistoryPage> {
-  if (isNativeRuntimeAvailable()) return nativeStore.list(offset, limit);
+  if (isNativeRuntimeAvailable()) return nativeStore.list(offset, limit).then(visiblePage);
   const records = readPerformanceHistory();
   return Promise.resolve({ records: records.slice(offset, offset + limit), total: records.length, next_offset: offset + limit < records.length ? offset + limit : null });
 }
@@ -31,7 +33,7 @@ export function loadBenchmarkHistoryPage(offset = 0, limit = 50): Promise<Benchm
 export async function migrateBenchmarkHistory(store: BenchmarkHistoryStore = nativeStore): Promise<BenchmarkHistoryPage> {
   const legacy = inspectLegacyPerformanceHistory();
   for (let offset = 0; offset < legacy.records.length; offset += 100) await store.import(legacy.records.slice(offset, offset + 100));
-  const page = await store.list(0, 50);
+  const page = visiblePage(await store.list(0, 50));
   if (legacy.unreadable || legacy.rejected) return { ...page, warnings: [...page.warnings ?? [], 'Some legacy records could not be imported. The original local history is retained.'] };
   return page;
 }
@@ -53,6 +55,12 @@ export function rememberBenchmarkResult(record: PerformanceBenchmarkRecord): Pro
   return Promise.resolve({ records: records.slice(0, 50), total: records.length, next_offset: records.length > 50 ? 50 : null });
 }
 
+/** Native deletion also prevents legacy migration from restoring the removed run. */
+export async function deleteBenchmarkHistoryRecord(runId: string): Promise<void> {
+  if (isNativeRuntimeAvailable()) await invoke('benchmark_history_delete', { runId });
+  else deletePerformanceRecord(runId);
+}
+
 export async function loadAllBenchmarkHistory(): Promise<PerformanceBenchmarkRecord[]> {
   const records = new Map<string, PerformanceBenchmarkRecord>();
   let offset: number | null = 0;
@@ -64,5 +72,3 @@ export async function loadAllBenchmarkHistory(): Promise<PerformanceBenchmarkRec
   }
   return [...records.values()];
 }
-
-export const identifyBenchmarkModel = (path: string) => invoke<BenchmarkModelIdentity>('benchmark_identify_model', { path });

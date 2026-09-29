@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { PerformanceBenchmarkRow } from '../../shared/api/types.ts';
+import { benchmarkReport } from './benchmarkReport';
+import { performanceMarkdown } from './performanceMarkdown';
 import {
   PERFORMANCE_HISTORY_KEY, performanceCsv, readPerformanceHistory, savePerformanceRecord,
   summarizePerformanceRows, type PerformanceBenchmarkRecord,
@@ -98,26 +100,79 @@ describe('performance history and export', () => {
     expect(readPerformanceHistory()).toEqual([failed]);
   });
 
-  it('exports empty failures, actual arguments, raw trials, and empty unknown metrics', () => {
+  it('exports failure status but omits empty cancellations without leaking paths or logs', () => {
     const failed = record();
-    failed.result = { ...failed.result, status: 'cancelled', rows: [], message: 'cancelled while loading' };
-    const csv = performanceCsv([record(), failed]);
+    failed.result = { ...failed.result, status: 'failed', rows: [], message: 'cannot load C:/private/models/test.gguf' };
+    const cancelled = { ...failed, result: { ...failed.result, status: 'cancelled' as const } };
+    const csv = performanceCsv([record(), failed, cancelled]);
     const lines = csv.trim().split('\r\n');
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain('peak_process_ram_bytes');
-    expect(lines[1]).toContain('"2304","2","[""--ctx-size"",""2304"",""--parallel"",""2""]"');
-    expect(lines[2]).toContain('"cancelled","cancelled while loading"');
+    expect(lines[0]).toContain('Peak process RAM (GiB)');
+    expect(lines[1]).toContain('"test.gguf"');
+    expect(lines[2]).toContain('"Failed"');
+    expect(csv).not.toContain('"Cancelled"');
+    expect(performanceMarkdown(cancelled, 'en')).toBe('');
+    expect(csv).not.toMatch(/C:|private|models\/|cannot load|--ctx-size|run_id|effective_args|sha256|perf-1/);
     for (const line of lines.slice(1)) expect(line.match(/"(?:[^"]|"")*"/g)).toHaveLength(lines[0].split(',').length);
+    expect(lines[0].split(',')).toHaveLength(18);
     expect(csv).not.toContain('undefined');
     expect(csv).not.toContain('NaN');
   });
 
-  it('escapes multiline cells and neutralizes spreadsheet formulas without mutating records', () => {
-    const saved = record({ model: '=SUM(1,2)' });
-    saved.result.message = 'one "quote"\nand another line';
+  it('omits interrupted trials from cancelled history and exports while keeping completed measurements', () => {
+    const cancelled = record();
+    cancelled.result = { ...cancelled.result, status: 'cancelled', rows: [
+      row(), // Missing RAM is legitimate and does not invalidate a completed measurement.
+      row({ id: 'interrupted', prompt_tokens: 16384, completion_tokens: 3, error: 'benchmark cancelled', tg_tps: null }),
+    ] };
+    const empty = { ...cancelled, id: 'empty', request: { ...cancelled.request, run_id: 'empty' }, result: { ...cancelled.result, run_id: 'empty', rows: cancelled.result.rows.slice(1) } };
+    const bytes = JSON.stringify([cancelled, empty]);
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, bytes);
+    const visible = readPerformanceHistory();
+    expect(visible).toHaveLength(1);
+    expect(visible[0].result.rows).toEqual([row()]);
+    expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(bytes);
+    expect(benchmarkReport([cancelled, empty]).rows).toHaveLength(1);
+    expect(performanceCsv([cancelled, empty])).not.toContain('16384');
+    const markdown = performanceMarkdown(cancelled, 'en');
+    expect(markdown).toContain('| 1,024 / 128 |');
+    expect(markdown).not.toContain('16,384');
+    expect(markdown).toContain('N/A'); // Genuine missing RAM is still represented honestly.
+    expect(cancelled.result.rows).toHaveLength(2);
+  });
+
+  it('escapes quoted model names and neutralizes spreadsheet formulas without mutating records', () => {
+    const saved = record({ model: '=SUM("1",2)' });
     const csv = performanceCsv([saved]);
-    expect(csv).toContain('"\'=SUM(1,2)"');
-    expect(csv).toContain('"one ""quote""\nand another line"');
-    expect(saved.model).toBe('=SUM(1,2)');
+    expect(csv).toContain('"\'=SUM(""1"",2)"');
+    expect(saved.model).toBe('=SUM("1",2)');
+  });
+
+  it('shares numeric aggregates and unit conversions between CSV and the workbook', () => {
+    const saved = record();
+    saved.result.rows = [
+      row({ tg_tps: 80, peak_memory_bytes: 1024 ** 3 }),
+      row({ id: 'repeat', repetition: 2, tg_tps: 120, peak_memory_bytes: 2 * 1024 ** 3 }),
+      row({ id: 'concurrent', concurrency: 2, tg_tps: 180 }),
+      row({ id: 'failed', concurrency: 4, error: '/private/models/test.gguf failed', tg_tps: 0 }),
+    ];
+    const report = benchmarkReport([saved]);
+    expect(report.rows).toHaveLength(3);
+    const [single, batch, failure] = report.rows;
+    expect(single.slice(4, 12)).toEqual([1024, 128, 1, 2, 100, 10, 10240, 100]);
+    expect(single[12]).toBeCloseTo(Math.sqrt(800));
+    expect(single[14]).toBe(1.37);
+    expect(single[16]).toBe(2);
+    expect(batch[13]).toBe(1.8);
+    expect(failure.slice(8, 17)).toEqual(Array(9).fill(null));
+    expect(failure[17]).toBe('Failed');
+    expect(performanceCsv([saved]).trim().split('\r\n')).toHaveLength(4);
+  });
+
+  it.each(['C:\\synthetic\\models\\한글.gguf', '\\\\example\\models\\한글.gguf', '/synthetic/models/한글.gguf'])('exports only the model basename for %s', model => {
+    const csv = performanceCsv([record({ model })], 'ko');
+    expect(csv).toContain('"모델","측정 시각"');
+    expect(csv).toContain('"한글.gguf"');
+    expect(csv).not.toMatch(/synthetic|example|models|\\|\/synthetic/);
   });
 });

@@ -116,6 +116,10 @@ pub fn validate_request(request: &mut PerformanceBenchRequest) -> Result<(), Str
     request.prompt_lengths.dedup();
     request.batch_sizes.sort_unstable();
     request.batch_sizes.dedup();
+    // Every run prepares its slots before measuring. The field stays in the
+    // request for saved histories that recorded `false`; a validated request
+    // always carries the warmup it will actually perform.
+    request.warmup = true;
     Ok(())
 }
 
@@ -370,23 +374,117 @@ async fn batch(
     concurrency: u32,
     cancel: &Arc<AtomicBool>,
     timeout: Duration,
-) -> Vec<protocol::Measurement> {
+) -> Option<Vec<protocol::Measurement>> {
     let mut requests = FuturesUnordered::new();
     for slot in 0..concurrency {
-        requests.push(protocol::measure(
+        let measured = protocol::measure(
             endpoint.clone(),
             tokens.clone(),
             generation,
             slot,
             cancel.clone(),
             timeout,
-        ));
+        );
+        requests.push(async move {
+            let measured = measured.await;
+            // Cancel raises the flag before it kills the server, so a failure
+            // that ends after the flag may be the kill rather than the runtime.
+            let interrupted = measured.error.is_some() && cancel.load(Ordering::Acquire);
+            (measured, interrupted)
+        });
     }
     let mut results = Vec::new();
-    while let Some(measured) = requests.next().await {
+    let mut interrupted = false;
+    while let Some((measured, cut)) = requests.next().await {
+        interrupted |= cut;
         results.push(measured);
     }
-    results
+    // An interrupted batch measured nothing comparable. Requests that finished
+    // on their own, successfully or with a runtime error, still form a trial.
+    (!interrupted).then_some(results)
+}
+
+/// Measures one trial and records it only when every request ran to its own
+/// end, so a trial cut short by cancellation never reaches the rows, the
+/// journal checkpoint or a progress row event.
+#[allow(clippy::too_many_arguments)]
+async fn trial(
+    request: &PerformanceBenchRequest,
+    endpoint: &protocol::Endpoint,
+    tokens: Arc<Vec<u32>>,
+    (prompt, concurrency, repetition): (u32, u32, u32),
+    pid: u32,
+    cancel: &Arc<AtomicBool>,
+    timeout: Duration,
+    result: &mut PerformanceBenchResult,
+    checkpoint: Option<&Checkpoint>,
+    progress: &Progress,
+) -> Result<Vec<protocol::Measurement>, String> {
+    let phase = if concurrency == 1 { "single" } else { "batch" };
+    emit(
+        progress,
+        request,
+        phase,
+        result.rows.len(),
+        None,
+        Some(format!(
+            "{prompt} input / {} output, {concurrency} request(s), repetition {repetition}",
+            request.generation_length
+        )),
+    );
+    let memory = PeakMemorySampler::start(pid);
+    let started = Instant::now();
+    let measured = batch(
+        endpoint,
+        tokens,
+        request.generation_length,
+        concurrency,
+        cancel,
+        timeout,
+    )
+    .await;
+    let ended = Instant::now();
+    let peak_memory = memory.finish();
+    let Some(measured) = measured else {
+        return Err("benchmark cancelled".into());
+    };
+    let row = aggregate(
+        request,
+        prompt,
+        concurrency,
+        repetition,
+        started..ended,
+        &measured,
+        peak_memory,
+    );
+    result.rows.push(row.clone());
+    if let Some(checkpoint) = checkpoint {
+        checkpoint(result)?;
+    }
+    emit(progress, request, phase, result.rows.len(), Some(row), None);
+    Ok(measured)
+}
+
+/// Runs one request on every configured slot before the first trial so model
+/// loading and first-use effects never land in a measured row. The warmup is
+/// never recorded; a failed or cancelled warmup ends the run before any trial.
+async fn warm_slots(
+    request: &PerformanceBenchRequest,
+    endpoint: &protocol::Endpoint,
+    all_tokens: &[u32],
+    slots: u32,
+    cancel: &Arc<AtomicBool>,
+    progress: &Progress,
+) -> Result<(), String> {
+    emit(progress, request, "warmup", 0, None, None);
+    let tokens = Arc::new(all_tokens[..all_tokens.len().min(128)].to_vec());
+    let Some(warmup) = batch(endpoint, tokens, 16, slots, cancel, REQUEST_TIMEOUT).await else {
+        return Err("benchmark cancelled".into());
+    };
+    if let Some(error) = warmup.iter().find_map(|m| m.error.as_ref()) {
+        return Err(format!("warmup failed: {error}"));
+    }
+    Ok(())
 }
 
 pub struct RuntimeInfo {
@@ -516,12 +614,7 @@ pub async fn run(
         };
         let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone() };
         if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
-        if request.warmup {
-            emit(&progress, &request, "warmup", 0, None, None);
-            let tokens = Arc::new(all_tokens[..all_tokens.len().min(128)].to_vec());
-            let warmup = batch(&endpoint, tokens, 16, isolated.parallel, &cancel, REQUEST_TIMEOUT).await;
-            if let Some(error) = warmup.iter().find_map(|m| m.error.as_ref()) { return Err(format!("warmup failed: {error}")); }
-        }
+        warm_slots(&request, &endpoint, &all_tokens, isolated.parallel, &cancel, &progress).await?;
         // Concurrency is the outer sweep so every input length finishes at one level before the next: 1x runs for all lengths, then 2x, and so on.
         for concurrency in std::iter::once(1).chain(request.batch_sizes.iter().copied()) {
             for &prompt in &request.prompt_lengths {
@@ -530,16 +623,7 @@ pub async fn run(
                     if cancel.load(Ordering::Acquire) { return Err("benchmark cancelled".into()); }
                     let remaining = deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() { return Err("benchmark exceeded its 30 minute timeout".into()); }
-                    let phase = if concurrency == 1 { "single" } else { "batch" };
-                    emit(&progress, &request, phase, result.rows.len(), None, Some(format!("{prompt} input / {} output, {concurrency} request(s), repetition {repetition}", request.generation_length)));
-                    let memory = PeakMemorySampler::start(pid);
-                    let started = Instant::now();
-                    let measured = batch(&endpoint, tokens.clone(), request.generation_length, concurrency, &cancel, REQUEST_TIMEOUT.min(remaining)).await;
-                    let ended = Instant::now();
-                    let row = aggregate(&request, prompt, concurrency, repetition, started..ended, &measured, memory.finish());
-                    result.rows.push(row.clone());
-                    if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
-                    emit(&progress, &request, phase, result.rows.len(), Some(row), None);
+                    let measured = trial(&request, &endpoint, tokens.clone(), (prompt, concurrency, repetition), pid, &cancel, REQUEST_TIMEOUT.min(remaining), &mut result, runtime.checkpoint.as_ref(), &progress).await?;
                     if cancel.load(Ordering::Acquire) { return Err("benchmark cancelled".into()); }
                     if measured.iter().any(|m| m.error.as_ref().is_some_and(|error| error.contains("timed out"))) {
                         return Err("benchmark request timed out; completed measurements were preserved".into());
@@ -678,6 +762,73 @@ mod tests {
     }
 
     #[test]
+    fn new_request_without_warmup_is_normalized_to_mandatory_warmup() {
+        let mut req: PerformanceBenchRequest = serde_json::from_value(serde_json::json!({
+            "run_id": "legacy", "prompt_lengths": [16], "generation_length": 8,
+            "batch_sizes": [], "repetitions": 1, "context_profile": "novel_en", "warmup": false,
+        }))
+        .unwrap();
+        validate_request(&mut req).unwrap();
+        assert!(req.warmup);
+        assert_eq!(serde_json::to_value(&req).unwrap()["warmup"], true);
+    }
+
+    #[tokio::test]
+    async fn warmup_prepares_every_slot_and_stops_the_run_on_failure_or_cancellation() {
+        let request = request();
+        let mode = Arc::new(std::sync::atomic::AtomicU8::new(SLOT_ONE_SUCCEEDS));
+        let (stalled_tx, mut stalled) = tokio::sync::mpsc::unbounded_channel();
+        let (endpoint, server) = fake_runtime(mode.clone(), stalled_tx).await;
+        let events = Arc::new(Mutex::new(Vec::<(&'static str, bool)>::new()));
+        let seen = events.clone();
+        let progress: Progress = Arc::new(move |event| {
+            seen.lock()
+                .unwrap()
+                .push((event.phase, event.row.is_some()));
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let tokens = [1, 2, 3];
+
+        warm_slots(&request, &endpoint, &tokens, 2, &cancel, &progress)
+            .await
+            .unwrap();
+        assert_eq!(*events.lock().unwrap(), [("warmup", false)]);
+
+        mode.store(SLOT_ONE_MISCOUNTS, Ordering::Release);
+        let error = warm_slots(&request, &endpoint, &tokens, 2, &cancel, &progress)
+            .await
+            .unwrap_err();
+        assert!(
+            error.starts_with("warmup failed: output token count mismatch"),
+            "{error}"
+        );
+
+        // Slot 1 is reached and stalls; cancelling it ends the warmup instead
+        // of letting the run continue into measured trials.
+        mode.store(SLOT_ONE_STALLS, Ordering::Release);
+        let trigger = cancel.clone();
+        let canceller = tokio::spawn(async move {
+            stalled.recv().await.unwrap();
+            trigger.store(true, Ordering::Release);
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            warm_slots(&request, &endpoint, &tokens, 2, &cancel, &progress),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        canceller.await.unwrap();
+        server.abort();
+        assert_eq!(error, "benchmark cancelled");
+        assert!(events
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(phase, row)| *phase == "warmup" && !row));
+    }
+
+    #[test]
     fn missing_batch_timestamps_do_not_turn_into_partial_averages_or_fake_decode_speed() {
         let start = Instant::now();
         let observed = protocol::Measurement {
@@ -717,6 +868,195 @@ mod tests {
         assert!(row.ttft_ms.is_none());
         assert!(row.pp_tps.is_none());
         assert!(row.tg_tps.is_none());
+    }
+
+    const SLOT_ONE_SUCCEEDS: u8 = 0;
+    const SLOT_ONE_STALLS: u8 = 1;
+    const SLOT_ONE_MISCOUNTS: u8 = 2;
+
+    /// Serves `/completion` for three prompt tokens and two output tokens.
+    /// Slot 0 always completes; slot 1 follows `mode`. Each stalled request
+    /// is reported on `stalled` after its first token is written.
+    async fn fake_runtime(
+        mode: Arc<std::sync::atomic::AtomicU8>,
+        stalled: tokio::sync::mpsc::UnboundedSender<()>,
+    ) -> (protocol::Endpoint, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mode = mode.clone();
+                let stalled = stalled.clone();
+                tokio::spawn(async move {
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0; 4096];
+                    let body = loop {
+                        let read = socket.read(&mut buffer).await.unwrap();
+                        assert!(read > 0, "request ended before its body");
+                        bytes.extend_from_slice(&buffer[..read]);
+                        let text = String::from_utf8_lossy(&bytes).to_string();
+                        let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                            continue;
+                        };
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap();
+                        if body.len() >= length {
+                            break serde_json::from_str::<serde_json::Value>(body).unwrap();
+                        }
+                    };
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"tokens\":[8],\"stop\":false}\n\n").await.unwrap();
+                    let slot_one = body["id_slot"] == 1;
+                    match mode.load(Ordering::Acquire) {
+                        SLOT_ONE_STALLS if slot_one => {
+                            stalled.send(()).unwrap();
+                            std::future::pending::<()>().await;
+                        }
+                        SLOT_ONE_MISCOUNTS if slot_one => {
+                            socket.write_all(b"data: {\"tokens\":[9],\"stop\":true,\"timings\":{\"prompt_n\":3,\"cache_n\":0,\"predicted_n\":1}}\n\n").await.unwrap();
+                        }
+                        _ => {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                            let done = format!("data: {{\"tokens\":[9],\"stop\":true,\"timings\":{{\"prompt_n\":3,\"cache_n\":0,\"predicted_n\":{}}}}}\n\n", body["n_predict"]);
+                            socket.write_all(done.as_bytes()).await.unwrap();
+                        }
+                    }
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        let endpoint = protocol::Endpoint {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            base,
+            key: "test".into(),
+        };
+        (endpoint, server)
+    }
+
+    #[tokio::test]
+    async fn cancelled_trial_leaves_no_row_checkpoint_or_progress_but_finished_trials_remain() {
+        let request = PerformanceBenchRequest {
+            prompt_lengths: vec![3],
+            generation_length: 2,
+            batch_sizes: vec![2],
+            repetitions: 3,
+            ..request()
+        };
+        let mode = Arc::new(std::sync::atomic::AtomicU8::new(SLOT_ONE_SUCCEEDS));
+        let (stalled_tx, mut stalled) = tokio::sync::mpsc::unbounded_channel();
+        let (endpoint, server) = fake_runtime(mode.clone(), stalled_tx).await;
+        let checkpoints = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
+        let saved = checkpoints.clone();
+        let checkpoint: Checkpoint = Arc::new(move |result| {
+            saved
+                .lock()
+                .unwrap()
+                .push(result.rows.iter().map(|row| row.id.clone()).collect());
+            Ok(())
+        });
+        let emitted = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = emitted.clone();
+        let progress: Progress = Arc::new(move |event| {
+            if let Some(row) = event.row {
+                seen.lock().unwrap().push(row.id);
+            }
+        });
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut result = failed(&request, &AppConfig::default(), String::new());
+        let tokens = Arc::new(vec![1, 2, 3]);
+        let pid = std::process::id();
+        let timeout = Duration::from_secs(10);
+
+        // A trial that finished before cancellation is kept, and so is a
+        // genuine runtime failure; neither is an interrupted measurement.
+        trial(
+            &request,
+            &endpoint,
+            tokens.clone(),
+            (3, 2, 1),
+            pid,
+            &cancel,
+            timeout,
+            &mut result,
+            Some(&checkpoint),
+            &progress,
+        )
+        .await
+        .unwrap();
+        mode.store(SLOT_ONE_MISCOUNTS, Ordering::Release);
+        trial(
+            &request,
+            &endpoint,
+            tokens.clone(),
+            (3, 2, 2),
+            pid,
+            &cancel,
+            timeout,
+            &mut result,
+            Some(&checkpoint),
+            &progress,
+        )
+        .await
+        .unwrap();
+        assert!(result.rows[0].error.is_none(), "{:?}", result.rows[0].error);
+        assert!(result.rows[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("output token count mismatch"));
+
+        // Slot 0 completes successfully while slot 1 is still streaming when
+        // cancellation arrives; the partial batch must leave no trace.
+        mode.store(SLOT_ONE_STALLS, Ordering::Release);
+        let trigger = cancel.clone();
+        let canceller = tokio::spawn(async move {
+            stalled.recv().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            trigger.store(true, Ordering::Release);
+        });
+        let interrupted = tokio::time::timeout(
+            Duration::from_secs(5),
+            trial(
+                &request,
+                &endpoint,
+                tokens.clone(),
+                (3, 2, 3),
+                pid,
+                &cancel,
+                timeout,
+                &mut result,
+                Some(&checkpoint),
+                &progress,
+            ),
+        )
+        .await
+        .unwrap();
+        canceller.await.unwrap();
+        server.abort();
+
+        assert_eq!(interrupted.unwrap_err(), "benchmark cancelled");
+        let kept = ["test-p3-g2-c2-r1", "test-p3-g2-c2-r2"];
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            kept
+        );
+        assert_eq!(*emitted.lock().unwrap(), kept);
+        assert_eq!(
+            *checkpoints.lock().unwrap(),
+            vec![vec![kept[0].to_owned()], kept.map(str::to_owned).to_vec()]
+        );
     }
 
     #[tokio::test]

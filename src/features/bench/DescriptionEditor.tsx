@@ -49,10 +49,11 @@ export function descriptionCodePoints(value: string): number {
 }
 
 export function DescriptionEditor({
-  value, onChange, disabled, label, hint, countLabel,
+  value, onChange, disabled, label, hint, countLabel, rows = 5,
 }: {
   value: string; onChange: (value: string) => void; disabled?: boolean;
   label: string; hint: string; countLabel: (used: number, max: number) => string;
+  rows?: number;
 }) {
   const used = descriptionCodePoints(value);
   const over = used > DESCRIPTION_MAX_CODEPOINTS;
@@ -61,10 +62,10 @@ export function DescriptionEditor({
       <label>
         <span aria-hidden="true">{label}</span>
         <textarea
-          className="app-input performance-description-input"
+          className="app-textarea"
           value={value}
           disabled={disabled}
-          rows={5}
+          rows={rows}
           maxLength={12000}
           onChange={(event) => onChange(event.target.value)}
           aria-label={label}
@@ -74,7 +75,7 @@ export function DescriptionEditor({
       </label>
       <p id="benchmark-description-count" role="status">{countLabel(used, DESCRIPTION_MAX_CODEPOINTS)}</p>
       <p>{hint}</p>
-      {over && <p role="alert">Description exceeds 4000 characters.</p>}
+      {over && <p role="alert" className="performance-validation">Description exceeds 4000 characters.</p>}
       {value && !over && <DescriptionPreview text={value} />}
     </div>
   );

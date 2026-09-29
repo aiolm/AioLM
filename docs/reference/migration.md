@@ -8,7 +8,7 @@ The canonical repository is [aiolm/AioLM](https://github.com/aiolm/AioLM). App b
 
 The website repository is [aiolm/AioLm-Web](https://github.com/aiolm/AioLm-Web), and the public site is [https://aiolm.vercel.app](https://aiolm.vercel.app).
 
-Benchmark publishing uses the native build-time `AIOLM_BENCHMARK_API_URL` setting. Set the app repository Actions variable to `https://aiolm.vercel.app` before the next approved release build; the release workflow passes it to native compilation. Local native builds use the same environment variable at compile time. An absent or blank value keeps publishing disabled, and existing binaries retain the origin compiled into them.
+Benchmark publishing targets this website by default. The native build-time `AIOLM_BENCHMARK_API_URL` setting only overrides it: an absent or blank value, including an empty app repository Actions variable, uses `https://aiolm.vercel.app`; a root HTTPS origin selects another service; and `off` builds with publishing disabled. The release workflow passes the variable to native compilation, and local native builds read the same environment variable at compile time. Existing binaries keep the behavior compiled into them, so builds made before this default publish only if they were built with an origin.
 
 Existing checkouts can update their remote with `git remote set-url origin https://github.com/aiolm/AioLM.git`. A checkout's local directory name is independent of the remote; new clones can use `git clone https://github.com/aiolm/AioLM.git AioLM`.
 

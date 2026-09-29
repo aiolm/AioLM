@@ -161,10 +161,10 @@ jobs:
       contents: read
     # The benchmark service origin is compiled into the native binary, so it
     # must be present for every cargo invocation in this job. An unset or
-    # blank repository variable keeps anonymous publishing disabled, exactly
-    # like a developer build; a configured value that is not a usable release
-    # origin fails `cargo test` below instead of shipping installers whose
-    # publishing is silently off.
+    # blank repository variable uses the built-in official website, exactly
+    # like a developer build; `off` explicitly disables anonymous publishing;
+    # any other value that is not a usable release origin fails `cargo test`
+    # below instead of shipping installers whose publishing is silently off.
     env:
       AIOLM_BENCHMARK_API_URL: ${{ vars.AIOLM_BENCHMARK_API_URL }}
     steps:
@@ -190,10 +190,13 @@ jobs:
       - name: Report benchmark sharing configuration
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:AIOLM_BENCHMARK_API_URL)) {
-            Write-Warning "AIOLM_BENCHMARK_API_URL is not configured; these installers ship with anonymous benchmark publishing disabled."
+          $override = "$env:AIOLM_BENCHMARK_API_URL".Trim()
+          if ($override -eq "") {
+            Write-Host "AIOLM_BENCHMARK_API_URL is not set; anonymous benchmark publishing targets the built-in official website https://aiolm.vercel.app"
+          } elseif ($override -eq "off") {
+            Write-Warning "AIOLM_BENCHMARK_API_URL is 'off'; these installers ship with anonymous benchmark publishing disabled."
           } else {
-            Write-Host "Anonymous benchmark publishing targets $env:AIOLM_BENCHMARK_API_URL"
+            Write-Host "Anonymous benchmark publishing targets $override"
           }
       - name: Build CLI resource
         run: npm run build:cli

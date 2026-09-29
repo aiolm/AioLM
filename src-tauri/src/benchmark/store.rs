@@ -1,7 +1,9 @@
 //! One append-only journal per run. Only the requested history page is decoded;
 //! interrupted writes discard their incomplete final line, preserving trials.
+mod deletions;
 mod locks;
 mod receipts;
+pub(crate) use deletions::delete;
 pub(crate) use receipts::{acknowledge, Acknowledgement, UploadReceipt};
 
 use crate::performance_bench::{PerformanceBenchRequest, PerformanceBenchResult};
@@ -242,8 +244,10 @@ fn path_for(
 ) -> Result<Option<PathBuf>, String> {
     validate_record(record)?;
     let digest = record_digest(record);
+    let id = record["id"].as_str().expect("validated id");
     if existing.contains(&digest)
-        || receipts::has_tombstone(root, record["id"].as_str().expect("validated id"))?
+        || receipts::has_tombstone(root, id)?
+        || deletions::has_tombstone(root, id)?
     {
         return Ok(None);
     }
@@ -496,6 +500,7 @@ fn update_result(record: &mut Option<Value>, result: Value) -> Result<(), String
 pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPage, String> {
     let _lock = StoreLock::acquire(root)?;
     let (active_digests, mut warnings) = locks::active_digests(root)?;
+    let deleted = deletions::deleted_digests(root)?;
     let paths = {
         let active = ACTIVE_RUNS
             .lock()
@@ -504,7 +509,8 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
             .into_iter()
             .filter(|path| !active.contains(path))
             .filter(|path| {
-                !RunLock::journal_digest(path).is_ok_and(|digest| active_digests.contains(digest))
+                !RunLock::journal_digest(path)
+                    .is_ok_and(|digest| active_digests.contains(digest) || deleted.contains(digest))
             })
             .collect::<Vec<_>>()
     };

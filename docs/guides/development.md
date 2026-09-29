@@ -113,10 +113,12 @@ build keep theirs, because only the packaging scripts set the define. Existing
 `CFLAGS` and `CXXFLAGS`, including target-specific variants such as
 `CFLAGS_x86_64-pc-windows-msvc`, are appended to rather than replaced.
 
-`AIOLM_BENCHMARK_API_URL` is read at native build time and selects the benchmark
-sharing service for the packaged app. Leave it unset to package a build with
-anonymous publishing disabled while review, export and queueing keep working.
-Set it to a root HTTPS origin to enable publishing:
+`AIOLM_BENCHMARK_API_URL` is read at native build time and overrides the
+benchmark sharing service for the built app. Leave it unset or blank to publish
+to the official AioLM website, `https://aiolm.vercel.app`. Set it to a root
+HTTPS origin to use another service, or to `off` (any case) to build with
+anonymous publishing disabled while the sharing summary and local result
+exports remain available:
 
 ```powershell
 $env:AIOLM_BENCHMARK_API_URL = "https://benchmarks.example.com"
@@ -124,6 +126,8 @@ npm run package:tauri
 ```
 
 The Windows release workflow supplies it from the `AIOLM_BENCHMARK_API_URL`
-repository variable. `cargo test` rejects a configured value that a release
-build cannot use, so a typo fails verification instead of producing installers
-with publishing silently disabled.
+repository variable, and an empty variable builds installers that use the
+official website. `cargo test` rejects any other value that a release build
+cannot use, such as a URL with a path or plain HTTP, so a typo fails
+verification instead of producing installers with publishing silently disabled.
+An invalid value never falls back to the official website.

@@ -295,14 +295,31 @@ fn acknowledge_at_with_durability(
         ));
     }
     let digest = format!("{:x}.jsonl", Sha256::digest(run_id.as_bytes()));
-    let path = files(root)?
-        .into_iter()
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(&digest))
-        })
-        .ok_or("the local benchmark recovery record was not found")?;
+    let Some(path) = files(root)?.into_iter().find(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(&digest))
+    }) else {
+        if !super::deletions::has_tombstone(root, run_id)? {
+            return Err("the local benchmark recovery record was not found".into());
+        }
+        // The user deleted the local copy while its upload was in flight.
+        // Server acceptance is still recorded; there is no journal to cache.
+        let accepted = AcceptedUpload {
+            schema_version: 1,
+            run_id: run_id.into(),
+            receipt,
+            acknowledged_at: now,
+            candidate: None,
+        };
+        durable_receipt(&accepted_path, &accepted, ensure_durable)?;
+        return Ok(prune_cache_with_durability(
+            root,
+            RECENT_CACHE_LIMIT,
+            |path| fs::remove_file(path),
+            ensure_durable,
+        ));
+    };
     if ACTIVE_RUNS
         .lock()
         .map_err(|_| "active benchmark store lock was poisoned")?

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as renderView, screen, waitFor } from '@testing-library/react';
+import type { ReactElement, ReactNode } from 'react';
+import { I18nProvider } from '../../shared/i18n/i18n';
 import { BenchmarkPublishPanel } from './BenchmarkPublishPanel';
 import { benchmarkCopy } from './benchmarkCopy';
 import * as sharing from '../../shared/api/benchmarkSharing';
@@ -8,6 +10,11 @@ import { createBenchmarkOutbox, type BenchmarkOutboxStore, type QueuedBenchmark 
 import { HttpError } from '../../shared/api/http';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import type { PublicBenchmarkSubmission } from '@aiolm/benchmark-contracts';
+
+// Shared feedback banners read the active locale for their dismiss label.
+const English = ({ children }: { children: ReactNode }) => <I18nProvider initialLocale="en">{children}</I18nProvider>;
+const render = (ui: ReactElement) => renderView(ui, { wrapper: English });
+const copy = benchmarkCopy('en');
 
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
 vi.mock('../../shared/api/benchmarkSharing', async (importOriginal) => {
@@ -75,7 +82,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 async function clickPublish() {
-  const button = await screen.findByRole('button', { name: 'Publish selected result' });
+  const button = await screen.findByRole('button', { name: copy.publishSelected });
   await waitFor(() => expect(button).toBeEnabled());
   fireEvent.click(button);
 }
@@ -92,18 +99,21 @@ describe('publish flow', () => {
       .mockRejectedValueOnce(Object.assign(new HttpError('http', 'Verify first.', true, 401), { serviceCode: 'verification_required' }))
       .mockResolvedValue({ status: 201, body: JSON.stringify({ submission_id: snapshot().submission_id, id: 'public-1' }) });
     const onBound = vi.fn();
-    const onQueued = vi.fn();
-    render(<BenchmarkPublishPanel snapshot={snapshot()} description="hello notes" sourceRunId="performance-1" busy={false} copy={benchmarkCopy('en')} onQueued={onQueued} onBound={onBound} outbox={engine} />);
+    const onPublished = vi.fn();
+    render(<BenchmarkPublishPanel snapshot={snapshot()} description="hello notes" sourceRunId="performance-1" busy={false} copy={copy} onPublished={onPublished} onBound={onBound} outbox={engine} />);
     await clickPublish();
     await waitFor(() => expect(sharing.benchmarkSharingPrepare).toHaveBeenCalledWith(snapshot().submission_id, body));
     expect(sharing.benchmarkSharingBeginVerification).toHaveBeenCalledWith(snapshot().submission_id);
     expect(sharing.benchmarkSharingSubmit).toHaveBeenCalledTimes(2);
     expect(sharing.benchmarkSharingSubmit).toHaveBeenLastCalledWith(snapshot().submission_id, body);
     expect(onBound).toHaveBeenCalledWith('hello notes');
-    expect(onQueued).toHaveBeenCalled();
+    expect(onPublished).toHaveBeenCalledOnce();
     expect(await engine.get(snapshot().submission_id)).toMatchObject({ state: 'sent', receipt: { id: 'public-1' } });
-    await screen.findByText('Upload accepted. Local receipt:');
-    expect(screen.getByText('public-1')).toBeInTheDocument();
+    await screen.findByText(copy.publishAccepted);
+    expect(screen.queryByText('public-1')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: copy.openManagement }));
+    await waitFor(() => expect(sharing.benchmarkSharingOpenManagement).toHaveBeenCalledWith(snapshot().submission_id));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -169,10 +179,11 @@ describe('publish flow', () => {
     vi.mocked(sharing.benchmarkSharingPollVerification).mockImplementation(() => new Promise(() => {}));
     render(<BenchmarkPublishPanel snapshot={snapshot()} description="hello notes" sourceRunId="performance-1" busy={false} copy={benchmarkCopy('en')} outbox={engine} />);
     await clickPublish();
-    await screen.findByRole('button', { name: 'Cancel publish' });
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel publish' }));
+    await waitFor(() => expect(sharing.benchmarkSharingPollVerification).toHaveBeenCalled());
+    expect(screen.getByRole('status')).toHaveTextContent(copy.publishVerifying);
+    fireEvent.click(screen.getByRole('button', { name: copy.cancelPublish }));
     await waitFor(() => expect(sharing.benchmarkSharingCancel).toHaveBeenCalledWith(snapshot().submission_id));
-    expect(screen.getByRole('button', { name: 'Publish selected result' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: copy.publishSelected })).toBeEnabled());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -195,7 +206,7 @@ describe('publish flow', () => {
     render(<BenchmarkPublishPanel snapshot={snapshot()} description="durable notes" sourceRunId="performance-1" busy={false} copy={benchmarkCopy('en')} onBound={onBound} outbox={engine} />);
     await clickPublish();
     await waitFor(() => expect(sharing.benchmarkSharingPrepare).toHaveBeenCalledWith(id, JSON.stringify({ benchmark: snapshot(), description_md: 'durable notes' })));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel publish' }));
+    fireEvent.click(screen.getByRole('button', { name: copy.cancelPublish }));
     await waitFor(() => expect(sharing.benchmarkSharingCancel).toHaveBeenCalledWith(id));
     // A late native completion must never attach or send.
     resolvePrepare({ credential_ref: 'cred-late', body_sha256: 'h', destination: 'https://example.test/v1/benchmark-runs' });
@@ -212,8 +223,75 @@ describe('publish flow', () => {
     const { engine } = memoryOutbox();
     vi.mocked(sharing.benchmarkSharingConfiguration).mockResolvedValue({ base_url: null });
     render(<BenchmarkPublishPanel snapshot={snapshot()} description="hello notes" sourceRunId="performance-1" busy={false} copy={benchmarkCopy('en')} outbox={engine} />);
-    await screen.findByText('No sharing service is configured. Review, export, and queue still work offline.');
-    expect(screen.getByRole('button', { name: 'Publish selected result' })).toBeDisabled();
+    await screen.findByText(copy.publishNeedsService);
+    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeDisabled();
     expect(sharing.benchmarkSharingPrepare).not.toHaveBeenCalled();
+  });
+
+  it('restores published status after reopening without another upload', async () => {
+    const { rows, engine } = memoryOutbox();
+    const id = snapshot().submission_id;
+    rows.set(id, {
+      id, payload: snapshot(), state: 'sent', createdAt: 0, attempts: 1, nextAttemptAt: 0,
+      requestBody: JSON.stringify({ benchmark: snapshot(), description_md: 'published notes' }),
+      receipt: { submission_id: id, id: 'public-1' },
+    });
+    const onBound = vi.fn();
+    render(<BenchmarkPublishPanel snapshot={snapshot()} description="draft" sourceRunId="performance-1" busy={false} copy={copy} onBound={onBound} outbox={engine} />);
+    await screen.findByText(copy.publishAccepted);
+    expect(onBound).toHaveBeenCalledWith('published notes');
+    expect(screen.queryByRole('button', { name: copy.publishSelected })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: copy.recoveryImport })).not.toBeInTheDocument();
+    expect(sharing.benchmarkSharingPrepare).not.toHaveBeenCalled();
+    expect(sharing.benchmarkSharingSubmit).not.toHaveBeenCalled();
+  });
+
+  it('blocks publishing until saved state is read and allows a failed read to be retried', async () => {
+    const { engine } = memoryOutbox();
+    const outbox = { ...engine, get: vi.fn().mockRejectedValueOnce(new Error('storage unavailable')).mockResolvedValue(undefined) };
+    render(<BenchmarkPublishPanel snapshot={snapshot()} description="notes" sourceRunId="performance-1" busy={false} copy={copy} outbox={outbox} />);
+    await screen.findByText(copy.publishRestoreError);
+    expect(screen.getByRole('button', { name: copy.publishSelected })).toBeDisabled();
+    expect(sharing.benchmarkSharingPrepare).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: copy.publishRetry }));
+    await waitFor(() => expect(screen.getByRole('button', { name: copy.publishSelected })).toBeEnabled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('retries a rejected result explicitly with the same body and one action', async () => {
+    const { engine } = memoryOutbox();
+    vi.mocked(sharing.benchmarkSharingPrepare).mockResolvedValue({ credential_ref: 'cred-1', body_sha256: 'h', destination: 'https://example.test/v1/benchmark-runs' });
+    vi.mocked(sharing.benchmarkSharingSubmit)
+      .mockResolvedValueOnce({ status: 400, body: JSON.stringify({ code: 'invalid_request', message: 'Rejected.' }) })
+      .mockResolvedValueOnce({ status: 201, body: JSON.stringify({ submission_id: snapshot().submission_id, id: 'public-1' }) });
+    const onPublished = vi.fn();
+    render(<BenchmarkPublishPanel snapshot={snapshot()} description="original notes" sourceRunId="performance-1" busy={false} copy={copy} onPublished={onPublished} outbox={engine} />);
+    await clickPublish();
+    await screen.findByText(copy.publishError);
+    expect(onPublished).not.toHaveBeenCalled();
+    expect((await engine.get(snapshot().submission_id))?.state).toBe('rejected');
+    fireEvent.click(screen.getByRole('button', { name: copy.publishRetry }));
+    await screen.findByText(copy.publishAccepted);
+    expect(onPublished).toHaveBeenCalledOnce();
+    const calls = vi.mocked(sharing.benchmarkSharingSubmit).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+    expect(sharing.benchmarkSharingPrepare).toHaveBeenCalledOnce();
+  });
+
+  it('keeps deleted public results blocked without a retry upload', async () => {
+    const { rows, engine } = memoryOutbox();
+    const id = snapshot().submission_id;
+    rows.set(id, {
+      id, payload: snapshot(), state: 'rejected', createdAt: 0, attempts: 1, nextAttemptAt: 0,
+      requestBody: JSON.stringify({ benchmark: snapshot(), description_md: '' }),
+      error: { code: 'submission_deleted', status: 410 },
+    });
+    render(<BenchmarkPublishPanel snapshot={snapshot()} description="" sourceRunId="performance-1" busy={false} copy={copy} outbox={engine} />);
+    await screen.findByText(copy.publishDeleted);
+    expect(screen.getByRole('button', { name: copy.publishRetry })).toBeDisabled();
+    expect(sharing.benchmarkSharingSubmit).not.toHaveBeenCalled();
+    expect(sharing.benchmarkSharingPrepare).not.toHaveBeenCalled();
+    expect((await engine.get(id))?.state).toBe('rejected');
   });
 });

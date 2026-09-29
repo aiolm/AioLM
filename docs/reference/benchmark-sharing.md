@@ -19,8 +19,9 @@ other history. Active runs are excluded until the runner releases their journal.
 
 The first history read imports valid legacy browser records in batches of 100.
 Imports preserve existing native run IDs and leave the original localStorage
-bytes intact. Retrying an interrupted migration is safe. CSV exports retain
-local diagnostic context; the public JSON export uses a separate contract.
+bytes intact. Retrying an interrupted migration is safe. Excel, CSV and Markdown
+exports contain a readable results report without local paths. Website sharing
+uses the separate public contract below.
 
 ## Public data contract
 
@@ -80,12 +81,15 @@ model digest to distinguish exact files. Old records and frozen publication
 snapshots keep their original metadata. Roll out the accepting web contract
 before distributing an app that submits the optional metadata.
 
-The method and corpus versions identify how a result was produced. SHA256 model
-identification is an explicit preparation action performed while execution is
-idle. Later runs read its metadata-validated cache without hashing the model
-again. Multipart models remain `multipart` with an unknown digest until a complete
-shard-manifest format is implemented. Legacy records without provenance remain
-unidentified. These values describe reported local measurements; they do not
+The method and corpus versions identify how a result was produced. The UI no
+longer hashes models. Digests already stored in saved results and in the
+model-identity cache remain valid: runs read that metadata-validated cache without
+hashing the model, and a cached digest is discarded once the file's size or
+timestamps change, leaving the model unidentified. Existing saved results keep
+their recorded digests, and download receipts are still matched to the file by the
+same size and timestamp stamp. Multipart models remain
+`multipart` with an unknown digest until a complete shard-manifest format is
+implemented. Legacy records without provenance remain unidentified. These values describe reported local measurements; they do not
 provide server-verified authenticity or a universal hardware ranking.
 
 Installed GPUs are recorded separately from configured selection. CPU mode,
@@ -98,17 +102,28 @@ failed or missing samples cannot establish an uncontaminated speedup.
 
 ## Connecting a service
 
-The app offers publication-wrapper review/export, local queue management, and
-anonymous publishing through a configured service origin. There is no default
-sharing service and no stored access token. The service origin comes from the
-`AIOLM_BENCHMARK_API_URL` build environment through the native configuration
-command; publishing stays disabled when it is absent or invalid, while review,
-export and queueing still work offline. Packaged Windows releases receive it
-from the release workflow's `AIOLM_BENCHMARK_API_URL` repository variable, and
-build verification rejects a configured value a release build cannot use, so an
-enabled release cannot ship with publishing silently off. See
-[Development](../guides/development.md) for packaging a build with or without a
-service. Publishing is opt-in per configured
+The selected result has an expanded **Share result** section. It shows
+a readable summary of the public model information, hardware, runtime,
+measurement conditions and results, followed by an optional description and
+one publish action. Raw JSON and queue-management controls are not part of this
+flow. Publishing shows browser-verification instructions when needed, and
+completion replaces the publish action with website management. Reopening an
+accepted submission restores that completion state without another upload.
+
+Anonymous publishing uses a service origin resolved natively at build time,
+and no access token is stored. Builds publish to the official AioLM website,
+`https://aiolm.vercel.app`, unless the `AIOLM_BENCHMARK_API_URL` build
+environment overrides it; the native configuration command reports the result.
+An unset or blank value selects the official website, a root HTTPS origin
+selects another service, and `off` (any case) disables publishing. An invalid
+value also disables publishing rather than falling back to the official
+website. When publishing is disabled, the summary and local result exports
+remain available. Packaged Windows releases receive the override from the
+release workflow's `AIOLM_BENCHMARK_API_URL` repository variable, and build
+verification rejects a value a release build cannot use, so a release cannot
+ship with publishing silently off. See [Development](../guides/development.md)
+for packaging a build with the official, a custom or no service. Publishing is
+opt-in per configured
 origin in this order: the reviewer writes a Markdown description (max 4000
 characters, paragraphs/lists/HTTP(S) links/code blocks only), the app durably
 persists the exact unbound `{benchmark, description_md}` wrapper first, the
@@ -116,11 +131,11 @@ native runner then binds the OS-vault owner key to that body hash and the
 binding metadata attaches idempotently to the same wrapper, and a browser
 verification binds a short-lived upload permit before the identical bytes are
 submitted. A cancelled or late native binding never attaches or sends, but the
-original unbound wrapper stays queued for retry and restart. The frozen
+original unbound wrapper stays in internal storage for explicit retry and restart. The frozen
 snapshot never changes afterwards, and retries resend the identical bytes under
 the `Idempotency-Key` equal to `submission_id`. Owner secrets and upload
 permits stay in the native runner and never enter WebView state. Review
-hydrates the persisted wrapper before export or publishing becomes usable, so a
+hydrates the persisted wrapper before the summary or publishing becomes usable, so a
 reload restores the exact frozen bytes rather than a re-derived draft.
 
 ```ts
@@ -136,9 +151,10 @@ await controller.prepare({ benchmark, description_md }, { runId });
 await controller.publishSelected(submissionId, createNativeSelectedTransport(destination), abortController.signal);
 ```
 
-Legacy bare submissions keep working through the offline queue path below.
-Selected publication entries never travel it: the legacy HTTP client cannot
-carry descriptions or exact frozen bytes.
+Existing internal outbox records are retained. The legacy HTTP client remains
+separate from selected publication: it cannot carry descriptions or exact
+frozen wrapper bytes. Previously attempted bare submissions cannot be silently
+converted into a new body for the same submission ID.
 
 The native transport accepts a configured origin over HTTPS; loopback HTTP is
 allowed for local integration tests. It refuses credential-bearing URLs and
@@ -154,22 +170,66 @@ Permission expiry surfaces a recoverable verification block rather than a
 permanent rejection; deleted submissions are terminal and never retried.
 The website must configure CORS for its supported clients.
 
-The outbox is stored in IndexedDB separately from native history. A queue success
-means the write transaction committed; unavailable storage and quota failures are
+The internal outbox is stored in IndexedDB separately from native history; users
+do not enqueue, browse or remove submissions through a separate sharing queue.
+Preparation succeeds only after the write transaction commits; unavailable storage and quota failures are
 reported instead of silently falling back to memory. Entries are independently
 addressable, and reads return cursor pages of at most 100 entries. Browser storage
-clearing or eviction can remove the queue; the native run history is independent
-and can be used to prepare another public export.
+clearing or eviction can remove this internal state; native run history is
+independent. A retry is explicit and retains the saved body and service binding.
 
 Ownership records live in a permanent native registry outside the queue, so
 pruning the acknowledged cache never strands owner keys. The app lists them
-through a paginated native command independent of queue/history and offers
-per-entry recovery file export/import, clipboard copy and management-page
-controls; recovery codes use `aiolm-recovery-v1.` base64url JSON
+through a paginated native command independent of queue/history in **Shared
+results**, with a website management action for each entry. Its expanded
+**Backup and restore** section offers per-result backup-file export and code
+copy, and backup-file import remains available even on a new device with no
+entries. The explanation identifies the backup as permission to edit or delete
+a shared result after reinstalling or on another device. Recovery codes use `aiolm-recovery-v1.` base64url JSON
 `{version, origin, submission_id, secret}`, are handled by native file dialogs
 and pasted-code validation, and never kept in WebView state or navigation URLs.
 A recovered secret conveys exactly the original authority. A lost key and a
 lost backup cannot be recovered automatically.
+
+The website management action signs in without showing the key. The native
+command refuses during a measurement, reads the owner key from the OS vault
+only when the saved ownership origin matches the configured service, and sends
+`POST <origin>/v1/management-handoffs` with body `{submission_id}` and the
+base64url owner key as the bearer credential, using the same restricted
+no-redirect, cookie-free, timeout- and size-bounded client. The response
+`{handoff_id, handoff_token, expires_at}` is accepted only with a lowercase
+canonical UUID v4 id and a canonical unpadded base64url 32-byte token. The app
+then opens the system browser at `<origin>/manage#handoff=<id>.<token>`, built
+natively from those validated parts; the ticket rides only in the URL fragment,
+which browsers do not send to servers or in `Referer`. The website redeems it
+once for its ordinary management session and removes the fragment. The owner
+key, recovery code, ticket and URL never reach the WebView or logs; the command
+returns only success or a structured error. Every failure opens nothing:
+ownership saved for a different service is a binding conflict, unknown submissions
+and invalid owner proofs both report `ownership_missing`, malformed responses are
+invalid, and redirects are refused. Cancel or a measurement start aborts the
+pending request and suppresses the browser launch.
+
+Each handoff expires after two minutes and can be used only once. The website
+removes the fragment before redeeming it for its normal result-scoped management
+cookie and CSRF token. Opening management never edits or deletes a result
+automatically.
+
+The website also accepts the app's existing backup `.txt` files through a file
+picker. Users can select multiple files and choose a result from the imported
+list without pasting a recovery code. Files are validated against the existing
+recovery contract and service origin; credentials stay in page memory rather
+than browser persistent storage. The manual-code form remains a fallback.
+
+Automatic app-to-web management requires the website's management-handoff API
+to be deployed before the updated desktop client. The website reuses its
+management session storage with a separate ticket hash domain and does not
+require a database migration.
+The native client issues `POST /v1/management-handoffs` with `{submission_id}`
+and owner bearer proof. A successful response contains `{handoff_id,
+handoff_token, expires_at}`. The website redeems the ticket at
+`POST /v1/management-handoffs/<id>/redeem` with `{handoff_token}` under an exact
+Origin check and atomically consumes it while creating the management session.
 
 Edits and deletion belong to the website: descriptions change only through a
 revision-checked request, and deletion removes payload data while the service

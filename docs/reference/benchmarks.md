@@ -8,7 +8,9 @@ Open the shared settings dialog from Benchmark to choose a model, runtime, GPU p
 
 The settings dialog edits a draft. Cancel discards unapplied edits. Context allocation, concurrency, and sampling used by the measurement are controlled by the benchmark workload; their controls explain this constraint. The target starts from the default execution settings on first use and then remains independent. Use the explicit default-settings action to replace it with the current default execution settings.
 
-Defaults are 4,096 and 16,384 input tokens, 128 output tokens, 2 and 4 concurrent requests, one repetition, Python code, and warmup enabled. Concurrent request counts are separate from the runtime's token batch and microbatch settings. A workload without additional concurrent request counts runs only its single-request baseline.
+Defaults are 4,096 and 16,384 input tokens, 128 output tokens, 2 and 4 concurrent requests, one repetition, and Python code. Every new run automatically prepares the model and warms every configured request slot before measuring; this is not a user-selectable option. Preparation is excluded from measurements, and failure or cancellation during preparation prevents measurement from starting. Concurrent request counts are separate from the runtime's token batch and microbatch settings. A workload without additional concurrent request counts runs only its single-request baseline.
+
+The native runner normalizes new requests to `warmup: true` before creating their history journal. The field remains in saved results and the sharing contract so older results preserve whether warmup was enabled at the time; reading, exporting or sharing an old result never changes its recorded conditions.
 
 The runner clones the model's configuration and starts an authenticated server on an OS-assigned loopback port. It explicitly sizes the context for the largest input plus output and the maximum selected concurrency. It checks the runtime's reported slot and context settings before measuring. Temporary context, concurrency, cache, and port overrides do not replace saved tuning or the main server. The effective arguments and context allocation are recorded with the result.
 
@@ -24,20 +26,26 @@ The benchmark reports timings observed by the local client, including local sche
 | --- | --- |
 | TTFT | Time from each request's start to its first observed output token; averaged across concurrent requests. |
 | TPOT | Each request's observed first-to-last output interval divided by its output count minus one; averaged across requests. |
-| PP tok/s | Total input tokens divided by the interval from trial start until every request emits its first token. This is a prefill estimate based on TTFT, including queueing and transport. |
-| TG tok/s | Total output tokens excluding each request's first token, divided by the interval from the earliest first output to the latest last output. |
-| E2E | Wall time from trial start until all requests finish. |
-| Total tok/s | Total output tokens divided by E2E, including input processing. |
+| Input processing (Prefill / PP) · estimated, tok/s | Total input tokens divided by the interval from trial start until every request emits its first token. This is a prefill estimate based on TTFT, including queueing and transport. |
+| Output generation (Decode / TG), tok/s | Total output tokens excluding each request's first token, divided by the interval from the earliest first output to the latest last output. |
+| Total time, s | Wall time from trial start until all requests finish (E2E). |
+| Total throughput, tok/s | Total output tokens divided by total time, including input processing (Prefill / PP). |
 | Peak process RAM | Largest sampled resident working set of the dedicated server during the trial. Sampling occurs at the boundaries and approximately every 150 ms on Windows. This is RAM, not VRAM, and brief peaks can be missed. |
 | Speedup | TG rate divided by the single-request baseline with exactly the same input length, output length, and timing method. |
 
 Unobservable metrics remain unavailable instead of becoming zero. In particular, a single output token or output delivered in one burst cannot establish a decode rate. Missing OS memory counters produce an unavailable RAM result. Failed trials do not contribute to speed averages or speedup.
 
-The result table averages repeated successful trials for the same workload, shows sample standard deviation when at least two TG samples exist, and takes the maximum RAM observation. Unknown metrics remain unknown if any contributing trial lacks that measurement. Raw trials remain in saved results and CSV. A cache-contaminated result is not a valid speedup baseline.
+Cancelling discards the in-flight trial before it is saved or emitted as a result. A concurrent trial is discarded as a whole if any request is interrupted; earlier completed trials remain available. Cancelled runs show only completed measurements in history and Excel/CSV/Markdown exports, and a cancellation with no completed measurements leaves no result entry. This also filters interrupted error rows saved by older versions when displaying or exporting them, without rewriting the original journal or a frozen publication. Legitimately unavailable metrics on a completed measurement remain unavailable.
+
+The result table averages repeated successful trials for the same workload, shows sample standard deviation when at least two TG samples exist, and takes the maximum RAM observation. Unknown metrics remain unknown if any contributing trial lacks that measurement. Raw trials remain in saved results; exports contain the summary table. A cache-contaminated result is not a valid speedup baseline. UI, sharing summaries and exports reuse the same localized metric names; see [Terminology](ui-components.md#terminology).
 
 ## History and export
 
-History stores the newest 20 runs in local browser storage. Each run includes the request, raw trial measurements, the runtime version as llama.cpp's own banner states it, actual context and concurrency, effective arguments without credentials, available device information including the processor's thread count and, where the operating system reports it, its physical core count, and complete/partial/cancelled/failed status. Select a saved run to inspect it or export the history to CSV. Failed runs with no measurements also have a CSV row. Nothing is uploaded automatically.
+History uses [native storage](benchmark-sharing.md) with paginated reads. Each run includes the request, raw trial measurements, the runtime version as llama.cpp's own banner states it, actual context and concurrency, effective arguments without credentials, available device information including the processor's thread count and, where the operating system reports it, its physical core count, and complete/partial/cancelled/failed status. Select a saved run to inspect it, export one or all runs as Excel/CSV, or copy a result as a Markdown table. Exports omit local paths and raw launch arguments. Failed runs with no measurements retain a status row in Excel/CSV. Nothing is uploaded automatically.
+
+Use **Delete result** for the selected run. The confirmation identifies the model and measurement time; deletion removes that local result and selects a remaining run, or clears the result view when none remain. Measurement, export and publication operations disable deletion. A failed delete keeps the confirmation available for retry, while a failure to refresh after successful deletion does not restore the removed result.
+
+Native deletion records a durable marker before removing the journal, preventing retained migration data from restoring it on restart. Active runs are protected by store/run locks. Website publications, upload receipts and management credentials remain available separately in shared-result management. Browser-only deletion removes the selected record from local storage while preserving unrelated entries.
 
 Legacy engine history remains in local storage; it is not deleted, converted, or displayed as serving benchmark results.
 

@@ -1,4 +1,5 @@
 //! Durable local benchmark records and explicit measurement provenance.
+pub(crate) mod csv_export;
 pub(crate) mod download_receipt;
 pub(crate) mod identity;
 pub(crate) mod model_metadata;
