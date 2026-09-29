@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../../shared/i18n/i18n";
+import { PanelFeedbackActivity, PanelFeedbackIndicator, PanelFeedbackOutlet, PanelFeedbackProvider } from "../../shared/ui/PanelFeedback";
 import { createUpdateStore, type AppUpdateInfo, type AppUpdateProgress } from "./updateStore";
 import AppUpdateNotice from "./AppUpdateNotice";
 import AppUpdateSettings from "./AppUpdateSettings";
@@ -20,22 +21,43 @@ function fixture(info = release, native = true) {
 }
 
 describe("application update surfaces", () => {
-  it("announces a newer version once across StrictMode replay and allows opening settings and dismissal", async () => {
+  it("announces a newer version in the activity drawer once across StrictMode replay and preserves its actions", async () => {
     const { updater, check, install } = fixture();
     const open = vi.fn();
-    render(<StrictMode><I18nProvider initialLocale="en"><AppUpdateNotice updater={updater} onOpenSettings={open} /></I18nProvider></StrictMode>);
-    expect(await screen.findByText("A new AioLM version is available")).toBeVisible();
-    expect(screen.getByText("1.0.0 → 1.1.0")).toBeVisible();
+    render(<StrictMode><I18nProvider initialLocale="en"><PanelFeedbackProvider>
+      <div data-testid="startup-notice"><AppUpdateNotice updater={updater} onOpenSettings={open} /></div>
+      <PanelFeedbackActivity hasActivity={false}>
+        <summary>Activity<PanelFeedbackIndicator message="Check notices" globalError={false} /></summary>
+        <PanelFeedbackOutlet />
+      </PanelFeedbackActivity>
+    </PanelFeedbackProvider></I18nProvider></StrictMode>);
+    const summary = screen.getByText("Activity");
+    const drawer = summary.closest("details")!;
+    expect(drawer).toHaveAttribute("hidden");
+    await waitFor(() => expect(within(drawer).getByText("A new AioLM version is available")).toBeVisible());
+    expect(screen.getByTestId("startup-notice")).toBeEmptyDOMElement();
+    expect(drawer).not.toHaveAttribute("hidden");
+    expect(drawer).toHaveProperty("open", true);
+    expect(summary).toHaveTextContent("1 notices");
+    expect(within(drawer).getByText("1.0.0 → 1.1.0")).toBeVisible();
     expect(check).toHaveBeenCalledTimes(1); expect(install).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "View update" }));
+    fireEvent.click(summary);
+    expect(drawer).toHaveProperty("open", false);
+    await act(() => updater.check());
+    expect(drawer).toHaveProperty("open", false);
+    fireEvent.click(summary);
+    expect(within(drawer).getByText("A new AioLM version is available")).toBeVisible();
+    fireEvent.click(within(drawer).getByRole("button", { name: "View update" }));
     expect(open).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("A new AioLM version is available")).not.toBeInTheDocument();
+    expect(drawer).toHaveAttribute("hidden");
+    expect(summary).not.toHaveTextContent("1 notices");
     await act(() => updater.check());
     expect(screen.queryByText("A new AioLM version is available")).not.toBeInTheDocument();
   });
 
-  it("keeps startup network failures out of the app banner while displaying a retry in settings", async () => {
+  it("keeps startup network failures out of app notifications while displaying a retry in settings", async () => {
     const { updater, check } = fixture();
     check.mockRejectedValueOnce(new Error("Offline"));
     const { container } = render(<I18nProvider initialLocale="en"><AppUpdateNotice updater={updater} onOpenSettings={vi.fn()} /></I18nProvider>);
