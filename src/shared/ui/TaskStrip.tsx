@@ -5,6 +5,9 @@ import { useI18n } from "../i18n/i18n";
 import { dismissTask, updateTask, useTasks, type AppTask } from "../state/taskRegistry";
 import { useLocalTaskCancellationIds } from "./TaskCancellation";
 import { formatBytes, formatSpeedBps } from "../lib/units";
+import Badge from "./Badge";
+import ProgressBar from "./ProgressBar";
+import FeedbackBanner from "./FeedbackBanner";
 
 function hasPanelCancellation(task: AppTask): boolean {
   return (task.kind === "runtime" && task.id === "runtime-operation")
@@ -53,7 +56,7 @@ export default function TaskStrip() {
     <aside className="app-task-strip" aria-label={t("ui.taskStripLabel")} data-testid="task-strip">
       <div className="app-task-strip__heading">
         <span className="app-task-strip__title">{t("ui.taskStripTitle")}</span>
-        {active.length > 0 && <span className="app-task-strip__count" role="status">{active.length}</span>}
+        {active.length > 0 && <Badge role="status">{active.length}</Badge>}
       </div>
       <div className="app-task-strip__list">
         {visible.map((task) => {
@@ -69,14 +72,14 @@ export default function TaskStrip() {
                 <span className="app-task-strip__status">{normalizeDisplayText(statusLabel(task, t))}{task.detail ? ` · ${normalizeDisplayText(task.detail)}` : ""}</span>
                 {activeTask && transfer && <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`}>{transfer}</span>}
               </div>
-              {progress !== undefined && <div className="app-task-strip__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} aria-label={normalizeDisplayText(task.label)}><span style={{ width: `${progress}%` }} /></div>}
-              {activeTask && task.cancel && !(hasPanelCancellation(task) && localTaskIds.has(task.id)) && <button type="button" className="app-task-strip__cancel" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
-              {!activeTask && <button type="button" className="app-task-strip__cancel" aria-label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(task.label)}`} onClick={() => dismissTask(task.id)}>{t("ui.taskDismiss")}</button>}
+              {progress !== undefined && <ProgressBar className="app-task-strip__progress" label={normalizeDisplayText(task.label)} value={progress} />}
+              {activeTask && task.cancel && !(hasPanelCancellation(task) && localTaskIds.has(task.id)) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
+              {!activeTask && <button type="button" className="app-button app-button--ghost app-button--sm" aria-label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(task.label)}`} onClick={() => dismissTask(task.id)}>{t("ui.taskDismiss")}</button>}
             </div>
           );
         })}
       </div>
-      {cancelError && <span className="app-task-strip__error" role="alert">{normalizeDisplayText(cancelError)}</span>}
+      {cancelError && <FeedbackBanner tone="error">{cancelError}</FeedbackBanner>}
     </aside>
   );
 }

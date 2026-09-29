@@ -5,7 +5,6 @@
  --ui-ink: #202630; --ui-muted: #515e70; --ui-faint: #606c7e; --ui-muted-deep: #515e70;
  --ui-border: #dce2eb; --ui-border-strong: #a4afbf; --ui-border-strongest: #77869c;
  --ui-accent: #3254c8; --ui-accent-solid: #2856d9; --ui-accent-solid-hover: #244bc3; --ui-accent-soft: #eaf0ff; --ui-border-accent: #a8bbea; --ui-focus: #3254c8;
- --ui-nav-fill: linear-gradient(110deg, #e2f5fc, #e9edff 60%, #f0e9fc);
  --ui-overlay: rgb(19 29 48 / 38%); --ui-mono-bg: #f1f3f7; --ui-mono-ink: #303c50;
  --tone-info-bg: #edf3ff; --tone-info-border: #b8cef6; --tone-info-ink: #315f9f;
  --tone-success-bg: #eaf6f0; --tone-success-border: #a6d6bf; --tone-success-ink: #216447;
@@ -27,7 +26,6 @@
  --ui-ink: #edf0f6; --ui-muted: #b4bfce; --ui-faint: #a0aec1; --ui-muted-deep: #b4bfce;
  --ui-border: #344052; --ui-border-strong: #60718b; --ui-border-strongest: #8292aa;
  --ui-accent: #adc2ff; --ui-accent-solid: #2856d9; --ui-accent-solid-hover: #244bc3; --ui-accent-soft: #27344f; --ui-border-accent: #617bb3; --ui-focus: #93c5fd;
- --ui-nav-fill: linear-gradient(110deg, #173745, #263553 60%, #352b50);
  --ui-overlay: rgb(5 9 18 / 65%); --ui-mono-bg: #15191f; --ui-mono-ink: #c5d4ec;
  --tone-info-bg: #222f46; --tone-info-border: #405879; --tone-info-ink: #adc7ef;
  --tone-success-bg: #1d322a; --tone-success-border: #365e4c; --tone-success-ink: #8dd4b1;

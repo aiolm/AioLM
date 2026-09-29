@@ -1,6 +1,6 @@
-import StableLabel from "../../shared/ui/StableLabel";
 import { useRef, type KeyboardEvent } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
+import TabNav from "../../shared/ui/TabNav";
 import { TUNING_CONTENT_PANEL_ID, type TuningCategory, type TuningCategoryId, type TuningViewMode } from "./tuningFields";
 
 const MODES: readonly TuningViewMode[] = ["quick", "advanced"];
@@ -45,21 +45,7 @@ export default function TuningNavigation({
   categories, activeCategory, onSelectCategory, mode, onModeChange, query, onQueryChange,
 }: Props) {
   const { t } = useI18n();
-  const modeTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const categoryRefs = useRef<Array<HTMLButtonElement | null>>([]);
-
-  const handleModeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const currentIndex = MODES.indexOf(mode);
-    let nextIndex: number;
-    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % MODES.length;
-    else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + MODES.length) % MODES.length;
-    else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = MODES.length - 1;
-    else return;
-    event.preventDefault();
-    onModeChange(MODES[nextIndex]);
-    modeTabRefs.current[nextIndex]?.focus();
-  };
 
   const handleCategoryKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex: number;
@@ -75,32 +61,15 @@ export default function TuningNavigation({
 
   return (
     <aside className="tuning-navigation" aria-label={t("extra.tuningNavigationLabel")}>
-      <div
+      <TabNav
+        items={MODES.map((value) => ({ id: value, label: value === "quick" ? t("extra.quickMode") : t("extra.advancedMode") }))}
+        active={mode}
+        onSelect={onModeChange}
+        label={t("extra.tuningDetailLevel")}
+        tabId={(value) => `tuning-mode-tab-${value}`}
+        panelId={() => TUNING_CONTENT_PANEL_ID}
         className="tuning-navigation__mode"
-        role="tablist"
-        aria-label={t("extra.tuningDetailLevel")}
-        onKeyDown={handleModeKeyDown}
-      >
-        {MODES.map((value, index) => {
-          const isActive = mode === value;
-          return (
-            <button
-              key={value}
-              ref={(el) => { modeTabRefs.current[index] = el; }}
-              type="button"
-              id={`tuning-mode-tab-${value}`}
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={TUNING_CONTENT_PANEL_ID}
-              tabIndex={isActive ? 0 : -1}
-              className={`tuning-mode-tab ${isActive ? "is-active" : ""}`}
-              onClick={() => onModeChange(value)}
-            >
-              <StableLabel value={value === "quick" ? t("extra.quickMode") : t("extra.advancedMode")} labels={[t("extra.quickMode"), t("extra.advancedMode")]} />
-            </button>
-          );
-        })}
-      </div>
+      />
 
       <div className="tuning-navigation__search">
         <label className="sr-only" htmlFor="tuning-settings-search">{t("extra.searchTuningSettingsLabel")}</label>
@@ -112,12 +81,13 @@ export default function TuningNavigation({
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={t("extra.searchSettingsPlaceholder")}
           aria-label={t("extra.searchTuningSettingsLabel")}
+          className="app-input"
           data-tuning-search
         />
         {query && (
           <button
             type="button"
-            className="tuning-navigation__search-clear"
+            className="tuning-navigation__search-clear app-icon-button app-icon-button--sm"
             aria-label={t("extra.clearTuningSearch")}
             onClick={() => onQueryChange("")}
           >
@@ -135,7 +105,7 @@ export default function TuningNavigation({
               key={category.id}
               ref={(el) => { categoryRefs.current[index] = el; }}
               type="button"
-              className={`tuning-category-link ${isActive ? "is-active" : ""}`}
+              className={`tuning-category-link app-nav-item ${isActive ? "is-active" : ""}`}
               aria-current={isActive ? "true" : undefined}
               aria-controls={TUNING_CONTENT_PANEL_ID}
               tabIndex={isActive ? 0 : -1}

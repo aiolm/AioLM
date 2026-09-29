@@ -1,5 +1,6 @@
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { formatBytes } from "../../shared/lib/units";
+import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import type * as api from "../../shared/api/types";
 import type { UiTextKey } from "../../shared/i18n/uiI18n";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
@@ -37,9 +38,9 @@ export default function PullRequestProvenance({ t, preview, backend }: { t: (key
       {/* Defensive: a preview from an older backend carries no advisories, and
           a crashed dialog would be a worse failure than a missing warning. */}
       {(preview.advisories ?? []).map((advisory) => (
-        <p key={advisory} className={`rounded-lg border px-2.5 py-2 text-xs ${advisory === "fork" ? "border-warning-line bg-warning-soft/40 text-warning" : "app-border-strongest bg-surface/60 text-ink"}`}>
+        <FeedbackBanner key={advisory} tone={advisory === "fork" ? "warning" : "info"}>
           {normalizeDisplayText(advisory === "fork" ? t("ui.prForkWarning", { repository: preview.repository }) : t(`ui.${advisoryText[advisory] ?? "prAdvisoryUnknown"}`, { advisory }))}
-        </p>
+        </FeedbackBanner>
       ))}
       <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
         {rows.map(([label, value]) => (
@@ -51,7 +52,7 @@ export default function PullRequestProvenance({ t, preview, backend }: { t: (key
       </dl>
       {/* L5: say exactly what the build produces, so "build this PR" is not an
           open-ended promise. Mirrors SOURCE_BUILD_TARGETS in runtime.rs. */}
-      <div className="rounded-lg border border-line-strong bg-surface/50 px-2.5 py-2">
+      <div className="app-card app-card--muted app-card--tight">
         <p className="text-xs font-medium text-ink">{t("ui.prBuildPlanTitle")}</p>
         <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-muted">
           <li>{t("ui.prBuildPlanTargets")}</li>
@@ -61,19 +62,19 @@ export default function PullRequestProvenance({ t, preview, backend }: { t: (key
         </ul>
       </div>
       {preview.artifact ? (
-        <p className="rounded-lg border app-border-success bg-success-soft/40 px-2.5 py-2 text-xs text-success">
+        <FeedbackBanner tone="success">
           {t("ui.prPrebuiltAvailable", {
             name: normalizeDisplayText(preview.artifact.name),
             size: formatBytes(preview.artifact.bytes),
           })}
-          <span className="mt-1 block break-all font-mono text-xs text-success/70">SHA-256: {preview.artifact.sha256}</span>
-        </p>
+          <span className="mt-1 block break-all font-mono text-xs">SHA-256: {preview.artifact.sha256}</span>
+        </FeedbackBanner>
       ) : (
-        <p className="rounded-lg border border-line-strong bg-surface/50 px-2.5 py-2 text-xs text-muted">{t("ui.prLocalBuildRequired")}</p>
+        <FeedbackBanner tone="info">{t("ui.prLocalBuildRequired")}</FeedbackBanner>
       )}
-      {preview.artifact_error && <p className="rounded-lg border border-warning-line bg-warning-soft/40 px-2.5 py-2 text-xs text-warning">{t("ui.prArtifactLookupFailed", { error: normalizeDisplayText(preview.artifact_error) })}</p>}
+      {preview.artifact_error && <FeedbackBanner tone="warning">{t("ui.prArtifactLookupFailed", { error: normalizeDisplayText(preview.artifact_error) })}</FeedbackBanner>}
       <p className="text-xs text-muted">{t("ui.prReplaceNote", { pr: preview.pull_request, backend })}</p>
-      {backend === "rocm" && <p className="rounded-lg border border-warning-line bg-warning-soft/40 px-2.5 py-2 text-xs text-warning">{t("ui.prRocmLocalOnly")}</p>}
+      {backend === "rocm" && <FeedbackBanner tone="warning">{t("ui.prRocmLocalOnly")}</FeedbackBanner>}
       <p className="text-xs text-muted">{t("ui.prIntegrityNote")}</p>
     </div>
   );

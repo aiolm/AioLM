@@ -1,5 +1,7 @@
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { normalizeDisplayPathLines, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import Badge from "../../shared/ui/Badge";
+import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import TuningRawDefaults from "./TuningRawDefaults";
 
 interface Props {
@@ -21,11 +23,11 @@ export default function TuningEscapeSection({
   chatOptionsDraft, onChatOptionsChange, chatOptionsDirty, onSaveChatOptions,
 }: Props) {
   return (
-    <section className="tuning-section tuning-section--escape min-w-0 app-card app-card--muted">
+    <section className="tuning-section tuning-section--escape min-w-0 app-card">
       <h2 className="app-section-title">{t("section.escape")}</h2>
       <p className="app-section-hint mb-4">{t("ui.escapeHint")}</p>
       <div className="tuning-advanced-error-slot mb-3">
-        {advancedError && <div className="break-words rounded-lg border border-error-line bg-error-soft/50 px-3 py-2 text-sm text-error" role="alert">{normalizeDisplayText(advancedError)}</div>}
+        {advancedError && <FeedbackBanner tone="error">{normalizeDisplayText(advancedError)}</FeedbackBanner>}
       </div>
       <div className="grid gap-5 app-form-grid">
         <div className="min-w-0">
@@ -52,7 +54,7 @@ export default function TuningEscapeSection({
             >
               {t("extra.saveServerArguments")}
             </button>
-            <span className="text-xs text-warning">{t("ui.restartRequiredShort")}</span>
+            <Badge tone="warning">{t("ui.restartRequiredShort")}</Badge>
           </div>
         </div>
         <div className="min-w-0">
@@ -79,7 +81,7 @@ export default function TuningEscapeSection({
             >
               {t("extra.saveChatOptions")}
             </button>
-            <span className="text-xs text-success">{t("ui.nextMessageShort")}</span>
+            <Badge tone="success">{t("ui.nextMessageShort")}</Badge>
           </div>
         </div>
       </div>

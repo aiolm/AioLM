@@ -2,6 +2,7 @@ import type { ModelMetadata } from '../api/types';
 import { useI18n } from '../i18n/i18n';
 import { useVisibleModelMetadata } from './useVisibleModelMetadata';
 import ModelPublisher, { modelPublishers } from './ModelPublisher';
+import Badge from './Badge';
 
 export interface ModelBadge {
   kind: 'family' | 'architecture' | 'parameters' | 'quantization' | 'context' | 'projector' | 'tag';
@@ -62,8 +63,8 @@ export default function ModelBadges({ model, metadata, localPath, tags, reposito
     {badges.length > 0 && <span className="model-badges">{badges.map(badge => {
     const label = t(badgeLabels[badge.kind]);
     const source = t(badge.source === 'metadata' ? 'ui.modelBadgeMetadata' : badge.source === 'hub' ? 'ui.modelBadgeHub' : 'ui.modelBadgeFilename');
-    return <span key={`${badge.kind}:${badge.value}`} className="model-badge" title={`${label}: ${badge.value} · ${source}`}>
+    return <Badge key={`${badge.kind}:${badge.value}`} title={`${label}: ${badge.value} · ${source}`}>
       <span className="sr-only">{label}: </span>{badge.value}
-    </span>;
+    </Badge>;
   })}</span>}</span>;
 }

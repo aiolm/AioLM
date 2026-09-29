@@ -112,14 +112,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
     expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
-    expect(screen.getByRole('button', { name: 'Performance & memory' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('tab', { name: 'Performance & memory' })).toHaveAttribute('aria-selected', 'true');
     expect(numeric('ctx_size')).toHaveValue(8192);
 
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
     expect(screen.getByRole('heading', { name: 'Editable profile · Editing' })).toBeVisible();
     fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
     expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Updated prompt' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -207,9 +207,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(numeric('ngl')).toBeEnabled();
     fireEvent.focus(numeric('ngl')); fireEvent.blur(numeric('ngl'));
     fireEvent.pointerUp(document.querySelector('input[id$="-ngl-range"]')!);
-    fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     fireEvent.focus(numeric('temperature')); fireEvent.blur(numeric('temperature'));
-    fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Reasoning' }));
     const message = document.querySelector<HTMLInputElement>('input[id$="-reasoning-budget-message"]')!;
     expect(message).toHaveValue('');
     fireEvent.focus(message); fireEvent.blur(message);
@@ -240,7 +240,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saved = { ...cfg, ctx_size: 12288, mmproj: 'models/projector.gguf' };
     const { onApply } = mount({ initialConfig: saved, requireModelSelection: true });
     expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
-    expect(within(screen.getByRole('navigation', { name: 'Model & settings' })).getByRole('button', { name: 'Runtime & GPU' })).toBeVisible();
+    expect(within(screen.getByRole('tablist', { name: 'Model & settings' })).getByRole('tab', { name: 'Runtime & GPU' })).toBeVisible();
     const first = await screen.findByRole('button', { name: /a.gguf/ });
     const second = await screen.findByRole('button', { name: /b.gguf/ });
     expect(first).toHaveAttribute('aria-pressed', 'false');
@@ -256,7 +256,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('requires a managed runtime before starting and never offers a system runtime', async () => {
     mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
     await waitFor(() => expect(api.rtList).toHaveBeenCalled());
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Model & settings' })).getByRole('button', { name: 'Runtime & GPU' }));
+    fireEvent.click(within(screen.getByRole('tablist', { name: 'Model & settings' })).getByRole('tab', { name: 'Runtime & GPU' }));
     expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toHaveTextContent('Select a runtime');
     fireEvent.click(screen.getByRole('combobox', { name: 'Runtime & GPU' }));
     const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
@@ -318,7 +318,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const writes = vi.spyOn(Storage.prototype, 'setItem');
     const { onProfileCommit } = mount();
     fireEvent.click(await screen.findByRole('button', { name: /b.gguf/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Performance & memory' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
     expect(numeric('ctx_size').value).toBe('16384');
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
@@ -411,7 +411,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('keeps invalid inputs while browsing profile previews and allows reverting the working draft', async () => {
     const { onProfileCommit } = mount({ initialSection: 'advanced' });
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     expect(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' })).toBeDisabled();
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
@@ -422,7 +422,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it('preserves benchmark workload values and inherits the other tuning fields when applying the Default profile', async () => {
     const { onProfileCommit, getSaved } = mount({ mode: 'benchmark', initialSection: 'profiles' });
-    expect(screen.queryByRole('button', { name: 'Generation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Generation' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     fireEvent.click(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
@@ -453,7 +453,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, '', copy);
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source, copy, orphan], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(numeric('ngl'), { target: { value: '25' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     expect(screen.getAllByRole('button', { name: /Shared settings/ })).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Shared settings · Selected · Editing' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Shared settings · Default profile' }));
@@ -473,13 +473,13 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, 'Saved prompt', profile);
     const { getSaved } = mount({ initialSection: 'sampling', initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Renamed profile' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Saved profile · Editing' })).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
     expect(getSaved().settings_profiles?.entries[0]).toMatchObject({ name: 'Renamed profile', system_prompt: 'Saved prompt' });
   });
@@ -493,16 +493,16 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.change(numeric('temperature'), { target: { value: '1.3' } });
     fireEvent.blur(numeric('temperature'));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Set as default' }));
     await waitFor(() => expect(getSaved().settings_profiles?.default_profile_id).toBe(profile.id));
     expect(onProfileCommit).toHaveBeenCalledOnce();
     expect(getSaved().temperature).toBe(cfg.temperature);
     expect(appliedProfile(getSaved())).toMatchObject({ system_prompt: 'Saved prompt', settings: { temperature: cfg.temperature } });
-    fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(numeric('temperature')).toHaveValue(1.3);
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Working prompt');
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
@@ -525,7 +525,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Settings were saved');
     expect(screen.getByRole('heading', { name: 'Saved once' })).toBeVisible();
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     expect(screen.getByRole('button', { name: 'Saved once · Selected' })).toBeVisible();
     expect(onProfileCommit).toHaveBeenCalledOnce();
   });
@@ -534,7 +534,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     mount({ initialSection: 'sampling', liveState: 'running', liveConfig: cfg });
     fireEvent.change(numeric('temperature'), { target: { value: '0.9' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Performance & memory' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
     fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
     expect(screen.getByText('Save the profile and reload to use these execution options.')).toBeVisible();
@@ -549,7 +549,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saved = { ...custom, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(custom.active_model)]: application } } };
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     fireEvent.click(screen.getByRole('button', { name: /^Original settings ·/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
@@ -565,7 +565,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Original settings · Editing' })).not.toBeInTheDocument());
     expect(numeric('ctx_size')).toHaveValue(16384);
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
-    fireEvent.click(screen.getByRole('button', { name: 'Generation' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
   });
 
@@ -599,7 +599,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Reset to defaults.');
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');

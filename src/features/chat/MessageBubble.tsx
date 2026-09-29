@@ -4,6 +4,7 @@ import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
+import Badge from "../../shared/ui/Badge";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import ChatMarkdown from "./ChatMarkdown";
 import ResponseMetrics from "./ResponseMetrics";
@@ -44,7 +45,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
       >
         <div className="min-w-0">
         {message.role === "assistant" && message.reasoning && (
-          <details className="chat-reasoning mb-2.5 rounded-lg border px-2.5 py-2 text-xs leading-relaxed ui-border-color-border ui-background-surface-muted ui-color-muted" >
+          <details className="chat-reasoning mb-2.5 app-card app-card--muted app-card--tight text-xs leading-relaxed ui-color-muted">
             <summary className="cursor-pointer select-none font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)] ui-color-faint" >{text("thinking")}</summary>
             {/* The body collapses on click too, so a long trace can be put away
                 from wherever the reader's eye already is. Copying text out of it
@@ -60,7 +61,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
           </details>
         )}
         {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <img key={image.dataUrl} src={image.dataUrl} alt={normalizeDisplayText(image.name)} loading="lazy" decoding="async" width={144} height={144} className="h-36 w-36 max-h-40 max-w-40 rounded-lg border object-contain ui-border-color-border ui-background-mono-bg"  />)}</div> : null}
-        {message.documents?.length ? <div className="mb-2 flex flex-wrap gap-1.5">{message.documents.map((document) => <span key={document.path} className="rounded-full border px-2.5 py-1 text-xs font-medium ui-border-color-border ui-background-surface-muted ui-color-muted" >{text("document")} · {normalizeDisplayText(document.name)}</span>)}</div> : null}
+        {message.documents?.length ? <div className="mb-2 flex flex-wrap gap-1.5">{message.documents.map((document) => <Badge key={document.path}>{text("document")} · {normalizeDisplayText(document.name)}</Badge>)}</div> : null}
         {/* Only the assistant's side is markdown. What the user typed is shown
             back exactly as typed, since they did not ask for it to be formatted. */}
         {message.content && !isUser

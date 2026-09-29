@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import type { ServerOption } from '../../shared/config/serverOptions';
 import { parseSettingsText, type RejectedSetting } from './settingsImport';
 import { modelSettingsCopy } from './modelSettingsCopy';
@@ -38,15 +39,14 @@ export default function SettingsPasteBox({ cfg, options, disabled, onChange }: {
   return <div className="model-settings-paste">
     <label htmlFor="model-settings-paste">{copy.pasteLabel}</label>
     <p className="app-section-hint">{copy.pasteHint}</p>
-    <textarea id="model-settings-paste" className="app-input font-mono" rows={5} spellCheck={false} disabled={disabled}
+    <textarea id="model-settings-paste" className="app-textarea font-mono" rows={5} spellCheck={false} disabled={disabled}
       value={text} onChange={event => { setText(event.target.value); setResult(null); }} placeholder={copy.pastePlaceholder} />
     <div className="model-settings-paste-actions">
       <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled || !text.trim()} onClick={apply}>{copy.pasteApply}</button>
       {result && <span className="app-section-hint" role="status">{copy.pasteApplied.replace('{count}', String(result.applied.length))}</span>}
     </div>
-    {result && result.rejected.length > 0 && <div className="model-settings-paste-rejected" role="alert">
-      <strong>{copy.pasteRejected}</strong>
-      <ul>{result.rejected.map(entry => <li key={`${entry.flag}:${entry.value ?? ''}`}>{rejectionText(entry, copy)}</li>)}</ul>
-    </div>}
+    {result && result.rejected.length > 0 && <FeedbackBanner tone="warning" title={copy.pasteRejected}>
+      <ul className="list-disc space-y-1 pl-4">{result.rejected.map(entry => <li key={`${entry.flag}:${entry.value ?? ''}`}>{rejectionText(entry, copy)}</li>)}</ul>
+    </FeedbackBanner>}
   </div>;
 }

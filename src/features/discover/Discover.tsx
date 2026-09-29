@@ -8,6 +8,8 @@ import { formatBytes, formatSpeedBps, isMmprojPath, markInstalled, quantLabel, s
 import { MODEL_DOWNLOAD_TASK_ID, useModelDownload } from "../../shared/state/modelDownloadTask";
 import { finishTask, registerTask } from "../../shared/state/taskRegistry";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import Badge from "../../shared/ui/Badge";
+import ProgressBar from "../../shared/ui/ProgressBar";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
@@ -277,7 +279,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           <h2 className="mt-1 text-[18px] font-semibold tracking-tight ui-color-ink" >{t("extra.discoverTitle")}</h2>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed ui-color-muted" >{t("extra.discoverDescription")}</p>
         </div>
-        <div className="rounded-lg border px-3.5 py-2 text-right text-xs ui-border-color-border ui-background-panel ui-color-faint" >
+        <div className="app-card app-card--tight text-right text-xs ui-color-faint">
           <div className="text-xs">{t("panel.destination")}</div>
           <div className="mt-0.5 max-w-[18rem] app-text-wrap text-xs ui-color-ink"  title={store.cfg?.models_dir ? normalizeDisplayPath(store.cfg.models_dir) : t("panel.loading")}>{store.cfg?.models_dir ? normalizeDisplayPath(store.cfg.models_dir) : t("panel.loading")}</div>
         </div>
@@ -285,7 +287,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
 
       <form onSubmit={(event) => { event.preventDefault(); void runSearch(query, sort); }} className="mb-4 flex min-w-0 flex-wrap items-center gap-2.5" aria-busy={searching || loadingFiles || downloading !== null}>
         <label className="sr-only" htmlFor="discover-search">{t("extra.search")}</label>
-        <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("extra.searchPlaceholder")} className="app-input h-9 min-w-48 flex-1 px-3.5 text-sm" />
+        <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("extra.searchPlaceholder")} className="app-input min-w-48 flex-1" />
         <CustomSelect ariaLabel={t("ui.discoverSort")} value={sort} size="sm" className="shrink-0" options={SORT_KEYS.map((key) => ({ value: key, label: t(SORT_LABELS[key]) }))} onChange={changeSort} />
         <button type="submit" disabled={searching} className="app-button app-button--primary shrink-0 ui-min-width-120px" ><StableLabel value={searching ? t("panel.scanning") : t("panel.searchModels")} labels={[t("panel.scanning"), t("panel.searchModels")]} /></button>
       </form>
@@ -308,7 +310,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
             <span className="min-w-0 app-text-wrap font-medium ui-color-ink" >{t("ui.downloadingFile", { file: normalizeDisplayPath(progress.file_path) })}</span>
             <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent}%</span>
           </div>
-          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full ui-background-border" role="progressbar" aria-label={t("ui.downloadProgress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? progressPercent : undefined}><div className="h-full rounded-full transition-[width] ui-background-accent-solid" style={{ width: `${progressPercent}%` }} /></div>
+          <ProgressBar label={t("ui.downloadProgress")} value={progress.total > 0 ? progressPercent : undefined} className="mt-2.5" />
           <div className="mt-2.5 flex items-center justify-between gap-3"><span className="whitespace-nowrap text-xs tabular-nums ui-color-muted" >{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span><span className="flex shrink-0 items-center gap-2.5"><span className="whitespace-nowrap text-right text-sm font-semibold tabular-nums ui-color-accent ui-min-width-120px" >{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span><LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</LocalTaskCancelButton></span></div>
         </div>
       )}
@@ -318,11 +320,11 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           <div className="sticky top-0 z-10 border-b px-4 py-2.5 text-xs font-semibold ui-border-color-border ui-background-surface-muted ui-color-faint" >{t("extra.searchResults")} {results.length ? `(${results.length})` : ""}</div>
           {searching && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.searching")}</div>}
           {!searching && results.length === 0 && <div className="p-6 text-center text-xs leading-relaxed ui-color-faint" >{listed ? t("ui.discoverNoResults") : t("ui.searchHint")}</div>}
-          <div role="list">
+          <div role="list" className="space-y-1.5 p-2">
             {results.map((model) => (
-              <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={[`block w-full border-b px-4 py-3 text-left last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${selected?.id === model.id ? "" : "hover:bg-[var(--ui-surface-muted)]"}`, "ui-border-color-border", (selected?.id === model.id ? "ui-background-accent-soft" : "")].filter(Boolean).join(" ")} >
+              <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={`app-list-row block w-full${selected?.id === model.id ? " is-selected" : ""}`}>
                 <div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={model.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums ui-color-faint" ><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span><span aria-hidden="true">♥ </span><span className="sr-only">{t("panel.likes")} </span>{formatCount(locale, model.likes)}</span>{model.gated && <span className="ui-color-warning" >{t("panel.gated")}</span>}</div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums ui-color-faint" ><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span><span aria-hidden="true">♥ </span><span className="sr-only">{t("panel.likes")} </span>{formatCount(locale, model.likes)}</span>{model.gated && <Badge tone="warning">{t("panel.gated")}</Badge>}</div>
               </button></div>
             ))}
           </div>
@@ -345,7 +347,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
               >{t("ui.discoverModelCard")}<span aria-hidden="true">↗</span></a>}<div className="mt-1 text-xs ui-color-faint" >{t("ui.repoFileHint")} · {selected.pipeline_tag || "llama.cpp"}</div>{checkingInstalled && <div className="mt-1 text-xs ui-color-faint"  role="status">{t("ui.discoverInstalledChecking")}</div>}{installedUnknown && <div className="mt-1 text-xs ui-color-warning"  role="status">{t("ui.discoverInstalledUnknown")}</div>}</div>
             {loadingFiles && <div className="p-6 text-center text-sm ui-color-muted"  role="status">{t("extra.readingFiles")}</div>}
             {!loadingFiles && files?.length === 0 && <div className="p-6 text-center text-xs ui-color-faint" >{t("extra.noFiles")}</div>}
-            {!loadingFiles && files && files.length > 0 && <div role="list">
+            {!loadingFiles && files && files.length > 0 && <div role="list" className="space-y-1.5 p-2">
               {files.map((file) => {
                 const activeDownload = downloading === file.path;
                 const displayFilePath = normalizeDisplayPath(file.path);
@@ -355,8 +357,8 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
                 const blockedReason = present ? t("ui.discoverInstalledAt", { path: normalizeDisplayPath(present.local_path) })
                   : checkingInstalled ? t("ui.discoverInstalledChecking")
                   : !canDownload ? t("ui.stopBeforeDownload") : undefined;
-                return <div key={file.path} role="listitem" className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 last:border-0 ui-border-color-border" >
-                  <div className="min-w-0 flex-1"><div className="app-text-wrap text-sm font-medium ui-color-ink"  title={displayFilePath}>{displayFilePath}</div><div className="mt-1 flex flex-wrap gap-2 text-xs ui-color-faint" ><span>{formatBytes(file.size_bytes)}</span><span>{file.is_mmproj ? t("ui.visionProjector") : quantLabel(file.path)}</span>{file.oid && <span title={file.oid}>{t("ui.checksumMetadata")}</span>}{present && present.missing_shards.length > 0 && <span className="ui-color-warning" >{t("ui.modelShardsMissing", { count: present.missing_shards.length, total: shardTotal(file.path) ?? present.missing_shards.length })}</span>}</div></div>
+                return <div key={file.path} role="listitem" className="app-list-row flex min-w-0 flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1"><div className="app-text-wrap text-sm font-medium ui-color-ink"  title={displayFilePath}>{displayFilePath}</div><div className="mt-1 flex flex-wrap gap-2 text-xs ui-color-faint" ><span>{formatBytes(file.size_bytes)}</span><span>{file.is_mmproj ? t("ui.visionProjector") : quantLabel(file.path)}</span>{file.oid && <span title={file.oid}>{t("ui.checksumMetadata")}</span>}{present && present.missing_shards.length > 0 && <Badge tone="warning">{t("ui.modelShardsMissing", { count: present.missing_shards.length, total: shardTotal(file.path) ?? present.missing_shards.length })}</Badge>}</div></div>
                   <button
                     type="button"
                     onClick={() => {

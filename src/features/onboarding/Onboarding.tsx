@@ -5,6 +5,7 @@ import { applyTheme, subscribeToSystemTheme, type ThemeMode } from '../../shared
 import { localeOptions, useI18n, type Locale } from '../../shared/i18n/i18n';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { AioMark } from '../../shared/ui/AppIcons';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { onboardingCopy } from './onboardingCopy';
 import './onboarding.css';
 
@@ -96,14 +97,14 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
         <div className="setup-content">
           {step === 0 && <fieldset className="setup-options setup-languages">
             <legend className="sr-only">{copy.steps[0]}</legend>
-            {[...localeOptions].sort((a, b) => Number(b.value === 'en') - Number(a.value === 'en')).map(option => <label key={option.value} className="setup-choice" data-selected={locale === option.value}>
+            {[...localeOptions].sort((a, b) => Number(b.value === 'en') - Number(a.value === 'en')).map(option => <label key={option.value} className={`app-list-row setup-choice${locale === option.value ? ' is-selected' : ''}`}>
               <input type="radio" name="setup-language" value={option.value} checked={locale === option.value} onChange={() => setLocale(option.value)} />
               <span lang={option.value}>{option.label}</span>
             </label>)}
           </fieldset>}
           {step === 1 && <fieldset className="setup-options setup-themes">
             <legend className="sr-only">{copy.steps[1]}</legend>
-            {(['light', 'dark', 'system'] as const).map(mode => <label key={mode} className="setup-choice setup-theme-choice" data-selected={theme === mode}>
+            {(['light', 'dark', 'system'] as const).map(mode => <label key={mode} className={`app-list-row setup-choice setup-theme-choice${theme === mode ? ' is-selected' : ''}`}>
               <span className={`setup-preview setup-preview--${mode}`} aria-hidden="true"><span className="setup-preview-sidebar" /><span className="setup-preview-workspace"><i /><i /><i /></span></span>
               <span className="setup-theme-label"><input type="radio" name="setup-theme" value={mode} checked={theme === mode} onChange={() => setTheme(mode)} /><span>{t(`theme.${mode}`)}</span></span>
               <small>{copy[`${mode}Hint`]}</small>
@@ -112,18 +113,20 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
           {step === 2 && <div className="setup-folder">
             <label htmlFor="setup-folder">{copy.folderLabel}</label>
             <p id="setup-folder-hint">{copy.folderHint}</p>
-            <input ref={folderInput} id="setup-folder" name="models-directory" value={folder} readOnly aria-describedby="setup-folder-hint" />
+            <input ref={folderInput} id="setup-folder" className="app-input app-mono" name="models-directory" value={folder} readOnly aria-describedby="setup-folder-hint" />
             <div className="setup-folder-actions">
-              <button type="button" className="app-button app-button--secondary" disabled={saving || choosing} onClick={() => { void chooseFolder(); }}>{choosing ? copy.choosing : copy.browse}</button>
-              {folder !== defaultFolder && <button type="button" className="app-button app-button--secondary" disabled={saving || choosing} onClick={() => { setFolder(defaultFolder); setError(null); folderInput.current?.focus(); }}>{copy.defaultFolder}</button>}
+              <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} onClick={() => { void chooseFolder(); }}>{choosing ? copy.choosing : copy.browse}</button>
+              {folder !== defaultFolder && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} onClick={() => { setFolder(defaultFolder); setError(null); folderInput.current?.focus(); }}>{copy.defaultFolder}</button>}
             </div>
             <div className="setup-folder-note"><strong>{copy.noModels}</strong><p>{copy.noModelsHint}</p></div>
           </div>}
         </div>
-        {error && <div ref={errorMessage} className="setup-error" role="alert" tabIndex={-1}><p>{copy[error.kind]}</p>{error.detail && <p>{error.detail}</p>}</div>}
+        {error && <div ref={errorMessage} className="setup-error" tabIndex={-1}>
+          <FeedbackBanner tone="error" title={error.detail ? copy[error.kind] : undefined}>{error.detail ?? copy[error.kind]}</FeedbackBanner>
+        </div>}
         <footer className="setup-footer">
-          {step > 0 && <button type="button" className="app-button app-button--secondary" disabled={saving || choosing} onClick={() => { setError(null); setStep(step - 1); }}>{copy.back}</button>}
-          <button type="submit" className="app-button app-button--primary" disabled={saving || choosing}>{saving ? copy.saving : step === 2 ? copy.finish : copy.next}<span aria-hidden="true"> →</span></button>
+          {step > 0 && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} onClick={() => { setError(null); setStep(step - 1); }}>{copy.back}</button>}
+          <button type="submit" className="app-button app-button--primary app-button--lg" disabled={saving || choosing}>{saving ? copy.saving : step === 2 ? copy.finish : copy.next}<span aria-hidden="true"> →</span></button>
         </footer>
       </form>
     </div>

@@ -18,6 +18,10 @@ export interface CustomSelectProps<T extends string | number = string> {
   value: T;
   options: CustomSelectOption<T>[];
   onChange: (value: T) => void;
+  /** Allows free text alongside the same option menu used by fixed selections. */
+  onInputChange?: (value: string) => void;
+  placeholder?: string;
+  spellCheck?: boolean;
   disabled?: boolean;
   className?: string;
   triggerClassName?: string;
@@ -46,6 +50,9 @@ export function CustomSelect<T extends string | number = string>({
   value,
   options,
   onChange,
+  onInputChange,
+  placeholder,
+  spellCheck,
   disabled = false,
   className = "",
   triggerClassName = "",
@@ -64,16 +71,30 @@ export function CustomSelect<T extends string | number = string>({
   const effectiveAriaLabelledBy = ariaLabelledBy ?? ariaLabelledByKebab;
   const effectiveAriaDescribedBy = ariaDescribedBy ?? ariaDescribedByKebab;
   const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const editable = !!onInputChange;
+  const visibleOptions = editable && query
+    ? options.filter(option => normalizeDisplayText(option.label).toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+    : options;
+  const open = isOpen && !disabled && visibleOptions.length > 0;
   const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | HTMLInputElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
   const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
   const selected = options.find((opt) => opt.value === value) || options[0];
   const generatedId = useId();
   const listboxId = `${id ?? generatedId}-listbox`;
-  const selectedIndex = options.findIndex((opt) => opt.value === value);
+  const selectedIndex = visibleOptions.findIndex((opt) => opt.value === value);
   const [highlightedIndex, setHighlightedIndex] = useState(selectedIndex);
   const typeaheadRef = useRef<{ query: string; timer: ReturnType<typeof setTimeout> | null }>({ query: "", timer: null });
+  const controlDisabled = () => disabled || !!triggerRef.current?.matches(':disabled');
+
+  useEffect(() => {
+    const buffer = typeaheadRef.current;
+    return () => { if (buffer.timer) clearTimeout(buffer.timer); };
+  }, []);
+
+  useEffect(() => { if (disabled) setIsOpen(false); }, [disabled]);
 
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
@@ -88,7 +109,7 @@ export function CustomSelect<T extends string | number = string>({
       // Labels retain their accessible name and focus behavior without forwarding
       // a second activation to the dropdown button.
       event.preventDefault();
-      if (!trigger.disabled) trigger.focus();
+      if (!trigger.matches(':disabled')) trigger.focus();
     };
     labels.forEach((label) => label.addEventListener("click", focusFromLabel));
     return () => labels.forEach((label) => label.removeEventListener("click", focusFromLabel));
@@ -124,7 +145,7 @@ export function CustomSelect<T extends string | number = string>({
       if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return;
       setIsOpen(false);
     }
-    if (isOpen) {
+    if (open) {
       document.addEventListener("pointerdown", handleClickOutside);
       window.addEventListener("aiolm:navigate", closeMenu);
     }
@@ -133,17 +154,17 @@ export function CustomSelect<T extends string | number = string>({
       document.removeEventListener("pointerdown", handleClickOutside);
       window.removeEventListener("aiolm:navigate", closeMenu);
     };
-  }, [isOpen]);
+  }, [open]);
 
   useLayoutEffect(() => {
-    if (!isOpen) {
+    if (!open) {
       setMenuPosition(null);
       return;
     }
 
     // Keyboard navigation only moves the highlight while open; re-seed it from the
     // committed value each time the listbox opens so a previous preview never leaks in.
-    setHighlightedIndex(options.findIndex((opt) => opt.value === value));
+    setHighlightedIndex(visibleOptions.findIndex((opt) => opt.value === value));
     updateMenuPosition();
     const handleViewportChange = () => updateMenuPosition();
     window.addEventListener("resize", handleViewportChange);
@@ -153,20 +174,25 @@ export function CustomSelect<T extends string | number = string>({
       window.removeEventListener("scroll", handleViewportChange, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, updateMenuPosition]);
+  }, [open, updateMenuPosition]);
+
+  useLayoutEffect(() => {
+    if (open && highlightedIndex >= 0) menuRef.current?.children[highlightedIndex]?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, highlightedIndex]);
 
   /** Finds the next enabled option at or after `from` (wrapping), matching `predicate`. */
   const findEnabledOption = (from: number, step: number, predicate: (opt: CustomSelectOption<T>) => boolean) => {
-    for (let offset = 0; offset < options.length; offset += 1) {
-      const index = ((from + step * offset) % options.length + options.length) % options.length;
-      if (!options[index].disabled && predicate(options[index])) return index;
+    for (let offset = 0; offset < visibleOptions.length; offset += 1) {
+      const index = ((from + step * offset) % visibleOptions.length + visibleOptions.length) % visibleOptions.length;
+      if (!visibleOptions[index].disabled && predicate(visibleOptions[index])) return index;
     }
     return -1;
   };
 
   const commitHighlighted = () => {
-    const option = options[highlightedIndex];
-    if (option && !option.disabled) onChange(option.value);
+    const option = visibleOptions[highlightedIndex];
+    if (option && !option.disabled && !controlDisabled()) onChange(option.value);
+    setQuery('');
     setIsOpen(false);
   };
 
@@ -176,30 +202,31 @@ export function CustomSelect<T extends string | number = string>({
     buffer.query = `${buffer.query}${char.toLowerCase()}`;
     buffer.timer = setTimeout(() => { buffer.query = ""; }, 700);
     const matches = (opt: CustomSelectOption<T>) => opt.label.toLocaleLowerCase().startsWith(buffer.query);
-    const searchFrom = isOpen ? highlightedIndex + 1 : selectedIndex + 1;
+    const searchFrom = open ? highlightedIndex + 1 : selectedIndex + 1;
     let match = findEnabledOption(searchFrom, 1, matches);
     // A repeated single letter (e.g. "d", "d") should still find something even if
     // it only matches the option already active, so retry from the start once.
     if (match === -1 && buffer.query.length > 1) match = findEnabledOption(0, 1, matches);
     if (match === -1) return;
-    if (isOpen) setHighlightedIndex(match);
-    else onChange(options[match].value);
+    if (open) setHighlightedIndex(match);
+    else onChange(visibleOptions[match].value);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (disabled) return;
+    if (controlDisabled() || e.nativeEvent.isComposing) return;
     if (e.key === "Escape") {
-      if (isOpen) { e.preventDefault(); e.stopPropagation(); }
+      if (open) { e.preventDefault(); e.stopPropagation(); }
       setIsOpen(false);
       return;
     }
-    if (!isOpen) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || (!editable && (e.key === "Enter" || e.key === " "))) {
         e.preventDefault();
+        setQuery('');
         setIsOpen(true);
         return;
       }
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!editable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         handleTypeahead(e.key);
       }
@@ -213,71 +240,84 @@ export function CustomSelect<T extends string | number = string>({
       e.preventDefault();
       const prev = findEnabledOption(highlightedIndex - 1, -1, () => true);
       if (prev !== -1) setHighlightedIndex(prev);
-    } else if (e.key === "Home") {
+    } else if (!editable && e.key === "Home") {
       e.preventDefault();
       const first = findEnabledOption(0, 1, () => true);
       if (first !== -1) setHighlightedIndex(first);
-    } else if (e.key === "End") {
+    } else if (!editable && e.key === "End") {
       e.preventDefault();
-      const last = findEnabledOption(options.length - 1, -1, () => true);
+      const last = findEnabledOption(visibleOptions.length - 1, -1, () => true);
       if (last !== -1) setHighlightedIndex(last);
-    } else if (e.key === "Enter" || e.key === " ") {
+    } else if (e.key === "Enter" || (!editable && e.key === " ")) {
       e.preventDefault();
       commitHighlighted();
     } else if (e.key === "Tab") {
       setIsOpen(false);
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    } else if (!editable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       handleTypeahead(e.key);
     }
   };
 
   const isSm = size === "sm";
+  const accessibility = {
+    id, role: 'combobox' as const, 'aria-haspopup': 'listbox' as const, 'aria-expanded': open,
+    'aria-controls': listboxId,
+    'aria-activedescendant': open && visibleOptions[highlightedIndex] ? `${listboxId}-option-${highlightedIndex}` : undefined,
+    'aria-label': effectiveAriaLabel, 'aria-labelledby': effectiveAriaLabelledBy, 'aria-describedby': effectiveAriaDescribedBy,
+    disabled,
+  };
+  const triggerClasses = `app-custom-select-trigger app-custom-select-trigger--${size} ${triggerClassName}`;
+  const toggle = () => {
+    if (controlDisabled()) return;
+    setQuery('');
+    setIsOpen(previous => !previous);
+    triggerRef.current?.focus();
+  };
+  const chevron = <svg className={`app-custom-select-chevron shrink-0 text-muted transition-transform duration-150 ${isSm ? 'h-3 w-3' : 'h-3.5 w-3.5'} ${open ? 'rotate-180 text-ink' : ''}`}
+    fill="none" viewBox="0 0 20 20" stroke="currentColor" aria-hidden="true" focusable="false">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m6 8 4 4 4-4" />
+  </svg>;
 
   return (
     <div
       ref={containerRef}
       className={`app-custom-select-container relative inline-block text-left ${className}`}
       onKeyDown={handleKeyDown}
+      onBlur={event => {
+        if (!containerRef.current?.contains(event.relatedTarget) && !menuRef.current?.contains(event.relatedTarget)) setIsOpen(false);
+      }}
     >
       {name && <input type="hidden" name={name} value={value} disabled={disabled} />}
-      <button
-        ref={triggerRef}
-        id={id}
+      {editable ? <div className="app-custom-select-editable">
+        <input {...accessibility} ref={element => { triggerRef.current = element; }}
+          className={`${triggerClasses} app-custom-select-input`} aria-autocomplete="list" autoComplete="off"
+          value={normalizeDisplayText(String(value))} placeholder={placeholder} spellCheck={spellCheck}
+          onClick={() => { if (!controlDisabled()) { setQuery(''); setIsOpen(true); } }}
+          onChange={event => {
+            const next = event.target.value;
+            onInputChange?.(next);
+            setQuery(next);
+            setHighlightedIndex(-1);
+            setIsOpen(true);
+          }} />
+        <button type="button" className="app-custom-select-toggle" disabled={disabled} tabIndex={-1} aria-hidden="true"
+          onMouseDown={event => event.preventDefault()} onClick={toggle}>{chevron}</button>
+      </div> : <button
+        {...accessibility}
+        ref={element => { triggerRef.current = element; }}
         type="button"
-        role="combobox"
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
-        aria-controls={listboxId}
-        aria-activedescendant={isOpen && highlightedIndex >= 0 ? `${listboxId}-option-${highlightedIndex}` : undefined}
-        aria-label={effectiveAriaLabel}
-        aria-labelledby={effectiveAriaLabelledBy}
-        aria-describedby={effectiveAriaDescribedBy}
-        disabled={disabled}
-        onClick={() => !disabled && setIsOpen((prev) => !prev)}
-        className={`app-custom-select-trigger ${
-          isSm ? "app-custom-select-trigger--sm" : "app-custom-select-trigger--md"
-        } ${triggerClassName}`}
+        onClick={toggle}
+        className={triggerClasses}
       >
         <span className="app-text-wrap flex items-center gap-1.5 min-w-0">
           {selected?.icon}
           <span className="app-text-wrap">{normalizeDisplayText(selected?.label ?? String(value))}</span>
         </span>
-        <svg
-          className={`shrink-0 text-muted transition-transform duration-150 ${isSm ? "h-3 w-3" : "h-3.5 w-3.5"} ${
-            isOpen ? "rotate-180 text-ink" : ""
-          }`}
-          fill="none"
-          viewBox="0 0 20 20"
-          stroke="currentColor"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m6 8 4 4 4-4" />
-        </svg>
-      </button>
+        {chevron}
+      </button>}
 
-      {isOpen && menuPosition && createPortal(
+      {open && menuPosition && createPortal(
         <ul
           ref={menuRef}
           id={listboxId}
@@ -287,7 +327,7 @@ export function CustomSelect<T extends string | number = string>({
           className={[`app-custom-dropdown-menu ${menuClassName}`, (menuPosition.opensAbove ? "ui-transform-translateY-100" : "")].filter(Boolean).join(" ")}
           style={{ top: menuPosition.top, left: menuPosition.left, width: menuPosition.width, maxHeight: menuPosition.maxHeight }}
         >
-          {options.map((opt, index) => {
+          {visibleOptions.map((opt, index) => {
             const isSelected = opt.value === value;
             const isHighlighted = index === highlightedIndex;
             return (
@@ -297,11 +337,14 @@ export function CustomSelect<T extends string | number = string>({
                 role="option"
                 aria-selected={isSelected}
                 aria-disabled={opt.disabled}
+                onMouseDown={event => event.preventDefault()}
                 onMouseEnter={() => setHighlightedIndex(index)}
                 onClick={() => {
-                  if (opt.disabled) return;
+                  if (opt.disabled || controlDisabled()) return;
                   onChange(opt.value);
+                  setQuery('');
                   setIsOpen(false);
+                  triggerRef.current?.focus();
                 }}
                 className={`app-custom-dropdown-item ${isSelected || isHighlighted ? "is-selected" : ""} ${opt.disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
               >

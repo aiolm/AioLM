@@ -262,7 +262,7 @@ describe('settings profile workspace', () => {
     expect(card.getByText('온도').nextElementSibling).toHaveTextContent('0.2');
     expect(card.getByText('온도').nextElementSibling).not.toHaveTextContent('사용 중');
     expect(card.getByText('컨텍스트 크기').nextElementSibling?.querySelector('.default-value-number')).toHaveTextContent('4096');
-    expect(card.getByText('컨텍스트 크기').nextElementSibling?.querySelector('.default-value-badge')).toHaveTextContent(/^기본$/);
+    expect(card.getByText('컨텍스트 크기').nextElementSibling?.querySelector('.default-value .app-badge')).toHaveTextContent(/^기본$/);
     expect(card.getByText('컨텍스트 크기').closest('.settings-profile-value')).not.toHaveClass('settings-profile-value--custom');
     expect(card.getByText('온도').closest('.settings-profile-value')).toHaveClass('settings-profile-value--custom');
     expect(card.getByText('물리 배치 크기').closest('.settings-profile-value')).not.toHaveClass('settings-profile-value--custom');

@@ -312,6 +312,14 @@ describe("session model settings", () => {
     await act(async () => { finish(cfg); });
     expect(screen.getByLabelText("Session name")).toHaveValue("Newer edit");
   });
+  it("saves the stop-existing load option from its switch", async () => {
+    const store = renderPanel();
+    const option = screen.getByRole("switch", { name: "Stop existing sessions when loading" });
+    expect(option).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(option);
+    expect(option).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith({ stop_existing_sessions_on_load: true }));
+  });
   it("loads a saved session regardless of its legacy enabled value", async () => {
     const store = renderPanel({ ...cfg, sessions: [{ ...definition, enabled: false }] }); await selectWork();
     expect(sessionRow().getByRole("button", { name: "Load session" })).toBeEnabled();

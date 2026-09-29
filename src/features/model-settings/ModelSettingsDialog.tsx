@@ -11,6 +11,9 @@ import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import { CustomSelect, OverlayContainerContext } from '../../shared/ui/CustomSelect';
 import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import Badge from '../../shared/ui/Badge';
+import Switch from '../../shared/ui/Switch';
+import TabNav from '../../shared/ui/TabNav';
 import { previewExecution } from '../models/modelExecutionState';
 import { useServerOptions } from '../tuning/useServerOptions';
 import DraftTuningEditor from './DraftTuningEditor';
@@ -280,7 +283,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     <input className="app-input" aria-label={`${label} — ${copy.path}`} aria-describedby={`${id}-${key}-help`} value={normalizeDisplayPath(cfg[key])} disabled={disabled} onChange={event => change({ [key]: restoreDisplayPath(cfg[key], event.target.value) })} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
   </label>;
-  return <dialog ref={dialog} className="model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
+  return <dialog ref={dialog} className="app-dialog model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
     onKeyDown={event => {
       if (event.key !== 'Tab') return;
       const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])'))
@@ -294,10 +297,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell">
         <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p><ModelBadges model={cfg.active_model} metadata={selectedMetadata} /></div>
-          <button type="button" className="app-button app-button--ghost" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}>×</button></header>
+          <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}>×</button></header>
         <div className="model-settings-layout" inert={!!pending || confirmSave || disabled}>
-          <nav className="model-settings-nav" aria-label={copy.title}>{sections.map(value => <button type="button" key={value} className={section === value ? 'is-active' : ''} aria-current={section === value ? 'page' : undefined} onClick={() => showSection(value)}>{copy[value]}</button>)}</nav>
-          <div className="model-settings-body" ref={body}>
+          <TabNav items={sections.map(value => ({ id: value, label: copy[value] }))} active={section as (typeof sections)[number]} onSelect={showSection} label={copy.title}
+            tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />
+          <div className="model-settings-body" ref={body} id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${section}`}>
             <SettingsProfileControl items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
               defaultProfileId={defaultSettingsProfileEntry(profiles.library).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
               modelPath={cfg.active_model} currentSettings={settings} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={section === 'profiles'}
@@ -307,12 +311,12 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
               saveAction={<><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
             {running && !liveMatches && <p className="model-settings-profile-status">{serverChanged ? profileCopy.next : profileCopy.request}</p>}
-            {benchmark && <p className="model-settings-scope">{copy.benchmarkControlled}</p>}
+            {benchmark && <FeedbackBanner tone="info" className="model-settings-scope">{copy.benchmarkControlled}</FeedbackBanner>}
             <div hidden={section !== 'model'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.model}</h3><button type="button" className="app-button app-button--ghost app-button--sm" onClick={catalog.refresh}>{copy.refresh}</button></div>
               <p id={`${id}-model-help`} className="app-section-hint">{help.model}</p>
               <input type="search" className="app-input" value={query} onChange={event => setQuery(event.target.value)} placeholder={copy.search} aria-label={copy.search} />
-              {catalog.error && <p className="text-error" role="alert">{normalizeDisplayText(catalog.error)}</p>}
+              {catalog.error && <FeedbackBanner tone="error">{normalizeDisplayText(catalog.error)}</FeedbackBanner>}
               {catalog.loading && <p role="status">{t('extra.loading')}</p>}
               {catalog.truncated && <p role="status">{copy.truncated}</p>}
               <ul className="model-settings-models" onKeyDown={event => {
@@ -321,8 +325,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
                 const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
                 event.preventDefault(); buttons[next]?.focus();
-              }}>{models.map(model => <li key={model.path}><button type="button" className={cfg.active_model === model.path ? 'is-selected' : ''} disabled={!!model.shards?.missing.length}
-                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} /><small>{formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <span>{copy.selected}</span>}</button></li>)}</ul>
+              }}>{models.map(model => <li key={model.path}><button type="button" className={`app-list-row${cfg.active_model === model.path ? ' is-selected' : ''}`} disabled={!!model.shards?.missing.length}
+                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} /><small>{formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
               <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
@@ -331,16 +335,16 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}</div>
               <label>{copy.runtime}<CustomSelect ariaLabel={copy.runtime} ariaDescribedBy={`${id}-runtime-help`} value={`${cfg.active_backend}/${cfg.active_build}`} options={[{ value: '/', label: copy.selectRuntime, disabled: true }, ...resources.runtimes.map(item => ({ value: `${item.backend}/${item.build}`, label: `${item.backend} · ${formatRuntimeVersion(item.build, item.version)}` })), ...(runtimeMissing ? [{ value: `${cfg.active_backend}/${cfg.active_build}`, label: `${cfg.active_backend} · ${formatRuntimeVersion(cfg.active_build)}` }] : [])]}
                 onChange={value => { const item = resources.runtimes.find(item => item.backend + '/' + item.build === value); change({ active_backend: item?.backend ?? '', active_build: item?.build ?? '' }); }} /><span id={`${id}-runtime-help`} className="app-section-hint">{help.runtime}</span></label>
-              {runtimeMissing && <p className="text-warning" role="status">{copy.missingRuntime}</p>}
-              {(resourceError || runtime.error) && <div><p className="text-warning" role="status">{normalizeDisplayText(resourceError || runtime.error || '')}</p><button type="button" className="app-button app-button--secondary" onClick={() => { setResourceRevision(value => value + 1); runtime.refresh(); }}>{copy.refresh}</button></div>}
+              {runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
+              {(resourceError || runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
               <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} onInvalid={setFieldInvalid} />
             </div>
             <div hidden={!['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
-              {!benchmark && section === 'sampling' && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} aria-describedby={`${id}-prompt-hint`} className="app-textarea" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small id={`${id}-prompt-hint`}>{profileCopy.promptHint}</small></div>}
+              {!benchmark && section === 'sampling' && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} aria-describedby={`${id}-prompt-hint`} className="app-textarea" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small id={`${id}-prompt-hint`} className="app-section-hint">{profileCopy.promptHint}</small></div>}
               <div hidden={section !== 'adapters'} className="model-settings-fields">
                 {sidecar('mmproj', copy.projector, true)}{sidecar('spec_draft_model', copy.draftModel, false)}
                 <h3>LoRA</h3><p id={`${id}-lora-help`} className="app-section-hint">{help.loraPath}</p>
-                {cfg.lora_adapters.map((adapter, index) => <div key={adapter.path} className="model-settings-lora"><strong title={normalizeDisplayPath(adapter.path)}><ModelIcon model={adapter.path} />{modelDisplayName(adapter.path)}<ModelBadges model={adapter.path} localPath={adapter.path} /></strong><label>{copy.enabled}<input type="checkbox" aria-describedby={`${id}-lora-enabled-help`} checked={adapter.enabled} onChange={event => change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, enabled: event.target.checked } : item) })} /></label>
+                {cfg.lora_adapters.map((adapter, index) => <div key={adapter.path} className="model-settings-lora app-card app-card--tight"><strong title={normalizeDisplayPath(adapter.path)}><ModelIcon model={adapter.path} />{modelDisplayName(adapter.path)}<ModelBadges model={adapter.path} localPath={adapter.path} /></strong><span className="model-settings-lora-toggle"><label htmlFor={`${id}-lora-${index}-enabled`}>{copy.enabled}</label><Switch id={`${id}-lora-${index}-enabled`} aria-describedby={`${id}-lora-enabled-help`} checked={adapter.enabled} onChange={enabled => change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, enabled } : item) })} /></span>
                   <label>{copy.scale}<input className="app-input" aria-describedby={`${id}-lora-scale-help`} type="number" min="0" max="4" step="0.05" value={adapter.scale} onChange={event => { const scale = Number(event.target.value); if (Number.isFinite(scale) && scale >= 0 && scale <= 4) change({ lora_adapters: cfg.lora_adapters.map((item, i) => i === index ? { ...item, scale } : item) }); }} /></label>
                   <button type="button" className="app-button app-button--ghost" onClick={() => change({ lora_adapters: cfg.lora_adapters.filter((_, i) => i !== index) })}>{copy.remove}</button></div>)}
                 {cfg.lora_adapters.length > 0 && <div className="app-section-hint"><p id={`${id}-lora-enabled-help`}>{help.loraEnabled}</p><p id={`${id}-lora-scale-help`}>{help.loraScale}</p></div>}

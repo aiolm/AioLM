@@ -257,7 +257,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const navigation = <nav aria-label={t("app.primary")} className="aiolm-navigation">
     {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group">
       <h2>{copy[group.id]}</h2>
-      {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="aiolm-nav-link" onClick={() => navigate(item.id)}>
+      {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="app-nav-item aiolm-nav-link" onClick={() => navigate(item.id)}>
         <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{labelFor(item.id)}</span>
       </button>)}
     </section>)}

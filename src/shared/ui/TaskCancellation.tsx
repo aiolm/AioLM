@@ -29,7 +29,7 @@ export function useLocalTaskCancellationIds(): ReadonlySet<string> {
 }
 
 /** Keeps global cancellation available until the active panel mounts its control. */
-export function LocalTaskCancelButton({ taskId, pending = false, disabled, onClick, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { taskId: string; pending?: boolean }) {
+export function LocalTaskCancelButton({ taskId, pending = false, disabled, onClick, children, className = "app-button app-button--secondary app-button--sm", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { taskId: string; pending?: boolean }) {
   const { t } = useI18n();
   const tasks = useTasks();
   const cancelling = tasks.some(task => task.id === taskId && task.state === "cancelling");
@@ -41,7 +41,7 @@ export function LocalTaskCancelButton({ taskId, pending = false, disabled, onCli
     register(controlId, taskId);
     return () => register(controlId, null);
   }, [active, cancelling, controlId, disabled, pending, register, taskId]);
-  return <button type="button" disabled={disabled || cancelling} {...props} onClick={event => {
+  return <button type="button" disabled={disabled || cancelling} {...props} className={className} onClick={event => {
     if (getTaskSnapshot().some(task => task.id === taskId && task.state === "cancelling")) return;
     onClick?.(event);
   }}>{cancelling && !pending ? t("ui.taskCancelling") : children}</button>;

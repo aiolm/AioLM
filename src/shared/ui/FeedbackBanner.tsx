@@ -53,18 +53,20 @@ export default function FeedbackBanner({
   onDismiss,
   action,
   className,
+  "aria-label": ariaLabel,
 }: {
   tone: FeedbackTone;
   title?: string;
   children: ReactNode;
   onDismiss?: () => void;
-  action?: { label: string; onClick: () => void };
+  action?: { label: string; onClick: () => void; disabled?: boolean };
   className?: string;
+  "aria-label"?: string;
 }) {
   const { t } = useI18n();
   const displayChildren = Children.map(children, (child) => typeof child === "string" ? normalizeDisplayText(child) : child);
   return (
-    <div className={`app-feedback ${toneClass[tone]}${className ? ` ${className}` : ""}`} role={tone === "error" ? "alert" : "status"} aria-live={tone === "error" ? "assertive" : "polite"} aria-atomic="true">
+    <div className={`app-feedback ${toneClass[tone]}${className ? ` ${className}` : ""}`} role={tone === "error" ? "alert" : "status"} aria-label={ariaLabel} aria-live={tone === "error" ? "assertive" : "polite"} aria-atomic="true">
       <span className="app-feedback-icon" aria-hidden="true">
         <FeedbackToneIcon tone={tone} />
       </span>
@@ -72,8 +74,8 @@ export default function FeedbackBanner({
         {title && <div className="app-feedback-title">{normalizeDisplayText(title)}</div>}
         <div className="app-feedback-message">{displayChildren}</div>
       </div>
-      {action && <button type="button" className="app-feedback-action" onClick={action.onClick}>{action.label}</button>}
-      {onDismiss && <button type="button" className="app-feedback-dismiss" aria-label={t("common.dismiss")} onClick={onDismiss}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="M3 3 9 9M9 3 3 9" /></svg></button>}
+      {action && <button type="button" className="app-button app-button--ghost app-button--sm app-feedback-action" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
+      {onDismiss && <button type="button" className="app-icon-button app-icon-button--sm app-feedback-dismiss" aria-label={t("common.dismiss")} onClick={onDismiss}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="M3 3 9 9M9 3 3 9" /></svg></button>}
     </div>
   );
 }

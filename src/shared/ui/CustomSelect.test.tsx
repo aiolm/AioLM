@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import axe from "axe-core";
-import { CustomSelect } from "./CustomSelect";
+import { useState } from 'react';
+import { CustomSelect, OverlayContainerContext } from "./CustomSelect";
 
 const OPTIONS = [
   { value: "light", label: "Light" },
@@ -17,6 +18,89 @@ function renderSelect(onChange = vi.fn()) {
 }
 
 describe("CustomSelect", () => {
+  it('keeps editable values outside the suggestions and uses the common listbox for choices', () => {
+    const onChange = vi.fn();
+    function Editable() {
+      const [value, setValue] = useState('custom value');
+      return <CustomSelect ariaLabel="Runtime value" value={value} options={OPTIONS}
+        onInputChange={setValue} onChange={next => { setValue(next); onChange(next); }} />;
+    }
+    render(<Editable />);
+    const input = screen.getByRole('combobox', { name: 'Runtime value' });
+    expect(input).toHaveValue('custom value');
+    fireEvent.change(input, { target: { value: 'da' } });
+    expect(input).toHaveValue('da');
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input).toHaveValue('dark');
+    expect(onChange).toHaveBeenCalledWith('dark');
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.change(input, { target: { value: 'a value beyond the list' } });
+    expect(input).toHaveValue('a value beyond the list');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('leaves spaces, Home, End and composition keys available to editable inputs', () => {
+    const onChange = vi.fn();
+    render(<CustomSelect value="light" options={OPTIONS} onChange={onChange} onInputChange={vi.fn()} ariaLabel="Runtime value" />);
+    const input = screen.getByRole('combobox');
+    fireEvent.click(input);
+    for (const key of [' ', 'Home', 'End']) expect(fireEvent.keyDown(input, { key })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: 'Enter', isComposing: true })).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input).toHaveValue('light');
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('displays a normalized suggested path but commits its original value', () => {
+    const raw = String.raw`\\?\C:\synthetic\models\draft.gguf`;
+    const onChange = vi.fn();
+    render(<CustomSelect value="" options={[{ value: raw, label: raw }]} onChange={onChange} onInputChange={vi.fn()} ariaLabel="Draft path" />);
+    fireEvent.click(screen.getByRole('combobox'));
+    const option = screen.getByRole('option');
+    expect(option).toHaveTextContent(String.raw`C:\synthetic\models\draft.gguf`);
+    fireEvent.click(option);
+    expect(onChange).toHaveBeenCalledWith(raw);
+    expect(screen.getByRole('combobox')).toHaveFocus();
+  });
+
+  it('keeps the shared menu inside its modal and closes it when disabled', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const view = (disabled: boolean) => <OverlayContainerContext.Provider value={host}>
+      <CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} onInputChange={vi.fn()} disabled={disabled} ariaLabel="Runtime value" />
+    </OverlayContainerContext.Provider>;
+    const { rerender, unmount } = render(view(false));
+    fireEvent.click(screen.getByRole('combobox'));
+    expect(host).toContainElement(screen.getByRole('listbox'));
+    rerender(view(true));
+    expect(screen.getByRole('combobox')).toBeDisabled();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    unmount(); host.remove();
+  });
+
+  it('closes on Tab and cannot choose portalled options after an enclosing fieldset is disabled', () => {
+    const onChange = vi.fn();
+    const view = (disabled: boolean) => <fieldset disabled={disabled}><CustomSelect value="light" options={OPTIONS} onChange={onChange} ariaLabel="Theme" /></fieldset>;
+    const { rerender } = render(view(false));
+    const trigger = screen.getByRole('combobox');
+    fireEvent.click(trigger);
+    fireEvent.keyDown(trigger, { key: 'Tab' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
+    rerender(view(true));
+    fireEvent.click(screen.getByRole('option', { name: 'Dark' }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('has no axe-core violations for an editable dropdown', async () => {
+    const { container } = render(<CustomSelect value="light" options={OPTIONS} onChange={vi.fn()} onInputChange={vi.fn()} ariaLabel="Runtime value" />);
+    fireEvent.click(screen.getByRole('combobox'));
+    expect((await axe.run(container)).violations).toEqual([]);
+  });
+
   it.each(["explicit", "wrapping"])("focuses without opening when the %s label is clicked", (labelType) => {
     const select = <CustomSelect id="theme" value="light" options={OPTIONS} onChange={vi.fn()} />;
     render(labelType === "explicit"

@@ -34,7 +34,7 @@ export default function TuningSamplingSection({
   draftMode = false,
 }: Props) {
   return (
-    <section className="tuning-section tuning-section--sampling">
+    <section className="tuning-section tuning-section--sampling app-card">
       <p className="app-section-hint mb-4">{t("ui.samplingHint")}</p>
       <div className="tuning-field-list"><NumericFieldGrid fields={SAMPLING_FIELDS} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} /></div>
 
@@ -43,8 +43,8 @@ export default function TuningSamplingSection({
           <div className="mt-4"><TuningDefaultField fieldKey="samplers" label={t("ui.samplerChain")} request>
             {(resetAction) => <TuningSamplerChain samplers={samplerChain} disabled={disabled} onChange={onSamplerChainChange} headerAction={resetAction} />}
           </TuningDefaultField></div>
-          <details className="mt-5 rounded-lg border border-line-strong/80 bg-surface/40 p-3">
-            <summary className="cursor-pointer text-sm font-medium text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line">{t("extra.moreSampling")}</summary>
+          <details className="mt-5 app-card app-card--tight app-card--muted">
+            <summary className="cursor-pointer text-sm font-medium text-ink">{t("extra.moreSampling")}</summary>
             <p className="app-section-hint mb-4 mt-2">{t("ui.advancedSamplingHint")}</p>
             <div className="grid gap-4 app-form-grid tuning-sampling-grid">
               {ADVANCED_SAMPLING_FIELDS.map((field) => (

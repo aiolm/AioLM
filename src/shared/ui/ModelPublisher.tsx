@@ -1,5 +1,6 @@
 import type { ModelMetadata } from '../api/types';
 import { useI18n } from '../i18n/i18n';
+import Badge from './Badge';
 
 function repositoryOwner(repository?: string): string | undefined {
   if (!repository) return undefined;
@@ -37,11 +38,11 @@ export default function ModelPublisher({ metadata, repository }: { metadata?: Mo
   const { t } = useI18n();
   const people = modelPublishers(metadata, repository);
   if (!people.length) return null;
-  return <span className="model-publishers">{people.map(({ role, name }) => <span key={role}
+  return <span className="model-publishers">{people.map(({ role, name }) => <Badge key={role}
     className={`model-publisher${role === 'publisher' ? ' model-publisher--primary' : ''}`}
     title={t(role === 'publisher' && repository ? 'ui.modelBadgeHub'
       : role === 'publisher' && metadata?.download_repository ? 'ui.modelPublisherDownload'
       : role === 'publisher' && metadata?.directory_repository ? 'ui.modelPublisherDirectory' : 'ui.modelBadgeMetadata')}>
     <span className="model-publisher-label">{t(labels[role])}</span><strong>{name}</strong>
-  </span>)}</span>;
+  </Badge>)}</span>;
 }

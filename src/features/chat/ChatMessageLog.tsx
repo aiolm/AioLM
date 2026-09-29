@@ -6,6 +6,8 @@ import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import MessageBubble from "./MessageBubble";
+import EmptyState from "../../shared/ui/EmptyState";
+import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import type { ResponseMetrics } from "../../shared/lib/metrics";
 
 interface ChatMessageLogProps {
@@ -52,31 +54,32 @@ export default function ChatMessageLog({
       className="chat-message-log"
     >
       {disabled && msgs.length === 0 && (
-        <div className="app-chat-blocked mx-auto mt-10 max-w-xl">
-          <div className="app-empty-icon" aria-hidden="true">
-            {isFailed ? (
+        <div className="mt-10">
+          <EmptyState
+            icon={isFailed ? (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 7v5M10 13.5h.01" strokeLinecap="round" /></svg>
             ) : (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M10 3.5 11.8 8.2H16.5L12.6 10.9 13.9 15.5 10 12.8 6.1 15.5 7.4 10.9 3.5 8.2H8.2L10 3.5Z" /></svg>
             )}
-          </div>
-          <h3>{isFailed ? ct("requestFailed") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}</h3>
-          <p>{isFailed ? ct("blockedFailedDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}</p>
+            title={isFailed ? ct("requestFailed") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
+            description={isFailed ? ct("blockedFailedDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
+          >
           <div className="app-empty-actions">
             {onOpenModels && <button type="button" className="app-button app-button--secondary" onClick={onOpenModels} disabled={starting}>{modelSettingsLabel ?? ct("openModels")}</button>}
             {model && !serverOn && !isFailed && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={starting || status.state === "starting" ? ct("startingServer") : ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
             {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
           </div>
+          </EmptyState>
         </div>
       )}
 
       {!disabled && msgs.length === 0 && (
-        <div className="mx-auto mt-12 max-w-md px-4 text-center">
-          <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-xl border ui-border-color-border ui-background-surface-muted ui-color-faint"  aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 5.5a1.6 1.6 0 0 1 1.6-1.6h7.8a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6H8.3L5.8 14V12.5A1.6 1.6 0 0 1 4.5 11V5.5Z" /><path d="M7 7.2h6M7 9.7h3.5" strokeWidth="1.2" /></svg>
-          </div>
-          <h3 className="text-sm font-semibold ui-color-ink" >{ct("newConversationTitle")}</h3>
-          <p className="mt-1.5 text-xs leading-relaxed ui-color-muted" >{ct("newConversationDescription")}</p>
+        <div className="mt-12">
+          <EmptyState
+            icon={<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 5.5a1.6 1.6 0 0 1 1.6-1.6h7.8a1.6 1.6 0 0 1 1.6 1.6v5.4a1.6 1.6 0 0 1-1.6 1.6H8.3L5.8 14V12.5A1.6 1.6 0 0 1 4.5 11V5.5Z" /><path d="M7 7.2h6M7 9.7h3.5" strokeWidth="1.2" /></svg>}
+            title={ct("newConversationTitle")}
+            description={ct("newConversationDescription")}
+          />
         </div>
       )}
 
@@ -94,11 +97,10 @@ export default function ChatMessageLog({
         />
       ))}
 
-      {error && <div className="rounded-lg border p-3 text-xs leading-relaxed ui-border-color-error-border ui-background-error-bg ui-color-error-ink"  role="alert">
-        <div className="mb-1 text-xs font-semibold">{ct("requestFailed")}</div>
-        <div className="whitespace-pre-wrap break-words opacity-90">{normalizeDisplayText(error)}</div>
-        {canRetry && <button type="button" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger mt-2.5 app-button--sm">{ct("retry")}</button>}
-      </div>}
+      {error && <FeedbackBanner tone="error" title={ct("requestFailed")}>
+        <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
+        {canRetry && <button type="button" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
+      </FeedbackBanner>}
     </div>
   );
 }

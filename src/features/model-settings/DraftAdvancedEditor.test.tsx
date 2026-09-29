@@ -70,12 +70,12 @@ describe('advanced settings explanations', () => {
     expect(description).toBeVisible();
     expect(card.querySelector('details')).not.toHaveAttribute('open');
     fireEvent.click(card.querySelector('summary')!);
-    const checkbox = screen.getByRole('checkbox', { name: '--mlock Enabled' });
+    const toggle = screen.getByRole('switch', { name: '--mlock Enabled' });
     // Concrete documented defaults replace bare labels; the toggle help stays.
-    expect(checkbox).toHaveAccessibleDescription(expect.stringContaining(`Keep model weights in RAM. ${advancedSettingsHelp.en.toggle}`));
-    expect(checkbox).toHaveAccessibleDescription(expect.stringContaining('using runtime default'));
+    expect(toggle).toHaveAccessibleDescription(expect.stringContaining(`Keep model weights in RAM. ${advancedSettingsHelp.en.toggle}`));
+    expect(toggle).toHaveAccessibleDescription(expect.stringContaining('using runtime default'));
     expect(card.textContent).toMatch(/using runtime default/);
-    fireEvent.click(checkbox);
+    fireEvent.click(toggle);
   });
 
   it('uses localized descriptions in option search without duplicating runtime English prose', () => {
@@ -129,12 +129,38 @@ describe('advanced settings explanations', () => {
     // Empty means the documented default, so the placeholder names it instead of a bare label.
     expect(input.getAttribute('placeholder')).toMatch(/^MODE · /);
     expect(input.getAttribute('placeholder')).toContain('auto');
-    expect(Array.from(card.querySelectorAll('datalist option'), item => item.getAttribute('value')))
+    expect(card.querySelector('select, datalist')).not.toBeInTheDocument();
+    fireEvent.click(input);
+    expect(screen.getAllByRole('option').map(item => item.textContent))
       .toEqual(['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio']);
     expect(input).toHaveAccessibleDescription(expect.stringContaining(advancedSettingsHelp.ko.single));
-    fireEvent.change(input, { target: { value: 'none' } });
+    fireEvent.click(screen.getByRole('option', { name: 'none' }));
     expect(onChange).toHaveBeenLastCalledWith({ server_args: ['--load-mode', 'none'] });
+    expect(input).toHaveValue('none');
     expect(card.querySelector('.model-settings-option-default')).not.toHaveTextContent('사용 중');
+  });
+
+  it('accepts typed values beyond the suggested modes and clears back to the default', () => {
+    const { onChange, onInvalid } = mount();
+    const card = screen.getByText('--load-mode').closest('.model-settings-option')!;
+    fireEvent.click(card.querySelector('summary')!);
+    const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
+    fireEvent.change(input, { target: { value: 'future-mode' } });
+    expect(input).toHaveValue('future-mode');
+    expect(onChange).toHaveBeenLastCalledWith({ server_args: ['--load-mode', 'future-mode'] });
+    expect(onInvalid).toHaveBeenLastCalledWith('--load-mode', false);
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith({ server_args: [] });
+  });
+
+  it('disables suggestion comboboxes with the rest of the editor', () => {
+    render(<I18nProvider initialLocale="en"><DraftAdvancedEditor cfg={{ ...testConfig, server_args: [], chat_options: {} }} options={options} disabled benchmark={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    const card = screen.getByText('--load-mode').closest('.model-settings-option')!;
+    fireEvent.click(card.querySelector('summary')!);
+    const input = screen.getByRole('combobox', { name: '-lm, --load-mode MODE' });
+    expect(input).toBeDisabled();
+    fireEvent.click(input);
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 
   it('shows a saved flag and its value on one raw line and splits an edited line back into argv', () => {

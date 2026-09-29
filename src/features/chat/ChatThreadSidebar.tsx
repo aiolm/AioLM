@@ -89,7 +89,7 @@ export default function ChatThreadSidebar({
                 onSelect(thread);
                 onClose?.();
               }}
-              className="chat-thread-entry min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"
+              className="chat-thread-entry app-list-row__action"
               aria-current={thread.id === activeThreadId ? "true" : undefined}
             >
               <span className="chat-thread-title text-xs font-medium ui-color-ink" title={thread.title || ct("newConversation")}>{thread.title || ct("newConversation")}</span>

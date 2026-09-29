@@ -1,6 +1,9 @@
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
-import StableLabel from "../../shared/ui/StableLabel";
+import StatusBadge from "../../shared/ui/StatusBadge";
+import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import EmptyState from "../../shared/ui/EmptyState";
+import Switch from "../../shared/ui/Switch";
 import "./sessions.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
@@ -34,11 +37,20 @@ type PendingNavigation =
   | { kind: "close" };
 
 const sessionCopy = {
-  en: { options: "Load options", details: "Session details" },
-  ko: { options: "로드 옵션", details: "세션 상세" },
-  ja: { options: "ロードオプション", details: "セッション詳細" },
-  zh: { options: "加载选项", details: "会话详情" },
+  en: { options: "Load options", details: "Session details", emptyTitle: "No saved sessions" },
+  ko: { options: "로드 옵션", details: "세션 상세", emptyTitle: "저장된 세션 없음" },
+  ja: { options: "ロードオプション", details: "セッション詳細", emptyTitle: "保存されたセッションはありません" },
+  zh: { options: "加载选项", details: "会话详情", emptyTitle: "没有已保存的会话" },
 };
+
+const SESSION_STATES = ["stopped", "starting", "running", "stopping", "failed", "crashed"] as const;
+
+function statusTone(state: api.SessionStatus["state"]): "neutral" | "success" | "warning" | "danger" {
+  const label = sessionStatusLabel(state);
+  if (label === "running") return "success";
+  if (label === "starting" || label === "stopping") return "warning";
+  return label === "failed" || label === "crashed" ? "danger" : "neutral";
+}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -419,9 +431,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
         <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button>
       </header>
 
-      {(notice || failure) && <div className={["rounded-lg border px-3 py-2 text-xs", (failure ? "ui-border-color-error-border" : "ui-border-color-info-border"), (failure ? "ui-background-error-bg" : "ui-background-info-bg"), (failure ? "ui-color-error-ink" : "ui-color-info-ink")].filter(Boolean).join(" ")} role={failure ? "alert" : "status"} >{normalizeDisplayText(failure ?? notice ?? "")}</div>}
+      {(notice || failure) && <FeedbackBanner tone={failure ? "error" : "info"}>{normalizeDisplayText(failure ?? notice ?? "")}</FeedbackBanner>}
 
-      <section className="sessions-list" aria-label={t("ui.sessionsTitle")}>
+      <section className="app-card app-card--tight sessions-list" aria-label={t("ui.sessionsTitle")}>
         {visibleDefinitions.map((definition) => {
           const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
           const rowState = rowStatus?.state ?? "stopped";
@@ -435,13 +447,13 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           const build = runtime?.active_build ?? cfg?.active_build;
           const controlsDisabled = busyId !== null || savingId !== null || store.busy;
           return (
-            <article key={definition.id} className="session-entry" aria-label={rowName}>
+            <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={rowName}>
               <div className="session-entry-main">
-                <button type="button" className="session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
+                <button type="button" className="app-list-row__action session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
                   <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
                   <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{modelLabel(model, t("ui.sessionNoModel"))}</span><ModelBadges model={model} localPath={model} /></span>
                 </button>
-                <span className={`session-state session-state--${rowState}`}><StableLabel value={statusCopy(rowState, t)} labels={(["stopped", "starting", "running", "stopping", "failed", "crashed"] as const).map(state => statusCopy(state, t))} /></span>
+                <StatusBadge tone={statusTone(rowState)} label={statusCopy(rowState, t)} labels={SESSION_STATES.map(state => statusCopy(state, t))} />
                 <div className="session-entry-actions">
                   {/* Opening settings only reads; the apply itself is what has to
                       wait for a transition, and it says so. Disabling the button
@@ -475,14 +487,15 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
             </article>
           );
         })}
-        {visibleDefinitions.length === 0 && <p className="py-4 text-sm ui-color-muted">{t("ui.sessionEmpty")}</p>}
+        {visibleDefinitions.length === 0 && <EmptyState title={sessionCopy[locale].emptyTitle} description={t("ui.sessionEmpty")} />}
       </section>
-      <details className="sessions-load-options text-xs ui-color-muted">
+      {/* A single switch that changes what Load does; shown by default so the current choice is visible. */}
+      <details className="sessions-load-options text-xs ui-color-muted" open>
         <summary>{sessionCopy[locale].options}</summary>
-        <label className="mt-3 flex items-start gap-2">
-          <input type="checkbox" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(event) => { const next = event.target.checked; setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
-          <span>{t("ui.sessionStopExisting")}</span>
-        </label>
+        <div className="mt-3 flex items-center gap-2">
+          <Switch id="sessions-stop-existing" checked={stopExisting} disabled={busyId !== null || store.busy} onChange={(next) => { setStopExisting(next); void store.updateConfig({ stop_existing_sessions_on_load: next }).catch((error) => { setStopExisting((store.getConfig?.() ?? cfg)?.stop_existing_sessions_on_load ?? true); setFailure(errorText(error)); }); }} />
+          <label htmlFor="sessions-stop-existing">{t("ui.sessionStopExisting")}</label>
+        </div>
       </details>
       <ConfirmDialog open={pendingNavigation !== null} title={t("ui.gpuUnsaved")} description={t("ui.sessionUnsavedSwitchHint")} confirmLabel={t("ui.undoProfileChanges")} tone="danger" onConfirm={() => {
         const next = pendingNavigation;

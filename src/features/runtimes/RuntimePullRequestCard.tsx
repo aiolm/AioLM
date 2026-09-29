@@ -1,4 +1,5 @@
 import StableLabel from "../../shared/ui/StableLabel";
+import ProgressBar from "../../shared/ui/ProgressBar";
 import type { MutableRefObject } from "react";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { canBuildPrBackend, buildPhaseLabelKey } from "../../shared/runtime/runtimeUtils";
@@ -64,7 +65,7 @@ export default function RuntimePullRequestCard({
         </div>
       </div>
       <div className="runtime-progress-slot mt-3">
-        {prBusy && activePrProgress && <div role="status" aria-live="polite"><div className="mb-1 flex justify-between gap-2 text-xs text-muted"><span>{t(`ui.${buildPhaseLabelKey(activePrProgress.phase)}`)}</span><span>{t("ui.installingPr")}</span></div><div className="h-2 overflow-hidden rounded-full app-bg-elevated"><div className="h-full w-full animate-pulse rounded-full bg-warning" /></div></div>}
+        {prBusy && activePrProgress && <div role="status" aria-live="polite"><div className="mb-1 flex justify-between gap-2 text-xs text-muted"><span>{t(`ui.${buildPhaseLabelKey(activePrProgress.phase)}`)}</span><span>{t("ui.installingPr")}</span></div><ProgressBar label={t("ui.installingPr")} /></div>}
       </div>
     </section>
   );

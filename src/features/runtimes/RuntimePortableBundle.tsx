@@ -1,4 +1,5 @@
 import StableLabel from "../../shared/ui/StableLabel";
+import ProgressBar from "../../shared/ui/ProgressBar";
 import type * as api from "../../shared/api/types";
 import { buildPhaseLabelKey, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
@@ -33,14 +34,12 @@ export default function RuntimePortableBundle({
       </div>
       <div className="runtime-progress-slot mt-3">
         {bundleBusy && bundleProgress && (
-          <div role="progressbar" aria-label={t("ui.portableRuntimeTitle")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={bundleProgress.total > 0 ? Math.round((bundleProgress.received / bundleProgress.total) * 100) : undefined}>
+          <div>
             <div className="mb-1 flex justify-between gap-2 text-xs text-muted">
               <span>{t(`ui.${buildPhaseLabelKey(bundleProgress.phase)}`)}</span>
               {bundleProgress.total > 0 && <span>{formatBytes(bundleProgress.received)} / {formatBytes(bundleProgress.total)}</span>}
             </div>
-            <div className="h-2 overflow-hidden rounded-full app-bg-elevated">
-              <div className="h-full rounded-full bg-success transition-all" style={{ width: bundleProgress.total > 0 ? String(Math.min(100, bundleProgress.received / bundleProgress.total * 100)) + "%" : "100%" }} />
-            </div>
+            <ProgressBar label={t("ui.portableRuntimeTitle")} value={bundleProgress.total > 0 ? Math.round((bundleProgress.received / bundleProgress.total) * 100) : undefined} />
           </div>
         )}
       </div>

@@ -1,5 +1,6 @@
 import type { AppConfig } from "../../shared/api/types";
 import { useI18n } from "../../shared/i18n/i18n";
+import Badge from "../../shared/ui/Badge";
 import TuningSliderField from "./TuningSliderField";
 import TuningDefaultField from "./TuningDefaultField";
 import { tuningFieldDescription, tuningFieldLabel, type NumericField, type NumericKey } from "./tuningFields";
@@ -37,9 +38,9 @@ export default function NumericFieldGrid({ fields, cfg, drafts, disabled, onChan
             onChange={(value) => onChange(field.key, value)}
             onCommit={(value) => onCommit(field, value)}
             disabled={disabled}
-            valueMeta={<span className={`shrink-0 text-xs ${field.server ? "text-warning" : "text-success"}`}>
+            valueMeta={<Badge tone={field.server ? "warning" : "success"} className="shrink-0">
               {field.server ? t("extra.serverSide") : t("extra.perRequest")}
-            </span>}
+            </Badge>}
             headerAction={resetAction}
           />}</TuningDefaultField>
         );

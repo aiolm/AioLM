@@ -1,5 +1,6 @@
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
+import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
@@ -41,7 +42,7 @@ export default function TuningSpeculativeSection({
   const draftDeviceDefault = settingDefaultLabel('spec_draft_device', runtime.options, runtime.verified, locale);
   const draftModelDefault = settingDefaultLabel('spec_draft_model', runtime.options, runtime.verified, locale);
   return (
-    <div className="mt-5 rounded-lg border border-line-strong/80 bg-surface/40 p-3">
+    <div className="mt-5 app-card app-card--tight app-card--muted">
       <h3 className="app-section-title">{t("ui.specTitle")}</h3>
       <p className="app-section-hint mb-4">{t("ui.specHint")}</p>
       <div className="grid gap-4 app-form-grid">
@@ -52,7 +53,7 @@ export default function TuningSpeculativeSection({
               {resetAction}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+              <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
             </div>
           </div>
           <CustomSelect
@@ -91,7 +92,7 @@ export default function TuningSpeculativeSection({
               {resetAction}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+              <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
             </div>
           </div>
           <CustomSelect
@@ -129,7 +130,7 @@ export default function TuningSpeculativeSection({
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-draft-device`} className="text-sm text-ink">{t("ui.specDraftDeviceLabel")}</label>
             </div>
-            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+            <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
           </div>
           <input
             id={`${id}-spec-draft-device`}
@@ -140,7 +141,7 @@ export default function TuningSpeculativeSection({
             onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
             disabled={disabled}
             placeholder={`${t("ui.specDraftDevicePlaceholder")} · ${draftDeviceDefault}`}
-            className="w-full rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
+            className="app-input"
           />
           <span id={`${id}-spec-draft-device-hint`} className="text-xs text-muted">{help.specDraftDevice}</span>
           <TuningOptionMetadata fieldKey="spec_draft_device" />
@@ -150,7 +151,7 @@ export default function TuningSpeculativeSection({
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-draft-model`} className="text-sm text-ink">{t("ui.specDraftModelLabel")}</label>
             </div>
-            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+            <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
           </div>
           <input
             id={`${id}-spec-draft-model`}
@@ -161,7 +162,7 @@ export default function TuningSpeculativeSection({
             onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
             disabled={disabled}
             placeholder={`${t("ui.specDraftModelPlaceholder")} · ${draftModelDefault}`}
-            className="w-full rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
+            className="app-input"
           />
           <span id={`${id}-spec-draft-model-hint`} className="text-xs text-muted">{help.specDraftModel}</span>
           <TuningOptionMetadata fieldKey="spec_draft_model" />

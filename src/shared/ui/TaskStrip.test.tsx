@@ -49,7 +49,7 @@ describe("task cancellation ownership", () => {
     const strip = within(screen.getByRole("complementary", { name: "Background tasks" }));
     expect(strip.getByText("Preparing model")).toBeVisible();
     expect(strip.getByText("Loading weights")).toBeVisible();
-    expect(strip.getByRole("progressbar", { name: "Preparing model" })).toHaveAttribute("aria-valuenow", "25");
+    expect(strip.getByRole("progressbar", { name: "Preparing model" })).toHaveAttribute("value", "25");
     expect(strip.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(localCancel).toHaveBeenCalledOnce();

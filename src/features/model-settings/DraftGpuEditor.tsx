@@ -3,6 +3,7 @@ import type { DeviceReport, GpuPlacement, SplitMode } from '../../shared/api/typ
 import { useI18n } from '../../shared/i18n/i18n';
 import { cloneGpuPlacement, gpuDeviceLabel, missingGpuIds, resolvedGpuPlacement, toggleGpuSelection } from '../../shared/runtime/sessionUtils';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { formatMebibytes } from '../../shared/lib/units';
 import { modelSettingsCopy } from './modelSettingsCopy';
@@ -31,10 +32,10 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
     <div className="model-settings-section-heading"><h3>{copy.gpu}</h3></div>
     {/* An empty list means the runtime has not reported its devices yet, not
         that the saved ones are gone. Warning then fired on every backend switch. */}
-    {devices.length > 0 && missingGpuIds(gpu, devices).length > 0 && <p className="text-warning" role="status">{t('ui.gpuMissingWarning')}</p>}
+    {devices.length > 0 && missingGpuIds(gpu, devices).length > 0 && <FeedbackBanner tone="warning">{t('ui.gpuMissingWarning')}</FeedbackBanner>}
     {devices.length === 0 && <p className="app-section-hint">{t('ui.gpuNoDetected')}</p>}
     <p id={`${id}-devices-hint`} className="app-section-hint">{help.gpuDevices}</p>
-    <div className="model-settings-gpus">{devices.map((item, index) => <label key={item.stable_id} className="model-settings-gpu">
+    <div className="model-settings-gpus">{devices.map((item, index) => <label key={item.stable_id} className={`model-settings-gpu app-list-row${gpu.gpu_ids.includes(item.stable_id) ? ' is-selected' : ''}`}>
       <input type="checkbox" aria-describedby={`${id}-devices-hint`} checked={gpu.gpu_ids.includes(item.stable_id)} disabled={disabled} onChange={() => { setWeights(null); onInvalid('gpu_tensor_split', false); onChange(resolvedGpuPlacement(toggleGpuSelection(gpu, item.stable_id, devices))); }} />
       <span>{normalizeDisplayText(gpuDeviceLabel(item, index))}{item.vram_mb ? <small>{formatMebibytes(item.vram_mb)}</small> : null}</span>
     </label>)}</div>

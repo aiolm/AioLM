@@ -24,6 +24,7 @@ import {
 } from "./projectStore";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import EmptyState from "../../shared/ui/EmptyState";
+import Badge from "../../shared/ui/Badge";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
@@ -399,13 +400,13 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="min-w-0 flex-1 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span><ModelBadges model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <span className="mr-1 rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink" >{t("ui.active")}</span>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span><ModelBadges model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 app-card" >
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold ui-color-ink">{selected ? t("ui.projectEditorEdit") : t("ui.projectEditorNew")}</h3>
-            {isActiveSelection && <span className="rounded-full border px-2 py-0.5 text-xs font-medium ui-border-color-success-border ui-background-success-bg ui-color-success-ink">{t("ui.active")}</span>}
+            {isActiveSelection && <Badge tone="success">{t("ui.active")}</Badge>}
           </div>
           <h4 className="app-section-title">1 · {t("ui.fieldProjectName")} / {t("ui.fieldDescription")}</h4>
           <div className="mt-2 grid gap-3 app-form-grid">
@@ -413,7 +414,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <label className="text-xs ui-color-muted" >{t("ui.fieldDescription")}<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder={t("ui.fieldDescriptionPlaceholder")} className="app-input mt-1" /></label>
           </div>
           <h4 className="app-section-title mt-4">2 · {t("ui.projectProfileLabel")}</h4>
-          <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="mt-2 rounded-xl border px-3 py-2.5 ui-border-color-border ui-background-surface-muted">
+          <section aria-label={t("ui.fieldSystemPrompt")} data-testid="project-prompt-preview" className="mt-2 app-card app-card--muted app-card--tight">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium ui-color-ink">
                 {displayedProfileName ?? t("ui.projectNoProfile")}
@@ -442,7 +443,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button type="button" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm">{mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")}</button>
                 </div>
-                <div role="group" aria-labelledby="project-mcp-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto rounded-lg border px-2 py-2 ui-border-color-border">
+                <div role="group" aria-labelledby="project-mcp-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
                   {mcpCatalog.length === 0 && !mcpLoading && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoMcpTools")}</p>}
                   {mcpCatalog.map((entry) => {
                     const checked = selectedTools.includes(entry.key);
@@ -461,9 +462,9 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 <div className="mt-2">
                   <button type="button" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
                 </div>
-                <div role="group" aria-labelledby="project-documents-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto rounded-lg border px-2 py-2 ui-border-color-border">
+                <div role="group" aria-labelledby="project-documents-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
                   {documents.length === 0 && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoDocuments")}</p>}
-                  {documents.map((document) => <div key={document.path} className="flex items-center justify-between gap-2 px-1 py-1"><span className="min-w-0 flex-1 truncate text-xs ui-color-ink" title={document.path}>{normalizeDisplayText(document.name)} <span className="ui-color-faint">· {normalizeDisplayPath(document.path)}</span></span><button type="button" onClick={() => removeDocument(document.path)} aria-label={t("ui.projectRemoveDocument", { name: document.name })} className="app-button app-button--ghost app-button--sm">×</button></div>)}
+                  {documents.map((document) => <div key={document.path} className="flex items-center justify-between gap-2 px-1 py-1"><span className="min-w-0 flex-1 truncate text-xs ui-color-ink" title={document.path}>{normalizeDisplayText(document.name)} <span className="ui-color-faint">· {normalizeDisplayPath(document.path)}</span></span><button type="button" onClick={() => removeDocument(document.path)} aria-label={t("ui.projectRemoveDocument", { name: document.name })} className="app-icon-button app-icon-button--sm app-icon-button--danger"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}
                 </div>
               </div>
             </div>

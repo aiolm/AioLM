@@ -1,5 +1,6 @@
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
+import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
@@ -52,7 +53,7 @@ export default function TuningServerSection({
   const cacheValueField = SERVER_TEXT_FIELDS.find((field) => field.key === "cache_type_v");
   const cacheFields = [cacheKeyField, cacheValueField].filter((field): field is NonNullable<typeof field> => Boolean(field));
   return (
-    <section className="tuning-section tuning-section--server">
+    <section className="tuning-section tuning-section--server app-card">
       {fields.length > 0 && <div className="tuning-field-list"><NumericFieldGrid fields={fields} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} /></div>}
       {showFlashAttention && <div className="mt-4 flex min-w-0 flex-col gap-1.5 w-full max-w-lg">
         <TuningDefaultField fieldKey="flash_attn" label={t("ui.flashAttention")}>{(resetAction) => <><div className="flex flex-wrap items-center justify-between gap-2">
@@ -61,7 +62,7 @@ export default function TuningServerSection({
             {resetAction}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+            <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
           </div>
         </div>
         <CustomSelect
@@ -117,7 +118,7 @@ export default function TuningServerSection({
               <div className="flex min-w-0 items-center gap-1.5">
                 <label htmlFor={`${id}-mmproj`} className="text-sm text-ink">{t("ui.mmprojLabel")}</label>
               </div>
-              <span className="shrink-0 text-xs text-warning">{t("extra.serverSide")}</span>
+              <Badge tone="warning" className="shrink-0">{t("extra.serverSide")}</Badge>
             </div>
             <input
               id={`${id}-mmproj`}

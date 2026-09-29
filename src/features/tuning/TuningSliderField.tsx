@@ -136,7 +136,7 @@ export default function TuningSliderField({
           aria-labelledby={labelId}
           aria-invalid={invalid || undefined}
           aria-describedby={[hintId, invalid ? errorId : undefined].filter(Boolean).join(' ') || undefined}
-          className="tuning-slider-field__number"
+          className="tuning-slider-field__number app-input"
         />
       </div>
       {resolvedHint && <span id={hintId} className="tuning-slider-field__hint">{resolvedHint}</span>}

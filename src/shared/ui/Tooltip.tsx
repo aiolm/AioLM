@@ -75,7 +75,7 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
       <button
         ref={triggerRef}
         type="button"
-        className="app-tooltip-trigger"
+        className="app-icon-button app-icon-button--sm"
         aria-label={normalizeDisplayText(resolvedLabel)}
         aria-describedby={tooltipId}
         aria-expanded={open}

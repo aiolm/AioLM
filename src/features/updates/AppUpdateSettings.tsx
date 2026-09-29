@@ -3,6 +3,8 @@ import { version } from "../../../package.json";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
+import FeedbackBanner from "../../shared/ui/FeedbackBanner";
+import ProgressBar from "../../shared/ui/ProgressBar";
 import { appUpdater, openAppUpdateRelease, useAppUpdate } from "./appUpdater";
 import { isUpdateBusy } from "./updateStore";
 import { updateText } from "./updateText";
@@ -35,9 +37,9 @@ export default function AppUpdateSettings({ query = "", updater = appUpdater, op
     <div className="app-update-content">
       <p>{copy.current}: <strong>{info?.current_version ?? version}</strong>{info?.available && <> · {copy.latest}: <strong>{info.latest_version}</strong></>}</p>
       <p role="status">{status}</p>
-      {state.error && <p role="alert" className="ui-color-error-ink">{normalizeDisplayText(state.error)}</p>}
-      {releaseError && <p role="alert" className="ui-color-error-ink">{normalizeDisplayText(releaseError)}</p>}
-      {state.phase === "downloading" && <div className="app-update-progress"><progress aria-label={copy.downloadProgress} max={100} value={percent} />{percent !== undefined && <span>{percent}%</span>}</div>}
+      {state.error && <FeedbackBanner tone="error" className="mt-1.5">{normalizeDisplayText(state.error)}</FeedbackBanner>}
+      {releaseError && <FeedbackBanner tone="error" className="mt-1.5">{normalizeDisplayText(releaseError)}</FeedbackBanner>}
+      {state.phase === "downloading" && <div className="app-update-progress"><ProgressBar label={copy.downloadProgress} value={percent} />{percent !== undefined && <span>{percent}%</span>}</div>}
       {info?.available && !info.can_install && <p>{copy.unsupported}</p>}
       {info?.available && info.notes && <details><summary>{copy.notes}</summary><div className="app-update-notes">{info.notes}</div></details>}
       <div className="app-update-actions">

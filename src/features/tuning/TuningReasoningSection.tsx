@@ -1,5 +1,6 @@
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
+import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import NumericFieldGrid from "./NumericFieldGrid";
 import TuningDefaultField from "./TuningDefaultField";
@@ -38,7 +39,7 @@ export default function TuningReasoningSection({
   const effortDefault = settingDefaultLabel('reasoning_effort', runtime.options, runtime.verified, locale, { selected: cfg.reasoning_effort === 'default', compact: true });
   const budgetMessageDefault = settingDefaultLabel('reasoning_budget_message', runtime.options, runtime.verified, locale);
   return (
-    <section className="tuning-section tuning-section--reasoning min-w-0 app-card app-card--muted">
+    <section className="tuning-section tuning-section--reasoning min-w-0 app-card">
       <p className="mb-4 text-xs text-muted">{t("extra.reasoningDescription")}</p>
       <div className="grid gap-4 app-form-grid">
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -106,7 +107,7 @@ export default function TuningReasoningSection({
               {resetAction}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="shrink-0 text-xs text-warning">{t("ui.serverAndRequest")}</span>
+              <Badge tone="warning" className="shrink-0">{t("ui.serverAndRequest")}</Badge>
             </div>
           </div>
           <CustomSelect

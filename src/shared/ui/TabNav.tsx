@@ -73,7 +73,7 @@ export default function TabNav<T extends string>({
   };
 
   return (
-    <div role="tablist" aria-label={label} aria-orientation={orientation} className={className}>
+    <div role="tablist" aria-label={label} aria-orientation={orientation} className={`app-tab-list${className ? ` ${className}` : ""}`}>
       {items.map((item) => (
         <button
           key={item.id}
@@ -86,7 +86,7 @@ export default function TabNav<T extends string>({
           tabIndex={item.id === active ? 0 : -1}
           onClick={() => onSelect(item.id)}
           onKeyDown={onKeyDown}
-          className={tabClassName?.(item.id === active)}
+          className={`app-tab ${tabClassName?.(item.id === active) ?? ""}`}
           title={tabTitle?.(item.id)}
         >
           {item.icon && <span className="tab-icon" aria-hidden="true">{item.icon}</span>}

@@ -1,4 +1,7 @@
 import StableLabel from "../../shared/ui/StableLabel";
+import Badge from "../../shared/ui/Badge";
+import StatusBadge from "../../shared/ui/StatusBadge";
+import ProgressBar from "../../shared/ui/ProgressBar";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import type * as api from "../../shared/api/types";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
@@ -7,7 +10,7 @@ import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/dis
 import { formatBytes, formatMebibytes } from "../../shared/lib/units";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { prSourceTitle, type BackendRow } from "./runtimesHelpers";
-import { fitClassOf, fitLabelOf, fitOf, reasonText, stateOf, suitabilityOf } from "./runtimeRowPresentation";
+import { fitLabelOf, fitToneOf, fitOf, reasonText, stateOf, suitabilityOf } from "./runtimeRowPresentation";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
@@ -53,8 +56,8 @@ export default function RuntimeBackendList({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <h3 id={`runtime-${row.backend}`} className="text-sm font-semibold text-ink">{backendName}</h3>
-              <span className={`rounded px-2 py-0.5 text-xs ${state.cls}`}>{state.label}</span>
-              {device && <span className={`rounded px-2 py-0.5 text-xs ${fitClassOf(fitOf(device, row.backend))}`}>{fitLabelOf(locale, fitOf(device, row.backend))}</span>}
+              <StatusBadge label={state.label} tone={state.tone} />
+              {device && <Badge tone={fitToneOf(fitOf(device, row.backend))}>{fitLabelOf(locale, fitOf(device, row.backend))}</Badge>}
             </div>
             <div className="mt-0.5 break-words text-xs text-muted">{t(`ui.${row.note}`)}{device && reasonText(locale, suitabilityOf(device, row.backend)) ? ` · ${normalizeDisplayText(reasonText(locale, suitabilityOf(device, row.backend)))}` : ""}</div>
           </div>
@@ -71,16 +74,16 @@ export default function RuntimeBackendList({
           {info ? <span className="block app-text-wrap">{t("ui.latestBuild")}: <span className="text-ink">{t("ui.buildLabel", { build: buildNumber(info.build) })}</span>{" · "}{info.digest ? t("ui.digestPublished") : t("ui.digestUnavailable")}</span> : <span className="block app-text-wrap">{t("ui.latestUnavailable")}{row.latestErr ? `: ${normalizeDisplayText(row.latestErr)}` : ` ${t("ui.latestUnavailableRetry")}`}</span>}
         </div>
 
-        {row.busy && row.progress && <div className="runtime-progress-slot mt-3" role="progressbar" aria-label={t("ui.installedBuilds", { label: row.backend })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.progress.total > 0 ? Math.round(row.progress.received / row.progress.total * 100) : undefined}>
+        {row.busy && row.progress && <div className="runtime-progress-slot mt-3">
           <div className="mb-1 flex justify-between gap-2 text-xs text-muted"><span>{t(`ui.${buildPhaseLabelKey(row.progress.phase)}`)}</span>{row.progress.total > 0 && <span>{formatBytes(row.progress.received)} / {formatBytes(row.progress.total)}</span>}</div>
-          <div className="h-2 overflow-hidden rounded-full app-bg-elevated"><div className="h-full rounded-full app-bg-accent-solid transition-all" style={{ width: row.progress.total > 0 ? `${Math.min(100, row.progress.received / row.progress.total * 100)}%` : "100%" }} /></div>
+          <ProgressBar label={t("ui.installedBuilds", { label: row.backend })} value={row.progress.total > 0 ? Math.round(row.progress.received / row.progress.total * 100) : undefined} />
         </div>}
 
         {row.installed.length > 0 && <div className="mt-3 flex min-w-0 flex-wrap gap-2.5" role="list" aria-label={t("ui.installedBuilds", { label: backendName })}>
           {row.installed.map((item) => {
             const probed = probeTarget?.backend === row.backend && probeTarget.build === item.build;
             const uninstallBlockedReason = row.busy ? undefined : serverRunning ? t("ui.stopBeforeRemoveRuntime") : prBusy ? t("ui.installingPr") : null;
-            return <div key={item.build} role="listitem" className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 text-xs ${probed ? "app-border-accent bg-accent-soft/40" : "border-line-strong app-bg-muted"}`} title={normalizeDisplayPath(item.dir)}>
+            return <div key={item.build} role="listitem" className={`app-list-row flex min-w-0 max-w-full flex-wrap items-center gap-2 px-3 py-1.5 text-xs ${probed ? "is-selected" : ""}`} title={normalizeDisplayPath(item.dir)}>
               <span className="text-ink" title={normalizeDisplayText(item.source?.commit ? prSourceTitle(locale, item.source) : item.version?.commit ? `commit ${item.version.commit}` : item.build)}>{item.source ? `${t("ui.runtimePrBuild", { pr: item.source.pull_request })} · ${item.source.commit.slice(0, 7)} · ` : ""}{normalizeDisplayText(formatRuntimeVersion(item.build, item.version))}</span>
               <span className="text-muted">{formatMebibytes(item.size_mb)}</span>
               <button type="button" onClick={() => onProbe(row.backend, item.build)} disabled={row.busy || probeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} aria-label={`${t("ui.probeBuild")}: ${backendName} ${item.build}`} className="app-button app-button--secondary app-button--sm">{t("ui.probeBuild")}</button>

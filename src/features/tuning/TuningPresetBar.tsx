@@ -58,7 +58,7 @@ export default function TuningPresetBar({
               run: () => applyPreset(name),
             })}
             disabled={phase === "applying" || busy}
-            className="rounded-lg border border-line-strong app-bg-muted px-3 py-1.5 text-xs text-ink app-bg-elevated disabled:opacity-40"
+            className="app-button app-button--secondary app-button--sm"
           >
             {name}
           </button>
@@ -72,7 +72,7 @@ export default function TuningPresetBar({
             run: resetDefaults,
           })}
           disabled={phase === "applying" || busy}
-          className="rounded-lg border border-line-strong px-3 py-1.5 text-xs text-muted app-bg-muted disabled:opacity-40"
+          className="app-button app-button--secondary app-button--sm"
         >
           {profileLabel}
         </button>}

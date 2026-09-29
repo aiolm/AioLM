@@ -1,4 +1,5 @@
 import { CustomSelect } from "../../shared/ui/CustomSelect";
+import Badge from "../../shared/ui/Badge";
 import { useEffect, useState, type ReactNode } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
 import { useTuningId } from './TuningIdScope';
@@ -105,14 +106,14 @@ export default function TuningSamplerChain({
   const availableOptions = options.filter((option) => !draft.includes(option));
 
   return (
-    <div className="tuning-sampler-chain" data-testid="tuning-sampler-chain">
+    <div className="tuning-sampler-chain app-card app-card--tight" data-testid="tuning-sampler-chain">
       <div className="tuning-sampler-chain__header flex-wrap">
         <div className="tuning-field-title">
           <h3 className="tuning-sampler-chain__title">{t("extra.samplerChainTitle")}</h3>
           {headerAction}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="tuning-sampler-chain__count">{t("extra.samplerChainCount", { count: draft.length })}</span>
+          <Badge className="shrink-0">{t("extra.samplerChainCount", { count: draft.length })}</Badge>
         </div>
       </div>
 
@@ -123,7 +124,7 @@ export default function TuningSamplerChain({
               key={sampler}
               role="listitem"
               aria-label={sampler}
-              className={`tuning-sampler-chip ${draggedIndex === index ? "is-dragging" : ""}`}
+              className={`tuning-sampler-chip app-list-row ${draggedIndex === index ? "is-dragging" : ""}`}
               draggable={!disabled}
               onDragStart={() => setDraggedIndex(index)}
               onDragOver={(event) => event.preventDefault()}
@@ -136,9 +137,9 @@ export default function TuningSamplerChain({
               <span className="tuning-sampler-chip__number" aria-hidden="true">{index + 1}</span>
               <span className="tuning-sampler-chip__name">{sampler}</span>
               <span className="tuning-sampler-chip__actions">
-                <button type="button" onClick={() => move(index, -1)} disabled={disabled || index === 0} aria-label={help.moveSamplerEarlier.replace('{name}', sampler)}>←</button>
-                <button type="button" onClick={() => move(index, 1)} disabled={disabled || index === draft.length - 1} aria-label={help.moveSamplerLater.replace('{name}', sampler)}>→</button>
-                <button type="button" className="tuning-sampler-chip__remove" onClick={() => publish(draft.filter((_, itemIndex) => itemIndex !== index))} disabled={disabled} aria-label={help.removeSampler.replace('{name}', sampler)}>×</button>
+                <button type="button" className="app-icon-button app-icon-button--sm" onClick={() => move(index, -1)} disabled={disabled || index === 0} aria-label={help.moveSamplerEarlier.replace('{name}', sampler)}>←</button>
+                <button type="button" className="app-icon-button app-icon-button--sm" onClick={() => move(index, 1)} disabled={disabled || index === draft.length - 1} aria-label={help.moveSamplerLater.replace('{name}', sampler)}>→</button>
+                <button type="button" className="app-icon-button app-icon-button--sm app-icon-button--danger" onClick={() => publish(draft.filter((_, itemIndex) => itemIndex !== index))} disabled={disabled} aria-label={help.removeSampler.replace('{name}', sampler)}>×</button>
               </span>
             </li>
           ))}

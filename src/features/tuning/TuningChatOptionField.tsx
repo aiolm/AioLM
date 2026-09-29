@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { AppConfig } from "../../shared/api/types";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
+import Badge from "../../shared/ui/Badge";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { clampNumber } from "../../shared/config/tuningValidation";
 import { chatOptionValue, tuningFieldDescription, tuningFieldLabel, type ChatOptionField } from "./tuningFields";
@@ -41,7 +42,7 @@ export default function TuningChatOptionField({
           {resetAction}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>
+          <Badge tone="success" className="shrink-0">{t("extra.perRequest")}</Badge>
         </div>
       </div>}
       {field.options ? (
@@ -86,7 +87,7 @@ export default function TuningChatOptionField({
                 onBlur={(event) => { if (chatOptionDrafts[field.key] !== undefined) onCommit(field, event.currentTarget.value); }}
                 onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
                 disabled={disabled}
-                className="w-full min-w-0 rounded-lg border border-line-strong app-bg-muted px-3 py-2 text-sm text-ink focus:border-accent-line focus:outline-none"
+                className="app-input"
               />
             )}
           </div>
@@ -103,7 +104,7 @@ export default function TuningChatOptionField({
           onChange={(value) => setChatOptionDrafts((drafts) => ({ ...drafts, [field.key]: value }))}
           onCommit={(value) => onCommit(field, value)}
           disabled={disabled}
-          valueMeta={<span className="shrink-0 text-xs text-success">{t("extra.perRequest")}</span>}
+          valueMeta={<Badge tone="success" className="shrink-0">{t("extra.perRequest")}</Badge>}
           headerAction={resetAction}
         />
       )}

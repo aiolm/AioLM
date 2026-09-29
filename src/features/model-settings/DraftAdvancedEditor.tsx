@@ -8,6 +8,9 @@ import type { DraftPatch } from './DraftTuningEditor';
 import { advancedOptionDescription, advancedSettingsHelp } from './advancedSettingsHelp';
 import { serverDefaultInfo, type DefaultValueInfo } from '../../shared/config/defaultValueDisplay';
 import DefaultValue from '../../shared/ui/DefaultValue';
+import { CustomSelect } from '../../shared/ui/CustomSelect';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import Switch from '../../shared/ui/Switch';
 
 const EXCLUDED = new Set(['--help', '--version', '--cache-list', '--completion-bash', '--list-devices']);
 /**
@@ -45,21 +48,26 @@ const AdvancedOptionRow = memo(function AdvancedOptionRow({
   const formatId = `${idPrefix}-${option.id}-format`;
   const defaultId = `${idPrefix}-${option.id}-default`;
   const describedBy = `${descriptionId} ${formatId} ${defaultId}`;
-  const choicesId = `${idPrefix}-${option.id}-choices`;
   const placeholder = option.arity === 0 ? undefined : `${option.argument} · ${defaultInfo.value}`;
-  return <div className="model-settings-option"><details><summary><code>{option.id}</code></summary>
+  const edit = (raw: string) => {
+    onDraft(option.id, raw);
+    const values = option.arity === 1 ? [raw] : raw.trim().split(/\s+/);
+    const valid = !raw || values.length === option.arity;
+    onInvalid(option.id, !valid);
+    if (valid) onSet(option, raw ? [{ flag: option.id, values }] : []);
+  };
+  const switchId = `${idPrefix}-${option.id}-enabled`;
+  // A configured option starts expanded to show its value; editing it later never collapses the row.
+  const [initiallyOpen] = useState(checked);
+  return <div className="model-settings-option app-card app-card--tight"><details open={initiallyOpen}><summary><code>{option.id}</code></summary>
     {option.arity === 0
-      ? <label><input type="checkbox" aria-label={`${option.id} ${enabledLabel}`} aria-describedby={describedBy} checked={checked} disabled={disabled}
-          onChange={event => onSet(option, event.target.checked ? [{ flag: option.id, values: [] }] : [])} />{enabledLabel}</label>
-      : <label><span>{option.signature}</span><input className="app-input" aria-describedby={describedBy} value={value} disabled={disabled}
-          placeholder={placeholder} list={choices.length ? choicesId : undefined} onChange={event => {
-            const raw = event.target.value;
-            onDraft(option.id, raw);
-            const values = option.arity === 1 ? [raw] : raw.trim().split(/\s+/);
-            const valid = !raw || values.length === option.arity;
-            onInvalid(option.id, !valid);
-            if (valid) onSet(option, raw ? [{ flag: option.id, values }] : []);
-          }} />{choices.length > 0 && <datalist id={choicesId}>{choices.map(choice => <option key={choice} value={choice} />)}</datalist>}</label>}
+      ? <div className="model-settings-option-toggle"><Switch id={switchId} aria-describedby={describedBy} checked={checked} disabled={disabled}
+          onChange={enabled => onSet(option, enabled ? [{ flag: option.id, values: [] }] : [])} /><label htmlFor={switchId}><span className="sr-only">{option.id}</span> {enabledLabel}</label></div>
+      : <label><span>{option.signature}</span>{choices.length > 0
+          ? <CustomSelect className="w-full" aria-describedby={describedBy} value={value} disabled={disabled} placeholder={placeholder}
+              options={choices.map(choice => ({ value: choice, label: choice }))} onChange={edit} onInputChange={edit} />
+          : <input className="app-input" aria-describedby={describedBy} value={value} disabled={disabled}
+              placeholder={placeholder} onChange={event => edit(event.target.value)} />}</label>}
   </details><p className="app-section-hint whitespace-pre-line break-words"><span id={descriptionId}>{description}</span>
     <span id={formatId} className="model-settings-option-format">{option.arity === 0 ? help.toggle : option.arity === 1 ? help.single : help.multiple}
       {choices.length > 0 && <> {help.choices}: {choices.join(', ')}.</>}</span>
@@ -110,15 +118,15 @@ export default function DraftAdvancedEditor({ cfg, options, verified = false, di
   const markInvalid = useCallback((key: string, invalid: boolean) => invalidRef.current(key, invalid), []);
 
   return <div className="model-settings-fields">
-    {error && <p className="text-error" role="alert">{error}</p>}
+    {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
     <div><label htmlFor={`${id}-args`}>{copy.rawArgs}</label>
-    <textarea id={`${id}-args`} aria-describedby={`${id}-args-help`} className="app-input font-mono" rows={6} spellCheck={false} disabled={disabled} value={args ?? serverArgsToText(cfg.server_args, options)} onChange={event => {
+    <textarea id={`${id}-args`} aria-describedby={`${id}-args-help`} className="app-textarea font-mono" rows={6} spellCheck={false} disabled={disabled} value={args ?? serverArgsToText(cfg.server_args, options)} onChange={event => {
       const raw = event.target.value; setArgs(raw);
       try { const server_args = serverArgsFromText(raw, options); onChange({ server_args }); onInvalid('server_args', false); setError(''); }
       catch (cause) { onInvalid('server_args', true); setError(String(cause)); }
     }} /><p id={`${id}-args-help`} className="app-section-hint">{help.args}</p></div>
     {!benchmark && <div><label htmlFor={`${id}-chat`}>{copy.rawChat}</label>
-    <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} className="app-input font-mono" rows={7} spellCheck={false} disabled={disabled} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
+    <textarea id={`${id}-chat`} aria-describedby={`${id}-chat-help`} className="app-textarea font-mono" rows={7} spellCheck={false} disabled={disabled} value={chat ?? JSON.stringify(cfg.chat_options, null, 2)} onChange={event => {
       const raw = event.target.value; setChat(raw);
       try { const chat_options = parseChatOptions(raw); onChange({ chat_options }); onInvalid('chat_options', false); setError(''); }
       catch (cause) { onInvalid('chat_options', true); setError(String(cause)); }

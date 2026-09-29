@@ -21,7 +21,7 @@ export default function TuningDefaultField({ fieldKey, label, children, request 
   const context = useContext(TuningDefaultsContext);
   const { t } = useI18n();
   const resetLabel = t("ui.runtimeDefaultResetField", { label });
-  const resetAction = context && <button type="button" className="tuning-field-reset" disabled={context.disabled}
+  const resetAction = context && <button type="button" className="app-icon-button app-icon-button--sm" disabled={context.disabled}
     aria-label={resetLabel} title={resetLabel} onClick={() => context.reset(fieldKey)}>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" />
