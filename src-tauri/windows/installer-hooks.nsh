@@ -1,3 +1,8 @@
+; Refresh cached shortcut and pinned taskbar icons after replacing the app.
+!macro NSIS_HOOK_POSTINSTALL
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x1000, p 0, p 0)'
+!macroend
+
 ; Uninstall: "Delete the application data" also clears AioLM's data folders.
 ;
 ; Tauri removes only its own %APPDATA% and %LOCALAPPDATA% folders
