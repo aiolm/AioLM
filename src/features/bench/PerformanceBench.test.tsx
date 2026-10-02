@@ -510,7 +510,7 @@ describe("Performance benchmark workflow", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("Current benchmark failed to start")).not.toBeInTheDocument();
     const disclosure = screen.getByText("Run configuration").closest("details")!;
-    expect(within(disclosure).getByText("llama-test")).toBeVisible();
+    expect(within(disclosure).getByText("llama-test(1)")).toBeVisible();
     expect(within(disclosure).getByText("32,768")).toBeVisible();
     expect(within(disclosure).getByText("Enabled")).toBeVisible();
     const csv = vi.spyOn(performanceRecords, "performanceCsv");

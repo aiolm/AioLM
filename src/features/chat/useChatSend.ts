@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { buildMultimodalContent, capMaxTokens, estimateChatTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
+import { buildMultimodalContent, capMaxTokens, estimateChatTokens, estimateMessageTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
 import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
 import type { ModelProfile } from "../model-settings/profileEditor";
@@ -13,6 +13,10 @@ import type { ChatMcpTool } from "./useChatMcpTools";
 import type { FailedRequest, PendingToolCall, RequestMetricsAccumulator, StreamingDraft } from "./chatSendTypes";
 import { createStreamDeltaHandler, resolveDetectedToolCall, retrieveDocumentContext, sameDocuments, sameImages, toChatMessage } from "./chatSendHelpers";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
+import { notifyCompletion } from "../../shared/lib/notifications";
+import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
+import type { Locale } from "../../shared/i18n/i18nCatalog";
+import { answerSkillToolCall, buildPersonalizedSystemPrompt, hasPersonalization, MAX_SKILL_READS_PER_RESPONSE, prepareTurnPersonalization, SKILL_TOOL_NAME, skillToolDefinition, type TurnPersonalization } from "./chatPersonalization";
 
 export type { PendingToolCall } from "./chatSendTypes";
 
@@ -41,6 +45,11 @@ interface UseChatSendOptions {
   atBottomRef: MutableRefObject<boolean>;
   phase: "idle" | "thinking" | "streaming";
   setPhase: Dispatch<SetStateAction<"idle" | "thinking" | "streaming">>;
+  /** Skills picked in the composer for the next message. */
+  selectedSkillIds?: string[];
+  /** Clears the picker once a message carrying its selection is accepted. */
+  onSkillsAccepted?: () => void;
+  locale?: Locale;
 }
 
 // Streaming updates land in `streamingDraft` instead of `msgs` so the hot rAF path never
@@ -51,7 +60,9 @@ export function useChatSend({
   store, effectiveConfig, modelProfile, sessionId = "default", preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
   input, setInput, attachments, documents, setAttachments, setDocuments,
   mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
+  selectedSkillIds = [], onSkillsAccepted, locale = "en",
 }: UseChatSendOptions) {
+  const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
   const [error, setError] = useState<string | null>(null);
   const [contextWarning, setContextWarning] = useState<string | null>(null);
   const [contextSources, setContextSources] = useState<string[]>([]);
@@ -65,6 +76,7 @@ export function useChatSend({
   const metricsRef = useRef<RequestMetricsAccumulator>({ preparationStartedAt: 0 });
   const streamResponsesRef = useRef(true);
   const toolRoundsRef = useRef(0);
+  const skillReadsRef = useRef(0);
   const turnRef = useRef<{
     config: api.AppConfig | null;
     baseUrl: string;
@@ -74,6 +86,8 @@ export function useChatSend({
     systemPrompt: string;
     tools: api.ChatToolDefinition[];
     toolEntries: Map<string, ChatMcpTool>;
+    /** Loaded once per new user turn; follow-ups and retries reuse it unchanged. */
+    personalization: TurnPersonalization | null;
   } | null>(null);
   const activityRef = useRef<{ sessionId: string; started: boolean } | null>(null);
   const releaseActivity = () => {
@@ -148,7 +162,10 @@ export function useChatSend({
     if (!toolFollowup && !text && images.length === 0 && pendingDocuments.length === 0) return;
     if (!toolFollowup && !canSend && !retry) return;
     if (!toolFollowup) {
+      // A new message supersedes an earlier failure; if it fails during preparation, Retry must not resend the old one.
+      if (!retry) failedRef.current = null;
       toolRoundsRef.current = 0;
+      skillReadsRef.current = 0;
       documentTruncationRef.current = false;
       const config = structuredClone(effectiveConfig ?? store.cfg);
       const profile = modelProfile !== undefined ? modelProfile : config ? requestProfileFromApplication(appliedProfile(config, sessionId)) : null;
@@ -158,6 +175,7 @@ export function useChatSend({
         systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || "You are a helpful assistant.",
         tools: structuredClone(mcpDefinitions),
         toolEntries: new Map(mcpEntryByFunctionName),
+        personalization: null,
       };
     }
     const turn = turnRef.current;
@@ -176,6 +194,8 @@ export function useChatSend({
     metricsRef.current = { preparationStartedAt: performance.now() };
     let awaitingTool = false;
     let assistantAppended = false;
+    let skillFollowup: api.ChatMessage[] | null = null;
+    const skillIds = selectedSkillIds.slice();
     try {
       if (!activityRef.current) {
         const activity = { sessionId: turn.sessionId, started: false };
@@ -188,6 +208,13 @@ export function useChatSend({
       }
       controller.signal.throwIfAborted();
 
+      if (!toolFollowup) {
+        // A retry resends the failed turn's own snapshot; only a new message rereads the files.
+        turn.personalization = retry && failed ? failed.personalization ?? null : await prepareTurnPersonalization(text, skillIds, controller.signal, pt);
+        controller.signal.throwIfAborted();
+        if (turn.personalization?.catalog.length && !turn.toolEntries.has(SKILL_TOOL_NAME)) turn.tools = [...turn.tools, skillToolDefinition()];
+      }
+
       const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, turn.model, turn.apiKey, turn.baseUrl);
       controller.signal.throwIfAborted();
       if (documentChunksTruncated) documentTruncationRef.current = true;
@@ -197,14 +224,20 @@ export function useChatSend({
         role: "user",
         content: images.length ? buildMultimodalContent(requestContent, images) : requestContent,
       };
+      const systemMessage: api.ChatMessage = { role: "system", content: buildPersonalizedSystemPrompt(turn.systemPrompt, turn.personalization) };
       const rawHistory = historyOverride ?? (retry && failed ? failed.history : [
-        { role: "system" as const, content: turn.systemPrompt },
+        systemMessage,
         ...msgs.map(toChatMessage),
         userMessage,
       ]);
       const contextSize = Math.max(512, requestConfig?.ctx_size ?? 4096);
       const runtimeContext = requestConfig ? usesRuntimeDefault(requestConfig, "ctx_size") : false;
       const maxContextTokens = Math.max(256, Math.floor(contextSize * 0.75));
+      // Trimming would truncate the system message; local instructions are never cut silently.
+      if (!historyOverride && !(retry && failed) && !runtimeContext && hasPersonalization(turn.personalization)) {
+        const systemTokens = estimateMessageTokens(systemMessage);
+        if (systemTokens > maxContextTokens - 32) throw new Error(pt("contextTooLarge", { tokens: systemTokens, budget: maxContextTokens }));
+      }
       // When the runtime owns context sizing, the old manual number is not a valid limit.
       const bounded = toolFollowup || runtimeContext ? { messages: rawHistory, trimmed: false } : trimChatHistory(rawHistory, maxContextTokens);
       const promptTokens = estimateChatTokens(bounded.messages);
@@ -212,10 +245,15 @@ export function useChatSend({
       const warnings = [
         documentTruncationRef.current ? `Only the first ${MAX_SEARCHABLE_DOCUMENT_CHUNKS} document chunks were searched; the rest of the attached document(s) were not included.` : null,
         bounded.trimmed ? "Older messages were omitted from this request to stay within the configured context window." : null,
+        turn.personalization?.warnings.length ? pt("instructionWarnings", { warnings: turn.personalization.warnings.join(" ") }) : null,
       ].filter((warning): warning is string => warning !== null);
       setContextWarning(warnings.length > 0 ? warnings.join(" ") : null);
-      failedRef.current = { text, images, documents: pendingDocuments, history: bounded.messages };
+      // A tool follow-up carries no user input of its own: keep the original request so Retry can still resend it.
+      failedRef.current = toolFollowup && failed
+        ? { text: failed.text, images: failed.images, documents: failed.documents, history: bounded.messages, personalization: turn.personalization }
+        : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization };
       if (!toolFollowup) setInput("");
+      if (!retry && !toolFollowup) onSkillsAccepted?.();
       if (!retry && !toolFollowup) setAttachments([]);
       if (!retry && !toolFollowup) setDocuments([]);
       atBottomRef.current = true;
@@ -258,6 +296,24 @@ export function useChatSend({
           return next;
         });
         setStreamingDraft(null);
+        if (toolCall.function.name === SKILL_TOOL_NAME && turn.personalization?.catalog.length && !turn.toolEntries.has(SKILL_TOOL_NAME)) {
+          // Reading a listed SKILL.md is read-only, so it runs without the MCP approval step.
+          skillReadsRef.current += 1;
+          if (skillReadsRef.current > MAX_SKILL_READS_PER_RESPONSE) throw new Error(pt("skillReadLimit", { limit: MAX_SKILL_READS_PER_RESPONSE }));
+          setPhase("thinking");
+          const answer = await answerSkillToolCall(toolCall, turn.personalization);
+          controller.signal.throwIfAborted();
+          const followup: api.ChatMessage[] = [
+            ...bounded.messages,
+            { role: "assistant", content: "", tool_calls: [toolCall] },
+            { role: "tool", tool_call_id: toolCall.id, name: SKILL_TOOL_NAME, content: answer.content },
+          ];
+          const followupTokens = estimateChatTokens(followup);
+          if (!runtimeContext && followupTokens > maxContextTokens) throw new Error(pt("skillTooLarge", { name: answer.skill?.name ?? SKILL_TOOL_NAME, tokens: followupTokens, budget: maxContextTokens }));
+          skillFollowup = followup;
+          awaitingTool = true;
+          return;
+        }
         toolRoundsRef.current += 1;
         if (toolRoundsRef.current > 4) throw new Error("MCP tool loop limit reached (4 calls per response).");
         setPendingToolCall(resolveDetectedToolCall(toolCall, turn.toolEntries));
@@ -282,7 +338,11 @@ export function useChatSend({
       setStreamingDraft(null);
       failedRef.current = null;
       toolRoundsRef.current = 0;
+      skillReadsRef.current = 0;
       setPhase("idle");
+      // Only the turn's final answer is announced - after any MCP follow-up,
+      // never for a tool request, an error, a stop or an unmount.
+      if (!controller.signal.aborted) void notifyCompletion("chat");
     } catch (caught) {
       const isAbort = controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError");
       cancelScheduledRender();
@@ -307,6 +367,7 @@ export function useChatSend({
       if (isAbort) {
         if (!streamRef.current.assistant && !streamRef.current.reasoning) failedRef.current = null;
         toolRoundsRef.current = 0;
+        skillReadsRef.current = 0;
         setPhase("idle");
       } else {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -320,6 +381,8 @@ export function useChatSend({
       ctrlRef.current = null;
       setAborting(false);
       void store.refreshStatus();
+      // The read skill joins this turn's history and generation continues on the same snapshot.
+      if (skillFollowup) await send(false, skillFollowup);
     }
   };
 
@@ -360,6 +423,7 @@ export function useChatSend({
     setPendingToolCall(null);
     failedRef.current = null;
     toolRoundsRef.current = 0;
+    skillReadsRef.current = 0;
     setMsgs((current) => current[current.length - 1]?.role === "assistant" ? current.slice(0, -1) : current);
     setError("MCP tool call rejected by the user.");
     setPhase("idle");

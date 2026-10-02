@@ -5,7 +5,6 @@ import { tuningResetValues } from './tuningResetValues';
 
 /** A reset omits overrides, so defaults follow the selected runtime and model. */
 export const RUNTIME_DEFAULT_KEYS = catalog.map((field) => field.key);
-export const REQUEST_DEFAULT_KEYS = ["temperature", "top_p", "top_k", "reasoning_effort"];
 export const usesRuntimeDefault = (cfg: Pick<AppConfig, "runtime_defaults">, key: string) => cfg.runtime_defaults?.includes(key) ?? false;
 
 const chatAliases: Record<string, string[]> = {

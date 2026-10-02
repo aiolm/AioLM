@@ -41,10 +41,6 @@ export function fitLabelOf(locale: Locale, fit: api.BackendFit): string {
   return fit === "recommended" ? translate(locale, "ui.fitRecommended") : fit === "compatible" ? translate(locale, "ui.fitCompatible") : translate(locale, "ui.fitUnsupported");
 }
 
-export function fitToneOf(fit: api.BackendFit): BadgeTone {
-  return fit === "recommended" ? "success" : fit === "compatible" ? "neutral" : "warning";
-}
-
 // Policy reasons arrive as keys so the backend never ships display strings.
 export function reasonText(locale: Locale, suitability?: api.BackendSuitability): string {
   if (!suitability) return "";

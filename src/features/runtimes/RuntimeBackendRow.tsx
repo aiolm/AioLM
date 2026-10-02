@@ -4,7 +4,7 @@ import ProgressBar from "../../shared/ui/ProgressBar";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import type * as api from "../../shared/api/types";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
-import { buildNumber, buildPhaseLabelKey, formatRuntimeVersion, runtimeRowAction } from "../../shared/runtime/runtimeUtils";
+import { buildPhaseLabelKey, formatRuntimeVersion, runtimeRowAction } from "../../shared/runtime/runtimeUtils";
 import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { formatBytes, formatMebibytes } from "../../shared/lib/units";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
@@ -38,7 +38,10 @@ export default function RuntimeBackendRow({
 }: RuntimeBackendRowProps) {
   const state = stateOf(locale, row);
   const info = row.latest;
-  const newestInstalled = !!info && row.installed.some((item) => item.build === info.build);
+  const latestInstalled = info ? row.installed.find((item) => item.build === info.build) : undefined;
+  const newestInstalled = !!latestInstalled;
+  // Only the same build's install record may name the latest release's version.
+  const latestVersion = formatRuntimeVersion(info?.build ?? "", latestInstalled?.version);
   const rowAction = runtimeRowAction({ busy: row.busy, newestInstalled });
   const backendName = t(`ui.${row.label}`, { id: row.backend });
   const fit = device ? fitOf(device, row.backend) : null;
@@ -64,15 +67,15 @@ export default function RuntimeBackendRow({
         </div>
         <div className={`runtime-group__latest runtime-latest-slot ${info ? "" : "is-error"}`}>
           {info
-            ? <span className="app-text-wrap">{t("ui.latestBuild")} <span className="runtime-number">{t("ui.buildLabel", { build: buildNumber(info.build) })}</span><span className="runtime-group__digest"> · {info.digest ? t("ui.digestPublished") : t("ui.digestUnavailable")}</span></span>
+            ? <span className="app-text-wrap">{t("ui.latestBuild")} <span className="runtime-number">{latestVersion}</span><span className="runtime-group__digest"> · {info.digest ? t("ui.digestPublished") : t("ui.digestUnavailable")}</span></span>
             : <span className="app-text-wrap">{t("ui.latestUnavailable")}{row.latestErr ? `: ${normalizeDisplayText(row.latestErr)}` : ` ${t("ui.latestUnavailableRetry")}`}</span>}
         </div>
         <div className="runtime-group__action">
           {rowAction === "cancel" ? (
             <LocalTaskCancelButton taskId="runtime-operation" pending={cancelBusy} onClick={onCancelInstall} disabled={cancelBusy} className="app-button app-button--danger"><StableLabel value={cancelBusy ? t("ui.cancelling") : prBusy ? t("ui.cancelPrBuild") : t("ui.cancelInstall")} labels={[t("ui.cancelling"), t("ui.cancelPrBuild"), t("ui.cancelInstall")]} /></LocalTaskCancelButton>
           ) : rowAction === "install" ? (
-            <button type="button" data-icon="download" onClick={() => installBlockedReason ? onBlockedAction?.(installBlockedReason) : onInstall(row.backend)} aria-disabled={installBlockedReason ? "true" : undefined} title={installBlockedReason ?? undefined} aria-label={`${info ? t("ui.installBuild", { build: t("ui.buildLabel", { build: buildNumber(info.build) }) }) : t("ui.installLatest")}: ${backendName}`} className="app-button app-button--primary">
-              <StableLabel value={info ? t("ui.installBuild", { build: t("ui.buildLabel", { build: buildNumber(info.build) }) }) : t("ui.installLatest")} labels={[t("ui.installBuild", { build: t("ui.buildLabel", { build: buildNumber(info?.build ?? "") }) }), t("ui.installLatest")]} />
+            <button type="button" data-icon="download" onClick={() => installBlockedReason ? onBlockedAction?.(installBlockedReason) : onInstall(row.backend)} aria-disabled={installBlockedReason ? "true" : undefined} title={installBlockedReason ?? undefined} aria-label={`${info ? t("ui.installBuild", { build: latestVersion }) : t("ui.installLatest")}: ${backendName}`} className="app-button app-button--primary">
+              <StableLabel value={info ? t("ui.installBuild", { build: latestVersion }) : t("ui.installLatest")} labels={[t("ui.installBuild", { build: latestVersion }), t("ui.installLatest")]} />
             </button>
           ) : null}
         </div>
@@ -95,8 +98,8 @@ export default function RuntimeBackendRow({
             </span>
             <span className="runtime-version__size">{formatMebibytes(item.size_mb)}</span>
             <span className="runtime-version__actions">
-              <button type="button" data-icon="probe" onClick={() => onProbe(row.backend, item.build)} disabled={row.busy || probeBusy || serverRunning} title={probeBlockedReason ?? undefined} aria-label={`${t("ui.probeBuild")}: ${backendName} ${item.build}`} className="app-button app-button--secondary app-button--sm">{t("ui.probeBuild")}</button>
-              <button type="button" data-icon="delete" onClick={() => uninstallBlockedReason ? onBlockedAction?.(uninstallBlockedReason) : onUninstall(row.backend, item.build)} disabled={row.busy} aria-disabled={uninstallBlockedReason ? "true" : undefined} title={uninstallBlockedReason ?? undefined} aria-label={`${t("panel.remove")}: ${backendName} ${item.build}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.remove")}</button>
+              <button type="button" data-icon="probe" onClick={() => onProbe(row.backend, item.build)} disabled={row.busy || probeBusy || serverRunning} title={probeBlockedReason ?? undefined} aria-label={`${t("ui.probeBuild")}: ${backendName} ${version}`} className="app-button app-button--secondary app-button--sm">{t("ui.probeBuild")}</button>
+              <button type="button" data-icon="delete" onClick={() => uninstallBlockedReason ? onBlockedAction?.(uninstallBlockedReason) : onUninstall(row.backend, item.build)} disabled={row.busy} aria-disabled={uninstallBlockedReason ? "true" : undefined} title={uninstallBlockedReason ?? undefined} aria-label={`${t("panel.remove")}: ${backendName} ${version}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.remove")}</button>
             </span>
           </li>;
         })}

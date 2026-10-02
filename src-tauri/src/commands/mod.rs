@@ -12,6 +12,7 @@ pub(crate) mod gateway;
 pub(crate) mod launch;
 pub(crate) mod mcp;
 pub(crate) mod models;
+pub(crate) mod personalization;
 pub(crate) mod runtimes;
 pub(crate) mod server;
 pub(crate) mod sessions;

@@ -1,6 +1,6 @@
 # Privacy policy
 
-Last updated: 2026-09-21
+Last updated: 2026-10-02
 
 AioLM is a local-first Windows desktop application. It checks public GitHub release metadata at desktop startup to notify users of application updates. Other network operations occur when using the corresponding features described below.
 
@@ -17,6 +17,7 @@ The following network requests can occur:
 - GitHub API, GitHub release assets, and commit archives for runtime discovery, release metadata, and explicitly requested pull-request builds.
 - Hugging Face API and model files when the user searches Discover or downloads a selected model/projector.
 - A local or remote LLM endpoint selected by the user for chat, embeddings, model lists, or compatible API features. The endpoint receives the request data required to perform that operation.
+- Chat requests include available user AGENTS.md instructions and the text of skills selected by the user or read by the model. These files remain on the user's computer; their loaded text is sent to the selected chat endpoint as request context. See [chat personalization](../reference/personalization.md).
 - User-configured MCP servers and developer gateways. These are third-party programs or endpoints and should be trusted and reviewed by the user.
 - GitHub release metadata and assets when the user runs `install.ps1` to install or verify a release.
 - One GitHub release metadata check at desktop startup, and additional checks requested in **Settings → General → Application updates**. The request identifies the app version in its User-Agent and sends normal network metadata, without local settings, models or conversations. Installer assets and checksums are downloaded only after the user confirms an update; **Open release page** opens the public release page in the user's browser.
@@ -38,4 +39,3 @@ During an update check or a user-requested network operation, the relevant provi
 ## Changes and contact
 
 Material changes to this policy will be announced in the repository and reflected in the “Last updated” date. For privacy or security questions, contact the maintainer privately through the instructions in [SECURITY.md](../SECURITY.md).
-

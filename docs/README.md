@@ -20,6 +20,7 @@ Guides, technical reference, and policies for the current AioLM implementation.
 - [Server options](reference/server-options.md): tuning controls and runtime option behavior.
 - [Model selection and settings](reference/model-settings.md): shared settings dialog, named profiles, and model and session execution.
 - [Chat response metrics](reference/chat-metrics.md): PP/TG counts, durations, throughput, request timing, and persistence.
+- [Chat personalization](reference/personalization.md): user AGENTS.md files, skill discovery and manual invocation, and the in-app editor.
 - [Benchmarks](reference/benchmarks.md): serving workloads, metric definitions, result history, and CSV export.
 - [Data migration](reference/migration.md): storage migration and compatibility.
 

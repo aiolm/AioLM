@@ -1,18 +1,19 @@
 import type { Dispatch, SetStateAction } from "react";
 import * as api from "../../shared/api/index";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
-import { canBuildPrBackend, isInstallCancellation } from "../../shared/runtime/runtimeUtils";
+import { canBuildPrBackend, formatRuntimeVersion, isInstallCancellation } from "../../shared/runtime/runtimeUtils";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { finishTask, registerTask } from "../../shared/state/taskRegistry";
 import type { BackendRow } from "./runtimesHelpers";
 
 const RUNTIME_TASK_ID = "runtime-operation";
 
-function beginRuntimeTask(label: string, phase: string, cancel = api.rtCancel): string {
+function beginRuntimeTask(label: string, phase: string, cancel = api.rtCancel, installs = false): string {
   // The download, extraction and build all run in the backend and keep emitting
   // progress whichever panel is on screen, so leaving this page costs nothing.
-  // The task strip is where it stays visible.
-  return registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: true, cancel });
+  // The task strip is where it stays visible. Only a real installation counts
+  // as a finished download; exports and imports are local file work.
+  return registerTask({ id: RUNTIME_TASK_ID, kind: "runtime", label, phase, interruptible: true, cancel, notifyOnComplete: installs ? "download" : undefined });
 }
 
 interface CommonDeps {
@@ -45,10 +46,10 @@ export async function runInstall(
     return;
   }
   setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true } : item));
-  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"));
+  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"), api.rtCancel, true);
   try {
-    await api.rtInstall(backend, info.build);
-    deps.flashT(translate(deps.locale, "ui.installedOk", { backend, build: info.build }));
+    const installed = await api.rtInstall(backend, info.build);
+    deps.flashT(translate(deps.locale, "ui.installedOk", { backend, build: formatRuntimeVersion(info.build, installed?.version) }));
     await refresh();
     finishTask(taskId, "completed");
   } catch (error) {
@@ -71,6 +72,7 @@ export async function runExportRuntime(
   setBundleBusy: (value: boolean) => void,
   setBundleProgress: (value: api.DownloadProgress | null) => void,
   deps: CommonDeps,
+  version?: api.RuntimeVersion,
 ): Promise<void> {
   if (runtimeBusy) return;
   if (deps.serverRunning) {
@@ -85,7 +87,7 @@ export async function runExportRuntime(
     const info = await api.rtExport(backend, build);
     deps.flashT(translate(deps.locale, "ui.runtimeBundleExported", {
       backend: info.backend,
-      build: info.build,
+      build: formatRuntimeVersion(info.build, version),
       path: info.path,
       sha: info.archive_sha256,
     }));
@@ -124,7 +126,7 @@ export async function runImportRuntime(
   const taskId = beginRuntimeTask(translate(deps.locale, "ui.importRuntimeBundle"), translate(deps.locale, "ui.runtimeBundleWorking"));
   try {
     const installed = await api.rtImport();
-    deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: installed.backend, build: installed.build }));
+    deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: installed.backend, build: formatRuntimeVersion(installed.build, installed.version) }));
     await refresh(true);
     finishTask(taskId, "completed");
   } catch (error) {
@@ -227,7 +229,7 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
   state.setPrBusy(true);
   state.setActivePrBackend(backend);
   state.setRows((previous) => previous.map((item) => item.backend === backend ? { ...item, busy: true, progress: null } : item));
-  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"));
+  const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"), api.rtCancel, true);
   try {
     const installed = await api.rtInstallPr(backend, source, preview.commit);
     // A PR keeps one directory, so a rebuild swaps the bytes behind a row

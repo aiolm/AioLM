@@ -12,6 +12,7 @@ AioLM (All-in-One LM) — Windows desktop runtime manager for `llama.cpp`. Uses 
 - Managed runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO) with portable ZIP support
 - PR builds by number/URL with provenance review
 - Streaming chat with local threads, document context, and embeddings
+- User AGENTS.md instructions, local skills, and an in-app personalization editor
 - Projects, Hugging Face Discover, and MCP servers
 - Independent model loading and one API server page for OpenAI- and Anthropic-compatible clients
 - Tuning for server and sampling parameters
@@ -24,6 +25,11 @@ from **API server** in the sidebar to use loaded models from other applications:
 the URL, key and model ID, and pick the OpenAI or Anthropic example on the same page.
 The API stays up when models are unloaded or replaced, and stopping it leaves internal
 chat and loaded models available. See [API server and model lifecycle](docs/guides/local-api.md).
+
+Use **Settings → Personalization** to edit your shared and AioLM-specific
+AGENTS.md instructions. Chat reads these files for new turns and can load local
+skills automatically or through the skill picker and `$skill-name` references.
+See [chat personalization](docs/reference/personalization.md).
 
 ## Platform support
 

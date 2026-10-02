@@ -1,3 +1,4 @@
+import { formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
 import { summarizePublicBenchmarkRows } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import type { PublicBenchmarkSubmission } from '../../shared/contracts/benchmark/publicBenchmark.ts';
 import type { benchmarkCopy } from './benchmarkCopy.ts';
@@ -46,7 +47,7 @@ export function PublicBenchmarkSummary({ snapshot, copy }: { snapshot: PublicBen
         <h4>{copy.shareRuntime}</h4>
         <dl>
           <div><dt>{copy.shareBackend}</dt><dd>{snapshot.runtime.backend ?? unknown}</dd></div>
-          <div><dt>{copy.runtimeVersion}</dt><dd>{snapshot.runtime.version ?? unknown}</dd></div>
+          <div><dt>{copy.runtimeVersion}</dt><dd>{formatRuntimeVersionLabel(snapshot.runtime) ?? unknown}</dd></div>
           <div><dt>{copy.shareAppVersion}</dt><dd>{snapshot.app_version ?? unknown}</dd></div>
         </dl>
       </section>

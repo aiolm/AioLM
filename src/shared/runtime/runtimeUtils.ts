@@ -1,3 +1,5 @@
+import { formatRuntimeVersionLabel } from "@aiolm/benchmark-contracts";
+
 export type CapabilityState = "available" | "failed preflight" | "not installed" | "unsupported by this runtime build" | "unknown";
 
 export interface LoadingProfile {
@@ -19,31 +21,29 @@ export interface RuntimeVersion {
   commit: string;
 }
 
-/** `b10638` -> `10638`; anything else is returned unchanged. */
-export function buildNumber(build: string): string {
-  return /^b\d+$/.test(build) ? build.slice(1) : build;
+/** Every runtime AioLM manages today is a llama.cpp build; other engines name themselves. */
+const RUNTIME_ENGINE = "llama.cpp";
+
+/**
+ * An installed runtime as `version(build)`: `0.3.0-dev(10638)`.
+ *
+ * llama.cpp tags every CI build as `bNNNN` and only the binary itself knows
+ * the semantic version, so a half nobody recorded stays `?` — `?(10638)` —
+ * rather than being invented. The build number the binary reported names it
+ * ahead of the storage id, which for a PR or local build is no build number;
+ * a reported 0 is llama.cpp's "built without git" and leaves the storage id.
+ */
+export function formatRuntimeVersion(build: string, version?: RuntimeVersion | null, engine = RUNTIME_ENGINE): string {
+  return formatRuntimeVersionLabel({ name: engine, version: version?.semver, build: version?.build || build }) ?? "";
 }
 
 /**
- * llama.cpp tags every CI build as `bNNNN` and only the binary itself knows the
- * semantic version, so show the version when it has been recorded and fall back
- * to a spelled-out build number otherwise.
- *
- * `0.3.0-dev` / `build 10638`
+ * A benchmark or probe names the runtime it measured, even after that
+ * installation changes: the version text it recorded, then the build id it was
+ * recorded with, and never the runtime installed today.
  */
-export function formatRuntimeVersion(build: string, version?: RuntimeVersion | null): string {
-  if (version?.semver) return version.semver;
-  return `build ${buildNumber(build)}`;
-}
-
-/** A benchmark names the runtime it measured, even after that installation changes. */
-export function formatRecordedRuntimeVersion(version: string | null | undefined, fallback: string): string {
-  const text = version?.trim();
-  if (!text || text === "unknown") return fallback;
-  const release = text.match(/(?:^|\bversion:\s*)v?(\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?)/i)?.[1];
-  if (release) return release;
-  if (/^b?\d+(?:-[\da-f]+)?$/i.test(text)) return `build ${text.replace(/^b/, "")}`;
-  return text;
+export function formatRecordedRuntimeVersion(version: string | null | undefined, build: string | null | undefined, unavailable: string, engine = RUNTIME_ENGINE): string {
+  return formatRuntimeVersionLabel({ name: engine, version, build }) ?? unavailable;
 }
 
 export function extractFlagNames(help: string): string[] {

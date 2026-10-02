@@ -23,6 +23,30 @@
 .settings-danger, .settings-note { margin: 12px; }
 .settings-danger .app-button { margin-top: 12px; }
 .settings-wipe-slot { min-height: 48px; }
+/* Typography previews render the selected stacks directly, so they update with
+   the choice even before the document-wide properties change. */
+.settings-preview { margin: 0; padding: var(--ui-row-space) 12px; border-bottom: 1px solid var(--ui-border); }
+.settings-preview > p { max-width: 72ch; color: var(--ui-ink); font-size: var(--ui-text); }
+.settings-preview-code { margin-top: 8px; padding: 10px 12px; border-radius: var(--ui-radius-menu); font-size: var(--ui-text); line-height: 1.7; overflow-x: auto; }
+.settings-preview-code > code { font-size: .92em; white-space: pre; }
+.settings-copy > strong { font-size: var(--ui-text); font-weight: 550; }
+.settings-notification-actions { flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-notification-feedback { flex-basis: 100%; }
+/* Personalization edits whole instruction files, so the editor takes the full row width. */
+.settings-personalization-sources { margin: 0; min-inline-size: 0; }
+.settings-personalization-choices { display: flex; flex: 1 1 22rem; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.settings-personalization-choice { display: flex; flex: 1 1 14rem; align-items: start; gap: 8px; min-width: 0; padding: 8px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); cursor: pointer; }
+.settings-personalization-choice:has(input:checked) { border-color: var(--ui-focus); }
+.settings-personalization-choice:has(input:focus-visible) { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.settings-personalization-choice input { margin-top: 4px; accent-color: var(--ui-focus); }
+.settings-personalization-choice > span { display: flex; flex-direction: column; min-width: 0; font-size: var(--ui-text); }
+.settings-personalization-choice code { color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.settings-personalization-editor { flex-direction: column; align-items: stretch; }
+.settings-personalization-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-personalization-meta label { font-size: var(--ui-text); font-weight: 550; }
+.settings-personalization-path, .settings-personalization-hint { color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.settings-personalization-textarea { min-height: 16rem; resize: vertical; font-family: var(--font-chat-code); white-space: pre-wrap; }
+.settings-personalization-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .app-update-settings { align-items: start; }
 .app-update-settings h4 { font-size: var(--ui-text); font-weight: 550; }
 .app-update-content { flex: 1 1 22rem; min-width: 0; font-size: var(--ui-text-support); line-height: 1.65; overflow-wrap: break-word; }

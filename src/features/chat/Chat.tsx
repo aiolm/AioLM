@@ -16,17 +16,22 @@ import ChatThreadSidebar from "./ChatThreadSidebar";
 import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
-import { SESSION_STATUS_CHANGED_EVENT, notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus } from "../../shared/runtime/sessionUtils";
+import { notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus } from "../../shared/runtime/sessionUtils";
+import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { titleFromMessage } from "./chatHistory";
+import { useChatSkills } from "./useChatSkills";
+import ChatSkillPicker from "./ChatSkillPicker";
+import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const ct = (key: ChatTextKey) => t(`chat.${key}`);
+  const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
   const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
   const [input, setInput] = useState("");
   const [copied, setCopied] = useState<number | null>(null);
@@ -38,33 +43,17 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
 
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    let refreshing = false;
-    const refreshSessions = () => {
-      if (refreshing) return;
-      refreshing = true;
-      void api.sessionList().then(api.normalizeSessionList).then((items) => {
-        if (!cancelled) {
-          setSessions(items.filter((item) => item.id !== "default"));
-          setSessionsLoaded(true);
-        }
-      }).catch(() => {
-        if (!cancelled) {
-          setSessionsLoaded(true);
-        }
-      }).finally(() => { refreshing = false; });
-    };
-    refreshSessions();
-    const interval = window.setInterval(refreshSessions, 3000);
-    window.addEventListener(SESSION_STATUS_CHANGED_EVENT, refreshSessions);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-      window.removeEventListener(SESSION_STATUS_CHANGED_EVENT, refreshSessions);
-    };
-  }, [active]);
+  // The shared poller also refreshes on session status changes, and serves an
+  // open model settings dialog from the same session_list request.
+  useSessionPolling({
+    active,
+    details: true,
+    onData: (items) => {
+      setSessions(items.filter((item) => item.id !== "default"));
+      setSessionsLoaded(true);
+    },
+    onError: () => setSessionsLoaded(true),
+  });
 
   const savedSessions = store.cfg?.sessions ?? [];
   const availableSessions = [
@@ -90,6 +79,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, setError: (message) => setError(message) });
   const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools({ setError: (message) => setError(message) });
 
+  const skills = useChatSkills();
+
   const requireIdle = () => {
     if (phase === "idle" && !pendingToolCall) return true;
     setError("Stop the current response first.");
@@ -99,6 +90,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const resetComposer = () => {
     setInput("");
     clearComposerAttachments();
+    skills.clearSelectedSkills();
     resetChatState();
   };
 
@@ -127,6 +119,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     modelProfile: effectiveConfig ? modelSettings?.getRequestProfile(selectedSessionId, effectiveConfig) : undefined,
     input, setInput, attachments, documents, setAttachments, setDocuments,
     mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
+    selectedSkillIds: skills.selectedSkillIds, onSkillsAccepted: skills.clearSelectedSkills, locale,
   });
 
   const openModelSettings = () => {
@@ -231,7 +224,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    // IME composition (including the keyCode 229 some engines report) must never send.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey && (preferences?.chat.enterToSend ?? true)) {
       event.preventDefault();
       sendMessage();
@@ -255,7 +249,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         ]}
         selectedSessionId={selectedSessionId}
         model={model || configuredModel}
-        onSelectSession={(id) => { if (requireIdle()) setSelectedSessionId(id); }}
+        onSelectSession={(id) => { if (requireIdle()) { setSelectedSessionId(id); skills.clearSelectedSkills(); } }}
         ct={ct}
       />
 
@@ -329,6 +323,12 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             canSend={canSend}
             msgsLength={viewMessages.length}
             ct={ct}
+            skillPicker={<ChatSkillPicker native={skills.native} catalog={skills.catalog} warnings={skills.warnings} loadError={skills.loadError} loading={skills.loading} loaded={skills.loaded} selectedSkillIds={skills.selectedSkillIds} onToggleSkill={skills.toggleSkill} onRefresh={() => void skills.refreshSkills()} locked={phase !== "idle" || pendingToolCall !== null} closeLabel={ct("close")} pt={pt} />}
+            selectedSkills={skills.selectedSkills}
+            onRemoveSkill={skills.toggleSkill}
+            skillsLocked={phase !== "idle" || pendingToolCall !== null}
+            selectedSkillsLabel={pt("selectedSkills")}
+            removeSkillLabel={pt("removeSkill")}
           />
         </div>
       </div>

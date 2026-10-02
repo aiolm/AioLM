@@ -25,3 +25,4 @@ export {
   type ParsedServiceError, type UploadSessionRequest, type UploadSessionResponse,
   type UploadSessionStatus, type UploadSessionPoll, type ServiceErrorBody,
 } from './service.js';
+export { formatRuntimeVersionLabel, type RuntimeVersionLabelInput } from './runtimeLabel.js';

@@ -162,9 +162,6 @@ export const TUNING_CATEGORIES: readonly TuningCategory[] = [
   },
 ] as const;
 
-/** Alias retained for callers that prefer a definitions-oriented name. */
-export const TUNING_CATEGORY_DEFINITIONS = TUNING_CATEGORIES;
-
 export const SERVER_FIELDS: NumericField[] = [
   { key: "ngl", label: "GPU layers (ngl)", step: 1, min: 0, max: 999, server: true, hint: "0–999. 0 keeps inference on CPU; a value past the layer count offloads all of them.", category: "runtime", tooltip: { title: "GPU layers", description: "Number of model layers offloaded to the selected GPU." }, aliases: ["--n-gpu-layers", "--gpu-layers", "-ngl"] },
   { key: "ctx_size", label: "Context size", step: 256, min: 0, max: 131072, server: true, hint: "0 uses the model context size. Restart required.", category: "context", tooltip: { title: "Context size", description: "Maximum prompt and generation context allocated by the server." }, aliases: ["--ctx-size", "-c"] },

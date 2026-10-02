@@ -17,6 +17,7 @@ mod mcp;
 pub mod models;
 pub mod performance_bench;
 pub mod performance_memory;
+mod personalization;
 mod process_output;
 mod procutil;
 mod resource_estimate;
@@ -116,6 +117,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::restore_main_window(app);
         }))
+        // Completion alerts use the official plugin's native path on every
+        // desktop OS. The frontend awaits its `notify` command directly: on
+        // desktop that call only confirms the toast was prepared and handed to
+        // the OS, never that the OS displayed it.
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_update::check_app_update,
@@ -129,6 +135,10 @@ pub fn run() {
             commands::conversations::conversation_delete,
             commands::conversations::conversations_import,
             commands::conversations::conversations_clear,
+            commands::personalization::chat_personalization,
+            commands::personalization::personalization_read_skill,
+            commands::personalization::personalization_read_agents,
+            commands::personalization::personalization_save_agents,
             commands::models::list_models,
             commands::models::model_metadata,
             commands::models::estimate_model_resources,
@@ -211,8 +221,21 @@ pub fn run() {
         // webview is still being created; the runtime then drops the window but
         // keeps the process, which would leave AioLM running with no window and
         // hand every later launch to that process.
+        //
+        // On Windows and Linux the app draws its own title bar, so the native
+        // frame is removed here, while the window is still hidden, rather than
+        // after it appears. The OS keeps resizing from the edges, the Windows
+        // drop shadow and rounded corners (`shadow` defaults on), and closing
+        // still goes through `CloseRequested`, so the tray setting below keeps
+        // working. macOS keeps its native frame and traffic lights. The
+        // frontend asks `isDecorated()` instead of guessing the platform, so a
+        // frame that could not be removed simply keeps the native title bar.
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(any(windows, target_os = "linux"))]
+                if let Err(error) = window.set_decorations(false) {
+                    eprintln!("could not remove the native title bar: {error}");
+                }
                 let _ = window.show();
                 let _ = window.set_focus();
             }

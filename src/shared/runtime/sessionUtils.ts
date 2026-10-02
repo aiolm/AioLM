@@ -88,16 +88,6 @@ export function toggleGpuSelection(placement: GpuPlacement, id: string, devices:
   };
 }
 
-export function parseTensorSplit(value: string, expectedCount: number): number[] | null {
-  if (!value.trim()) return [];
-  const parts = value.split(",").map((part) => part.trim());
-  if (parts.some((part) => !part)) return null;
-  const values = parts.map(Number);
-  if (values.some((number) => !Number.isFinite(number) || number < 0)) return null;
-  if (expectedCount > 1 && values.length !== expectedCount) return null;
-  return values;
-}
-
 export function gpuTensorSplitDrafts(placement: GpuPlacement): Record<string, string> {
   return Object.fromEntries(placement.gpu_ids.map((id, index) => [id, String(placement.tensor_split[index] ?? 1)]));
 }

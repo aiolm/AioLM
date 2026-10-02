@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState, type ReactNode } from "react";
 import { normalizeDisplayText } from "../shared/lib/displayPaths";
 import { migrateBrowserStorage, type MigratedPath } from "../shared/storage/storageMigration";
 import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
+import TitleBar from "./TitleBar";
 
 // Bootstrap cannot load the normal catalogs or preferences before migration.
 const copy = {
@@ -60,10 +61,7 @@ export default function Bootstrap() {
     return () => { cancelled = true; };
   }, [attempt]);
 
-  if (content) return content;
-  if (!error) return <SurfaceLoading />;
-
-  return (
+  const failure = (
     <div className="app-runtime-empty">
       <div className="app-empty-state">
         <div className="app-eyebrow">AioLM · All-In-One LM</div>
@@ -76,6 +74,16 @@ export default function Bootstrap() {
           </button>
         </div>
       </div>
+    </div>
+  );
+
+  // The title bar stays mounted across loading, failure and the app itself, so
+  // a frameless window can always be moved and closed, and the app below it is
+  // never remounted because of the bar.
+  return (
+    <div className="app-window">
+      <TitleBar />
+      <div className="app-window-body">{content ?? (error ? failure : <SurfaceLoading />)}</div>
     </div>
   );
 }

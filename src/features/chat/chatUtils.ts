@@ -84,26 +84,8 @@ export function rankVectorDocumentChunks(
     .sort((left, right) => right.score - left.score || left.chunk.order - right.chunk.order);
 }
 
-export function vectorDocumentSources(
-  chunks: DocumentChunk[],
-  vectors: number[][],
-  queryIndex: number,
-  limit = 4,
-): string[] {
-  return rankedDocumentSources(rankVectorDocumentChunks(chunks, vectors, queryIndex).slice(0, Math.max(1, limit)));
-}
-
 function rankedDocumentSources(ranked: RankedDocumentChunk[]): string[] {
   return ranked.map(({ chunk, score }) => `${chunk.document.name} @ ${chunk.offset} (${score.toFixed(2)})`);
-}
-
-export function vectorDocumentCitations(
-  chunks: DocumentChunk[],
-  vectors: number[][],
-  queryIndex: number,
-  limit = 4,
-): ChatCitation[] {
-  return rankedDocumentCitations(rankVectorDocumentChunks(chunks, vectors, queryIndex).slice(0, Math.max(1, limit)));
 }
 
 function rankedDocumentCitations(ranked: RankedDocumentChunk[]): ChatCitation[] {

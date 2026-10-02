@@ -5,7 +5,8 @@ import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { DEEP_VERIFICATION_TASK } from "./useDeepVerification";
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
-import { buildNumber, capabilityLabel } from "../../shared/runtime/runtimeUtils";
+import { capabilityLabel, formatRecordedRuntimeVersion } from "../../shared/runtime/runtimeUtils";
+import { useRuntimeVersionLabel } from "../../shared/runtime/installedRuntimes";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 
 interface Props {
@@ -24,6 +25,9 @@ interface Props {
 export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, probeTarget, onProbe, deepVerify }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
+  const targetVersion = useRuntimeVersionLabel(probeTarget?.backend ?? "", probeTarget?.build ?? "");
+  // The probe names the binary it just ran; its raw banner stays in the probe result, not the label.
+  const probedVersion = capabilities ? normalizeDisplayText(formatRecordedRuntimeVersion(capabilities.version, capabilities.build, t("ui.notReported"))) : "";
   return (
     <section className="runtime-capabilities-card mb-4 app-card"  aria-labelledby="runtime-capabilities-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -44,11 +48,11 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
         {deepVerify.record && <p className="app-section-hint">{normalizeDisplayText(deepVerify.record.detail)}</p>}
         {deepVerify.error && <FeedbackBanner tone="error">{normalizeDisplayText(deepVerify.error)}</FeedbackBanner>}
       </div>}
-      <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: buildNumber(probeTarget.build) }) : t("ui.probeChooseBuild")}</p>
+      <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>
       {capabilities && (
         <div className="mt-3.5 grid gap-2.5 app-summary-grid">
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeState")}</div><div className="mt-1"><StatusBadge label={capabilityLabel(capabilities.state)} tone={capabilities.state === "available" ? "success" : "warning"} /></div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {capabilities.build}</div></div>
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 max-h-20 overflow-auto whitespace-pre-wrap break-words font-mono text-xs ui-color-ink" >{normalizeDisplayText(capabilities.version || t("ui.notReported"))}</div></div>
+          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeState")}</div><div className="mt-1"><StatusBadge label={capabilityLabel(capabilities.state)} tone={capabilities.state === "available" ? "success" : "warning"} /></div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {probedVersion}</div></div>
+          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 text-xs tabular-nums ui-color-ink" >{probedVersion}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 max-h-20 overflow-auto app-text-wrap font-mono text-xs ui-color-faint" >{displayFlags || t("ui.none")}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: capabilities.devices.length })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeBench")}</div><div className="mt-1"><StatusBadge label={capabilities.bench_available ? t("ui.benchAvailable") : t("ui.benchMissing")} tone={capabilities.bench_available ? "success" : "warning"} /></div><div className="mt-1 text-xs ui-color-faint" >llama-bench --help</div></div>

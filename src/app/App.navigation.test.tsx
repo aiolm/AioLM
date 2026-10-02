@@ -4,7 +4,7 @@ import { I18nProvider } from "../shared/i18n/i18n";
 import { createTestStore } from "../testing/appStore";
 import type { AppStore } from "../shared/state/store";
 import App from "./App";
-import { getTaskSnapshot, registerTask, removeTask } from "../shared/state/taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, removeTask, updateTask } from "../shared/state/taskRegistry";
 import { LocalTaskCancelButton } from "../shared/ui/TaskCancellation";
 import { setSessionActivity } from "../shared/state/sessionActivity";
 import type { ModelSettingsDialogProps } from "../features/model-settings/ModelSettingsDialog";
@@ -15,7 +15,8 @@ let showBenchmarkCancel = false;
 let benchmarkLoading: Promise<void> | null = null;
 const cancelBenchmark = vi.fn();
 vi.mock("../shared/state/store", () => ({ useAppStore: () => store }));
-vi.mock("../features/chat/Chat", () => ({ default: () => <input aria-label="Conversation draft" /> }));
+let chatRenders = 0;
+vi.mock("../features/chat/Chat", () => ({ default: () => { chatRenders += 1; return <input aria-label="Conversation draft" />; } }));
 vi.mock("../features/projects/Projects", () => ({ default: ({ onOpenTuning }: { onOpenTuning: () => void }) => <><input aria-label="Project draft" /><button onClick={onOpenTuning}>Project parameters</button></> }));
 vi.mock("../features/models/Models", () => ({ default: () => <p>Model library</p> }));
 vi.mock('../features/models/ModelWorkspace', () => ({ default: ({ section }: { section: { id: string } }) => <><p>Model library</p>{section.id === 'tuning' && <p>Parameter form</p>}{section.id === 'profiles' && <p>Saved profiles</p>}</> }));
@@ -201,6 +202,21 @@ describe("Workspace navigation", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
+  it("reports task progress without re-rendering mounted panels", async () => {
+    const view = mount();
+    await screen.findByLabelText("Conversation draft");
+    act(() => { registerTask({ id: "download", kind: "model-download", label: "model.gguf", interruptible: true, received: 0, total: 100 }); });
+    const summary = view.container.querySelector("details.app-activity > summary")!;
+    expect(summary.querySelector(".app-activity-count")).toHaveTextContent("1");
+    const renders = chatRenders;
+    // A download reports up to ten progress events a second.
+    for (const received of [10, 20, 30, 40, 50]) act(() => { updateTask("download", { received }); });
+    expect(chatRenders).toBe(renders);
+    act(() => { finishTask("download", "failed", "Network lost"); });
+    expect(summary.querySelector(".app-activity-count")).toHaveTextContent("0");
+    expect(view.container.querySelector("details.app-activity")).not.toHaveAttribute("hidden");
+  });
+
   it("guards navigation while settings can open without leaving the current workspace", async () => {
     mount();
     fireEvent.click(mainTab("Projects"));
@@ -220,6 +236,27 @@ describe("Workspace navigation", () => {
     confirm.mockReturnValue(true);
     fireEvent.click(mainTab("Run a model"));
     expect(await screen.findByText("Model library")).toBeVisible();
+  });
+
+  it("applies typography preferences in place without remounting the conversation", async () => {
+    mount();
+    const draft = await screen.findByLabelText("Conversation draft");
+    fireEvent.change(draft, { target: { value: "Keep this" } });
+    expect(document.documentElement.style.getPropertyValue("--font-sans")).toBe("");
+    fireEvent.click(mainTab("Settings"));
+    fireEvent.click(await screen.findByRole("tab", { name: "Appearance" }, { timeout: 5000 }));
+    fireEvent.click(screen.getByRole("combobox", { name: "App font" }));
+    fireEvent.click(screen.getByRole("option", { name: "Serif" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Chat line spacing" }));
+    fireEvent.click(screen.getByRole("option", { name: "Relaxed" }));
+    expect(document.documentElement.style.getPropertyValue("--font-sans")).toMatch(/serif$/);
+    expect(document.documentElement.style.getPropertyValue("--chat-prose-leading")).toBe("1.9");
+    expect(JSON.parse(localStorage.getItem("aiolm-preferences")!).values).toMatchObject({ appearance: { fontFamily: "serif" }, chat: { lineSpacing: "relaxed" } });
+    fireEvent.click(mainTab("Chat"));
+    expect(screen.getByLabelText("Conversation draft")).toBe(draft);
+    expect(draft).toHaveValue("Keep this");
+    document.documentElement.removeAttribute("style");
   });
 
   it("keeps projects beside conversations and retains the conversation draft", async () => {

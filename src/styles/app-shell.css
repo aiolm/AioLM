@@ -91,3 +91,22 @@
 .app-activity-error { color: var(--ui-danger); }
 .app-activity-notice { color: var(--ui-muted); }
 .app-activity-content { position: absolute; bottom: 32px; inset-inline: 0; max-height: calc(100% - 32px); overflow-y: auto; z-index: 35; padding-bottom: 12px; background: var(--ui-surface); border-top: 1px solid var(--ui-border); box-shadow: var(--ui-elev-2); }
+
+/* Frameless window (Windows and Linux desktop). The frame wraps every surface;
+   without a title bar the body fills the window exactly as before. The bar takes
+   the rail tone so it reads as one frame with the sidebar, with caption buttons
+   at the conventional 46px width and the platform's red close hover. */
+.app-window { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.app-window-body { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.app-titlebar { display: flex; align-items: stretch; flex-shrink: 0; height: 32px; background: var(--ui-sidebar); color: var(--ui-rail-ink); user-select: none; -webkit-user-select: none; }
+.app-titlebar-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-inline: 12px; font-size: var(--ui-text-caption); font-weight: 600; pointer-events: none; }
+.app-titlebar-brand .aiolm-mark { width: 16px; height: 16px; }
+.app-titlebar-controls { display: flex; margin-inline-start: auto; }
+.app-titlebar-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ui-rail-ink); }
+.app-titlebar-button:hover { background: var(--ui-nav-hover); }
+.app-titlebar-button:focus-visible { outline-color: var(--ui-rail-focus); outline-offset: -2px; }
+.app-titlebar-button--close:hover, .app-titlebar-button--close:focus-visible { background: #C42B1C; color: #FFFFFF; }
+@media (forced-colors: active) {
+  .app-titlebar { border-bottom: 1px solid CanvasText; }
+  .app-titlebar-button:hover, .app-titlebar-button--close:hover { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+}

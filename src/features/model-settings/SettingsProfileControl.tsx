@@ -16,6 +16,7 @@ import { useServerOptions } from '../tuning/useServerOptions';
 import GpuPlacementSummary from './GpuPlacementSummary';
 import ServerArgumentsSummary from './ServerArgumentsSummary';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
+import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import './settings-profile.css';
 
 export interface ProfileViewItem {
@@ -80,6 +81,7 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const renderValue = valueRenderer(locale);
+  const installedRuntimes = useInstalledRuntimes();
   const backend = settings.active_backend ?? runtime.backend ?? '';
   const build = settings.active_build ?? runtime.build ?? '';
   const sameRuntime = backend === (runtime.backend ?? '') && build === (runtime.build ?? '');
@@ -109,7 +111,8 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
             <dt>{profileFieldLabel(key, locale)}</dt>
             <dd>{inherited ? <DefaultValue info={settingDefaultInfo(key, source.options, source.verified, locale, { selected: mode === 'current' })} />
               : placement ? <GpuPlacementSummary placement={placement} devices={displayDevices} />
-                : args ? <ServerArgumentsSummary args={args} options={source.options} /> : renderValue(value)}</dd>
+                : args ? <ServerArgumentsSummary args={args} options={source.options} />
+                  : key === 'active_build' && typeof value === 'string' && value ? runtimeVersionLabel(installedRuntimes, backend, value) : renderValue(value)}</dd>
           </div>;
         })}</dl>
       </section>;

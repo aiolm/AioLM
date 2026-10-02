@@ -1,4 +1,4 @@
-import { buildNumber } from "../../shared/runtime/runtimeUtils";
+import { useRuntimeVersionLabel } from "../../shared/runtime/installedRuntimes";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import type { UiTextKey } from "../../shared/i18n/uiI18n";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
@@ -22,9 +22,10 @@ export default function RuntimeRemovalNotice({ t, backend, build, references }: 
   build: string;
   references: RuntimeReference[];
 }) {
+  const version = useRuntimeVersionLabel(backend, build);
   return (
     <div className="runtime-removal-notice">
-      <p>{t("ui.removeRuntimeBody", { backend, build: buildNumber(build) })}</p>
+      <p>{t("ui.removeRuntimeBody", { backend, build: version })}</p>
       {references.length === 0
         ? <p className="app-section-hint">{t("ui.removeRuntimeUnused")}</p>
         : <>

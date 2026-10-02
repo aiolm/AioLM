@@ -1,13 +1,20 @@
 import type { ThemeMode } from "./theme";
 import { type Locale } from "../i18n/i18nCatalog";
 
+export type ChatLineSpacing = "compact" | "normal" | "relaxed";
+export type AppFontFamily = "default" | "system" | "serif";
+export type CodeFontFamily = "default" | "system";
+/** Which finished tasks may raise an operating-system notification. */
+export interface NotificationPreferences { chat: boolean; downloads: boolean; benchmark: boolean }
+
 export interface AppPreferences {
   locale: Locale;
   theme: ThemeMode;
-  chat: { enterToSend: boolean; showTimestamps: boolean; streamResponses: boolean; compactMessages: boolean };
+  chat: { enterToSend: boolean; showTimestamps: boolean; streamResponses: boolean; compactMessages: boolean; lineSpacing: ChatLineSpacing };
   server: { autoStart: boolean; autoStopOnExit: boolean; pollIntervalMs: number };
-  appearance: { reduceMotion: boolean; density: "comfortable" | "compact" };
+  appearance: { reduceMotion: boolean; density: "comfortable" | "compact"; fontFamily: AppFontFamily; codeFontFamily: CodeFontFamily };
   advanced: { developerMode: boolean; confirmDestructiveActions: boolean };
+  notifications: NotificationPreferences;
 }
 
 interface StoredPreferences { version: 1; values: AppPreferences }
@@ -15,14 +22,19 @@ const KEY = "aiolm-preferences";
 
 export const defaultPreferences = (): AppPreferences => ({
   locale: "en", theme: "system",
-  chat: { enterToSend: true, showTimestamps: true, streamResponses: true, compactMessages: false },
+  chat: { enterToSend: true, showTimestamps: true, streamResponses: true, compactMessages: false, lineSpacing: "normal" },
   server: { autoStart: false, autoStopOnExit: false, pollIntervalMs: 1000 },
-  appearance: { reduceMotion: false, density: "comfortable" },
+  // "default" keeps the bundled typography the app shipped with.
+  appearance: { reduceMotion: false, density: "comfortable", fontFamily: "default", codeFontFamily: "default" },
   advanced: { developerMode: false, confirmDestructiveActions: true },
+  // Off until the user opts in, so an upgrade never starts raising OS alerts.
+  notifications: { chat: false, downloads: false, benchmark: false },
 });
 
 const isLocale = (v: unknown): v is Locale => v === "ko" || v === "en" || v === "ja" || v === "zh";
 const isTheme = (v: unknown): v is ThemeMode => v === "light" || v === "dark" || v === "system";
+const oneOf = <T extends string>(values: readonly T[], v: unknown, fallback: T): T => values.includes(v as T) ? v as T : fallback;
+const strictBool = (v: unknown, fallback: boolean): boolean => typeof v === "boolean" ? v : fallback;
 
 export function validatePreferences(input: Partial<AppPreferences> | null | undefined): AppPreferences {
   const d = defaultPreferences();
@@ -30,10 +42,13 @@ export function validatePreferences(input: Partial<AppPreferences> | null | unde
   return {
     locale: isLocale(p.locale) ? p.locale : d.locale,
     theme: isTheme(p.theme) ? p.theme : d.theme,
-    chat: { ...d.chat, ...(p.chat ?? {}), enterToSend: Boolean(p.chat?.enterToSend ?? d.chat.enterToSend), showTimestamps: Boolean(p.chat?.showTimestamps ?? d.chat.showTimestamps), streamResponses: Boolean(p.chat?.streamResponses ?? d.chat.streamResponses), compactMessages: Boolean(p.chat?.compactMessages ?? d.chat.compactMessages) },
+    chat: { ...d.chat, ...(p.chat ?? {}), enterToSend: Boolean(p.chat?.enterToSend ?? d.chat.enterToSend), showTimestamps: Boolean(p.chat?.showTimestamps ?? d.chat.showTimestamps), streamResponses: Boolean(p.chat?.streamResponses ?? d.chat.streamResponses), compactMessages: Boolean(p.chat?.compactMessages ?? d.chat.compactMessages), lineSpacing: oneOf(["compact", "normal", "relaxed"], p.chat?.lineSpacing, d.chat.lineSpacing) },
     server: { ...d.server, ...(p.server ?? {}), autoStart: Boolean(p.server?.autoStart ?? d.server.autoStart), autoStopOnExit: Boolean(p.server?.autoStopOnExit ?? d.server.autoStopOnExit), pollIntervalMs: [500, 1000, 2000, 5000].includes(Number(p.server?.pollIntervalMs)) ? Number(p.server?.pollIntervalMs) : d.server.pollIntervalMs },
-    appearance: { ...d.appearance, ...(p.appearance ?? {}), reduceMotion: Boolean(p.appearance?.reduceMotion ?? d.appearance.reduceMotion), density: p.appearance?.density === "compact" ? "compact" : "comfortable" },
+    appearance: { ...d.appearance, ...(p.appearance ?? {}), reduceMotion: Boolean(p.appearance?.reduceMotion ?? d.appearance.reduceMotion), density: p.appearance?.density === "compact" ? "compact" : "comfortable", fontFamily: oneOf(["default", "system", "serif"], p.appearance?.fontFamily, d.appearance.fontFamily), codeFontFamily: oneOf(["default", "system"], p.appearance?.codeFontFamily, d.appearance.codeFontFamily) },
     advanced: { ...d.advanced, ...(p.advanced ?? {}), developerMode: Boolean(p.advanced?.developerMode ?? d.advanced.developerMode), confirmDestructiveActions: Boolean(p.advanced?.confirmDestructiveActions ?? d.advanced.confirmDestructiveActions) },
+    // Built field by field: preferences saved before this group existed, or a
+    // hand-edited import, can only enable a category with a real boolean.
+    notifications: { chat: strictBool(p.notifications?.chat, d.notifications.chat), downloads: strictBool(p.notifications?.downloads, d.notifications.downloads), benchmark: strictBool(p.notifications?.benchmark, d.notifications.benchmark) },
   };
 }
 

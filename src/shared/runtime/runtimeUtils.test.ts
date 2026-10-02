@@ -1,34 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { buildNumber, canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, formatRecordedRuntimeVersion, isInstallCancellation, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
+import { canBuildPrBackend, defaultPrBackend, defaultPrBackendForDevice, formatRuntimeVersion, formatRecordedRuntimeVersion, isInstallCancellation, PR_BUILD_BACKENDS, runtimeRowAction } from "./runtimeUtils";
 
-describe("runtime build labels", () => {
-  it("preserves the measured release after the installed runtime has changed", () => {
-    expect(formatRecordedRuntimeVersion("0.3.0-dev (build 123, commit abc123)", "0.4.1")).toBe("0.3.0-dev");
-    expect(formatRecordedRuntimeVersion("compiler: test\nversion: 0.3.0-dev (build 123)", "build 123")).toBe("0.3.0-dev");
-    expect(formatRecordedRuntimeVersion("b123-abcdef", "0.4.1")).toBe("build 123-abcdef");
-    expect(formatRecordedRuntimeVersion(null, "build 123")).toBe("build 123");
-  });
-  it("strips the b prefix from llama.cpp CI build tags", () => {
-    expect(buildNumber("b10638")).toBe("10638");
-    expect(buildNumber("b1")).toBe("1");
+describe("runtime version labels", () => {
+  it("names an installed runtime as version(build)", () => {
+    expect(formatRuntimeVersion("b10638", { semver: "0.3.0-dev", build: 10638, commit: "bf9421646" })).toBe("0.3.0-dev(10638)");
   });
 
-  it("leaves anything that is not a bNNNN tag alone", () => {
-    for (const value of ["system", "", "beta", "b10638-rc1", "10638"]) {
-      expect(buildNumber(value)).toBe(value);
-    }
+  it("marks a version nobody recorded instead of inventing one", () => {
+    expect(formatRuntimeVersion("b10638")).toBe("?(10638)");
+    expect(formatRuntimeVersion("b10603", null)).toBe("?(10603)");
+    expect(formatRuntimeVersion("b10638", { semver: "", build: 10638, commit: "" })).toBe("?(10638)");
   });
 
-  it("prefers the recorded semantic version over the bare build", () => {
-    expect(formatRuntimeVersion("b10638", { semver: "0.3.0-dev", build: 10638, commit: "bf9421646" }))
-      .toBe("0.3.0-dev");
+  it("prefers the build the binary reported over a PR or local storage id", () => {
+    expect(formatRuntimeVersion("pr12345", { semver: "0.3.0-dev", build: 10640, commit: "abc" })).toBe("0.3.0-dev(10640)");
+    expect(formatRuntimeVersion("pr12345")).toBe("?(pr12345)");
+    expect(formatRuntimeVersion("local_b10840_nop2p")).toBe("?(local_b10840_nop2p)");
+    // llama.cpp reports build 0 when compiled without git: no number to prefer.
+    expect(formatRuntimeVersion("pr12345", { semver: "0.0.0-dev", build: 0, commit: "" })).toBe("0.0.0-dev(pr12345)");
   });
 
-  it("falls back to the build number when no version was recorded", () => {
-    expect(formatRuntimeVersion("b10638")).toBe("build 10638");
-    expect(formatRuntimeVersion("b10603", null)).toBe("build 10603");
-    // A manifest without a usable semver must not render a dangling separator.
-    expect(formatRuntimeVersion("b10638", { semver: "", build: 10638, commit: "" })).toBe("build 10638");
+  it("leaves another engine's own version untouched", () => {
+    expect(formatRecordedRuntimeVersion("b123-abcdef", null, "n/a", "vllm")).toBe("b123-abcdef");
+    expect(formatRuntimeVersion("b7", { semver: "0.6.3", build: 0, commit: "" }, "MLX")).toBe("0.6.3(b7)");
+  });
+
+  it("keeps the runtime a benchmark measured after the installation changes", () => {
+    expect(formatRecordedRuntimeVersion("0.3.0-dev (build 123, commit abc123)", "b999", "n/a")).toBe("0.3.0-dev(123)");
+    expect(formatRecordedRuntimeVersion("compiler: test\nversion: 0.3.0-dev (build 123)", "b999", "n/a")).toBe("0.3.0-dev(123)");
+    expect(formatRecordedRuntimeVersion("version: 4589 (1a2b3c4)", "b999", "n/a")).toBe("?(4589)");
+    expect(formatRecordedRuntimeVersion("b123-abcdef", "b999", "n/a")).toBe("?(123)");
+    expect(formatRecordedRuntimeVersion("unknown", "b123", "n/a")).toBe("?(123)");
+    expect(formatRecordedRuntimeVersion("", "", "n/a")).toBe("n/a");
   });
 });
 

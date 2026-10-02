@@ -545,7 +545,3 @@ export async function consumeAnthropicStream(
     }
   }
 }
-
-export function streamDeltaFromUsage(usage: StreamUsage | undefined): AnthropicStreamDelta {
-  return usage ? { usage: { input_tokens: Number(usage.prompt_tokens ?? 0), output_tokens: Number(usage.completion_tokens ?? 0) } } : {};
-}

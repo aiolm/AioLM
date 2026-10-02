@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createChatThread, loadChatWorkspace, loadChatWorkspaceAsync, mergeHydratedWorkspace, saveChatWorkspaceAsync, threadMatchesQuery, titleFromMessage, type ChatHistoryMessage, type ChatThread, type ChatWorkspace } from "./chatHistory";
 import { removeDocumentVectorsForPaths } from "./documentIndex";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
@@ -104,9 +104,11 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
     switchRef.current();
   }, [phase, msgsThreadId, activeThread]);
 
-  const visibleThreads = workspace.threads
+  // A search scans every message and attached document, so it must not rerun on
+  // each composer keystroke or streaming tick, which leave the threads unchanged.
+  const visibleThreads = useMemo(() => workspace.threads
     .filter((thread) => threadMatchesQuery(thread, threadQuery))
-    .sort((left, right) => right.updatedAt - left.updatedAt);
+    .sort((left, right) => right.updatedAt - left.updatedAt), [workspace.threads, threadQuery]);
 
   // Reading another conversation is always allowed. Only the buffer stays put
   // while a reply is arriving; the view is free to move.

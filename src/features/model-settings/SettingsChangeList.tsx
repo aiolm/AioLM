@@ -6,6 +6,7 @@ import DefaultValue from '../../shared/ui/DefaultValue';
 import type { ReactNode } from 'react';
 import type { ServerOption } from '../../shared/config/serverOptions';
 import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
+import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { profileControlCopy, profileFieldLabel } from './profileControlCopy';
 
 /** Renders a stored value the way the profile detail panel does, so the same
@@ -41,7 +42,11 @@ export default function SettingsChangeList({ saved, current, savedPrompt, curren
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const render = valueRenderer(locale);
+  const installedRuntimes = useInstalledRuntimes();
   const renderChange = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0 ? '{}' : render(value);
+  // A build id is storage identity; the person reads the version it names.
+  const renderBuild = (key: string, value: unknown, backend: string | undefined) =>
+    key === 'active_build' && typeof value === 'string' && value ? runtimeVersionLabel(installedRuntimes, backend ?? '', value) : renderChange(value);
   const changes = changedSettings(saved, current);
   const runtimeChanged = saved.active_backend !== current.active_backend || saved.active_build !== current.active_build;
   const promptChanged = savedPrompt !== currentPrompt;
@@ -58,8 +63,8 @@ export default function SettingsChangeList({ saved, current, savedPrompt, curren
         if (index === 1 && change.path?.[0] === 'server_args') return key;
         return profileFieldLabel(key, locale);
       }).join(' · '),
-      change.beforeInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true, previousRuntime: runtimeChanged })} /> : renderChange(change.before),
-      change.afterInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true })} /> : renderChange(change.after)))}
+      change.beforeInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true, previousRuntime: runtimeChanged })} /> : renderBuild(change.key, change.before, saved.active_backend),
+      change.afterInherited ? <DefaultValue info={settingDefaultInfo(change.key, runtimeOptions, runtimeVerified, locale, { selected: true })} /> : renderBuild(change.key, change.after, current.active_backend)))}
     {promptChanged && row('__prompt', copy.prompt, savedPrompt || copy.empty, currentPrompt || copy.empty)}
   </dl>;
 }

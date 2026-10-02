@@ -2,7 +2,8 @@ import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import StableLabel from "../../shared/ui/StableLabel";
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import type { ChatSkill } from "../../shared/api/personalization";
 import type * as api from "../../shared/api/types";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
@@ -38,6 +39,12 @@ interface ChatComposerProps {
   canSend: boolean;
   msgsLength: number;
   ct: (key: ChatTextKey) => string;
+  skillPicker?: ReactNode;
+  selectedSkills?: ChatSkill[];
+  onRemoveSkill?: (id: string) => void;
+  skillsLocked?: boolean;
+  selectedSkillsLabel?: string;
+  removeSkillLabel?: string;
 }
 
 export default function ChatComposer({
@@ -45,6 +52,7 @@ export default function ChatComposer({
   mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
   aborting, onSend, canSend, msgsLength, ct,
+  skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
 }: ChatComposerProps) {
   const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken") : msgsLength === 0 ? ct("emptyConversation") : `${ct("responseReady")} · ${msgsLength} ${ct("messages")}`;
   return (
@@ -68,6 +76,8 @@ export default function ChatComposer({
         </div>
       </details>
 
+      {skillPicker}
+
       <div className="chat-pending-tool-slot">
         {pendingToolCall && <div className="app-card app-card--warning app-card--tight app-card--raised text-xs ui-color-warning-ink" role="alert"><div className="font-semibold">{ct("mcpApprovalRequired")}</div><p className="mt-1"><span className="ui-color-ink" >{normalizeDisplayText(pendingToolCall.serverName)}</span> <span className="opacity-40">·</span> <code className="rounded px-1 py-0.5 font-mono text-xs ui-background-mono-bg ui-color-mono-ink" >{normalizeDisplayText(pendingToolCall.toolName)}</code></p><pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded p-2.5 font-mono text-xs ui-background-rgb-0-0-0-18 ui-color-inherit" >{normalizeDisplayText(JSON.stringify(pendingToolCall.argumentsValue, null, 2))}</pre><div className="mt-3 flex gap-2"><button type="button" onClick={onApproveTool} className="app-button app-button--primary app-button--sm">{ct("approveTool")}</button><button type="button" data-icon="close" onClick={onRejectTool} className="app-button app-button--secondary app-button--sm">{ct("rejectTool")}</button></div></div>}
       </div>
@@ -86,6 +96,7 @@ export default function ChatComposer({
       {attachments.length > 0 && <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={ct("pendingImages")}>{attachments.map((image) => <div key={image.dataUrl} className="flex items-start gap-1"><img src={image.dataUrl} alt={normalizeDisplayText(image.name)} width={64} height={64} className="h-16 w-16 rounded-lg border object-cover ui-border-color-border"  /><button type="button" onClick={() => onRemoveAttachment(image.dataUrl)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(image.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
       {documents.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label={ct("pendingDocuments")}>{documents.map((document) => <div key={document.path} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">{normalizeDisplayText(document.name)}</span><button type="button" onClick={() => onRemoveDocument(document.path)} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${ct("removeAttachment")}: ${normalizeDisplayText(document.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
       </div>}
+        {selectedSkills.length > 0 && <div className="col-span-full flex flex-wrap gap-1.5" role="group" aria-label={selectedSkillsLabel}>{selectedSkills.map((skill) => <div key={skill.id} className="app-list-row flex items-center gap-1.5 px-2.5 py-1 text-xs ui-color-muted"><span className="max-w-48 app-text-wrap">${normalizeDisplayText(skill.name)}</span><button type="button" onClick={() => onRemoveSkill?.(skill.id)} disabled={skillsLocked} className="app-icon-button app-icon-button--sm app-icon-button--danger" aria-label={`${removeSkillLabel}: ${normalizeDisplayText(skill.name)}`}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div>}
         <textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onKeyDown} disabled={disabled || phase !== "idle"} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct("offline") : ct("placeholder")} className="app-textarea min-w-0 flex-1" />
         <button type="button" data-icon="add" onClick={onAddAttachment} disabled={disabled || phase !== "idle" || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}>{ct("attachFile")}</button>
         <span className="chat-composer-status text-xs tabular-nums ui-color-faint" role="status" aria-live="polite">{conversationStatus}</span>

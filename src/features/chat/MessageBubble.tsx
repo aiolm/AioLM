@@ -66,7 +66,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             back exactly as typed, since they did not ask for it to be formatted. */}
         {message.content && !isUser
           ? <ChatMarkdown source={message.content} />
-          : <div className="whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinkingNow")}</span> : "")}</div>}
+          : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinkingNow")}</span> : "")}</div>}
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{text("partialFailed")}</div>}
         </div>

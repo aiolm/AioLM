@@ -120,11 +120,11 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(screen.getByRole("button", { name: "Probe again" })).toBeDisabled();
     expect(mocked.rtProbe).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
+    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) ?(10638)" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledWith("cuda", "b10638"));
     await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: ["--ctx-size"], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
 
-    expect(advanced).toHaveTextContent("Showing cuda 10638.");
+    expect(advanced).toHaveTextContent("Showing cuda ?(10638).");
     // A re-probe repeats the same build rather than picking one for the user.
     fireEvent.click(screen.getByRole("button", { name: "Probe again" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledTimes(2));
@@ -169,7 +169,7 @@ describe("RuntimesPanel pull-request builds", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel build" });
     expect(cancel.closest("details")).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel install" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) ?(10638)" })).toBeDisabled();
     fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
   });
@@ -261,7 +261,7 @@ describe("RuntimesPanel pull-request builds", () => {
 
   it("offers export for each installed runtime", async () => {
     renderPanel();
-    const exportButton = await screen.findByRole("button", { name: /Export runtime: cuda build 10638/ });
+    const exportButton = await screen.findByRole("button", { name: "Export runtime: cuda ?(10638)" });
     fireEvent.click(exportButton);
     await waitFor(() => expect(mocked.rtExport).toHaveBeenCalledWith("cuda", "b10638"));
   });
@@ -499,7 +499,7 @@ describe("RuntimesPanel pull-request builds", () => {
     } } as unknown as AppStore;
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(RuntimesPanel, { store: configured, active: true }) }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove: CUDA (NVIDIA) b10638" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove: CUDA (NVIDIA) ?(10638)" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("These use this runtime and will be left without one:");

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigratedPath } from "../shared/storage/storageMigration";
 
@@ -11,6 +11,7 @@ const appRendered = vi.fn();
 const loadPreferences = vi.fn();
 const applyTheme = vi.fn();
 const loadFont = vi.fn();
+const titleBarMounted = vi.fn();
 
 function deferred() {
   let resolve!: () => void;
@@ -25,7 +26,7 @@ let originalHtmlAttributes: Array<[string, string | null]>;
 beforeEach(() => {
   // Fresh mock factories make eager imports observable on every bootstrap attempt.
   vi.resetModules();
-  for (const mock of [migrate, invoke, moduleLoaded, appRendered, loadPreferences, applyTheme, loadFont]) mock.mockReset();
+  for (const mock of [migrate, invoke, moduleLoaded, appRendered, loadPreferences, applyTheme, loadFont, titleBarMounted]) mock.mockReset();
   invoke.mockResolvedValue(migratedPaths);
   loadFont.mockResolvedValue([]);
   loadPreferences.mockReturnValue({
@@ -58,6 +59,7 @@ beforeEach(() => {
     return { loadPreferences };
   });
   vi.doMock("../shared/config/theme", () => ({ applyTheme }));
+  vi.doMock("./TitleBar", () => ({ default: function TitleBar() { useEffect(() => titleBarMounted(), []); return <div data-testid="title-bar" />; } }));
 });
 
 afterEach(() => {
@@ -116,6 +118,8 @@ describe("Bootstrap migration boundary", () => {
     await act(async () => failedMigration.reject(new Error("Migration test failure")));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Migration test failure");
+    // A frameless window must stay movable and closable on the failure screen.
+    expect(screen.getByTestId("title-bar")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Your data could not be migrated" })).toBeInTheDocument();
     expectApplicationDeferred();
 
@@ -133,5 +137,8 @@ describe("Bootstrap migration boundary", () => {
     expect(loadPreferences).toHaveBeenCalledTimes(1);
     expect(applyTheme).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // One title bar from the first loading screen through the mounted app.
+    expect(screen.getByTestId("title-bar")).toBeInTheDocument();
+    expect(titleBarMounted).toHaveBeenCalledTimes(1);
   });
 });

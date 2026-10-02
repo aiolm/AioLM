@@ -56,9 +56,8 @@ export function useInstalledRuntimes(): api.InstalledRuntime[] {
 }
 
 /**
- * `0.3.0-dev` when the install recorded what the binary calls
- * itself, `build 10638` when it did not. Never a version invented from the
- * build number.
+ * `0.3.0-dev(10638)` when the install recorded what the binary calls itself,
+ * `?(10638)` when it did not. Never a version invented from the build number.
  */
 export function runtimeVersionLabel(
   runtimes: readonly api.InstalledRuntime[],

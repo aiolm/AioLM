@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -27,6 +27,26 @@ const payload = { schema_version: 1, submission_id: '00000000-0000-4000-8000-000
 };
 
 try {
+  // A deleted source module must disappear from the next distributable, while
+  // unchanged modules keep their timestamps for live workspace consumers.
+  const buildFixture = join(scratch, 'build-fixture');
+  cpSync(join(packageRoot, 'src'), join(buildFixture, 'src'), { recursive: true });
+  cpSync(join(packageRoot, 'schema'), join(buildFixture, 'schema'), { recursive: true });
+  copyFileSync(join(packageRoot, 'tsconfig.json'), join(buildFixture, 'tsconfig.json'));
+  mkdirSync(join(buildFixture, 'scripts'));
+  const typescriptUrl = pathToFileURL(createRequire(import.meta.url).resolve('typescript')).href;
+  writeFileSync(join(buildFixture, 'scripts/build.mjs'), readFileSync(join(packageRoot, 'scripts/build.mjs'), 'utf8').replace("'typescript'", JSON.stringify(typescriptUrl)));
+  const retiredSource = join(buildFixture, 'src/retired.ts');
+  writeFileSync(retiredSource, 'export const retired = true;\n');
+  const build = () => execFileSync(process.execPath, [join(buildFixture, 'scripts/build.mjs')], { windowsHide: true });
+  build();
+  const keptModules = ['index.js', 'index.d.ts', 'schema.js', 'schema.d.ts'];
+  const timestamps = keptModules.map(name => statSync(join(buildFixture, 'dist', name)).mtimeMs);
+  unlinkSync(retiredSource);
+  build();
+  assert(!existsSync(join(buildFixture, 'dist/retired.js')) && !existsSync(join(buildFixture, 'dist/retired.d.ts')), 'Retired modules remained in the build output.');
+  assert.deepEqual(keptModules.map(name => statSync(join(buildFixture, 'dist', name)).mtimeMs), timestamps, 'An unchanged rebuild invalidated live workspace modules.');
+
   const packed = JSON.parse(runNpm(['pack', '--json', '--ignore-scripts', '--pack-destination', scratch], packageRoot));
   const archive = Array.isArray(packed) ? packed[0] : packed['@aiolm/benchmark-contracts'] ?? packed;
   assert.equal(typeof archive.filename, 'string', 'npm pack did not return an archive.');
@@ -48,7 +68,7 @@ try {
 
   writeFileSync(join(consumer, 'node-smoke.mjs'), `
     import assert from 'node:assert/strict';
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
     assert.equal(validatePublicBenchmark(payload), payload);
     assert.equal(summarizePublicBenchmarkRows(payload.measurements.rows).find(row => row.concurrency === 2).speedup, 2);
@@ -92,6 +112,26 @@ try {
     assert.equal(parseServiceError(410, JSON.stringify({ error: { code: 'submission_deleted', message: 'Gone' } })).terminal, true);
     assert.equal(benchmarkRunsUrl('https://example.test/'), 'https://example.test/v1/benchmark-runs');
     assert.throws(() => normalizeBaseUrl('http://example.test'));
+    const label = input => formatRuntimeVersionLabel(input);
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b10638' }), '0.3.0-dev(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 10638 }), '0.3.0-dev(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev' }), '0.3.0-dev(?)');
+    assert.equal(label({ name: 'llama.cpp', build: 'b10638' }), '?(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: null, build: null }), null);
+    assert.equal(label({ name: 'llama.cpp', version: 'unknown', build: '' }), null);
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev (build 10638, commit bf9421646)', build: 'b1' }), '0.3.0-dev(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: 'compiler: x\\nversion: 0.3.0-dev (build 10638, commit bf9421646)' }), '0.3.0-dev(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: 'version: 4589 (1a2b3c4)', build: 'b9999' }), '?(4589)');
+    assert.equal(label({ name: 'llama.cpp', version: 'b123-abcdef', build: 'b9999' }), '?(123)');
+    assert.equal(label({ name: 'llama.cpp', build: 'pr12345' }), '?(pr12345)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.0.0-dev (build 0, commit unknown)', build: 'pr12345' }), '0.0.0-dev(pr12345)');
+    assert.equal(label({ name: 'llama.cpp', version: 'version: 0 (unknown)', build: 0 }), null);
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b0' }), '0.3.0-dev(?)');
+    assert.equal(label({ name: 'llama.cpp', build: 'local_b10840_nop2p' }), '?(local_b10840_nop2p)');
+    assert.equal(label({ name: 'vllm', version: '0.6.3.post1' }), '0.6.3.post1');
+    assert.equal(label({ name: 'MLX', version: 'b123-abcdef', build: 'b7' }), 'b123-abcdef(b7)');
+    assert.equal(label({ version: 'version: 0.3.0-dev (build 10638)' }), 'version: 0.3.0-dev (build 10638)');
+    assert.equal(label({ name: 'vllm' }), null);
   `);
   execFileSync(process.execPath, ['node-smoke.mjs'], { cwd: consumer, stdio: 'pipe', windowsHide: true });
 
@@ -126,15 +166,18 @@ try {
   assert.equal(openapi.paths['/v1/upload-sessions'].post.operationId, 'createUploadSession');
   assert.equal(openapi.paths['/v1/benchmark-runs/{id}'].delete.operationId, 'deleteBenchmarkRun');
   assert.equal(browser.namespace.validatePublicationRequest({ benchmark: payload, description_md: '' }).description_md, '');
+  assert.equal(browser.namespace.formatRuntimeVersionLabel({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b10638' }), '0.3.0-dev(10638)');
   assert.equal(browser.namespace.decodeRecoveryCode(browser.namespace.encodeRecoveryCode(browser.namespace.RECOVERY_FIXTURE)).version, 1);
 
   writeFileSync(join(consumer, 'consumer.ts'), `
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, validatePublicationRequest, decodeRecoveryCode, type PublicBenchmarkSubmission, type BenchmarkSummary, type BenchmarkReceipt, type BenchmarkPublicationRequest } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, validatePublicationRequest, decodeRecoveryCode, formatRuntimeVersionLabel, type RuntimeVersionLabelInput, type PublicBenchmarkSubmission, type BenchmarkSummary, type BenchmarkReceipt, type BenchmarkPublicationRequest } from '@aiolm/benchmark-contracts';
     const payload: PublicBenchmarkSubmission = validatePublicBenchmark({});
     const summaries: BenchmarkSummary[] = summarizePublicBenchmarkRows(payload.measurements.rows);
     const receipt: BenchmarkReceipt = validateBenchmarkReceipt({}, payload.submission_id);
     const publication: BenchmarkPublicationRequest = validatePublicationRequest({ benchmark: payload, description_md: '' });
-    export { summaries, receipt, publication };
+    const runtimeInput: RuntimeVersionLabelInput = { name: payload.runtime.name, version: payload.runtime.version, build: payload.runtime.build };
+    const runtimeLabel: string | null = formatRuntimeVersionLabel(runtimeInput);
+    export { summaries, receipt, publication, runtimeLabel };
   `);
   const program = ts.createProgram([join(consumer, 'consumer.ts')], { strict: true, noEmit: true, types: [], target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext });
   const diagnostics = ts.getPreEmitDiagnostics(program);

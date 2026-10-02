@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { defaultPrBackendForDevice } from "../../shared/runtime/runtimeUtils";
+import { defaultPrBackendForDevice, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import { publishInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
@@ -183,7 +183,9 @@ export function useRuntimesController(store: AppStore, active: boolean) {
   };
 
   const commonDeps = { locale, flashT, setFailure, serverRunning };
-  const exportRuntime = (backend: string, build: string) => runExportRuntime(backend, build, runtimeBusy, setBundleBusy, setBundleProgress, commonDeps);
+  const installedVersion = (backend: string, build: string) =>
+    rows.find((row) => row.backend === backend)?.installed.find((item) => item.build === build)?.version;
+  const exportRuntime = (backend: string, build: string) => runExportRuntime(backend, build, runtimeBusy, setBundleBusy, setBundleProgress, commonDeps, installedVersion(backend, build));
   const importRuntime = () => runImportRuntime(runtimeBusy, setBundleBusy, setBundleProgress, refresh, commonDeps);
   const install = (backend: string) => runInstall(backend, rows, setRows, refresh, prBusy, bundleBusy, commonDeps);
   const reviewPullRequest = () => runReviewPullRequest(prSource, prBackend, rows, prBusy, bundleBusy, prReviewBusy, setPrReviewBusy, setPrPreview, commonDeps);
@@ -212,7 +214,7 @@ export function useRuntimesController(store: AppStore, active: boolean) {
     setUninstallBusy(true);
     try {
       await api.rtUninstall(backend, build);
-      flashT(t("ui.uninstalledOk", { backend, build }));
+      flashT(t("ui.uninstalledOk", { backend, build: formatRuntimeVersion(build, installedVersion(backend, build)) }));
       // Removing a build clears it from every profile that named it, so the
       // panel reloads the configuration rather than keeping a selection that
       // no longer exists on disk.

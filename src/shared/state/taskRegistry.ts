@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { notifyCompletion, type CompletionNotificationKind } from "../lib/notifications";
 
 export type TaskKind = "runtime" | "benchmark" | "model-download" | "other";
 export type TaskState = "running" | "cancelling" | "completed" | "cancelled" | "failed" | "crashed";
@@ -19,7 +20,18 @@ export interface AppTask {
   /** Set false only for work that really cannot survive navigation. */
   interruptible: boolean;
   cancel?: () => Promise<void> | void;
+  /**
+   * Which completion alert a successful finish may raise. Model downloads and
+   * benchmarks have one by kind; other work opts in here, and the rest - session
+   * loads, exports, imports, verification - stays silent.
+   */
+  notifyOnComplete?: CompletionNotificationKind;
 }
+
+const NOTIFY_BY_KIND: Partial<Record<TaskKind, CompletionNotificationKind>> = {
+  "model-download": "download",
+  benchmark: "benchmark",
+};
 
 /** How long a task that ended as expected stays on screen before clearing. */
 export const TASK_CLEAR_DELAY_MS = 6000;
@@ -72,8 +84,16 @@ export function updateTask(id: string, patch: Partial<Omit<AppTask, "id">>) {
  * until the user dismisses it.
  */
 export function finishTask(id: string, state: Exclude<TaskState, "running" | "cancelling">, detail?: string) {
-  if (!tasks.has(id)) return;
+  const previous = tasks.get(id);
+  if (!previous) return;
   updateTask(id, { state, detail, finishedAt: Date.now(), speedBps: undefined });
+  // Only the run's own transition out of active work announces it, so a
+  // repeated finish, or a record registered as already completed, stays quiet
+  // while a reused id that went back to running announces its new run.
+  const notice = previous.notifyOnComplete ?? NOTIFY_BY_KIND[previous.kind];
+  if (notice && state === "completed" && (previous.state === "running" || previous.state === "cancelling")) {
+    void notifyCompletion(notice);
+  }
   cancelClear(id);
   if (state !== "completed" && state !== "cancelled") return;
   clearTimers.set(id, setTimeout(() => {

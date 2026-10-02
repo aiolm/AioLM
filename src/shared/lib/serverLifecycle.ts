@@ -71,10 +71,6 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
   });
 }
 
-export function createErrorId(now = Date.now()): string {
-  return `LB-${now.toString(36).toUpperCase()}`;
-}
-
 /**
  * The override key a refused launch printed, if this failure is one.
  *

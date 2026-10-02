@@ -9,6 +9,7 @@ import { SESSION_STATUS_CHANGED_EVENT, sessionConfig } from "../../shared/runtim
 import { sessionHasActivity } from "../../shared/state/sessionActivity";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { createTestStore } from "../../testing/appStore";
+import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
@@ -478,6 +479,8 @@ describe("ChatPanel document context warning", () => {
     mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
     const mutableConfig = structuredClone(cfg);
     renderPanel({ ...store, cfg: mutableConfig });
+    // Wait for the stored workspace to hydrate; it replaces the message buffer.
+    await screen.findByRole("log", { name: "Conversation" });
     respondWithText("Original settings");
     await sendMessage("Hello");
     expect(sessionHasActivity("default")).toBe(true);
@@ -554,6 +557,42 @@ describe("ChatPanel document context warning", () => {
     window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
 
     await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · crashed" })).not.toHaveAttribute("aria-disabled", "true"));
+  });
+
+  it("shares one session list request with other open session views", async () => {
+    // A dialog that also watches sessions must not double the native session_list calls.
+    function OtherSessionView() {
+      useSessionPolling({ active: true, details: true, onData: () => undefined });
+      return null;
+    }
+    render(createElement(I18nProvider, { initialLocale: "en", children: [createElement(ChatPanel, { key: "chat", store }), createElement(OtherSessionView, { key: "other" })] }));
+
+    await screen.findByLabelText("Loaded sessions");
+    await waitFor(() => expect(mocked.sessionList).toHaveBeenCalled());
+    expect(mocked.sessionList).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes detailed session state as soon as a hidden window returns", async () => {
+    mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "running", port: 8092, url: "http://127.0.0.1:8092", api_key: "key", model: "worker.gguf" }]);
+    mocked.normalizeSessionList.mockImplementation((value: unknown) => value);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      renderPanel();
+      fireEvent.click(await screen.findByLabelText("Loaded sessions"));
+      await screen.findByRole("option", { name: "Worker · 8092 · running" });
+      const calls = mocked.sessionList.mock.calls.length;
+
+      visibility.mockReturnValue("hidden");
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "crashed", port: 8092, model: "worker.gguf" }]);
+      visibility.mockReturnValue("visible");
+      act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+
+      await screen.findByRole("option", { name: "Worker · 8092 · crashed" });
+      expect(mocked.sessionList).toHaveBeenCalledTimes(calls + 1);
+    } finally {
+      visibility.mockRestore();
+    }
   });
 
   it("warns in the DOM when an attached document exceeds the 64-chunk search limit", async () => {

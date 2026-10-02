@@ -14,7 +14,7 @@ import EmptyState from "../shared/ui/EmptyState";
 import FeedbackBanner from "../shared/ui/FeedbackBanner";
 import TaskStrip from "../shared/ui/TaskStrip";
 import { TaskCancellationProvider } from "../shared/ui/TaskCancellation";
-import { useTasks, type AppTask } from "../shared/state/taskRegistry";
+import { getTaskSnapshot, useTasks, type AppTask } from "../shared/state/taskRegistry";
 import { useModelDownloadTask } from "../shared/state/modelDownloadTask";
 import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
@@ -26,6 +26,7 @@ import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedback
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
 import { useRuntimeVersionLabel } from "../shared/runtime/installedRuntimes";
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
+import { applyTypography } from "../shared/config/typography";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
 import { DraftGuardProvider } from '../shared/state/draftGuard';
 import { useExecutionStore } from '../features/models/useExecutionStore';
@@ -60,6 +61,16 @@ function LazyPanel({ children }: { children: React.ReactNode }) {
  * unable to survive navigation (`interruptible: false`); see taskRegistry.ts. */
 export function findTaskBlockingTabLeave(tasks: AppTask[]): AppTask | undefined {
   return tasks.find((task) => (task.state === "running" || task.state === "cancelling") && !task.interruptible);
+}
+
+/** The only shell part that follows the task registry, so a download's progress
+ * events re-render this summary instead of the shell and every mounted panel. */
+function TaskActivity({ hasActivity, title, indicator, children }: { hasActivity: boolean; title: string; indicator: React.ReactNode; children: React.ReactNode }) {
+  const tasks = useTasks();
+  return <PanelFeedbackActivity hasActivity={tasks.length > 0 || hasActivity}>
+    <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span>{indicator}</summary>
+    <div className="app-activity-content">{children}</div>
+  </PanelFeedbackActivity>;
 }
 
 function shortModel(path: string | undefined, emptyLabel: string): string {
@@ -134,7 +145,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [settingsUpdateRequest, setSettingsUpdateRequest] = useState(0);
   const menuRef = useRef<HTMLDialogElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
-  const tasks = useTasks();
   // Held here, not in Discover, so a download keeps reporting after the user
   // navigates away from the page that started it.
   useModelDownloadTask();
@@ -179,6 +189,14 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     return subscribeToSystemTheme(() => applyTheme("system"));
   }, [locale, preferences.theme, preferences.appearance.density, preferences.appearance.reduceMotion, preferences.advanced.developerMode]);
 
+  // Applied as root custom properties so open panels restyle in place; nothing
+  // remounts, so chat drafts and scroll positions survive a font change.
+  const { fontFamily, codeFontFamily } = preferences.appearance;
+  const { lineSpacing } = preferences.chat;
+  useEffect(() => {
+    applyTypography(document.documentElement, { appearance: { fontFamily, codeFontFamily }, chat: { lineSpacing } });
+  }, [fontFamily, codeFontFamily, lineSpacing]);
+
   useEffect(() => {
     if (!preferences.server.autoStopOnExit) return undefined;
     const stopOnExit = () => {
@@ -218,7 +236,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     }
     const executionTarget = next === 'models' ? 'setup' : null;
     if (executionTarget) next = 'models';
-    const blocking = findTaskBlockingTabLeave(tasks);
+    const blocking = findTaskBlockingTabLeave(getTaskSnapshot());
     if (blocking && next !== view && !window.confirm(t("ui.taskLeaveConfirm", { task: normalizeDisplayText(blocking.label) }))) return false;
     if (executionTarget) setExecutionSection(current => ({ id: executionTarget, revision: current.revision + 1 }));
     window.dispatchEvent(new Event("aiolm:navigate"));
@@ -289,9 +307,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
       </header>
       <div className="app-main-area">
         <AppUpdateNotice onOpenSettings={() => { if (navigate("settings")) setSettingsUpdateRequest(current => current + 1); }} />
-        <PanelFeedbackActivity hasActivity={tasks.length > 0 || !!hasError || store.bootState === 'native-unavailable'}>
-          <summary><span>{t("ui.taskStripTitle")}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span><PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} /></summary>
-          <div className="app-activity-content">
+        <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} indicator={<PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} />}>
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
           {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors}
@@ -300,8 +316,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         </PanelFeedback>
         <TaskStrip />
         <PanelFeedbackOutlet />
-          </div>
-        </PanelFeedbackActivity>
+        </TaskActivity>
         <main id="main-content" className="app-main" tabIndex={-1}>
           {panel("chat", store.bootState === "native-unavailable" ? <div className="app-page-scroll app-runtime-empty"><EmptyState title={t("native.unavailable")} description={t("native.message")} action={{ label: t("native.openDiagnostics"), onClick: openDiagnostics }} /></div> : <ChatPanel store={store} preferences={preferences} active={view === "chat"} onOpenModels={openModels} onOpenDiagnostics={openDiagnostics} />)}
           {panel("projects", store.cfg ? <ProjectsPanel store={store} onOpenTuning={openTuning} /> : <PanelLoading />)}
