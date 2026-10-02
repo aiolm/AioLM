@@ -318,9 +318,9 @@ pub(super) mod tests {
     const WAIT: Duration = Duration::from_secs(10);
 
     /// Prompt tests run one at a time: shutdown answers every open prompt.
-    pub(in crate::mcp) fn serial() -> std::sync::MutexGuard<'static, ()> {
-        static SERIAL: Mutex<()> = Mutex::new(());
-        SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+    pub(in crate::mcp) async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
+        static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        SERIAL.lock().await
     }
 
     pub(in crate::mcp) fn gate() -> (Gate, mpsc::Receiver<isize>, mpsc::Sender<()>) {
@@ -435,9 +435,9 @@ pub(super) mod tests {
         (prompt, held)
     }
 
-    #[test]
-    fn dropping_an_open_prompt_closes_its_own_dialog_and_ends_its_thread() {
-        let _serial = serial();
+    #[tokio::test]
+    async fn dropping_an_open_prompt_closes_its_own_dialog_and_ends_its_thread() {
+        let _serial = serial().await;
         let (prompt, held) = open_held();
         let key = prompt.key;
         drop(prompt);
@@ -447,7 +447,7 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn an_expired_prompt_closes_its_dialog_and_ends_its_thread() {
-        let _serial = serial();
+        let _serial = serial().await;
         let (prompt, held) = open_held();
         let expired = tokio::time::timeout(Duration::from_millis(20), prompt.answer()).await;
         assert!(expired.is_err());
@@ -458,7 +458,7 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn a_dismissal_that_races_dialog_creation_is_applied_by_the_hook() {
-        let _serial = serial();
+        let _serial = serial().await;
         let (before_show, before_reached, before_release) = gate();
         let (mut gates, reached, release) = created_gates();
         gates.before_show = Some(before_show);
@@ -482,7 +482,7 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn the_yes_button_is_reported_as_approval() {
-        let _serial = serial();
+        let _serial = serial().await;
         let (prompt, mut held) = open_held();
         let hwnd = held.hwnd.unwrap();
         unsafe { PostMessageW(hwnd as HWND, WM_COMMAND, IDYES as WPARAM, 0) };
@@ -496,7 +496,7 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn shutdown_withdraws_every_open_prompt() {
-        let _serial = serial();
+        let _serial = serial().await;
         let (prompt, held) = open_held();
         dismiss_all();
         assert!(held.withdrawn());

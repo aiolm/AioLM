@@ -947,7 +947,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread")]
     async fn stop_closes_the_native_approval_dialog_and_never_sends_tools_call() {
-        let _serial = native_approval::tests::serial();
+        let _serial = native_approval::tests::serial().await;
         let fixture = LifecycleFixture::new();
         let candidate = tool_call_fixture(&fixture.0);
         let call_id = uuid::Uuid::new_v4().to_string();
