@@ -83,6 +83,8 @@ export async function consumeChatStream(
       await reader.cancel();
     } catch {
       // The stream may already be closed by the transport.
+    } finally {
+      reader.releaseLock();
     }
   }
 }

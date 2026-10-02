@@ -7,7 +7,23 @@ import {
   buildNativeChatRequestBody,
   nativeChatUrl,
   translateOpenAiResponseToAnthropic,
+  consumeNativeChatStream,
+  consumeAnthropicStream,
 } from "../../src/shared/api/endpointAdapters.ts";
+
+for (const [consume, terminal] of [
+  [consumeNativeChatStream, 'data: {"type":"chat.end"}\n\n'],
+  [consumeAnthropicStream, 'event: message_stop\ndata: {"type":"message_stop"}\n\n'],
+] as const) {
+  for (const text of [terminal, 'data: invalid-json\n\n']) {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); },
+    });
+    if (text === terminal) await consume(body, () => undefined);
+    else await assert.rejects(() => consume(body, () => undefined));
+    assert.equal(body.locked, false, "endpoint completion and failure release the stream reader");
+  }
+}
 
 const sampling = { temperature: 0.7, top_p: 0.9, top_k: 40, options: { max_tokens: 128 } };
 const messages = [

@@ -155,6 +155,8 @@ export async function consumeNativeChatStream(
       await reader.cancel();
     } catch {
       // The stream may already be closed by the transport.
+    } finally {
+      reader.releaseLock();
     }
   }
 }
@@ -542,6 +544,8 @@ export async function consumeAnthropicStream(
       await reader.cancel();
     } catch {
       // The stream may already be closed by the transport.
+    } finally {
+      reader.releaseLock();
     }
   }
 }

@@ -35,6 +35,11 @@ const openStream = new ReadableStream<Uint8Array>({
 });
 assert.equal(await consumeChatStream(openStream, () => undefined), "done");
 assert.equal(cancelled, true);
+assert.equal(openStream.locked, false, "completed chat releases its stream reader");
+
+const failedStream = stream([encoder.encode("data: invalid-json\n\n")]);
+await assert.rejects(() => consumeChatStream(failedStream, () => undefined));
+assert.equal(failedStream.locked, false, "failed chat releases its stream reader");
 
 const oversizedFrame = `data: ${"x".repeat(5 * 1024 * 1024)}`;
 assert.throws(() => new SseParser(() => undefined).push(oversizedFrame), /SSE frame exceeds/);
