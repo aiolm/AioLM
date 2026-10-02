@@ -20,3 +20,22 @@
 .model-publisher { display: inline-grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; min-width: 0; }
 .model-publisher-label { font-weight: 400; white-space: nowrap; }
 .model-publisher strong { color: var(--ui-ink); font-size: inherit; font-weight: 600; overflow-wrap: anywhere; }
+
+/* List summaries fit their actual column; complete values live in the details view. */
+.model-information--compact, .model-information--detail { inline-size: 100%; }
+.model-publishers--compact { flex-wrap: nowrap; }
+.model-publishers--compact .model-publisher strong { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-badge-summary { position: relative; display: block; min-inline-size: 0; }
+.model-badge-summary > .model-badges { display: flex; }
+.model-badge { flex: 0 0 auto; min-inline-size: 0; max-inline-size: min(14rem, 100%); }
+.model-badge-value { display: block; min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-badge-value[data-measure-value]::before { content: attr(data-measure-value); }
+.model-badge-more { color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.model-badge-summary > .model-badges--measure { position: absolute; inset-block-start: 0; inset-inline-start: 0; inline-size: 100%; flex-wrap: nowrap; overflow: clip; visibility: hidden; pointer-events: none; }
+.model-metadata-details { min-inline-size: 0; margin-block-start: 4px; font-size: var(--ui-text-support); font-weight: 400; }
+.model-metadata-details > summary { cursor: pointer; color: var(--ui-muted); }
+.model-metadata-details > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.model-metadata-fields { display: grid; gap: 6px; max-block-size: min(16rem, 25dvh); overflow-y: auto; margin-block: 8px; }
+.model-metadata-fields > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); gap: 8px; }
+.model-metadata-fields dt { color: var(--ui-muted); overflow-wrap: anywhere; }
+.model-metadata-fields dd { min-inline-size: 0; margin: 0; color: var(--ui-ink); overflow-wrap: anywhere; }

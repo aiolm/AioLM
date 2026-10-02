@@ -29,20 +29,20 @@ export function modelPublishers(metadata?: ModelMetadata, repository?: string) {
   return people.filter(person => !!person.name);
 }
 
-const labels = {
+export const modelPublisherLabels = {
   publisher: 'ui.modelPublisher', quantizer: 'ui.modelQuantizer',
   author: 'ui.modelAuthor', organization: 'ui.modelOrganization',
 } as const;
 
-export default function ModelPublisher({ metadata, repository }: { metadata?: ModelMetadata; repository?: string }) {
+export default function ModelPublisher({ metadata, repository, compact = false }: { metadata?: ModelMetadata; repository?: string; compact?: boolean }) {
   const { t } = useI18n();
   const people = modelPublishers(metadata, repository);
   if (!people.length) return null;
-  return <span className="model-publishers">{people.map(({ role, name }) => <Badge key={role}
+  return <span className={`model-publishers${compact ? ' model-publishers--compact' : ''}`}>{(compact ? people.slice(0, 1) : people).map(({ role, name }) => <Badge key={role}
     className={`model-publisher${role === 'publisher' ? ' model-publisher--primary' : ''}`}
     title={t(role === 'publisher' && repository ? 'ui.modelBadgeHub'
       : role === 'publisher' && metadata?.download_repository ? 'ui.modelPublisherDownload'
       : role === 'publisher' && metadata?.directory_repository ? 'ui.modelPublisherDirectory' : 'ui.modelBadgeMetadata')}>
-    <span className="model-publisher-label">{t(labels[role])}</span><strong>{name}</strong>
+    <span className="model-publisher-label">{t(modelPublisherLabels[role])}</span><strong title={name}>{name}</strong>
   </Badge>)}</span>;
 }

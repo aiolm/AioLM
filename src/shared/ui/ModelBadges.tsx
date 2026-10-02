@@ -1,7 +1,8 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { ModelMetadata } from '../api/types';
 import { useI18n } from '../i18n/i18n';
 import { useVisibleModelMetadata } from './useVisibleModelMetadata';
-import ModelPublisher, { modelPublishers } from './ModelPublisher';
+import ModelPublisher, { modelPublishers, modelPublisherLabels } from './ModelPublisher';
 import Badge from './Badge';
 
 export interface ModelBadge {
@@ -52,19 +53,115 @@ export function modelBadges(model: string, metadata?: ModelMetadata, tags: strin
   });
 }
 
-export default function ModelBadges({ model, metadata, localPath, tags, repository }: { model: string; metadata?: ModelMetadata; localPath?: string; tags?: string[]; repository?: string }) {
+const normalizeBadge = (value: string) => value.toLowerCase().replace(/[-_.\s]/g, '');
+
+/** Summaries prioritize model capabilities; the complete metadata stays available in details. */
+export function summaryModelBadges(badges: ModelBadge[], people: ReturnType<typeof modelPublishers> = []): ModelBadge[] {
+  const core = badges.filter(badge => badge.kind !== 'tag').map(badge => normalizeBadge(badge.value));
+  const names = new Set(people.map(person => normalizeBadge(person.name ?? '')));
+  const priority = (badge: ModelBadge) => {
+    if (badge.kind !== 'tag') return 0;
+    if (/^(gguf|moe|reasoning|vision|embedding|text-generation|image-text-to-text|feature-extraction)$/i.test(badge.value)) return 1;
+    return 2;
+  };
+  return badges.filter(badge => {
+    if (badge.kind !== 'tag') return true;
+    const key = normalizeBadge(badge.value);
+    return !badge.value.includes(':') && !names.has(key)
+      && !/^(model|transformers|pytorch|safetensors|endpoints_compatible)$/i.test(badge.value)
+      && !core.some(value => value === key || (value.startsWith(key) && /^\d/.test(value.slice(key.length))));
+  }).sort((a, b) => priority(a) - priority(b)).slice(0, 5);
+}
+
+/** Fit a prefix into two rows, reserving space for the omitted-information count. */
+export function fittingModelBadgeCount(width: number, badgeWidths: number[], moreWidth: number, total: number, gap = 4): number {
+  if (width <= 0) return badgeWidths.length;
+  for (let count = badgeWidths.length; count >= 0; count--) {
+    const widths = badgeWidths.slice(0, count);
+    if (total > count) widths.push(moreWidth);
+    let rows = 1;
+    let used = 0;
+    for (const item of widths) {
+      const size = Math.min(item, width);
+      if (used && used + gap + size > width) { rows++; used = size; }
+      else used += (used ? gap : 0) + size;
+    }
+    if (rows <= 2) return count;
+  }
+  return 0;
+}
+
+function ModelBadgeItem({ badge }: { badge: ModelBadge }) {
+  const { t } = useI18n();
+  const label = t(badgeLabels[badge.kind]);
+  const source = t(badge.source === 'metadata' ? 'ui.modelBadgeMetadata' : badge.source === 'hub' ? 'ui.modelBadgeHub' : 'ui.modelBadgeFilename');
+  return <Badge className="model-badge" title={`${label}: ${badge.value} · ${source}`}>
+    <span className="sr-only">{label}: </span><span className="model-badge-value">{badge.value}</span>
+  </Badge>;
+}
+
+function CompactModelBadges({ badges, total }: { badges: ModelBadge[]; total: number }) {
+  const { t, locale } = useI18n();
+  const measure = useRef<HTMLSpanElement>(null);
+  const [fit, setFit] = useState<{ signature: string; count: number }>();
+  const signature = JSON.stringify(badges);
+  const count = fit?.signature === signature ? Math.min(fit.count, badges.length) : badges.length;
+  const hidden = total - count;
+  useLayoutEffect(() => {
+    const node = measure.current;
+    if (!node) return;
+    const items = Array.from(node.children);
+    const update = () => {
+      const widths = items.map(item => item.getBoundingClientRect().width);
+      const gap = Number.parseFloat(getComputedStyle(node).columnGap) || 0;
+      const next = fittingModelBadgeCount(node.getBoundingClientRect().width, widths.slice(0, -1), widths.at(-1) ?? 0, total, gap);
+      setFit(previous => previous?.signature === signature && previous.count === next ? previous : { signature, count: next });
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update);
+      return () => window.removeEventListener('resize', update);
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    for (const item of items) observer.observe(item);
+    return () => observer.disconnect();
+  }, [signature, total, locale]);
+  if (!total) return null;
+  return <span className="model-badge-summary">
+    <span className="model-badges">{badges.slice(0, count).map(badge => <ModelBadgeItem key={`${badge.kind}:${badge.value}`} badge={badge} />)}
+      {hidden > 0 && <Badge className="model-badge model-badge-more" title={t('ui.modelBadgeMoreHint')}><span className="model-badge-value">{t('ui.modelBadgeMore', { count: hidden })}</span></Badge>}
+    </span>
+    <span ref={measure} className="model-badges model-badges--measure" aria-hidden="true">
+      {badges.map(badge => <Badge className="model-badge" key={`${badge.kind}:${badge.value}`}><span className="model-badge-value" data-measure-value={badge.value} /></Badge>)}
+      <Badge className="model-badge model-badge-more"><span className="model-badge-value" data-measure-value={t('ui.modelBadgeMore', { count: total })} /></Badge>
+    </span>
+  </span>;
+}
+
+export default function ModelBadges({ model, metadata, localPath, tags, repository, mode = 'compact' }: {
+  model: string; metadata?: ModelMetadata; localPath?: string; tags?: string[]; repository?: string; mode?: 'compact' | 'detail';
+}) {
   const { t } = useI18n();
   const visible = useVisibleModelMetadata(metadata ? undefined : localPath);
   const details = metadata ?? visible.metadata;
   const badges = modelBadges(model, details, tags);
-  if (!badges.length && !localPath && !modelPublishers(details, repository).length) return null;
-  return <span ref={visible.ref} className="model-information">
-    <ModelPublisher metadata={details} repository={repository} />
-    {badges.length > 0 && <span className="model-badges">{badges.map(badge => {
-    const label = t(badgeLabels[badge.kind]);
-    const source = t(badge.source === 'metadata' ? 'ui.modelBadgeMetadata' : badge.source === 'hub' ? 'ui.modelBadgeHub' : 'ui.modelBadgeFilename');
-    return <Badge key={`${badge.kind}:${badge.value}`} title={`${label}: ${badge.value} · ${source}`}>
-      <span className="sr-only">{label}: </span>{badge.value}
-    </Badge>;
-  })}</span>}</span>;
+  const people = modelPublishers(details, repository);
+  if (!badges.length && !localPath && !people.length) return null;
+  const summary = <><ModelPublisher metadata={details} repository={repository} compact />
+    <CompactModelBadges badges={summaryModelBadges(badges, people)} total={badges.length + Math.max(0, people.length - 1)} /></>;
+  if (mode === 'compact') return <span ref={visible.ref} className="model-information model-information--compact">{summary}</span>;
+  return <div ref={node => { visible.ref.current = node; }} className="model-information model-information--detail">{summary}
+    {(badges.length > 0 || people.length > 1) && <details className="model-metadata-details">
+      <summary>{t('ui.modelBadgeAll', { count: badges.length + people.length })}</summary>
+      <dl className="model-metadata-fields">
+        {people.map(({ role, name }) => <div key={role}><dt>{t(modelPublisherLabels[role])}</dt><dd>{name}</dd></div>)}
+        {badges.map(badge => {
+          const colon = badge.kind === 'tag' ? badge.value.indexOf(':') : -1;
+          return <div key={`${badge.kind}:${badge.value}`}><dt>{colon > 0 ? badge.value.slice(0, colon) : t(badgeLabels[badge.kind])}</dt>
+            <dd>{colon > 0 ? badge.value.slice(colon + 1) : badge.value}</dd></div>;
+        })}
+      </dl>
+    </details>}
+  </div>;
 }

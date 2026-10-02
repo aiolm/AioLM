@@ -322,7 +322,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
           <div role="list" className="space-y-1.5 p-2">
             {results.map((model) => (
               <div key={model.id} role="listitem"><button type="button" onClick={() => void inspect(model)} aria-current={selected?.id === model.id ? "true" : undefined} className={`app-list-row block w-full${selected?.id === model.id ? " is-selected" : ""}`}>
-                <div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={model.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
+                <div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={model.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-medium ui-color-ink">{model.id}</span></div><ModelBadges mode="compact" model={model.id} repository={model.id} tags={[...model.tags, ...(model.pipeline_tag ? [model.pipeline_tag] : [])]} />
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums ui-color-faint" ><span>{formatCount(locale, model.downloads)} {t("panel.downloads")}</span><span><span aria-hidden="true">♥ </span><span className="sr-only">{t("panel.likes")} </span>{formatCount(locale, model.likes)}</span>{model.gated && <Badge tone="warning">{t("panel.gated")}</Badge>}</div>
               </button></div>
             ))}
@@ -332,7 +332,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         <section className="min-h-0 overflow-auto app-card app-card--flush" tabIndex={0} aria-label={t("panel.ariaRepositoryFiles")}>
           {!selected && <div className="flex h-full min-h-48 items-center justify-center p-6 text-center text-xs leading-relaxed ui-color-faint" >{t("extra.selectRepository")}</div>}
           {selected && <>
-            <div className="sticky top-0 z-10 border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={selected.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
+            <div className="border-b px-4 py-3 ui-border-color-border ui-background-surface-muted" ><div className="flex min-w-0 items-center gap-2.5"><ModelIcon model={selected.id} size={32} /><span className="min-w-0 app-text-wrap text-sm font-semibold ui-color-ink">{selected.id}</span></div><ModelBadges mode="detail" model={selected.id} repository={selected.id} tags={[...selected.tags, ...(selected.pipeline_tag ? [selected.pipeline_tag] : [])]} />
               {validateHfRepoId(selected.id) && <a
                 className="mt-2 inline-flex items-center gap-1 text-xs font-medium underline underline-offset-4 ui-color-accent"
                 href={`https://huggingface.co/${selected.id}`} target="_blank" rel="noopener noreferrer"

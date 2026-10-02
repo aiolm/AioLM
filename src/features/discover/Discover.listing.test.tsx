@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
@@ -45,15 +45,23 @@ describe("Discover listing and installed files", () => {
     expect(api.hfSearchModels).toHaveBeenCalledWith("", 30, "downloads");
   });
 
-  it("preserves every Hub tag in the listing and selected repository", async () => {
+  it("summarizes Hub tags in the listing and preserves all values in repository details", async () => {
     vi.mocked(api.hfSearchModels).mockResolvedValue([{ ...repository,
-      tags: ['gguf', 'en', 'text-generation', 'license:apache-2.0', 'qwen4exp', 'custom-tag'] }]);
+      tags: ['gguf', 'en', 'text-generation', 'license:apache-2.0', 'qwen4exp', 'custom-tag', 'base_model:original/long-model-name'] }]);
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     expect(await screen.findByText('qwen4exp')).toBeVisible();
     expect(screen.getByText('custom-tag')).toBeVisible();
+    const result = screen.getByRole('button', { name: /owner\/model/ });
+    expect(within(result).queryByText('license:apache-2.0')).not.toBeInTheDocument();
+    expect(within(result).getByText('+2 more')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /owner\/model/ }));
-    expect(screen.getAllByText('qwen4exp')).toHaveLength(2);
-    expect(screen.getAllByText('custom-tag')).toHaveLength(2);
+    const disclosure = screen.getByText(/All model information/).closest('details')!;
+    expect(within(disclosure).getByText('apache-2.0')).not.toBeVisible();
+    fireEvent.click(within(disclosure).getByText(/All model information/));
+    expect(within(disclosure).getByText('qwen4exp')).toBeVisible();
+    expect(within(disclosure).getByText('custom-tag')).toBeVisible();
+    expect(within(disclosure).getByText('apache-2.0')).toBeVisible();
+    expect(within(disclosure).getByText('original/long-model-name')).toBeVisible();
   });
 
   it("opens the selected repository model card without changing its file selection", async () => {

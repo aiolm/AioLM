@@ -51,6 +51,22 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
+  it('keeps the selected model summary compact and exposes all metadata without changing settings', async () => {
+    vi.mocked(api.modelMetadata).mockResolvedValueOnce({ architecture: 'future-architecture', author: 'Synthetic Author',
+      context_length: 32768, tags: ['reasoning', 'base_model:original/long-model-name', 'license:apache-2.0'] });
+    const { onApply, onProfileCommit } = mount({ initialSection: 'model' });
+    const summary = await screen.findByText(/All model information/);
+    const disclosure = summary.closest('details')!;
+    expect(disclosure).not.toHaveAttribute('open');
+    expect(within(disclosure).getByText('original/long-model-name')).not.toBeVisible();
+    fireEvent.click(summary);
+    expect(within(disclosure).getByText('original/long-model-name')).toBeVisible();
+    expect(within(disclosure).getByText('Synthetic Author')).toBeVisible();
+    expect(within(disclosure).getByText('apache-2.0')).toBeVisible();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
   it('refreshes resource estimates as execution settings change before applying them', async () => {
     const { onApply, onProfileCommit } = mount({ initialSection: 'tuning' });
     await waitFor(() => expect(screen.getByTestId('resource-ram')).toHaveTextContent('2.00 GiB'));

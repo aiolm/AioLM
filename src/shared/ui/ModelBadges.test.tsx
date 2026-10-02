@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import ModelBadges, { modelBadges } from './ModelBadges';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import ModelBadges, { fittingModelBadgeCount, modelBadges, summaryModelBadges } from './ModelBadges';
 import { I18nProvider } from '../i18n/i18n';
 
 describe('model metadata badges', () => {
@@ -50,5 +50,44 @@ describe('model metadata badges', () => {
     render(<I18nProvider initialLocale="ko"><ModelBadges model="Qwen3-8B-Q4_K_M.gguf" metadata={{ architecture: 'qwen3' }} /></I18nProvider>);
     expect(screen.getByTitle('아키텍처: qwen3 · GGUF 메타데이터')).toBeVisible();
     expect(screen.getByTitle('양자화: Q4_K_M · 모델명에서 읽은 정보')).toBeVisible();
+  });
+  it('prioritizes capabilities and omits administrative and duplicate tags only from the summary', () => {
+    const all = modelBadges('community/Qwen3-30B-GGUF', undefined,
+      ['base_model:original/Qwen3-30B', 'transformers', 'community', 'qwen', 'gguf', 'region:us', 'text-generation', 'MoE', 'custom-tag']);
+    expect(summaryModelBadges(all, [{ role: 'publisher', name: 'community' }]).map(badge => badge.value))
+      .toEqual(['Qwen3', '30B', 'gguf', 'text-generation', 'MoE']);
+    expect(all.map(badge => badge.value)).toContain('base_model:original/Qwen3-30B');
+    expect(all.map(badge => badge.value)).toContain('custom-tag');
+  });
+  it('keeps unfamiliar metadata architectures and short tags eligible for a summary', () => {
+    expect(summaryModelBadges(modelBadges('unknown.gguf', { architecture: 'future-architecture', tags: ['future-task'] }))
+      .map(badge => badge.value)).toEqual(['future-architecture', 'future-task']);
+  });
+  it('reserves the omitted count within two rows as the column narrows and grows', () => {
+    const widths = [70, 70, 70, 70, 70];
+    expect(fittingModelBadgeCount(500, widths, 50, 9)).toBe(5);
+    expect(fittingModelBadgeCount(160, widths, 50, 9)).toBe(3);
+    expect(fittingModelBadgeCount(90, widths, 50, 9)).toBe(1);
+    expect(fittingModelBadgeCount(30, widths, 50, 9)).toBe(1);
+    expect(fittingModelBadgeCount(90, [70, 70], 50, 2)).toBe(2);
+  });
+  it('exposes the complete long values and attribution in a collapsible detail view', () => {
+    const { container } = render(<I18nProvider initialLocale="ko"><ModelBadges mode="detail" model="Qwen3-8B-Q4_K_M.gguf"
+      repository="community/model" metadata={{ author: 'Original Team', architecture: 'qwen3', context_length: 32768 }}
+      tags={['gguf', 'text-generation', 'base_model:original/very-long-model-name', 'license:apache-2.0']} /></I18nProvider>);
+    const disclosure = container.querySelector('details')!;
+    expect(disclosure).not.toHaveAttribute('open');
+    fireEvent.click(within(disclosure).getByText(/전체 모델 정보/));
+    expect(disclosure).toHaveAttribute('open');
+    expect(within(disclosure).getByText('original/very-long-model-name')).toBeVisible();
+    expect(within(disclosure).getByText('Original Team')).toBeVisible();
+    expect(within(disclosure).getByText('apache-2.0')).toBeVisible();
+    expect(container.querySelector('.model-badges:not(.model-badges--measure)')!.children).toHaveLength(6);
+  });
+  it('keeps the compact summary free of nested interactive controls', () => {
+    const { container } = render(<I18nProvider initialLocale="en"><button type="button"><ModelBadges mode="compact" model="unknown.gguf"
+      tags={['region:us', 'base_model:original/model']} /></button></I18nProvider>);
+    expect(screen.getByText('+2 more')).toBeVisible();
+    expect(container.querySelector('.model-information')!.querySelector('button, summary, a')).toBeNull();
   });
 });

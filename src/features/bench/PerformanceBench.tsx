@@ -397,7 +397,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
           <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} data-icon="settings" onClick={() => editModel('model')}>{modelCopy.settings}</button>
           {targetDiffers && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); }}>{modelCopy.importDefault}</button>}
         </div>}
-        <ModelBadges model={displayedModel.model} localPath={displayedModel.model} />
+        <ModelBadges mode="compact" model={displayedModel.model} localPath={displayedModel.model} />
       </div>
       <div className="performance-setup-body">
         <div className="performance-setup-environment">
@@ -457,7 +457,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
     {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
-    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges mode="compact" model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />
     {selectedRecord && <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />}
     <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} revision={sharingRevision} />

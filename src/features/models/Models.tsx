@@ -453,7 +453,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 className="models-model-name app-list-row__action flex-col items-start"
 
               >
-                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges model={model.name} localPath={model.path} />
+                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges mode="compact" model={model.name} localPath={model.path} />
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
               <span className="models-model-size" >{formatMebibytes(model.size_mb)}</span>

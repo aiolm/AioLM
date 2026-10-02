@@ -452,7 +452,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
               <div className="session-entry-main">
                 <button type="button" className="app-list-row__action session-entry-name" onClick={() => expanded ? closeDetails() : selectDefinition(definition)} aria-expanded={expanded} aria-controls={expanded ? `session-details-${definition.id}` : undefined} title={sessionCopy[locale].details}>
                   <span className="session-entry-chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
-                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{modelLabel(model, t("ui.sessionNoModel"))}</span><ModelBadges model={model} localPath={model} /></span>
+                  <span className="min-w-0"><span className="block app-text-wrap text-sm font-medium">{rowName}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-muted"><ModelIcon model={model} />{modelLabel(model, t("ui.sessionNoModel"))}</span><ModelBadges mode="compact" model={model} localPath={model} /></span>
                 </button>
                 <StatusBadge tone={statusTone(rowState)} label={statusCopy(rowState, t)} labels={SESSION_STATES.map(state => statusCopy(state, t))} />
                 <div className="session-entry-actions">

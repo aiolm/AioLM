@@ -10,8 +10,8 @@
 .performance-target-label { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .performance-target-name { display: inline-flex; align-items: center; max-width: 100%; min-width: 0; font-size: var(--ui-text-group); font-weight: 650; }
 .performance-target-name > span { min-width: 0; overflow-wrap: anywhere; }
-/* Metadata gets the full row below the model name and wraps without hiding values. */
-.performance-target > .model-information { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+/* The metadata summary gets its own row below the model name. */
+.performance-target > .model-information { flex: 1 1 100%; }
 .performance-target :is(.model-badges, .model-publishers) { min-width: 0; margin-block: 0; }
 .performance-target-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .performance-setup-body { display: grid; grid-template-columns: minmax(0, 1fr); }

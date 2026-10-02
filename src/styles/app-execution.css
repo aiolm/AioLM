@@ -16,9 +16,9 @@
 .models-panel .models-model-row + .models-model-row { border-top: 1px solid var(--ui-border); }
 .models-panel .models-model-row:hover { background: var(--ui-row-hover); }
 .models-panel .models-model-row.is-loaded { box-shadow: inset 3px 0 0 var(--ui-accent-solid); }
-.models-panel .models-model-name { grid-area: name; flex-flow: row wrap; align-items: center; gap: 0 8px; padding-block: 4px 2px; background: transparent; color: var(--ui-ink); }
-.models-panel .models-model-name > .model-badges { margin-block: 0; }
-.models-panel .models-model-name > :nth-child(n+3) { flex-basis: 100%; }
+.models-panel .models-model-name { grid-area: name; flex-direction: column; align-items: stretch; gap: 4px; padding-block: 4px 2px; background: transparent; color: var(--ui-ink); }
+.models-panel .models-model-name > .model-information { padding-inline-start: 26px; }
+.models-panel .models-model-name .model-publishers { margin-block-start: 0; }
 .models-model-title { display: block; font-size: var(--ui-text); font-weight: 600; line-height: 1.5; color: var(--ui-ink); }
 .models-panel .models-model-name:enabled::after { content: ''; position: absolute; inset: 0; z-index: 1; cursor: pointer; }
 .models-panel .models-model-name[aria-disabled="true"]::after { cursor: default; }

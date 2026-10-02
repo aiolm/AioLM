@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import ModelPublisher, { modelPublishers } from './ModelPublisher';
 import ModelBadges from './ModelBadges';
 import { I18nProvider } from '../i18n/i18n';
@@ -35,9 +35,11 @@ it('does not relabel an author as a distributor when origin is unknown', () => {
 
 it('shows the imported repository owner ahead of the original model author', () => {
   const metadata = { directory_repository: 'community-publisher/example-GGUF', repo_url: 'https://huggingface.co/original/model', author: 'Original Team' };
-  const { container } = render(<I18nProvider initialLocale="ko"><ModelBadges model="example.gguf" metadata={metadata} /></I18nProvider>);
+  const { container } = render(<I18nProvider initialLocale="ko"><ModelBadges mode="detail" model="example.gguf" metadata={metadata} /></I18nProvider>);
   expect(container.querySelector('.model-publisher--primary')).toHaveTextContent('배포자community-publisher');
   expect(container.querySelector('.model-publisher--primary')).toHaveAttribute('title', '모델 보관 폴더에서 확인한 배포자');
+  expect(screen.getByText('Original Team')).not.toBeVisible();
+  fireEvent.click(screen.getByText(/전체 모델 정보/));
   expect(screen.getByText('Original Team')).toBeVisible();
   expect(modelPublishers({ ...metadata, download_repository: 'recorded/model' })[0].name).toBe('recorded');
   expect(modelPublishers(metadata, 'selected/model')[0].name).toBe('selected');
