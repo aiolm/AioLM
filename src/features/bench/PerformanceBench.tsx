@@ -37,6 +37,9 @@ import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadin
 import { executionText } from '../../shared/i18n/executionI18n';
 import { useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import { formatBytes, formatCpuCores } from '../../shared/lib/units';
+import BenchmarkExplorerActions, { useBenchmarkProfileImport } from './BenchmarkExplorerActions';
+import { benchmarkExplorerCopy } from './benchmarkExplorerCopy';
+import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 
 const PROMPT_LENGTHS = [1024, 4096, 8192, 16384, 32768, 65536, 131072, 200000];
 const BATCH_SIZES = [2, 4, 8];
@@ -116,6 +119,8 @@ function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; c
 export default function PerformanceBench({ store, active = true }: { store: AppStore; active?: boolean }) {
   const { locale } = useI18n();
   const copy = benchmarkCopy(locale);
+  const explorerCopy = benchmarkExplorerCopy(locale);
+  const profileImport = useBenchmarkProfileImport(store);
   const modelCopy = modelActions(locale);
   const runCopy = executionText[locale];
   const installedRuntimes = useInstalledRuntimes();
@@ -379,6 +384,10 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const modelLabel = displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel;
   return <div className="app-page-scroll performance-page">
     <header className="app-page-header performance-heading"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.description}</p></div></header>
+    <BenchmarkExplorerActions listenerReady={profileImport.listenerReady} />
+    <ActivePanelContext.Provider value={true}><PanelFeedback>
+      {profileImport.notice && <FeedbackBanner tone={profileImport.notice.error ? 'error' : 'success'} onDismiss={profileImport.dismissNotice}>{profileImport.notice.text}</FeedbackBanner>}
+    </PanelFeedback></ActivePanelContext.Provider>
     <form className="app-card app-card--flush performance-card performance-setup" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-target">
         <div className="performance-target-identity"><span className="performance-target-label">{copy.model}</span>
@@ -436,6 +445,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
           label: `${new Date(item.createdAt).toLocaleString()} · ${modelDisplayName(item.model)} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
           icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting} data-icon="copy" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
       </>}<CustomSelect className="performance-export-format" ariaLabel={copy.exportFormat} value={exportFormat} disabled={busy || exporting || deleting}
         onChange={value => { setExportFormat(value); setExportNotice(null); }} options={[{ value: 'xlsx', label: 'Excel (.xlsx)' }, { value: 'csv', label: 'CSV (.csv)' }]} />

@@ -2,6 +2,41 @@
 
 The Benchmark screen measures local serving requests with a dedicated `llama-server`.
 
+## Public benchmark explorer and profiles
+
+The Benchmark screen links to the localized [AioLM website](https://aiolm.vercel.app)
+in the default browser. **Browse public benchmarks** opens that site's existing
+explorer in a separate AioLM window, preserving its search, filters, comparisons
+and detail pages without copying the website UI. The site disallows iframe
+embedding, so this window loads it directly. It has no native IPC capabilities
+and uses a private browsing session; external HTTPS links open in the default
+browser. Closing the explorer leaves the main app running, while closing the
+main app also exits its explorer.
+
+On a result detail page, **Create profile from run settings** creates a reusable
+profile from the public record's context allocation, concurrency, runtime,
+recorded execution settings and supported portable launch options. The same
+action is available beside a local history result. Creating a profile preserves
+the current model, running sessions, profile assignments and existing profiles.
+Repeated imports of the same result keep the previously created profile,
+including any user edits. Import notifications remain visible in the app's
+activity drawer when the Benchmark screen is hidden.
+
+Check the local model files, GPU devices and installed runtime before applying an imported profile;
+public records omit file paths, device identifiers, credentials and other private
+launch options. Settings absent from older records inherit runtime defaults
+rather than the viewer's current settings. The import reports unsupported options
+instead of silently claiming an exact reproduction. It does not download models,
+install a recorded runtime or copy benchmark workload parameters into server
+settings. Measurements and benchmark conditions remain available on the detail
+page. The website needs no changes or deployment for this integration.
+
+The app only accepts import requests for bounded public IDs on the official
+website origin. Native reads use its fixed public detail API, follow no
+redirects, send no owner credentials or cookies, and limit response size and
+duration. Metadata is validated against the shared benchmark contract before
+the profile is appended through the existing configuration save queue.
+
 ## Workflow
 
 Open the shared settings dialog from Benchmark to choose a model, runtime, GPU placement, and execution options. Applying these settings changes only the benchmark target. The default execution model and saved chat settings remain available for their own sessions. Stop running model sessions before starting a measurement; the page lists sessions that must be stopped. Select one or more prompt lengths, the output length, concurrent request counts, repetitions, and an input profile. Every input length gets a single-request baseline and each selected concurrent workload. Trials run in ascending concurrency order, and each level covers every selected input length before the next level starts: with 4,096 and 16,384 input tokens at 1x and 2x, the order is 4,096/1x, 16,384/1x, 4,096/2x, 16,384/2x. Leaving the screen does not cancel the run. Cancel stops the dedicated server and preserves trials already returned.

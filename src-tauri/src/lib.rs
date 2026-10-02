@@ -124,6 +124,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
+            commands::benchmark_explorer::open_aiolm_website,
+            commands::benchmark_explorer::open_benchmark_explorer,
+            commands::benchmark_explorer::read_public_benchmark,
             commands::app_update::check_app_update,
             commands::app_update::install_app_update,
             commands::app_update::open_app_update_release,
@@ -319,6 +322,14 @@ pub fn run() {
             if let Some(window) = app_handle.get_webview_window("main") {
                 let _ = window.hide();
             }
+        }
+        RunEvent::WindowEvent {
+            ref label,
+            event: WindowEvent::Destroyed,
+            ..
+        } if label == "main" => {
+            // A public explorer window must not keep an otherwise closed app alive.
+            app_handle.exit(0);
         }
         RunEvent::Exit => {
             if let Some(state) = app_handle.try_state::<AppState>() {

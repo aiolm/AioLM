@@ -94,7 +94,7 @@ const safeArgument = (token: string) => token.length > 0 && token.length <= 128
  * are published together or not at all; a half-reported option would read as a
  * switch the run never used.
  */
-function effectiveArguments(args: readonly string[]): string[] | null {
+export function effectiveArguments(args: readonly string[]): string[] | null {
   if (!args.length) return null;
   const published: string[] = [];
   for (let index = 0; index < args.length; index += 1) {

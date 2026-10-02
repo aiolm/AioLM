@@ -142,3 +142,5 @@
   .performance-environment-hardware > div { grid-template-columns: minmax(0, 1fr); }
   .performance-run-bar > button { width: 100%; }
 }
+.performance-explorer-actions { display: grid; gap: 8px; margin-bottom: 16px; }
+.performance-explorer-actions .performance-hint { margin: 0; }

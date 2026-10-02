@@ -2,6 +2,7 @@
 
 pub(crate) mod app_update;
 pub(crate) mod benchmark;
+pub(crate) mod benchmark_explorer;
 pub(crate) mod benchmark_sharing;
 pub(crate) mod config;
 pub(crate) mod conversations;

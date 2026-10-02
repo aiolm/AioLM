@@ -70,6 +70,13 @@ export interface BenchmarkModelIdentity {
   metadata?: BenchmarkModelMetadata | null;
 }
 
+/**
+ * Currently llama.cpp settings. When adding vLLM or MLX, define settings
+ * discriminated by runtime.name and update the JSON schema and validators
+ * together, preserving existing llama.cpp records. Imports must retain the
+ * recorded runtime's settings; context, concurrency and KV-cache controls
+ * must not be translated between engines based on similar field names.
+ */
 export interface BenchmarkExecutionSettings {
   /** -1 preserves an explicitly selected automatic runtime value. */
   gpu_layers: number | null;
