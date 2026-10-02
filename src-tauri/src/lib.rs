@@ -63,6 +63,8 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     // runtime_cancel. Kill the tracked CMake process trees while the app is
     // still alive so Ninja/compilers do not remain behind.
     procutil::terminate_transient_processes();
+    // Withdraw MCP approval prompts too, so none outlives an update shutdown.
+    mcp::cancel_all_tool_calls();
     commands::gateway::abort_gateway_now(state);
     // Bench/model children are already covered by the process-owner registry.
     // Recover poisoned state locks so credentials/readers are still released.
@@ -160,6 +162,7 @@ pub fn run() {
             commands::mcp::mcp_remove_server,
             commands::mcp::mcp_list_tools,
             commands::mcp::mcp_call_tool,
+            commands::mcp::mcp_cancel_tool_call,
             commands::documents::pick_attachment,
             commands::documents::pick_document,
             commands::documents::read_document_text,

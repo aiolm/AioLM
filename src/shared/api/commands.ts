@@ -40,8 +40,11 @@ export const mcpListServers = () => invoke<McpServer[]>("mcp_list_servers");
 export const mcpSaveServer = (server: McpServer) => invoke<McpServer[]>("mcp_save_server", { server });
 export const mcpRemoveServer = (id: string) => invoke<McpServer[]>("mcp_remove_server", { id });
 export const mcpListTools = (id: string) => invoke<McpTool[]>("mcp_list_tools", { id });
-export const mcpCallTool = (id: string, name: string, argumentsValue: Record<string, unknown>) =>
-  invoke<unknown>("mcp_call_tool", { id, name, arguments: argumentsValue });
+/** `callId` makes the call stoppable through {@link mcpCancelToolCall}. */
+export const mcpCallTool = (id: string, name: string, argumentsValue: Record<string, unknown>, callId?: string) =>
+  invoke<unknown>("mcp_call_tool", callId ? { id, name, arguments: argumentsValue, callId } : { id, name, arguments: argumentsValue });
+/** Stop the call started with `callId`, including its approval wait. Safe to send before the call itself arrives. */
+export const mcpCancelToolCall = (callId: string) => invoke<void>("mcp_cancel_tool_call", { callId });
 
 export const startServer = (cfg: AppConfig) => invoke<string>("start_server", { cfg });
 export const preflightLaunch = (cfg: AppConfig) => invoke<AppConfig>('preflight_launch', { cfg });

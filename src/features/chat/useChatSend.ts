@@ -395,8 +395,18 @@ export function useChatSend({
     setPhase("thinking");
     const controller = new AbortController();
     ctrlRef.current = controller;
+    // Stop (or leaving the chat) cancels the native call too: its approval
+    // prompt, the tool RPC and the MCP server it started.
+    const callId = crypto.randomUUID();
+    const cancelCall = () => { void api.mcpCancelToolCall(callId).catch(() => undefined); };
+    controller.signal.addEventListener("abort", cancelCall, { once: true });
     try {
-      const result = await api.mcpCallTool(pending.serverId, pending.toolName, pending.argumentsValue);
+      let result: unknown;
+      try {
+        result = await api.mcpCallTool(pending.serverId, pending.toolName, pending.argumentsValue, callId);
+      } finally {
+        controller.signal.removeEventListener("abort", cancelCall);
+      }
       controller.signal.throwIfAborted();
       const serializedResult = JSON.stringify(result);
       if (serializedResult.length > 256_000) throw new Error("MCP tool result exceeds the 256 KiB chat safety limit.");

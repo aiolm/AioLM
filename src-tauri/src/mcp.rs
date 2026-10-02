@@ -1,13 +1,13 @@
 // Local MCP stdio client with explicit per-call approval.
-use rfd::{AsyncMessageDialog, MessageButtons, MessageDialogResult};
+use crate::procutil::{OwnedTask, TransientChild};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::task::JoinHandle;
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::time::timeout;
 
 const MCP_FILE: &str = "mcp-servers.json";
@@ -16,6 +16,13 @@ const MAX_RPC_LINE: usize = 1024 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1024;
 const MAX_APPROVAL_DESCRIPTION_BYTES: usize = 4096;
 const PROTOCOL_VERSION: &str = "2024-11-05";
+/// An unanswered approval must not hold its MCP server open indefinitely.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+const TOOL_CALL_CANCELLED: &str = "MCP tool call cancelled";
+const APPROVAL_TITLE: &str = "MCP tool approval required";
+
+#[cfg(windows)]
+mod native_approval;
 static CONFIG_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -178,6 +185,7 @@ fn inherited_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     const ALLOWED: &[&str] = &[
         "PATH",
         "SystemRoot",
+        "SystemDrive",
         "WINDIR",
         "TEMP",
         "TMP",
@@ -204,6 +212,7 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
         return Err("MCP server is disabled".into());
     }
     let mut command = crate::procutil::tokio_command(&server.command);
+    crate::procutil::configure_process_group(&mut command);
     command
         .args(&server.args)
         .env_clear()
@@ -212,8 +221,7 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
+    let mut child = TransientChild::spawn(&mut command)
         .map_err(|error| format!("cannot start MCP server '{}': {error}", server.name))?;
     let stdin = child
         .stdin
@@ -228,7 +236,7 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
     // `close_session` so the reader task cannot outlive the session it
     // belongs to.
     let stderr_drain = child.stderr.take().map(|mut stderr| {
-        tokio::spawn(async move {
+        OwnedTask::from(tokio::spawn(async move {
             let mut buffer = [0_u8; 4096];
             loop {
                 match stderr.read(&mut buffer).await {
@@ -236,7 +244,7 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
                     Ok(_) => {}
                 }
             }
-        })
+        }))
     });
     let mut session = McpSession {
         child,
@@ -244,27 +252,34 @@ async fn spawn_session(server: &McpServer) -> Result<McpSession, String> {
         stdout: BufReader::new(stdout),
         stderr_drain,
     };
-    send_message(
-        &mut session.stdin,
-        1,
-        "initialize",
-        json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": {"name": "aiolm", "version": env!("CARGO_PKG_VERSION")}
-        }),
-    )
-    .await?;
-    let _ = read_response(&mut session.stdout, 1).await?;
-    send_notification(&mut session.stdin, "notifications/initialized", json!({})).await?;
+    let initialized = async {
+        send_message(
+            &mut session.stdin,
+            1,
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "aiolm", "version": env!("CARGO_PKG_VERSION")}
+            }),
+        )
+        .await?;
+        let _ = read_response(&mut session.stdout, 1).await?;
+        send_notification(&mut session.stdin, "notifications/initialized", json!({})).await
+    }
+    .await;
+    if let Err(error) = initialized {
+        close_session(session).await;
+        return Err(error);
+    }
     Ok(session)
 }
 
 struct McpSession {
-    child: Child,
+    child: TransientChild,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
-    stderr_drain: Option<JoinHandle<()>>,
+    stderr_drain: Option<OwnedTask<()>>,
 }
 
 async fn send_message(
@@ -290,14 +305,18 @@ async fn write_line(stdin: &mut ChildStdin, message: Value) -> Result<(), String
     let mut bytes = serde_json::to_vec(&message)
         .map_err(|error| format!("cannot encode MCP request: {error}"))?;
     bytes.push(b'\n');
-    stdin
-        .write_all(&bytes)
-        .await
-        .map_err(|error| format!("cannot write MCP request: {error}"))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|error| format!("cannot flush MCP request: {error}"))
+    timeout(RPC_TIMEOUT, async {
+        stdin
+            .write_all(&bytes)
+            .await
+            .map_err(|error| format!("cannot write MCP request: {error}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|error| format!("cannot flush MCP request: {error}"))
+    })
+    .await
+    .map_err(|_| "MCP request write timed out after 15 seconds".to_string())?
 }
 
 async fn read_bounded_line(reader: &mut BufReader<ChildStdout>) -> Result<Option<String>, String> {
@@ -350,36 +369,20 @@ async fn read_response(reader: &mut BufReader<ChildStdout>, id: u64) -> Result<V
 }
 
 async fn close_session(mut session: McpSession) {
-    #[cfg(windows)]
-    {
-        if let Some(pid) = session.child.id() {
-            let killed_tree = tokio::task::spawn_blocking(move || {
-                let pid = pid.to_string();
-                crate::procutil::std_command("taskkill")
-                    .args(["/PID", &pid, "/T", "/F"])
-                    .status()
-                    .map(|status| status.success())
-                    .unwrap_or(false)
-            })
-            .await
-            .unwrap_or(false);
-            if !killed_tree {
-                let _ = session.child.kill().await;
-            }
-        } else {
-            let _ = session.child.kill().await;
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = session.child.kill().await;
-    }
+    // The Job object (Windows) or process group (Unix) owns the whole tree, so
+    // one terminate reaches every descendant before the root is reaped.
+    session.child.terminate();
     let _ = session.child.wait().await;
     // The child's stdio pipes close on exit, which lets this reader task
     // finish on its own; joining it here guarantees the task is gone before
     // the session is considered closed instead of leaking it indefinitely.
-    if let Some(drain) = session.stderr_drain.take() {
-        let _ = drain.await;
+    if let Some(mut drain) = session.stderr_drain.take() {
+        // A server may have passed stderr to a detached descendant. Do not let
+        // that inherited pipe keep the caller waiting forever after shutdown.
+        if timeout(Duration::from_secs(2), &mut drain).await.is_err() {
+            drain.abort();
+            let _ = drain.await;
+        }
     }
 }
 
@@ -505,20 +508,43 @@ async fn confirm_tool_call(
     name: &str,
     arguments: &Value,
 ) -> Result<(), String> {
-    let result = AsyncMessageDialog::new()
-        .set_title("MCP tool approval required")
-        .set_description(tool_approval_description(server, name, arguments))
-        .set_buttons(MessageButtons::YesNo)
+    let description = tool_approval_description(server, name, arguments);
+    // Windows: the prompt belongs to this future, so a Stop, the approval
+    // timeout or shutdown closes the dialog and ends its thread.
+    #[cfg(windows)]
+    let approved = native_approval::Prompt::open(APPROVAL_TITLE, &description)?
+        .answer()
+        .await?;
+    #[cfg(not(windows))]
+    let approved = rfd::AsyncMessageDialog::new()
+        .set_title(APPROVAL_TITLE)
+        .set_description(description)
+        .set_buttons(rfd::MessageButtons::YesNo)
         .show()
-        .await;
-    if result == MessageDialogResult::Yes {
+        .await
+        == rfd::MessageDialogResult::Yes;
+    if approved {
         Ok(())
     } else {
         Err("MCP tool call rejected by the user".into())
     }
 }
 
-pub async fn call_tool(id: &str, name: &str, arguments: Value) -> Result<Value, String> {
+/// Run one approved tool call. With a caller-chosen `call_id` it can be
+/// stopped through [`cancel_tool_call`]; the id is registered before any other
+/// work, so a Stop can never fall between registration and the first await.
+pub async fn call_tool_with_id(
+    id: &str,
+    name: &str,
+    arguments: Value,
+    call_id: Option<&str>,
+) -> Result<Value, String> {
+    // A call without a caller id still registers under a private one, so
+    // shutdown can cancel it like any other.
+    let call_id = call_id
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let (_registration, mut cancel) = register_tool_call(&call_id)?;
     if name.is_empty() || name.len() > 256 || contains_forbidden_control(name) {
         return Err("invalid MCP tool name".into());
     }
@@ -530,13 +556,43 @@ pub async fn call_tool(id: &str, name: &str, arguments: Value) -> Result<Value, 
     if argument_bytes.len() > MAX_TOOL_ARGUMENT_BYTES {
         return Err("MCP tool arguments exceed the 256 KiB safety limit".into());
     }
-    let server = load_servers()
-        .await?
+    let server = cancel
+        .guard(load_servers())
+        .await??
         .into_iter()
         .find(|server| server.id == id)
         .ok_or_else(|| "MCP server was not found".to_string())?;
-    let mut session = spawn_session(&server).await?;
-    let result = async {
+    run_tool_call(
+        &server,
+        name,
+        &arguments,
+        cancel,
+        || confirm_tool_call(&server, name, &arguments),
+        APPROVAL_TIMEOUT,
+    )
+    .await
+}
+
+/// Run one approved tool call on its own session. Cancellation drops the
+/// pending step (spawn, RPC or the approval wait) and always reclaims the
+/// session; a call cancelled before approval never sends `tools/call`.
+async fn run_tool_call<F, Fut>(
+    server: &McpServer,
+    name: &str,
+    arguments: &Value,
+    mut cancel: CallCancel,
+    approve: F,
+    approval_timeout: Duration,
+) -> Result<Value, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    // A dropped spawn future still owns its TransientChild, which terminates
+    // the process tree, so an early cancel needs no separate cleanup.
+    let mut session = cancel.guard(spawn_session(server)).await??;
+    let approval_cancel = cancel.clone();
+    let work = async {
         let tool_list = send_tools_request(&mut session).await?;
         let tool = tool_list
             .get("tools")
@@ -548,9 +604,16 @@ pub async fn call_tool(id: &str, name: &str, arguments: Value) -> Result<Value, 
             })
             .ok_or_else(|| format!("MCP tool '{name}' is not declared by the server"))?;
         if let Some(schema) = tool.get("inputSchema") {
-            validate_tool_arguments(schema, &arguments)?;
+            validate_tool_arguments(schema, arguments)?;
         }
-        confirm_tool_call(&server, name, &arguments).await?;
+        timeout(approval_timeout, approve())
+            .await
+            .map_err(|_| "MCP tool approval timed out".to_string())??;
+        // The approval may have resolved in the same instant as a Stop; the
+        // tool must not run once the caller has cancelled.
+        if approval_cancel.is_cancelled() {
+            return Err(TOOL_CALL_CANCELLED.to_string());
+        }
         send_message(
             &mut session.stdin,
             2,
@@ -559,15 +622,612 @@ pub async fn call_tool(id: &str, name: &str, arguments: Value) -> Result<Value, 
         )
         .await?;
         read_response(&mut session.stdout, 2).await
-    }
-    .await;
+    };
+    let result = cancel.guard(work).await.and_then(|result| result);
     close_session(session).await;
     result
+}
+
+/// Cancellation state of one caller-identified tool call. A cancel that
+/// arrives before its call registers leaves a short-lived tombstone, so the
+/// two IPC requests may reach the backend in either order.
+enum CallSlot {
+    Active(tokio::sync::watch::Sender<bool>),
+    Cancelled(std::time::Instant),
+}
+
+const CANCELLED_CALL_RETENTION: Duration = Duration::from_secs(60);
+const MAX_CANCELLED_CALLS: usize = 256;
+const MAX_ACTIVE_CALLS: usize = 32;
+
+fn tool_calls() -> &'static std::sync::Mutex<HashMap<String, CallSlot>> {
+    static CALLS: OnceLock<std::sync::Mutex<HashMap<String, CallSlot>>> = OnceLock::new();
+    CALLS.get_or_init(Default::default)
+}
+
+fn prune_cancelled_calls(calls: &mut HashMap<String, CallSlot>, keep: usize) {
+    let now = std::time::Instant::now();
+    calls.retain(|_, slot| match slot {
+        CallSlot::Active(_) => true,
+        CallSlot::Cancelled(at) => now.duration_since(*at) < CANCELLED_CALL_RETENTION,
+    });
+    let mut tombstones = calls
+        .iter()
+        .filter_map(|(id, slot)| match slot {
+            CallSlot::Cancelled(at) => Some((*at, id.clone())),
+            CallSlot::Active(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if tombstones.len() > keep {
+        tombstones.sort();
+        for (_, id) in &tombstones[..tombstones.len() - keep] {
+            calls.remove(id);
+        }
+    }
+}
+
+fn lock_tool_calls() -> std::sync::MutexGuard<'static, HashMap<String, CallSlot>> {
+    tool_calls()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// Cancel the tool call registered under `call_id`, or the one that is about
+/// to register under it.
+pub fn cancel_tool_call(call_id: &str) -> Result<(), String> {
+    if !valid_id(call_id) {
+        return Err("invalid MCP tool call id".into());
+    }
+    record_cancel(&mut lock_tool_calls(), call_id);
+    Ok(())
+}
+
+fn record_cancel(calls: &mut HashMap<String, CallSlot>, call_id: &str) {
+    match calls.get(call_id) {
+        Some(CallSlot::Active(sender)) => {
+            sender.send_replace(true);
+        }
+        Some(CallSlot::Cancelled(_)) => {}
+        None => {
+            // Make room first, so the bound holds and this record is kept.
+            prune_cancelled_calls(calls, MAX_CANCELLED_CALLS - 1);
+            calls.insert(
+                call_id.to_string(),
+                CallSlot::Cancelled(std::time::Instant::now()),
+            );
+        }
+    }
+}
+
+fn cancel_active_calls(calls: &HashMap<String, CallSlot>) {
+    for slot in calls.values() {
+        if let CallSlot::Active(sender) = slot {
+            sender.send_replace(true);
+        }
+    }
+}
+
+/// Application shutdown: cancel every running tool call and withdraw any
+/// approval prompt at once, without waiting for their tasks to be polled.
+pub fn cancel_all_tool_calls() {
+    cancel_active_calls(&lock_tool_calls());
+    #[cfg(windows)]
+    native_approval::dismiss_all();
+}
+
+/// Keeps a call id registered for exactly as long as its call runs.
+struct CallRegistration(String);
+
+impl Drop for CallRegistration {
+    fn drop(&mut self) {
+        let mut calls = lock_tool_calls();
+        if matches!(calls.get(&self.0), Some(CallSlot::Active(_))) {
+            calls.remove(&self.0);
+        }
+    }
+}
+
+fn register_tool_call(call_id: &str) -> Result<(CallRegistration, CallCancel), String> {
+    if !valid_id(call_id) {
+        return Err("invalid MCP tool call id".into());
+    }
+    let receiver = admit_call(&mut lock_tool_calls(), call_id)?;
+    Ok((
+        CallRegistration(call_id.to_string()),
+        CallCancel(Some(receiver)),
+    ))
+}
+
+fn admit_call(
+    calls: &mut HashMap<String, CallSlot>,
+    call_id: &str,
+) -> Result<tokio::sync::watch::Receiver<bool>, String> {
+    prune_cancelled_calls(calls, MAX_CANCELLED_CALLS);
+    match calls.get(call_id) {
+        Some(CallSlot::Active(_)) => Err("MCP tool call id is already in use".into()),
+        Some(CallSlot::Cancelled(_)) => {
+            calls.remove(call_id);
+            Err(TOOL_CALL_CANCELLED.into())
+        }
+        None => {
+            let active = calls
+                .values()
+                .filter(|slot| matches!(slot, CallSlot::Active(_)))
+                .count();
+            // Each running call owns an MCP server process.
+            if active >= MAX_ACTIVE_CALLS {
+                return Err("too many MCP tool calls are already running".into());
+            }
+            let (sender, receiver) = tokio::sync::watch::channel(false);
+            calls.insert(call_id.to_string(), CallSlot::Active(sender));
+            Ok(receiver)
+        }
+    }
+}
+
+/// The cancellation signal a tool call observes; `None` never fires.
+#[derive(Clone)]
+struct CallCancel(Option<tokio::sync::watch::Receiver<bool>>);
+
+impl CallCancel {
+    fn is_cancelled(&self) -> bool {
+        self.0.as_ref().is_some_and(|receiver| *receiver.borrow())
+    }
+
+    async fn cancelled(&mut self) {
+        match self.0.as_mut() {
+            // The sender lives as long as the registration, which outlives
+            // every wait; a closed channel is never a cancel.
+            Some(receiver) => {
+                if receiver.wait_for(|cancelled| *cancelled).await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            None => std::future::pending().await,
+        }
+    }
+
+    /// Run `work` unless the call is cancelled first. A cancel that is
+    /// already pending wins over work that is ready in the same poll.
+    async fn guard<T>(&mut self, work: impl std::future::Future<Output = T>) -> Result<T, String> {
+        tokio::select! {
+            biased;
+            _ = self.cancelled() => Err(TOOL_CALL_CANCELLED.to_string()),
+            value = work => Ok(value),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn lifecycle_fixture(root: &std::path::Path, response: &str) -> McpServer {
+        let parent_file = root
+            .join("parent.pid")
+            .to_string_lossy()
+            .replace('\'', "''");
+        let descendant_file = root
+            .join("descendant.pid")
+            .to_string_lossy()
+            .replace('\'', "''");
+        let script = format!("[IO.File]::WriteAllText('{parent_file}', [string]$PID); $child = Start-Process ping.exe -ArgumentList @('-n','60','127.0.0.1') -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText('{descendant_file}', [string]$child.Id); {response}; Start-Sleep -Seconds 60");
+        McpServer {
+            args: vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                script,
+            ],
+            ..server("powershell")
+        }
+    }
+
+    #[cfg(windows)]
+    struct LifecycleFixture(std::path::PathBuf);
+
+    #[cfg(windows)]
+    impl LifecycleFixture {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("aiolm-mcp-lifecycle-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for LifecycleFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn invalid_initialization_terminates_the_server_and_its_descendant() {
+        let fixture = LifecycleFixture::new();
+        let candidate = lifecycle_fixture(&fixture.0, "[Console]::Out.WriteLine('invalid-json')");
+        let result = spawn_session(&candidate).await;
+        assert!(matches!(result, Err(ref error) if error.contains("invalid JSON")));
+        for name in ["parent.pid", "descendant.pid"] {
+            let pid = std::fs::read_to_string(fixture.0.join(name))
+                .unwrap()
+                .parse()
+                .unwrap();
+            if let Some(exit) = crate::procutil::ProcessExitProbe::open(pid) {
+                assert!(exit.exited(), "MCP initialization left {name} running");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn interrupting_initialization_terminates_the_server_and_its_descendant() {
+        let fixture = LifecycleFixture::new();
+        let candidate =
+            lifecycle_fixture(&fixture.0, "[Console]::Error.WriteLine('fixture-ready')");
+        let task = OwnedTask::from(tokio::spawn(async move { spawn_session(&candidate).await }));
+        let mut exits = Vec::new();
+        timeout(Duration::from_secs(10), async {
+            for name in ["parent.pid", "descendant.pid"] {
+                let pid = loop {
+                    if let Ok(text) = tokio::fs::read_to_string(fixture.0.join(name)).await {
+                        if let Ok(pid) = text.parse::<u32>() {
+                            break pid;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                };
+                exits.push(crate::procutil::ProcessExitProbe::open(pid).unwrap());
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+        assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+        timeout(Duration::from_secs(5), async {
+            while exits.iter().any(|exit| !exit.exited()) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cancelled MCP initialization must release the process tree");
+    }
+
+    /// A synthetic MCP server that declares one tool and records, but never
+    /// answers, a `tools/call`, so a test can hold the RPC in flight.
+    #[cfg(windows)]
+    fn tool_call_fixture(root: &std::path::Path) -> McpServer {
+        let quoted = |name: &str| root.join(name).to_string_lossy().replace('\'', "''");
+        let script = r#"[IO.File]::WriteAllText('__PID__', [string]$PID); while (($line = [Console]::In.ReadLine()) -ne $null) { $message = $line | ConvertFrom-Json; if ($message.method -eq 'initialize') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":1,"result":{}}') } elseif ($message.method -eq 'tools/list') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"probe","inputSchema":{"type":"object"}}]}}') } elseif ($message.method -eq 'tools/call') { [IO.File]::WriteAllText('__CALLED__', 'called') }; [Console]::Out.Flush() }"#
+            .replace("__PID__", &quoted("server.pid"))
+            .replace("__CALLED__", &quoted("tools-call.txt"));
+        McpServer {
+            args: vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                script,
+            ],
+            ..server("powershell")
+        }
+    }
+
+    #[cfg(windows)]
+    async fn server_exit_probe(root: &std::path::Path) -> crate::procutil::ProcessExitProbe {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(text) = tokio::fs::read_to_string(root.join("server.pid")).await {
+                    if let Ok(pid) = text.parse::<u32>() {
+                        if let Some(probe) = crate::procutil::ProcessExitProbe::open(pid) {
+                            return probe;
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture server must start")
+    }
+
+    /// The fixture writes its PID before answering `initialize`, so the file
+    /// exists, and the server is alive, once a call has reached approval.
+    #[cfg(windows)]
+    fn open_server_probe(root: &std::path::Path) -> crate::procutil::ProcessExitProbe {
+        let pid = std::fs::read_to_string(root.join("server.pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        crate::procutil::ProcessExitProbe::open(pid).expect("fixture server must be running")
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stop_closes_the_native_approval_dialog_and_never_sends_tools_call() {
+        let _serial = native_approval::tests::serial();
+        let fixture = LifecycleFixture::new();
+        let candidate = tool_call_fixture(&fixture.0);
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let (registration, cancel) = register_tool_call(&call_id).unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let call = OwnedTask::from(tokio::spawn(async move {
+            let _registration = registration;
+            run_tool_call(
+                &candidate,
+                "probe",
+                &json!({}),
+                cancel,
+                move || async move {
+                    // The real prompt, held hidden at creation by the test gate.
+                    let (gates, reached, release) = native_approval::tests::created_gates();
+                    let mut prompt =
+                        native_approval::Prompt::open_with(APPROVAL_TITLE, "synthetic", gates)?;
+                    held_tx.send(prompt.hold(reached, release)).unwrap();
+                    if prompt.answer().await? {
+                        Ok(())
+                    } else {
+                        Err("MCP tool call rejected by the user".into())
+                    }
+                },
+                Duration::from_secs(60),
+            )
+            .await
+        }));
+        let held = tokio::task::spawn_blocking(move || {
+            let mut held = held_rx
+                .recv_timeout(Duration::from_secs(20))
+                .expect("the call must reach approval");
+            held.created();
+            held
+        })
+        .await
+        .unwrap();
+        let server = open_server_probe(&fixture.0);
+        cancel_tool_call(&call_id).unwrap();
+        let result = timeout(Duration::from_secs(10), call)
+            .await
+            .expect("Stop must end the approval wait")
+            .unwrap();
+        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert!(held.withdrawn(), "Stop must answer the dialog No");
+        tokio::task::spawn_blocking(move || held.release_withdrawn())
+            .await
+            .unwrap();
+        assert!(!fixture.0.join("tools-call.txt").exists());
+        assert!(server.exited());
+        assert!(!call_registered(&call_id));
+    }
+
+    #[test]
+    fn running_calls_and_cancel_records_stay_bounded() {
+        let mut calls = HashMap::new();
+        for index in 0..MAX_CANCELLED_CALLS + 5 {
+            record_cancel(&mut calls, &format!("stopped-{index}"));
+            assert!(calls.len() <= MAX_CANCELLED_CALLS);
+        }
+        assert!(calls.contains_key(&format!("stopped-{}", MAX_CANCELLED_CALLS + 4)));
+        let mut receivers = Vec::new();
+        for index in 0..MAX_ACTIVE_CALLS {
+            receivers.push(admit_call(&mut calls, &format!("running-{index}")).unwrap());
+        }
+        assert_eq!(
+            admit_call(&mut calls, "one-too-many").err(),
+            Some("too many MCP tool calls are already running".to_string())
+        );
+        // A cancel recorded for a waiting call is still honoured at the limit.
+        assert_eq!(
+            admit_call(&mut calls, &format!("stopped-{}", MAX_CANCELLED_CALLS + 4)).err(),
+            Some(TOOL_CALL_CANCELLED.to_string())
+        );
+        drop(receivers);
+    }
+
+    #[test]
+    fn shutdown_cancels_every_running_call() {
+        let (first, first_cancel) = tokio::sync::watch::channel(false);
+        let (second, second_cancel) = tokio::sync::watch::channel(false);
+        let mut calls = HashMap::new();
+        calls.insert("first".to_string(), CallSlot::Active(first));
+        calls.insert("second".to_string(), CallSlot::Active(second));
+        calls.insert(
+            "stopped".to_string(),
+            CallSlot::Cancelled(std::time::Instant::now()),
+        );
+        cancel_active_calls(&calls);
+        assert!(*first_cancel.borrow());
+        assert!(*second_cancel.borrow());
+    }
+
+    fn call_registered(call_id: &str) -> bool {
+        lock_tool_calls().contains_key(call_id)
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn stop_while_awaiting_approval_never_sends_tools_call_and_reclaims_the_server() {
+        let fixture = LifecycleFixture::new();
+        let candidate = tool_call_fixture(&fixture.0);
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let (registration, cancel) = register_tool_call(&call_id).unwrap();
+        let (shown, approval_shown) = tokio::sync::oneshot::channel();
+        let call = OwnedTask::from(tokio::spawn(async move {
+            let _registration = registration;
+            run_tool_call(
+                &candidate,
+                "probe",
+                &json!({}),
+                cancel,
+                move || async move {
+                    let _ = shown.send(());
+                    std::future::pending::<Result<(), String>>().await
+                },
+                Duration::from_secs(60),
+            )
+            .await
+        }));
+        timeout(Duration::from_secs(20), approval_shown)
+            .await
+            .expect("the call must reach approval")
+            .unwrap();
+        let exit = server_exit_probe(&fixture.0).await;
+        cancel_tool_call(&call_id).unwrap();
+        let result = timeout(Duration::from_secs(10), call)
+            .await
+            .expect("Stop must end the approval wait")
+            .unwrap();
+        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert!(!fixture.0.join("tools-call.txt").exists());
+        assert!(exit.exited(), "a cancelled call must close its MCP server");
+        assert!(!call_registered(&call_id));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn stop_that_races_an_approval_still_forbids_tools_call() {
+        let fixture = LifecycleFixture::new();
+        let candidate = tool_call_fixture(&fixture.0);
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let (registration, cancel) = register_tool_call(&call_id).unwrap();
+        let exit = std::cell::RefCell::new(None);
+        let result = run_tool_call(
+            &candidate,
+            "probe",
+            &json!({}),
+            cancel,
+            || {
+                *exit.borrow_mut() = Some(open_server_probe(&fixture.0));
+                // The user answers Yes in the same instant the chat is stopped.
+                cancel_tool_call(&call_id).unwrap();
+                async { Ok(()) }
+            },
+            Duration::from_secs(60),
+        )
+        .await;
+        let exit = exit.into_inner().expect("the call must reach approval");
+        drop(registration);
+        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert!(!fixture.0.join("tools-call.txt").exists());
+        assert!(exit.exited());
+        assert!(!call_registered(&call_id));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cancelling_during_the_tool_rpc_closes_the_session_and_clears_the_call() {
+        let fixture = LifecycleFixture::new();
+        let candidate = tool_call_fixture(&fixture.0);
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let (registration, cancel) = register_tool_call(&call_id).unwrap();
+        let call = OwnedTask::from(tokio::spawn(async move {
+            let _registration = registration;
+            run_tool_call(
+                &candidate,
+                "probe",
+                &json!({}),
+                cancel,
+                || async { Ok(()) },
+                Duration::from_secs(60),
+            )
+            .await
+        }));
+        let exit = server_exit_probe(&fixture.0).await;
+        timeout(Duration::from_secs(20), async {
+            while !fixture.0.join("tools-call.txt").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the server must receive tools/call");
+        let stopped = std::time::Instant::now();
+        cancel_tool_call(&call_id).unwrap();
+        let result = timeout(Duration::from_secs(10), call)
+            .await
+            .expect("Stop must end the in-flight RPC")
+            .unwrap();
+        assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+        assert!(stopped.elapsed() < RPC_TIMEOUT);
+        assert!(exit.exited(), "a cancelled RPC must close its MCP server");
+        assert!(!call_registered(&call_id));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_unanswered_approval_times_out_and_closes_the_server() {
+        let fixture = LifecycleFixture::new();
+        let candidate = tool_call_fixture(&fixture.0);
+        let exit = std::cell::RefCell::new(None);
+        let result = run_tool_call(
+            &candidate,
+            "probe",
+            &json!({}),
+            CallCancel(None),
+            || {
+                *exit.borrow_mut() = Some(open_server_probe(&fixture.0));
+                std::future::pending::<Result<(), String>>()
+            },
+            Duration::from_millis(200),
+        )
+        .await;
+        let exit = exit.into_inner().expect("the call must reach approval");
+        assert_eq!(result, Err("MCP tool approval timed out".to_string()));
+        assert!(!fixture.0.join("tools-call.txt").exists());
+        assert!(exit.exited());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_that_arrives_before_its_call_still_applies_once() {
+        let call_id = uuid::Uuid::new_v4().to_string();
+        cancel_tool_call(&call_id).unwrap();
+        // The call is refused before it reads any configuration or starts a server.
+        assert_eq!(
+            call_tool_with_id("not-configured", "probe", json!({}), Some(&call_id)).await,
+            Err(TOOL_CALL_CANCELLED.to_string())
+        );
+        assert!(!call_registered(&call_id));
+        // The tombstone is consumed, so a later call may reuse the id.
+        let (registration, cancel) = register_tool_call(&call_id).unwrap();
+        assert!(!cancel.is_cancelled());
+        assert!(
+            register_tool_call(&call_id).is_err(),
+            "an id runs one call at a time"
+        );
+        cancel_tool_call(&call_id).unwrap();
+        assert!(cancel.is_cancelled());
+        drop(registration);
+        assert!(!call_registered(&call_id));
+    }
+
+    #[test]
+    fn cancelled_call_tombstones_stay_bounded_and_ids_are_validated() {
+        assert!(cancel_tool_call("bad id\n").is_err());
+        assert!(register_tool_call("").is_err());
+        // Pruning is checked on a private map so concurrent tests keep their
+        // own tombstones in the shared registry.
+        let now = std::time::Instant::now();
+        let mut calls = HashMap::new();
+        let (sender, _receiver) = tokio::sync::watch::channel(false);
+        calls.insert("running".to_string(), CallSlot::Active(sender));
+        calls.insert(
+            "expired".to_string(),
+            CallSlot::Cancelled(now - CANCELLED_CALL_RETENTION - Duration::from_secs(1)),
+        );
+        for index in 0..MAX_CANCELLED_CALLS + 8 {
+            calls.insert(
+                format!("stopped-{index}"),
+                CallSlot::Cancelled(now - Duration::from_millis(index as u64)),
+            );
+        }
+        prune_cancelled_calls(&mut calls, MAX_CANCELLED_CALLS);
+        assert_eq!(calls.len(), MAX_CANCELLED_CALLS + 1);
+        assert!(matches!(calls.get("running"), Some(CallSlot::Active(_))));
+        assert!(!calls.contains_key("expired"));
+        // The newest tombstones survive; the oldest give way.
+        assert!(calls.contains_key("stopped-0"));
+        assert!(!calls.contains_key(&format!("stopped-{}", MAX_CANCELLED_CALLS + 7)));
+    }
 
     fn server(command: &str) -> McpServer {
         McpServer {

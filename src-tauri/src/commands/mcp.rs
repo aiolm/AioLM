@@ -26,6 +26,14 @@ pub(crate) async fn mcp_call_tool(
     id: String,
     name: String,
     arguments: serde_json::Value,
+    call_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    mcp::call_tool(&id, &name, arguments).await
+    mcp::call_tool_with_id(&id, &name, arguments, call_id.as_deref()).await
+}
+
+/// Stop a tool call started with the same `call_id`, including one still
+/// waiting for approval. A cancel that arrives first still applies.
+#[tauri::command]
+pub(crate) fn mcp_cancel_tool_call(call_id: String) -> Result<(), String> {
+    mcp::cancel_tool_call(&call_id)
 }
