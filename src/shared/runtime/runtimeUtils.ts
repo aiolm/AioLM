@@ -135,7 +135,7 @@ export function writeLoadingProfiles(profiles: LoadingProfile[], key = "aiolm.lo
  * toolchain is present; the resulting build is explicitly machine-local in
  * the confirmation flow because the GPU driver remains host supplied.
  */
-export const PR_BUILD_BACKENDS = ["cpu", "vulkan", "cuda", "rocm"] as const;
+export const PR_BUILD_BACKENDS = ["cpu", "vulkan", "cuda", "rocm", "metal"] as const;
 
 export function canBuildPrBackend(backend: string): boolean {
   return (PR_BUILD_BACKENDS as readonly string[]).includes(backend);

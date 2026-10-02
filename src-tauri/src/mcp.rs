@@ -815,7 +815,7 @@ impl CallCancel {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     fn node_fixture(root: &std::path::Path, script: &str) -> McpServer {
         // Use the project's Node runtime to keep fixture startup independent
         // of PowerShell host initialization and command-input handling.
@@ -852,10 +852,10 @@ child.on('spawn', () => {{
         node_fixture(root, &script)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     struct LifecycleFixture(std::path::PathBuf);
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     impl LifecycleFixture {
         fn new() -> Self {
             let root =
@@ -865,10 +865,163 @@ child.on('spawn', () => {{
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     impl Drop for LifecycleFixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    fn unix_monitored_fixture(root: &std::path::Path, port: u16, mode: &str) -> McpServer {
+        // Separate lifetime sockets make cleanup observable without PID reuse
+        // races or platform-specific zombie/reaping assumptions. Both the MCP
+        // process and its background child retain one socket until they exit.
+        let descendant = format!(
+            "const socket = require('node:net').createConnection({{ host: '127.0.0.1', port: {port} }}, () => process.send('ready')); setTimeout(() => {{}}, 60000);"
+        );
+        let script = format!(
+            r#"import {{ createConnection }} from 'node:net';
+import {{ spawn }} from 'node:child_process';
+import {{ createInterface }} from 'node:readline';
+let connected = 0;
+const ready = () => {{
+    if (++connected === 2 && {mode} === 'invalid') process.stdout.write('invalid-json\n');
+}};
+const lifetime = createConnection({{ host: '127.0.0.1', port: {port} }}, ready);
+lifetime.on('error', error => {{ throw error; }});
+const child = spawn(process.execPath, ['-e', {descendant}], {{ stdio: ['ignore', 'ignore', 'ignore', 'ipc'] }});
+child.on('error', error => {{ throw error; }});
+child.on('message', ready);
+if ({mode} === 'tool') {{
+    const input = createInterface({{ input: process.stdin, crlfDelay: Infinity }});
+    input.on('line', line => {{
+        const message = JSON.parse(line);
+        let result;
+        if (message.method === 'initialize') result = {{}};
+        else if (message.method === 'tools/list') result = {{ tools: [{{ name: 'probe', inputSchema: {{ type: 'object' }} }}] }};
+        else if (message.method === 'tools/call') record('tools-call.txt', 'called');
+        if (result !== undefined) process.stdout.write(JSON.stringify({{ jsonrpc: '2.0', id: message.id, result }}) + '\n');
+    }});
+}}
+setTimeout(() => {{}}, 60000);
+"#,
+            mode = serde_json::to_string(mode).unwrap(),
+            descendant = serde_json::to_string(&descendant).unwrap(),
+        );
+        node_fixture(root, &script)
+    }
+
+    #[cfg(unix)]
+    async fn accept_lifetimes(listener: &tokio::net::TcpListener) -> Vec<tokio::net::TcpStream> {
+        timeout(Duration::from_secs(20), async {
+            let mut sockets = Vec::new();
+            for _ in 0..2 {
+                sockets.push(listener.accept().await.unwrap().0);
+            }
+            sockets
+        })
+        .await
+        .expect("the MCP server and its descendant must start")
+    }
+
+    #[cfg(unix)]
+    async fn assert_lifetimes_closed(sockets: Vec<tokio::net::TcpStream>) {
+        timeout(Duration::from_secs(5), async {
+            for mut socket in sockets {
+                let mut bytes = Vec::new();
+                socket.read_to_end(&mut bytes).await.unwrap();
+            }
+        })
+        .await
+        .expect("the MCP server and its descendant must both exit");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_failed_and_interrupted_initialization_reclaim_the_process_tree() {
+        for mode in ["invalid", "pending"] {
+            let fixture = LifecycleFixture::new();
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let candidate =
+                unix_monitored_fixture(&fixture.0, listener.local_addr().unwrap().port(), mode);
+            let task =
+                OwnedTask::from(tokio::spawn(async move { spawn_session(&candidate).await }));
+            let sockets = accept_lifetimes(&listener).await;
+            if mode == "pending" {
+                task.abort();
+                assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+            } else {
+                let result = timeout(Duration::from_secs(10), task)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(matches!(result, Err(ref error) if error.contains("invalid JSON")));
+            }
+            assert_lifetimes_closed(sockets).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_stop_during_approval_or_tool_rpc_closes_the_process_tree() {
+        for waiting_for_approval in [true, false] {
+            let fixture = LifecycleFixture::new();
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let candidate =
+                unix_monitored_fixture(&fixture.0, listener.local_addr().unwrap().port(), "tool");
+            let call_id = uuid::Uuid::new_v4().to_string();
+            let (registration, cancel) = register_tool_call(&call_id).unwrap();
+            let (shown, approval_shown) = tokio::sync::oneshot::channel();
+            let call = OwnedTask::from(tokio::spawn(async move {
+                let _registration = registration;
+                run_tool_call(
+                    &candidate,
+                    "probe",
+                    &json!({}),
+                    cancel,
+                    move || async move {
+                        let _ = shown.send(());
+                        if waiting_for_approval {
+                            std::future::pending::<Result<(), String>>().await
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    Duration::from_secs(60),
+                )
+                .await
+            }));
+            let sockets = accept_lifetimes(&listener).await;
+            timeout(Duration::from_secs(20), approval_shown)
+                .await
+                .unwrap()
+                .unwrap();
+            if !waiting_for_approval {
+                timeout(Duration::from_secs(10), async {
+                    while !fixture.0.join("tools-call.txt").exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("the server must receive tools/call");
+            }
+            cancel_tool_call(&call_id).unwrap();
+            let result = timeout(Duration::from_secs(10), call)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
+            assert_eq!(
+                fixture.0.join("tools-call.txt").exists(),
+                !waiting_for_approval
+            );
+            assert!(!call_registered(&call_id));
+            assert_lifetimes_closed(sockets).await;
         }
     }
 

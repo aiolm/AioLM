@@ -33,7 +33,7 @@ See [chat personalization](docs/reference/personalization.md).
 
 ## Platform support
 
-Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support is planned**. Linux/macOS will use `curl | tar`; Windows uses `NSIS`/`MSI`. Windows installers are built on GitHub-hosted CI and published unsigned with SHA-256 checksums.
+Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support is planned**. Native validation builds use DEB/AppImage on Linux and APP/DMG on macOS; Windows uses NSIS/MSI. See [cross-platform validation](docs/reference/cross-platform-validation.md) for CI and acceptance requirements. Windows installers are built on GitHub-hosted CI and published unsigned with SHA-256 checksums.
 
 ## Download
 

@@ -67,7 +67,7 @@ describe("install cancellation", () => {
 
 describe("pull request build backends", () => {
   it("accepts only the backends the local builder can honestly produce", () => {
-    expect([...PR_BUILD_BACKENDS]).toEqual(["cpu", "vulkan", "cuda", "rocm"]);
+    expect([...PR_BUILD_BACKENDS]).toEqual(["cpu", "vulkan", "cuda", "rocm", "metal"]);
     for (const backend of PR_BUILD_BACKENDS) expect(canBuildPrBackend(backend)).toBe(true);
     for (const backend of ["sycl", "openvino", "", "unknown"]) {
       expect(canBuildPrBackend(backend), backend).toBe(false);
@@ -82,6 +82,7 @@ describe("pull request build backends", () => {
   it("chooses a safe PR backend from detected NVIDIA, AMD, Intel, and unknown profiles", () => {
     expect(defaultPrBackendForDevice({ backends: [{ backend: "cuda", fit: "recommended" }] })).toBe("cuda");
     expect(defaultPrBackendForDevice({ backends: [{ backend: "rocm", fit: "recommended" }] })).toBe("rocm");
+    expect(defaultPrBackendForDevice({ backends: [{ backend: "metal", fit: "recommended" }] })).toBe("metal");
     expect(defaultPrBackendForDevice({ backends: [{ backend: "sycl", fit: "recommended" }, { backend: "openvino", fit: "recommended" }, { backend: "vulkan", fit: "recommended" }] })).toBe("vulkan");
     expect(defaultPrBackendForDevice({ backends: [{ backend: "unknown", fit: "recommended" }, { backend: "cpu", fit: "recommended" }] })).toBe("cpu");
   });

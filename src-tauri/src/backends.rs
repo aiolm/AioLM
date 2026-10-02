@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hardware::{DeviceProfile, GpuVendor};
-use crate::runtime::CATALOG_BACKENDS;
+use crate::runtime::{catalog_supports, CATALOG_BACKENDS};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -55,9 +55,7 @@ fn device_name(profile: &DeviceProfile, vendor: GpuVendor) -> Option<String> {
 }
 
 pub fn recommend(profile: &DeviceProfile) -> Vec<BackendSuitability> {
-    // The published catalog assets are x64-only, so nothing is installable on
-    // another architecture regardless of the GPU.
-    if profile.arch != "x86_64" {
+    if !matches!(profile.arch.as_str(), "x86_64" | "aarch64") {
         return CATALOG_BACKENDS
             .iter()
             .map(|backend| entry(backend, BackendFit::Unsupported, "archNotSupported", None))
@@ -75,7 +73,17 @@ pub fn recommend(profile: &DeviceProfile) -> Vec<BackendSuitability> {
         .iter()
         .any(|gpu| gpu.vendor != GpuVendor::Unknown);
 
-    vec![
+    let mut recommendations = vec![
+        if profile.os == "macos" && profile.has_vendor(GpuVendor::Apple) {
+            entry(
+                "metal",
+                BackendFit::Recommended,
+                "vendorMatch",
+                device_name(profile, GpuVendor::Apple),
+            )
+        } else {
+            entry("metal", BackendFit::Unsupported, "osNotSupported", None)
+        },
         if nvidia {
             entry(
                 "cuda",
@@ -144,7 +152,28 @@ pub fn recommend(profile: &DeviceProfile) -> Vec<BackendSuitability> {
         } else {
             entry("cpu", BackendFit::Recommended, "noGpuDetected", None)
         },
-    ]
+    ];
+    for item in &mut recommendations {
+        if !catalog_supports(&item.backend, &profile.os, &profile.arch) {
+            item.fit = BackendFit::Unsupported;
+            item.reason = "platformNotSupported".into();
+            item.device = None;
+        }
+    }
+    // Intel Macs have a CPU-only release, even when an AMD/Intel GPU is detected.
+    if !recommendations
+        .iter()
+        .any(|item| item.fit == BackendFit::Recommended)
+    {
+        if let Some(cpu) = recommendations
+            .iter_mut()
+            .find(|item| item.backend == "cpu" && item.fit == BackendFit::Compatible)
+        {
+            cpu.fit = BackendFit::Recommended;
+            cpu.reason = "cpuFallback".into();
+        }
+    }
+    recommendations
 }
 
 #[cfg(test)]
@@ -286,12 +315,41 @@ mod tests {
     }
 
     #[test]
-    fn non_x64_architectures_have_no_installable_catalog_asset() {
+    fn unsupported_architectures_have_no_installable_catalog_asset() {
         let list = recommend(&profile(
-            "aarch64",
+            "riscv64",
             vec![gpu(GpuVendor::Nvidia, "Orin", false)],
         ));
         assert!(list.iter().all(|item| item.fit == BackendFit::Unsupported));
         assert!(list.iter().all(|item| item.reason == "archNotSupported"));
+    }
+
+    #[test]
+    fn apple_silicon_recommends_metal_and_intel_macos_uses_cpu() {
+        let mut apple = profile(
+            "aarch64",
+            vec![gpu(GpuVendor::Apple, "Apple Test Chip", true)],
+        );
+        apple.os = "macos".into();
+        assert_eq!(shown_by_default(&recommend(&apple)), vec!["metal"]);
+        assert_eq!(
+            fit_of(&recommend(&apple), "vulkan"),
+            BackendFit::Unsupported
+        );
+        let mut intel = profile(
+            "x86_64",
+            vec![gpu(GpuVendor::Intel, "Intel Test GPU", true)],
+        );
+        intel.os = "macos".into();
+        assert_eq!(shown_by_default(&recommend(&intel)), vec!["cpu"]);
+    }
+
+    #[test]
+    fn linux_arm_can_install_cpu_and_vulkan_without_advertising_x64_only_backends() {
+        let mut device = profile("aarch64", vec![gpu(GpuVendor::Amd, "Test GPU", false)]);
+        device.os = "linux".into();
+        assert_eq!(shown_by_default(&recommend(&device)), vec!["vulkan"]);
+        assert_eq!(fit_of(&recommend(&device), "rocm"), BackendFit::Unsupported);
+        assert_eq!(fit_of(&recommend(&device), "cpu"), BackendFit::Compatible);
     }
 }

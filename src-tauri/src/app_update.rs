@@ -1,6 +1,7 @@
 //! Application self-update: checking this project's published GitHub releases
-//! for a newer stable version, and installing it with the Windows installer
-//! that matches how this copy was installed.
+//! for a newer stable version and opening the verified installer that matches
+//! how this copy was installed. macOS DMG and Linux DEB handoffs require the
+//! user to finish installation in the system interface.
 //!
 //! The trust model is the one `install.ps1` already applies to a first-time
 //! install. Release metadata and installer assets are fetched over HTTPS from
@@ -67,12 +68,37 @@ pub struct UpdateStatus {
 /// download path run under `cargo test` without a Tauri window.
 pub type ProgressSink<'a> = &'a (dyn Fn(&str, u64, Option<u64>) + Send + Sync);
 
-/// The Windows installer flavour a copy of the app was installed with.
-/// Updating with the other one would leave two registered installations.
+/// The installer matching this copy's platform and installation method.
+/// Windows flavours stay distinct to avoid two registered installations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallKind {
     Nsis,
     Msi,
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
+    Dmg(InstallerArch),
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
+    Deb(InstallerArch),
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallerArch {
+    X64,
+    Arm64,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+fn unix_install_kind(os: &str, arch: &str) -> Option<InstallKind> {
+    let arch = match arch {
+        "x86_64" => InstallerArch::X64,
+        "aarch64" => InstallerArch::Arm64,
+        _ => return None,
+    };
+    match os {
+        "macos" => Some(InstallKind::Dmg(arch)),
+        "linux" => Some(InstallKind::Deb(arch)),
+        _ => None,
+    }
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -167,11 +193,27 @@ fn parse_requested_version(value: &str) -> Result<Version, String> {
     Ok(version)
 }
 
-/// The installer file names the release workflow publishes for Windows x64.
+/// Exact Tauri bundle names; never substitute an asset for another architecture.
 fn installer_asset_name(kind: InstallKind, version: &str) -> String {
     match kind {
         InstallKind::Nsis => format!("{PRODUCT_NAME}_{version}_x64-setup.exe"),
         InstallKind::Msi => format!("{PRODUCT_NAME}_{version}_x64_en-US.msi"),
+        #[cfg(any(target_os = "macos", target_os = "linux", test))]
+        InstallKind::Dmg(arch) => format!(
+            "{PRODUCT_NAME}_{version}_{}.dmg",
+            match arch {
+                InstallerArch::X64 => "x64",
+                InstallerArch::Arm64 => "aarch64",
+            }
+        ),
+        #[cfg(any(target_os = "macos", target_os = "linux", test))]
+        InstallKind::Deb(arch) => format!(
+            "{PRODUCT_NAME}_{version}_{}.deb",
+            match arch {
+                InstallerArch::X64 => "amd64",
+                InstallerArch::Arm64 => "arm64",
+            }
+        ),
     }
 }
 
@@ -543,9 +585,45 @@ pub fn detect_install_kind() -> Result<InstallKind, String> {
     windows_install::detect()
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn detect_install_kind() -> Result<InstallKind, String> {
-    Err("in-app updates are published for Windows x64 only".into())
+    let executable = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| format!("could not locate the running executable: {error}"))?;
+    let home = std::env::home_dir().and_then(|path| path.canonicalize().ok());
+    if !mac_install_location(&executable, home.as_deref()) {
+        return Err("this copy is not installed in an Applications folder; install the macOS update from the release page instead".into());
+    }
+    unix_install_kind("macos", std::env::consts::ARCH)
+        .ok_or_else(|| "this macOS architecture has no supported update installer".into())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mac_install_location(executable: &Path, home: Option<&Path>) -> bool {
+    let relative = Path::new("AioLM.app")
+        .join("Contents")
+        .join("MacOS")
+        .join("aiolm");
+    // Requiring an installed location excludes mounted DMGs, App Translocation
+    // and development bundles, which must use the release-page fallback.
+    executable == Path::new("/Applications").join(&relative)
+        || home.is_some_and(|home| executable == home.join("Applications").join(&relative))
+}
+
+#[cfg(target_os = "linux")]
+pub fn detect_install_kind() -> Result<InstallKind, String> {
+    linux_install::detect()
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+pub fn detect_install_kind() -> Result<InstallKind, String> {
+    Err("this platform has no supported update installer; use the release page instead".into())
+}
+
+async fn installed_kind() -> Result<InstallKind, String> {
+    tokio::task::spawn_blocking(detect_install_kind)
+        .await
+        .map_err(|error| format!("installation detection failed: {error}"))?
 }
 
 #[cfg(windows)]
@@ -553,9 +631,132 @@ fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), String> {
     windows_install::launch(kind, path)
 }
 
-#[cfg(not(windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn launch_installer(kind: InstallKind, path: &Path) -> Result<(), String> {
+    let program = match (std::env::consts::OS, kind) {
+        ("macos", InstallKind::Dmg(_)) => "/usr/bin/open",
+        ("linux", InstallKind::Deb(_)) => "/usr/bin/xdg-open",
+        _ => return Err("installer does not match the running platform".into()),
+    };
+    use std::os::unix::process::CommandExt;
+    let mut command = crate::procutil::std_command(program);
+    command
+        .arg(path)
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // The app's managed-process shutdown already ran. The system installer
+    // must outlive it, so it is deliberately not an OwnedChild/transient task.
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not open the verified installer: {error}"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("the system could not open the installer ({status}); install the update from the release page")),
+            Err(error) => return Err(format!("could not check the installer launcher: {error}")),
+            Ok(None) if std::time::Instant::now() >= deadline => return Ok(()),
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn launch_installer(_kind: InstallKind, _path: &Path) -> Result<(), String> {
-    Err("in-app updates are published for Windows x64 only".into())
+    Err("this platform has no supported update installer".into())
+}
+
+// Tauri derives the Debian control Package from the product's kebab-case name.
+#[cfg(any(target_os = "linux", test))]
+const DEB_PACKAGE_NAME: &str = "aio-lm";
+
+#[cfg(any(target_os = "linux", test))]
+fn deb_architecture(arch: InstallerArch) -> &'static str {
+    match arch {
+        InstallerArch::X64 => "amd64",
+        InstallerArch::Arm64 => "arm64",
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn deb_package_owner(output: &str, executable: &Path, arch: InstallerArch) -> Option<String> {
+    let qualified = format!("{DEB_PACKAGE_NAME}:{}", deb_architecture(arch));
+    let mut owners = output.lines().filter_map(|line| {
+        let (package, path) = line.split_once(": ")?;
+        (Path::new(path) == executable && (package == DEB_PACKAGE_NAME || package == qualified))
+            .then(|| package.to_owned())
+    });
+    let owner = owners.next()?;
+    owners.next().is_none().then_some(owner)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn deb_status_matches(output: &str, arch: InstallerArch) -> bool {
+    let fields = output.trim().split('\t').collect::<Vec<_>>();
+    fields == [DEB_PACKAGE_NAME, "installed", deb_architecture(arch)]
+}
+
+#[cfg(target_os = "linux")]
+mod linux_install {
+    use super::*;
+
+    fn query(arguments: &[&std::ffi::OsStr]) -> Result<String, String> {
+        let mut command = crate::procutil::std_command("/usr/bin/dpkg-query");
+        command
+            .arg("--admindir=/var/lib/dpkg")
+            .args(arguments)
+            .env("LC_ALL", "C")
+            .env("DPKG_COLORS", "never");
+        let output = crate::procutil::capture_stdout_with_cap(
+            &mut command,
+            Duration::from_secs(3),
+            64 * 1024,
+        )
+        .map_err(|error| format!("could not identify the installed Debian package: {error}"))?;
+        if !output.status.success() {
+            return Err("the executable is not owned by an installed Debian package".into());
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|_| "Debian package information is not UTF-8".into())
+    }
+
+    pub(super) fn detect() -> Result<InstallKind, String> {
+        let unsupported = || {
+            "this copy is not a supported installed Debian package; use the release page for AppImage or manual updates".to_string()
+        };
+        let Some(kind @ InstallKind::Deb(arch)) =
+            unix_install_kind("linux", std::env::consts::ARCH)
+        else {
+            return Err(unsupported());
+        };
+        let executable = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .map_err(|error| format!("could not locate the running executable: {error}"))?;
+        if executable.file_name() != Some(std::ffi::OsStr::new("aiolm")) {
+            return Err(unsupported());
+        }
+        let owner = query(&["--search".as_ref(), "--".as_ref(), executable.as_os_str()])
+            .ok()
+            .and_then(|text| deb_package_owner(&text, &executable, arch))
+            .ok_or_else(unsupported)?;
+        let status = query(&[
+            "--show".as_ref(),
+            "--showformat=${Package}\t${db:Status-Status}\t${Architecture}\n".as_ref(),
+            "--".as_ref(),
+            owner.as_ref(),
+        ])?;
+        if !deb_status_matches(&status, arch) {
+            return Err(unsupported());
+        }
+        if !Path::new("/usr/bin/xdg-open").is_file() {
+            return Err(
+                "no desktop installer launcher is available; use the release page instead".into(),
+            );
+        }
+        Ok(kind)
+    }
 }
 
 /// What the startup notification and the settings panel call. It never
@@ -590,8 +791,12 @@ pub async fn check(current_version: &str) -> Result<UpdateStatus, String> {
             notes: None,
         });
     };
-    let can_install =
-        latest.newer && installable(detect_install_kind().ok(), &release.assets, &latest.version);
+    let can_install = latest.newer
+        && installable(
+            installed_kind().await.ok(),
+            &release.assets,
+            &latest.version,
+        );
     Ok(UpdateStatus {
         current_version: current.to_string(),
         latest_version: Some(latest.version),
@@ -634,7 +839,7 @@ pub async fn install(
             "{PRODUCT_NAME} {requested} is not newer than the installed {current}"
         ));
     }
-    let kind = detect_install_kind()?;
+    let kind = installed_kind().await?;
     // Unlike the "latest" lookup, a missing tag here is a failure: the
     // renderer asked to install a version that this repository does not
     // publish.
@@ -688,7 +893,10 @@ pub async fn install(
         if let Some(before_launch) = before_launch {
             before_launch();
         }
-        launch_installer(kind, &installer)
+        let installer = installer.clone();
+        tokio::task::spawn_blocking(move || launch_installer(kind, &installer))
+            .await
+            .map_err(|error| format!("installer launch task failed: {error}"))?
     }
     .await;
     match result {
@@ -953,6 +1161,10 @@ mod windows_install {
                 command.arg("/i").arg(path);
                 command
             }
+            #[cfg(test)]
+            InstallKind::Dmg(_) | InstallKind::Deb(_) => {
+                return Err("installer does not match Windows".into());
+            }
         };
         command
             .spawn()
@@ -1197,6 +1409,88 @@ mod tests {
             installer_asset_name(InstallKind::Msi, "0.1.12"),
             "AioLM_0.1.12_x64_en-US.msi"
         );
+        for (os, arch, expected) in [
+            ("macos", "x86_64", "AioLM_0.1.12_x64.dmg"),
+            ("macos", "aarch64", "AioLM_0.1.12_aarch64.dmg"),
+            ("linux", "x86_64", "AioLM_0.1.12_amd64.deb"),
+            ("linux", "aarch64", "AioLM_0.1.12_arm64.deb"),
+        ] {
+            let kind = unix_install_kind(os, arch).unwrap();
+            assert_eq!(installer_asset_name(kind, "0.1.12"), expected);
+            assert!(installable(Some(kind), &[asset(expected, None)], "0.1.12"));
+            assert!(!installable(
+                Some(kind),
+                &release("v0.1.12").assets,
+                "0.1.12"
+            ));
+        }
+        assert!(unix_install_kind("linux", "riscv64").is_none());
+        assert!(unix_install_kind("macos", "x86").is_none());
+        assert!(unix_install_kind("freebsd", "x86_64").is_none());
+    }
+
+    #[test]
+    fn mac_updates_require_the_app_installed_in_an_applications_folder() {
+        let home = Path::new("/Users/synthetic");
+        assert!(mac_install_location(
+            Path::new("/Applications/AioLM.app/Contents/MacOS/aiolm"),
+            Some(home)
+        ));
+        assert!(mac_install_location(
+            &home.join("Applications/AioLM.app/Contents/MacOS/aiolm"),
+            Some(home)
+        ));
+        for path in [
+            "/Volumes/AioLM/AioLM.app/Contents/MacOS/aiolm",
+            "/private/var/folders/test/AppTranslocation/id/d/AioLM.app/Contents/MacOS/aiolm",
+            "/tmp/build/AioLM.app/Contents/MacOS/aiolm",
+            "/Applications/Other.app/Contents/MacOS/aiolm",
+            "/Applications/AioLM.app/Contents/MacOS/aiolm-cli",
+        ] {
+            assert!(!mac_install_location(Path::new(path), Some(home)), "{path}");
+        }
+    }
+
+    #[test]
+    fn deb_updates_require_exact_file_ownership_and_installed_architecture() {
+        let executable = Path::new("/usr/bin/aiolm");
+        assert_eq!(
+            deb_package_owner("aio-lm: /usr/bin/aiolm\n", executable, InstallerArch::X64),
+            Some("aio-lm".into())
+        );
+        assert_eq!(
+            deb_package_owner(
+                "aio-lm:arm64: /usr/bin/aiolm\n",
+                executable,
+                InstallerArch::Arm64
+            ),
+            Some("aio-lm:arm64".into())
+        );
+        for output in [
+            "other: /usr/bin/aiolm",
+            "aio-lm: /usr/bin/aiolm-cli",
+            "aio-lm:arm64: /usr/bin/aiolm",
+            "aio-lm, other: /usr/bin/aiolm",
+            "local diversion from: /usr/bin/aiolm",
+            "aio-lm: /tmp/.mount_app/usr/bin/aiolm",
+        ] {
+            assert!(
+                deb_package_owner(output, executable, InstallerArch::X64).is_none(),
+                "{output}"
+            );
+        }
+        assert!(deb_status_matches(
+            "aio-lm\tinstalled\tamd64\n",
+            InstallerArch::X64
+        ));
+        for output in [
+            "aio-lm\tinstalled\tarm64",
+            "aio-lm\tconfig-files\tamd64",
+            "other\tinstalled\tamd64",
+            "aio-lm\tinstalled\tamd64\nextra",
+        ] {
+            assert!(!deb_status_matches(output, InstallerArch::X64), "{output}");
+        }
     }
 
     #[test]
@@ -1219,7 +1513,7 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn platforms_without_a_published_installer_report_no_install_kind() {
+    fn an_uninstalled_test_binary_reports_no_install_kind() {
         assert!(detect_install_kind().is_err());
     }
 
@@ -1364,7 +1658,7 @@ mod tests {
         let error = install(&progress, "999.0.0", "0.1.11", Some(&before_launch))
             .await
             .expect_err("an unidentified installation must be refused");
-        assert!(error.contains("Windows"), "{error}");
+        assert!(error.contains("release page"), "{error}");
     }
 
     #[test]

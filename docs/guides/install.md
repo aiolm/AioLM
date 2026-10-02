@@ -54,7 +54,7 @@ AioLM checks its public GitHub release metadata once each time the desktop app s
 
 Choose **Download and install** and confirm to download the matching Windows x64 installer. AioLM verifies the SHA-256 digest published with that release, stops managed servers and tasks, opens the installer, and closes. Save active work first, follow the installer instructions, and reopen AioLM afterward. The download progress and verification status appear in settings. Installation is never started by the automatic check. If the download or verification fails, running sessions continue; if opening the installer fails after cleanup, the app stays open and servers can be started again.
 
-The updater matches the running application's Windows uninstall registration to use the same NSIS or MSI installer type. For an unregistered development/portable copy or an unsupported platform, use **Open release page** to obtain an installer manually. Update checks and downloads use the same public release source as `install.ps1`; no separate update server or signing secret is required. Installers remain unsigned, and checksum verification does not replace publisher code signing.
+The updater matches the running application's Windows uninstall registration to use the same NSIS or MSI installer type. The Linux/macOS implementation also recognizes a Debian package owned by `aio-lm`, or an app installed in `/Applications` or the user's `Applications` folder, and selects the matching DEB/DMG architecture when that asset is published. After verification it opens the system installation screen; complete installation there before reopening AioLM. For a DMG, replace the app in its existing installation folder. AppImage, development and other manual installations use **Open release page**. Update checks and downloads use the same public release source as `install.ps1`; no separate update server or signing secret is required. Checksum verification does not replace publisher code signing.
 
 ## Uninstall
 
@@ -62,4 +62,8 @@ Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **
 
 ## Linux / macOS (planned)
 
-`curl | tar` distribution is planned. No OS signing required for tar path. See [README.md](../../README.md#platform-support).
+Linux and macOS native acceptance is still pending. Host builds produce DEB/AppImage
+and APP/DMG packages; see [Cross-platform validation](../reference/cross-platform-validation.md).
+Package generation and checksum verification do not replace macOS signing,
+notarization or installation tests. Published support is tracked in
+[README.md](../../README.md#platform-support).

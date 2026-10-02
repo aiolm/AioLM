@@ -397,28 +397,13 @@ fn pump_log<R: Read + Send + 'static>(mut reader: R, path: PathBuf, guard: Arc<M
 }
 
 fn process_is_llama_server(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        process_image_path(pid)
-            .and_then(|path| path.file_name().map(|name| name.to_owned()))
-            .is_some_and(|name| {
-                name.to_string_lossy()
-                    .to_ascii_lowercase()
-                    .contains("llama-server")
-            })
-    }
-    #[cfg(not(windows))]
-    {
-        fs::read_link(format!("/proc/{pid}/exe"))
-            .ok()
-            .and_then(|path| path.file_name().map(|name| name.to_owned()))
-            .map(|name| {
-                name.to_string_lossy()
-                    .to_ascii_lowercase()
-                    .contains("llama-server")
-            })
-            .unwrap_or(false)
-    }
+    process_image_path(pid)
+        .and_then(|path| path.file_name().map(|name| name.to_owned()))
+        .is_some_and(|name| {
+            name.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("llama-server")
+        })
 }
 
 fn process_is_alive(pid: u32) -> bool {
@@ -433,9 +418,23 @@ fn process_is_alive(pid: u32) -> bool {
         let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
         unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) == 258 } // WAIT_TIMEOUT
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        Path::new(&format!("/proc/{pid}")).is_dir()
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        if pid <= 0 {
+            return false;
+        }
+        // Signal 0 checks existence without signaling the process. EPERM also
+        // means a process exists, but the caller has no right to signal it.
+        (unsafe { libc::kill(pid, 0) == 0 })
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        false
     }
 }
 
@@ -468,6 +467,33 @@ fn process_image_path(pid: u32) -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn process_image_path(pid: u32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_image_path(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+
+    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: proc_pidpath receives a writable buffer of the documented maximum
+    // size. The returned path is preserved as OS bytes, including non-UTF8 names.
+    let length =
+        unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    if length <= 0 || length as usize >= buffer.len() {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    Some(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn process_image_path(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
 fn process_matches_executable(pid: u32, executable: &Path) -> bool {
     let expected = executable
         .canonicalize()
@@ -484,8 +510,7 @@ fn process_matches_executable(pid: u32, executable: &Path) -> bool {
     }
     #[cfg(not(windows))]
     {
-        fs::read_link(format!("/proc/{pid}/exe"))
-            .ok()
+        process_image_path(pid)
             .and_then(|path| path.canonicalize().ok())
             .map(|path| path == expected)
             .unwrap_or(false)
@@ -1149,11 +1174,24 @@ mod tests {
         assert!(validate_state_url("http://127.0.0.1:8081/v1", 8080).is_err());
     }
 
-    #[cfg(windows)]
     #[test]
     fn native_process_identity_matches_current_executable() {
         let executable = env::current_exe().expect("test executable should be discoverable");
         assert!(process_matches_executable(std::process::id(), &executable));
+        assert!(process_is_alive(std::process::id()));
+        assert!(!process_matches_executable(
+            std::process::id(),
+            &executable.with_file_name("different-synthetic-program")
+        ));
+    }
+
+    #[test]
+    fn invalid_process_ids_are_not_treated_as_headless_servers() {
+        for pid in [0, u32::MAX] {
+            assert!(!process_is_alive(pid));
+            assert!(!process_is_llama_server(pid));
+            assert!(process_image_path(pid).is_none());
+        }
     }
 
     #[test]

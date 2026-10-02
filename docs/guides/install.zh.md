@@ -44,4 +44,4 @@ AioLM将数据保存在 `%USERPROFILE%\.aiolm`，也可以通过环境变量 `AI
 
 ## Linux / macOS (计划中)
 
-计划提供 `curl | tar` 分发。tar 路径无需 OS 签名。详见 [overview.zh.md](overview.zh.md#平台支持)。
+Linux/macOS 的实际环境验证尚未完成。主机构建在 Linux 生成 DEB/AppImage，在 macOS 生成 APP/DMG。请参阅[验证步骤](../reference/cross-platform-validation.md)。除生成安装包外，还需验证 macOS 签名、公证和安装。DEB/DMG 更新会在系统安装界面打开已验证的文件，由用户完成安装。AppImage 和手动安装通过发布页面更新。

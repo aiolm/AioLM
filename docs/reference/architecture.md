@@ -171,9 +171,11 @@ validation functions used by the CLI and integration tests.
   from the development machine or change persisted path identities as part of a
   performance refactor.
 
-CI compiles the native library, binaries, examples and tests on Linux and macOS
-in addition to the Windows test gate. These compile checks guard against platform
-drift; they do not establish runtime installation, packaging or WebView support.
+CI executes native tests and builds both binaries on Linux and both macOS
+architectures in addition to the Windows test gate. A clean-home CLI smoke checks
+initialization and persistence. A separate manual workflow builds native packages.
+These gates do not establish GPU, WebView, native-dialog or desktop-session support;
+see [Cross-platform validation](cross-platform-validation.md).
 
 ## Conversation persistence
 

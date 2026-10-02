@@ -37,6 +37,7 @@ export function writeLatestCache(infos: Record<string, api.LatestInfo>, errors: 
 }
 
 export const BACKENDS = [
+  { id: "metal", label: "backendMetal", note: "noteMetal" },
   { id: "rocm", label: "backendRocm", note: "noteAmd" },
   { id: "vulkan", label: "backendVulkan", note: "noteVulkan" },
   { id: "cuda", label: "backendCuda", note: "noteNvidia" },

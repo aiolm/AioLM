@@ -48,6 +48,7 @@ fn device_prefix(backend: &str) -> Option<&'static str> {
         "rocm" => Some("ROCm"),
         "vulkan" => Some("Vulkan"),
         "sycl" => Some("SYCL"),
+        "metal" => Some("MTL"),
         _ => None,
     }
 }
@@ -85,7 +86,7 @@ pub fn resolve(
     }
     let Some(prefix) = device_prefix(backend) else {
         return Err(format!(
-            "GPU placement is configured but backend '{}' does not support pinning devices by id; select cuda, rocm, vulkan, or sycl, or clear the GPU assignment",
+            "GPU placement is configured but backend '{}' does not support pinning devices by id; select cuda, rocm, vulkan, sycl, or metal, or clear the GPU assignment",
             if backend.is_empty() { "(none selected)" } else { backend }
         ));
     };
@@ -146,7 +147,11 @@ fn parse_runtime_devices(lines: &[String], prefix: &str) -> Vec<RuntimeDevice> {
         .filter_map(|line| {
             let trimmed = line.trim();
             let (name, description) = trimmed.split_once(':')?;
-            let suffix = name.trim().strip_prefix(prefix)?;
+            let suffix = name.trim().strip_prefix(prefix).or_else(|| {
+                (prefix == "MTL")
+                    .then(|| name.trim().strip_prefix("Metal"))
+                    .flatten()
+            })?;
             let index = suffix.parse::<usize>().ok()?;
             Some(RuntimeDevice {
                 name: name.trim().to_string(),
@@ -447,6 +452,28 @@ mod tests {
             gpus,
             detection: "test".into(),
             fingerprint: "test".into(),
+        }
+    }
+
+    #[test]
+    fn metal_placement_uses_the_runtime_reported_device_name() {
+        let mut apple = gpu(GpuVendor::Apple, "apple-gpu-0");
+        apple.name = "Apple Test Chip".into();
+        apple.integrated = true;
+        let machine = profile(vec![apple]);
+        for name in ["MTL0", "Metal0"] {
+            let placement = GpuPlacement {
+                gpu_ids: vec!["apple-gpu-0".into()],
+                ..Default::default()
+            };
+            let resolved = resolve_with_runtime_devices(
+                &placement,
+                "metal",
+                &machine,
+                &[format!("{name}: Apple Test Chip (8192 MiB, 4096 MiB free)")],
+            )
+            .unwrap();
+            assert_eq!(resolved.device_flag.as_deref(), Some(name));
         }
     }
 

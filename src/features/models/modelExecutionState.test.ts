@@ -12,6 +12,13 @@ describe('model execution memory', () => {
     expect(restoreExecution(b, 'c:/models/a.gguf')).toMatchObject({ active_backend: 'vulkan', active_build: 'b77', ctx_size: 8192, temperature: 0.4, runtime_defaults: ['top_k'], mmproj: 'a-vision.gguf', lora_adapters: a.lora_adapters });
     expect(restoreExecution(a, b.active_model)).toMatchObject({ ctx_size: 2048, temperature: 1.2, mmproj: '', lora_adapters: [] });
   });
+  it('restores separate execution settings for POSIX files differing only by case', () => {
+    const upper = { ...testConfig, active_model: '/models/Example.gguf', temperature: 0.2, mmproj: '/models/Upper.gguf' };
+    const lower = { ...testConfig, active_model: '/models/example.gguf', temperature: 0.8, mmproj: '/models/Lower.gguf' };
+    rememberExecution(upper); rememberExecution(lower);
+    expect(restoreExecution(lower, upper.active_model)).toMatchObject({ temperature: 0.2, mmproj: upper.mmproj });
+    expect(restoreExecution(upper, lower.active_model)).toMatchObject({ temperature: 0.8, mmproj: lower.mmproj });
+  });
   it('restores an applied snapshot independently of changed profile originals and stale local memory', () => {
     const a = { ...testConfig, active_model: 'a.gguf', temperature: 0.2 };
     const original = captureProfile(a, 'Brief', 'global', 'Saved prompt');

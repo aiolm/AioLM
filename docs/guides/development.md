@@ -4,11 +4,11 @@
 
 ## Requirements
 
-- Windows 10/11 x64
+- Windows 10/11 x64 for the published release; Linux and macOS for native portability validation
 - Node `22.23.2` / npm `12.0.2` (`.node-version`, `package.json#engines`)
 - Rust `1.98.0` + `rustfmt`/`clippy` (`rust-toolchain.toml`)
 - Tauri v2 prerequisites
-- `llama-server.exe` or managed runtime for smoke tests
+- A managed `llama-server` runtime for real-model smoke tests
 - For PR builds: CMake + toolchain/SDK per backend (`cuda`→CUDA Toolkit, `vulkan`→Vulkan SDK, `rocm`→HIP SDK + `hipcc`)
 
 Bump toolchain: `.node-version` + `package.json#engines` together; `rust-toolchain.toml` + `src-tauri/Cargo.toml#rust-version` + `.github/workflows/{ci,release}.yml` `toolchain:` together.
@@ -44,12 +44,18 @@ npm run test:ui -- <path>
 
 ```
 
-CI runs the full native checks on Windows and also runs `cargo check --locked
---manifest-path src-tauri/Cargo.toml --all-targets --all-features` on Ubuntu and
-macOS. The additional jobs check compilation while support for those platforms
-is developed; they do not validate native runtime installation or packaging.
-For local compile checks on those hosts, install the corresponding
+CI runs native tests and Clippy on Windows, Ubuntu 24.04, macOS ARM64 and macOS
+Intel. The Unix jobs also build both binaries and run `npm run test:native-cli`
+with a disposable home. This covers initialization and persistence without
+reading existing user settings. Install the corresponding
 [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) first.
+
+The manually dispatched **Validate Linux and macOS packages** workflow builds
+DEB/AppImage and APP/DMG packages and retains installers with SHA-256 checksums
+as workflow artifacts. It does not publish a release. Run `npm run package:tauri`
+on the target OS to produce the same host formats locally. Windows continues to
+produce NSIS/MSI. See [Cross-platform validation](../reference/cross-platform-validation.md)
+for remaining desktop, installation, update and real-model acceptance checks.
 
 Benchmark history, public contract and sharing-client development are described
 in [Benchmark sharing](../reference/benchmark-sharing.md). Their normal tests use

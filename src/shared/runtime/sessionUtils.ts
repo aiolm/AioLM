@@ -66,15 +66,16 @@ export function gpuDeviceLabel(device: GpuDevice, index: number): string {
 
 /** Runtime indices are explicit choices, not unverified physical-card identities. */
 export function runtimeGpuDevices(backend: string, lines: string[]): GpuDevice[] {
-  const prefix = ({ rocm: "ROCm", cuda: "CUDA", vulkan: "Vulkan", sycl: "SYCL" } as Record<string, string>)[backend];
+  const prefix = ({ rocm: "ROCm", cuda: "CUDA", vulkan: "Vulkan", sycl: "SYCL", metal: "(?:MTL|Metal)" } as Record<string, string>)[backend];
   if (!prefix) return [];
   const seen = new Set<string>();
   return lines.flatMap((line) => {
     const match = line.trim().match(new RegExp(`^(${prefix}\\d+):\\s*(.+)$`));
     if (!match || seen.has(match[1])) return [];
     seen.add(match[1]);
-    const vendor = backend === "rocm" ? "amd" : backend === "cuda" ? "nvidia" : backend === "sycl" ? "intel" : "unknown";
-    return [{ name: `${match[1]} · ${match[2]}`, stable_id: `runtime:${backend}:${match[1]}`, vendor, integrated: false } as GpuDevice];
+    const appleMetal = backend === "metal" && /\bApple\b/i.test(match[2]);
+    const vendor = backend === "rocm" ? "amd" : backend === "cuda" ? "nvidia" : backend === "sycl" ? "intel" : appleMetal ? "apple" : "unknown";
+    return [{ name: `${match[1]} · ${match[2]}`, stable_id: `runtime:${backend}:${match[1]}`, vendor, integrated: appleMetal } as GpuDevice];
   });
 }
 

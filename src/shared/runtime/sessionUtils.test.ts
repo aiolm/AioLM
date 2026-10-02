@@ -11,6 +11,11 @@ const placement: GpuPlacement = {
 };
 
 describe("GPU tensor split drafts", () => {
+  it("preserves current and legacy Metal device IDs with unified memory", () => {
+    const current = runtimeGpuDevices("metal", ["MTL0: Apple Test Chip", "Vulkan0: Other GPU"]);
+    expect(current).toMatchObject([{ stable_id: "runtime:metal:MTL0", vendor: "apple", integrated: true }]);
+    expect(runtimeGpuDevices("metal", ["Metal0: Apple Test Chip"])[0].stable_id).toBe("runtime:metal:Metal0");
+  });
   it("keeps identical devices explicit and scoped to their runtime", () => {
     const devices = runtimeGpuDevices("rocm", ["Available devices:", "ROCm1: R9700 (32768 MiB)", "ROCm0: R9700 (32768 MiB)", "Vulkan0: R9700", "ROCm0: duplicate"]);
     expect(devices.map((gpu) => gpu.stable_id)).toEqual(["runtime:rocm:ROCm1", "runtime:rocm:ROCm0"]);

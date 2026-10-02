@@ -48,4 +48,4 @@ AioLM은 데이터를 `%USERPROFILE%\.aiolm`에 보관하며, `AIOLM_HOME` 환�
 
 ## Linux / macOS (예정)
 
-`curl | tar` 배포를 계획 중입니다. tar 경로는 OS 서명이 필요 없습니다. 자세한 내용은 [overview.ko.md](overview.ko.md#플랫폼-지원)를 참조하세요.
+Linux·macOS의 실제 환경 검증은 아직 진행 전입니다. 호스트 빌드는 Linux에서 DEB/AppImage, macOS에서 APP/DMG를 생성합니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참조하세요. 패키지 생성·체크섬 검증과 별도로 macOS 서명·공증 및 설치 검증이 필요합니다. DEB/DMG 업데이트는 검증된 파일을 시스템 설치 화면으로 전달하며, 사용자가 설치를 마무리합니다. AppImage·수동 설치는 릴리스 페이지에서 업데이트합니다.

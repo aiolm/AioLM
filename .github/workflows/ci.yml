@@ -75,18 +75,31 @@ jobs:
         run: npm run build
 
   rust-portability:
-    name: Rust compile (${{ matrix.os }})
+    name: Native tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    # Compile every target on its host OS to catch cfg/dependency drift while
-    # Linux and macOS runtime installation and packaging support is developed.
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+    # Execute native tests on each architecture, including Unix process-tree
+    # cleanup and RSS sampling. GPU/model and desktop integration are separate.
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: ".node-version"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Rebuild esbuild
+        run: npm rebuild esbuild
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -96,5 +109,14 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch
         with:
           toolchain: "1.98.0"
-      - name: Compile library, binaries, examples and tests
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+          components: rustfmt, clippy
+      - name: Lint native code
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+      - name: Native tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features
+      - name: Build frontend
+        run: npm run build
+      - name: Build desktop and CLI
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
+      - name: Native CLI with a clean home
+        run: npm run test:native-cli

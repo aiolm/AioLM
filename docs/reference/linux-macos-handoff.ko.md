@@ -1,0 +1,267 @@
+# Linux·macOS 이식 및 검증 인계
+
+Windows 검증 기준일: 2026-10-03. 이 문서는 함께 커밋된 이식 구현의 검증 결과와
+Linux에서 이어서 수행할 작업을 설명한다. 공통 개발 절차는
+[Cross-platform validation](cross-platform-validation.md)을 참고한다.
+
+## 현재 상태와 구현 범위
+
+Windows에서 확인할 수 있는 이식 결함을 수정하고 자동 검증을 추가했다.
+아래 Windows 결과는 Linux·macOS에서의 실행 성공을 의미하지 않는다. 대상 OS의
+CI, 패키지 설치, 실제 모델·GUI 검증은 아래 완료 기준을 충족할 때까지 미완료다.
+배포 버전과 정식 지원 표시는 아직 Windows x64 기준이다.
+
+| 영역 | 구현 내용 | 남은 대상 OS 검증 |
+| --- | --- | --- |
+| 런타임 선택 | OS와 x64/ARM64 구분, Linux tar.gz/CPU/CUDA sidecar, macOS CPU·Metal 배포 이름 처리 | 실제 릴리스 다운로드·설치·probe |
+| 압축·배포 | ZIP/tar.gz, 최상위 래퍼 폴더, 실행 권한 보존, 내부 SONAME 링크를 파일로 변환 | Linux .so / macOS .dylib 로딩과 ZIP 내보내기·가져오기 |
+| 압축 안전성 | 경로 탈출·특수 파일·외부 링크·순환 링크·중복 파일 거부, 확장 크기/개수/메타데이터 한도, 취소 | 회귀 테스트를 Unix에서도 실행 |
+| Metal | 백엔드 추천·UI·번역·MTL0/Metal0 선택·빌드 옵션 | Apple Silicon GPU 추론 |
+| CPU | GPU가 함께 포함된 런타임도 CPU 선택 시 서버·perplexity의 GPU 오프로딩 차단; 저장 프로필 보존 | ARM64 CPU/Metal을 비교해 실제 실행 장치 확인 |
+| GPU/CPU 정보 | Linux PCI 슬롯별 이름·드라이버 보완, macOS sysctl CPU/Apple GPU 이름 | 실제 장치·드라이버 정보와 대응 |
+| 메모리 | Linux procfs RSS, macOS resident size, 공통 150ms 샘플링; Metal 통합 메모리를 별도 VRAM으로 중복 계산하지 않음 | 실제 모델 프로세스 RSS와 비교 |
+| 프로세스 | Linux TCP inode 필드 인덱스 수정, macOS CLI 실행 파일·PID 식별 수정 | 시작·정지·재시작·비정상 종료 |
+| MCP | Unix 초기화/호출 취소와 자식 프로세스 종료 회귀 테스트 | 실제 GTK/Cocoa 승인 창 취소 |
+| 모델 식별 | POSIX 대소문자·역슬래시 구분, 기존 원본 모델 경로를 이용한 프로필 키 복구 | 대소문자가 다른 실제 모델·프로필·세션 |
+| 패키징 | Windows NSIS/MSI, Linux DEB/AppImage, macOS APP/DMG 자동 선택; 테스트 서버 배포 제외 | 실제 설치·시작·제거 |
+| 업데이트 | 설치된 DEB/APP의 소유권·위치·아키텍처 확인 후 해시 검증을 거쳐 시스템 설치 화면으로 전달 | 설치 화면에서 업데이트 완료·재실행 |
+| CI | Linux와 macOS ARM64/Intel 각각 Clippy·Rust 테스트·바이너리 빌드·격리된 홈 CLI 검사 | 원격 작업 결과를 확인하고 실패 해결 |
+| 패키지 CI | 수동 desktop-packages.yml, 네이티브 패키지·체크섬 아티팩트 | 아티팩트 설치 검증, 이후 정식 릴리스 연결 |
+
+CPU 인자 정규화는 서버와 perplexity에 적용한다. 인자 문법이 다른 `llama-bench`나
+도움말·버전·장치 조회에 서버 인자를 일괄 삽입하지 않는다.
+
+업데이트는 DEB/DMG 파일을 열었다고 완료되는 것이 아니다. DEB는 데스크톱의 패키지
+설치 화면에서 사용자가 마무리해야 하고, DMG는 **기존 앱이 있는 설치 폴더**의 앱을
+교체해야 한다. AppImage와 개발/기타 수동 설치는 릴리스 페이지 안내를 사용한다.
+현재 Windows 릴리스 워크플로는 그대로이며, Linux/macOS 파일이 실제 릴리스에
+게시되기 전에는 해당 업데이트 설치 버튼을 사용할 수 없다.
+
+## 완료한 Windows 검증
+
+| 검증 | 결과 |
+| --- | --- |
+| TypeScript 전체 타입 검사, ESLint | 통과 |
+| 계약 패키지·직접 실행 테스트·패키징 스크립트 테스트 | 통과 |
+| Vitest 전체 | 144개 파일, 1,447개 테스트 통과 |
+| Vitest 커버리지 | Statements 78.17%, branches 73.21%, lines 82.16% |
+| Rust format, Clippy `-D warnings` | 통과 |
+| Rust 전체 타깃·전체 기능 테스트 | 라이브러리 715 + CLI 10 + 가짜 서버 통합 1 = 726개 통과 |
+| 프런트엔드 production, Windows GUI/CLI debug 빌드 | 통과 |
+| 격리된 홈 CLI 초기화·설정 저장/재로딩·빈 런타임 목록·서버 중지 상태 | debug/release 모두 통과 |
+| 실제 CPU·Vulkan 런타임 설치 | llama.cpp b11349 다운로드·SHA-256·압축 해제·preflight 통과 |
+| 실제 다운로드 취소 | 통과; 공통 취소 테스트는 CPU 사용 |
+| 업데이트 UI, 패키징 선택 | 각각 13개, 3개 테스트 통과 |
+| CI YAML 문법·OS 행렬, 변경 파일 공백 검사 | 통과 |
+
+기본 Rust 실행에서 실제 모델·다운로드 등 7개 테스트는 명시적 opt-in으로 제외된다.
+첫 병렬 실행에서 일부 UI·프로세스 타이밍 테스트가 시간 초과했다. 동시 컴파일 부하를
+제거하고 Vitest 작업자 4개, Rust 테스트 스레드 4개로 재실행해 통과했다.
+테스트 시간 제한은 변경하지 않았다.
+
+Windows 패키지도 생성하고 파일 목록을 검사했다:
+
+| 산출물 | 크기 | 확인 범위 |
+| --- | ---: | --- |
+| AioLM_0.2.0_x64-setup.exe | 10,771,221 bytes | 생성 및 NSIS 파일 목록 |
+| AioLM_0.2.0_x64_en-US.msi | 14,086,144 bytes | 생성 및 MSI DB 읽기 전용 파일 목록 |
+
+두 패키지 모두 제품 GUI와 CLI를 포함하고 `fake-llama-server`는 제외됐다.
+릴리스 실행 파일에 개발 PC의 홈/워크스페이스 경로가 UTF-8·UTF-16으로 포함되지
+않았음을 검사했다. 설치 파일을 실제 설치하거나 기존 사용자 앱을 교체하지는 않았다.
+실제 모델을 로딩한 Windows GPU 추론과 ROCm 실기 검증도 이 결과에 포함하지 않는다.
+
+기존 대형 프런트엔드 청크 안내와 release의 미사용 debug 전용 함수
+(`is_loopback_host`) 경고는 남아 있다. 원본 검증 로그와 로컬 장비 메모는 Git에
+포함하지 않으며, 다음 작업자는 아래 명령으로 자신의 환경에서 결과를 재검증한다.
+
+## Linux에서 소스 받기
+
+새 작업 폴더에서는:
+
+```sh
+git clone https://github.com/aiolm/AioLM.git
+cd AioLM
+git switch main
+```
+
+이미 저장소가 있다면 먼저 `git status --short`로 미커밋 작업을 확인한다. 작업 트리가
+깨끗하고 main에서 이어서 작업할 경우:
+
+```sh
+git switch main
+git pull --ff-only origin main
+git log -1 --oneline
+```
+
+로컬 수정이 있으면 먼저 별도 커밋/브랜치에 보존한다. 강제 초기화나 패치 재적용은
+필요하지 않다. 이 문서와 이식 코드는 같은 커밋에 들어 있다.
+
+## Linux 검증 순서
+
+1. 저장소의 AGENTS.md, 이 문서와 [공통 검증 문서](cross-platform-validation.md)를 읽는다.
+2. 저장소에 고정된 Node/npm·Rust 버전을 사용한다. 작성 시점에는 Node 22.23.2,
+   npm 12.0.2, Rust 1.98.0이다. lockfile을 일괄 갱신하지 않는다.
+3. Tauri 시스템 개발 패키지를 설치하고 아래 자동 검사를 순서대로 실행한다.
+
+Ubuntu 24.04의 예:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libwebkit2gtk-4.1-dev \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pciutils
+npm ci --ignore-scripts
+npm rebuild esbuild
+npm test
+npm run typecheck
+npm run lint
+npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- --test-threads=4
+cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
+npm run test:native-cli
+```
+
+4. 사용할 CPU/GPU 백엔드를 확인한다. AMD 환경에서도 CPU, Vulkan, ROCm을 별도
+   결과로 취급한다. Vulkan 성공만으로 ROCm 성공을 판정하지 않는다.
+5. 실제 런타임 설치 테스트를 실행한다. 이 테스트는 자체 임시 폴더를 만들고 정리하므로
+   설치된 사용자 런타임을 덮어쓰지 않는다. 사용할 백엔드만 선택한다.
+
+```sh
+AIOLM_RUNTIME_INSTALL=1 AIOLM_RUNTIME_BACKENDS=cpu,vulkan,rocm \
+cargo test --locked --manifest-path src-tauri/Cargo.toml --test runtime_install \
+  -- --ignored --nocapture --test-threads=1
+```
+
+6. 별도 테스트 OS 계정에서 앱을 시작하고 작은 실제 GGUF를 설치한다. CPU부터
+   채팅·생성 취소·정지·재시작을 확인한다.
+7. 같은 모델로 Vulkan과 ROCm을 각각 확인한다. 런타임 장치 목록에 나온 이름을
+   사용하며 GPU 순번이나 실제 GPU 개수를 추정하지 않는다.
+8. 작은 반복 벤치마크, 중간 취소, 결과 보존, RAM 측정, CSV/XLSX 내보내기를 확인한다.
+9. ZIP 내보내기 → 별도 테스트 폴더에 가져오기 → probe → 추론을 실행해 실행 권한과
+   라이브러리가 보존되는지 확인한다.
+10. CMake 소스 빌드와 취소를 확인한다. SONAME 링크·RPATH를 `ldd`/`readelf`로 점검한다.
+11. `npm run package:tauri`로 DEB/AppImage를 만들고 새로운 테스트 계정/VM에서
+    설치·업데이트·제거한다. 설치한 CLI도 검사한다.
+
+실제 모델 opt-in 테스트 예시(별도 테스트 계정에서 경로·빌드 값을 교체):
+
+```sh
+AIOLM_SMOKE=1 AIOLM_SMOKE_MODEL='/absolute/path/to/test-model.gguf' \
+AIOLM_SMOKE_BACKEND=cpu AIOLM_SMOKE_BUILD='<installed-build-id>' \
+cargo test --locked --manifest-path src-tauri/Cargo.toml --test smoke \
+  -- --ignored --nocapture --test-threads=1
+```
+
+각 GPU 백엔드로 반복한다. `AIOLM_SMOKE_DEVICE`에는 `--list-devices`가 보고한
+런타임 장치 이름을 사용한다.
+
+### AMD GPU와 Linux 배포판
+
+현재 네이티브 패키지 CI 기준은 Ubuntu 24.04 x64이다. 더 오래된 배포판 지원은
+glibc 기준을 별도로 낮춰 빌드하고 검증해야 한다. ROCm은 실제 GPU의 아키텍처가
+지원되는 **OS 세부 버전 + 커널 + 드라이버 + ROCm** 조합을 고른다.
+[공식 ROCm 호환 표](https://rocm.docs.amd.com/en/latest/compatibility/compatibility-matrix.html)를
+설치 직전에 확인하고 서로 다른 릴리스의 표를 섞지 않는다.
+
+도구가 설치된 검증 환경에서 다음 결과를 로컬 기록으로 남긴다:
+
+```sh
+uname -r
+lscpu
+lspci -nnk
+rocminfo
+vulkaninfo --summary
+```
+
+`rocminfo`에서 실제 GPU 아키텍처와 접근 가능 여부를 확인하고, `vulkaninfo`에서는
+소프트웨어 렌더러가 아닌 실제 GPU가 선택 가능한지 확인한다. 오류가 있으면 앱 수정
+전에 드라이버/장치 접근 권한 문제인지 분리한다. 임의의 gfx override를 정상 지원의
+증거로 사용하지 않는다. 장비 목록이나 개인 경로를 테스트 fixture·앱 기본값에 넣지 않는다.
+
+### 데이터 격리
+
+`AIOLM_HOME`만 임시 폴더로 바꾸고 GUI/CLI의 첫 실행을 하면 **기존 경로를
+마이그레이션**할 수 있다. 구버전 런타임은 복사가 아니라 이동될 수도 있다.
+기존 사용자 데이터를 실험 대상으로 삼지 않는다. 제공된 `npm run test:native-cli`는
+HOME/USERPROFILE/APPDATA/LOCALAPPDATA/XDG 경로를 모두 **자식 프로세스에서만**
+격리한다. 수동 GUI·Keyring 검증에는 별도 OS 계정을 사용한다.
+
+### Linux GUI 확인 항목
+
+- X11과 Wayland 각각의 창 이동·크기 조절·제목 표시줄·파일 대화상자·클립보드.
+- 한글 IME 조합, 경로/파일명에 공백·한글, 긴 경로.
+- GNOME/KDE에서 트레이 메뉴 Show/Quit와 두 번째 실행의 기존 창 복귀.
+- AppIndicator가 없는 환경에서 close-to-tray로 앱이 복구 불가능하게 숨지 않는지.
+- Secret Service 정상 저장/조회/삭제, 잠긴 저장소, 서비스 없음, 인증 취소.
+- MCP stdio/HTTP, 초기화 실패, 도구 승인/거부/취소, 네이티브 승인 창 닫힘.
+- 앱 종료·런타임 빌드 취소 후 llama-server/MCP/CMake의 자식과 소켓이 남지 않는지.
+- 이미지/문서/임베딩/외부 API/프로필·프로젝트/벤치마크 공유는 각 기능에 필요한 전용 테스트 자료·계정으로 확인.
+- DEB 설치·업데이트·제거와 AppImage 최초 실행·수동 교체. 파일 열기 성공과 설치 완료를 구분.
+
+## Mac 기기 없이 Linux에서 macOS 작업 병행
+
+Linux에서 코드를 수정하고 GitHub의 macOS 작업을 실행해 실제 macOS 빌드·테스트
+결과를 받을 수 있다. [CI](../../.github/workflows/ci.yml)는 main 푸시와 PR에서
+`macos-15` ARM64, `macos-15-intel` x64 및 Linux를 검증한다.
+먼저 해당 커밋의 CI 결과를 확인하고 Unix 네이티브 테스트, Metal 선택, dylib 경로,
+CLI 프로세스 식별, RAM 샘플링 등의 실패를 해결한다.
+
+[패키지 검증 워크플로](../../.github/workflows/desktop-packages.yml)는 수동 실행하며
+DEB/AppImage와 두 Mac 아키텍처의 DMG·체크섬을 아티팩트로 보관한다.
+읽기 전용 저장소 권한으로 동작하고 릴리스를 게시하지 않는다.
+
+```sh
+gh run list --workflow ci.yml --branch main
+gh workflow run desktop-packages.yml --ref main
+gh run list --workflow desktop-packages.yml
+gh run view '<run-id>' --log-failed
+gh run download '<run-id>' --dir tmp/native-packages
+```
+
+실제 Mac 런타임 설치 테스트는 위 Linux 명령의 백엔드를 Apple Silicon에서는
+`cpu,metal`, upstream Intel 아카이브에서는 `cpu`로 바꾼다. ARM64에서 CPU와
+Metal이 같은 배포 아카이브를 사용해도 실제 실행 장치가 달라지는지 확인한다.
+
+현재 CI는 CLI와 네이티브 코드 테스트이며 WebView 조작 E2E는 포함하지 않는다.
+[Tauri의 WebdriverIO embedded driver 안내](https://v2.tauri.app/develop/tests/webdriver/)에
+따라 데스크톱 E2E를 추가할 수 있다. Linux에서 CI를 제어할 수 있지만 아래 실행
+증거는 실제 macOS 환경에서 확보해야 한다:
+
+- WKWebView 렌더링, Cocoa 파일/승인 대화상자, 한글 IME, Keychain 허용/거부/취소.
+- Finder/Dock 실행·재실행·트레이/메뉴·닫기 동작.
+- DMG에서 시스템/사용자 Applications로 설치·교체 후 사용자 데이터 보존.
+- Developer ID 서명·공증·다운로드 격리 속성/Gatekeeper. 미서명 CI DMG는 공개 배포 검증을 대신하지 않는다.
+- 최소 macOS 버전과 Tailwind v4의 Safari 16.4 수준 WebKit 요구사항 확정.
+- Apple Silicon의 실제 Metal GPU 추론. 호스팅 CI가 GPU를 제공하는지는 `llama-server --list-devices`로 먼저 확인.
+- Intel x64 CPU 실행. Intel Metal은 실제 장치·소스 빌드가 지원하는 범위를 별도로 확인.
+
+호스팅 Mac에서 Metal 장치를 사용할 수 없으면 원격 Apple Silicon 장비,
+자체 runner 또는 Mac 사용자 테스터가 필요하다. ARM64 성공 결과로 Intel 검증을
+대체하지 않는다.
+
+## 정식 지원 완료 기준
+
+- [ ] Linux native CI, macOS ARM64/Intel native CI 모두 성공.
+- [ ] 두 플랫폼 실제 패키지 생성·설치·제거·업데이트 완료 확인.
+- [ ] Linux CPU/Vulkan/ROCm 실제 모델 테스트와 결과 기록.
+- [ ] macOS CPU/Metal 실제 모델 테스트와 결과 기록.
+- [ ] 네이티브 GUI·Keyring·MCP 승인·프로세스 정리·파일 처리 체크리스트 완료.
+- [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.
+- [ ] macOS 서명/공증 계정·CI secrets 구성 및 Gatekeeper 검증.
+- [ ] Windows 전용 release.yml을 검증된 Linux/macOS 아티팩트까지 게시하도록 확장. 파일명·체크섬 형식은 updater와 일치.
+- [ ] 검증 결과에 맞춰 README의 planned 표시와 설치 가이드를 정식 지원으로 갱신.
+
+실기 확인 없이 체크박스를 완료로 바꾸지 않는다. 실패는 재현 명령, 기대/실제 결과,
+OS/커널·GPU 드라이버·런타임 빌드·모델 해시로 기록하되 개인 경로·토큰·사용자 데이터는
+제외한다. 지원 상태가 바뀌면 이 인계 문서와 공통 검증 문서를 함께 갱신한다.
+
+## 공식 참고 자료
+
+- [llama.cpp 배포 형식](https://github.com/ggml-org/llama.cpp/blob/master/.github/workflows/release.yml)
+- [Tauri WebView 버전](https://v2.tauri.app/reference/webview-versions/)
+- [Tauri AppImage와 glibc](https://v2.tauri.app/distribute/appimage/)
+- [Tauri macOS 서명](https://v2.tauri.app/distribute/sign/macos/)
+- [GitHub 호스팅 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+- [Tailwind 브라우저 요구사항](https://tailwindcss.com/docs/compatibility)

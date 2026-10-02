@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -59,7 +59,11 @@ const CMAKE_CONFIGURE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const CMAKE_BUILD_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
 /// Backends the release catalog can install. Single source of truth for both
 /// the downloader and the recommendation policy.
-pub const CATALOG_BACKENDS: &[&str] = &["rocm", "vulkan", "cuda", "sycl", "openvino", "cpu"];
+pub const CATALOG_BACKENDS: &[&str] =
+    &["rocm", "vulkan", "cuda", "sycl", "openvino", "cpu", "metal"];
+
+#[path = "runtime_archive.rs"]
+mod archive;
 
 type AssetCache = HashMap<String, (Instant, Vec<Asset>)>;
 type ErrorCache = HashMap<String, (Instant, String)>;
@@ -863,6 +867,9 @@ pub fn perplexity_bin_for(backend: &str, build: &str) -> Result<PathBuf, String>
 /// The correctness gate needs the same isolation the capability probe already
 /// applies — cleared environment plus only the runtime's own library paths —
 /// so it shares that path instead of spawning the tool directly.
+/// Callers currently run llama-perplexity, using llama.cpp's common argument
+/// parser. This wrapper applies inference placement flags for CPU execution;
+/// do not use it for capability probes or llama-bench's separate argument parser.
 pub async fn run_runtime_tool(
     binary: &Path,
     backend: &str,
@@ -875,8 +882,19 @@ pub async fn run_runtime_tool(
         return Err(format!("runtime tool is missing: {}", binary.display()));
     }
     let environment = child_environment_for_runtime(backend, build)?;
+    let mut effective_args = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    if backend == "cpu" {
+        crate::inference_args::force_cpu(&mut effective_args);
+    }
+    let args = effective_args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     let outcome =
-        run_probe_with_cancel_and_environment(binary, args, limit, cancel, &environment).await;
+        run_probe_with_cancel_and_environment(binary, &args, limit, cancel, &environment).await;
     if let Some(diagnostic) = outcome.diagnostic {
         return Err(diagnostic);
     }
@@ -1247,10 +1265,16 @@ pub fn child_environment_for_runtime(
         environment.retain(|(key, _)| key != OsStr::new(name));
     }
     set_environment_value(&mut environment, "PATH", root.as_os_str().to_os_string());
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     set_environment_value(
         &mut environment,
         "LD_LIBRARY_PATH",
+        root.as_os_str().to_os_string(),
+    );
+    #[cfg(target_os = "macos")]
+    set_environment_value(
+        &mut environment,
+        "DYLD_LIBRARY_PATH",
         root.as_os_str().to_os_string(),
     );
     add_packaged_gpu_library_paths(&mut environment, &root);
@@ -3232,6 +3256,17 @@ pub fn export_bundle(
             if cancel.load(Ordering::Acquire) {
                 return Err("runtime install cancelled".into());
             }
+            #[cfg(unix)]
+            let options = {
+                use std::os::unix::fs::PermissionsExt;
+                options.unix_permissions(
+                    fs::metadata(path)
+                        .map_err(|error| error.to_string())?
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                )
+            };
             archive
                 .start_file(format!("{root_name}/{relative}"), options)
                 .map_err(|error| error.to_string())?;
@@ -3442,13 +3477,14 @@ async fn import_bundle_with_digest(
             return Err(format!("runtime bundle size task failed: {error}"));
         }
     };
-    let version = match preflight_staged_runtime(&runtime_root, progress, &cancel).await {
-        Ok(version) => version,
-        Err(error) => {
-            remove_import_staging(&staging).await;
-            return Err(error);
-        }
-    };
+    let version =
+        match preflight_staged_runtime(&runtime_root, &manifest.backend, progress, &cancel).await {
+            Ok(version) => version,
+            Err(error) => {
+                remove_import_staging(&staging).await;
+                return Err(error);
+            }
+        };
     if cancel.load(Ordering::Acquire) {
         remove_import_staging(&staging).await;
         return Err("runtime install cancelled".into());
@@ -3915,17 +3951,63 @@ fn is_build_tag(tag: &str) -> bool {
         && tag[1..].chars().all(|value| value.is_ascii_digit())
 }
 
-/// The archive one backend needs from one release, if that release published it.
-fn backend_asset<'a>(release: &'a Rel, backend: &str) -> Option<&'a Asset> {
-    let prefix = format!(
-        "llama-{}-bin-{}-{backend}",
-        release.tag_name,
-        release_platform()
-    );
-    release.assets.iter().find(|asset| {
-        asset.name == format!("{prefix}-x64.zip")
-            || (asset.name.starts_with(&prefix) && asset.name.ends_with("-x64.zip"))
-    })
+/// Upstream uses Ubuntu tarballs on Linux and one combined CPU/Metal archive
+/// on Apple Silicon. Intel macOS archives explicitly disable Metal.
+pub fn catalog_supports(backend: &str, os: &str, arch: &str) -> bool {
+    match (os, arch) {
+        ("windows", "x86_64") | ("linux", "x86_64") => {
+            CATALOG_BACKENDS.contains(&backend) && backend != "metal"
+        }
+        ("windows", "aarch64") => matches!(backend, "cpu" | "cuda"),
+        ("linux", "aarch64") => matches!(backend, "cpu" | "vulkan" | "cuda"),
+        ("macos", "aarch64") => matches!(backend, "cpu" | "metal"),
+        ("macos", "x86_64") => backend == "cpu",
+        _ => false,
+    }
+}
+
+fn backend_asset_for<'a>(
+    release: &'a Rel,
+    backend: &str,
+    os: &str,
+    arch: &str,
+) -> Option<&'a Asset> {
+    if !catalog_supports(backend, os, arch) {
+        return None;
+    }
+    let architecture = match arch {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return None,
+    };
+    let platform = match os {
+        "windows" => "win",
+        "linux" => "ubuntu",
+        "macos" => "macos",
+        _ => return None,
+    };
+    let base = format!("llama-{}-bin-{platform}", release.tag_name);
+    let extension = if os == "windows" { "zip" } else { "tar.gz" };
+    let suffix = format!("-{architecture}.{extension}");
+    let prefix = if os == "macos" || (os == "linux" && backend == "cpu") {
+        base
+    } else {
+        format!("{base}-{backend}")
+    };
+    // Match exact unversioned assets first. Versioned backend suffixes must
+    // start at a hyphen boundary, never a similarly named unrelated backend.
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name == format!("{prefix}{suffix}"))
+        .or_else(|| {
+            if os == "macos" || backend == "cpu" {
+                return None;
+            }
+            release.assets.iter().find(|asset| {
+                asset.name.starts_with(&format!("{prefix}-")) && asset.name.ends_with(&suffix)
+            })
+        })
 }
 
 /// The newest release that actually published this backend's archive.
@@ -3937,10 +4019,26 @@ fn backend_asset<'a>(release: &'a Rel, backend: &str) -> Option<&'a Asset> {
 /// the newest download therefore fails for whichever backend happens to be
 /// mid-upload, so walk back to the newest release that has the archive.
 fn newest_with_asset<'a>(releases: &'a [Rel], backend: &str) -> Option<(&'a Rel, &'a Asset)> {
+    newest_with_asset_for(
+        releases,
+        backend,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+}
+
+fn newest_with_asset_for<'a>(
+    releases: &'a [Rel],
+    backend: &str,
+    os: &str,
+    arch: &str,
+) -> Option<(&'a Rel, &'a Asset)> {
     releases
         .iter()
         .filter(|release| is_build_tag(&release.tag_name))
-        .find_map(|release| backend_asset(release, backend).map(|asset| (release, asset)))
+        .find_map(|release| {
+            backend_asset_for(release, backend, os, arch).map(|asset| (release, asset))
+        })
 }
 
 /// Recent llama.cpp releases with their published assets, cached briefly.
@@ -4103,7 +4201,7 @@ fn release_platform() -> &'static str {
     }
 }
 
-/// Pick a verified x64 asset for a backend.
+/// Fetch the release's assets; selection validates the host OS and architecture.
 async fn assets_for_build(build: &str) -> Result<Vec<Asset>, String> {
     if let Some(error) = cached_asset_error(build) {
         return Err(error);
@@ -4159,7 +4257,11 @@ pub fn companion_asset_name(build: &str, main_file_name: &str) -> Option<String>
     if !suffix.contains("-cuda-") {
         return None;
     }
-    Some(format!("cudart-llama-bin-{suffix}"))
+    if suffix.starts_with("ubuntu-") {
+        Some(format!("cudart-llama-{build}-bin-{suffix}"))
+    } else {
+        Some(format!("cudart-llama-bin-{suffix}"))
+    }
 }
 
 async fn companion_assets(build: &str, main_file_name: &str) -> Result<Vec<Asset>, String> {
@@ -4180,6 +4282,13 @@ pub async fn latest_for(backend: &str) -> Result<LatestInfo, String> {
             "no downloadable catalog asset is defined for backend: {backend}"
         ));
     }
+    if !catalog_supports(backend, std::env::consts::OS, std::env::consts::ARCH) {
+        return Err(format!(
+            "no downloadable {backend} runtime is provided for {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ));
+    }
     let releases = recent_releases().await?;
     let (release, asset) = newest_with_asset(&releases, backend).ok_or_else(|| {
         let newest = releases
@@ -4188,8 +4297,8 @@ pub async fn latest_for(backend: &str) -> Result<LatestInfo, String> {
             .map(|release| release.tag_name.as_str())
             .unwrap_or("none");
         format!(
-            "no {backend} x64 build has been published in the {} most recent llama.cpp releases (newest is {newest}); a release appears before its archives finish uploading, so try again shortly",
-            releases.len()
+            "no {backend} {} {} build has been published in the {} most recent llama.cpp releases (newest is {newest}); a release appears before its archives finish uploading, so try again shortly",
+            std::env::consts::OS, std::env::consts::ARCH, releases.len()
         )
     })?;
     Ok(LatestInfo {
@@ -4323,12 +4432,12 @@ fn validate_asset_file_name(name: &str) -> Result<(), String> {
     if name.is_empty()
         || name.len() > 255
         || path.file_name().and_then(|value| value.to_str()) != Some(name)
-        || !name.ends_with(".zip")
+        || !(name.ends_with(".zip") || name.ends_with(".tar.gz"))
         || !name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || ".-_".contains(character))
     {
-        return Err("release asset filename is not a safe ZIP basename".into());
+        return Err("release asset filename is not a safe ZIP or tar.gz basename".into());
     }
     Ok(())
 }
@@ -4445,7 +4554,7 @@ pub async fn install_with(
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
     let nonce = short_nonce();
-    let archive_path = download_root.join(format!(".{nonce}-{}.zip", info.file_name));
+    let archive_path = download_root.join(format!(".{nonce}-{}", info.file_name));
     let staging = root.join(format!(".{build}-{backend}.staging-{nonce}"));
     let mut cleanup = InstallCleanup::new(archive_path.clone(), staging.clone());
 
@@ -4471,7 +4580,7 @@ pub async fn install_with(
         let extract_staging = staging.clone();
         let extract_cancel = cancel.clone();
         tokio::task::spawn_blocking(move || {
-            extract(&extract_archive, &extract_staging, &extract_cancel)?;
+            archive::extract_release(&extract_archive, &extract_staging, &extract_cancel)?;
             verify_runtime_files(&extract_staging)
         })
         .await
@@ -4516,7 +4625,7 @@ pub async fn install_with(
             let extract_staging = staging.clone();
             let extract_cancel = cancel.clone();
             tokio::task::spawn_blocking(move || {
-                extract(&extract_companion, &extract_staging, &extract_cancel)
+                archive::extract_release(&extract_companion, &extract_staging, &extract_cancel)
             })
             .await
             .map_err(|error| format!("runtime extraction task failed: {error}"))??;
@@ -4545,7 +4654,7 @@ pub async fn install_with(
         let size_mb = tokio::task::spawn_blocking(move || dir_size(&size_staging))
             .await
             .map_err(|error| format!("runtime size task failed: {error}"))?;
-        let version = preflight_staged_runtime(&staging, progress, &cancel).await?;
+        let version = preflight_staged_runtime(&staging, backend, progress, &cancel).await?;
         if let Some(version) = version.as_ref() {
             write_version_manifest(&staging, version);
         }
@@ -4869,7 +4978,7 @@ pub async fn install_pr_with(
         let size_mb = tokio::task::spawn_blocking(move || dir_size(&size_staging))
             .await
             .map_err(|error| format!("runtime size task failed: {error}"))?;
-        let version = preflight_staged_runtime(&staging, progress, &cancel).await?;
+        let version = preflight_staged_runtime(&staging, backend, progress, &cancel).await?;
         if let Some(version) = version.as_ref() {
             write_version_manifest(&staging, version);
         }
@@ -4953,7 +5062,7 @@ pub async fn source_build_preflight(backend: &str) -> Result<PathBuf, String> {
 /// ROCm runtime libraries and their kernel data are copied beside the staged
 /// binaries when the SDK exposes them. GPU driver libraries are deliberately
 /// not copied: they belong to the host driver.
-pub const SOURCE_BUILD_BACKENDS: &[&str] = &["cpu", "vulkan", "cuda", "rocm"];
+pub const SOURCE_BUILD_BACKENDS: &[&str] = &["cpu", "vulkan", "cuda", "rocm", "metal"];
 
 /// Reject a backend that cannot be built from source on an ordinary machine,
 /// before anything is resolved, downloaded or extracted.
@@ -5041,6 +5150,14 @@ fn missing_source_build_toolchain(backend: &str, view: &ToolchainView<'_>) -> Op
 }
 
 fn source_build_toolchain_error(backend: &str) -> Option<String> {
+    if backend == "metal" && !cfg!(target_os = "macos") {
+        return Some("Metal source builds require macOS and the Xcode command line tools.".into());
+    }
+    if cfg!(target_os = "macos") && matches!(backend, "cuda" | "rocm") {
+        return Some(format!(
+            "{backend} source builds are not supported on macOS; select metal or cpu."
+        ));
+    }
     let executable = |name: &str| locate_tool(name).is_some();
     let rocm_sdk_present = rocm_sdk_is_configured();
     let directory_variable = |name: &str| {
@@ -5320,6 +5437,7 @@ fn source_build_configure_args(
         "vulkan" => "GGML_VULKAN",
         "cuda" => "GGML_CUDA",
         "rocm" => "GGML_HIP",
+        "metal" => "GGML_METAL",
         "cpu" => "GGML_CPU",
         _ => unreachable!("validate_source_build_backend checked the backend"),
     };
@@ -5327,6 +5445,7 @@ fn source_build_configure_args(
         // Without an explicit list CMake compiles every architecture llama.cpp
         // names by default, which is the single biggest cost in a CUDA build.
         "cuda" => vec![format!("-DCMAKE_CUDA_ARCHITECTURES={cuda_architectures}")],
+        "metal" => vec!["-DGGML_METAL_EMBED_LIBRARY=ON".into()],
         _ => Vec::new(),
     };
     let mut args = vec![
@@ -5339,6 +5458,10 @@ fn source_build_configure_args(
         "-DBUILD_SHARED_LIBS=ON".into(),
         "-DGGML_BACKEND_DL=ON".into(),
         "-DGGML_CPU_ALL_VARIANTS=ON".into(),
+        format!(
+            "-DGGML_METAL={}",
+            if backend == "metal" { "ON" } else { "OFF" }
+        ),
         "-DLLAMA_BUILD_COMMON=ON".into(),
         "-DLLAMA_BUILD_SERVER=ON".into(),
         "-DLLAMA_BUILD_TOOLS=ON".into(),
@@ -5378,12 +5501,11 @@ fn source_build_configure_args(
     // libraries beside the staged binaries and ask the platform loader to
     // search that directory after activation. The token is intentionally
     // passed as an argv value; it is not shell-expanded.
-    if matches!(backend, "cuda" | "rocm") {
-        if let Some(rpath) = portable_runtime_rpath() {
-            args.push(format!("-DCMAKE_BUILD_RPATH={rpath}"));
-            args.push(format!("-DCMAKE_INSTALL_RPATH={rpath}"));
-            args.push("-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON".into());
-        }
+    if let Some(rpath) = portable_runtime_rpath() {
+        args.push(format!("-DCMAKE_BUILD_RPATH={rpath}"));
+        args.push(format!("-DCMAKE_INSTALL_RPATH={rpath}"));
+        args.push("-DCMAKE_BUILD_RPATH_USE_ORIGIN=ON".into());
+        args.push("-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON".into());
     }
     Ok(args)
 }
@@ -5789,6 +5911,16 @@ fn copy_runtime_tree(
     destination: &Path,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let root = fs::canonicalize(source).map_err(|error| error.to_string())?;
+    copy_runtime_tree_in(&root, &root, destination, cancel)
+}
+
+fn copy_runtime_tree_in(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     let entries = fs::read_dir(source).map_err(|error| error.to_string())?;
     for entry in entries {
@@ -5797,13 +5929,21 @@ fn copy_runtime_tree(
         }
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        let mut metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
         if metadata.file_type().is_symlink() {
-            return Err("runtime build output contains a symbolic link".into());
+            // CMake produces SONAME aliases on Linux and macOS. Materialize
+            // only file aliases inside this build tree, never directory links.
+            let resolved = fs::canonicalize(&path).map_err(|error| error.to_string())?;
+            if !resolved.starts_with(root) || !resolved.is_file() {
+                return Err(
+                    "runtime build output link escapes its tree or targets a directory".into(),
+                );
+            }
+            metadata = fs::metadata(&resolved).map_err(|error| error.to_string())?;
         }
         let target = destination.join(entry.file_name());
         if metadata.is_dir() {
-            copy_runtime_tree(&path, &target, cancel)?;
+            copy_runtime_tree_in(root, &path, &target, cancel)?;
         } else {
             fs::copy(&path, &target).map_err(|error| error.to_string())?;
             #[cfg(unix)]
@@ -6234,14 +6374,18 @@ fn copy_backend_runtime_dependencies_from_roots(
                     return Err("runtime install cancelled".into());
                 }
                 let path = entry.path();
-                let Ok(metadata) = fs::symlink_metadata(&path) else {
+                let Ok(metadata) = fs::metadata(&path) else {
                     continue;
                 };
                 if !metadata.is_file()
-                    || metadata.file_type().is_symlink()
                     || !is_backend_runtime_library(backend, &entry.file_name().to_string_lossy())
                 {
                     continue;
+                }
+                let sdk_root = fs::canonicalize(root).map_err(|error| error.to_string())?;
+                let resolved = fs::canonicalize(&path).map_err(|error| error.to_string())?;
+                if !resolved.starts_with(&sdk_root) {
+                    return Err("runtime SDK library link escapes the configured SDK".into());
                 }
                 found += 1;
                 let target = destination.join(entry.file_name());
@@ -6377,6 +6521,7 @@ fn verify_runtime_files(staging: &Path) -> Result<(), String> {
 
 async fn preflight_staged_runtime(
     staging: &Path,
+    backend: &str,
     progress: ProgressSink<'_>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Option<RuntimeVersion>, String> {
@@ -6423,7 +6568,8 @@ async fn preflight_staged_runtime(
                 "staged runtime preflight failed for {label}: {diagnostic}"
             ));
         }
-        if args == ["--list-devices"]
+        if backend != "cpu"
+            && args == ["--list-devices"]
             && result
                 .text
                 .lines()
@@ -6487,58 +6633,8 @@ where
     Ok(())
 }
 
-fn extract(zip_path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), String> {
-    fs::create_dir_all(dest).map_err(|error| error.to_string())?;
-    let file = fs::File::open(zip_path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    if archive.len() > MAX_ARCHIVE_ENTRIES {
-        return Err("runtime archive contains too many entries".into());
-    }
-    let mut extracted_bytes = 0_u64;
-    for index in 0..archive.len() {
-        if cancel.load(Ordering::Acquire) {
-            return Err("runtime install cancelled".into());
-        }
-        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| (mode & 0o170000) == 0o120000)
-        {
-            return Err("runtime archive contains a symbolic link".into());
-        }
-        let relative = entry
-            .enclosed_name()
-            .ok_or("runtime archive contains an unsafe path")?;
-        let output = dest.join(relative);
-        if !output.starts_with(dest) {
-            return Err("runtime archive path escapes staging directory".into());
-        }
-        if entry.is_dir() {
-            fs::create_dir_all(&output).map_err(|error| error.to_string())?;
-            continue;
-        }
-        let declared_size = entry.size();
-        extracted_bytes = extracted_bytes
-            .checked_add(declared_size)
-            .ok_or("runtime archive expanded size overflow")?;
-        if extracted_bytes > MAX_EXTRACTED_BYTES {
-            return Err("runtime archive expands beyond the configured size limit".into());
-        }
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let mut destination = fs::File::create(&output).map_err(|error| error.to_string())?;
-        // A corrupt ZIP can lie about an entry's uncompressed size. Limit the
-        // actual copy to one byte beyond the declaration so the later mismatch
-        // check cannot be turned into an unbounded disk-fill operation.
-        let mut source = BufReader::new(entry).take(declared_size.saturating_add(1));
-        let copied =
-            std::io::copy(&mut source, &mut destination).map_err(|error| error.to_string())?;
-        if copied != declared_size {
-            return Err("runtime archive entry size changed while extracting".into());
-        }
-    }
-    Ok(())
+fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+    archive::extract(path, dest, cancel)
 }
 
 #[cfg(test)]
@@ -7241,10 +7337,12 @@ mod tests {
     }
 
     #[test]
-    fn release_asset_filename_must_be_a_safe_zip_basename() {
+    fn release_asset_filename_must_be_a_safe_supported_archive_basename() {
         assert!(validate_asset_file_name("llama-b10603-bin-win-vulkan-x64.zip").is_ok());
+        assert!(validate_asset_file_name("llama-b123-bin-ubuntu-rocm-10.0-x64.tar.gz").is_ok());
         assert!(validate_asset_file_name("../runtime.zip").is_err());
-        assert!(validate_asset_file_name("runtime.tar.gz").is_err());
+        assert!(validate_asset_file_name("runtime.tar.gz").is_ok());
+        assert!(validate_asset_file_name("runtime.tar").is_err());
         assert!(validate_asset_file_name("runtime file.zip").is_err());
     }
 
@@ -8721,6 +8819,46 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn source_build_packaging_materializes_internal_library_aliases() {
+        let root = test_directory("library-alias");
+        let source = root.join("bin");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("libllama.so.0"), b"library").unwrap();
+        std::os::unix::fs::symlink("libllama.so.0", source.join("libllama.so")).unwrap();
+        let dest = root.join("staging");
+        copy_runtime_tree(&source, &dest, &Arc::new(AtomicBool::new(false))).unwrap();
+        assert_eq!(fs::read(dest.join("libllama.so")).unwrap(), b"library");
+        assert!(!fs::symlink_metadata(dest.join("libllama.so"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cpu_preflight_accepts_a_machine_without_accelerators() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = test_directory("cpu-preflight");
+        for name in [server_executable_name(), bench_executable_name()] {
+            let path = root.join(name);
+            fs::write(&path, b"#!/bin/sh\ncase \"$1\" in\n--version) echo 'version: 0.1.0 (123)';;\n--list-devices) printf 'Available devices:\\n(none)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let progress: ProgressSink = &|_, _, _| {};
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert!(preflight_staged_runtime(&root, "cpu", progress, &cancel)
+            .await
+            .is_ok());
+        assert!(preflight_staged_runtime(&root, "vulkan", progress, &cancel)
+            .await
+            .unwrap_err()
+            .contains("no accelerator"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_symlink_in_the_build_output_is_refused_rather_than_followed() {
         let root = std::env::temp_dir().join(format!(
             "aiolm-symlink-{}-{}",
@@ -8737,7 +8875,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let error = copy_runtime_tree(&source, &destination, &cancel)
             .expect_err("a symlink must not be packaged");
-        assert!(error.contains("symbolic link"), "{error}");
+        assert!(error.contains("link escapes"), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -9021,6 +9159,8 @@ mod tests {
         assert!(option_for("vulkan").contains(&"-DGGML_VULKAN=ON".to_string()));
         assert!(option_for("rocm").contains(&"-DGGML_HIP=ON".to_string()));
         assert!(option_for("cpu").contains(&"-DGGML_CPU=ON".to_string()));
+        assert!(option_for("metal").contains(&"-DGGML_METAL=ON".to_string()));
+        assert!(!option_for("cpu").contains(&"-DGGML_METAL=ON".to_string()));
         assert!(!option_for("cuda").contains(&"-DGGML_VULKAN=ON".to_string()));
         assert!(!option_for("vulkan").contains(&"-DGGML_CUDA=ON".to_string()));
         assert!(!option_for("rocm").contains(&"-DGGML_CUDA=ON".to_string()));
@@ -9028,8 +9168,8 @@ mod tests {
     }
 
     #[test]
-    fn vendor_builds_request_a_runtime_path_relative_to_the_installed_binary() {
-        for backend in ["cuda", "rocm"] {
+    fn source_builds_request_a_runtime_path_relative_to_the_installed_binary() {
+        for backend in SOURCE_BUILD_BACKENDS {
             let args = source_build_configure_args(
                 backend,
                 Path::new("source"),
@@ -9160,6 +9300,63 @@ mod tests {
     }
 
     #[test]
+    fn release_selection_uses_the_platform_architecture_and_published_backend_layout() {
+        let names = [
+            "llama-b123-bin-win-cpu-x64.zip",
+            "llama-b123-bin-win-cpu-arm64.zip",
+            "llama-b123-bin-ubuntu-x64.tar.gz",
+            "llama-b123-bin-ubuntu-arm64.tar.gz",
+            "llama-b123-bin-ubuntu-vulkan-x64.tar.gz",
+            "llama-b123-bin-ubuntu-vulkan-arm64.tar.gz",
+            "llama-b123-bin-ubuntu-rocm-10.0-x64.tar.gz",
+            "llama-b123-bin-ubuntu-cuda-13.4-x64.tar.gz",
+            "llama-b123-bin-macos-arm64.tar.gz",
+            "llama-b123-bin-macos-x64.tar.gz",
+        ];
+        let release = Rel {
+            tag_name: "b123".into(),
+            assets: names
+                .iter()
+                .map(|name| Asset {
+                    name: (*name).into(),
+                    browser_download_url: format!("https://example.invalid/{name}"),
+                    digest: None,
+                    size: 0,
+                })
+                .collect(),
+        };
+        for (backend, os, arch, expected) in [
+            ("cpu", "windows", "x86_64", 0),
+            ("cpu", "windows", "aarch64", 1),
+            ("cpu", "linux", "x86_64", 2),
+            ("cpu", "linux", "aarch64", 3),
+            ("vulkan", "linux", "x86_64", 4),
+            ("vulkan", "linux", "aarch64", 5),
+            ("rocm", "linux", "x86_64", 6),
+            ("cuda", "linux", "x86_64", 7),
+            ("metal", "macos", "aarch64", 8),
+            ("cpu", "macos", "x86_64", 9),
+        ] {
+            assert_eq!(
+                backend_asset_for(&release, backend, os, arch).unwrap().name,
+                names[expected]
+            );
+        }
+        for (backend, os, arch) in [
+            ("metal", "macos", "x86_64"),
+            ("rocm", "macos", "aarch64"),
+            ("rocm", "linux", "aarch64"),
+            ("cpu", "linux", "riscv64"),
+        ] {
+            assert!(backend_asset_for(&release, backend, os, arch).is_none());
+        }
+        assert_eq!(
+            companion_asset_name("b123", names[7]).as_deref(),
+            Some("cudart-llama-b123-bin-ubuntu-cuda-13.4-x64.tar.gz")
+        );
+    }
+
+    #[test]
     fn the_newest_published_backend_archive_wins_over_the_newest_tag() {
         // The shape that broke runtime management: a release tag exists before
         // its build matrix finishes, so the newest tags carried partial asset
@@ -9178,7 +9375,7 @@ mod tests {
                     .collect(),
             }
         }
-        let platform = release_platform();
+        let platform = "win";
         let releases = vec![
             release(
                 "b11030",
@@ -9201,8 +9398,8 @@ mod tests {
         assert!(!is_build_tag("master-abc"));
 
         // But the download has to come from the newest release that has it.
-        let (release, asset) =
-            newest_with_asset(&releases, "rocm").expect("an older release published rocm");
+        let (release, asset) = newest_with_asset_for(&releases, "rocm", "windows", "x86_64")
+            .expect("an older release published rocm");
         assert_eq!(release.tag_name, "b11026");
         assert_eq!(
             asset.name,
@@ -9210,15 +9407,15 @@ mod tests {
         );
         // A backend whose archive is the newest one still gets the newest.
         assert_eq!(
-            newest_with_asset(&releases, "cpu")
+            newest_with_asset_for(&releases, "cpu", "windows", "x86_64")
                 .expect("cpu published")
                 .0
                 .tag_name,
             "b11030"
         );
         // And a backend nobody published is reported rather than mis-served.
-        assert!(newest_with_asset(&releases, "sycl").is_none());
-        assert!(newest_with_asset(&[], "rocm").is_none());
+        assert!(newest_with_asset_for(&releases, "sycl", "windows", "x86_64").is_none());
+        assert!(newest_with_asset_for(&[], "rocm", "windows", "x86_64").is_none());
     }
 
     /// This is intentionally opt-in and ignored: it copies the locally
@@ -9315,7 +9512,7 @@ mod tests {
         );
         let progress: ProgressSink = &|_, _, _| {};
         println!("ROCm bundle: packaged SDK dependencies; running preflight");
-        let version = preflight_staged_runtime(&destination, progress, &cancel)
+        let version = preflight_staged_runtime(&destination, "rocm", progress, &cancel)
             .await
             .unwrap()
             .expect("engine version");

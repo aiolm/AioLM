@@ -869,3 +869,126 @@ mod tests {
         assert_eq!(tokio_cmd.as_std().get_program(), manual.get_program());
     }
 }
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+    use std::io::{BufRead, Read};
+    use std::process::Stdio;
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+
+    fn shell(script: &str) -> std::process::Command {
+        let mut command = std_command("sh");
+        command
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command
+    }
+
+    #[test]
+    fn synchronous_owner_drop_reclaims_descendants_and_closes_inherited_stdout() {
+        let mut command = shell("sleep 60 & printf 'ready\\n'; wait");
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        stdout.read_line(&mut ready).unwrap();
+        assert_eq!(ready, "ready\n");
+        let (closed, completion) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = closed.send(stdout.read_to_end(&mut bytes));
+        });
+        drop(child);
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the background child must release its inherited stdout")
+            .unwrap();
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn synchronous_helper_timeout_and_parent_exit_reclaim_background_children() {
+        let started = std::time::Instant::now();
+        let error =
+            capture_stdout(&mut shell("sleep 60 & wait"), Duration::from_millis(100)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
+
+        // The shell exits normally while its background child still owns the
+        // pipe. Cleanup must precede the blocking output-reader join.
+        let started = std::time::Instant::now();
+        let output = capture_stdout(
+            &mut shell("sleep 60 & printf 'finished\\n'"),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"finished\n");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    async fn transient(
+        script: &str,
+    ) -> (
+        TransientChild,
+        tokio::io::BufReader<tokio::process::ChildStdout>,
+    ) {
+        let mut command = tokio_command("sh");
+        command
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = TransientChild::spawn(&mut command).unwrap();
+        let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut ready))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        (child, stdout)
+    }
+
+    async fn assert_closed(mut stdout: tokio::io::BufReader<tokio::process::ChildStdout>) {
+        tokio::time::timeout(Duration::from_secs(5), stdout.read_to_end(&mut Vec::new()))
+            .await
+            .expect("all descendants must release the inherited pipe")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_async_owner_reclaims_its_process_group() {
+        let (mut child, stdout) = transient("sleep 60 & printf 'ready\\n'; wait").await;
+        let token = child.token;
+        let owner = OwnedTask::from(tokio::spawn(async move { child.wait().await }));
+        owner.abort();
+        assert!(owner.await.unwrap_err().is_cancelled());
+        assert_closed(stdout).await;
+        assert!(!transient_processes()
+            .lock()
+            .unwrap()
+            .trees
+            .contains_key(&token));
+    }
+
+    #[tokio::test]
+    async fn successful_async_parent_exit_reclaims_its_background_child() {
+        let (mut child, stdout) = transient("sleep 60 & printf 'ready\\n'").await;
+        let token = child.token;
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(status.success());
+        assert_closed(stdout).await;
+        assert!(!transient_processes()
+            .lock()
+            .unwrap()
+            .trees
+            .contains_key(&token));
+    }
+}

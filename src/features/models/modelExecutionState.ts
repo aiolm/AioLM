@@ -1,11 +1,11 @@
 import type { AppConfig } from '../../shared/api/types';
-import { normalizeDisplayPath } from '../../shared/lib/displayPaths';
+import { modelPathIdentity } from '../../shared/lib/displayPaths';
 import { profileSettingsSnapshot, profileTargetKey } from '../../shared/config/settingsProfiles';
 
 export const MODEL_EXECUTION_KEY = 'aiolm-model-execution';
 type Snapshot = Partial<AppConfig>;
 type Saved = { version: 1; models: Record<string, Snapshot> };
-const identity = (path: string) => normalizeDisplayPath(path).replace(/\\/g, '/').toLowerCase();
+const identity = modelPathIdentity;
 
 /** Capture execution fields only; never copy app preferences, ports, keys or sessions. */
 export function executionSnapshot(cfg: AppConfig): Snapshot {

@@ -65,7 +65,7 @@ The benchmark reports timings observed by the local client, including local sche
 | Output generation (Decode / TG), tok/s | Total output tokens excluding each request's first token, divided by the interval from the earliest first output to the latest last output. |
 | Total time, s | Wall time from trial start until all requests finish (E2E). |
 | Total throughput, tok/s | Total output tokens divided by total time, including input processing (Prefill / PP). |
-| Peak process RAM | Largest sampled resident working set of the dedicated server during the trial. Sampling occurs at the boundaries and approximately every 150 ms on Windows. This is RAM, not VRAM, and brief peaks can be missed. |
+| Peak process RAM | Largest sampled resident memory of the dedicated server during the trial. Sampling occurs at the boundaries and approximately every 150 ms on Windows, Linux and macOS. Linux uses the lightweight procfs RSS counter, which can lag actual residency; macOS uses resident size rather than Activity Monitor's memory footprint. This is RAM, not VRAM, and brief peaks can be missed. |
 | Speedup | TG rate divided by the single-request baseline with exactly the same input length, output length, and timing method. |
 
 Unobservable metrics remain unavailable instead of becoming zero. In particular, a single output token or output delivered in one burst cannot establish a decode rate. Missing OS memory counters produce an unavailable RAM result. Failed trials do not contribute to speed averages or speedup.

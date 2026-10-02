@@ -13,6 +13,7 @@ pub mod gpu;
 pub mod hardware;
 mod hardware_memory;
 pub mod home;
+mod inference_args;
 mod mcp;
 pub mod models;
 pub mod performance_bench;

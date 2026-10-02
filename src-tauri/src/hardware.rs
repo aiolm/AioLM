@@ -600,6 +600,14 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
     let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
         return (Vec::new(), "unavailable".into());
     };
+    let pci_names = crate::procutil::capture_stdout(
+        crate::procutil::std_command("lspci").args(["-D", "-vmm"]),
+        std::time::Duration::from_secs(2),
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+    .unwrap_or_default();
     let mut gpus = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -623,7 +631,6 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
         let vram_mb = read("mem_info_vram_total")
             .and_then(|value| value.parse::<u64>().ok())
             .map(|bytes| bytes / (1024 * 1024));
-        let label = read("product_name").unwrap_or_else(|| format!("PCI {vendor_raw}"));
         // `device` is a symlink into /sys/bus/pci/devices/<bus-address>; the
         // link target's file name is the card's real PCI bus/slot/function
         // address (e.g. "0000:03:00.0"), which is unique per physical card
@@ -636,18 +643,102 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
                 .file_name()
                 .map(|value| value.to_string_lossy().into_owned())
         });
+        let label = read("product_name")
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                bus_address
+                    .as_deref()
+                    .and_then(|slot| pci_device_name(&pci_names, slot))
+            })
+            .unwrap_or_else(|| format!("PCI {vendor_raw}:{device_hex}"));
         let stable_id = bus_address.unwrap_or_else(|| name.clone());
         gpus.push(GpuDevice {
             vendor: GpuVendor::from_pci(vendor_id),
             integrated: looks_integrated(&label, vram_mb),
             name: label,
             vram_mb,
-            driver: None,
+            driver: std::fs::read_link(device.join("driver"))
+                .ok()
+                .and_then(|path| {
+                    path.file_name()
+                        .map(|value| value.to_string_lossy().into_owned())
+                }),
             stable_id,
             pci_id: Some(format!("{:04x}:{device_hex}", vendor_id)),
         });
     }
     (gpus, "linux-sysfs".into())
+}
+
+/// pciutils' machine-readable records identify each card by its PCI slot.
+/// Marketing names in brackets match the names reported by compute runtimes.
+#[cfg(any(target_os = "linux", test))]
+fn pci_device_name(records: &str, slot: &str) -> Option<String> {
+    for record in records.split("\n\n") {
+        let field = |key: &str| {
+            record.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                (name == key).then(|| value.trim())
+            })
+        };
+        if field("Slot") != Some(slot) {
+            continue;
+        }
+        let raw = field("Device")?;
+        let name = raw
+            .rsplit_once('[')
+            .and_then(|(_, tail)| tail.strip_suffix(']'))
+            .filter(|value| !value.is_empty())
+            .unwrap_or(raw);
+        if name.is_empty() {
+            return None;
+        }
+        let vendor = field("Vendor").unwrap_or_default();
+        let prefix = if vendor.contains("AMD") || vendor.contains("ATI") {
+            "AMD"
+        } else if vendor.contains("NVIDIA") {
+            "NVIDIA"
+        } else if vendor.contains("Intel") {
+            "Intel"
+        } else {
+            ""
+        };
+        return Some(
+            if prefix.is_empty()
+                || name
+                    .to_ascii_lowercase()
+                    .contains(&prefix.to_ascii_lowercase())
+            {
+                name.into()
+            } else {
+                format!("{prefix} {name}")
+            },
+        );
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cpu_name() -> Option<String> {
+    let mut bytes = [0u8; 256];
+    let mut size = bytes.len();
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"machdep.cpu.brand_string".as_ptr(),
+            bytes.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 || size > bytes.len() {
+        return None;
+    }
+    let value = std::str::from_utf8(&bytes[..size])
+        .ok()?
+        .trim_end_matches('\0')
+        .trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -658,7 +749,7 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
         (
             vec![GpuDevice {
                 vendor: GpuVendor::Apple,
-                name: "Apple GPU".into(),
+                name: macos_cpu_name().unwrap_or_else(|| "Apple GPU".into()),
                 vram_mb: None,
                 driver: None,
                 pci_id: None,
@@ -692,6 +783,10 @@ fn detect_cpu_name() -> String {
     if let Some(name) = windows_detect::cpu_name() {
         return name;
     }
+    #[cfg(target_os = "macos")]
+    if let Some(name) = macos_cpu_name() {
+        return name;
+    }
     #[cfg(target_os = "linux")]
     if let Ok(info) = std::fs::read_to_string("/proc/cpuinfo") {
         if let Some(line) = info.lines().find(|line| line.starts_with("model name")) {
@@ -706,6 +801,20 @@ fn detect_cpu_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pci_marketing_names_are_matched_by_slot_not_enumeration_order() {
+        let records = "Slot:\t0000:04:00.0\nVendor:\tAdvanced Micro Devices, Inc. [AMD/ATI]\nDevice:\tTest Chip [Radeon Test Pro]\n\nSlot:\t0000:03:00.0\nVendor:\tNVIDIA Corporation\nDevice:\tTest Accel\n";
+        assert_eq!(
+            pci_device_name(records, "0000:04:00.0").as_deref(),
+            Some("AMD Radeon Test Pro")
+        );
+        assert_eq!(
+            pci_device_name(records, "0000:03:00.0").as_deref(),
+            Some("NVIDIA Test Accel")
+        );
+        assert_eq!(pci_device_name(records, "0000:05:00.0"), None);
+    }
 
     fn gpu(vendor: GpuVendor, name: &str, vram_mb: Option<u64>, integrated: bool) -> GpuDevice {
         GpuDevice {

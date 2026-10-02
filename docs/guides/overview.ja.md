@@ -26,7 +26,7 @@ API サーバーは維持され、API を停止してもモデルとアプリ内
 
 ## プラットフォーム対応
 
-現在は Windows x64 をサポートしています。**Linux（NVIDIA DGX を含む）および macOS 対応を予定**しています。Linux/macOS は `curl | tar`、Windows は `NSIS`/`MSI` を使用します。Windows インストーラーは GitHub ホスト型 CI でビルドし、未署名のファイルと SHA-256 チェックサムを配布します。
+現在は Windows x64 をサポートしています。**Linux（NVIDIA DGX を含む）および macOS 対応を予定**しています。検証用ビルドは Linux で DEB/AppImage、macOS で APP/DMG、Windows で NSIS/MSI を生成します。[プラットフォーム検証](../reference/cross-platform-validation.md)を参照してください。Windows インストーラーは GitHub ホスト型 CI でビルドし、未署名のファイルと SHA-256 チェックサムを配布します。
 
 ## ダウンロード
 

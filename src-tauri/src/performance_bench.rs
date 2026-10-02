@@ -714,6 +714,25 @@ mod tests {
     }
 
     #[test]
+    fn cpu_benchmark_disables_offload_while_preserving_saved_gpu_layers() {
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            ngl: 99,
+            runtime_defaults: vec!["ngl".into()],
+            server_args: vec!["--op-offload".into()],
+            ..Default::default()
+        };
+        let isolated = isolated_config(&cfg, &request(), 41327, true);
+        let args = server::build_args(&isolated, "");
+        assert!(args.windows(2).any(|pair| pair == ["--n-gpu-layers", "0"]));
+        assert!(args.windows(2).any(|pair| pair == ["--device", "none"]));
+        assert!(args.iter().any(|arg| arg == "--no-op-offload"));
+        assert_eq!(cfg.ngl, 99);
+        assert_eq!(isolated.ngl, 99);
+        assert_eq!(cfg.server_args, ["--op-offload"]);
+    }
+
+    #[test]
     fn batch_rates_use_wall_time_and_actual_token_accounting() {
         let start = Instant::now();
         let measurements = vec![

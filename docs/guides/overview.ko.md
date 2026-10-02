@@ -26,7 +26,7 @@ API 서버를 중지해도 로드된 모델과 내부 채팅은 유지됩니다.
 
 ## 플랫폼 지원
 
-현재 Windows x64를 지원합니다. **Linux(NVIDIA DGX 포함) 및 macOS 지원을 계획 중**입니다. Linux/macOS는 `curl | tar`, Windows는 `NSIS`/`MSI`를 사용합니다. Windows 인스톨러는 GitHub 호스팅 CI에서 빌드하며, 미서명 파일과 SHA-256 체크섬을 함께 배포합니다.
+현재 Windows x64를 지원합니다. **Linux(NVIDIA DGX 포함) 및 macOS 지원을 계획 중**입니다. 대상 OS 검증용 빌드는 Linux에서 DEB/AppImage, macOS에서 APP/DMG를 생성하며 Windows는 NSIS/MSI를 사용합니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참조하세요. Windows 인스톨러는 GitHub 호스팅 CI에서 빌드하며, 미서명 파일과 SHA-256 체크섬을 함께 배포합니다.
 
 ## 다운로드
 

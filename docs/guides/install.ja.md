@@ -44,4 +44,4 @@ AioLMはデータを `%USERPROFILE%\.aiolm` に保存します。環境変数 `A
 
 ## Linux / macOS (予定)
 
-`curl | tar` 配布を予定しています。tar パスは OS 署名不要です。詳しくは [overview.ja.md](overview.ja.md#プラットフォーム対応) を参照してください。
+Linux/macOS の実環境検証は未完了です。ホストビルドは Linux で DEB/AppImage、macOS で APP/DMG を生成します。[検証手順](../reference/cross-platform-validation.md)を参照してください。パッケージ生成とは別に macOS の署名・公証とインストール検証が必要です。DEB/DMG 更新は検証済みファイルをシステムの画面で開き、ユーザーが完了します。AppImage・手動インストールはリリースページで更新します。

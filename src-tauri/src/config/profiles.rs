@@ -163,6 +163,11 @@ impl Default for SettingsProfileLibrary {
 
 fn model_key(path: &str) -> String {
     let path = path.trim();
+    // Scanned POSIX paths are absolute. Keep their case and literal backslashes;
+    // Windows and legacy relative paths retain their existing saved identities.
+    if path.starts_with('/') && !path.starts_with("//") {
+        return format!("model:{path}");
+    }
     let lower = path.to_lowercase();
     let display = if lower.starts_with("\\\\?\\unc\\") {
         format!("\\\\{}", &path[8..])
@@ -172,6 +177,43 @@ fn model_key(path: &str) -> String {
         path.to_owned()
     };
     format!("model:{}", display.replace('\\', "/").to_lowercase())
+}
+
+/// Original spelling survives in applications even when earlier keys were folded.
+fn migrate_model_path_keys(library: &mut SettingsProfileLibrary) -> Result<(), String> {
+    let mut applied = BTreeMap::new();
+    let mut profile_keys: BTreeMap<String, HashSet<String>> = BTreeMap::new();
+    for (key, application) in &library.applied {
+        let model = model_key(&application.model);
+        let legacy = format!(
+            "model:{}",
+            application.model.trim().replace('\\', "/").to_lowercase()
+        );
+        let target = if key == &legacy { &model } else { key };
+        if applied
+            .get(target)
+            .is_some_and(|previous| previous != application)
+        {
+            return Err("conflicting saved settings for the same model path".into());
+        }
+        applied.insert(target.clone(), application.clone());
+        if let Some(id) = &application.profile_id {
+            profile_keys.entry(id.clone()).or_default().insert(model);
+        }
+    }
+    for profile in &mut library.entries {
+        let Some(keys) = profile_keys.get(&profile.id).filter(|keys| keys.len() == 1) else {
+            continue;
+        };
+        let key = keys.iter().next().unwrap();
+        if profile.scope == ProfileScope::Model
+            && profile.model_key.as_deref() == Some(key.replace('\\', "/").to_lowercase().as_str())
+        {
+            profile.model_key = Some(key.clone());
+        }
+    }
+    library.applied = applied;
+    Ok(())
 }
 
 fn compatible(profile: &SettingsProfile, model: &str) -> bool {
@@ -365,6 +407,7 @@ pub(super) fn initialize_profiles(
     adopt_runtimes: bool,
 ) -> Result<(), String> {
     let mut library = cfg.settings_profiles.take().unwrap_or_default();
+    migrate_model_path_keys(&mut library)?;
     if library.entries.is_empty() {
         library.entries.push(default_profile());
     }
@@ -1110,6 +1153,79 @@ mod tests {
         .unwrap();
         library.entries.push(default_profile());
         library
+    }
+
+    #[test]
+    fn posix_model_identity_preserves_case_and_literal_backslashes() {
+        assert_ne!(model_key("/models/A.gguf"), model_key("/models/a.gguf"));
+        assert_ne!(
+            model_key(r"/models/a\b.gguf"),
+            model_key("/models/a/b.gguf")
+        );
+        assert_eq!(
+            model_key(r"C:\Models\A.gguf"),
+            model_key("c:/models/a.gguf")
+        );
+        assert_eq!(
+            model_key(r"\\?\UNC\Server\Models\A.gguf"),
+            model_key("//server/models/a.gguf")
+        );
+    }
+
+    #[test]
+    fn disk_migration_recovers_posix_spelling_and_keeps_saved_profile_values() {
+        let mut saved = library();
+        let mut application = saved.applied.pop_first().unwrap().1;
+        application.model = "/models/Example.gguf".into();
+        saved.entries[0].model_key = Some("model:/models/example.gguf".into());
+        saved
+            .applied
+            .insert("model:/models/example.gguf".into(), application.clone());
+        saved
+            .applied
+            .insert("session:kept".into(), application.clone());
+        let raw = json!({
+            "active_model": application.model,
+            "settings_profiles": saved,
+            "temperature": 0.8,
+            "config_version": super::super::CURRENT_CONFIG_VERSION,
+        });
+        let migrated = super::super::migrate_value(raw).unwrap();
+        let profiles = migrated.settings_profiles.as_ref().unwrap();
+        assert_eq!(profiles.revision, saved.revision);
+        assert_eq!(profiles.applied["model:/models/Example.gguf"], application);
+        assert_eq!(profiles.applied["session:kept"], application);
+        assert!(!profiles.applied.contains_key("model:/models/example.gguf"));
+        assert_eq!(
+            profiles.entries[0].model_key.as_deref(),
+            Some("model:/models/Example.gguf")
+        );
+        profiles.validate().unwrap();
+        let restored =
+            super::super::migrate_value(serde_json::to_value(&migrated).unwrap()).unwrap();
+        assert_eq!(restored.settings_profiles, migrated.settings_profiles);
+    }
+
+    #[test]
+    fn posix_key_migration_preserves_case_distinct_applications_and_rejects_conflicts() {
+        let mut saved = library();
+        let mut upper = saved.applied.pop_first().unwrap().1;
+        upper.model = "/models/Example.gguf".into();
+        let mut lower = upper.clone();
+        lower.model = "/models/example.gguf".into();
+        lower.system_prompt = "Lowercase model".into();
+        saved.applied.insert(model_key(&upper.model), upper.clone());
+        saved.applied.insert(model_key(&lower.model), lower.clone());
+        migrate_model_path_keys(&mut saved).unwrap();
+        assert_eq!(saved.applied[&model_key(&upper.model)], upper);
+        assert_eq!(saved.applied[&model_key(&lower.model)], lower);
+
+        let mut conflict = upper.clone();
+        conflict.system_prompt = "Different saved prompt".into();
+        saved.applied.insert(model_key(&lower.model), conflict);
+        let original = saved.clone();
+        assert!(migrate_model_path_keys(&mut saved).is_err());
+        assert_eq!(saved, original);
     }
 
     #[test]

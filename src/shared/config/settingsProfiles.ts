@@ -1,5 +1,5 @@
 import type { AppConfig } from '../api/types';
-import { normalizeDisplayPath } from '../lib/displayPaths';
+import { modelPathIdentity } from '../lib/displayPaths';
 import { EXECUTION_KEYS, executionSettings, type ExecutionKey, type ExecutionSettings } from './executionSettings';
 import { RUNTIME_DEFAULT_KEYS } from './tuningDefaults';
 import { tuningResetValues } from './tuningResetValues';
@@ -75,6 +75,7 @@ export function defaultSettingsProfile(): SettingsProfile {
 }
 
 export function ensureProfileLibrary(library: SettingsProfileLibrary): SettingsProfileLibrary {
+  library = migrateModelPathKeys(library);
   const populated = library.entries.length ? library : { ...library, entries: [defaultSettingsProfile()] };
   const selected = populated.entries.find(entry => entry.id === populated.default_profile_id)
     ?? populated.entries.find(entry => entry.id === DEFAULT_SETTINGS_PROFILE_ID)
@@ -151,8 +152,39 @@ export function profileApplicationConfig(application: ProfileApplication): AppCo
 
 export function profileTargetKey(modelPath: string, sessionId = 'default'): string {
   return sessionId === 'default'
-    ? `model:${normalizeDisplayPath(modelPath).replace(/\\/g, '/').toLowerCase()}`
+    ? `model:${modelPathIdentity(modelPath)}`
     : `session:${sessionId}`;
+}
+
+/** Recover original POSIX spelling from saved applications, never from a folded key alone. */
+function migrateModelPathKeys(library: SettingsProfileLibrary): SettingsProfileLibrary {
+  let changed = false;
+  const profileKeys = new Map<string, Set<string>>();
+  const applied: Record<string, ProfileApplication> = {};
+  for (const [key, application] of Object.entries(library.applied)) {
+    const modelKey = profileTargetKey(application.model);
+    const legacyKey = `model:${application.model.trim().replace(/\\/g, '/').toLowerCase()}`;
+    const target = key === legacyKey ? modelKey : key;
+    if (applied[target] && JSON.stringify(sortedValue(applied[target])) !== JSON.stringify(sortedValue(application))) {
+      throw new Error('Conflicting saved settings for the same model path.');
+    }
+    applied[target] = application;
+    changed ||= target !== key;
+    if (application.profile_id) {
+      const keys = profileKeys.get(application.profile_id) ?? new Set<string>();
+      keys.add(modelKey);
+      profileKeys.set(application.profile_id, keys);
+    }
+  }
+  const entries = library.entries.map(profile => {
+    const keys = profileKeys.get(profile.id);
+    if (profile.scope !== 'model' || keys?.size !== 1) return profile;
+    const key = [...keys][0];
+    if (key === profile.model_key || key.toLowerCase().replace(/\\/g, '/') !== profile.model_key) return profile;
+    changed = true;
+    return { ...profile, model_key: key };
+  });
+  return changed ? { ...library, applied, entries } : library;
 }
 
 /** The model identity and app management fields live outside a reusable settings snapshot. */

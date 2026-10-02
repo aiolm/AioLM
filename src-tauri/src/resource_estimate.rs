@@ -776,7 +776,9 @@ fn launch_settings(cfg: &AppConfig) -> Launch {
     let mut automatic = false;
     // `tuning_defaults::filter_args` launches the app's own defaults for these
     // two even when they are marked as runtime defaults.
-    let ngl = if inherited("ngl") {
+    let ngl = if cfg.active_backend == "cpu" {
+        0
+    } else if inherited("ngl") {
         tuning_defaults::app_default_u32("ngl")
     } else {
         cfg.ngl
@@ -821,6 +823,17 @@ fn launch_settings(cfg: &AppConfig) -> Launch {
         u64::from(cfg.n_cpu_moe)
     };
     let parallel = (!inherited("parallel") && cfg.parallel > 0).then_some(u64::from(cfg.parallel));
+    let args = if cfg.active_backend == "cpu" {
+        let mut effective = cfg.server_args.clone();
+        crate::inference_args::force_cpu(&mut effective);
+        let mut parsed = parse_server_args(&effective);
+        parsed.kv_offload = false;
+        parsed.op_offload = false;
+        parsed.mmproj_offload = false;
+        parsed
+    } else {
+        parse_server_args(&cfg.server_args)
+    };
     Launch {
         ngl: u64::from(ngl),
         ctx: u64::from(ctx),
@@ -831,7 +844,7 @@ fn launch_settings(cfg: &AppConfig) -> Launch {
         flash_attn,
         n_cpu_moe,
         parallel,
-        args: parse_server_args(&cfg.server_args),
+        args,
         automatic,
     }
 }
@@ -1663,6 +1676,9 @@ fn scenario(launch: &Launch, main: &Shape, accelerator: Accelerator) -> Option<S
 /// Parses `--spec-draft-ngl`: `auto` and `all` offload every layer
 /// (`llama_model::n_gpu_layers` treats a negative count as all of them).
 fn draft_layers(cfg: &AppConfig) -> u64 {
+    if cfg.active_backend == "cpu" {
+        return 0;
+    }
     if tuning_defaults::inherited(cfg, "spec_draft_ngl") {
         return u64::MAX;
     }
@@ -1926,7 +1942,7 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
         let draft_plan = draft.as_ref().map(|draft| ContextPlan {
             shape: draft,
             ngl: draft_layers(cfg),
-            on_gpu: cfg.spec_draft_device.trim() != "none",
+            on_gpu: cfg.active_backend != "cpu" && cfg.spec_draft_device.trim() != "none",
             overrides: Overrides {
                 cpu_moe: launch.args.draft_cpu_moe,
                 n_cpu_moe: launch.args.draft_n_cpu_moe,
@@ -2735,6 +2751,35 @@ mod tests {
             Environment::from_profile(&cfg, None, None).accelerator,
             Accelerator::Cpu
         );
+    }
+
+    #[test]
+    fn cpu_estimate_uses_effective_host_placement_instead_of_saved_gpu_tuning() {
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            ngl: 99,
+            spec_draft_ngl: "all".into(),
+            runtime_defaults: vec!["ngl".into(), "spec_draft_ngl".into()],
+            server_args: [
+                "--override-tensor=blk.*=MTL0",
+                "--mmproj-device=MTL0",
+                "--kv-offload",
+                "--op-offload",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+            ..Default::default()
+        };
+        let launch = launch_settings(&cfg);
+        assert_eq!(launch.ngl, 0);
+        assert_eq!(draft_layers(&cfg), 0);
+        assert!(!launch.args.kv_offload);
+        assert!(!launch.args.op_offload);
+        assert!(!launch.args.mmproj_offload);
+        assert!(!launch.args.unmodeled);
+        assert!(!launch.args.unknown);
+        assert_eq!(cfg.ngl, 99);
+        assert_eq!(cfg.spec_draft_ngl, "all");
     }
 
     #[test]

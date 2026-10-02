@@ -25,7 +25,7 @@ API 服务器，停止 API 服务器也不会卸载模型或中断应用内聊�
 
 ## 平台支持
 
-目前支持 Windows x64。**计划支持 Linux（包括 NVIDIA DGX）和 macOS**。Linux/macOS 将使用 `curl | tar`，Windows 使用 `NSIS`/`MSI`。Windows 安装程序由 GitHub 托管的 CI 构建，以未签名文件和 SHA-256 校验和的形式发布。
+目前支持 Windows x64。**计划支持 Linux（包括 NVIDIA DGX）和 macOS**。验证构建在 Linux 生成 DEB/AppImage，在 macOS 生成 APP/DMG，在 Windows 生成 NSIS/MSI。请参阅[跨平台验证](../reference/cross-platform-validation.md)。Windows 安装程序由 GitHub 托管的 CI 构建，以未签名文件和 SHA-256 校验和的形式发布。
 
 ## 下载
 

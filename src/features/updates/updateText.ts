@@ -7,7 +7,7 @@ export const updateText = {
     downloading: "Downloading update…", verifying: "Verifying download…", installing: "Opening installer…", started: "Installer opened. Follow its instructions to finish updating.",
     checkFailed: "Could not check for updates.", installFailed: "Could not install the update.",
     nativeOnly: "Update checks are available in the desktop app.", unsupported: "In-app installation is unavailable for this installation or platform. Use the release installer to update manually.",
-    confirmTitle: "Install AioLM update?", confirmBody: "After the download is verified, AioLM will close and the installer will open. Running chats, servers and tasks will stop. Save your work before continuing. Follow the installer instructions, then reopen AioLM.",
+    confirmTitle: "Install AioLM update?", confirmBody: "After the download is verified, AioLM will close and the installer will open. Running chats, servers and tasks will stop. Save your work before continuing. Complete installation in the window that opens. If asked to replace the app, use its existing installation folder, then reopen AioLM.",
     notes: "Release notes", downloadProgress: "Update download progress", releasePage: "Open release page",
   },
   ko: {
@@ -18,7 +18,7 @@ export const updateText = {
     downloading: "업데이트 다운로드 중…", verifying: "다운로드 검증 중…", installing: "설치 프로그램 여는 중…", started: "설치 프로그램을 열었습니다. 안내에 따라 업데이트를 완료하세요.",
     checkFailed: "업데이트를 확인하지 못했습니다.", installFailed: "업데이트를 설치하지 못했습니다.",
     nativeOnly: "데스크톱 앱에서 업데이트를 확인할 수 있습니다.", unsupported: "현재 설치 방식 또는 운영체제에서는 앱 내 설치를 지원하지 않습니다. 릴리스의 설치 파일로 직접 업데이트하세요.",
-    confirmTitle: "AioLM을 업데이트할까요?", confirmBody: "다운로드 검증이 끝나면 AioLM이 종료되고 설치 프로그램이 열립니다. 실행 중인 대화, 서버 및 작업이 중단됩니다. 계속하기 전에 작업을 저장하세요. 설치 안내를 따른 뒤 AioLM을 다시 실행하세요.",
+    confirmTitle: "AioLM을 업데이트할까요?", confirmBody: "다운로드 검증이 끝나면 AioLM이 종료되고 설치 프로그램이 열립니다. 실행 중인 대화, 서버 및 작업이 중단됩니다. 계속하기 전에 작업을 저장하세요. 열린 창에서 설치를 완료하세요. 앱을 교체하라는 안내가 나오면 기존 설치 폴더의 앱을 교체한 뒤 AioLM을 다시 실행하세요.",
     notes: "릴리스 노트", downloadProgress: "업데이트 다운로드 진행률", releasePage: "릴리스 페이지 열기",
   },
   ja: {
@@ -29,7 +29,7 @@ export const updateText = {
     downloading: "更新をダウンロード中…", verifying: "ダウンロードを検証中…", installing: "インストーラーを起動中…", started: "インストーラーを起動しました。案内に従って更新を完了してください。",
     checkFailed: "更新を確認できませんでした。", installFailed: "更新をインストールできませんでした。",
     nativeOnly: "デスクトップアプリで更新を確認できます。", unsupported: "現在のインストール方法または環境ではアプリ内の更新に対応していません。リリースのインストーラーで手動更新してください。",
-    confirmTitle: "AioLMを更新しますか？", confirmBody: "ダウンロードの検証後、AioLMが終了し、インストーラーが開きます。実行中のチャット、サーバー、タスクは停止します。作業を保存してから続行してください。インストール後、AioLMを再起動してください。",
+    confirmTitle: "AioLMを更新しますか？", confirmBody: "ダウンロードの検証後、AioLMが終了し、インストーラーが開きます。実行中のチャット、サーバー、タスクは停止します。作業を保存してから続行してください。開いた画面でインストールを完了してください。アプリの置き換えを求められた場合は既存のインストール先を使用し、その後AioLMを再起動してください。",
     notes: "リリースノート", downloadProgress: "更新ダウンロードの進行状況", releasePage: "リリースページを開く",
   },
   zh: {
@@ -40,7 +40,7 @@ export const updateText = {
     downloading: "正在下载更新…", verifying: "正在验证下载…", installing: "正在打开安装程序…", started: "安装程序已打开，请按照提示完成更新。",
     checkFailed: "无法检查更新。", installFailed: "无法安装更新。",
     nativeOnly: "请在桌面应用中检查更新。", unsupported: "当前安装方式或系统不支持应用内安装。请使用发布页面的安装程序手动更新。",
-    confirmTitle: "更新AioLM？", confirmBody: "下载验证完成后，AioLM将关闭并打开安装程序。正在运行的对话、服务器和任务将停止。请先保存工作。按照安装提示完成后，重新打开AioLM。",
+    confirmTitle: "更新AioLM？", confirmBody: "下载验证完成后，AioLM将关闭并打开安装程序。正在运行的对话、服务器和任务将停止。请先保存工作。在打开的窗口中完成安装。如需替换应用，请使用原来的安装目录，然后重新打开AioLM。",
     notes: "发行说明", downloadProgress: "更新下载进度", releasePage: "打开发行页面",
   },
 };

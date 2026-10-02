@@ -26,6 +26,41 @@ describe('settings profiles', () => {
     expect(defaultSettingsProfile().settings.runtime_defaults).not.toContain('synthetic');
   });
 
+  it('keeps POSIX model case and literal backslashes while preserving Windows identities', () => {
+    expect(profileTargetKey('/models/A.gguf')).not.toBe(profileTargetKey('/models/a.gguf'));
+    expect(profileTargetKey('/models/a\\b.gguf')).not.toBe(profileTargetKey('/models/a/b.gguf'));
+    expect(profileTargetKey('C:\\Models\\Example.gguf')).toBe(profileTargetKey('c:/models/example.gguf'));
+    expect(profileTargetKey('\\\\?\\UNC\\Server\\Models\\A.gguf')).toBe(profileTargetKey('//server/models/a.gguf'));
+  });
+
+  it('migrates folded POSIX keys from saved model spelling without changing snapshots or revisions', () => {
+    const cfg = { ...testConfig, active_model: '/models/Example.gguf', temperature: 0.23 };
+    const profile = captureProfile(cfg, 'Saved', 'model', 'Keep this prompt');
+    const application = materializeProfileApplication(cfg, 'Saved prompt', profile);
+    const source = { ...emptyProfileLibrary(), revision: 7, default_profile_id: 'profile-default',
+      entries: [defaultSettingsProfile(), { ...profile, model_key: 'model:/models/example.gguf' }],
+      applied: { 'model:/models/example.gguf': application, 'session:kept': application } };
+    const before = structuredClone(source);
+    const migrated = ensureProfileLibrary(source);
+    expect(migrated.applied).toEqual({ 'model:/models/Example.gguf': application, 'session:kept': application });
+    expect(migrated.entries[1]).toEqual(profile);
+    expect(migrated.revision).toBe(7);
+    expect(ensureProfileLibrary(migrated)).toBe(migrated);
+    expect(source).toEqual(before);
+  });
+
+  it('refuses ambiguous migration collisions instead of overwriting saved model settings', () => {
+    const cfg = { ...testConfig, active_model: '/models/Example.gguf' };
+    const profile = captureProfile(cfg, 'Saved', 'model', '');
+    const application = materializeProfileApplication(cfg, '', profile);
+    const source = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile], applied: {
+      'model:/models/example.gguf': application,
+      'model:/models/Example.gguf': { ...application, system_prompt: 'Different' },
+    } };
+    expect(() => ensureProfileLibrary(source)).toThrow('Conflicting saved settings');
+    expect(Object.keys(source.applied)).toHaveLength(2);
+  });
+
   it('protects only the designated default even when it has internal model copies', () => {
     const source = defaultSettingsProfile();
     const copy = { ...captureProfile(testConfig, 'Default', 'model', ''), source_id: source.id, source_scope: 'global' as const };

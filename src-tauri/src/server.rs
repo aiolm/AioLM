@@ -672,6 +672,12 @@ pub fn build_args_with_gpu(
     // overrides (e.g. --top-p) must survive even when the request control inherits.
     let mut args = crate::tuning_defaults::filter_args(cfg, args);
     append_unmanaged_server_args(&mut args, &cfg.server_args);
+    if cfg.active_backend == "cpu" {
+        crate::inference_args::force_cpu_server(
+            &mut args,
+            crate::tuning_defaults::speculative_enabled(cfg),
+        );
+    }
     args
 }
 
@@ -845,27 +851,31 @@ fn proc_tcp_listener_inodes(port: u16) -> Option<std::collections::HashSet<u64>>
         };
         readable_proc_table = true;
 
-        for line in table.lines().skip(1) {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() <= 10 || fields[3] != "0A" {
-                continue;
-            }
-            let Some((_, local_port)) = fields[1].rsplit_once(':') else {
-                continue;
-            };
-            let Ok(local_port) = u16::from_str_radix(local_port, 16) else {
-                continue;
-            };
-            if local_port != port {
-                continue;
-            }
-            if let Ok(inode) = fields[10].parse::<u64>() {
-                inodes.insert(inode);
-            }
-        }
+        inodes.extend(parse_proc_tcp_listener_inodes(&table, port));
     }
 
     readable_proc_table.then_some(inodes)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_proc_tcp_listener_inodes(table: &str, port: u16) -> std::collections::HashSet<u64> {
+    table
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 10 || fields[3] != "0A" {
+                return None;
+            }
+            let (_, local_port) = fields[1].rsplit_once(':')?;
+            if u16::from_str_radix(local_port, 16).ok()? != port {
+                return None;
+            }
+            // The queues and timer each occupy a colon-separated field. Inode
+            // is field 9; field 10 is the socket reference count, not its ID.
+            fields[9].parse::<u64>().ok().filter(|inode| *inode != 0)
+        })
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -1240,6 +1250,56 @@ mod tests {
     }
 
     #[test]
+    fn cpu_backend_uses_host_for_main_draft_and_projector_without_changing_saved_tuning() {
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            active_model: "model.gguf".into(),
+            ngl: 99,
+            runtime_defaults: vec!["ngl".into(), "spec_draft_ngl".into()],
+            mmproj: "projector.gguf".into(),
+            spec_type: "draft".into(),
+            spec_draft_model: "draft.gguf".into(),
+            spec_draft_ngl: "all".into(),
+            spec_draft_device: "MTL0".into(),
+            server_args: vec![
+                "--op-offload".into(),
+                "--mmproj-offload".into(),
+                "--override-tensor".into(),
+                "blk.*=MTL0".into(),
+                "--no-mmap".into(),
+            ],
+            ..AppConfig::default()
+        };
+        let before = serde_json::to_value(&cfg).unwrap();
+        let resolved = crate::gpu::ResolvedGpu {
+            device_flag: Some("MTL0".into()),
+            draft_device: Some("MTL0".into()),
+            ..crate::gpu::ResolvedGpu::default()
+        };
+        let args = build_args_with_gpu(&cfg, "", &resolved);
+        for pair in [
+            ["--device", "none"],
+            ["--n-gpu-layers", "0"],
+            ["--spec-draft-device", "none"],
+            ["--spec-draft-ngl", "0"],
+            ["--mmproj", "projector.gguf"],
+            ["--spec-draft-model", "draft.gguf"],
+        ] {
+            assert!(args.windows(2).any(|actual| actual == pair));
+        }
+        for flag in [
+            "--no-kv-offload",
+            "--no-op-offload",
+            "--no-mmproj-offload",
+            "--no-mmap",
+        ] {
+            assert!(args.iter().any(|arg| arg == flag));
+        }
+        assert!(!args.iter().any(|arg| arg.contains("MTL0")));
+        assert_eq!(serde_json::to_value(&cfg).unwrap(), before);
+    }
+
+    #[test]
     fn build_args_with_gpu_emits_every_resolved_placement_flag() {
         let cfg = AppConfig {
             active_model: "model.gguf".into(),
@@ -1301,6 +1361,32 @@ mod tests {
         assert!(netstat_line_owns_listener(line, 24128, 8080));
         assert!(!netstat_line_owns_listener(line, 24129, 8080));
         assert!(!netstat_line_owns_listener(line, 24128, 8081));
+    }
+
+    #[test]
+    fn linux_listener_ownership_reads_inodes_instead_of_reference_counts() {
+        let table = concat!(
+            "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n",
+            "0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 456789 1 0\n",
+            "1: 00000000000000000000000001000000:1F90 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 987654 2 0\n",
+            "2: 0100007F:1F90 0100007F:1234 01 00000000:00000000 00:00000000 00000000 1000 0 222222 1 0\n",
+            "3: 0100007F:1F91 00000000:0000 0A 00000000:00000000 00:00000000 00000000 1000 0 333333 1 0\n",
+            "4: 0100007F:1F90 00000000:0000 0A truncated\n",
+        );
+        assert_eq!(
+            parse_proc_tcp_listener_inodes(table, 8080),
+            std::collections::HashSet::from([456789, 987654])
+        );
+        assert!(parse_proc_tcp_listener_inodes(table, 9000).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_listener_ownership_identifies_a_real_socket() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(listener_owned_by_child(std::process::id(), port));
+        assert!(!listener_owned_by_child(0, port));
     }
 
     #[cfg(unix)]

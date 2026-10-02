@@ -146,6 +146,7 @@ fn backend_devices(backend: &str) -> Option<(&'static str, Option<GpuVendor>)> {
         "rocm" => Some(("ROCm", Some(GpuVendor::Amd))),
         "vulkan" => Some(("Vulkan", None)),
         "sycl" => Some(("SYCL", Some(GpuVendor::Intel))),
+        "metal" => Some(("MTL", None)),
         _ => None,
     }
 }
@@ -160,7 +161,14 @@ fn listed_devices<'a>(lines: &'a [String], prefix: &str) -> Vec<Listed<'a>> {
             continue;
         };
         let name = name.trim();
-        let index = name.strip_prefix(prefix).unwrap_or_default();
+        let index = name
+            .strip_prefix(prefix)
+            .or_else(|| {
+                (prefix == "MTL")
+                    .then(|| name.strip_prefix("Metal"))
+                    .flatten()
+            })
+            .unwrap_or_default();
         if index.is_empty()
             || !index.bytes().all(|byte| byte.is_ascii_digit())
             || devices.iter().any(|device| device.name == name)
@@ -225,6 +233,32 @@ mod tests {
     use crate::hardware::{CpuInfo, DEVICE_PROFILE_SCHEMA};
 
     const GIB: u64 = 1024 * MIB;
+
+    #[test]
+    fn metal_unified_memory_is_shared_and_never_added_as_dedicated_vram() {
+        let hardware = profile(vec![card(
+            GpuVendor::Apple,
+            "Apple Test Chip",
+            "apple-gpu-0",
+            None,
+            true,
+        )]);
+        for prefix in ["MTL", "Metal"] {
+            let runtime_id = format!("runtime:metal:{prefix}0");
+            let cfg = config("metal", &[&runtime_id], None, SplitMode::Single);
+            let devices = vec![format!(
+                "{prefix}0: Apple Test Chip (24576 MiB, 16000 MiB free)"
+            )];
+            assert_eq!(
+                gpu_capacity(&cfg, Some(&hardware), &devices),
+                Some(GpuCapacity {
+                    dedicated_bytes: 0,
+                    devices: 1,
+                    shared: true,
+                })
+            );
+        }
+    }
 
     fn card(
         vendor: GpuVendor,

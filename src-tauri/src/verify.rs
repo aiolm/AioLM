@@ -604,20 +604,18 @@ async fn measure(
     let text_arg = text.to_string_lossy().into_owned();
     let baseline_arg = baseline.to_string_lossy().into_owned();
 
-    let mut reference = common_args(&model_arg, &text_arg);
-    reference.extend_from_slice(&[
-        "--device",
-        "none",
-        "-ngl",
-        "0",
-        "--save-all-logits",
-        &baseline_arg,
-    ]);
+    let mut reference = common_args(&model_arg, &text_arg)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    reference.extend(["--save-all-logits".to_string(), baseline_arg.clone()]);
+    crate::inference_args::force_cpu(&mut reference);
+    let reference_args = reference.iter().map(String::as_str).collect::<Vec<_>>();
     let reference_output = runtime::run_runtime_tool(
         &binary,
         &cfg.active_backend,
         &cfg.active_build,
-        &reference,
+        &reference_args,
         PASS_TIMEOUT,
         cancel,
     )
@@ -817,14 +815,8 @@ pub async fn run_deep(
         args
     };
 
-    let reference = shared(&[
-        "--device",
-        "none",
-        "-ngl",
-        "0",
-        "--save-all-logits",
-        &baseline_arg,
-    ]);
+    let mut reference = shared(&["--save-all-logits", &baseline_arg]);
+    crate::inference_args::force_cpu(&mut reference);
     let reference_args = reference.iter().map(String::as_str).collect::<Vec<_>>();
     let reference_output = runtime::run_runtime_tool(
         &binary,

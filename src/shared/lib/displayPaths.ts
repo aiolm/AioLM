@@ -8,6 +8,12 @@ export function normalizeDisplayPath(value: string): string {
   return path;
 }
 
+/** POSIX absolute paths are case sensitive; retain existing Windows and legacy relative keys. */
+export function modelPathIdentity(value: string): string {
+  const path = normalizeDisplayPath(value);
+  return path.startsWith('/') && !path.startsWith('//') ? path : path.replace(/\\/g, '/').toLowerCase();
+}
+
 /** A model label groups GGUF shards; file access and API requests must use the original value. */
 export function modelDisplayName(value: string): string {
   const path = normalizeDisplayPath(value);
