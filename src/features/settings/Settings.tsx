@@ -18,6 +18,7 @@ import type { AppStore } from "../../shared/state/store";
 import AppUpdateSettings from "../updates/AppUpdateSettings";
 import PersonalizationSettings, { usePersonalizationEditor } from "./PersonalizationSettings";
 import { personalizationText } from "../../shared/i18n/personalizationText";
+import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 
 interface Props { preferences: AppPreferences; update: (patch: Partial<AppPreferences>) => void; reset: () => void; store?: AppStore; updateRequest?: number; }
 
@@ -121,7 +122,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   const search = searchText[locale];
   const [confirmReset, setConfirmReset] = useState(false);
   const [ioError, setIoError] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<"idle" | "saved">("idle");
+  const [saveState, showSaved] = useFlashMessage(1800);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [wiping, setWiping] = useState(false);
   const [wipeNotice, setWipeNotice] = useState<string | null>(null);
@@ -138,8 +139,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
     setTraySaving(true); setTrayError(null);
     try {
       await store.updateConfig({ close_to_tray: value });
-      setSaveState("saved");
-      window.setTimeout(() => setSaveState("idle"), 1800);
+      showSaved("saved");
     } catch (error) { setTrayError(error instanceof Error ? error.message : trayCopy.failed); }
     finally { setTraySaving(false); }
   };
@@ -166,8 +166,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   ];
   const patch = (next: Partial<AppPreferences>) => {
     update(next);
-    setSaveState("saved");
-    window.setTimeout(() => setSaveState("idle"), 1800);
+    showSaved("saved");
   };
   const toggle = (key: "enterToSend" | "showTimestamps" | "streamResponses" | "compactMessages", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
   const bool = (id: string, checked: boolean, onChange: (value: boolean) => void) => <Switch id={id} checked={checked} onChange={onChange} />;

@@ -26,6 +26,7 @@ import { titleFromMessage } from "./chatHistory";
 import { useChatSkills } from "./useChatSkills";
 import ChatSkillPicker from "./ChatSkillPicker";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
+import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -34,7 +35,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
   const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
   const [input, setInput] = useState("");
-  const [copied, setCopied] = useState<number | null>(null);
+  const [copiedMessage, showCopied] = useFlashMessage(1800);
+  const copied = copiedMessage === null ? null : Number(copiedMessage);
   const [activeProjectName, setActiveProjectName] = useState<string | null>(null);
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
@@ -205,13 +207,12 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     void (async () => {
       try {
         await navigator.clipboard.writeText(text);
-        setCopied(index);
-        window.setTimeout(() => setCopied((current) => (current === index ? null : current)), 1800);
+        showCopied(String(index));
       } catch (caught) {
         setError(`${t("chat.requestFailed")}: ${caught instanceof Error ? caught.message : String(caught)}`);
       }
     })();
-  }, [t, setError]);
+  }, [t, setError, showCopied]);
 
   const sendMessage = () => {
     if (!canSend) return;

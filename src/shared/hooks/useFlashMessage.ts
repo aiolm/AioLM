@@ -10,6 +10,7 @@ export type ShowFlashMessage = (message: string | null) => void;
 export function useFlashMessage(timeoutMs = 4000): [string | null, ShowFlashMessage, () => void] {
   const [flash, setFlash] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
 
   const clearTimer = () => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
@@ -17,9 +18,13 @@ export function useFlashMessage(timeoutMs = 4000): [string | null, ShowFlashMess
   };
 
   const showFlash = useCallback<ShowFlashMessage>((message) => {
+    if (!mountedRef.current) return;
     clearTimer();
     setFlash(message);
-    if (message) timerRef.current = window.setTimeout(() => setFlash(null), timeoutMs);
+    if (message) timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      setFlash(null);
+    }, timeoutMs);
   }, [timeoutMs]);
 
   const dismissFlash = useCallback(() => {
@@ -27,7 +32,10 @@ export function useFlashMessage(timeoutMs = 4000): [string | null, ShowFlashMess
     setFlash(null);
   }, []);
 
-  useEffect(() => clearTimer, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; clearTimer(); };
+  }, []);
 
   return [flash, showFlash, dismissFlash];
 }

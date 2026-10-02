@@ -71,4 +71,15 @@ describe("useFlashMessage", () => {
     unmount();
     expect(clearSpy).toHaveBeenCalled();
   });
+
+  it("keeps one timer through repeated messages and ignores late async completion after unmount", () => {
+    const { result, unmount } = renderHook(() => useFlashMessage(1000));
+    const show = result.current[1];
+    for (let index = 0; index < 100; index++) act(() => show(String(index)));
+    expect(vi.getTimerCount()).toBe(1);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => show("late clipboard/save result"));
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
