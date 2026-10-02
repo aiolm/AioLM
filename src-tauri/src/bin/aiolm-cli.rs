@@ -399,15 +399,13 @@ fn pump_log<R: Read + Send + 'static>(mut reader: R, path: PathBuf, guard: Arc<M
 fn process_is_llama_server(pid: u32) -> bool {
     #[cfg(windows)]
     {
-        let filter = format!("PID eq {pid}");
-        let Ok(output) = Command::new("tasklist")
-            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
-            .output()
-        else {
-            return false;
-        };
-        let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-        text.contains("llama-server.exe") || text.contains("llama-server")
+        process_image_path(pid)
+            .and_then(|path| path.file_name().map(|name| name.to_owned()))
+            .is_some_and(|name| {
+                name.to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("llama-server")
+            })
     }
     #[cfg(not(windows))]
     {
@@ -426,16 +424,14 @@ fn process_is_llama_server(pid: u32) -> bool {
 fn process_is_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
-        let filter = format!("PID eq {pid}");
-        Command::new("tasklist")
-            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
-            .output()
-            .map(|output| {
-                !String::from_utf8_lossy(&output.stdout)
-                    .to_ascii_lowercase()
-                    .contains("no tasks are running")
-            })
-            .unwrap_or(false)
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+        let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) }; // SYNCHRONIZE
+        if handle.is_null() {
+            return false;
+        }
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+        unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) == 258 } // WAIT_TIMEOUT
     }
     #[cfg(not(windows))]
     {
@@ -631,6 +627,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         Some(stdout) => stdout,
         None => {
             let _ = child.kill();
+            let _ = child.wait();
             return Err("headless server stdout pipe was not available".into());
         }
     };
@@ -638,6 +635,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         Some(stderr) => stderr,
         None => {
             let _ = child.kill();
+            let _ = child.wait();
             return Err("headless server stderr pipe was not available".into());
         }
     };
@@ -648,7 +646,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
     let url = configured_server_url(cfg.port);
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     if let Ok(mut state) = shared.lock() {
-        state.child = Some(child);
+        state.child = Some(child.into());
         state.url = url.clone();
         state.model = cfg.active_model.clone();
         state.lifecycle = server::Lifecycle::Starting;
@@ -682,6 +680,16 @@ async fn server_start_unlocked() -> Result<Value, String> {
     if let Err(error) = write_state(&state) {
         let _ = terminate_pid(pid);
         return Err(error);
+    }
+    // Headless mode deliberately transfers ownership to its persisted state;
+    // desktop and benchmark children retain their automatic teardown owner.
+    if let Some(child) = shared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .child
+        .take()
+    {
+        drop(child.release());
     }
     Ok(json!({
         "state":"running",

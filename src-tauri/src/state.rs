@@ -17,7 +17,7 @@ pub(crate) struct AppState {
     /// duration of a multi-minute build.
     pub(crate) runtime_busy: Arc<AtomicBool>,
     pub(crate) bench_cancel: Arc<AtomicBool>,
-    pub(crate) bench_pid: Arc<Mutex<Option<u32>>>,
+    pub(crate) bench_process: Arc<Mutex<Option<crate::procutil::ProcessHandle>>>,
     pub(crate) runtime_cancel: Arc<AtomicBool>,
     pub(crate) discover_cancel: Arc<AtomicBool>,
     pub(crate) verify_cancel: Arc<AtomicBool>,
@@ -57,7 +57,7 @@ impl Default for AppState {
             operation: Arc::new(tokio::sync::Mutex::new(())),
             runtime_busy: Arc::new(AtomicBool::new(false)),
             bench_cancel: Arc::new(AtomicBool::new(false)),
-            bench_pid: Arc::new(Mutex::new(None)),
+            bench_process: Arc::new(Mutex::new(None)),
             runtime_cancel: Arc::new(AtomicBool::new(false)),
             discover_cancel: Arc::new(AtomicBool::new(false)),
             verify_cancel: Arc::new(AtomicBool::new(false)),

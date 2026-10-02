@@ -2,14 +2,13 @@
 use crate::process_output::{
     drain_stream, drain_stream_into, read_log, shared_log, Retain, SharedLog,
 };
+use crate::procutil::{OwnedTask, TransientChild};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-#[cfg(unix)]
-use std::io;
 use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -20,7 +19,6 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncRead, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
@@ -1436,12 +1434,18 @@ fn prepend_environment_paths(environment: &mut Vec<(OsString, OsString)>, prefix
 /// preflight and the packaging code use the same compiler-derived root, so the
 /// compiler, CMake's package lookup, and staged sidecars cannot silently come
 /// from three different SDK versions.
-fn build_environment_for_backend(tool: &Path, backend: &str) -> Vec<(OsString, OsString)> {
+fn build_environment_for_backend(
+    tool: &Path,
+    backend: &str,
+    cancel: Option<&AtomicBool>,
+) -> Vec<(OsString, OsString)> {
     let mut environment = build_environment_with_tool(tool);
     #[cfg(windows)]
     if let Some(cl) = locate_tool("cl") {
-        merge_visual_studio_environment(&mut environment, &cl);
+        merge_visual_studio_environment(&mut environment, &cl, cancel);
     }
+    #[cfg(not(windows))]
+    let _ = cancel;
     let (root, variable_names): (Option<PathBuf>, &[&str]) = match backend {
         "cuda" => (sdk_root_from_tool("nvcc"), &["CUDA_PATH", "CUDA_HOME"]),
         "rocm" => (sdk_root_from_tool("hipcc"), &["HIP_PATH", "ROCM_PATH"]),
@@ -1499,7 +1503,11 @@ fn build_environment_for_backend(tool: &Path, backend: &str) -> Vec<(OsString, O
 }
 
 #[cfg(windows)]
-fn merge_visual_studio_environment(environment: &mut Vec<(OsString, OsString)>, cl: &Path) {
+fn merge_visual_studio_environment(
+    environment: &mut Vec<(OsString, OsString)>,
+    cl: &Path,
+    cancel: Option<&AtomicBool>,
+) {
     let Some(vc_root) = cl.ancestors().find(|path| {
         path.file_name()
             .is_some_and(|name| name == OsStr::new("VC"))
@@ -1513,12 +1521,17 @@ fn merge_visual_studio_environment(environment: &mut Vec<(OsString, OsString)>, 
     if vcvarsall.is_file() {
         let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe"));
         let command_line = format!("call \"{}\" x64 >nul && set", vcvarsall.display());
-        if let Ok(output) = crate::procutil::std_command(comspec)
+        let mut command = crate::procutil::std_command(comspec);
+        command
             .env_clear()
             .envs(child_environment())
-            .args(["/d", "/s", "/c", &command_line])
-            .output()
-        {
+            .args(["/d", "/s", "/c", &command_line]);
+        if let Ok(output) = crate::procutil::capture_stdout_cancellable(
+            &mut command,
+            Duration::from_secs(30),
+            256 * 1024,
+            cancel,
+        ) {
             if output.status.success() {
                 const NAMES: &[&str] = &[
                     "PATH",
@@ -2288,7 +2301,7 @@ where
     drain_stream(reader, MAX_PROBE_OUTPUT, Retain::Head).await
 }
 
-async fn finish_reader(mut task: JoinHandle<Vec<u8>>, limit: Duration) -> Vec<u8> {
+async fn finish_reader(mut task: OwnedTask<Vec<u8>>, limit: Duration) -> Vec<u8> {
     match timeout(limit, &mut task).await {
         Ok(Ok(output)) => output,
         _ => {
@@ -2299,17 +2312,18 @@ async fn finish_reader(mut task: JoinHandle<Vec<u8>>, limit: Duration) -> Vec<u8
     }
 }
 
-async fn finish_probe_reader(task: JoinHandle<Vec<u8>>) -> Vec<u8> {
+async fn finish_probe_reader(task: OwnedTask<Vec<u8>>) -> Vec<u8> {
     finish_reader(task, PROBE_READER_TIMEOUT).await
 }
 
 /// Join a build drain task, and if it will not end - a grandchild is still
 /// holding the inherited pipe - abandon it but keep whatever it already read.
 async fn finish_build_reader(
-    mut task: JoinHandle<()>,
+    task: impl Into<OwnedTask<()>>,
     log: &SharedLog,
     limit: Duration,
 ) -> Vec<u8> {
+    let mut task = task.into();
     if timeout(limit, &mut task).await.is_err() {
         task.abort();
         let _ = task.await;
@@ -2317,17 +2331,8 @@ async fn finish_build_reader(
     read_log(log)
 }
 
-async fn terminate_probe(child: &mut tokio::process::Child) {
-    #[cfg(windows)]
-    if let Some(pid) = child.id() {
-        let _ = crate::procutil::tokio_command("taskkill")
-            .env_clear()
-            .envs(child_environment())
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()
-            .await;
-    }
-    let _ = child.kill().await;
+async fn terminate_probe(child: &mut TransientChild) {
+    child.terminate();
     let _ = child.wait().await;
 }
 
@@ -2336,114 +2341,12 @@ async fn terminate_probe(child: &mut tokio::process::Child) {
 /// beneath it; killing only the direct child leaves that grandchild compiling
 /// against a tree that cleanup is about to remove.
 fn configure_build_process_group(command: &mut Command) {
-    #[cfg(not(unix))]
-    let _ = command;
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // `setpgid(0, 0)` makes the child the leader of a new group. The
-        // closure runs in the child between fork and exec, before any build
-        // code can spawn descendants.
-        unsafe {
-            command.as_std_mut().pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
+    crate::procutil::configure_process_group(command);
 }
 
-/// PIDs of the top-level CMake processes currently owned by a source build.
-///
-/// The async cancellation path can kill a process tree while the app is alive,
-/// but a window close can terminate the Rust future before it gets a chance to
-/// observe `runtime_cancel`. Keeping only these short-lived top-level PIDs lets
-/// the exit handler kill the whole tree synchronously, without holding a lock
-/// across the build itself.
-static ACTIVE_BUILD_PIDS: OnceLock<Mutex<Vec<u32>>> = OnceLock::new();
-static BUILD_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-fn active_build_pids() -> &'static Mutex<Vec<u32>> {
-    ACTIVE_BUILD_PIDS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-fn terminate_build_pid_sync(pid: u32) {
-    #[cfg(windows)]
-    {
-        let _ = crate::procutil::std_command("taskkill")
-            .env_clear()
-            .envs(child_environment())
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status();
-    }
-    #[cfg(unix)]
-    {
-        unsafe {
-            let _ = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-        }
-    }
-}
-
-fn register_active_build(pid: u32) {
-    let kill_now = {
-        let Ok(mut active) = active_build_pids().lock() else {
-            return;
-        };
-        if BUILD_SHUTDOWN_REQUESTED.load(Ordering::Acquire) {
-            true
-        } else {
-            active.push(pid);
-            false
-        }
-    };
-    if kill_now {
-        terminate_build_pid_sync(pid);
-    }
-}
-
-fn unregister_active_build(pid: u32) {
-    if let Ok(mut active) = active_build_pids().lock() {
-        active.retain(|candidate| *candidate != pid);
-    }
-}
-
-/// Request termination of every in-flight source build. This is intentionally
-/// synchronous: it runs from Tauri's exit callback, after the app has stopped
-/// accepting work, and must finish before the process disappears.
-pub fn terminate_active_builds() {
-    BUILD_SHUTDOWN_REQUESTED.store(true, Ordering::Release);
-    let pids = active_build_pids()
-        .lock()
-        .map(|mut active| std::mem::take(&mut *active))
-        .unwrap_or_default();
-    for pid in pids {
-        terminate_build_pid_sync(pid);
-    }
-}
-
-/// Terminate a build process and all descendants. Windows keeps the existing
-/// taskkill tree termination; Unix sends SIGKILL to the private process group.
-async fn terminate_build_child(child: &mut tokio::process::Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        let process_group = -(pid as libc::pid_t);
-        unsafe {
-            let _ = libc::kill(process_group, libc::SIGKILL);
-        }
-    }
-    #[cfg(windows)]
-    if let Some(pid) = child.id() {
-        let _ = crate::procutil::tokio_command("taskkill")
-            .env_clear()
-            .envs(child_environment())
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()
-            .await;
-    }
-    let _ = child.kill().await;
+/// Build commands share the same tree owner and shutdown gate as probes/MCP.
+async fn terminate_build_child(child: &mut TransientChild) {
+    child.terminate();
     let _ = child.wait().await;
 }
 
@@ -2458,7 +2361,7 @@ enum ProbeWaitOutcome {
 }
 
 async fn wait_probe_child(
-    child: &mut tokio::process::Child,
+    child: &mut TransientChild,
     limit: Duration,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> ProbeWaitOutcome {
@@ -2513,17 +2416,17 @@ async fn run_probe_with_cancel_and_environment(
     environment: &[(OsString, OsString)],
 ) -> ProbeCommand {
     let mut command = crate::procutil::tokio_command(binary);
+    crate::procutil::configure_process_group(&mut command);
     command
         .kill_on_drop(true)
         .env_clear()
         .envs(environment.iter().map(|(name, value)| (name, value)));
-    let mut child = match command
+    command
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+        .stderr(std::process::Stdio::piped());
+    let mut child = match TransientChild::spawn(&mut command) {
         Ok(child) => child,
         Err(error) => {
             return ProbeCommand {
@@ -2541,11 +2444,11 @@ async fn run_probe_with_cancel_and_environment(
             diagnostic: Some("runtime probe stdout was not captured".into()),
         };
     };
-    let stdout_task = tokio::spawn(read_probe_output(stdout));
+    let stdout_task: OwnedTask<_> = tokio::spawn(read_probe_output(stdout)).into();
     let stderr_task = child
         .stderr
         .take()
-        .map(|stderr| tokio::spawn(read_probe_output(stderr)));
+        .map(|stderr| OwnedTask::from(tokio::spawn(read_probe_output(stderr))));
     let status = match wait_probe_child(&mut child, limit, cancel).await {
         ProbeWaitOutcome::Exited(Ok(status)) => status,
         ProbeWaitOutcome::Exited(Err(error)) => {
@@ -5185,7 +5088,7 @@ fn windows_clang_link_environment_ready() -> bool {
         return false;
     };
     let mut environment = build_environment();
-    merge_visual_studio_environment(&mut environment, &cl);
+    merge_visual_studio_environment(&mut environment, &cl, None);
     let has_directory = |name: &str| {
         environment_value(&environment, name)
             .map(|value| std::env::split_paths(&value).any(|path| path.is_dir()))
@@ -5565,7 +5468,7 @@ struct BuildCommandOutput {
 /// full pipe or die on a broken one - and they are only joined after the
 /// process has exited, so no handle is ever closed under a live child.
 async fn supervise_build_child(
-    mut child: tokio::process::Child,
+    mut child: TransientChild,
     progress: ProgressSink<'_>,
     phase: &str,
     label: &str,
@@ -5573,7 +5476,7 @@ async fn supervise_build_child(
     deadline: Duration,
 ) -> Result<BuildCommandOutput, String> {
     let Some(stdout) = child.stdout.take() else {
-        terminate_probe(&mut child).await;
+        terminate_build_child(&mut child).await;
         return Err(format!("{label} stdout was not captured"));
     };
     let readers = BuildReaders::attach(stdout, child.stderr.take());
@@ -5608,7 +5511,9 @@ async fn supervise_build_child(
         tokio::select! {
             result = child.wait() => {
                 match result {
-                    Ok(status) => break status,
+                    Ok(status) => {
+                        break status;
+                    }
                     // The child is unreachable but not necessarily gone: kill
                     // the tree and join the drains before returning, so no
                     // pipe outlives this call and no build is left orphaned.
@@ -5635,8 +5540,8 @@ async fn supervise_build_child(
 /// The drain tasks of a supervised build child, kept together so every exit
 /// path joins both of them before the call returns.
 struct BuildReaders {
-    stdout: (JoinHandle<()>, SharedLog),
-    stderr: Option<(JoinHandle<()>, SharedLog)>,
+    stdout: (OwnedTask<()>, SharedLog),
+    stderr: Option<(OwnedTask<()>, SharedLog)>,
 }
 
 impl BuildReaders {
@@ -5649,10 +5554,10 @@ impl BuildReaders {
         let stderr = stderr.map(|stderr| {
             let log = shared_log(MAX_BUILD_LOG_TAIL, Retain::Tail);
             let task = tokio::spawn(drain_stream_into(stderr, log.clone()));
-            (task, log)
+            (task.into(), log)
         });
         Self {
-            stdout: (stdout_task, stdout_log),
+            stdout: (stdout_task.into(), stdout_log),
             stderr,
         }
     }
@@ -5716,28 +5621,37 @@ async fn run_cmake_command(
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
     let deadline = cmake_phase_timeout(phase);
+    let environment_tool = cmake.to_path_buf();
+    let environment_backend = backend.to_string();
+    let environment_cancel = cancel.clone();
+    let environment = tokio::task::spawn_blocking(move || {
+        build_environment_for_backend(
+            &environment_tool,
+            &environment_backend,
+            Some(&environment_cancel),
+        )
+    })
+    .await
+    .map_err(|error| format!("failed to prepare CMake environment: {error}"))?;
+    if cancel.load(Ordering::Acquire) {
+        return Err("runtime install cancelled".into());
+    }
     let mut command = crate::procutil::tokio_command(cmake);
     configure_build_process_group(&mut command);
     command
         .env_clear()
-        .envs(build_environment_for_backend(cmake, backend))
+        .envs(environment)
         .current_dir(current_dir);
-    let child = command
+    command
+        .kill_on_drop(true)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .stderr(std::process::Stdio::piped());
+    let child = TransientChild::spawn(&mut command)
         .map_err(|error| format!("failed to start CMake for {phase}: {error}"))?;
-    let pid = child.id();
-    if let Some(pid) = pid {
-        register_active_build(pid);
-    }
     let label = format!("CMake {phase}");
     let supervised = supervise_build_child(child, progress, phase, &label, cancel, deadline).await;
-    if let Some(pid) = pid {
-        unregister_active_build(pid);
-    }
     let output = supervised?;
     if output.status.success() {
         return Ok(());
@@ -7114,7 +7028,7 @@ mod tests {
         if locate_tool("hipcc").is_none() {
             return;
         }
-        let environment = build_environment_for_backend(Path::new("cmake"), "rocm");
+        let environment = build_environment_for_backend(Path::new("cmake"), "rocm", None);
         let hipcxx = environment
             .iter()
             .find(|(name, _)| name == OsStr::new("HIPCXX"))
@@ -7138,7 +7052,7 @@ mod tests {
             return;
         };
         let mut environment = build_environment();
-        merge_visual_studio_environment(&mut environment, &cl);
+        merge_visual_studio_environment(&mut environment, &cl, None);
         let include = environment_value(&environment, "INCLUDE")
             .expect("Visual Studio should provide INCLUDE for clang on Windows");
         assert!(
@@ -7540,12 +7454,11 @@ mod tests {
     async fn a_build_that_outruns_the_log_cap_still_runs_to_completion() {
         let mut command = noisy_command();
         configure_build_process_group(&mut command);
-        let child = command
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn the noisy child");
+            .stderr(std::process::Stdio::piped());
+        let child = TransientChild::spawn(&mut command).expect("spawn the noisy child");
         let cancel = Arc::new(AtomicBool::new(false));
         let progress: ProgressSink = &|_, _, _| {};
         let output = supervise_build_child(
@@ -8862,12 +8775,11 @@ mod tests {
             command
         };
         configure_build_process_group(&mut command);
-        let child = command
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn a long child");
+            .stderr(std::process::Stdio::piped());
+        let child = TransientChild::spawn(&mut command).expect("spawn a long child");
         // Already cancelled: the supervisor must not wait out the sleep.
         let cancel = Arc::new(AtomicBool::new(true));
         let progress: ProgressSink = &|_, _, _| {};
@@ -8912,12 +8824,11 @@ mod tests {
             command
         };
         configure_build_process_group(&mut command);
-        let child = command
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn a long child");
+            .stderr(std::process::Stdio::piped());
+        let child = TransientChild::spawn(&mut command).expect("spawn a long child");
         let cancel = Arc::new(AtomicBool::new(false));
         let progress: ProgressSink = &|_, _, _| {};
         let deadline = Duration::from_millis(200);
@@ -8950,7 +8861,7 @@ mod tests {
         root: PathBuf,
         marker: PathBuf,
         pid_file: PathBuf,
-        child: tokio::process::Child,
+        child: TransientChild,
     }
 
     #[cfg(unix)]
@@ -8971,12 +8882,11 @@ mod tests {
         .env("AIOLM_MARKER", &marker)
         .env("AIOLM_PID", &pid_file);
         configure_build_process_group(&mut command);
-        let child = command
+        command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn process-group test child");
+            .stderr(std::process::Stdio::piped());
+        let child = TransientChild::spawn(&mut command).expect("spawn process-group test child");
 
         for _ in 0..100 {
             if marker.is_file() && pid_file.is_file() {
@@ -9454,5 +9364,39 @@ mod tests {
         .await
         .unwrap();
         println!("Verified ROCm bundle SHA-256: {}", exported.archive_sha256);
+    }
+}
+#[cfg(all(test, windows))]
+#[tokio::test]
+async fn dropping_a_build_future_terminates_the_child_and_unregisters_it() {
+    for _ in 0..3 {
+        let mut command = crate::procutil::tokio_command("cmd");
+        command
+            .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let child = TransientChild::spawn(&mut command).unwrap();
+        let pid = child.id().unwrap();
+        let exit = crate::procutil::ProcessExitProbe::open(pid).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress: ProgressSink = &|_, _, _| {};
+        let future = supervise_build_child(
+            child,
+            progress,
+            "building",
+            "fixture",
+            &cancel,
+            Duration::from_secs(60),
+        );
+        assert!(timeout(Duration::from_millis(100), future).await.is_err());
+        timeout(Duration::from_secs(5), async {
+            while !exit.exited() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("abandoned build must exit");
     }
 }

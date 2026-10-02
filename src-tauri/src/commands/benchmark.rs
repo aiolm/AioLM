@@ -1,5 +1,5 @@
 //! Benchmark execution, progress events and cancellation IPC.
-use crate::{benchmark, config, performance_bench, procutil, runtime, state::AppState};
+use crate::{benchmark, config, performance_bench, runtime, state::AppState};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{atomic::Ordering, Arc};
@@ -101,10 +101,13 @@ pub(crate) async fn benchmark_export_xlsx(
 #[tauri::command]
 pub(crate) fn bench_cancel(state: State<'_, AppState>) {
     state.bench_cancel.store(true, Ordering::Release);
-    if let Ok(pid) = state.bench_pid.lock() {
-        if let Some(pid) = *pid {
-            procutil::terminate_pid(pid);
-        }
+    if let Some(process) = state
+        .bench_process
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        process.terminate();
     }
 }
 
@@ -256,7 +259,7 @@ pub(crate) async fn run_performance_bench(
         request,
         gpu,
         cancel,
-        state.bench_pid.clone(),
+        state.bench_process.clone(),
         progress,
         performance_bench::RuntimeInfo {
             version,

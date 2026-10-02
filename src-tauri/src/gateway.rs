@@ -25,11 +25,13 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+#[cfg(test)]
+use tokio::task::JoinHandle;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
     sync::Notify,
-    task::{JoinHandle, JoinSet},
+    task::JoinSet,
 };
 
 const MAX_UPSTREAM_JSON_BYTES: usize = 8 * 1024 * 1024;
@@ -100,7 +102,7 @@ async fn bounded_upstream_json(response: reqwest::Response) -> Result<Value, Str
 pub struct GatewayHandle {
     pub port: u16,
     shutdown: Arc<Notify>,
-    task: JoinHandle<()>,
+    task: crate::procutil::OwnedTask<()>,
 }
 
 impl GatewayHandle {
@@ -156,7 +158,7 @@ pub async fn start(
     Ok(GatewayHandle {
         port,
         shutdown,
-        task,
+        task: task.into(),
     })
 }
 

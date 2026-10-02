@@ -33,7 +33,7 @@ pub(crate) fn measurement_active(state: &AppState) -> bool {
     if state.operation.try_lock().is_err() {
         return true;
     }
-    match state.bench_pid.try_lock() {
+    match state.bench_process.try_lock() {
         Ok(running) => {
             if running.is_some() {
                 return true;
@@ -68,9 +68,10 @@ mod tests {
         drop(operation);
         assert!(!measurement_active(&state));
         // A tracked bench process.
-        *state.bench_pid.lock().unwrap() = Some(1234);
+        *state.bench_process.lock().unwrap() =
+            Some(crate::procutil::ProcessHandle::empty_for_test());
         assert!(measurement_active(&state));
-        *state.bench_pid.lock().unwrap() = None;
+        *state.bench_process.lock().unwrap() = None;
         assert!(!measurement_active(&state));
         // Runtime mutation and shutdown also gate sharing.
         state.runtime_busy.store(true, Ordering::Release);

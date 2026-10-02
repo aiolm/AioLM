@@ -28,6 +28,7 @@ fn release_update_gate(state: &AppState, was_exiting: bool) {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     if !was_exiting && !*normal_exit {
+        crate::procutil::resume_transient_processes();
         state.exiting.store(false, Ordering::Release);
     }
 }

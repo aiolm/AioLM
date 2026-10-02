@@ -14,6 +14,31 @@ pub(super) struct PreparedLaunch {
     gpu: gpu::ResolvedGpu,
 }
 
+/// A dropped readiness future must not leave a model loading on a session.
+/// Generation checks keep an older future from stopping its replacement.
+struct LaunchGuard {
+    target: Arc<Mutex<server::ServerState>>,
+    generation: u64,
+}
+
+impl Drop for LaunchGuard {
+    fn drop(&mut self) {
+        let mut model = self.target.lock().unwrap_or_else(|e| e.into_inner());
+        if model.is_current_launch(self.generation)
+            && model.lifecycle == server::Lifecycle::Starting
+        {
+            server::kill(&mut model.child, None);
+            model.cancel_launch();
+            model.url.clear();
+            model.api_key.clear();
+            model.redaction_secret.clear();
+            model.model.clear();
+            model.mmproj.clear();
+            model.draft_model.clear();
+        }
+    }
+}
+
 /// Complete validation and optional persistence before stopping any session.
 pub(super) async fn prepare_launch(
     state: &AppState,
@@ -145,6 +170,11 @@ pub(super) async fn start_on_target(
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
+        // Stop/unload can complete while this launch waits for the target lock.
+        ensure_launch_allowed(state, launch_cancel)?;
+        if server.retired {
+            return Err("session was unloaded".into());
+        }
         if server.lifecycle.blocks_resource_change() && server.active_requests > 0 {
             return Err("finish or stop the active response before replacing this model".into());
         }
@@ -162,13 +192,17 @@ pub(super) async fn start_on_target(
         server::kill(&mut server.child, Some(err.clone()));
         (generation, worker_cfg)
     };
+    let _launch_owner = LaunchGuard {
+        target: target.clone(),
+        generation: launch_generation,
+    };
     err.clear();
 
     {
         let server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        if !server.is_current_launch(launch_generation) {
+        if !server.is_current_launch(launch_generation) || launch_cancel.load(Ordering::Acquire) {
             return Err("server start cancelled".into());
         }
     }
@@ -197,7 +231,10 @@ pub(super) async fn start_on_target(
         let mut server = target
             .lock()
             .map_err(|_| "server state lock was poisoned".to_string())?;
-        if !server.is_current_launch(launch_generation) || state.exiting.load(Ordering::Acquire) {
+        if !server.is_current_launch(launch_generation)
+            || state.exiting.load(Ordering::Acquire)
+            || launch_cancel.load(Ordering::Acquire)
+        {
             let mut orphan = Some(child);
             server::kill(&mut orphan, Some(err.clone()));
             server::cleanup_api_key_file(api_key_file.as_deref());
@@ -241,7 +278,9 @@ pub(super) async fn start_on_target(
             let mut server = target
                 .lock()
                 .map_err(|_| "server state lock was poisoned".to_string())?;
-            if !server.is_current_launch(launch_generation) || state.exiting.load(Ordering::Acquire)
+            if !server.is_current_launch(launch_generation)
+                || state.exiting.load(Ordering::Acquire)
+                || launch_cancel.load(Ordering::Acquire)
             {
                 server::kill(&mut server.child, Some(err.clone()));
                 server::cleanup_api_key_file(api_key_file.as_deref());
@@ -590,6 +629,88 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_launch_retaining_a_forgotten_entry_cannot_revive_that_model() {
+        let state = AppState::default();
+        let original = state.sessions.get_or_create("retired", "Retired").unwrap();
+        state.sessions.forget("retired").unwrap();
+        let prepared = PreparedLaunch {
+            cfg: config::AppConfig {
+                active_model: "synthetic.gguf".into(),
+                ..Default::default()
+            },
+            gpu: gpu::ResolvedGpu::default(),
+        };
+        // This token was registered after unload's initial cancellation. The
+        // retained target itself must reject the late request before spawning.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let error = start_on_target(&state, &original.state, &original.err, prepared, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error, "session was unloaded");
+        assert!(original.state.lock().unwrap().child.is_none());
+        assert_eq!(
+            original.state.lock().unwrap().lifecycle,
+            server::Lifecycle::Stopped
+        );
+        let replacement = state
+            .sessions
+            .get_or_create("retired", "Replacement")
+            .unwrap();
+        assert!(!replacement.state.lock().unwrap().retired);
+        assert!(!Arc::ptr_eq(&original, &replacement));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn abandoning_readiness_reclaims_a_poisoned_session_without_stopping_a_replacement() {
+        let target = Arc::new(Mutex::new(server::ServerState::new()));
+        let child = crate::procutil::std_command("cmd")
+            .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+            .spawn()
+            .unwrap();
+        let exit = crate::procutil::ProcessExitProbe::open(child.id()).unwrap();
+        let generation = {
+            let mut model = target.lock().unwrap();
+            let generation = model.begin_launch();
+            model.attach_starting(
+                child,
+                "http://127.0.0.1:1/v1".into(),
+                "synthetic-key".into(),
+                "synthetic.gguf".into(),
+                String::new(),
+                String::new(),
+            );
+            generation
+        };
+        let poisoned = target.clone();
+        let _ = std::thread::spawn(move || {
+            let _lock = poisoned.lock().unwrap();
+            panic!("synthetic poisoned state");
+        })
+        .join();
+        drop(LaunchGuard {
+            target: target.clone(),
+            generation,
+        });
+        assert!(exit.exited());
+        {
+            let mut model = target.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(model.lifecycle, server::Lifecycle::Stopped);
+            assert!(model.child.is_none());
+            assert!(model.api_key.is_empty());
+            model.begin_launch();
+        }
+        drop(LaunchGuard {
+            target: target.clone(),
+            generation,
+        });
+        assert_eq!(
+            target.lock().unwrap_or_else(|e| e.into_inner()).lifecycle,
+            server::Lifecycle::Starting
+        );
+    }
 
     #[test]
     fn model_worker_uses_a_private_port_without_changing_saved_api_settings() {

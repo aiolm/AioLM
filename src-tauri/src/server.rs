@@ -7,9 +7,147 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::process::Command;
-use std::process::{Child, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// A model process owns its temporary credential and stderr reader. Teardown
+/// also runs when a launch fails before attaching to a session.
+pub struct Child {
+    process: Option<crate::procutil::OwnedChild>,
+    key_file: Option<ApiKeyFile>,
+    stderr_reader: Option<StderrReader>,
+}
+
+impl From<std::process::Child> for Child {
+    fn from(child: std::process::Child) -> Self {
+        Self {
+            process: Some(child.into()),
+            key_file: None,
+            stderr_reader: None,
+        }
+    }
+}
+
+impl std::ops::Deref for Child {
+    type Target = crate::procutil::OwnedChild;
+    fn deref(&self) -> &Self::Target {
+        self.process.as_ref().expect("owned server process")
+    }
+}
+impl std::ops::DerefMut for Child {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.process.as_mut().expect("owned server process")
+    }
+}
+impl Child {
+    pub fn release(mut self) -> std::process::Child {
+        // Persistent CLI children do not use a temporary credential or this
+        // reader; their stdout/stderr are managed by the headless log pump.
+        self.process.take().expect("owned server process").release()
+    }
+}
+impl Drop for Child {
+    fn drop(&mut self) {
+        if let Some(process) = self.process.as_mut() {
+            process.terminate();
+        }
+        self.stderr_reader.take();
+        self.key_file.take();
+    }
+}
+
+struct ApiKeyFile(PathBuf);
+impl Drop for ApiKeyFile {
+    fn drop(&mut self) {
+        cleanup_api_key_file(Some(&self.0));
+    }
+}
+
+struct StderrReader {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl Drop for StderrReader {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl StderrReader {
+    fn attach(mut stderr: std::process::ChildStderr, ring: Arc<ErrBuf>) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = stderr.as_raw_fd();
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags == -1
+                || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopping = stop.clone();
+        let thread = std::thread::Builder::new()
+            .name("model-stderr".into())
+            .spawn(move || {
+                let mut buffer = [0_u8; 8192];
+                loop {
+                    #[cfg(windows)]
+                    let limit = {
+                        use std::os::windows::io::AsRawHandle;
+                        let mut available = 0;
+                        if unsafe {
+                            windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                                stderr.as_raw_handle(),
+                                std::ptr::null_mut(),
+                                0,
+                                std::ptr::null_mut(),
+                                &mut available,
+                                std::ptr::null_mut(),
+                            )
+                        } == 0
+                        {
+                            break;
+                        }
+                        (available as usize).min(buffer.len())
+                    };
+                    #[cfg(not(windows))]
+                    let limit = buffer.len();
+                    let read = if limit == 0 {
+                        Err(std::io::ErrorKind::WouldBlock.into())
+                    } else {
+                        stderr.read(&mut buffer[..limit])
+                    };
+                    let pending = read_is_pending(&read);
+                    match read {
+                        Ok(0) => break,
+                        Ok(size) => ring.push(&buffer[..size]),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => break,
+                    }
+                    if stopping.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    if limit == 0 || pending {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            })?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
+    }
+}
+
+fn read_is_pending(result: &std::io::Result<usize>) -> bool {
+    matches!(result, Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+}
 
 /// Loading large models and warming up the backend can take several minutes.
 /// Desktop sessions, the CLI and benchmarks share one readiness deadline.
@@ -58,6 +196,8 @@ pub struct ServerState {
     pub last_error: Option<String>,
     pub last_activity_at: Instant,
     pub active_requests: u32,
+    /// A forgotten named session cannot accept a launch through an older Arc.
+    pub retired: bool,
     launch_generation: u64,
 }
 
@@ -136,6 +276,7 @@ impl ServerState {
             last_error: None,
             last_activity_at: Instant::now(),
             active_requests: 0,
+            retired: false,
             launch_generation: 0,
         }
     }
@@ -168,14 +309,14 @@ impl ServerState {
 
     pub fn attach_starting(
         &mut self,
-        child: Child,
+        child: impl Into<Child>,
         url: String,
         api_key: String,
         model: String,
         mmproj: String,
         draft_model: String,
     ) {
-        self.child = Some(child);
+        self.child = Some(child.into());
         self.url = url;
         self.redaction_secret = api_key.clone();
         self.api_key = api_key;
@@ -595,19 +736,20 @@ fn create_api_key_file(api_key: &str) -> Result<Option<PathBuf>, String> {
         return Ok(None);
     }
     let path = std::env::temp_dir().join(format!("aiolm-api-key-{}.txt", uuid::Uuid::new_v4()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(&path)
         .map_err(|error| format!("failed to create temporary API key file: {error}"))?;
     if let Err(error) = writeln!(file, "{api_key}").and_then(|_| file.flush()) {
+        drop(file);
         let _ = std::fs::remove_file(&path);
         return Err(format!("failed to write temporary API key file: {error}"));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(Some(path))
 }
@@ -633,6 +775,7 @@ pub fn spawn(
     let environment =
         runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?;
     let api_key_file = create_api_key_file(api_key)?;
+    let key_guard = api_key_file.clone().map(ApiKeyFile);
     let mut args = build_args_with_gpu(cfg, api_key, resolved_gpu);
     if let Some(path) = api_key_file.as_ref() {
         args.push("--api-key-file".into());
@@ -644,14 +787,16 @@ pub fn spawn(
     // consistent with probes and benchmarks, and never hand it inherited
     // credentials or unrelated application state.
     command.env_clear().envs(environment).args(&args);
-    let mut child = command
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            cleanup_api_key_file(api_key_file.as_deref());
-            crate::procutil::spawn_error(Path::new(&bin), &e)
-        })?;
+    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    let process = crate::procutil::OwnedChild::spawn(&mut command).map_err(|e| {
+        cleanup_api_key_file(api_key_file.as_deref());
+        crate::procutil::spawn_error(Path::new(&bin), &e)
+    })?;
+    let mut child = Child {
+        process: Some(process),
+        key_file: key_guard,
+        stderr_reader: None,
+    };
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
@@ -660,17 +805,10 @@ pub fn spawn(
             return Err("llama-server stderr pipe was not available".to_string());
         }
     };
-    let error_ring = ring.clone();
-    std::thread::spawn(move || {
-        let mut reader = std::io::BufReader::new(stderr);
-        let mut buffer = [0_u8; 8192];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(size) => error_ring.push(&buffer[..size]),
-            }
-        }
-    });
+    child.stderr_reader = Some(
+        StderrReader::attach(stderr, ring.clone())
+            .map_err(|error| format!("failed to start server stderr reader: {error}"))?,
+    );
     Ok((
         child,
         format!("http://127.0.0.1:{}/v1", cfg.port),
@@ -759,19 +897,18 @@ fn process_has_socket_inode(pid: u32, inodes: &std::collections::HashSet<u64>) -
 fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     let pid = pid.to_string();
     let port_filter = format!("-iTCP:{port}");
-    let Ok(output) = crate::procutil::std_command("lsof")
-        .args([
-            "-nP",
-            "-a",
-            "-p",
-            &pid,
-            &port_filter,
-            "-sTCP:LISTEN",
-            "-F",
-            "pn",
-        ])
-        .output()
-    else {
+    let mut command = crate::procutil::std_command("lsof");
+    command.args([
+        "-nP",
+        "-a",
+        "-p",
+        &pid,
+        &port_filter,
+        "-sTCP:LISTEN",
+        "-F",
+        "pn",
+    ]);
+    let Ok(output) = crate::procutil::capture_stdout(&mut command, Duration::from_secs(10)) else {
         return false;
     };
     if !output.status.success() {
@@ -793,10 +930,13 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
 fn listener_owned_by_child(pid: u32, port: u16) -> bool {
     #[cfg(windows)]
     {
-        let Ok(output) = crate::procutil::std_command("netstat")
-            .args(["-ano", "-p", "tcp"])
-            .output()
-        else {
+        let mut command = crate::procutil::std_command("netstat");
+        command.args(["-ano", "-p", "tcp"]);
+        let Ok(output) = crate::procutil::capture_stdout_with_cap(
+            &mut command,
+            Duration::from_secs(10),
+            4 * 1024 * 1024,
+        ) else {
             return false;
         };
         let text = String::from_utf8_lossy(&output.stdout);
@@ -928,7 +1068,7 @@ pub async fn wait_ready(
                             .map_err(|_| "server state lock was poisoned".to_string())?
                             .child
                             .as_ref()
-                            .map(Child::id)
+                            .map(|child| child.id())
                             .ok_or_else(|| "server process tracking was lost".to_string())?;
                         let owns_listener =
                             tokio::task::spawn_blocking(move || listener_owned_by_child(pid, port))
@@ -965,23 +1105,11 @@ pub async fn wait_ready(
 }
 
 fn terminate(child: &mut Child) {
-    #[cfg(windows)]
-    {
-        let pid = child.id().to_string();
-        let killed_tree = crate::procutil::std_command("taskkill")
-            .args(["/PID", &pid, "/T", "/F"])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !killed_tree {
-            let _ = child.kill();
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
+    child
+        .process
+        .as_mut()
+        .expect("owned server process")
+        .terminate();
 }
 
 /// Kill and reap the child process. The caller controls whether the error ring is cleared.
@@ -1657,5 +1785,61 @@ mod tests {
         assert!(error.contains("server exited before ready (7)"));
         assert!(error.contains("failed to allocate model buffer"));
         assert!(child_reaped);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn dropping_a_server_owner_reclaims_process_key_file_and_reader() {
+        for _ in 0..3 {
+            let mut command = crate::procutil::std_command("cmd");
+            command
+                .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped());
+            let mut process = crate::procutil::OwnedChild::spawn(&mut command).unwrap();
+            let exit = crate::procutil::ProcessExitProbe::open(process.id()).unwrap();
+            let path = create_api_key_file("synthetic-start-token")
+                .unwrap()
+                .unwrap();
+            let reader =
+                StderrReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
+                    .unwrap();
+            let owner = Child {
+                process: Some(process),
+                key_file: Some(ApiKeyFile(path.clone())),
+                stderr_reader: Some(reader),
+            };
+            let started = Instant::now();
+            drop(owner);
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "reader teardown must not await pipe EOF"
+            );
+            assert!(exit.exited());
+            assert!(!path.exists());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dropping_a_stderr_reader_does_not_require_terminating_its_writer() {
+        let mut process = crate::procutil::std_command("cmd")
+            .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let reader =
+            StderrReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
+                .unwrap();
+        let started = Instant::now();
+        drop(reader);
+        let elapsed = started.elapsed();
+        let still_running = process.try_wait().unwrap().is_none();
+        crate::procutil::terminate_pid(process.id());
+        let _ = process.wait();
+        assert!(still_running);
+        assert!(elapsed < Duration::from_secs(2));
     }
 }

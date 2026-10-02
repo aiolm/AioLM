@@ -57,18 +57,17 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     state.bench_cancel.store(true, Ordering::Release);
     state.runtime_cancel.store(true, Ordering::Release);
     state.discover_cancel.store(true, Ordering::Release);
+    state.verify_cancel.store(true, Ordering::Release);
     state.sessions.cancel_all_pending_starts();
     // A window close can end the async build future before it observes
     // runtime_cancel. Kill the tracked CMake process trees while the app is
     // still alive so Ninja/compilers do not remain behind.
-    runtime::terminate_active_builds();
+    procutil::terminate_transient_processes();
     commands::gateway::abort_gateway_now(state);
-    if let Ok(pid) = state.bench_pid.lock() {
-        if let Some(pid) = *pid {
-            procutil::terminate_pid(pid);
-        }
-    }
-    if let Ok(mut server) = state.server.lock() {
+    // Bench/model children are already covered by the process-owner registry.
+    // Recover poisoned state locks so credentials/readers are still released.
+    {
+        let mut server = state.server.lock().unwrap_or_else(|e| e.into_inner());
         server.cancel_launch();
         server::kill(&mut server.child, Some(state.err.clone()));
         server.lifecycle = server::Lifecycle::Stopped;
@@ -79,7 +78,8 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     // untracked-by-the-OS process tree; nothing else in the app kills these
     // once the window is gone.
     for entry in state.sessions.entries() {
-        if let Ok(mut server) = entry.state.lock() {
+        {
+            let mut server = entry.state.lock().unwrap_or_else(|e| e.into_inner());
             server.cancel_launch();
             server::kill(&mut server.child, Some(entry.err.clone()));
             server.lifecycle = server::Lifecycle::Stopped;

@@ -1608,12 +1608,13 @@ mod tests {
             code::MEASUREMENT_ACTIVE
         );
         drop(_held);
-        *state.bench_pid.lock().unwrap() = Some(7);
+        *state.bench_process.lock().unwrap() =
+            Some(crate::procutil::ProcessHandle::empty_for_test());
         assert_eq!(
             guard::ensure_idle(&state).unwrap_err().code,
             code::MEASUREMENT_ACTIVE
         );
-        *state.bench_pid.lock().unwrap() = None;
+        *state.bench_process.lock().unwrap() = None;
         assert!(guard::ensure_idle(&state).is_ok());
     }
 }

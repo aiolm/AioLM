@@ -248,20 +248,19 @@ fn redacted_args(args: Vec<String>) -> Vec<String> {
 struct IsolatedServer {
     state: Arc<Mutex<server::ServerState>>,
     key_file: Option<PathBuf>,
-    active_pid: Arc<Mutex<Option<u32>>>,
+    active_process: Arc<Mutex<Option<crate::procutil::ProcessHandle>>>,
 }
 
 impl Drop for IsolatedServer {
     fn drop(&mut self) {
         // Drop runs on normal completion, cancellation, timeout and unwind.
-        // Clear the externally cancellable PID before reaping it to avoid a
-        // late cancel ever targeting a recycled process identifier.
-        if let Ok(mut pid) = self.active_pid.lock() {
-            *pid = None;
-        }
-        if let Ok(mut state) = self.state.lock() {
-            server::kill(&mut state.child, None);
-        }
+        // Remove the cancellation owner before releasing the server's job.
+        *self
+            .active_process
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        server::kill(&mut state.child, None);
         server::cleanup_api_key_file(self.key_file.as_deref());
     }
 }
@@ -524,7 +523,7 @@ pub async fn run(
     mut request: PerformanceBenchRequest,
     gpu: ResolvedGpu,
     cancel: Arc<AtomicBool>,
-    active_pid: Arc<Mutex<Option<u32>>>,
+    active_process: Arc<Mutex<Option<crate::procutil::ProcessHandle>>>,
     progress: Progress,
     runtime: RuntimeInfo,
 ) -> PerformanceBenchResult {
@@ -557,12 +556,13 @@ pub async fn run(
         drop(reservation);
         let (child, url, key_file) = server::spawn(&isolated, &key, &ring, &gpu)?;
         if key_file.is_some() { result.args.extend(["--api-key-file".into(), "[redacted]".into()]); }
+        let process_handle = child.process_handle();
         let pid = child.id();
         let mut dedicated_state = server::ServerState::default();
         dedicated_state.child = Some(child);
         let shared = Arc::new(Mutex::new(dedicated_state));
-        managed = Some(IsolatedServer { state: shared.clone(), key_file, active_pid: active_pid.clone() });
-        if let Ok(mut active) = active_pid.lock() { *active = Some(pid); }
+        managed = Some(IsolatedServer { state: shared.clone(), key_file, active_process: active_process.clone() });
+        *active_process.lock().unwrap_or_else(|e| e.into_inner()) = process_handle;
         tokio::select! {
             biased;
             _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
@@ -1093,13 +1093,13 @@ mod tests {
             context_profile: "novel_ko".into(),
             warmup: true,
         };
-        let active_pid = Arc::new(Mutex::new(None));
+        let active_process = Arc::new(Mutex::new(None));
         let result = run(
             resolved_cfg,
             request,
             gpu,
             Arc::new(AtomicBool::new(false)),
-            active_pid.clone(),
+            active_process.clone(),
             Arc::new(|event| {
                 eprintln!(
                     "{} {}/{} {:?}",
@@ -1111,7 +1111,7 @@ mod tests {
         .await;
         eprintln!("{}", serde_json::to_string_pretty(&result).unwrap());
         assert!(
-            active_pid.lock().unwrap().is_none(),
+            active_process.lock().unwrap().is_none(),
             "benchmark process must be cleaned up"
         );
         assert_eq!(result.status, "complete", "{:?}", result.message);

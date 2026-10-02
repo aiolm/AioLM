@@ -11,6 +11,28 @@ use tokio::io::AsyncReadExt;
 const EXTERNAL_KEY: &str = "sk-external-test-key";
 const WAIT: Duration = Duration::from_secs(10);
 
+#[tokio::test]
+async fn dropping_the_gateway_owner_releases_listener_and_open_connections() {
+    for _ in 0..3 {
+        let mut api = TestApi::start().await;
+        let mut connection = TcpStream::connect(("127.0.0.1", api.port)).await.unwrap();
+        connection
+            .write_all(b"GET /v1/models HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        drop(api.handle.take());
+        let mut byte = [0];
+        let closed = tokio::time::timeout(WAIT, connection.read(&mut byte))
+            .await
+            .unwrap();
+        assert!(matches!(closed, Ok(0) | Err(_)), "connection remained open");
+        let listener = TcpListener::bind(("127.0.0.1", api.port))
+            .await
+            .expect("listener port must be released");
+        drop(listener);
+    }
+}
+
 async fn eventually(mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + WAIT;
     while !condition() {

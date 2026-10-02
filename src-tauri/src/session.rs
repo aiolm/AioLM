@@ -69,7 +69,12 @@ impl PendingStartGuard {
 
 impl Drop for PendingStartGuard {
     fn drop(&mut self) {
-        if let Ok(mut pending) = self.manager.pending_starts.lock() {
+        {
+            let mut pending = self
+                .manager
+                .pending_starts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(tokens) = pending.get_mut(&self.id) {
                 tokens.retain(|current| !Arc::ptr_eq(current, &self.cancel));
                 if tokens.is_empty() {
@@ -89,8 +94,10 @@ impl SessionManager {
     pub fn entries(&self) -> Vec<Arc<SessionEntry>> {
         self.extra
             .lock()
-            .map(|guard| guard.values().cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn ids(&self) -> Vec<String> {
@@ -120,7 +127,11 @@ impl SessionManager {
     }
 
     pub fn cancel_pending_start(&self, id: &str) {
-        if let Ok(pending) = self.pending_starts.lock() {
+        {
+            let pending = self
+                .pending_starts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(tokens) = pending.get(id) {
                 for cancel in tokens {
                     cancel.store(true, Ordering::Release);
@@ -130,7 +141,11 @@ impl SessionManager {
     }
 
     pub fn cancel_all_pending_starts(&self) {
-        if let Ok(pending) = self.pending_starts.lock() {
+        {
+            let pending = self
+                .pending_starts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             for tokens in pending.values() {
                 for cancel in tokens {
                     cancel.store(true, Ordering::Release);
@@ -154,10 +169,21 @@ impl SessionManager {
         Ok(entry)
     }
 
-    /// Drop a session's tracking entry entirely. Callers must stop its
-    /// process first (see `server::kill`); this only forgets it existed.
+    /// Retire the entry under its state lock. A late launch that retained this
+    /// Arc must fail even if it registered after the initial unload cancellation.
     pub fn forget(&self, id: &str) -> Option<Arc<SessionEntry>> {
-        self.extra.lock().ok()?.remove(id)
+        let entry = self
+            .extra
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id)?;
+        let mut state = entry.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.retired = true;
+        state.cancel_launch();
+        server::kill(&mut state.child, Some(entry.err.clone()));
+        drop(state);
+        self.cancel_pending_start(id);
+        Some(entry)
     }
 
     /// Ports currently claimed by a live (non-`Stopped`) tracked session.
@@ -279,7 +305,7 @@ pub fn build_summary(
         model: (!state.model.is_empty()).then(|| state.model.clone()),
         mmproj: (!state.mmproj.is_empty()).then(|| state.mmproj.clone()),
         draft_model: (!state.draft_model.is_empty()).then(|| state.draft_model.clone()),
-        pid: state.child.as_ref().map(std::process::Child::id),
+        pid: state.child.as_ref().map(|child| child.id()),
         active_requests: state.active_requests,
         idle_seconds: state.idle_seconds(),
     }
