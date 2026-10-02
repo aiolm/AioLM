@@ -187,6 +187,19 @@ fn inherited_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         "SystemRoot",
         "SystemDrive",
         "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
+        "CommonProgramFiles(x86)",
+        "CommonProgramW6432",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432",
+        "OS",
         "TEMP",
         "TMP",
         "USERPROFILE",
@@ -850,7 +863,11 @@ mod tests {
         let fixture = LifecycleFixture::new();
         let candidate = lifecycle_fixture(&fixture.0, "[Console]::Out.WriteLine('invalid-json')");
         let result = spawn_session(&candidate).await;
-        assert!(matches!(result, Err(ref error) if error.contains("invalid JSON")));
+        assert!(
+            matches!(result, Err(ref error) if error.contains("invalid JSON")),
+            "initialization returned {:?}",
+            result.err()
+        );
         for name in ["parent.pid", "descendant.pid"] {
             let pid = std::fs::read_to_string(fixture.0.join(name))
                 .unwrap()
@@ -1106,7 +1123,9 @@ mod tests {
             Duration::from_secs(60),
         )
         .await;
-        let exit = exit.into_inner().expect("the call must reach approval");
+        let exit = exit
+            .into_inner()
+            .unwrap_or_else(|| panic!("the call must reach approval: {result:?}"));
         drop(registration);
         assert_eq!(result, Err(TOOL_CALL_CANCELLED.to_string()));
         assert!(!fixture.0.join("tools-call.txt").exists());
@@ -1171,7 +1190,9 @@ mod tests {
             Duration::from_millis(200),
         )
         .await;
-        let exit = exit.into_inner().expect("the call must reach approval");
+        let exit = exit
+            .into_inner()
+            .unwrap_or_else(|| panic!("the call must reach approval: {result:?}"));
         assert_eq!(result, Err("MCP tool approval timed out".to_string()));
         assert!(!fixture.0.join("tools-call.txt").exists());
         assert!(exit.exited());
