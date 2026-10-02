@@ -816,36 +816,40 @@ mod tests {
     use super::*;
 
     #[cfg(windows)]
-    fn powershell_fixture(root: &std::path::Path, script: &str) -> McpServer {
-        // Run a script file so Windows command-line quoting and the shell's
-        // command-input handling cannot interfere with the MCP stdio frames.
-        let path = root.join("server.ps1");
-        std::fs::write(&path, script).unwrap();
+    fn node_fixture(root: &std::path::Path, script: &str) -> McpServer {
+        // Use the project's Node runtime to keep fixture startup independent
+        // of PowerShell host initialization and command-input handling.
+        let path = root.join("server.mjs");
+        let prelude = r#"import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const root = process.argv[2];
+const record = (name, value) => writeFileSync(join(root, name), String(value));
+"#;
+        std::fs::write(&path, format!("{prelude}{script}")).unwrap();
         McpServer {
             args: vec![
-                "-NoProfile".into(),
-                "-NonInteractive".into(),
-                "-ExecutionPolicy".into(),
-                "Bypass".into(),
-                "-File".into(),
                 path.to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
             ],
-            ..server("powershell")
+            ..server("node")
         }
     }
 
     #[cfg(windows)]
     fn lifecycle_fixture(root: &std::path::Path, response: &str) -> McpServer {
-        let parent_file = root
-            .join("parent.pid")
-            .to_string_lossy()
-            .replace('\'', "''");
-        let descendant_file = root
-            .join("descendant.pid")
-            .to_string_lossy()
-            .replace('\'', "''");
-        let script = format!("[IO.File]::WriteAllText('{parent_file}', [string]$PID); $child = Start-Process ping.exe -ArgumentList @('-n','60','127.0.0.1') -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText('{descendant_file}', [string]$child.Id); {response}; Start-Sleep -Seconds 60");
-        powershell_fixture(root, &script)
+        let script = format!(
+            r#"import {{ spawn }} from 'node:child_process';
+record('parent.pid', process.pid);
+const child = spawn('ping.exe', ['-n', '60', '127.0.0.1'], {{ windowsHide: true, stdio: 'ignore' }});
+child.on('error', error => {{ throw error; }});
+child.on('spawn', () => {{
+    record('descendant.pid', child.pid);
+    {response};
+    setTimeout(() => {{}}, 60000);
+}});
+"#
+        );
+        node_fixture(root, &script)
     }
 
     #[cfg(windows)]
@@ -872,7 +876,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_initialization_terminates_the_server_and_its_descendant() {
         let fixture = LifecycleFixture::new();
-        let candidate = lifecycle_fixture(&fixture.0, "[Console]::Out.WriteLine('invalid-json')");
+        let candidate = lifecycle_fixture(&fixture.0, "process.stdout.write('invalid-json\\n')");
         let result = spawn_session(&candidate).await;
         assert!(
             matches!(result, Err(ref error) if error.contains("invalid JSON")),
@@ -894,8 +898,7 @@ mod tests {
     #[tokio::test]
     async fn interrupting_initialization_terminates_the_server_and_its_descendant() {
         let fixture = LifecycleFixture::new();
-        let candidate =
-            lifecycle_fixture(&fixture.0, "[Console]::Error.WriteLine('fixture-ready')");
+        let candidate = lifecycle_fixture(&fixture.0, "process.stderr.write('fixture-ready\\n')");
         let task = OwnedTask::from(tokio::spawn(async move { spawn_session(&candidate).await }));
         let mut exits = Vec::new();
         timeout(Duration::from_secs(10), async {
@@ -928,11 +931,19 @@ mod tests {
     /// answers, a `tools/call`, so a test can hold the RPC in flight.
     #[cfg(windows)]
     fn tool_call_fixture(root: &std::path::Path) -> McpServer {
-        let quoted = |name: &str| root.join(name).to_string_lossy().replace('\'', "''");
-        let script = r#"[IO.File]::WriteAllText('__PID__', [string]$PID); while (($line = [Console]::In.ReadLine()) -ne $null) { $message = $line | ConvertFrom-Json; if ($message.method -eq 'initialize') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":1,"result":{}}') } elseif ($message.method -eq 'tools/list') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"probe","inputSchema":{"type":"object"}}]}}') } elseif ($message.method -eq 'tools/call') { [IO.File]::WriteAllText('__CALLED__', 'called') }; [Console]::Out.Flush() }"#
-            .replace("__PID__", &quoted("server.pid"))
-            .replace("__CALLED__", &quoted("tools-call.txt"));
-        powershell_fixture(root, &script)
+        let script = r#"import { createInterface } from 'node:readline';
+record('server.pid', process.pid);
+const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('line', line => {
+    const message = JSON.parse(line);
+    let result;
+    if (message.method === 'initialize') result = {};
+    else if (message.method === 'tools/list') result = { tools: [{ name: 'probe', inputSchema: { type: 'object' } }] };
+    else if (message.method === 'tools/call') record('tools-call.txt', 'called');
+    if (result !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\n');
+});
+"#;
+        node_fixture(root, script)
     }
 
     #[cfg(windows)]
