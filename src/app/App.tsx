@@ -129,6 +129,8 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [developerSection, setDeveloperSection] = useState<"api" | "diagnostics">("api");
   const [menuOpen, setMenuOpen] = useState(false);
+  // Desktop-only rail state; the mobile drawer always shows full labels.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [settingsUpdateRequest, setSettingsUpdateRequest] = useState(0);
   const menuRef = useRef<HTMLDialogElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -255,22 +257,29 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
 
 
   const brand = <div className="aiolm-brand"><AioMark /><strong>AioLM</strong></div>;
-  const navigation = <nav aria-label={t("app.primary")} className="aiolm-navigation">
+  // In the collapsed rail the labels stay in the accessibility tree (visually
+  // hidden by CSS) and surface as tooltips, so every destination keeps its name.
+  const navigation = (rail: boolean) => <nav aria-label={t("app.primary")} className="aiolm-navigation">
     {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group">
       <h2>{copy[group.id]}</h2>
-      {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="app-nav-item aiolm-nav-link" onClick={() => navigate(item.id)}>
+      {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="app-nav-item aiolm-nav-link" title={rail ? labelFor(item.id) : undefined} onClick={() => navigate(item.id)}>
         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{labelFor(item.id)}</span>
       </button>)}
     </section>)}
   </nav>;
+  const sidebarToggleLabel = sidebarCollapsed ? copy.expandSidebar : copy.collapseSidebar;
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
     <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
-  return <TaskCancellationProvider><PanelFeedbackProvider><div className="app-shell" onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
+  return <TaskCancellationProvider><PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
-    <aside className="aiolm-sidebar">{brand}{navigation}<div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div></aside>
+    <aside id="aiolm-sidebar" className="aiolm-sidebar">
+      <div className="aiolm-sidebar-heading">{brand}<button type="button" className="app-icon-button aiolm-sidebar-toggle" aria-label={sidebarToggleLabel} title={sidebarToggleLabel} aria-expanded={!sidebarCollapsed} aria-controls="aiolm-sidebar" onClick={() => setSidebarCollapsed(current => !current)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={sidebarCollapsed ? "M4 4h16v16H4V4Z M9 4v16M13 9l3 3-3 3" : "M4 4h16v16H4V4Z M9 4v16M16 9l-3 3 3 3"} /></svg></button></div>
+      {navigation(sidebarCollapsed)}
+      <div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div>
+    </aside>
     <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setMenuOpen(false); }}>
-      <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>{navigation}</div>
+      <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>{navigation(false)}</div>
     </dialog>
     <div className="app-main-column">
       <header className="aiolm-header">

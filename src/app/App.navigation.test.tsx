@@ -271,6 +271,37 @@ describe("Workspace navigation", () => {
     expect(mainTab("Manage runtimes")).toHaveAttribute("aria-current", "page");
   });
 
+  it("collapses the desktop sidebar to a named icon rail that survives page changes", async () => {
+    const { container } = mount();
+    const collapse = screen.getByRole("button", { name: "Collapse sidebar" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    const sidebar = document.getElementById(collapse.getAttribute("aria-controls")!)!;
+    expect(sidebar).toContainElement(collapse);
+    expect(container.querySelectorAll(`[id="${sidebar.id}"]`)).toHaveLength(1);
+    collapse.focus();
+    fireEvent.click(collapse);
+    expect(collapse).toHaveAccessibleName("Expand sidebar");
+    expect(collapse).toHaveAttribute("aria-expanded", "false");
+    expect(collapse).toHaveFocus();
+    expect(container.querySelector(".app-shell")).toHaveClass("app-shell--rail");
+    const rail = within(sidebar).getByRole("navigation", { name: "Primary navigation" });
+    expect(within(rail).getAllByRole("button")).toHaveLength(11);
+    expect(within(rail).getByRole("heading", { name: "Workspace" })).toBeInTheDocument();
+    expect(within(rail).getByRole("button", { name: "Chat" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(within(rail).getByRole("button", { name: "Projects" }));
+    expect(await screen.findByLabelText("Project draft")).toBeVisible();
+    expect(within(rail).getByRole("button", { name: "Projects" })).toHaveAttribute("aria-current", "page");
+    expect(within(rail).getByRole("button", { name: "Projects" })).toHaveAttribute("title", "Projects");
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute("aria-expanded", "false");
+    const drawerLinks = container.querySelectorAll(".aiolm-drawer .aiolm-nav-link");
+    expect(drawerLinks).toHaveLength(11);
+    drawerLinks.forEach(link => expect(link).not.toHaveAttribute("title"));
+    fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    expect(container.querySelector(".app-shell")).not.toHaveClass("app-shell--rail");
+    expect(within(rail).getByRole("button", { name: "Projects" })).not.toHaveAttribute("title");
+  });
+
   it("provides a single global unload action even during model load", async () => {
     store.status = { state: "starting" }; store.busy = true;
     mount();

@@ -27,9 +27,9 @@ export const navigationGroups: { id: GroupId; items: NavigationItem[] }[] = [
   { id: 'settings', label: 'tab.settings', icon: 'M4 5h16M4 12h16M4 19h16M8 2v6M16 9v6M10 16v6' },
  ] },
 ];
-export const navigationText: Record<Locale, Record<GroupId | 'openMenu' | 'closeMenu' | 'local', string>> = {
- en: { workspace: 'Workspace', models: 'Models', execution: 'Run & optimize', integrations: 'Integrations', tools: 'Tools', openMenu: 'Open navigation', closeMenu: 'Close navigation', local: 'Your local AI workspace' },
- ko: { workspace: '작업 공간', models: '모델 관리', execution: '실행·성능', integrations: '외부 연동', tools: '공통 도구', openMenu: '메뉴 열기', closeMenu: '메뉴 닫기', local: '나의 로컬 AI 작업 공간' },
- ja: { workspace: 'ワークスペース', models: 'モデル管理', execution: '実行・最適化', integrations: '外部連携', tools: 'ツール', openMenu: 'メニューを開く', closeMenu: 'メニューを閉じる', local: 'ローカル AI ワークスペース' },
- zh: { workspace: '工作空间', models: '模型管理', execution: '运行与优化', integrations: '外部集成', tools: '工具', openMenu: '打开菜单', closeMenu: '关闭菜单', local: '本地 AI 工作空间' },
+export const navigationText: Record<Locale, Record<GroupId | 'openMenu' | 'closeMenu' | 'collapseSidebar' | 'expandSidebar' | 'local', string>> = {
+ en: { workspace: 'Workspace', models: 'Models', execution: 'Run & optimize', integrations: 'Integrations', tools: 'Tools', openMenu: 'Open navigation', closeMenu: 'Close navigation', collapseSidebar: 'Collapse sidebar', expandSidebar: 'Expand sidebar', local: 'Your local AI workspace' },
+ ko: { workspace: '작업 공간', models: '모델 관리', execution: '실행·성능', integrations: '외부 연동', tools: '공통 도구', openMenu: '메뉴 열기', closeMenu: '메뉴 닫기', collapseSidebar: '사이드바 접기', expandSidebar: '사이드바 펼치기', local: '나의 로컬 AI 작업 공간' },
+ ja: { workspace: 'ワークスペース', models: 'モデル管理', execution: '実行・最適化', integrations: '外部連携', tools: 'ツール', openMenu: 'メニューを開く', closeMenu: 'メニューを閉じる', collapseSidebar: 'サイドバーを折りたたむ', expandSidebar: 'サイドバーを展開', local: 'ローカル AI ワークスペース' },
+ zh: { workspace: '工作空间', models: '模型管理', execution: '运行与优化', integrations: '外部集成', tools: '工具', openMenu: '打开菜单', closeMenu: '关闭菜单', collapseSidebar: '收起侧边栏', expandSidebar: '展开侧边栏', local: '本地 AI 工作空间' },
 };
