@@ -39,10 +39,10 @@ export default function ApiPortControl({ savedPort, running, runningPort, disabl
         <input id="developer-api-port" className="app-input w-28" type="number" inputMode="numeric" min={1} max={65535} step={1} value={value}
           aria-describedby="developer-api-port-hint developer-api-port-feedback" aria-invalid={draft !== null && !valid}
           disabled={disabled || saving} onChange={(event) => setDraft(event.target.value)} />
-        <button type="submit" className="app-button app-button--secondary app-button--sm" disabled={disabled || saving || !changed || !valid} aria-busy={saving}>
+        <button data-icon="save" type="submit" className="app-button app-button--secondary app-button--sm" disabled={disabled || saving || !changed || !valid} aria-busy={saving}>
           <StableLabel value={running ? t("ui.savePortRestart") : t("ui.savePort")} labels={[t("ui.savePortRestart"), t("ui.savePort")]} />
         </button>
-        {draft !== null && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={saving} onClick={() => setDraft(null)}>{t("common.cancel")}</button>}
+        {draft !== null && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={saving} data-icon="close" onClick={() => setDraft(null)}>{t("common.cancel")}</button>}
       </div>
       <p id="developer-api-port-hint" className="mt-2 text-xs ui-color-faint">{t("ui.apiPortHint")}</p>
       <div id="developer-api-port-feedback" className="text-xs ui-color-muted">

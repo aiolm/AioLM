@@ -365,13 +365,13 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     <div className="app-page-scroll relative flex h-full min-h-0 flex-col">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="mt-1 text-[18px] font-semibold tracking-tight ui-color-ink" >{t("ui.projectsTitle")}</h2>
-          <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-muted" >{t("ui.projectsDescription")}</p>
+          <h2 className="app-page-title" >{t("ui.projectsTitle")}</h2>
+          <p className="app-page-description" >{t("ui.projectsDescription")}</p>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-faint" >{t("ui.projectWorkflow")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => loadProject(null)} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
-          <label className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
+          <label data-icon="upload" className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
             {t("panel.importJson")}
             <input
               type="file"
@@ -420,7 +420,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 {displayedProfileName ?? t("ui.projectNoProfile")}
                 {typeof displayedProfileRevision === "number" ? <span className="ml-1 ui-color-faint">r{displayedProfileRevision}</span> : null}
               </span>
-              <button type="button" onClick={openProjectEditor} disabled={modelSettings ? !cfg : !onOpenTuning} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
+              <button type="button" data-icon="edit" onClick={openProjectEditor} disabled={modelSettings ? !cfg : !onOpenTuning} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
             </div>
             <dl className="mt-2 space-y-1 text-xs">
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{modelDisplayName(displayConfig?.active_model ?? '') || t("load.noModel")}<ModelBadges model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
@@ -441,16 +441,16 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 </div>
                 <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectMcpHint")}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button type="button" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm">{mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")}</button>
+                  <button type="button" data-icon="refresh" onClick={() => void loadMcpCatalog(false)} disabled={mcpLoading} className="app-button app-button--secondary app-button--sm">{mcpLoading ? t("ui.projectMcpLoading") : t("ui.projectRefreshTools")}</button>
                 </div>
                 <div role="group" aria-labelledby="project-mcp-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
                   {mcpCatalog.length === 0 && !mcpLoading && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoMcpTools")}</p>}
                   {mcpCatalog.map((entry) => {
                     const checked = selectedTools.includes(entry.key);
                     const label = `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.toolName)}`;
-                    return <label key={entry.key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked={checked} onChange={() => toggleTool(entry.key)} className="ui-accent-color-accent-solid" /><span className="max-w-52 app-text-wrap" title={entry.key}>{label}</span></label>;
+                    return <label key={entry.key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked={checked} onChange={() => toggleTool(entry.key)} /><span className="max-w-52 app-text-wrap" title={entry.key}>{label}</span></label>;
                   })}
-                  {staleTools.map((key) => <label key={key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked onChange={() => toggleTool(key)} className="ui-accent-color-accent-solid" /><span className="max-w-52 app-text-wrap" title={key}>{key} · {t("ui.projectUnavailable")}</span></label>)}
+                  {staleTools.map((key) => <label key={key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked onChange={() => toggleTool(key)} /><span className="max-w-52 app-text-wrap" title={key}>{key} · {t("ui.projectUnavailable")}</span></label>)}
                 </div>
               </div>
               <div className="flex min-w-0 flex-col">
@@ -460,7 +460,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 </div>
                 <p className="mt-1 min-h-8 text-xs ui-color-muted">{t("ui.projectDocumentsHint")}</p>
                 <div className="mt-2">
-                  <button type="button" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
+                  <button type="button" data-icon="add" onClick={() => void addDocument()} disabled={docCount >= MAX_PROJECT_DOCUMENTS} className="app-button app-button--secondary app-button--sm">{t("ui.projectAddDocument")}</button>
                 </div>
                 <div role="group" aria-labelledby="project-documents-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
                   {documents.length === 0 && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoDocuments")}</p>}
@@ -474,7 +474,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectSaveApplyHint")}</p>
           <div className="mt-2 flex flex-wrap gap-2.5">
             <button type="button" onClick={save} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
-            {selected && <><button type="button" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
+            {selected && <><button type="button" data-icon="play" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" data-icon="download" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" data-icon="delete" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
           </div>
             <p className="mt-2 text-xs ui-color-faint">{t("ui.projectsFooter")}</p>
           </div>

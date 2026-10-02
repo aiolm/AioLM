@@ -1,54 +1,81 @@
-/* A single labeled navigation and a compact execution header. */
-.app-shell { display: grid; grid-template-columns: 184px minmax(0,1fr); height: 100%; overflow: hidden; background: var(--ui-bg); }
-.aiolm-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--ui-border); background: var(--ui-sidebar); }
-.aiolm-brand { display: flex; align-items: center; flex-shrink: 0; gap: 8px; padding: 16px; }
-.aiolm-mark { display: block; width: 36px; height: 36px; object-fit: contain; flex-shrink: 0; }
-.aiolm-brand strong { display: block; font-size: 20px; font-weight: 750; letter-spacing: -.04em; line-height: 1.2; }
-.aiolm-brand span { display: block; margin-top: 4px; font-size: 11px; color: var(--ui-muted); }
-.aiolm-navigation { min-height: 0; overflow-y: auto; padding: 0 8px 16px; }
-.aiolm-nav-group { margin: 0 0 8px; }
-.aiolm-nav-group h2 { padding: 0 8px; margin-bottom: 4px; font-size: 11px; line-height: 20px; font-weight: 600; color: var(--ui-faint); }
-.aiolm-nav-link { display: flex; width: 100%; }
-.aiolm-nav-link span { min-width: 0; overflow-wrap: anywhere; }
-.aiolm-nav-link svg { flex-shrink: 0; }
-.aiolm-sidebar-footer { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: auto; padding: 12px 16px; color: var(--ui-faint); font-size: 10px; }
-.aiolm-sidebar-footer span { margin-left: auto; }
+/* Familiar desktop chrome: a narrow sidebar with visible group headings and a
+   48px toolbar that names the current page; pages add their own body title. */
+.app-shell { display: grid; grid-template-columns: 208px minmax(0,1fr); height: 100%; overflow: hidden; background: var(--ui-bg); }
+/* The rail takes the palette's solid rail tone with
+   its own rail ink, so navigation never inherits body text colors. No boundary
+   line; the rail meets the body by tone alone. */
+.aiolm-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 0; background: var(--ui-sidebar); color: var(--ui-rail-ink); }
+.aiolm-brand { display: flex; align-items: center; flex-shrink: 0; gap: 8px; height: 48px; padding: 0 16px; }
+.aiolm-mark { display: block; width: 20px; height: 20px; object-fit: contain; flex-shrink: 0; }
+.aiolm-brand strong { display: block; font-size: 14px; font-weight: 650; letter-spacing: -.01em; line-height: 20px; color: var(--ui-rail-ink); }
+/* The current page takes the palette's selected fill with heavier weight and a
+   short solid indicator (app-gradients.css). Scoped to the rail so in-content
+   nav keeps the tinted-fill language. */
+.aiolm-sidebar .aiolm-nav-link, .aiolm-drawer .aiolm-nav-link { display: flex; align-items: center; width: 100%; min-height: var(--ui-nav-row); padding: 6px 10px; gap: 10px; font-size: var(--ui-text); font-weight: 500; color: var(--ui-rail-muted); box-shadow: none; }
+.aiolm-sidebar .aiolm-nav-link:hover:not(:disabled), .aiolm-drawer .aiolm-nav-link:hover:not(:disabled) { background: var(--ui-nav-hover); color: var(--ui-rail-ink); }
+.aiolm-sidebar .aiolm-nav-link[aria-current="page"], .aiolm-drawer .aiolm-nav-link[aria-current="page"] { background: var(--ui-nav-active); box-shadow: none; color: var(--ui-nav-active-ink); font-weight: 600; }
+.aiolm-sidebar .aiolm-nav-link[aria-current="page"] svg, .aiolm-drawer .aiolm-nav-link[aria-current="page"] svg { color: var(--ui-nav-active-ink); }
+/* Rail chrome takes the rail focus ring (at least 3.2:1 on the rail and the
+   selected fill); the 2px offset keeps it clear of the pill.
+   Fields and portaled menus keep ordinary input/menu ink. */
+.aiolm-sidebar .aiolm-nav-link:focus-visible, .aiolm-drawer .aiolm-nav-link:focus-visible, .aiolm-drawer-heading .app-icon-button:focus-visible { outline-color: var(--ui-rail-focus); }
+.aiolm-sidebar .app-input, .aiolm-sidebar .app-textarea, .aiolm-drawer .app-input, .aiolm-drawer .app-textarea { color: var(--ui-ink); }
+.aiolm-navigation { min-height: 0; overflow-y: auto; padding: 4px 8px 16px; }
+.aiolm-nav-group { display: grid; gap: 1px; margin: 0 0 12px; }
+.aiolm-nav-group h2 { padding: 0 10px; margin-bottom: 2px; color: var(--ui-rail-muted); font-size: var(--ui-text-support); font-weight: 500; line-height: 22px; letter-spacing: 0; }
+.aiolm-nav-link span { min-width: 0; overflow-wrap: break-word; }
+.aiolm-sidebar .aiolm-nav-link svg, .aiolm-drawer .aiolm-nav-link svg { width: 16px; height: 16px; flex-shrink: 0; color: currentColor; opacity: .75; }
+.aiolm-sidebar-footer { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: auto; padding: 12px 16px; color: var(--ui-rail-muted); font-size: var(--ui-text-caption); line-height: 16px; }
+.aiolm-sidebar-footer span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .app-main-column, .app-main-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.app-main-area { flex: 1; position: relative; }
-.aiolm-header { display: grid; grid-template-columns: minmax(0,max-content) minmax(0,1fr) 184px; align-items: center; gap: 16px; height: 72px; padding: 12px 16px; min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+.app-main-area { flex: 1; position: relative; background: var(--ui-bg); }
+.aiolm-header { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,max-content) max-content; align-items: center; gap: 12px; min-height: 48px; padding: 0 12px 0 20px; min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
 .aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.aiolm-heading h1 { font-size: 24px; overflow-wrap: anywhere; max-height: 48px; overflow-y: auto; }
-.aiolm-runtime-context { display: flex; align-items: center; min-width: 0; gap: 8px; max-height: 48px; overflow-y: auto; padding: 4px 8px; border: 1px solid var(--ui-border); border-radius: 8px; }
-.aiolm-runtime-context button { min-width: 0; text-align: left; }
-.aiolm-context-model { flex: 1 1 auto; justify-content: flex-start; }
-.aiolm-context-runtime { flex: 0 1 auto; }
-.aiolm-server { display: grid; grid-template-columns: 80px 88px; align-items: center; gap: 16px; }
-.aiolm-server > button { width: 88px; }
-.aiolm-status { justify-self: start; max-height: 48px; overflow-y: auto; }
+.aiolm-heading h1 { min-width: 0; font-size: var(--ui-text); font-weight: 600; line-height: 20px; letter-spacing: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* The model context is a compact filled pill, not a form field: it takes its
+   content's width up to a cap and truncates the name; the full path stays in
+   its title. */
+.aiolm-runtime-context { display: flex; align-items: center; min-width: 0; max-width: 380px; min-height: var(--ui-control); gap: 0; padding: 0 2px; border: 1px solid transparent; border-radius: var(--ui-radius-control); background: var(--ui-field-fill); }
+.aiolm-runtime-context:hover { background: var(--ui-field-fill-hover); }
+.aiolm-runtime-context:focus-within { outline: 2px solid var(--ui-focus); outline-offset: 0; }
+.aiolm-runtime-context button { min-width: 0; min-height: calc(var(--ui-control) - 6px); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); text-align: left; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
+.aiolm-context-model { flex: 1 1 auto; justify-content: flex-start; gap: 6px; }
+.aiolm-context-model .model-family-icon { margin-inline-end: 0; }
+.aiolm-context-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.aiolm-context-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-border-strongest); }
+.aiolm-context-runtime { flex: 0 0 auto; gap: 6px; border-inline-start: 1px solid var(--ui-border) !important; border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0 !important; color: var(--ui-muted) !important; font-size: var(--ui-text-support) !important; font-variant-numeric: tabular-nums; }
+.aiolm-server { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.aiolm-server > button { min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); }
+.aiolm-status { justify-self: start; border: 0; background: transparent; padding: 0 4px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; }
+.aiolm-status.app-badge--success .app-status-badge__dot { background: var(--ui-status-success-dot); }
+.aiolm-status.app-badge--warning .app-status-badge__dot { background: var(--ui-status-warning-dot); }
+.aiolm-status.app-badge--danger { color: var(--tone-error-ink); }
 .app-main { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .app-panel-host { height: 100%; min-width: 0; min-height: 0; position: relative; }
 .app-panel-host > .app-page-scroll { height: 100%; }
-.app-feedback-layer { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 8px 16px 0; flex-shrink: 0; }
+.app-feedback-layer { display: grid; gap: 8px; max-height: 30vh; overflow: auto; margin: 12px var(--ui-canvas-padding) 0; flex-shrink: 0; }
 .app-feedback-layer:empty { display: none; }
-.app-task-strip { display: flex; align-items: start; gap: 16px; margin: 8px 16px 0; padding: 12px 16px; background: var(--ui-panel); border: 1px solid var(--ui-border); border-radius: 8px; max-height: 140px; overflow: auto; flex-shrink: 0; font-size: 12px; }
+.app-task-strip { display: flex; align-items: start; gap: 16px; margin: 12px var(--ui-canvas-padding) 0; padding: 10px 14px; background: var(--ui-panel-raised); border: 1px solid transparent; border-radius: var(--ui-radius-panel); max-height: 140px; overflow: auto; flex-shrink: 0; font-size: var(--ui-text-support); }
 .app-task-strip__heading, .app-task-strip__item { display: flex; gap: 8px; align-items: center; }
 .app-task-strip__list { display: flex; flex-wrap: wrap; gap: 12px; min-width: 0; }
 .app-task-strip__copy { min-width: 0; }
-.app-task-strip__label { overflow-wrap: anywhere; }
+.app-task-strip__label { overflow-wrap: break-word; }
 .app-task-strip__status, .app-task-strip__progress { color: var(--ui-muted); }
 .app-task-strip__copy > span { display: block; }
 .app-task-strip__transfer { color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .app-task-strip__progress { width: 160px; max-width: 100%; margin-top: 8px; }
-.app-skip-link { position: fixed; top: 8px; left: 8px; transform: translateY(-200%); z-index: 100; padding: 12px; color: white; background: var(--ui-accent-solid); border-radius: 8px; }
+.app-skip-link { position: fixed; top: 8px; left: 8px; transform: translateY(-200%); z-index: 100; padding: 12px; color: var(--ui-on-accent); background: var(--ui-accent-solid); border-radius: var(--ui-radius-control); }
 .app-skip-link:focus { transform: none; }
 .aiolm-menu-trigger { display: none; }
-.aiolm-drawer { border: 0; padding: 0; margin: 0; height: 100dvh; max-height: 100dvh; width: min(304px,85vw); max-width: 85vw; background: var(--ui-sidebar); color: var(--ui-ink); box-shadow: var(--ui-elev-2); }
+.aiolm-drawer { border: 0; padding: 0; margin: 0; height: 100dvh; max-height: 100dvh; width: min(304px,85vw); max-width: 85vw; background: var(--ui-sidebar); color: var(--ui-rail-ink); box-shadow: var(--ui-elev-2); }
 .aiolm-drawer::backdrop { background: var(--ui-overlay); }
 .aiolm-drawer-sheet { display: flex; flex-direction: column; height: 100%; }
-.aiolm-drawer-heading { display: flex; align-items: center; justify-content: space-between; padding-right: 16px; }
-.app-activity { order: 2; flex: 0 0 36px; height: 36px; border-top: 1px solid var(--ui-border); background: var(--ui-surface); }
-.app-activity > summary { display: flex; align-items: center; gap: 8px; height: 36px; padding: 4px 16px; font-size: 12px; overflow-y: auto; }
+.aiolm-drawer-heading { display: flex; align-items: center; justify-content: space-between; padding-right: 16px; color: var(--ui-rail-ink); }
+.aiolm-drawer-heading .app-icon-button { color: var(--ui-rail-muted); }
+.aiolm-drawer-heading .app-icon-button:hover:not(:disabled) { background: var(--ui-nav-hover); color: var(--ui-rail-ink); }
+.app-activity { order: 2; flex: 0 0 32px; height: 32px; border-top: 1px solid var(--ui-border); background: var(--ui-bg); color: var(--ui-muted); }
+.app-activity > summary { display: flex; align-items: center; gap: 8px; height: 32px; padding: 4px var(--ui-canvas-padding); font-size: var(--ui-text-support); overflow-y: auto; }
 .app-activity-count { width: 3ch; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .app-activity-error { color: var(--ui-danger); }
 .app-activity-notice { color: var(--ui-muted); }
-.app-activity-content { position: absolute; bottom: 36px; inset-inline: 0; max-height: calc(100% - 36px); overflow-y: auto; z-index: 35; padding-bottom: 12px; background: var(--ui-surface); border-top: 1px solid var(--ui-border); box-shadow: var(--ui-elev-2); }
+.app-activity-content { position: absolute; bottom: 32px; inset-inline: 0; max-height: calc(100% - 32px); overflow-y: auto; z-index: 35; padding-bottom: 12px; background: var(--ui-surface); border-top: 1px solid var(--ui-border); box-shadow: var(--ui-elev-2); }

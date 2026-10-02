@@ -46,7 +46,7 @@ export default function RuntimePortableBundle({
       {rows.some((row) => row.installed.length > 0) && (
         <div className="mt-3 flex min-w-0 flex-wrap gap-2" aria-label={t("ui.exportRuntime")}>
           {rows.flatMap((row) => row.installed.map((item) => (
-            <button key={row.backend + ":" + item.build} type="button" onClick={() => onExport(row.backend, item.build)} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--secondary app-button--sm">
+            <button key={row.backend + ":" + item.build} type="button" data-icon="download" onClick={() => onExport(row.backend, item.build)} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeRuntime") : undefined} className="app-button app-button--secondary app-button--sm">
               {t("ui.exportRuntime")}: {row.backend} {formatRuntimeVersion(item.build, item.version)}
             </button>
           )))}

@@ -65,9 +65,9 @@ export default function ChatMessageLog({
             description={isFailed ? ct("blockedFailedDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
           >
           <div className="app-empty-actions">
-            {onOpenModels && <button type="button" className="app-button app-button--secondary" onClick={onOpenModels} disabled={starting}>{modelSettingsLabel ?? ct("openModels")}</button>}
+            {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting}>{modelSettingsLabel ?? ct("openModels")}</button>}
             {model && !serverOn && !isFailed && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={starting || status.state === "starting" ? ct("startingServer") : ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
-            {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
+            {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" data-icon="probe" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
           </div>
           </EmptyState>
         </div>
@@ -99,7 +99,7 @@ export default function ChatMessageLog({
 
       {error && <FeedbackBanner tone="error" title={ct("requestFailed")}>
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
-        {canRetry && <button type="button" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
+        {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
       </FeedbackBanner>}
     </div>
   );

@@ -39,7 +39,7 @@ function ModelDiagnostics({ store }: { store: AppStore }) {
         <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
           {store.status.model && <> · <span title={normalizeDisplayPath(store.status.model)}>{modelDisplayName(store.status.model)}</span></>}
         </p>
-        <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
+        <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
       </section>
     </div>
   </div>;
@@ -119,7 +119,7 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
     } catch (caught) { setError(errorMessage(caught)); }
   };
   const copyButton = (id: string, value: string, label: string, disabled = false) =>
-    <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} onClick={() => void copyText(id, value)}>
+    <button type="button" className="app-button app-button--secondary app-button--sm" disabled={disabled} data-icon="copy" onClick={() => void copyText(id, value)}>
       <StableLabel value={copied === id ? t('panel.copied') : label} labels={[t('panel.copied'), label]} />
     </button>;
 
@@ -153,8 +153,8 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
         <div className="api-section-heading">
           <h3>{copy.models}{apiRunning && modelsFetched && <Badge className="api-model-count">{models.length}</Badge>}</h3>
           <div className="api-inline-actions">
-            {canQueryModels && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={loadingModels} onClick={() => void refreshModels()}>{loadingModels ? t('ui.checking') : copy.refresh}</button>}
-            {onNavigate && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onNavigate('models')}>{copy.openModels}</button>}
+            {canQueryModels && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={loadingModels} data-icon="refresh" onClick={() => void refreshModels()}>{loadingModels ? t('ui.checking') : copy.refresh}</button>}
+            {onNavigate && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => onNavigate('models')}>{copy.openModels}</button>}
           </div>
         </div>
         {modelsMessage && <p className="api-hint">{modelsMessage}</p>}
@@ -187,7 +187,7 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
         <div className="api-disclosure-content">
           {store.cfg && <ApiPortControl savedPort={configuredPort} running={apiRunning} runningPort={apiServer.status.port}
             disabled={!apiServer.checked || apiPending !== null} onApply={applyPort} onRestart={() => void apiServer.restart()} />}
-          {onNavigate && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => onNavigate('diagnostics')}>{copy.diagnostics}</button>}
+          {onNavigate && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="open" onClick={() => onNavigate('diagnostics')}>{copy.diagnostics}</button>}
         </div>
       </details>
       <ApiExamples baseUrl={displayUrl} format={format} onCopy={text => void copyText('example', text)} copied={copied === 'example'} />

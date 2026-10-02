@@ -1,4 +1,4 @@
-import { Suspense, lazy, useMemo } from 'react';
+import { Suspense, lazy, useId, useMemo } from 'react';
 import { DESCRIPTION_MAX_CODEPOINTS, countCodePoints } from '@aiolm/benchmark-contracts';
 
 const Markdown = lazy(() => import('react-markdown'));
@@ -55,27 +55,28 @@ export function DescriptionEditor({
   label: string; hint: string; countLabel: (used: number, max: number) => string;
   rows?: number;
 }) {
+  const id = useId();
   const used = descriptionCodePoints(value);
   const over = used > DESCRIPTION_MAX_CODEPOINTS;
   return (
     <div className="performance-description">
-      <label>
-        <span aria-hidden="true">{label}</span>
+      <label htmlFor={id}>
+        <span>{label}</span>
         <textarea
-          className="app-textarea"
+          id={id}
+          className="app-textarea app-textarea--editable"
           value={value}
           disabled={disabled}
           rows={rows}
           maxLength={12000}
           onChange={(event) => onChange(event.target.value)}
-          aria-label={label}
           aria-invalid={over}
-          aria-describedby="benchmark-description-count"
+          aria-describedby={`${id}-hint ${id}-count${over ? ` ${id}-error` : ''}`}
         />
       </label>
-      <p id="benchmark-description-count" role="status">{countLabel(used, DESCRIPTION_MAX_CODEPOINTS)}</p>
-      <p>{hint}</p>
-      {over && <p role="alert" className="performance-validation">Description exceeds 4000 characters.</p>}
+      <p id={`${id}-count`}>{countLabel(used, DESCRIPTION_MAX_CODEPOINTS)}</p>
+      <p id={`${id}-hint`}>{hint}</p>
+      {over && <p id={`${id}-error`} role="alert" className="performance-validation">Description exceeds 4000 characters.</p>}
       {value && !over && <DescriptionPreview text={value} />}
     </div>
   );

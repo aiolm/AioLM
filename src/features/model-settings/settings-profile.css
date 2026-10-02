@@ -5,29 +5,32 @@
 .settings-profile-banner--working .settings-profile-state-dot { background: var(--ui-warning); }
 .settings-profile-banner-text { flex: 1 1 180px; min-width: 0; }
 .settings-profile-title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.settings-profile-banner h3, .settings-profile-detail h3 { margin: 0; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
-.settings-profile-banner p { margin: 3px 0 0; color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
+.settings-profile-banner h3, .settings-profile-detail h3 { margin: 0; font-size: var(--ui-text); font-weight: 650; overflow-wrap: break-word; }
+.settings-profile-banner p { margin: 3px 0 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
 .settings-profile-banner p.settings-profile-feedback { color: var(--ui-accent); font-weight: 500; }
 .settings-profile-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
 .settings-profile-buttons .app-button { max-width: 100%; }
 .settings-profile-groups { display: grid; gap: 18px; margin: 22px 0; }
 .settings-profile-group { min-width: 0; }
-.settings-profile-group-heading { margin: 0 0 8px; font-size: 12px; font-weight: 600; }
+.settings-profile-group-heading { margin: 0 0 8px; font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .settings-profile-chip { max-width: 100%; text-align: left; }
 .settings-profile-chip > span { min-width: 0; }
+/* The active profile takes the shared pressed language (tint + accent edge +
+   ink text) so the state never relies on the check mark alone. */
+.settings-profile-chip--active { border-color: var(--ui-accent); background: var(--ui-action-secondary-fill-hover); color: var(--ui-ink); }
 .settings-profile-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .settings-profile-detail-heading > div:first-child { min-width: 0; flex: 1 1 180px; }
 .settings-profile-detail-heading .settings-profile-buttons { flex: 0 1 auto; }
-.settings-profile-eyebrow { margin: 0 0 5px; color: var(--ui-muted); font-size: 10px; letter-spacing: .03em; }
+.settings-profile-eyebrow { margin: 0 0 5px; color: var(--ui-muted); font-size: var(--ui-text-caption); letter-spacing: .03em; }
 .settings-profile-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-.settings-profile-hint { color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
+.settings-profile-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
 .settings-profile-detail > .settings-profile-hint { margin: 12px 0 0; }
 .settings-profile-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 18px 28px; margin-top: 18px; }
 .settings-profile-value-group { min-width: 0; }
-.settings-profile-value-group h4 { margin: 0 0 8px; font-size: 11px; font-weight: 600; }
+.settings-profile-value-group h4 { margin: 0 0 8px; font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-value-group dl { display: grid; gap: 3px; margin: 0; }
-.settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 2px 6px; border-inline-start: 2px solid transparent; border-radius: 3px; color: var(--ui-muted); font-size: 11px; line-height: 1.5; }
+.settings-profile-value { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 2px 6px; border-inline-start: 2px solid transparent; border-radius: 3px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.5; }
 .settings-profile-value dt { color: var(--ui-muted); }
 .settings-profile-value dd { margin: 0; text-align: right; overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings-profile-value dd .default-value { justify-content: flex-end; }
@@ -47,16 +50,16 @@
 .settings-profile-arguments code { min-inline-size: 0; font: inherit; font-family: var(--font-mono, monospace); overflow-wrap: anywhere; white-space: pre-wrap; }
 .settings-profile-argument-key { color: var(--ui-muted); }
 .settings-profile-argument-values { display: flex; flex-wrap: wrap; gap: 0 1ch; min-inline-size: 0; font-weight: 600; }
-.settings-profile-inherited { color: var(--ui-muted); font-size: 10px; }
+.settings-profile-inherited { color: var(--ui-muted); font-size: var(--ui-text-support); }
 .settings-profile-prompt { grid-column: 1 / -1; }
-.settings-profile-prompt p { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: 11px; color: var(--ui-muted); }
+.settings-profile-prompt p { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: break-word; margin: 0; font-size: var(--ui-text-support); color: var(--ui-muted); }
 .settings-profile-defaults { margin-top: 18px; }
-.settings-profile-defaults > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.settings-profile-defaults > summary { cursor: pointer; font-size: var(--ui-text-support); font-weight: 600; }
 .settings-profile-defaults > summary .app-badge { margin-inline-start: 8px; }
 .settings-profile-defaults > .settings-profile-hint { margin: 12px 0 0; }
-.settings-profile-action { display: grid; gap: 8px; margin-top: 12px; font-size: 12px; }
-.settings-profile-action p { margin: 0; overflow-wrap: anywhere; }
-.settings-profile-action label { font-size: 12px; }
+.settings-profile-action { display: grid; gap: 8px; margin-top: 12px; font-size: var(--ui-text-support); }
+.settings-profile-action p { margin: 0; overflow-wrap: break-word; }
+.settings-profile-action label { font-size: var(--ui-text-support); }
 .settings-profile-action .app-input { min-width: 0; }
 .settings-profile-scope { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
 @media (max-width: 900px) {
@@ -73,7 +76,7 @@
 }
 
 /* What a save would rewrite, listed before it is pressed. */
-.settings-profile-changes { display: grid; margin: 8px 0; font-size: 13px; }
+.settings-profile-changes { display: grid; margin: 8px 0; font-size: var(--ui-text-support); }
 .settings-profile-changes > div { display: grid; grid-template-columns: minmax(8rem, 40%) minmax(0, 1fr); gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--ui-border); }
 .settings-profile-changes > div:last-child { border-bottom: 0; }
 .settings-profile-changes dt { font-weight: 600; }

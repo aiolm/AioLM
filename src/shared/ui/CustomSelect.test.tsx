@@ -170,12 +170,41 @@ describe("CustomSelect", () => {
     expect(trigger).toHaveAttribute("aria-activedescendant", `${listbox.id}-option-0`);
   });
 
+  it("references the listbox only while it is rendered", () => {
+    const { trigger } = renderSelect();
+    expect(trigger).not.toHaveAttribute("aria-controls");
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(document.getElementById(trigger.getAttribute("aria-controls") ?? "")).toHaveAttribute("role", "listbox");
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    expect(trigger).not.toHaveAttribute("aria-controls");
+  });
+
+  it.each(["explicit", "wrapping"])("names the listbox from a %s native label without the selected value", (labelType) => {
+    const select = <CustomSelect id="backend" value="light" options={OPTIONS} onChange={vi.fn()} />;
+    render(labelType === "explicit"
+      ? <><label htmlFor="backend">Backend</label>{select}</>
+      : <label><span>Backend</span>{select}</label>);
+    fireEvent.click(screen.getByRole("combobox", { name: /Backend/ }));
+    expect(screen.getByRole("listbox", { name: "Backend" })).toBeInTheDocument();
+  });
+
   it("moves the highlight on arrow keys without committing a value", () => {
     const { trigger, onChange } = renderSelect();
     fireEvent.click(trigger);
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(trigger).toHaveAttribute("aria-activedescendant", expect.stringContaining("-option-1"));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("styles the moving highlight apart from the committed selection", () => {
+    const { trigger } = renderSelect();
+    fireEvent.click(trigger);
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const [committed, highlighted] = screen.getAllByRole("option");
+    expect(committed).toHaveClass("is-selected");
+    expect(committed).not.toHaveClass("is-highlighted");
+    expect(highlighted).toHaveClass("is-highlighted");
+    expect(highlighted).not.toHaveClass("is-selected");
   });
 
   it("commits the highlighted option only on Enter", () => {

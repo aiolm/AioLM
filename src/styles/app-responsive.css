@@ -1,23 +1,25 @@
 @media (max-width: 1199px) {
- .aiolm-header { gap: 16px; }
+ .aiolm-runtime-context { max-width: 300px; }
 }
 @media (max-width: 959px) {
  .app-shell { grid-template-columns: minmax(0,1fr); }
  .aiolm-sidebar { display: none; }
  .aiolm-menu-trigger { display: inline-flex; }
- .aiolm-header { padding: 12px 16px; grid-template-columns: minmax(0,1fr) 176px; grid-template-rows: minmax(36px, auto) 40px; height: auto; min-height: 108px; gap: 8px; }
- .aiolm-heading h1 { font-size: 20px; max-height: none; overflow: visible; }
- .aiolm-runtime-context { grid-column: 1 / -1; grid-row: 2; width: 100%; max-height: 40px; }
- .aiolm-server { gap: 8px; }
+ .aiolm-header { padding: 0 8px; gap: 8px; }
+ .aiolm-runtime-context { max-width: 260px; }
+ .aiolm-context-runtime .aiolm-context-label { display: none; }
  .app-feedback-layer, .app-task-strip { margin-inline: 16px; }
 }
 @media (max-width: 639px) {
- :root { --ui-page-padding: 16px; }
+ :root { --ui-page-padding: 16px; --ui-canvas-padding: 16px; }
  .profile-snapshot { padding: 16px; }
  .settings-row { padding: var(--ui-row-space) 12px; }
  .tuning-redesign__header { padding: 16px; flex-wrap: wrap; }
- .aiolm-server { gap: 8px; }
- .aiolm-status { font-size: 11px; }
+ /* Phone width: location and server state on the first line, the model pill
+    gets the full second line so its name stays readable. */
+ .aiolm-header { grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: 48px auto; height: auto; padding-bottom: 8px; }
+ .aiolm-runtime-context { grid-column: 1 / -1; grid-row: 2; max-width: none; width: 100%; }
+ .aiolm-server { grid-column: 2; grid-row: 1; }
  .app-feedback { flex-wrap: wrap; }
  .app-task-strip { flex-direction: column; gap: 8px; }
  .app-confirm-dialog__panel { padding: 20px; }
@@ -30,8 +32,8 @@
  .discover-columns { grid-template-columns: minmax(0,.85fr) minmax(0,1.15fr); }
  .chat-thread-sidebar { display: flex; position: relative; inset: auto; z-index: auto; width: 224px; box-shadow: none; }
  .chat-thread-toggle, .chat-thread-close { display: none; }
- .models-model-row { grid-template-columns: minmax(0,1fr) minmax(280px,max-content); }
- .models-model-actions { max-width: 360px; }
+ .models-model-row { grid-template-columns: minmax(0,1fr) 5.5rem minmax(0,max-content); grid-template-areas: "name size actions" "path path files"; }
+ .models-model-actions { max-width: 360px; justify-content: flex-end; }
 }
 @container workspace (max-width: 719px) {
  .discover-columns { flex: 0 0 auto; }
@@ -59,4 +61,9 @@
  .tuning-redesign__content > .tuning-panel-scroll { height: auto; overflow: visible; }
  .tuning-navigation, .tuning-apply-footer { scrollbar-gutter: auto; }
  .tuning-apply-footer { position: sticky; bottom: 0; z-index: 10; }
+}
+
+/* Narrow model rows reserve the name column; action groups wrap below it. */
+@container workspace (max-width: 719px) {
+ .models-model-row { grid-template-areas: "name size" "path path" "actions actions" "files files"; row-gap: 8px; }
 }

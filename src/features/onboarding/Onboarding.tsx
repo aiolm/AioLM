@@ -115,8 +115,8 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
             <p id="setup-folder-hint">{copy.folderHint}</p>
             <input ref={folderInput} id="setup-folder" className="app-input app-mono" name="models-directory" value={folder} readOnly aria-describedby="setup-folder-hint" />
             <div className="setup-folder-actions">
-              <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} onClick={() => { void chooseFolder(); }}>{choosing ? copy.choosing : copy.browse}</button>
-              {folder !== defaultFolder && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} onClick={() => { setFolder(defaultFolder); setError(null); folderInput.current?.focus(); }}>{copy.defaultFolder}</button>}
+              <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} data-icon="folder" onClick={() => { void chooseFolder(); }}>{choosing ? copy.choosing : copy.browse}</button>
+              {folder !== defaultFolder && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} data-icon="reset" onClick={() => { setFolder(defaultFolder); setError(null); folderInput.current?.focus(); }}>{copy.defaultFolder}</button>}
             </div>
             <div className="setup-folder-note"><strong>{copy.noModels}</strong><p>{copy.noModelsHint}</p></div>
           </div>}
@@ -125,7 +125,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
           <FeedbackBanner tone="error" title={error.detail ? copy[error.kind] : undefined}>{error.detail ?? copy[error.kind]}</FeedbackBanner>
         </div>}
         <footer className="setup-footer">
-          {step > 0 && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} onClick={() => { setError(null); setStep(step - 1); }}>{copy.back}</button>}
+          {step > 0 && <button type="button" className="app-button app-button--secondary app-button--lg" disabled={saving || choosing} data-icon="back" onClick={() => { setError(null); setStep(step - 1); }}>{copy.back}</button>}
           <button type="submit" className="app-button app-button--primary app-button--lg" disabled={saving || choosing}>{saving ? copy.saving : step === 2 ? copy.finish : copy.next}<span aria-hidden="true"> →</span></button>
         </footer>
       </form>

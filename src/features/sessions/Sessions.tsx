@@ -427,13 +427,14 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   return (
     <div className="app-page-scroll sessions-panel relative flex h-full min-h-0 min-w-0 flex-col gap-4" data-testid="sessions-panel">
-      <header className="flex flex-wrap items-center justify-end gap-3">
-        <button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button>
+      <header className="app-page-header">
+        <div><h2 className="app-page-title">{t("ui.sessionsTitle")}</h2><p className="app-page-description">{t("ui.sessionsIntro")}</p></div>
+        <div className="app-page-actions"><button type="button" className="app-button app-button--primary app-button--sm" onClick={requestNewDefinition} disabled={!cfg || busyId !== null}>{t("ui.newSession")}</button></div>
       </header>
 
       {(notice || failure) && <FeedbackBanner tone={failure ? "error" : "info"}>{normalizeDisplayText(failure ?? notice ?? "")}</FeedbackBanner>}
 
-      <section className="app-card app-card--tight sessions-list" aria-label={t("ui.sessionsTitle")}>
+      <div className="app-card app-card--tight sessions-list">
         {visibleDefinitions.map((definition) => {
           const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
           const rowState = rowStatus?.state ?? "stopped";
@@ -458,12 +459,12 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                   {/* Opening settings only reads; the apply itself is what has to
                       wait for a transition, and it says so. Disabling the button
                       here left no way to look at a session while it loaded or stopped. */}
-                  <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings} onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
+                  <button type="button" className="app-button app-button--secondary app-button--sm" disabled={!modelSettings} data-icon="settings" onClick={() => openSettings(definition)}>{modelSettingsCopy[locale].title}</button>
                   {(loadingId === definition.id || rowState === "starting") && rowState !== "stopping"
                     ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
                     : rowState === "running"
-                      ? <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
-                      : <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
+                      ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
+                      : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
                 </div>
               </div>
               {rowStatus?.error && <FeedbackBanner tone="error" className="session-entry-error">{normalizeDisplayText(rowStatus.error)}</FeedbackBanner>}
@@ -480,15 +481,15 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                 {rowStatus?.log_tail && <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs ui-color-muted">{normalizeDisplayText(rowStatus.log_tail)}</pre>}
                 <div className="flex flex-wrap items-center gap-2">
                   {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => void saveDefinition()} disabled={controlsDisabled}>{t("ui.saveSession")}</button>}
-                  {definition.id !== DEFAULT_SESSION_ID && rowState === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
-                  {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>}
+                  {definition.id !== DEFAULT_SESSION_ID && rowState === "running" && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="stop" onClick={() => void stop(definition.id, true)} disabled={controlsDisabled}>{t("ui.sessionUnload")}</button>}
+                  {definition.id !== DEFAULT_SESSION_ID && <button type="button" className="app-button app-button--ghost app-button--sm ml-auto" data-icon="delete" onClick={() => void remove(rowDefinition)} disabled={controlsDisabled}>{t("ui.sessionDelete")}</button>}
                 </div>
               </div>}
             </article>
           );
         })}
         {visibleDefinitions.length === 0 && <EmptyState title={sessionCopy[locale].emptyTitle} description={t("ui.sessionEmpty")} />}
-      </section>
+      </div>
       {/* A single switch that changes what Load does; shown by default so the current choice is visible. */}
       <details className="sessions-load-options text-xs ui-color-muted" open>
         <summary>{sessionCopy[locale].options}</summary>

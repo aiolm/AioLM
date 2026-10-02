@@ -275,9 +275,8 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     <div className="app-page-scroll discover-panel relative flex h-full min-h-0 flex-col">
       <div className="mb-4 flex min-w-0 flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <div className="app-eyebrow">{t("section.discover")}</div>
-          <h2 className="mt-1 text-[18px] font-semibold tracking-tight ui-color-ink" >{t("extra.discoverTitle")}</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed ui-color-muted" >{t("extra.discoverDescription")}</p>
+          <h2 className="app-page-title" >{t("extra.discoverTitle")}</h2>
+          <p className="app-page-description" >{t("extra.discoverDescription")}</p>
         </div>
         <div className="app-card app-card--tight text-right text-xs ui-color-faint">
           <div className="text-xs">{t("panel.destination")}</div>

@@ -77,5 +77,5 @@ export function TuningIcon() {
 }
 
 export function AioMark() {
-  return <img className="aiolm-mark" src="/brand/aio-monogram.png" alt="" aria-hidden="true" width="36" height="36" />;
+  return <img className="aiolm-mark" src="/brand/themes/13.png" alt="" aria-hidden="true" width="36" height="36" />;
 }

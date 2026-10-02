@@ -72,7 +72,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
         </div>
         {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">
           {message.model && <ModelIcon model={message.model} />}
-          <span className="min-w-0 break-all">
+          <span className="min-w-0 [overflow-wrap:anywhere]">
             <span className="sr-only">{translate(locale, "ui.responseModel")}: </span>
             {message.model ? modelDisplayName(message.model) : translate(locale, "ui.responseModelUnknown")}
           </span>
@@ -83,7 +83,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             and every finished answer ended in a band of blank space. */}
         {message.role === "assistant" && (message.metrics || message.content) && <div className="chat-message-footer">
           {message.metrics && <ResponseMetrics metrics={message.metrics} locale={locale} />}
-          {message.content && <button type="button" onClick={() => onCopy(index, message.content)} className="chat-message-copy app-button app-button--secondary app-button--sm" aria-label={copied ? text("copied") : text("copy")}>{copied ? text("copied") : text("copy")}</button>}
+          {message.content && <button type="button" onClick={() => onCopy(index, message.content)} className="chat-message-copy app-button app-button--secondary app-button--sm" data-icon="copy" aria-label={copied ? text("copied") : text("copy")}>{copied ? text("copied") : text("copy")}</button>}
         </div>}
       </div>
     </div>

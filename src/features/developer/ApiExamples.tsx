@@ -46,7 +46,7 @@ export default function ApiExamples({ baseUrl, format, onCopy, copied }: {
         <label htmlFor="api-example-language">{copy.language}</label>
         <CustomSelect<Language> id="api-example-language" value={language} onChange={setLanguage}
           options={[{ value: 'curl', label: 'cURL' }, { value: 'python', label: 'Python' }, { value: 'javascript', label: 'JavaScript' }]} />
-        <button type="button" className="app-button app-button--secondary app-button--sm" onClick={() => onCopy(snippet)}>{copied ? t('panel.copied') : copy.copyExample}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="copy" onClick={() => onCopy(snippet)}>{copied ? t('panel.copied') : copy.copyExample}</button>
       </div>
       <p className="api-hint">{copy.exampleHint}</p>
       <pre tabIndex={0} aria-label={copy.examples} className="api-code"><code>{snippet}</code></pre>

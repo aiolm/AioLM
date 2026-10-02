@@ -213,7 +213,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
       <div className="settings-profile-buttons">
         {full && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || !modelPath.trim()} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
         {saveAction}
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={mutationLocked || blocked || !modelPath.trim()} onClick={event => openAction({ kind: 'create', name: '', scope: active.scope === 'global' ? 'global' : 'model', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked || !modelPath.trim()} onClick={event => openAction({ kind: 'create', name: '', scope: active.scope === 'global' ? 'global' : 'model', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
         {state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
       </div>
     </div>

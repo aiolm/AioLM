@@ -1,36 +1,33 @@
-import StableLabel from "../../shared/ui/StableLabel";
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { formatCpuCores } from "../../shared/lib/units";
+import { formatCpuCores, formatMebibytes } from "../../shared/lib/units";
 
 interface Props {
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   device: api.DeviceReport | null;
   deviceSummary: string;
-  showAll: boolean;
-  hiddenCount: number;
-  onToggleShowAll: () => void;
 }
 
-export default function RuntimeDeviceCard({ t, device, deviceSummary, showAll, hiddenCount, onToggleShowAll }: Props) {
-  const displayDevice = normalizeDisplayText(deviceSummary);
-  const displayCpu = device ? normalizeDisplayText(`${device.profile.cpu.name} · ${formatCpuCores(device.profile.cpu)} · ${device.profile.os}/${device.profile.arch}`) : "—";
+/** The detected hardware as label/value rows in the page's side column; the
+ * column stacks above the runtime list on narrow windows. */
+export default function RuntimeDeviceCard({ t, device, deviceSummary }: Props) {
+  const gpu = device ? device.profile.gpus.find((item) => !item.integrated) ?? device.profile.gpus[0] : undefined;
+  // The GPU name and its memory read as a value and a secondary line, like the
+  // CPU and its cores; the summary text stays the value when memory is unknown.
+  const gpuName = normalizeDisplayText(gpu?.vram_mb ? gpu.name : deviceSummary);
+  const gpuDetail = gpu?.vram_mb ? formatMebibytes(gpu.vram_mb) : null;
+  const cpu = device ? normalizeDisplayText(device.profile.cpu.name) : null;
+  const cores = device ? formatCpuCores(device.profile.cpu) : null;
+  const platform = device ? normalizeDisplayText(`${device.profile.os}/${device.profile.arch}`) : null;
   return (
-    <section className="runtime-detected-device mb-4 flex flex-wrap items-center justify-between gap-3 app-card"  aria-labelledby="detected-device-heading">
-      <div className="min-w-0">
-        <h2 id="detected-device-heading" className="app-eyebrow">{t("ui.detectedDevice")}</h2>
-        <div className="mt-1 min-w-0 app-text-wrap text-sm font-medium ui-color-ink"  title={displayDevice}>{displayDevice}</div>
-        <div className="mt-0.5 min-w-0 app-text-wrap text-xs tabular-nums ui-color-faint"  title={device ? displayCpu : undefined}>
-          {displayCpu}
-        </div>
-      </div>
-      <div className="runtime-device-actions flex shrink-0 flex-wrap items-center gap-2">
-        <span className={[`runtime-hidden-count text-xs ${!showAll && hiddenCount > 0 ? "" : "is-empty"}`, "ui-color-faint"].filter(Boolean).join(" ")} >{t("ui.hiddenBackends", { count: hiddenCount })}</span>
-        <button type="button" aria-pressed={showAll} onClick={onToggleShowAll} className="app-button app-button--secondary runtime-show-all">
-          <StableLabel value={showAll ? t("ui.showRecommendedOnly") : t("ui.showAllBackends")} labels={[t("ui.showRecommendedOnly"), t("ui.showAllBackends")]} />
-        </button>
-      </div>
+    <section className="runtime-device-summary" aria-labelledby="detected-device-heading">
+      <h2 id="detected-device-heading">{t("ui.detectedDevice")}</h2>
+      <dl className="runtime-device-properties">
+        <div><dt>GPU</dt><dd title={normalizeDisplayText(deviceSummary)}>{gpuName}{gpuDetail && <span className="runtime-device-detail">{gpuDetail}</span>}</dd></div>
+        {cpu && <div><dt>CPU</dt><dd title={cpu}>{cpu}{cores && <span className="runtime-device-detail">{cores}</span>}</dd></div>}
+        {platform && <div><dt>OS</dt><dd>{platform}</dd></div>}
+      </dl>
     </section>
   );
 }

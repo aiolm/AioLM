@@ -173,7 +173,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
                 {itemLabel(copy.ownedItemTitle, entry.created_at_ms)} · {displayHost(entry.destination)}
               </span>
               <span className="performance-owned-actions">
-                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} onClick={() => void manage(entry.submission_id)}>{opening === entry.submission_id ? copy.managementOpening : copy.openManagement}</button>
+                <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="open" onClick={() => void manage(entry.submission_id)}>{opening === entry.submission_id ? copy.managementOpening : copy.openManagement}</button>
               </span>
             </li>
           ))}
@@ -181,7 +181,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
       )}
       {started && items.length === 0 && !loading && <p role="status">{copy.ownedListEmpty}</p>}
       {cursor && (
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || loading} onClick={() => void loadPage(cursor)}>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || loading} data-icon="refresh" onClick={() => void loadPage(cursor)}>
           {copy.ownedListLoadMore}
         </button>
       )}
@@ -197,7 +197,7 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
         <summary>{copy.backupTitle}</summary>
         <p>{copy.backupHint}</p>
         <div className="performance-actions">
-          <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || importing || loading || working !== null} onClick={() => void importRecovery()}>{copy.recoveryImport}</button>
+          <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || importing || loading || working !== null} data-icon="upload" onClick={() => void importRecovery()}>{copy.recoveryImport}</button>
         </div>
         {items.length > 0 && (
           <ul className="performance-owned-list">
@@ -205,8 +205,8 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
               <li key={entry.submission_id}>
                 <span>{itemLabel(copy.ownedItemTitle, entry.created_at_ms)}</span>
                 <span className="performance-owned-actions">
-                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} onClick={() => void backup(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
-                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} onClick={() => void backup(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
+                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="download" onClick={() => void backup(entry.submission_id, 'export')}>{copy.recoveryExport}</button>
+                  <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy || working !== null || importing} data-icon="copy" onClick={() => void backup(entry.submission_id, 'copy')}>{copy.recoveryCopy}</button>
                 </span>
               </li>
             ))}

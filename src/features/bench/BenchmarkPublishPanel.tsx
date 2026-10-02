@@ -272,7 +272,7 @@ export function BenchmarkPublishPanel({ snapshot, description, sourceRunId, busy
       {restoreFailed && <FeedbackBanner tone="error" action={{ label: copy.publishRetry, disabled: busy, onClick: () => setRestoreRevision(value => value + 1) }}>{copy.publishRestoreError}</FeedbackBanner>}
       {published ? <>
         <FeedbackBanner tone="success">{copy.publishAccepted}</FeedbackBanner>
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={working} onClick={() => void openManagement()}>{phase === 'working' ? copy.managementOpening : copy.openManagement}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={working} data-icon="open" onClick={() => void openManagement()}>{phase === 'working' ? copy.managementOpening : copy.openManagement}</button>
       </> : <>
         {serviceUrl === null && <FeedbackBanner tone="info">{copy.publishNeedsService}</FeedbackBanner>}
         {serviceHost && <p className="performance-hint">{copy.publishServiceLabel}: {serviceHost}</p>}

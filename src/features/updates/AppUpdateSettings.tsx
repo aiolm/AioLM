@@ -43,7 +43,7 @@ export default function AppUpdateSettings({ query = "", updater = appUpdater, op
       {info?.available && !info.can_install && <p>{copy.unsupported}</p>}
       {info?.available && info.notes && <details><summary>{copy.notes}</summary><div className="app-update-notes">{info.notes}</div></details>}
       <div className="app-update-actions">
-        <button id="settings-check-update" type="button" className="app-button app-button--secondary" disabled={!native || busy} onClick={() => void updater.check()}>{state.phase === "checking" ? copy.checking : copy.check}</button>
+        <button id="settings-check-update" type="button" className="app-button app-button--secondary" disabled={!native || busy} data-icon="refresh" onClick={() => void updater.check()}>{state.phase === "checking" ? copy.checking : copy.check}</button>
         {info?.available && <button type="button" className="app-button app-button--primary" disabled={!native || busy || !info.can_install} onClick={() => setConfirm(true)}>{copy.install}</button>}
         {info?.available && <button type="button" className="app-button app-button--secondary" disabled={!native || busy} onClick={() => {
           setReleaseError(null);

@@ -8,9 +8,9 @@
     gap: 12px;
   }
 
-  .tuning-sampler-chain__title { font-size: 14px; font-weight: 600; }
-  .tuning-sampler-chain__hint, .tuning-sampler-chain__empty { color: var(--ui-muted); font-size: 12px; }
-  .tuning-sampler-chain__hint { margin-top: 10px; line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
+  .tuning-sampler-chain__title { font-size: var(--ui-text); font-weight: 600; }
+  .tuning-sampler-chain__hint, .tuning-sampler-chain__empty { color: var(--ui-muted); font-size: var(--ui-text-support); }
+  .tuning-sampler-chain__hint { margin-top: 10px; line-height: 1.65; word-break: keep-all; overflow-wrap: break-word; }
   .tuning-sampler-chain__empty { margin: 12px 0; }
 
   .tuning-sampler-chain__list {
@@ -29,14 +29,14 @@
     gap: 6px;
     min-width: 0;
     min-height: 46px;
-    font-size: 13px;
+    font-size: var(--ui-text-support);
   }
 
   .tuning-sampler-chip[draggable="true"] { cursor: grab; }
   .tuning-sampler-chip.is-dragging { opacity: 0.5; }
   .tuning-sampler-chip__grip, .tuning-sampler-chip__number { color: var(--ui-muted); user-select: none; }
   .tuning-sampler-chip__grip { letter-spacing: -3px; }
-  .tuning-sampler-chip__number { font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+  .tuning-sampler-chip__number { font-size: var(--ui-text-caption); font-variant-numeric: tabular-nums; text-align: right; }
   .tuning-sampler-chip__name { min-width: 0; overflow-wrap: anywhere; }
   .tuning-sampler-chip__actions { display: grid; grid-template-columns: repeat(3, auto); gap: 2px; }
   .tuning-sampler-chain__add { display: flex; gap: 8px; }

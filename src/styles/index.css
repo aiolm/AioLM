@@ -9,36 +9,49 @@
  --color-warning: var(--tone-warning-ink); --color-warning-soft: var(--tone-warning-bg); --color-warning-line: var(--tone-warning-border);
  --font-sans: "Pretendard Variable", "Segoe UI Variable", "Malgun Gothic", sans-serif;
  --font-mono: "Cascadia Code", Consolas, monospace;
+ /* Utility sizes follow the shared scale: xs is supporting text, sm is interface
+    text, base is a group heading and lg/xl are section and page headings. */
+ --text-xs: 12px; --text-xs--line-height: 1.5; --text-sm: 13px; --text-sm--line-height: 1.5;
+ --text-base: 14px; --text-base--line-height: 1.45; --text-lg: 16px; --text-lg--line-height: 1.4; --text-xl: 18px; --text-xl--line-height: 1.35;
 }
 @font-face { font-family: "Pretendard Variable"; src: url("/fonts/PretendardVariable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
 @layer base {
  :root { font-family: var(--font-sans); font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
  *, *::before, *::after { box-sizing: border-box; }
  html, body, #root { height: 100%; min-width: 0; margin: 0; }
- body { background: var(--ui-bg); color: var(--ui-ink); font-size: 14px; line-height: 1.5; overflow: hidden; word-break: keep-all; overflow-wrap: anywhere; accent-color: var(--ui-accent-solid); }
- button, input, textarea { font: inherit; }
- button, summary { cursor: pointer; }
- button:disabled { cursor: not-allowed; opacity: .5; }
+ /* break-word only splits a word that cannot fit on its own line; unlike
+    anywhere it keeps whole words in min-content, so flex and grid items do not
+    shrink into mid-word breaks. Korean keeps eojeol intact; other locales use
+    their normal line-breaking rules. */
+  body { background: var(--ui-bg); color: var(--ui-ink); font-size: var(--ui-text); line-height: var(--ui-text-leading); overflow: hidden; overflow-wrap: break-word; accent-color: var(--ui-accent); }
+ :root:lang(ko) body { word-break: keep-all; }
+  button, input, textarea { font: inherit; }
+  button, summary { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
  button { transition: background 160ms ease, color 160ms ease, border-color 160ms ease; }
- :focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 3px; }
+ :focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
  :focus:not(:focus-visible) { outline: none; }
  h1, h2, h3, h4, p { margin: 0; }
- h1 { font-size: 24px; font-weight: 650; line-height: 1.25; }
- h2 { font-size: 20px; font-weight: 650; }
- h3 { font-size: 16px; font-weight: 600; }
+ h1 { font-size: var(--ui-text-title); font-weight: 650; line-height: 1.3; letter-spacing: -.01em; }
+ h2 { font-size: var(--ui-text-section); font-weight: 650; line-height: 1.4; }
+ h3 { font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; }
  img, svg { max-width: 100%; }
  input, textarea { min-width: 0; }
  input::placeholder, textarea::placeholder { color: var(--ui-faint); opacity: 1; }
- input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex-shrink: 0; }
- input[type="range"] { width: 100%; }
+ /* The pastel action fill is about 1.6:1 on light surfaces, so checked boxes and
+    radios take the foreground accent that the palette keeps above 3:1. */
+ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--ui-accent); }
+ /* Slider thumbs and filled tracks take the same accent so the value position
+    is not drawn in the pastel fill. */
+ input[type="range"] { width: 100%; accent-color: var(--ui-accent); }
  textarea { resize: vertical; }
- code, pre { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+ code, pre { font-family: var(--font-mono); font-size: var(--ui-text-support); font-variant-numeric: tabular-nums; }
  pre { background: var(--ui-mono-bg); color: var(--ui-mono-ink); }
  a { color: var(--ui-accent); }
  * { scrollbar-width: thin; scrollbar-color: var(--ui-border-strong) transparent; }
 }
 [hidden] { display: none !important; }
-.app-text-wrap { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.app-text-wrap { min-width: 0; white-space: normal; overflow-wrap: break-word; }
 .stable-label { display: grid; min-width: 0; position: relative; }
 .stable-label > span { grid-area: 1 / 1; }
 .stable-label-size { visibility: hidden; pointer-events: none; user-select: none; }

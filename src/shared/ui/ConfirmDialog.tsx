@@ -13,6 +13,8 @@ type ConfirmDialogProps = {
   confirmDisabled?: boolean;
   scrollableDescription?: boolean;
   tone?: "primary" | "danger";
+  /** Semantic verb glyph for the confirm action (delete, reset, open, …); cancel always takes close. */
+  confirmIcon?: string;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -27,6 +29,7 @@ export default function ConfirmDialog({
   confirmDisabled = false,
   scrollableDescription = false,
   tone = "danger",
+  confirmIcon,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -96,8 +99,8 @@ export default function ConfirmDialog({
             would otherwise nest block elements inside a paragraph. */}
         <div id={descriptionId} className="app-confirm-dialog__description" tabIndex={scrollableDescription ? 0 : undefined}>{typeof description === "string" ? normalizeDisplayText(description) : description}</div>
         <div className="app-confirm-dialog__actions">
-          <button type="button" ref={cancelRef} className="app-button app-button--secondary" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
-          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} disabled={busy || confirmDisabled} onClick={onConfirm}>{busy ? t("common.wait") : confirmLabel}</button>
+          <button type="button" ref={cancelRef} className="app-button app-button--secondary" data-icon="close" disabled={busy} onClick={onCancel}>{busy ? t("common.wait") : cancelLabel}</button>
+          <button type="button" ref={confirmRef} className={`app-button app-button--${tone}`} data-icon={confirmIcon ?? "open"} disabled={busy || confirmDisabled} onClick={onConfirm}>{busy ? t("common.wait") : confirmLabel}</button>
         </div>
       </div>
     </dialog>,

@@ -3,9 +3,15 @@
 .panel-spinner { display: block; width: 48px; height: 6px; border-radius: 4px; background: var(--ui-accent-soft); animation: app-shimmer 1.2s ease-in-out infinite; }
 @keyframes app-shimmer { 50% { opacity: .35; } }
 @keyframes app-feedback-appear { from { opacity: 0; } to { opacity: 1; } }
-.app-page-scroll { padding: var(--ui-page-padding); }
-.app-section-title { color: var(--ui-ink); font-size: 16px; font-weight: 600; line-height: 1.4; }
-.app-section-hint { color: var(--ui-muted); font-size: 13px; line-height: 1.65; margin-top: 4px; }
-.app-eyebrow { font-size: 12px; font-weight: 600; color: var(--ui-muted); }
+.app-page-scroll { padding: 24px var(--ui-canvas-padding) 32px; }
+/* The body title names the work under the toolbar's location label. */
+.app-page-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; margin-bottom: 20px; }
+.app-page-header > div:first-child { flex: 1 1 24rem; min-width: 0; }
+.app-page-title, .api-page-heading h2, .settings-header h2, .workspace-page-heading h2 { color: var(--ui-ink); font-size: var(--ui-text-title); font-weight: 650; line-height: 1.3; letter-spacing: -.01em; }
+.app-page-description { max-width: 72ch; margin-top: 4px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.55; }
+.app-page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.app-section-title { color: var(--ui-ink); font-size: var(--ui-text-section); font-weight: 600; line-height: 1.4; }
+.app-section-hint { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.55; margin-top: 4px; }
+.app-eyebrow { font-size: var(--ui-text-support); font-weight: 600; color: var(--ui-muted); }
 .app-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .app-runtime-empty { display: grid; place-items: center; height: 100%; }

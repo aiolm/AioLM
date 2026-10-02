@@ -1,6 +1,6 @@
 /* Static presentation extracted into semantic classes; live dimensions stay in React. */
 @layer components {
-.ui-font-size-12px { font-size: 12px; }
+.ui-font-size-12px { font-size: var(--ui-text-support); }
 .ui-font-weight-800 { font-weight: 800; }
 .ui-letter-spacing-0-04em { letter-spacing: -0.04em; }
 .ui-line-height-1 { line-height: 1; }
@@ -24,7 +24,6 @@
 .ui-background-mono-bg { background: var(--ui-mono-bg); }
 .ui-color-mono-ink { color: var(--ui-mono-ink); }
 .ui-background-surface-muted { background: var(--ui-surface-muted); }
-.ui-accent-color-accent-solid { accent-color: var(--ui-accent-solid); }
 .ui-background-rgb-0-0-0-18 { background: var(--ui-mono-bg); }
 .ui-color-inherit { color: inherit; }
 .ui-background-danger-solid { background: var(--ui-danger-solid); }

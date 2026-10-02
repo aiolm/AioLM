@@ -56,3 +56,21 @@ describe('description renderer policy', () => {
     expect(screen.getByText('4001 / 4000')).toBeInTheDocument();
   });
 });
+
+describe('description field guidance', () => {
+  it('connects visible labels, hints and errors without announcing every character count', () => {
+    render(<DescriptionEditor value={'x'.repeat(4001)} onChange={() => undefined} label="Description" hint="Explain the setup" countLabel={(used, max) => `${used} / ${max}`} />);
+    const field = screen.getByRole('textbox', { name: 'Description' }) as HTMLTextAreaElement;
+    expect(field.labels?.[0]?.textContent).toContain('Description');
+    const ids = field.getAttribute('aria-describedby')!.split(' ');
+    expect(ids.map(id => document.getElementById(id)?.textContent)).toEqual(['Explain the setup', '4001 / 4000', 'Description exceeds 4000 characters.']);
+    expect(document.getElementById(ids[1])?.getAttribute('role')).toBeNull();
+  });
+  it('keeps descriptions separate when two result editors are displayed', () => {
+    render(<><DescriptionEditor value="" onChange={() => undefined} label="First" hint="First setup" countLabel={() => 'First count'} /><DescriptionEditor value="" onChange={() => undefined} label="Second" hint="Second setup" countLabel={() => 'Second count'} /></>);
+    const fields = screen.getAllByRole('textbox');
+    expect(fields[0].id).not.toBe(fields[1].id);
+    expect(document.getElementById(fields[0].getAttribute('aria-describedby')!.split(' ')[0])?.textContent).toBe('First setup');
+    expect(document.getElementById(fields[1].getAttribute('aria-describedby')!.split(' ')[0])?.textContent).toBe('Second setup');
+  });
+});

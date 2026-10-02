@@ -38,7 +38,7 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
         <div className="runtime-deep-verify-actions">
           {deepVerify.busy
             ? <LocalTaskCancelButton taskId={DEEP_VERIFICATION_TASK} onClick={deepVerify.cancel} className="app-button app-button--danger app-button--sm">{t("common.cancel")}</LocalTaskCancelButton>
-            : <button type="button" onClick={deepVerify.start} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--secondary app-button--sm">{t("ui.deepVerify")}</button>}
+            : <button type="button" data-icon="probe" onClick={deepVerify.start} disabled={runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--secondary app-button--sm">{t("ui.deepVerify")}</button>}
           {deepVerify.record && <StatusBadge label={t(deepVerify.record.verdict === "pass" ? "ui.deepVerifyPass" : "ui.deepVerifyFail")} tone={deepVerify.record.verdict === "pass" ? "success" : "danger"} />}
         </div>
         {deepVerify.record && <p className="app-section-hint">{normalizeDisplayText(deepVerify.record.detail)}</p>}

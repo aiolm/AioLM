@@ -378,14 +378,14 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
 
   const modelLabel = displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel;
   return <div className="app-page-scroll performance-page">
-    <header className="performance-heading"><h2 className="sr-only">{copy.title}</h2><p>{copy.description}</p></header>
+    <header className="app-page-header performance-heading"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.description}</p></div></header>
     <form className="app-card app-card--flush performance-card performance-setup" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-target">
         <div className="performance-target-identity"><span className="performance-target-label">{copy.model}</span>
           <strong className="performance-target-name" title={normalizeDisplayPath(displayedModel.model)}><ModelIcon model={displayedModel.model} /><span>{modelLabel}</span></strong>
         </div>
         {modelSettings && <div className="performance-target-actions">
-          <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} onClick={() => editModel('model')}>{modelCopy.settings}</button>
+          <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} data-icon="settings" onClick={() => editModel('model')}>{modelCopy.settings}</button>
           {targetDiffers && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); }}>{modelCopy.importDefault}</button>}
         </div>}
         <ModelBadges model={displayedModel.model} localPath={displayedModel.model} />
@@ -436,16 +436,16 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
           label: `${new Date(item.createdAt).toLocaleString()} · ${modelDisplayName(item.model)} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
           icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting} onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting} data-icon="copy" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
       </>}<CustomSelect className="performance-export-format" ariaLabel={copy.exportFormat} value={exportFormat} disabled={busy || exporting || deleting}
         onChange={value => { setExportFormat(value); setExportNotice(null); }} options={[{ value: 'xlsx', label: 'Excel (.xlsx)' }, { value: 'csv', label: 'CSV (.csv)' }]} />
-      {selectedRecord && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} onClick={() => void exportResults(false)}>{copy.exportFile}</button>}
-      {(exportAllDiffers || historyOffset !== null) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} onClick={() => void exportResults(true)}>{copy.exportAllCsv}</button>}
-      {selectedRecord && <button type="button" className="app-button app-button--danger app-button--sm" disabled={busy || otherBenchmark || exporting || historyLoading || deleting || sharingBusy} onClick={() => { setDeleteError(false); setHistoryNotice(null); setPendingDelete(selectedRecord); }}>{deleting ? copy.deleting : copy.deleteHistory}</button>}</div>
+      {selectedRecord && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} data-icon="download" onClick={() => void exportResults(false)}>{copy.exportFile}</button>}
+      {(exportAllDiffers || historyOffset !== null) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} data-icon="download" onClick={() => void exportResults(true)}>{copy.exportAllCsv}</button>}
+      {selectedRecord && <button type="button" className="app-button app-button--danger app-button--sm" disabled={busy || otherBenchmark || exporting || historyLoading || deleting || sharingBusy} data-icon="delete" onClick={() => { setDeleteError(false); setHistoryNotice(null); setPendingDelete(selectedRecord); }}>{deleting ? copy.deleting : copy.deleteHistory}</button>}</div>
     </div>}
     {exportNotice && <FeedbackBanner tone="success" className="performance-notice">{exportNotice}</FeedbackBanner>}
     {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
-    {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
+    {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
     {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, runtimeVersionLabel(installedRuntimes, selectedRecord.backend, selectedRecord.build))} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />

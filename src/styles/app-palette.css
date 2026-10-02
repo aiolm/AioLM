@@ -1,0 +1,72 @@
+/* Orchid Periwinkle (palette 13), the app's palette,
+   generated from the final design data with the brightened dark theme.
+   Light/dark mode stays its own preference: dark rules add [data-theme="dark"].
+   Text accents, focus rings, essential boundaries and status colors are derived
+   so text stays at 4.8:1 and focus/markers at 3.2:1 on every rendered fill. */
+:root, :root[data-theme="light"] {
+ --ui-bg: #FDFEFF; --ui-surface: #FDFDFF; --ui-sidebar: #DFF3FE; --ui-panel: #FDFDFF; --ui-panel-raised: #FDFDFF; --ui-input: #F5F8FF; --ui-input-hover: #DDE6FF; --ui-surface-muted: #F2FAFF; --ui-menu-bg: #FDFDFF; --ui-ink: #242424; --ui-muted: #646464; --ui-faint: #646464; --ui-muted-deep: #646464; --ui-border: #DFE6FA; --ui-border-strong: #898989; --ui-border-strongest: #646464; --ui-accent: #4B5C94; --ui-accent-solid: #7AB9F9; --ui-accent-solid-hover: #7AB9F9; --ui-accent-solid-active: #7AB9F9; --ui-accent-soft: #F2FAFF; --ui-accent-soft-hover: #BBE6FE; --ui-border-accent: #A4ADCA; --ui-focus: #242424; --ui-rail-focus: #242424; --ui-on-accent: #242424; --ui-rail-ink: #242424; --ui-rail-muted: #5E5E5E; --ui-nav-active: #BBE6FE; --ui-nav-active-ink: #242424; --ui-nav-hover: #DDE6FF; --ui-row-hover: #F9FCFF; --ui-mono-bg: #F5F8FF; --ui-mono-ink: #242424; --tone-info-bg: #F2F6FE; --tone-info-border: color-mix(in srgb, var(--tone-info-ink) 35%, var(--tone-info-bg)); --tone-info-ink: #495989; --tone-info-gradient: linear-gradient(180deg in srgb,#F4F8FF,#F2F6FE,#F0F4FC); --tone-success-bg: #F1F8F3; --tone-success-border: color-mix(in srgb, var(--tone-success-ink) 35%, var(--tone-success-bg)); --tone-success-ink: #376459; --tone-success-gradient: linear-gradient(180deg in srgb,#F3FAF5,#F1F8F3,#EFF6F1); --tone-warning-bg: #FFF4DC; --tone-warning-border: color-mix(in srgb, var(--tone-warning-ink) 35%, var(--tone-warning-bg)); --tone-warning-ink: #76510C; --tone-warning-gradient: linear-gradient(180deg in srgb,#FFF6E0,#FFF4DC,#FDF2D9); --tone-error-bg: #FCEEEF; --tone-error-border: color-mix(in srgb, var(--tone-error-ink) 35%, var(--tone-error-bg)); --tone-error-ink: #9B3B34; --tone-error-gradient: linear-gradient(180deg in srgb,#FDEFF0,#FCEEEF,#FAECEE); --tone-neutral-bg: #F2FAFF; --tone-neutral-ink: #646464; --ui-status-warning-dot: var(--tone-warning-ink); --ui-status-success-dot: var(--tone-success-ink); --ui-danger-hover: #F9DADC; --brand-cyan: #79D4FF; --brand-blue: #7993EE; --brand-violet: #D875B8; --brand-gradient: linear-gradient(115deg,#79D4FF,#7993EE,#D875B8); --ui-action-gradient: linear-gradient(135deg in srgb,#73C6F1,#7AB9F9,#87AAFC); --ui-action-hover-veil: rgb(255 255 255 / 10%); --ui-action-active-veil: rgb(255 255 255 / 18%); --ui-rail-gradient: linear-gradient(180deg in srgb,#DFF3FE,#E4F1FF,#E8EFFE); --ui-selected-gradient: linear-gradient(108deg in srgb,#BFE6FD,#CBE0FE); --ui-soft-gradient: linear-gradient(180deg in srgb,#F4F8FE,#F2F6FC); --ui-secondary-gradient: linear-gradient(180deg in srgb,#FAEDF5,#F8EBF3); --ui-field-gradient: linear-gradient(180deg in srgb,#F7FAFF,#F5F8FD); --ui-canvas-gradient: linear-gradient(132deg in srgb,#FDFEFF,#FBFDFF,#FCFCFE); --ui-device-gradient: linear-gradient(180deg in srgb,#FAFCFF,#F8FAFD); --ui-chart-gradient: linear-gradient(90deg in srgb,#79D4FF,#7993EE); --ui-chartAlt-gradient: linear-gradient(90deg in srgb,#7993EE,#D875B8); --ui-indicator-gradient: linear-gradient(112deg in srgb,#5595B4,#5568A8,#985282); --ui-navIndicator-gradient: linear-gradient(135deg in srgb,#49809B,#456E98,#495990); --ui-soft-ink: #303030; --ui-selected-ink: #242424; --ui-secondary-ink: #242424; --ui-support-color: #D875B8;
+ --ui-field-rest-gradient: linear-gradient(180deg in srgb,#F7FAFF,#F5F8FE,#F3F6FD);
+ --ui-field-hover-gradient: linear-gradient(180deg in srgb,#F2F7FF,#F0F5FE,#EEF3FD);
+ --ui-mono-gradient: linear-gradient(180deg in srgb,#F7FAFF,#F5F8FD);
+ --ui-action-secondary-gradient: linear-gradient(180deg in srgb,#E4ECFE,#E2E9FC,#E0E6FA);
+ --ui-action-secondary-gradient-hover: linear-gradient(180deg in srgb,#DBE3FD,#D9E0FC,#D7DDFB);
+ --tone-error-action-gradient: linear-gradient(180deg in srgb,#FBE4E6,#FAE2E4,#F8E0E2);
+ --tone-error-action-hover: linear-gradient(180deg in srgb,#F9DADC,#F7D7DA,#F5D4D7);
+ --tone-error-action-ink: #752622;
+ --tone-error-action-fill: #FAE2E4;
+ --tone-error-action-fill-hover: #F7D7DA;
+ --tone-warning-action-gradient: linear-gradient(180deg in srgb,#FCE8BE,#FBE6BA,#F9E4B7);
+ --tone-warning-action-hover: linear-gradient(180deg in srgb,#F8E0AE,#F6DEAB,#F4DCA8);
+ --tone-warning-action-ink: #624207;
+ --tone-warning-action-fill: #FBE6BA;
+ --tone-warning-action-fill-hover: #F6DEAB;
+ --ui-primary-gradient: linear-gradient(135deg in srgb,#73C6F1,#7AB9F9,#87AAFC);
+}
+:root[data-theme="dark"] {
+ --ui-bg: #34394B; --ui-surface: #3A4155; --ui-sidebar: #394768; --ui-panel: #3A4155; --ui-panel-raised: #3A4155; --ui-input: #404965; --ui-input-hover: #434F77; --ui-surface-muted: #3F496D; --ui-menu-bg: #3A4155; --ui-ink: #F5F5F5; --ui-muted: #D1D1D1; --ui-faint: #D1D1D1; --ui-muted-deep: #D1D1D1; --ui-border: #4F5A7C; --ui-border-strong: #A1A3A9; --ui-border-strongest: #D1D1D1; --ui-accent: #9BDFFF; --ui-accent-solid: #7AB9F9; --ui-accent-solid-hover: #7AB9F9; --ui-accent-solid-active: #7AB9F9; --ui-accent-soft: #3F496D; --ui-accent-soft-hover: #43578B; --ui-border-accent: #6B90AA; --ui-focus: #79D4FF; --ui-rail-focus: #79D4FF; --ui-on-accent: #242424; --ui-rail-ink: #F5F5F5; --ui-rail-muted: #D3D3D3; --ui-nav-active: #43578B; --ui-nav-active-ink: #F5F5F5; --ui-nav-hover: #434F77; --ui-row-hover: #3C445D; --ui-mono-bg: #404965; --ui-mono-ink: #F5F5F5; --tone-info-bg: #445270; --tone-info-border: color-mix(in srgb, var(--tone-info-ink) 35%, var(--tone-info-bg)); --tone-info-ink: #CDD8FA; --tone-info-gradient: linear-gradient(180deg in srgb,#465472,#445270,#42506E); --tone-success-bg: #42584F; --tone-success-border: color-mix(in srgb, var(--tone-success-ink) 35%, var(--tone-success-bg)); --tone-success-ink: #BEE2D8; --tone-success-gradient: linear-gradient(180deg in srgb,#445A51,#42584F,#40564D); --tone-warning-bg: #615037; --tone-warning-border: color-mix(in srgb, var(--tone-warning-ink) 35%, var(--tone-warning-bg)); --tone-warning-ink: #FFE2A3; --tone-warning-gradient: linear-gradient(180deg in srgb,#635239,#615037,#5F4E35); --tone-error-bg: #644A4D; --tone-error-border: color-mix(in srgb, var(--tone-error-ink) 35%, var(--tone-error-bg)); --tone-error-ink: #FFC9C1; --tone-error-gradient: linear-gradient(180deg in srgb,#664C4F,#644A4D,#62484B); --tone-neutral-bg: #404965; --tone-neutral-ink: #D1D1D1; --ui-status-warning-dot: var(--tone-warning-ink); --ui-status-success-dot: var(--tone-success-ink); --ui-danger-hover: #856266; --brand-cyan: #79D4FF; --brand-blue: #7993EE; --brand-violet: #D875B8; --brand-gradient: linear-gradient(115deg,#79D4FF,#7993EE,#D875B8); --ui-action-gradient: linear-gradient(135deg in srgb,#73C6F1,#7AB9F9,#87AAFC); --ui-action-hover-veil: rgb(255 255 255 / 10%); --ui-action-active-veil: rgb(255 255 255 / 18%); --ui-rail-gradient: linear-gradient(180deg in srgb,#3B4869,#394667); --ui-selected-gradient: linear-gradient(180deg in srgb,#46598D,#44578B,#425589); --ui-soft-gradient: linear-gradient(180deg in srgb,#455074,#434E72); --ui-secondary-gradient: linear-gradient(180deg in srgb,#444F6C,#424D6A); --ui-field-gradient: linear-gradient(180deg in srgb,#444F6B,#424D69); --ui-canvas-gradient: none; --ui-device-gradient: linear-gradient(180deg in srgb,#3C445A,#3A4258); --ui-chart-gradient: linear-gradient(90deg in srgb,#79D4FF,#7993EE); --ui-chartAlt-gradient: linear-gradient(90deg in srgb,#7993EE,#D875B8); --ui-indicator-gradient: linear-gradient(112deg in srgb,#79D4FF,#72B5FA,#7993EE); --ui-navIndicator-gradient: linear-gradient(135deg in srgb,#99DEFF,#93C7FB,#99ADF2); --ui-soft-ink: #F5F5F5; --ui-selected-ink: #F5F5F5; --ui-secondary-ink: #ECBADC; --ui-support-color: #ECBADC;
+ --ui-field-rest-gradient: linear-gradient(180deg in srgb,#4A526B,#49516A,#485069);
+ --ui-field-hover-gradient: linear-gradient(180deg in srgb,#4E576F,#4D566E,#4C556D);
+ --ui-mono-gradient: linear-gradient(180deg in srgb,#444F6B,#424D69);
+ --ui-action-secondary-gradient: linear-gradient(180deg in srgb,#515C8D,#4F5A8B,#4D5889);
+ --ui-action-secondary-gradient-hover: linear-gradient(180deg in srgb,#58608F,#565E8D,#545C8B);
+ --tone-error-action-gradient: linear-gradient(180deg in srgb,#815D60,#7E5A5D,#7B575A);
+ --tone-error-action-hover: linear-gradient(180deg in srgb,#856266,#825F63,#7F5C60);
+ --tone-error-action-ink: #FFF8F3;
+ --tone-error-action-fill: #7E5A5D;
+ --tone-error-action-fill-hover: #825F63;
+ --tone-warning-action-gradient: linear-gradient(180deg in srgb,#796543,#766240,#735F3D);
+ --tone-warning-action-hover: linear-gradient(180deg in srgb,#7E6A46,#7B6743,#786440);
+ --tone-warning-action-ink: #FFFEF8;
+ --tone-warning-action-fill: #766240;
+ --tone-warning-action-fill-hover: #7B6743;
+ --ui-primary-gradient: linear-gradient(135deg in srgb,#73C6F1,#7AB9F9,#87AAFC);
+}
+
+:root { --tone-error-border: color-mix(in srgb, var(--tone-error-ink) 35%, var(--tone-error-bg)); --tone-warning-border: color-mix(in srgb, var(--tone-warning-ink) 35%, var(--tone-warning-bg)); --tone-info-border: color-mix(in srgb, var(--tone-info-ink) 35%, var(--tone-info-bg)); --tone-success-border: color-mix(in srgb, var(--tone-success-ink) 35%, var(--tone-success-bg)); }
+
+:root {
+  --tone-error-action-fill: #FAE2E4;
+  --tone-error-action-fill-hover: #F7D7DA;
+  --tone-warning-action-fill: #FBE6BA;
+  --tone-warning-action-fill-hover: #F6DEAB;
+  --ui-publisher-fill: #F7E7F3;
+  --tone-error-action-gradient: linear-gradient(180deg in srgb,#FBE4E6,#FAE2E4,#F8E0E2);
+  --tone-error-action-hover: linear-gradient(180deg in srgb,#F9DADC,#F7D7DA,#F5D4D7);
+  --tone-error-action-ink: #752622;
+  --tone-warning-action-gradient: linear-gradient(180deg in srgb,#FCE8BE,#FBE6BA,#F9E4B7);
+  --tone-warning-action-hover: linear-gradient(180deg in srgb,#F8E0AE,#F6DEAB,#F4DCA8);
+  --tone-warning-action-ink: #624207;
+}
+:root[data-theme="dark"] {
+  --tone-error-action-fill: #7E5A5D;
+  --tone-error-action-fill-hover: #825F63;
+  --tone-warning-action-fill: #766240;
+  --tone-warning-action-fill-hover: #7B6743;
+  --ui-publisher-fill: #434F6C;
+  --tone-error-action-gradient: linear-gradient(180deg in srgb,#815D60,#7E5A5D,#7B575A);
+  --tone-error-action-hover: linear-gradient(180deg in srgb,#856266,#825F63,#7F5C60);
+  --tone-error-action-ink: #FFF8F3;
+  --tone-warning-action-gradient: linear-gradient(180deg in srgb,#796543,#766240,#735F3D);
+  --tone-warning-action-hover: linear-gradient(180deg in srgb,#7E6A46,#7B6743,#786440);
+  --tone-warning-action-ink: #FFFEF8;
+}

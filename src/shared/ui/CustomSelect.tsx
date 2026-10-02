@@ -81,6 +81,7 @@ export function CustomSelect<T extends string | number = string>({
   const triggerRef = useRef<HTMLButtonElement | HTMLInputElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
   const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
+  const [labelName, setLabelName] = useState<string>();
   const selected = options.find((opt) => opt.value === value) || options[0];
   const generatedId = useId();
   const listboxId = `${id ?? generatedId}-listbox`;
@@ -165,6 +166,13 @@ export function CustomSelect<T extends string | number = string>({
     // Keyboard navigation only moves the highlight while open; re-seed it from the
     // committed value each time the listbox opens so a previous preview never leaks in.
     setHighlightedIndex(visibleOptions.findIndex((opt) => opt.value === value));
+    // A portalled listbox is outside the native <label>, so it repeats the label's
+    // own text; a wrapping label's copy of the trigger (the selected value) is dropped.
+    setLabelName(Array.from(triggerRef.current?.labels ?? []).map((label) => {
+      const copy = label.cloneNode(true) as HTMLLabelElement;
+      copy.querySelectorAll(".app-custom-select-container").forEach((element) => element.remove());
+      return copy.textContent?.trim();
+    }).filter(Boolean).join(" ") || undefined);
     updateMenuPosition();
     const handleViewportChange = () => updateMenuPosition();
     window.addEventListener("resize", handleViewportChange);
@@ -259,11 +267,11 @@ export function CustomSelect<T extends string | number = string>({
     }
   };
 
-  const isSm = size === "sm";
   const accessibility = {
     id, role: 'combobox' as const, 'aria-haspopup': 'listbox' as const, 'aria-expanded': open,
-    'aria-controls': listboxId,
-    'aria-activedescendant': open && visibleOptions[highlightedIndex] ? `${listboxId}-option-${highlightedIndex}` : undefined,
+    // Only point at the popup while it is rendered, so the reference never dangles.
+    'aria-controls': open && menuPosition ? listboxId : undefined,
+    'aria-activedescendant': open && menuPosition && visibleOptions[highlightedIndex] ? `${listboxId}-option-${highlightedIndex}` : undefined,
     'aria-label': effectiveAriaLabel, 'aria-labelledby': effectiveAriaLabelledBy, 'aria-describedby': effectiveAriaDescribedBy,
     disabled,
   };
@@ -274,9 +282,9 @@ export function CustomSelect<T extends string | number = string>({
     setIsOpen(previous => !previous);
     triggerRef.current?.focus();
   };
-  const chevron = <svg className={`app-custom-select-chevron shrink-0 text-muted transition-transform duration-150 ${isSm ? 'h-3 w-3' : 'h-3.5 w-3.5'} ${open ? 'rotate-180 text-ink' : ''}`}
+  const chevron = <svg className={`app-custom-select-chevron ${open ? 'is-open' : ''}`}
     fill="none" viewBox="0 0 20 20" stroke="currentColor" aria-hidden="true" focusable="false">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m6 8 4 4 4-4" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="m6 8 4 4 4-4" />
   </svg>;
 
   return (
@@ -310,9 +318,9 @@ export function CustomSelect<T extends string | number = string>({
         onClick={toggle}
         className={triggerClasses}
       >
-        <span className="app-text-wrap flex items-center gap-1.5 min-w-0">
+        <span className="app-custom-select-label flex items-center gap-1.5">
           {selected?.icon}
-          <span className="app-text-wrap">{normalizeDisplayText(selected?.label ?? String(value))}</span>
+          <span className="app-custom-select-label">{normalizeDisplayText(selected?.label ?? String(value))}</span>
         </span>
         {chevron}
       </button>}
@@ -322,7 +330,7 @@ export function CustomSelect<T extends string | number = string>({
           ref={menuRef}
           id={listboxId}
           role="listbox"
-          aria-label={effectiveAriaLabel}
+          aria-label={effectiveAriaLabel ?? (effectiveAriaLabelledBy ? undefined : labelName)}
           aria-labelledby={effectiveAriaLabelledBy}
           className={[`app-custom-dropdown-menu ${menuClassName}`, (menuPosition.opensAbove ? "ui-transform-translateY-100" : "")].filter(Boolean).join(" ")}
           style={{ top: menuPosition.top, left: menuPosition.left, width: menuPosition.width, maxHeight: menuPosition.maxHeight }}
@@ -346,19 +354,15 @@ export function CustomSelect<T extends string | number = string>({
                   setIsOpen(false);
                   triggerRef.current?.focus();
                 }}
-                className={`app-custom-dropdown-item ${isSelected || isHighlighted ? "is-selected" : ""} ${opt.disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
+                className={`app-custom-dropdown-item ${isSelected ? "is-selected" : ""} ${isHighlighted ? "is-highlighted" : ""} ${opt.disabled ? "opacity-40 cursor-not-allowed pointer-events-none" : ""}`}
               >
-                <span className="app-text-wrap flex items-center gap-2 min-w-0">
+                <span className="app-custom-select-label flex items-center gap-2">
                   {opt.icon}
-                  <span className="app-text-wrap">{normalizeDisplayText(opt.label)}</span>
+                  <span className="app-custom-select-label">{normalizeDisplayText(opt.label)}</span>
                 </span>
                 {isSelected && (
-                  <svg className="app-custom-dropdown-check h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                    <path
-                      fillRule="evenodd"
-                      d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                      clipRule="evenodd"
-                    />
+                  <svg className="app-custom-dropdown-check shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true" focusable="false">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" d="m4.5 10.5 3.5 3.5 7.5-8" />
                   </svg>
                 )}
               </li>

@@ -3,9 +3,11 @@ import StableLabel from "../../shared/ui/StableLabel";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import type { AppStore } from "../../shared/state/store";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
+import Switch from "../../shared/ui/Switch";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import { useI18n } from "../../shared/i18n/i18n";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { executionText } from "../../shared/i18n/executionI18n";
 import { useRuntimesController } from "./useRuntimesController";
 import { computeVisibleRows, deviceSummaryOf } from "./runtimeRowPresentation";
 import RuntimeDeviceCard from "./RuntimeDeviceCard";
@@ -32,28 +34,39 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
   const deepVerify = useDeepVerification(store, locale);
 
   return (
-    <div className="app-page-scroll relative flex h-full min-h-0 flex-col">
-      <p className="mb-4 break-words text-sm text-muted">{t("ui.runtimesIntro")}</p>
+    <div className="app-page-scroll runtimes-page relative flex h-full min-h-0 flex-col">
+      <header className="app-page-header">
+        <div>
+          <h2 className="app-page-title">{executionText[locale].manageRuntime}</h2>
+          <p className="app-page-description">{t("ui.runtimesIntro")}</p>
+        </div>
+        <div className="app-page-actions">
+          {rt.bundleBusy
+            ? <LocalTaskCancelButton taskId="runtime-operation" pending={rt.cancelBusy} onClick={() => void rt.cancelInstall()} disabled={rt.cancelBusy} className="app-button app-button--danger shrink-0"><StableLabel value={rt.cancelBusy ? t("ui.cancelling") : t("ui.cancelRuntimeBundle")} labels={[t("ui.cancelling"), t("ui.cancelRuntimeBundle")]} /></LocalTaskCancelButton>
+            : <button type="button" onClick={() => void rt.refresh(true)} disabled={rt.runtimeBusy} className="app-button app-button--secondary shrink-0 runtime-refresh">
+                <svg aria-hidden="true" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 4v3.5h-3.5" /></svg>
+                {rt.loadError ? t("panel.retry") : t("ui.refreshRemote")}
+              </button>}
+        </div>
+      </header>
 
-      <RuntimeDeviceCard
-        t={t}
-        device={rt.device}
-        deviceSummary={deviceSummary}
-        showAll={rt.showAll}
-        hiddenCount={hiddenCount}
-        onToggleShowAll={rt.toggleShowAll}
-      />
+      <div className="runtimes-layout">
+      <aside className="runtimes-aside">
+        <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
+        <div className="runtime-show-all">
+          <Switch id="runtime-show-all" checked={rt.showAll} onChange={rt.toggleShowAll} aria-describedby={!rt.showAll && hiddenCount > 0 ? "runtime-hidden-count" : undefined} />
+          <label htmlFor="runtime-show-all">{t("ui.showAllBackends")}</label>
+          {!rt.showAll && hiddenCount > 0 && <span id="runtime-hidden-count" className="runtime-hidden-count">{t("ui.hiddenBackends", { count: hiddenCount })}</span>}
+        </div>
+        {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-link-button">{t("ui.executionProfiles")}</button></p>}
+      </aside>
+
+      <div className="runtimes-main">
       <PanelFeedback>
         {rt.failure && <FeedbackBanner tone="error" title={t("error.wrong")} onDismiss={() => rt.setFailure(null)}>{rt.failure}</FeedbackBanner>}
         {rt.loadError && <FeedbackBanner tone="error">{`${t("ui.runtimeLookupFailed")}: ${normalizeDisplayText(rt.loadError)}`}</FeedbackBanner>}
       </PanelFeedback>
-
-      <div className="runtime-refresh-row mb-3 flex flex-wrap items-center justify-between gap-2">
-        {rt.flash && <FeedbackBanner tone="info" className="w-full">{normalizeDisplayText(rt.flash)}</FeedbackBanner>}
-        {rt.bundleBusy
-          ? <LocalTaskCancelButton taskId="runtime-operation" pending={rt.cancelBusy} onClick={() => void rt.cancelInstall()} disabled={rt.cancelBusy} className="app-button app-button--danger app-button--sm shrink-0"><StableLabel value={rt.cancelBusy ? t("ui.cancelling") : t("ui.cancelRuntimeBundle")} labels={[t("ui.cancelling"), t("ui.cancelRuntimeBundle")]} /></LocalTaskCancelButton>
-          : <button type="button" onClick={() => void rt.refresh(true)} disabled={rt.runtimeBusy} className="app-button app-button--secondary app-button--sm shrink-0">{rt.loadError ? t("panel.retry") : t("ui.refreshRemote")}</button>}
-      </div>
+      {rt.flash && <FeedbackBanner tone="info" className="runtime-flash">{normalizeDisplayText(rt.flash)}</FeedbackBanner>}
 
       <RuntimeBackendList
         t={t}
@@ -73,11 +86,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
         onUninstall={(backend, build) => void rt.uninstall(backend, build)}
       />
 
-      {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-button app-button--ghost app-button--sm">{t("ui.executionProfiles")}</button></p>}
-
-      <details className="runtime-advanced mb-4 app-card" >
-        <summary className="app-section-title cursor-pointer">{t("settings.advanced")}</summary>
-        <div className="mt-4">
+      <details className="runtime-advanced">
+        <summary>{t("settings.advanced")}</summary>
+        <div className="runtime-advanced__body">
           <RuntimeCapabilitiesCard
             t={t}
             capabilities={rt.capabilities}
@@ -115,6 +126,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles }: 
           />
         </div>
       </details>
+      </div>
+      </div>
       <ConfirmDialog
         open={rt.prPreview !== null}
         title={t("ui.prConfirmTitle")}

@@ -1,0 +1,137 @@
+/* Light highlights lead into pastel role colors. Filled controls and notices
+   keep a visible gradient; reading structure stays quiet. No idle frames are added. */
+/* Primary actions: the hover/press veil moves the fill away from its ink.
+   Disabled actions keep the flat disabled fill so they never look enabled. */
+.app-button--primary:not(:disabled) { border-color: transparent; background-origin: border-box; background-image: var(--ui-primary-gradient); }
+.app-button--primary:hover:not(:disabled) { background-image: linear-gradient(var(--ui-primary-hover-veil), var(--ui-primary-hover-veil)), var(--ui-primary-gradient); }
+.app-button--primary:active:not(:disabled) { background-image: linear-gradient(var(--ui-primary-active-veil), var(--ui-primary-active-veil)), var(--ui-primary-gradient); }
+/* The rail's current page keeps its selected fill while hovered, plus a short
+   solid indicator bar so the state does not rely on the fill alone. */
+.aiolm-sidebar .aiolm-nav-link, .aiolm-drawer .aiolm-nav-link { position: relative; }
+.aiolm-sidebar .aiolm-nav-link[aria-current="page"], .aiolm-drawer .aiolm-nav-link[aria-current="page"], .aiolm-sidebar .aiolm-nav-link[aria-current="page"]:hover, .aiolm-drawer .aiolm-nav-link[aria-current="page"]:hover { background-color: var(--ui-nav-active); color: var(--ui-selected-ink); }
+.aiolm-sidebar .aiolm-nav-link[aria-current="page"]::before, .aiolm-drawer .aiolm-nav-link[aria-current="page"]::before { content: ""; position: absolute; inset-block: 8px; inset-inline-start: 0; width: 3px; border-radius: 2px; background-color: var(--ui-accent); }
+/* Publisher metadata stays distinct through its ink, without another gradient. */
+.app-badge--neutral { border-color: transparent; background-color: var(--ui-accent-soft); color: var(--ui-soft-ink); }
+.model-publishers .app-badge--neutral { background-color: var(--ui-publisher-fill); color: var(--ui-secondary-ink); }
+.runtime-device-summary { padding: 12px 14px; border-radius: var(--ui-radius-panel); background-color: var(--ui-surface); }
+.app-progress::-webkit-progress-value { background-color: var(--ui-primary-fill); }
+.app-progress::-moz-progress-bar { background-color: var(--ui-primary-fill); }
+@media (forced-colors: active) {
+ .aiolm-sidebar .aiolm-nav-link[aria-current="page"]::before, .aiolm-drawer .aiolm-nav-link[aria-current="page"]::before { background: Highlight; }
+}
+
+/* A persistent pencil distinguishes editable values even after the placeholder
+   disappears. Numbers retain their native spinners; read-only fields omit it. */
+:root :is(.app-input:not([type="number"], [type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [role="combobox"]), .app-textarea):not(:disabled, [readonly]) {
+ padding-inline-end: 32px;
+ --app-edit-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m13 3 4 4M3 17l4-1L17 6a2.8 2.8 0 0 0-4-4L3 12z' fill='none' stroke='%23646464' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+ background-image: var(--app-edit-glyph), var(--ui-field-rest-gradient);
+ background-repeat: no-repeat;
+ background-position: right 10px center, center;
+ background-size: 14px 14px, auto;
+}
+:root[data-theme="dark"] :is(.app-input:not([type="number"], [type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [role="combobox"]), .app-textarea):not(:disabled, [readonly]) {
+ --app-edit-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m13 3 4 4M3 17l4-1L17 6a2.8 2.8 0 0 0-4-4L3 12z' fill='none' stroke='%23D1D1D1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+@media (forced-colors: active) {
+ :root :is(.app-input:not([type="number"], [type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [role="combobox"]), .app-textarea):not(:disabled, [readonly]) { background-image: none; }
+}
+
+/* Shared editors and menus keep their lines separate when text is enlarged. */
+:root :is(.app-input, .app-textarea, .app-custom-select-trigger, .app-custom-dropdown-item, .app-button, .app-tab, .app-nav-item, .app-action-menu__item) { line-height: 1.5; }
+
+/* Windows contrast themes supply system fills and strokes; normal themes keep
+   the borderless filled controls above. */
+@media (forced-colors: active) {
+ :root :is(.app-button, .app-icon-button, .app-custom-select-trigger) {
+  color: ButtonText; background: ButtonFace; background-image: none;
+  border: 1px solid ButtonText; box-shadow: none;
+ }
+ :root :is(.app-button, .app-icon-button):disabled { color: GrayText; border-color: GrayText; }
+ :root :is(.app-input, .app-textarea) { background: Canvas; background-image: none; color: CanvasText; border-color: CanvasText; }
+ :root :is(.app-button, .app-icon-button, .app-input, .app-textarea, .app-custom-select-trigger):focus-visible { outline-color: Highlight; }
+ :root .app-button[data-icon]::before { background-color: currentColor; }
+ :root .app-switch { background: ButtonFace; background-image: none; border-color: ButtonText; }
+ :root .app-switch .app-switch__thumb { background: ButtonText; }
+ :root .app-switch[aria-checked="true"] { background: Highlight; }
+ :root .app-switch[aria-checked="true"] .app-switch__thumb { background: HighlightText; }
+ :root .app-progress { appearance: auto; background-image: none; }
+ :root .app-progress::-webkit-progress-value { background-image: none; }
+}
+/* Semantic actions keep their own hue even inside generic action groups. */
+.app-button--danger:not(:disabled) { border-color: transparent; background: var(--tone-error-action-gradient); color: var(--tone-error-action-ink); }
+.app-button--danger:hover:not(:disabled) { background: var(--tone-error-action-hover); color: var(--tone-error-action-ink); }
+.app-button--ghost.app-button--danger:not(:disabled) { background: transparent; color: var(--tone-error-ink); }
+.app-button--ghost.app-button--danger:hover:not(:disabled) { background: var(--tone-error-gradient); color: var(--tone-error-ink); }
+.app-button--warning:not(:disabled) { border-color: transparent; background: var(--tone-warning-action-gradient); color: var(--tone-warning-action-ink); }
+.app-button--warning:hover:not(:disabled) { background: var(--tone-warning-action-hover); }
+:root .app-textarea:not(:disabled, [readonly]) { background-position: right 10px top 10px, center; }
+@media (forced-colors: active) {
+  :root :is(.app-button--danger, .app-button--warning):not(:disabled), :root .app-button--ghost.app-button--danger:hover:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+}
+/* Recovery actions use the action palette; the enclosing notice carries status. */
+.app-feedback .app-feedback-action:not(:disabled) { background: var(--ui-action-secondary-gradient); color: var(--ui-action-ink); }
+.app-feedback .app-feedback-action:hover:not(:disabled) { background: var(--ui-action-secondary-gradient-hover); color: var(--ui-action-ink-hover); }
+@media (forced-colors: active) {
+  :root .app-feedback .app-feedback-action:not(:disabled) { background: ButtonFace; color: ButtonText; }
+}
+/* Text controls keep breathing room even in feature-specific compact rows. */
+:root .app-button:not(.app-button--icon) { padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); }
+/* Filled components keep their role colors without decorative shading. */
+@media (forced-colors: none) {
+ :root .app-icon-button:hover:not(:disabled) { background-color: var(--ui-action-secondary-fill-hover); }
+ :root .app-icon-button--danger:hover:not(:disabled) { background-color: var(--tone-error-bg); }
+ :root .app-feedback-dismiss:hover:not(:disabled) { background-color: var(--ui-accent-soft); }
+ :root .app-button--selected:not(:disabled), :root .app-button[aria-pressed="true"]:not(:disabled),
+ :root .settings-profile-chip--active { background-color: var(--ui-action-secondary-fill-hover); }
+ :root .app-empty-icon, :root .app-soft-accent, :root .models-list-count,
+ :root .project-config-snapshot, :root .ui-background-accent-soft { background-color: var(--ui-accent-soft); }
+ :root .app-custom-dropdown-item.is-highlighted, :root .app-action-menu-trigger[aria-expanded="true"],
+ :root .app-action-menu__item:is(:focus, :focus-visible),
+ :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-color: var(--ui-accent-soft); }
+ :root .performance-chip > span { background-color: var(--ui-field-fill); }
+ :root .performance-chip > input:checked + span, :root .performance-baseline-chip { background-color: var(--ui-accent-soft); }
+ :root .setup-progress [aria-current="step"] .setup-step-number { background: var(--ui-primary-fill); color: var(--ui-on-primary); }
+ :root .setup-progress [data-complete="true"] .setup-step-number { background-color: var(--ui-accent-soft); }
+ :root pre:not([data-empty="true"], [data-error="true"]), :root .chat-markdown-code,
+ :root .performance-details code { background-color: var(--ui-mono-bg); }
+ :root .models-model-actions .app-status-badge, :root .session-entry .app-status-badge, :root .aiolm-status { background-image: none; }
+}
+
+/* Windows contrast themes own the field surface in every interaction state. */
+@media (forced-colors: active) {
+ :root :is(.app-input, .app-textarea, .app-custom-select-trigger) { background-image: none !important; }
+}
+
+/* Shared filled states use the same palette as the web. Native contrast themes
+   keep their system fills and the edit glyph retains its bounded geometry. */
+@media (forced-colors: none) {
+ :root .app-button--secondary:not(:disabled) { background-image: var(--ui-action-secondary-gradient); }
+ :root .app-button--secondary:hover:not(:disabled), :root .app-button--ghost:not(.app-button--danger):hover:not(:disabled), :root .app-icon-button:hover:not(:disabled) { background-image: var(--ui-action-secondary-gradient-hover); }
+ :root .app-badge--info, :root .ui-background-info-bg { background-image: var(--tone-info-gradient); }
+ :root .app-badge--success, :root .ui-background-success-bg { background-image: var(--tone-success-gradient); }
+ :root .app-badge--warning, :root .ui-background-warning-bg { background-image: var(--tone-warning-gradient); }
+ :root .app-badge--danger, :root .ui-background-error-bg, :root .app-icon-button--danger:hover:not(:disabled) { background-image: var(--tone-error-gradient); }
+ :root .app-feedback { background-image: var(--tone-info-gradient); }
+ :root .app-feedback--success { background-image: var(--tone-success-gradient); }
+ :root .app-feedback--warning { background-image: var(--tone-warning-gradient); }
+ :root .app-feedback--error { background-image: var(--tone-error-gradient); }
+ :root .app-feedback .app-feedback-action:not(:disabled) { background-image: var(--ui-action-secondary-gradient); }
+ :root .app-feedback .app-feedback-action:hover:not(:disabled) { background-image: var(--ui-action-secondary-gradient-hover); }
+ :root .app-feedback-dismiss:hover:not(:disabled) { background-image: var(--ui-soft-gradient); }
+ :root .app-button--selected:not(:disabled), :root .app-button[aria-pressed="true"]:not(:disabled), :root .settings-profile-chip--active { background-image: var(--ui-action-secondary-gradient-hover); }
+ :root .app-empty-icon, :root .app-soft-accent, :root .models-list-count, :root .project-config-snapshot, :root .ui-background-accent-soft, :root .app-badge--neutral { background-image: var(--ui-soft-gradient); }
+ :root .model-publishers .app-badge--neutral { background-image: var(--ui-secondary-gradient); }
+ :root .app-custom-dropdown-item.is-highlighted, :root .app-action-menu-trigger[aria-expanded="true"], :root .app-action-menu__item:is(:focus, :focus-visible), :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-image: var(--ui-soft-gradient); }
+ :root .app-custom-select-trigger:not(:disabled), :root .app-input:not(:disabled), :root .app-textarea:not(:disabled), :root .performance-chip > span { background-image: var(--ui-field-rest-gradient); }
+ :root .app-custom-select-trigger:hover:not(:disabled, [aria-expanded="true"]) { background-image: var(--ui-field-hover-gradient); }
+ :root :is(.app-input:not([type="number"], [type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [role="combobox"]), .app-textarea):not(:disabled, [readonly]) { background-image: var(--app-edit-glyph), var(--ui-field-rest-gradient); }
+ :root :is(.app-input:not([type="number"], [type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [role="combobox"]), .app-textarea):is(:hover, :focus):not(:disabled, [readonly]) { background-image: var(--app-edit-glyph), var(--ui-field-hover-gradient); }
+ :root .performance-chip > input:checked + span, :root .performance-baseline-chip { background-image: var(--ui-soft-gradient); }
+ :root .setup-progress [aria-current="step"] .setup-step-number { background-image: var(--ui-primary-gradient); }
+ :root .setup-progress [data-complete="true"] .setup-step-number { background-image: var(--ui-soft-gradient); }
+ :root pre:not([data-empty="true"], [data-error="true"]), :root .chat-markdown-code, :root .performance-details code { background-image: var(--ui-mono-gradient); }
+ /* The approved rail keeps its very pale sky-to-lilac tint along its height. */
+ :root .aiolm-sidebar, :root .aiolm-drawer { background-image: var(--ui-rail-gradient); }
+ :root .aiolm-sidebar .aiolm-nav-link[aria-current="page"], :root .aiolm-drawer .aiolm-nav-link[aria-current="page"] { background-image: var(--ui-selected-gradient); }
+}

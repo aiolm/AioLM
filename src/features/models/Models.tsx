@@ -47,7 +47,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [serverAdapters, setServerAdapters] = useState<api.ServerLoraAdapter[]>([]);
   const [serverAdapterScales, setServerAdapterScales] = useState<Record<number, string>>({});
   const [adapterBusy, setAdapterBusy] = useState(false);
-  const [pendingConfirm, setPendingConfirm] = useState<{ title: string; description: string; confirmLabel: string; onConfirm: () => void } | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ title: string; description: string; confirmLabel: string; confirmIcon?: string; onConfirm: () => void } | null>(null);
   const scanTimer = useRef<number | null>(null);
   const scanGeneration = useRef(0);
   const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
@@ -267,6 +267,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         title: t("panel.restartSwitchQuestion"),
         description: t("ui.switchModelBody", { name: normalizeDisplayText(model.name) }),
         confirmLabel: t("panel.restartSwitch"),
+        confirmIcon: "open",
         onConfirm: () => { setPendingConfirm(null); void performSelectAndStart(model); },
       });
       return;
@@ -306,12 +307,14 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       title: t("ui.deleteModelTitle"),
       description: model.shards ? t("ui.deleteSplitModelBody", { name: normalizeDisplayText(model.name), count: model.shards.files.length }) : t("ui.deleteModelBody", { name: normalizeDisplayText(model.name) }),
       confirmLabel: t("ui.deleteModelAction"),
+      confirmIcon: "delete",
       onConfirm: () => void remove(),
     });
   };
 
   return (
     <div className={`app-page-scroll models-panel relative flex h-full min-h-0 min-w-0 flex-col${compact ? ' models-panel--compact' : ''}`} data-testid="models-scroll-region">
+      {compact && focus !== "lora" && <header className="app-page-header"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.hint}</p></div></header>}
       {focus === "lora" && <div className="mb-4"><div className="app-eyebrow">{t("panel.models")}</div><h2 className="mt-1 text-xl font-semibold tracking-tight text-ink">{t("panel.loraAdapters")}</h2><p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">{t("ui.loraDescription")}</p></div>}
 
       {/* Rendered outside the library-only fragment so LoRA actions report too. */}
@@ -341,7 +344,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           placeholder="models"
         />
         <div className="models-folder-buttons">
-        <button type="button" onClick={() => void browse()} disabled={scanning} className="app-button app-button--secondary shrink-0">{t("panel.browse")}</button>
+        <button type="button" data-icon="folder" onClick={() => void browse()} disabled={scanning} className="app-button app-button--secondary shrink-0">{t("panel.browse")}</button>
         </div>
       </div>
       </div>
@@ -351,7 +354,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {liveModel && <div className="app-text-wrap text-[15px] font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{modelDisplayName(models?.find((model) => model.path === liveModel)?.name ?? liveModel)}</div>}
+            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{modelDisplayName(models?.find((model) => model.path === liveModel)?.name ?? liveModel)}</div>}
             {/* Memory and slot status of the running model is what this card is for, so it starts expanded. */}
             <details className="models-runtime-details mt-1" open>
             <summary>{t("section.diagnostics")}</summary>
@@ -396,10 +399,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         {serverRunning && <div className="mt-3 border-t pt-3 ui-border-color-border" ><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-medium ui-color-ink" >{t("ui.loraServerAdapters")}</span><div className="flex gap-2"><button type="button" onClick={() => void refreshServerAdapters()} disabled={adapterBusy} className="app-button app-button--secondary app-button--sm"><StableLabel value={adapterBusy ? t("ui.reading") : t("ui.refresh")} labels={[t("ui.reading"), t("ui.refresh")]} /></button><button type="button" onClick={() => void applyServerAdapters()} disabled={adapterBusy || serverAdapters.length === 0} className="app-button app-button--primary app-button--sm">{t("ui.loraApplyScales")}</button></div></div>{serverAdapters.length > 0 ? <div className="mt-2 space-y-2">{serverAdapters.map((adapter) => { const displayPath = normalizeDisplayPath(adapter.path); return <label key={adapter.id} className="flex items-center gap-2 text-xs ui-color-muted" ><span className="min-w-0 flex-1 app-text-wrap" title={displayPath}>{displayPath.split(/[\\/]/).pop()}</span><input value={serverAdapterScales[adapter.id] ?? String(adapter.scale)} onChange={(event) => setServerAdapterScales((current) => ({ ...current, [adapter.id]: event.target.value }))} inputMode="decimal" className="app-input w-16" aria-label={t("ui.loraScaleFor", { name: displayPath.split(/[\\/]/).pop() ?? displayPath })} /></label>; })}</div> : <div className="mt-2 text-xs ui-color-faint" >{t("ui.loraNoServerAdapters")}</div>}</div>}
       </section>}
 
-      {focus !== "lora" && <div className="mt-4 flex min-w-0 flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5"><h2 className="text-sm font-semibold ui-color-ink" >{t("panel.models")} {models ? `(${visible.length})` : ""}</h2><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input min-w-0 max-w-xs flex-1" /></div>
-        <label className="flex items-center gap-2 text-xs ui-color-muted" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} className="ui-accent-color-accent-solid"  /> {t("panel.visionModels")}</label>
-        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
+      {focus !== "lora" && <div className="models-list-toolbar">
+        <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
+        <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
+        <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
+        {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
       </div>}
 
       {focus !== "lora" && runtimeGap && <FeedbackBanner tone="warning" className="mt-2.5" action={{ label: modelSettings ? copy.needRuntimeAction : copy.manageRuntime, onClick: () => {
@@ -412,11 +416,12 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         title={pendingConfirm?.title ?? t("panel.confirmAction")}
         description={pendingConfirm?.description ?? ""}
         confirmLabel={pendingConfirm?.confirmLabel ?? t("common.confirm")}
+        confirmIcon={pendingConfirm?.confirmIcon}
         onConfirm={() => pendingConfirm?.onConfirm()}
         onCancel={() => setPendingConfirm(null)}
       />
 
-      {focus !== "lora" && <div className="models-model-list mt-2.5 min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
+      {focus !== "lora" && <div className="models-model-list min-w-0" data-testid="models-list" role={visible.length > 0 ? "list" : "region"} aria-label={t("panel.ariaGgufModels")} aria-busy={scanning}>
         {scanning && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
@@ -448,20 +453,20 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 className="models-model-name app-list-row__action flex-col items-start"
 
               >
-                <span className="block app-text-wrap text-sm font-medium ui-color-ink" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges model={model.name} localPath={model.path} />
+                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges model={model.name} localPath={model.path} />
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
-              <div className="models-model-actions flex min-w-0 flex-nowrap items-center justify-end gap-1.5 overflow-x-auto px-1">
-                <span className="shrink-0 text-xs tabular-nums ui-color-faint" >{formatMebibytes(model.size_mb)}</span>
+              <span className="models-model-size" >{formatMebibytes(model.size_mb)}</span>
+              <div className="models-model-actions">
                 {model.is_vision && <Badge>{t("ui.visionTag")}</Badge>}
                 {running && <StatusBadge label={copy.running} tone="success" />}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
                 {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || runtimeGap} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
+              <code className="models-model-path">{normalizeDisplayPath(model.path)}</code>
               <div className="models-file-actions">
-                  <code>{normalizeDisplayPath(model.path)}</code>
-                  <button type="button" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
-                  <button type="button" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button>
+                  <button type="button" data-icon="copy" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
+                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
               </div>
             </div>
           );

@@ -254,12 +254,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     : t("load.pathRuntime");
 
 
-  const brand = <div className="aiolm-brand"><AioMark /><div><strong>AioLM</strong><span>All-In-One LM</span></div></div>;
+  const brand = <div className="aiolm-brand"><AioMark /><strong>AioLM</strong></div>;
   const navigation = <nav aria-label={t("app.primary")} className="aiolm-navigation">
     {navigationGroups.map(group => <section key={group.id} className="aiolm-nav-group">
       <h2>{copy[group.id]}</h2>
       {group.items.map(item => <button key={item.id} type="button" aria-current={view === item.id ? "page" : undefined} className="app-nav-item aiolm-nav-link" onClick={() => navigate(item.id)}>
-        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{labelFor(item.id)}</span>
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={item.icon} /></svg><span>{labelFor(item.id)}</span>
       </button>)}
     </section>)}
   </nav>;
@@ -270,12 +270,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
     <aside className="aiolm-sidebar">{brand}{navigation}<div className="aiolm-sidebar-footer">{copy.local}<span>v{version}</span></div></aside>
     <dialog ref={menuRef} className="aiolm-drawer" aria-label={t("app.primary")} onCancel={event => { event.preventDefault(); setMenuOpen(false); }} onClick={event => { if (event.target === event.currentTarget) setMenuOpen(false); }}>
-      <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}>×</button></div>{navigation}</div>
+      <div className="aiolm-drawer-sheet"><div className="aiolm-drawer-heading">{brand}<button type="button" className="app-icon-button" aria-label={copy.closeMenu} onClick={() => setMenuOpen(false)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>{navigation}</div>
     </dialog>
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}><ModelIcon model={liveModel ?? ''} />{shortModel(liveModel, modelCopy.choose)}</button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel ? `${backendLabel} · ` : ''}⚙</button></div>
+        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{shortModel(liveModel, modelCopy.choose)}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel && <span className="aiolm-context-label">{backendLabel}</span>}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
         <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
