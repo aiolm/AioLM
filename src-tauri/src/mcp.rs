@@ -816,6 +816,25 @@ mod tests {
     use super::*;
 
     #[cfg(windows)]
+    fn powershell_fixture(root: &std::path::Path, script: &str) -> McpServer {
+        // Run a script file so Windows command-line quoting and the shell's
+        // command-input handling cannot interfere with the MCP stdio frames.
+        let path = root.join("server.ps1");
+        std::fs::write(&path, script).unwrap();
+        McpServer {
+            args: vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-ExecutionPolicy".into(),
+                "Bypass".into(),
+                "-File".into(),
+                path.to_string_lossy().into_owned(),
+            ],
+            ..server("powershell")
+        }
+    }
+
+    #[cfg(windows)]
     fn lifecycle_fixture(root: &std::path::Path, response: &str) -> McpServer {
         let parent_file = root
             .join("parent.pid")
@@ -826,15 +845,7 @@ mod tests {
             .to_string_lossy()
             .replace('\'', "''");
         let script = format!("[IO.File]::WriteAllText('{parent_file}', [string]$PID); $child = Start-Process ping.exe -ArgumentList @('-n','60','127.0.0.1') -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText('{descendant_file}', [string]$child.Id); {response}; Start-Sleep -Seconds 60");
-        McpServer {
-            args: vec![
-                "-NoProfile".into(),
-                "-NonInteractive".into(),
-                "-Command".into(),
-                script,
-            ],
-            ..server("powershell")
-        }
+        powershell_fixture(root, &script)
     }
 
     #[cfg(windows)]
@@ -921,15 +932,7 @@ mod tests {
         let script = r#"[IO.File]::WriteAllText('__PID__', [string]$PID); while (($line = [Console]::In.ReadLine()) -ne $null) { $message = $line | ConvertFrom-Json; if ($message.method -eq 'initialize') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":1,"result":{}}') } elseif ($message.method -eq 'tools/list') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"probe","inputSchema":{"type":"object"}}]}}') } elseif ($message.method -eq 'tools/call') { [IO.File]::WriteAllText('__CALLED__', 'called') }; [Console]::Out.Flush() }"#
             .replace("__PID__", &quoted("server.pid"))
             .replace("__CALLED__", &quoted("tools-call.txt"));
-        McpServer {
-            args: vec![
-                "-NoProfile".into(),
-                "-NonInteractive".into(),
-                "-Command".into(),
-                script,
-            ],
-            ..server("powershell")
-        }
+        powershell_fixture(root, &script)
     }
 
     #[cfg(windows)]
