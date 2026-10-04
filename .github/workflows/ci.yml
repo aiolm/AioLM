@@ -179,6 +179,12 @@ jobs:
         if: runner.os == 'macOS'
         timeout-minutes: 5
         run: node scripts/smoke-macos-ui.mjs
+      - name: Real LaunchServices launch, reopen, command lookup and quit
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: |
+          swiftc scripts/macos-terminate-app.swift -o tmp/macos-terminate-app
+          node scripts/smoke-macos-launch.mjs
       - name: Retain synthetic macOS UI evidence
         if: always() && runner.os == 'macOS'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
