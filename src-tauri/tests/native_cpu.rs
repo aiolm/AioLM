@@ -183,6 +183,11 @@ fn real_cli_lifecycle(backend: &str) {
     println!("Probing selected runtime before launch");
     let capabilities = home.cli(&["runtime", "probe", backend, &build]);
     println!("Runtime devices: {}", capabilities["devices"]);
+    assert_eq!(
+        capabilities["state"], "available",
+        "runtime preflight diagnostics: {}",
+        capabilities["diagnostics"]
+    );
     if backend == "metal" {
         let devices: Vec<String> = serde_json::from_value(capabilities["devices"].clone()).unwrap();
         assert!(

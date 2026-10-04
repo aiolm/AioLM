@@ -34,6 +34,12 @@ const MAX_PROBE_OUTPUT: usize = 256 * 1024;
 /// the toolchain printed, never the banner it started with.
 const MAX_BUILD_LOG_TAIL: usize = 256 * 1024;
 const MAX_BUILD_DETAIL_CHARS: usize = 4096;
+// macOS CPU archives also contain Metal. Cold device/backend initialization
+// exceeded eight seconds in native acceptance, even after installation passed.
+// Keep interactive probes bounded while allowing that initialization to finish.
+#[cfg(target_os = "macos")]
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(not(target_os = "macos"))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 /// The staged preflight is the very first execution of a just-extracted
 /// runtime, so Windows still has to page in and virus-scan 100-250 MB of fresh
@@ -2503,17 +2509,32 @@ async fn run_probe_with_cancel_and_environment(
         }
         ProbeWaitOutcome::TimedOut => {
             terminate_probe(&mut child).await;
-            let _ = finish_probe_reader(stdout_task).await;
-            if let Some(task) = stderr_task {
-                let _ = finish_probe_reader(task).await;
-            }
+            let stdout = finish_probe_reader(stdout_task).await;
+            let stderr = match stderr_task {
+                Some(task) => finish_probe_reader(task).await,
+                None => Vec::new(),
+            };
+            let text = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+            let detail: String = text
+                .chars()
+                .rev()
+                .take(MAX_BUILD_DETAIL_CHARS)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             return ProbeCommand {
                 success: false,
-                text: String::new(),
+                text,
                 diagnostic: Some(format!(
-                    "runtime probe timed out after {}s: {}",
+                    "runtime probe timed out after {}s: {}\n{}",
                     limit.as_secs(),
-                    args.join(" ")
+                    args.join(" "),
+                    detail.trim(),
                 )),
             };
         }
@@ -7627,11 +7648,12 @@ mod tests {
     }
 
     #[test]
-    fn staged_preflight_budget_dwarfs_the_interactive_probe() {
+    fn staged_preflight_allows_more_time_than_an_interactive_probe() {
         // The first launch of a freshly extracted 100-250 MB runtime is
         // dominated by on-access virus scanning; the 8s interactive budget
         // aborts the install before llama-server reaches main().
-        assert!(STAGED_PREFLIGHT_TIMEOUT >= PROBE_TIMEOUT * 10);
+        assert!(STAGED_PREFLIGHT_TIMEOUT > PROBE_TIMEOUT);
+        assert!(STAGED_PREFLIGHT_TIMEOUT >= Duration::from_secs(180));
     }
 
     #[test]
@@ -9521,6 +9543,41 @@ mod tests {
         let output = read_probe_output(payload.as_slice()).await;
         assert_eq!(output.len(), MAX_PROBE_OUTPUT);
         assert!(output.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_probe_retains_its_initialization_diagnostic() {
+        let binary = which::which("node").expect("Node test fixture");
+        let result = run_probe_with(
+            &binary,
+            &["-e", "process.stderr.write('synthetic backend initialization\\n'); setInterval(() => {}, 1000);"],
+            Duration::from_secs(3),
+        ).await;
+        assert!(!result.success);
+        assert!(result.text.contains("synthetic backend initialization"));
+        assert!(result
+            .diagnostic
+            .unwrap()
+            .contains("synthetic backend initialization"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_cold_device_probe_can_finish_after_eight_seconds() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = test_directory("cold-device-probe");
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join("synthetic-runtime");
+        fs::write(
+            &binary,
+            "#!/bin/sh\n/bin/sleep 9\nprintf 'Available devices:\\n(none)\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = run_probe(&binary, &["--list-devices"]).await;
+        let _ = fs::remove_dir_all(root);
+        assert!(result.success, "{:?}", result.diagnostic);
+        assert!(result.text.contains("Available devices:"));
     }
 
     #[test]

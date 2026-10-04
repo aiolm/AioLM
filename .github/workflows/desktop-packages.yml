@@ -75,13 +75,13 @@ jobs:
           AIOLM_NATIVE_CLI: .codex-target/release/aiolm-cli
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: macOS Keychain roundtrip
-        if: runner.os == 'macOS'
+        if: (success() || failure()) && runner.os == 'macOS'
         timeout-minutes: 5
         env:
           AIOLM_VAULT_SMOKE: roundtrip
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
       - name: Real Cocoa approval cancellation and deadline
-        if: runner.os == 'macOS'
+        if: (success() || failure()) && runner.os == 'macOS'
         timeout-minutes: 5
         env:
           AIOLM_MACOS_APPROVAL_SMOKE: "1"
