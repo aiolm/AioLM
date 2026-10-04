@@ -46,16 +46,30 @@ impl Home {
     fn cli(&self, args: &[&str]) -> Value {
         eprintln!("CLI command: {args:?}");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let output = rt.block_on(async {
+        let result = rt.block_on(async {
             let mut command = tokio::process::Command::from(self.command());
             command.kill_on_drop(true).args(args);
-            tokio::time::timeout(Duration::from_secs(120), command.output())
-                .await
-                .unwrap_or_else(|_| {
-                    panic!("CLI command did not finish and close its output: {args:?}")
-                })
-                .expect("CLI process")
+            tokio::time::timeout(Duration::from_secs(120), command.output()).await
         });
+        // Windows pipe readers may still be draining a descendant after the
+        // launcher times out. Do not let runtime teardown hide the diagnosis.
+        rt.shutdown_timeout(Duration::from_secs(1));
+        if result.is_err() {
+            for name in [
+                "headless-server.log",
+                "headless-state.json",
+                "headless-state.lock",
+            ] {
+                let path = self.0.join("aiolm/cli").join(name);
+                eprintln!(
+                    "{name}: {}",
+                    std::fs::read_to_string(path).unwrap_or_default()
+                );
+            }
+        }
+        let output = result
+            .unwrap_or_else(|_| panic!("CLI command did not finish and close its output: {args:?}"))
+            .expect("CLI process");
         assert!(
             output.status.success(),
             "{args:?}: {} {}",
@@ -68,12 +82,23 @@ impl Home {
 
 impl Drop for Home {
     fn drop(&mut self) {
-        let _ = self
+        let child = self
             .command()
             .args(["server", "stop"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .spawn();
+        if let Ok(mut child) = child {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            while matches!(child.try_wait(), Ok(None)) {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -138,6 +163,9 @@ fn real_cpu_cli_lifecycle() {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     home.cli(&["config", "set", "port", &port.to_string()]);
+    println!("Probing selected runtime before launch");
+    home.cli(&["runtime", "probe", "cpu", &build]);
+    println!("Selected runtime capability probe passed");
     let mut last_pid = None;
     for action in ["start", "restart"] {
         let started = home.cli(&["server", action]);

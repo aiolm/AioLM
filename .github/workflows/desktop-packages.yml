@@ -115,7 +115,7 @@ jobs:
           PACKAGE_OS: ${{ matrix.os }}
         run: |
           [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
-          test "$(gh run view "$PACKAGE_RUN_ID" --json workflowName,conclusion --jq '.workflowName + ":" + .conclusion')" = 'Validate desktop packages:success'
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '.path + ":" + .conclusion')" = '.github/workflows/desktop-packages.yml:success'
           gh run download "$PACKAGE_RUN_ID" --name "desktop-packages-$PACKAGE_OS" --dir .codex-target/release/bundle
           cd .codex-target/release/bundle
           sha256sum --check checksums.txt

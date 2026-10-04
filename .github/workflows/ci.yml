@@ -93,6 +93,7 @@ jobs:
           AIOLM_NATIVE_CPU: "1"
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu -- --ignored --nocapture --test-threads=1
       - name: Windows Credential Manager roundtrip
+        if: success() || failure()
         env:
           AIOLM_VAULT_SMOKE: roundtrip
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
