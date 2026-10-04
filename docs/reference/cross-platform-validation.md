@@ -62,12 +62,14 @@ That run also passed Ubuntu 24.04 DEB dependency installation, installed CLI,
 same-version reinstall and removal. Genuine historical release upgrades remain
 unverified; the synthetic-version fixture is described below.
 
-The [final Linux packaged desktop run](https://github.com/aiolm/AioLM/actions/runs/37193684570)
+The [final Linux packaged desktop run](https://github.com/aiolm/AioLM/actions/runs/37193916897)
 explicitly selected package run `37192656705` and passed both desktop and KDE jobs.
 The Ubuntu job of the [follow-up CI](https://github.com/aiolm/AioLM/actions/runs/37193477047)
 also passed real Secret Service lock/native cancellation/recovery alongside the
 ordinary tests, build and CLI smoke. Verification commit `8bb653f` retains the app
-implementation from `a203ff6`.
+implementation from `a203ff6`. Desktop verification commit `b8e6d4b` supplies
+CJK fonts on the minimal runner; final AppImage screenshots also showed Korean,
+Japanese and Chinese labels correctly.
 
 Additional Linux acceptance exercised GPU1 and two-device layer splitting with both
 Vulkan and ROCm, CPU-reference perplexity comparison/cancellation, synthetic LoRA

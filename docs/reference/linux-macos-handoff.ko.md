@@ -306,11 +306,13 @@ GNOME 검사는 트레이/재실행 범위이며 전체 GNOME 입력·포털 검
 LoRA 검사는 연결·로드·추론 경로를 확인하며 학습 품질이나 모든 draft 아키텍처를
 검증하지 않는다. 다중 GPU 결과도 현재 장치의 layer split 범위다.
 
-[최종 Linux 패키지 실기 CI](https://github.com/aiolm/AioLM/actions/runs/37193684570)는
+[최종 Linux 패키지 실기 CI](https://github.com/aiolm/AioLM/actions/runs/37193916897)는
 패키지 run `37192656705`를 명시적으로 지정해 DEB 데이터 보존·FUSE·KDE 검사를 모두
 통과했다. [후속 Linux CI](https://github.com/aiolm/AioLM/actions/runs/37193477047)의
 Ubuntu 작업도 일반 테스트·실제 Secret Service 인증 취소·빌드·CLI 검사를 통과했다.
-검사 추가 커밋은 `8bb653f`이며 패키지의 앱 구현은 `a203ff6`과 같다.
+Secret Service 검사 커밋은 `8bb653f`, CJK 글꼴을 갖춘 패키지 검사 커밋은
+`b8e6d4b`이며 패키지의 앱 구현은 `a203ff6`과 같다. 최종 AppImage 스크린샷에서
+한국어·일본어·중국어 표시도 확인했다.
 
 반복 가능한 네이티브 검사는 다음에 추가했다:
 
