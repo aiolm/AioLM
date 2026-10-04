@@ -29,10 +29,14 @@ function removeInstalledApp() {
   else rmSync(app, { recursive: true, force: true });
   installed = false;
 }
+// LaunchServices passes the decomposed (NFD) file system form of the path,
+// so compare normalized commands rather than the bytes this script created.
 function installedGuiPids() {
-  const executable = join(app, "Contents/MacOS/aiolm");
-  const pattern = "^" + executable.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
-  return spawnSync("/usr/bin/pgrep", ["-f", pattern], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map(Number);
+  const executable = join(app, "Contents/MacOS/aiolm").normalize("NFC");
+  return run("/bin/ps", ["-axo", "pid=,command="]).split("\n").flatMap(line => {
+    const match = /^\s*(\d+)\s(.*)$/.exec(line.normalize("NFC"));
+    return match && (match[2] === executable || match[2].startsWith(`${executable} `)) ? [Number(match[1])] : [];
+  });
 }
 // Open the installed bundle through LaunchServices, as Finder does, and leave
 // through the standard quit request that the Dock's Quit item sends.
