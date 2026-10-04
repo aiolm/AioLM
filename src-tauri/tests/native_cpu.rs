@@ -1,4 +1,4 @@
-//! Explicit live acceptance: real managed CPU install and CLI inference after
+//! Explicit live acceptance: real managed CPU/Metal install and CLI inference after
 //! the launcher exits. Only public, hash-pinned model data and a disposable home
 //! are used. Run alone with AIOLM_NATIVE_CPU=1 and --ignored --test-threads=1.
 use aiolm_lib::runtime;
@@ -19,7 +19,9 @@ struct Home(PathBuf);
 
 impl Home {
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_aiolm-cli"));
+        let executable = std::env::var_os("AIOLM_NATIVE_CLI")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_aiolm-cli").into());
+        let mut command = Command::new(executable);
         for (key, _) in std::env::vars_os() {
             let upper = key.to_string_lossy().to_ascii_uppercase();
             if upper.starts_with("AIOLM_") || upper.starts_with("LLAMA_BOARD_") {
@@ -107,7 +109,19 @@ impl Drop for Home {
 #[ignore = "downloads a public 491 MB model and CPU runtime; set AIOLM_NATIVE_CPU=1 and run alone"]
 fn real_cpu_cli_lifecycle() {
     assert_eq!(std::env::var("AIOLM_NATIVE_CPU").as_deref(), Ok("1"));
-    let home = Home(std::env::temp_dir().join(format!("aiolm-cpu-{}", uuid::Uuid::new_v4())));
+    real_cli_lifecycle("cpu");
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+#[ignore = "requires an actual Metal device and downloads a public model; set AIOLM_NATIVE_METAL=1"]
+fn real_metal_cli_lifecycle() {
+    assert_eq!(std::env::var("AIOLM_NATIVE_METAL").as_deref(), Ok("1"));
+    real_cli_lifecycle("metal");
+}
+
+fn real_cli_lifecycle(backend: &str) {
+    let home = Home(std::env::temp_dir().join(format!("aiolm-{backend}-{}", uuid::Uuid::new_v4())));
     std::fs::create_dir_all(home.0.join("aiolm")).unwrap();
     // This integration binary has one explicitly selected test. The installer
     // reads only AIOLM_HOME and does not run legacy settings migration.
@@ -118,19 +132,19 @@ fn real_cpu_cli_lifecycle() {
         .build()
         .unwrap();
     let (build, model) = rt.block_on(async {
-        let latest = runtime::latest_for("cpu")
+        let latest = runtime::latest_for(backend)
             .await
-            .expect("CPU release metadata");
+            .expect("native release metadata");
         runtime::install_with(
             &|_, _, _| {},
-            "cpu",
+            backend,
             &latest.build,
             Arc::new(AtomicBool::new(false)),
         )
         .await
-        .expect("managed CPU download, digest, extraction and preflight");
+        .expect("managed runtime download, digest, extraction and preflight");
         println!(
-            "CPU runtime installed: {} ({})",
+            "{backend} runtime installed: {} ({})",
             latest.build, latest.file_name
         );
         let model = home.0.join("model with spaces.gguf");
@@ -156,15 +170,26 @@ fn real_cpu_cli_lifecycle() {
         (latest.build, model)
     });
     assert_eq!(home.cli(&["config", "get"])["active_build"], "");
-    home.cli(&["runtime", "select", "cpu", &build]);
+    home.cli(&["runtime", "select", backend, &build]);
     home.cli(&["config", "set", "active_model", model.to_str().unwrap()]);
     home.cli(&["config", "set", "ctx_size", "2048"]);
+    if backend == "metal" {
+        home.cli(&["config", "set", "ngl", "999"]);
+    }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     home.cli(&["config", "set", "port", &port.to_string()]);
     println!("Probing selected runtime before launch");
-    home.cli(&["runtime", "probe", "cpu", &build]);
+    let capabilities = home.cli(&["runtime", "probe", backend, &build]);
+    println!("Runtime devices: {}", capabilities["devices"]);
+    if backend == "metal" {
+        let devices: Vec<String> = serde_json::from_value(capabilities["devices"].clone()).unwrap();
+        assert!(
+            !aiolm_lib::gpu::select_all_runtime_devices("metal", &devices).is_empty(),
+            "Metal runtime must enumerate a real device"
+        );
+    }
     println!("Selected runtime capability probe passed");
     let mut last_pid = None;
     for action in ["start", "restart"] {
@@ -211,7 +236,19 @@ fn real_cpu_cli_lifecycle() {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
-        println!("CLI {action}: real CPU SSE answer and continuing logs passed");
+        if backend == "metal" {
+            let content = std::fs::read_to_string(&log).unwrap();
+            assert!(
+                content.lines().any(|line| {
+                    line.split_once("offloaded ")
+                        .and_then(|(_, suffix)| suffix.split('/').next())
+                        .and_then(|count| count.parse::<u32>().ok())
+                        .is_some_and(|count| count > 0)
+                }),
+                "Metal inference must offload model layers, rather than silently use CPU"
+            );
+        }
+        println!("CLI {action}: real {backend} SSE answer and continuing logs passed");
     }
     assert_eq!(home.cli(&["server", "stop"])["state"], "stopped");
     assert_eq!(home.cli(&["server", "status"])["state"], "stopped");
