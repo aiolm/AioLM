@@ -37,7 +37,7 @@ pub(crate) fn is_present<R: Runtime>(app: &AppHandle<R>) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn host_available() -> bool {
+pub(crate) fn host_available() -> bool {
     use gio::glib::variant::ToVariant;
     // AppIndicator creation can succeed without a desktop hosting its icon.
     // Check the host again on close, including after a desktop shell restart.
@@ -68,7 +68,7 @@ fn host_available() -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn host_available() -> bool {
+pub(crate) fn host_available() -> bool {
     true
 }
 
@@ -96,7 +96,9 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) -> Resu
         return Ok(());
     }
     if !host_available() {
-        return Err("the desktop has no available system tray host".into());
+        // Keep an existing preference portable to a desktop without a tray.
+        // The close handler will exit normally; other settings can still save.
+        return Ok(());
     }
     if app.tray_by_id(TRAY_ID).is_some() {
         return Ok(());
