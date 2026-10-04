@@ -89,6 +89,7 @@ jobs:
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
       - name: Native CLI with a clean home
         run: npm run test:native-cli
+
       - name: Real CPU runtime and model lifecycle
         timeout-minutes: 15
         env:
@@ -153,3 +154,23 @@ jobs:
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
       - name: Native CLI with a clean home
         run: npm run test:native-cli
+      - name: Build macOS debug app with embedded WebDriver
+        if: runner.os == 'macOS'
+        env:
+          TAURI_CONFIG: '{"build":{"devUrl":null}}'
+        run: |
+          mkdir -p tmp
+          swiftc scripts/macos-window-probe.swift -o tmp/macos-window-probe
+          cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm --no-default-features --features macos-ui-smoke
+      - name: Real WKWebView onboarding, settings and window lifecycle
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: node scripts/smoke-macos-ui.mjs
+      - name: Retain synthetic macOS UI evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-ui-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tmp/macos-ui.png

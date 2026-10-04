@@ -109,7 +109,7 @@ pub fn run() {
     let instance_startup = startup::InstanceStartupLock::acquire(&context.config().identifier)
         .expect("error coordinating application startup");
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Opening AioLM while it is already running - most visibly while its
         // window is hidden in the tray - brings that window back instead of
         // starting a second copy with a tray icon of its own. The new process
@@ -124,7 +124,13 @@ pub fn run() {
         // desktop OS. The frontend awaits its `notify` command directly: on
         // desktop that call only confirms the toast was prepared and handed to
         // the OS, never that the OS displayed it.
-        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_notification::init());
+    // Native WKWebView acceptance needs an embedded driver on macOS. It is
+    // explicitly opted into by CI and can never open an automation endpoint in
+    // a release build, even if a caller enables every Cargo feature.
+    #[cfg(all(debug_assertions, target_os = "macos", feature = "macos-ui-smoke"))]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    let app = builder
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::benchmark_explorer::open_aiolm_website,
