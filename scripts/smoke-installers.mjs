@@ -90,8 +90,10 @@ try {
     }
     assert.ok(!existsSync(join(msiInstall, "aiolm.exe")) && !existsSync(join(msiInstall, "aiolm-cli.exe")));
     console.log("MSI install, repair, installed CLI and uninstall passed.");
+  } else if (process.platform === "darwin") {
+    run(process.execPath, ["scripts/smoke-macos-package.mjs"]);
   } else {
-    throw new Error("installer smoke supports Windows and Linux");
+    throw new Error("installer smoke supports Windows, Linux and macOS");
   }
 } finally {
   rmSync(root, { recursive: true, force: true });

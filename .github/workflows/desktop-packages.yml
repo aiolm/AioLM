@@ -3,6 +3,12 @@ name: Validate desktop packages
 on:
   workflow_dispatch:
     inputs:
+      platforms:
+        description: Desktop platforms to validate
+        required: true
+        default: all
+        type: choice
+        options: [all, macos]
       package_run_id:
         description: Recheck installers from a successful package run (empty builds new packages)
         required: false
@@ -19,9 +25,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04, macos-15, macos-15-intel]
+        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15","macos-15-intel"]' || '["windows-latest","ubuntu-24.04","macos-15","macos-15-intel"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
       # AppImage's build tools can run without mounting FUSE in hosted CI.
@@ -59,9 +65,29 @@ jobs:
       - name: Release CLI with a clean home
         run: npm run test:native-cli -- .codex-target/release/aiolm-cli${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Install, reinstall and remove desktop packages
-        if: runner.os == 'Windows' || runner.os == 'Linux'
         timeout-minutes: 15
         run: node scripts/smoke-installers.mjs
+      - name: Real macOS CPU runtime and CLI lifecycle
+        if: runner.os == 'macOS'
+        timeout-minutes: 20
+        env:
+          AIOLM_NATIVE_CPU: "1"
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu -- --ignored --nocapture --test-threads=1
+      - name: macOS Keychain roundtrip
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        env:
+          AIOLM_VAULT_SMOKE: roundtrip
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
+      - name: Real Cocoa approval cancellation and deadline
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        env:
+          AIOLM_MACOS_APPROVAL_SMOKE: "1"
+        run: |
+          mkdir -p tmp
+          swiftc scripts/macos-window-probe.swift -o tmp/macos-window-probe
+          AIOLM_MACOS_WINDOW_PROBE="$PWD/tmp/macos-window-probe" cargo test --locked --manifest-path src-tauri/Cargo.toml --lib mcp::macos_approval::tests::real_cocoa_window_closes_on_cancellation_and_deadline -- --ignored --exact --nocapture --test-threads=1
       - name: Collect package checksums
         shell: bash
         run: |
@@ -97,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-24.04]
+        os: ${{ fromJSON(inputs.platforms == 'macos' && '["macos-15","macos-15-intel"]' || '["windows-latest","ubuntu-24.04","macos-15","macos-15-intel"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -118,7 +144,11 @@ jobs:
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '.path + ":" + .conclusion')" = '.github/workflows/desktop-packages.yml:success'
           gh run download "$PACKAGE_RUN_ID" --name "desktop-packages-$PACKAGE_OS" --dir .codex-target/release/bundle
           cd .codex-target/release/bundle
-          sha256sum --check checksums.txt
+          if [ "$RUNNER_OS" = macOS ]; then
+            shasum -a 256 --check checksums.txt
+          else
+            sha256sum --check checksums.txt
+          fi
       - name: Refresh Linux dependency metadata
         if: runner.os == 'Linux'
         run: |
