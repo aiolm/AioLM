@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -44,7 +44,18 @@ impl Home {
     }
 
     fn cli(&self, args: &[&str]) -> Value {
-        let output = self.command().args(args).output().expect("CLI process");
+        eprintln!("CLI command: {args:?}");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let output = rt.block_on(async {
+            let mut command = tokio::process::Command::from(self.command());
+            command.kill_on_drop(true).args(args);
+            tokio::time::timeout(Duration::from_secs(120), command.output())
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("CLI command did not finish and close its output: {args:?}")
+                })
+                .expect("CLI process")
+        });
         assert!(
             output.status.success(),
             "{args:?}: {} {}",
@@ -57,7 +68,12 @@ impl Home {
 
 impl Drop for Home {
     fn drop(&mut self) {
-        let _ = self.command().args(["server", "stop"]).output();
+        let _ = self
+            .command()
+            .args(["server", "stop"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
@@ -111,6 +127,7 @@ fn real_cpu_cli_lifecycle() {
         }
         assert_eq!(bytes, MODEL_BYTES);
         assert_eq!(format!("{:x}", hash.finalize()), MODEL_SHA256);
+        println!("Model download and pinned SHA-256 verification passed");
         (latest.build, model)
     });
     assert_eq!(home.cli(&["config", "get"])["active_build"], "");
@@ -124,6 +141,7 @@ fn real_cpu_cli_lifecycle() {
     let mut last_pid = None;
     for action in ["start", "restart"] {
         let started = home.cli(&["server", action]);
+        println!("CLI {action} launcher exited");
         assert_eq!(started["state"], "running");
         let pid = started["pid"].as_u64().unwrap();
         assert_ne!(last_pid, Some(pid));
