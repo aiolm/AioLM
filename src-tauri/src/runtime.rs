@@ -5506,13 +5506,15 @@ async fn detected_cuda_capabilities() -> Vec<String> {
 /// What a PR build produces, stated once so the UI, the docs and the build
 /// itself cannot drift apart.
 ///
-/// aiolm builds the server and the benchmark tool, and nothing else.
+/// aiolm builds the server, the benchmark tool and the perplexity tool that
+/// GPU verification runs before a device placement may start; without it a
+/// GPU PR runtime could never pass that check. Nothing else is built.
 /// Tests and examples are off because they roughly double the build for code
 /// aiolm never runs. The server's optional embedded web UI is **not**
 /// built here: aiolm uses the loopback API directly, so no Node
 /// toolchain is needed and no UI asset is fetched at build time - the same
 /// reason the network options in `SOURCE_BUILD_OFFLINE_OPTIONS` are off.
-pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-bench"];
+pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-bench", "llama-perplexity"];
 
 fn source_build_configure_args(
     backend: &str,
@@ -8882,11 +8884,15 @@ mod tests {
     // ---- L5 / L6: what gets built ----
 
     #[test]
-    fn a_pr_build_produces_the_server_and_the_bench_tool_and_nothing_else() {
+    fn a_pr_build_produces_the_server_bench_and_verification_tools_and_nothing_else() {
         let args = source_build_args(Path::new("build"));
         for target in SOURCE_BUILD_TARGETS {
             assert!(args.iter().any(|arg| arg == target), "{target}");
         }
+        // GPU verification refuses a runtime without it before the server starts.
+        assert!(
+            SOURCE_BUILD_TARGETS.contains(&perplexity_executable_name().trim_end_matches(".exe"))
+        );
         assert!(args.iter().any(|arg| arg == "--target"));
         assert!(args.iter().any(|arg| arg == "Release"));
         assert!(args.iter().any(|arg| arg == "--parallel"));
