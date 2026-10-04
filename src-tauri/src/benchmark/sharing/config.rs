@@ -54,6 +54,7 @@ fn validate_root_origin(url: &Url) -> Result<(), String> {
     Err("benchmark service URL requires HTTPS without embedded credentials".into())
 }
 
+#[cfg(debug_assertions)]
 fn is_loopback_host(url: &Url) -> bool {
     matches!(
         url.host_str(),

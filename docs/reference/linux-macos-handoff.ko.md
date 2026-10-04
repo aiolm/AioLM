@@ -1,7 +1,7 @@
 # Linux·macOS 이식 및 검증 인계
 
-Windows 검증 기준일: 2026-10-03. 이 문서는 함께 커밋된 이식 구현의 검증 결과와
-Linux에서 이어서 수행할 작업을 설명한다. 공통 개발 절차는
+Windows 검증 기준일: 2026-10-03, Linux 후속 검증: 2026-10-03~04. 이 문서는 이식 구현의 검증 결과와
+Linux·macOS에서 이어서 수행할 작업을 설명한다. 공통 개발 절차는
 [Cross-platform validation](cross-platform-validation.md)을 참고한다.
 
 ## 현재 상태와 구현 범위
@@ -71,9 +71,140 @@ Windows 패키지도 생성하고 파일 목록을 검사했다:
 않았음을 검사했다. 설치 파일을 실제 설치하거나 기존 사용자 앱을 교체하지는 않았다.
 실제 모델을 로딩한 Windows GPU 추론과 ROCm 실기 검증도 이 결과에 포함하지 않는다.
 
-기존 대형 프런트엔드 청크 안내와 release의 미사용 debug 전용 함수
-(`is_loopback_host`) 경고는 남아 있다. 원본 검증 로그와 로컬 장비 메모는 Git에
+Windows 검증 당시에는 대형 프런트엔드 청크 안내와 release의 미사용 debug 전용 함수
+(`is_loopback_host`) 경고가 있었다. 후자의 컴파일 조건은 Linux 후속 작업에서 수정했다.
+원본 검증 로그와 로컬 장비 메모는 Git에
 포함하지 않으며, 다음 작업자는 아래 명령으로 자신의 환경에서 결과를 재검증한다.
+
+## Linux에서 이어서 확인한 결과
+
+Ubuntu 26.04 x64에서 Node 22.23.2, npm 12.0.2, Rust 1.98.0으로 검증했다.
+관리자 설치 없이 임시 폴더에 도구와 Ubuntu 개발 패키지를 준비해 사용했다.
+이 환경의 결과는 Ubuntu 24.04 CI나 다른 배포판의 설치 검증을 대신하지 않는다.
+기존 사용자 설정·런타임을 테스트 자료로 사용하지 않았다.
+
+[이식 커밋 `687434a`의 CI](https://github.com/aiolm/AioLM/actions/runs/37033112852)를
+확인한 결과, Windows Rust와 프런트엔드는 성공했으나 Linux와 macOS ARM64/Intel은
+Clippy에서 중단됐다. 세 작업 모두 후속 네이티브 테스트·빌드·CLI 검사가 실행되지
+않았다. 패키지 워크플로의 기존 실행 이력도 없었다.
+
+이번에 수정한 항목:
+
+- Windows 전용 import·함수와 Linux/macOS에서 쓰이지 않는 함수의 컴파일 조건을
+  실제 사용 플랫폼에 맞췄다. Windows에서만 필요했던 가변 바인딩도 제거했다.
+- Unix CPU preflight 테스트가 실행 파일을 쓰기 전에 임시 디렉터리를 만들도록 수정했다.
+- CLI 정지·재시작은 종료 신호 후 최대 10초 동안 이전 서버의 종료를 기다린다.
+  시간 초과 시 상태와 오류를 보존하고 재시작을 진행하지 않는다. SIGTERM 후 정리를
+  지연하는 자식 프로세스로 회귀 검증했다.
+- Headless 서버의 로그 수집을 시작 CLI의 수명과 분리했다. 로그는 1MiB로 제한하고
+  파이프 청크에 걸친 비밀 값과 한글을 줄 단위로 처리한다. 서버 파이프 EOF에서
+  수집기를 종료하며, 정지·재시작은 수집기 종료도 기다린다.
+- CI와 패키지·릴리스 작업에서 `package.json`에 고정된 npm을 설치한다.
+  기존 실행은 Node에 포함된 npm 10.9.8을 사용해 버전 요구 경고를 냈다.
+- Linux ROCm 10의 추가 공유 라이브러리와 SDK 내부 디렉터리 구조를 처리한다.
+  실제 ELF 종속성을 읽어 완성 여부를 확인하고, 누락된 공급자 라이브러리만 기존
+  SDK 일치 검사와 함께 보완한다. 호스트 드라이버는 복사하지 않는다.
+- GPU 런타임의 preflight는 실제 백엔드 장치 이름을 확인한다. 빈 장치 목록에
+  진단 메시지가 함께 출력돼도 가속기가 있는 것으로 판정하지 않는다.
+- MCP의 native `inputSchema` 응답을 화면의 내부 형식으로 변환한다. 실제 도구 조회
+  응답으로 호출 준비 화면과 채팅 도구 스키마를 검사하는 회귀 테스트를 추가했다.
+- 긴 한글·다중 바이트 MCP 인자를 승인 설명에서 줄일 때 UTF-8 경계를 보존한다.
+- Linux MCP 승인 창의 프로세스를 호출이 소유하도록 바꿔 취소·시간 초과 때 함께
+  종료한다. DEB의 의존성에 `zenity`를 추가했다. AppImage 사용 환경에도 `zenity`가
+  필요하다.
+
+| 검증 | Linux 결과 |
+| --- | --- |
+| TypeScript 전체 타입 검사, ESLint, 프런트엔드 production 빌드 | 통과 |
+| 계약 패키지·직접 실행·패키징 스크립트 테스트 | 통과 |
+| Vitest 전체 | 145개 파일, 1,450개 테스트 통과 |
+| Vitest 커버리지 | Statements 78.18%, branches 73.23%, lines 82.17% |
+| Rust format, Clippy `-D warnings` | 통과 |
+| Rust 전체 타깃·전체 기능 테스트 | 라이브러리 707 + CLI 11 + 가짜 서버 통합 1 + 로그 통합 1 = 720개 통과 |
+| Linux GUI/CLI debug 빌드 | 통과; 실제 GUI 결과는 아래 별도 기록 |
+| 격리된 홈 CLI 초기화·설정 저장/재로딩·빈 런타임 목록·서버 중지 상태 | debug/release 통과 |
+
+기본 실행에서 실제 환경 opt-in 7개와 로그 통합 검사의 자식 프로세스 fixture 1개는
+제외된다. 실제 모델·설치 결과는 아래 별도 기록하며 기본 테스트 수에 중복 합산하지 않는다.
+
+수정 후 원격 CI의 재실행 결과는 아직 없다. macOS 성공이나 정식 지원 완료로
+표시하지 않는다. 커밋/푸시 후 Linux·두 macOS 작업의 테스트와 빌드까지 확인해야 한다.
+
+Headless CLI는 시작 → 시작 명령 종료 후 실제 채팅 → 로그 증가 → 재시작 → 다시
+채팅·로그 증가 → 정지 → 중지 상태를 확인했다. 서버와 로그 수집기가 모두 종료됐다.
+수정 전에는 시작 명령 종료 후 로그가 고정됐지만, 수정 후 각 채팅에서 새 prompt
+evaluation 로그가 추가됐다. 장기간 연속 운용의 결과로 확대 해석하지 않는다.
+
+원본 로그·도구·재현물은 저장소 루트 `tmp/`에만 두며 커밋하지 않는다.
+
+### 실제 모델과 GUI 확인 범위
+
+공개 Qwen2.5-0.5B-Instruct Q4_K_M GGUF와 llama.cpp b11349를 사용했다. 모델의
+SHA-256은 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`다.
+모델·런타임·설정·벤치마크 결과는 격리된 임시 홈에만 저장했다.
+
+| 실제 실행 | CPU | Vulkan0 | ROCm0 |
+| --- | --- | --- | --- |
+| 다운로드·SHA 검증·설치·probe | 통과 | 통과 | 통과 |
+| 채팅 응답·SSE 완료·서버 정지·포트 해제 | 통과 | 통과 | 통과 |
+| 벤치마크 중간 취소·완료 행 보존·프로세스 정리 | 통과 | 통과 | 통과 |
+| 확인한 GPU 오프로딩 | 0/25 layers | 25/25 layers | 25/25 layers |
+
+CPU 런타임의 ZIP 내보내기 → 새 임시 홈으로 가져오기 → probe → 실제 채팅도
+통과했다. 다른 GPU 순번이나 CUDA·Metal의 결과를 이 표로 대신하지 않는다.
+
+가상 X11 화면과 별도 DBus·격리된 HOME/XDG 경로에서 실제 Tauri/WebKitGTK 앱을
+WebDriver로 조작했다. 초기 설정의 한국어·어두운 테마 선택, 합성 프로젝트 저장 후
+재시작 복원, 주요 메뉴 11개 이동, 한글·공백 파일명의 모델 프로필 저장·CPU 실행,
+채팅·생성 취소·부분 응답 보존·언로드를 확인했다. 1280×800과 760×720 창의 채팅
+화면에서 루트 가로 넘침은 없었다. 찾아보기는 실제 공개 Hub 목록을 표시했다.
+
+GUI에서 시작한 로컬 API 서버는 인증 없는 모델 목록 요청에 401을 반환했고, 인증된
+모델 목록·OpenAI chat completions·Anthropic messages 요청은 200과 실제 모델
+응답을 반환했다. API 중지 후에도 모델은 유지되며, 이후 GUI에서 언로드했다.
+
+합성 로컬 MCP stdio 서버를 GUI에 등록해 도구 조회 → 스키마 표시 → 인자 입력 →
+호출 검토 → 실제 네이티브 Yes 승인 → 결과 표시를 확인했다. No 거부와 승인 대기
+중 IPC 취소에서는 `tools/call`이 전송되지 않았고 서버 프로세스가 종료됐다.
+취소 후 승인 창도 닫혔다. 테스트용 서버는 외부 네트워크나 사용자 파일에 접근하지 않는다.
+
+### Linux 패키지 확인 범위
+
+최종 변경으로 두 패키지를 생성했다:
+
+| 산출물 | 크기 | 확인 범위 |
+| --- | ---: | --- |
+| AioLM_0.2.0_amd64.deb | 17,970,984 bytes | 생성, 파일 목록, GUI/CLI 실행 권한, GTK/WebKit/AppIndicator·zenity 의존성 |
+| AioLM_0.2.0_amd64.AppImage | 101,796,344 bytes | 생성, 파일 목록, 격리된 X11 실행, CPU 채팅, MCP 네이티브 승인·결과 |
+
+AppImage는 `APPIMAGE_EXTRACT_AND_RUN=1`로 설치 없이 실행했다. 실행 중인 GUI가
+실제 AppImage에서 추출된 실행 파일인지 확인했고, 저장된 한글 모델 프로필로 실행해
+채팅 응답과 MCP 도구 실행 결과를 받았다. FUSE 마운트 방식이나 데스크톱 메뉴 실행은
+확인하지 않았다.
+
+두 패키지는 GUI와 CLI를 포함하며 가짜 서버·테스트 모델·설정 파일을 포함하지 않는다.
+DEB staging의 11개, AppDir의 442개 일반 파일을 검사해 개발 PC 홈·워크스페이스
+경로가 UTF-8·UTF-16으로 포함되지 않았음을 확인했다. 실제 시스템 설치·업데이트·제거
+검증은 아직 남아 있다.
+
+### 추가 실사용 검증이 필요한 기능
+
+자동 테스트가 통과해도 모든 사용자 기능의 실기 검증이 완료된 것은 아니다.
+
+- 빈 설정의 CLI 런타임 선택은 `runtime select <backend> <build>`로 두 값을 함께
+  검증·저장하도록 수정했다. 격리된 홈의 최초 선택과 잘못된 식별자 입력 후 기존
+  설정 보존 검사가 통과했다. Windows CI에도 같은 검사를 추가했다.
+- 공개 해시 고정 모델을 내려받는 `native_cpu` opt-in 검사를 추가했다. Linux에서
+  b11382 CPU 설치·preflight와 CLI 시작 명령 종료 후 SSE 채팅·로그 갱신, 재시작,
+  정지·포트 해제를 통과했다. Windows CI는 이 검사와 실제 Credential Manager
+  저장·읽기·수정·삭제를 실행하도록 구성했으며 원격 결과는 확인 중이다.
+- 실제 PDF·이미지·임베딩 모델, 외부 유료 API와 인증 계정, 벤치마크 공개 공유·복구,
+  OS 자격증명 저장소는 해당 자료·전용 계정·서비스로 별도 확인해야 한다.
+- Wayland·GNOME/KDE 트레이·한글 IME·클립보드·네이티브 파일 선택·저장 대화상자,
+  CMake 소스 빌드·취소, 실제 패키지 설치·업데이트·제거는 아직 미검증이다.
+- MCP는 현재 stdio만 구현됐다. HTTP 전송을 검사 완료나 지원 기능으로 표시하지 않는다.
+- macOS ARM64/Intel의 빌드·CPU/Metal 추론·Cocoa/Keychain·서명·공증은 실제 Mac
+  또는 대상 runner에서 확인해야 한다.
 
 ## Linux에서 소스 받기
 
@@ -109,7 +240,8 @@ Ubuntu 24.04의 예:
 ```sh
 sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libwebkit2gtk-4.1-dev \
-  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pciutils
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf pciutils zenity
+npm install --global "$(node -p 'require("./package.json").packageManager')"
 npm ci --ignore-scripts
 npm rebuild esbuild
 npm test
@@ -195,7 +327,7 @@ HOME/USERPROFILE/APPDATA/LOCALAPPDATA/XDG 경로를 모두 **자식 프로세스
 - GNOME/KDE에서 트레이 메뉴 Show/Quit와 두 번째 실행의 기존 창 복귀.
 - AppIndicator가 없는 환경에서 close-to-tray로 앱이 복구 불가능하게 숨지 않는지.
 - Secret Service 정상 저장/조회/삭제, 잠긴 저장소, 서비스 없음, 인증 취소.
-- MCP stdio/HTTP, 초기화 실패, 도구 승인/거부/취소, 네이티브 승인 창 닫힘.
+- MCP stdio, 초기화 실패, 도구 승인/거부/취소, 네이티브 승인 창 닫힘. HTTP 전송은 현재 미구현.
 - 앱 종료·런타임 빌드 취소 후 llama-server/MCP/CMake의 자식과 소켓이 남지 않는지.
 - 이미지/문서/임베딩/외부 API/프로필·프로젝트/벤치마크 공유는 각 기능에 필요한 전용 테스트 자료·계정으로 확인.
 - DEB 설치·업데이트·제거와 AppImage 최초 실행·수동 교체. 파일 열기 성공과 설치 완료를 구분.
@@ -245,7 +377,7 @@ Metal이 같은 배포 아카이브를 사용해도 실제 실행 장치가 달�
 
 - [ ] Linux native CI, macOS ARM64/Intel native CI 모두 성공.
 - [ ] 두 플랫폼 실제 패키지 생성·설치·제거·업데이트 완료 확인.
-- [ ] Linux CPU/Vulkan/ROCm 실제 모델 테스트와 결과 기록.
+- [x] Linux CPU/Vulkan/ROCm 실제 모델 테스트와 결과 기록(Ubuntu 26.04 x64, b11349).
 - [ ] macOS CPU/Metal 실제 모델 테스트와 결과 기록.
 - [ ] 네이티브 GUI·Keyring·MCP 승인·프로세스 정리·파일 처리 체크리스트 완료.
 - [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.

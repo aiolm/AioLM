@@ -134,7 +134,16 @@ export interface McpServer {
 export interface McpTool {
   name: string;
   description?: string;
+  /** Normalized for UI consumers; the native MCP payload uses inputSchema. */
   input_schema: unknown;
+}
+
+/** Native MCP serialization, with the older normalized spelling accepted. */
+export interface McpToolPayload {
+  name: string;
+  description?: string | null;
+  inputSchema?: unknown;
+  input_schema?: unknown;
 }
 
 export interface ModelDownloadProgress {

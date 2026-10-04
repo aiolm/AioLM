@@ -246,6 +246,38 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "uses the real OS credential store; run alone in a disposable account with AIOLM_VAULT_SMOKE=roundtrip or unavailable"]
+    fn real_vault_roundtrip() {
+        let mode = std::env::var("AIOLM_VAULT_SMOKE").expect("explicit vault smoke mode");
+        let user = format!("synthetic-smoke-{}", uuid::Uuid::new_v4());
+        let vault = OsVault;
+        if mode == "unavailable" {
+            assert!(matches!(
+                vault.get_secret(&user),
+                Err(VaultError::Locked(_) | VaultError::Platform(_))
+            ));
+            assert!(vault.set_secret(&user, &[7; OWNER_SECRET_LEN]).is_err());
+            return;
+        }
+        assert_eq!(mode, "roundtrip");
+        assert_eq!(vault.get_secret(&user), Err(VaultError::Missing));
+        let entry = keyring_core::Entry::new(VAULT_SERVICE, &user).unwrap();
+        struct Cleanup(keyring_core::Entry);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.delete_credential();
+            }
+        }
+        let cleanup = Cleanup(entry);
+        vault.set_secret(&user, &[7; OWNER_SECRET_LEN]).unwrap();
+        assert_eq!(OsVault.get_secret(&user).unwrap(), [7; OWNER_SECRET_LEN]);
+        vault.set_secret(&user, &[9; OWNER_SECRET_LEN]).unwrap();
+        assert_eq!(OsVault.get_secret(&user).unwrap(), [9; OWNER_SECRET_LEN]);
+        cleanup.0.delete_credential().unwrap();
+        assert_eq!(vault.get_secret(&user), Err(VaultError::Missing));
+    }
+
+    #[test]
     fn mock_vault_round_trip_lock_and_restart() {
         let vault = MockVault::open();
         let secret = [7u8; OWNER_SECRET_LEN];

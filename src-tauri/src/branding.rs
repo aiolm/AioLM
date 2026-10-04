@@ -1,7 +1,9 @@
 //! AioLM identity and a non-destructive, restartable first-run migration.
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(windows, test))]
+use std::path::PathBuf;
 
 pub fn env_var(key: &str) -> Result<String, std::env::VarError> {
     match std::env::var(key) {

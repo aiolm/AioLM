@@ -5,7 +5,33 @@ Linux and macOS have host packaging and native CI gates; source changes and a
 passing Windows suite alone are not evidence of support on another OS.
 
 The [Linux/macOS handoff (한국어)](linux-macos-handoff.ko.md) records the completed
-Windows verification and the next native checks to run from a Linux workstation.
+Windows and local Linux verification and the remaining native checks.
+
+On 2026-10-03–04, local Ubuntu 26.04 x64 verification passed the frontend suite
+(1,450 tests), typecheck, lint, production build, Rust format and Clippy, 720 native
+tests, debug desktop/CLI builds and the CLI smoke with an isolated home. Seven
+live-environment tests and one internal subprocess fixture were excluded from the
+default result. Build dependencies
+were extracted into a temporary directory without a system install. This does not
+establish the Ubuntu 24.04 package baseline or desktop acceptance.
+
+Actual b11349 CPU, Vulkan0 and ROCm0 installs, streaming model chats, server cleanup
+and benchmark cancellation preserving completed rows passed with a public
+Qwen2.5-0.5B-Instruct Q4_K_M model. CPU runtime ZIP export/import and subsequent
+inference also passed. The native Tauri/WebKitGTK GUI was exercised in isolated
+X11/DBus sessions: onboarding, settings/project persistence, 11 navigation panels,
+Unicode model paths, CPU loading, chat/cancellation/unload and authenticated
+OpenAI/Anthropic loopback routes. This does not cover Wayland, IME, tray or native
+file dialogs. A synthetic stdio MCP server passed discovery, call preparation,
+native Yes/No and cancellation with dialog/process cleanup. Detailed results and
+remaining gaps are in the Korean handoff.
+
+The [portability commit's CI](https://github.com/aiolm/AioLM/actions/runs/37033112852)
+stopped at Clippy on Linux and both macOS architectures; their tests and builds
+were skipped. Platform-specific unused code and a missing Unix test fixture
+directory have been corrected locally. CI now also installs the npm version
+declared in `package.json`; `setup-node` alone used the bundled npm version.
+Remote Linux/macOS verification remains pending until the updated commit runs.
 
 ## Build and test gates
 
@@ -16,7 +42,12 @@ libxdo, Ayatana AppIndicator and librsvg development packages. AppImage packagin
 also needs `patchelf`. `pciutils` supplies optional GPU marketing names; its absence
 does not prevent sysfs detection.
 
+Linux MCP approval dialogs require `zenity`. DEB metadata declares that dependency;
+AppImage hosts need it installed separately. A missing dialog executable fails the
+tool call without running the requested tool.
+
 ```sh
+npm install --global "$(node -p 'require("./package.json").packageManager')"
 npm ci --ignore-scripts
 npm rebuild esbuild
 npm test
@@ -33,7 +64,8 @@ npm run test:native-cli
 The CLI smoke uses a temporary directory, overrides both the current home and all
 legacy migration roots in the child environment, and removes only its own files.
 It verifies help, empty initial model/runtime selection, a saved setting roundtrip,
-diagnostics and stopped-server state. It does not start a model or access credentials.
+atomic runtime selection, invalid-selection rollback, diagnostics and stopped-server
+state. It does not start a model or access credentials.
 Point it at a release binary with:
 
 ```sh
@@ -54,6 +86,13 @@ The `test-fixtures` default Cargo feature keeps the fake-server integration test
 enabled in ordinary `cargo test`. Distribution scripts disable default features
 so that helper is neither built nor bundled. Do not enable `test-fixtures` when
 creating distribution packages.
+
+Local DEB/AppImage generation passed with GUI/CLI included and test fixtures/data
+excluded. The AppImage also launched under `APPIMAGE_EXTRACT_AND_RUN=1` in an
+isolated X11 session and completed a CPU chat and native MCP approval/call.
+The package staging files were scanned for development home/workspace paths in
+UTF-8/UTF-16 with no matches. System installation, FUSE mounting and updates
+remain unverified.
 
 | Host | Formats | Local output |
 | --- | --- | --- |
@@ -86,6 +125,22 @@ Use a separate OS account for manual first-run and migration tests. Setting
 `AIOLM_HOME` alone does not isolate legacy migration sources or OS credential stores.
 Never reuse production settings, credentials or model deletion targets as fixtures.
 
+CLI stop/restart now waits up to ten seconds for the managed server to exit after
+the termination signal, retaining state on timeout. Headless logs now use an
+independent collector that drains the server's pipes until EOF, keeps at most 1MiB
+and redacts complete lines. Tests cover launcher exit, split secrets/UTF-8, EOF,
+oversized lines and file-error recovery. Actual CPU requests after the starting
+CLI exited and after restart produced new logs; stop reclaimed both processes.
+
+MCP native tool schemas are normalized from `inputSchema` for UI/chat consumers.
+Approval descriptions preserve UTF-8 boundaries. Linux approval processes are
+owned by their call so cancellation and timeout also close the dialog.
+The CLI command `runtime select <backend> <build>` validates and saves the pair
+together, including first-run configuration. Invalid selections preserve saved
+settings. Windows CI additionally runs the opt-in `native_cpu` live download and
+CLI lifecycle test with a public hash-pinned 491 MB model, and an isolated synthetic
+Credential Manager roundtrip. The CPU lifecycle test also passed locally on Linux.
+
 | Area | Required observations |
 | --- | --- |
 | Install/launch | Clean install, CLI included, launch from desktop menu/Finder, second launch restores the existing window, uninstall leaves user data according to policy |
@@ -95,7 +150,7 @@ Never reuse production settings, credentials or model deletion targets as fixtur
 | Model files | Download/cancel/resume, scans, case-distinct POSIX files, symlinks, missing mounts, import/export, deletion limited to synthetic fixtures |
 | Runtime | Correct OS/arch asset, nested archives, shared libraries and executable permissions; install/import/export/uninstall; source builds and cancellation |
 | Model lifecycle | CPU first, then each supported GPU backend; start, streaming completion, cancel loading/generation, stop, restart, app exit, no residual processes or sockets |
-| MCP | stdio and HTTP fixtures, approval accept/deny/cancel, interrupted startup/tool calls, process descendants and native approval dialog close |
+| MCP | stdio fixtures, approval accept/deny/cancel, interrupted startup/tool calls, process descendants and native approval dialog close; HTTP transport is not implemented |
 | API/documents | Loopback auth, OpenAI/Anthropic routes, image input and document embeddings where the model supports them |
 | Benchmark | PP/TG, cancellation preserves rows, RSS values, resource estimate, history, CSV/XLSX export, consent-based sharing with a dedicated test account |
 | Updates | Version/arch matching, hash failure, interrupted download, manual installer completion, relaunch and persistence; unsupported install formats use release-page fallback |

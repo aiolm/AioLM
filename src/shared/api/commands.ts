@@ -4,7 +4,7 @@ import type { HfInstalledFile, HfSortKey } from "./models.ts";
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
-  LatestInfo, McpServer, McpTool, ModelDownloadProgress, ModelMetadata, ModelScanResult,
+  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata, ModelScanResult,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus, SessionSummary,
   VerificationRecord,
@@ -39,7 +39,14 @@ export const readDocumentBinding = (path: string) => invoke<string>("read_docume
 export const mcpListServers = () => invoke<McpServer[]>("mcp_list_servers");
 export const mcpSaveServer = (server: McpServer) => invoke<McpServer[]>("mcp_save_server", { server });
 export const mcpRemoveServer = (id: string) => invoke<McpServer[]>("mcp_remove_server", { id });
-export const mcpListTools = (id: string) => invoke<McpTool[]>("mcp_list_tools", { id });
+export const mcpListTools = async (id: string): Promise<McpTool[]> => {
+  const tools = await invoke<McpToolPayload[]>("mcp_list_tools", { id });
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description ?? undefined,
+    input_schema: tool.inputSchema !== undefined ? tool.inputSchema : tool.input_schema ?? null,
+  }));
+};
 /** `callId` makes the call stoppable through {@link mcpCancelToolCall}. */
 export const mcpCallTool = (id: string, name: string, argumentsValue: Record<string, unknown>, callId?: string) =>
   invoke<unknown>("mcp_call_tool", callId ? { id, name, arguments: argumentsValue, callId } : { id, name, arguments: argumentsValue });

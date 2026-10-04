@@ -29,6 +29,9 @@ jobs:
         with:
           node-version-file: ".node-version"
           cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |

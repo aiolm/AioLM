@@ -15,6 +15,8 @@ use std::process::{Command, Stdio};
 #[cfg(windows)]
 const HEADLESS_CREATION_FLAGS: u32 = 0x0000_0008 | 0x0000_0200 | 0x0800_0000;
 const MAX_HEADLESS_LOG_BYTES: usize = 1024 * 1024;
+const MAX_HEADLESS_LOG_LINE_BYTES: usize = 64 * 1024;
+const INTERNAL_LOG_COLLECTOR: &str = "--internal-headless-log";
 const MAX_HEADLESS_STATE_BYTES: u64 = 64 * 1024;
 const STALE_LOCK_SECONDS: u64 = 15 * 60;
 use std::sync::{Arc, Mutex};
@@ -30,6 +32,27 @@ struct HeadlessState {
     executable: String,
     #[serde(default)]
     log_path: String,
+    #[serde(default)]
+    log_collector: Option<LogCollectorIdentity>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LogCollectorIdentity {
+    pid: u32,
+    executable: String,
+}
+
+// Until startup succeeds, failure must also stop the log collector. Once the
+// server owns the pipe writers, EOF ends the collector even after this CLI exits.
+struct PendingLogCollector(Option<std::process::Child>);
+
+impl Drop for PendingLogCollector {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 struct CommandLock {
@@ -364,36 +387,100 @@ fn redact_log_text(text: &str) -> String {
     output
 }
 
-fn append_log_chunk(path: &Path, guard: &Arc<Mutex<()>>, chunk: &[u8]) {
-    let Ok(_guard) = guard.lock() else { return };
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return;
-        }
-    }
-    let existing = read_bounded_log(path).unwrap_or_default();
+fn append_log_chunk(path: &Path, chunk: &[u8]) -> std::io::Result<()> {
+    let existing = match read_bounded_log(path) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error),
+    };
     let redacted = redact_log_text(&String::from_utf8_lossy(chunk));
     let retained = bounded_log_bytes(&existing, redacted.as_bytes());
-    if let Ok(mut file) = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
-        .open(path)
-    {
-        let _ = file.write_all(&retained);
+        .open(path)?
+        .write_all(&retained)
+}
+
+fn collect_headless_log(mut reader: impl Read, path: &Path) -> std::io::Result<()> {
+    let mut buffer = [0_u8; 8192];
+    let mut line = Vec::new();
+    let mut oversized = false;
+    loop {
+        let size = match reader.read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        let mut completed = Vec::new();
+        for &byte in &buffer[..size] {
+            if byte == b'\n' {
+                if oversized {
+                    completed.extend_from_slice(b"[oversized headless log line omitted]\n");
+                } else {
+                    completed.extend_from_slice(&line);
+                    completed.push(b'\n');
+                }
+                line.clear();
+                oversized = false;
+            } else if !oversized {
+                if line.len() == MAX_HEADLESS_LOG_LINE_BYTES {
+                    line.clear();
+                    oversized = true;
+                } else {
+                    line.push(byte);
+                }
+            }
+        }
+        if size == 0 {
+            if oversized {
+                completed.extend_from_slice(b"[oversized headless log line omitted]\n");
+            } else {
+                completed.extend_from_slice(&line);
+            }
+        }
+        // Redact complete logical lines so a secret split across pipe reads
+        // cannot escape filtering. Oversized lines never accumulate unboundedly.
+        if !completed.is_empty() {
+            // A full disk or temporarily unavailable log must not close the
+            // server's pipe. Keep draining and retry on subsequent output.
+            let _ = append_log_chunk(path, &completed);
+        }
+        if size == 0 {
+            return Ok(());
+        }
     }
 }
 
-fn pump_log<R: Read + Send + 'static>(mut reader: R, path: PathBuf, guard: Arc<Mutex<()>>) {
-    std::thread::spawn(move || {
-        let mut buffer = [0_u8; 8192];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(size) => append_log_chunk(&path, &guard, &buffer[..size]),
-            }
-        }
-    });
+fn spawn_log_collector() -> Result<(PendingLogCollector, LogCollectorIdentity, Stdio, Stdio), String>
+{
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    let (reader, writer) = std::io::pipe().map_err(|error| error.to_string())?;
+    let stderr = writer.try_clone().map_err(|error| error.to_string())?;
+    let mut command = Command::new(&executable);
+    command
+        .arg(INTERNAL_LOG_COLLECTOR)
+        .env_clear()
+        .envs(runtime::child_environment())
+        .env("AIOLM_HOME", aiolm_lib::home::resolve_aiolm_home()?)
+        .stdin(reader)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(HEADLESS_CREATION_FLAGS);
+    let child = command
+        .spawn()
+        .map_err(|error| format!("failed to start headless log collector: {error}"))?;
+    let identity = LogCollectorIdentity {
+        pid: child.id(),
+        executable: executable.to_string_lossy().into_owned(),
+    };
+    Ok((
+        PendingLogCollector(Some(child)),
+        identity,
+        writer.into(),
+        stderr.into(),
+    ))
 }
 
 fn process_is_llama_server(pid: u32) -> bool {
@@ -547,6 +634,44 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
     }
 }
 
+async fn wait_for_process_exit(
+    pid: u32,
+    executable: &Path,
+    limit: std::time::Duration,
+) -> Result<(), String> {
+    tokio::time::timeout(limit, async {
+        while process_is_alive(pid) && process_matches_executable(pid, executable) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        format!(
+            "headless process {pid} did not exit within {} seconds; its state was retained",
+            limit.as_secs_f64()
+        )
+    })
+}
+
+fn log_collector_is_alive(state: &HeadlessState) -> bool {
+    state.log_collector.as_ref().is_some_and(|collector| {
+        process_is_alive(collector.pid)
+            && process_matches_executable(collector.pid, Path::new(&collector.executable))
+    })
+}
+
+async fn wait_for_log_collector(state: &HeadlessState) -> Result<(), String> {
+    if let Some(collector) = &state.log_collector {
+        wait_for_process_exit(
+            collector.pid,
+            Path::new(&collector.executable),
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 fn health_url(url: &str) -> String {
     format!(
         "{}/health",
@@ -560,7 +685,9 @@ async fn server_status() -> Result<Value, String> {
     };
     let cfg = config::load_result()?;
     if validate_state_url(&state.url, cfg.port).is_err() {
-        remove_state();
+        if !log_collector_is_alive(&state) {
+            remove_state();
+        }
         return Ok(
             json!({"state":"crashed","managed":false,"error":"invalid headless state endpoint"}),
         );
@@ -577,7 +704,7 @@ async fn server_status() -> Result<Value, String> {
     } else {
         false
     };
-    if !alive {
+    if !alive && !log_collector_is_alive(&state) {
         remove_state();
     }
     Ok(json!({
@@ -604,6 +731,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         if process_is_alive(existing.pid) && process_is_llama_server(existing.pid) {
             return Err("an unmanaged llama-server process matches the headless state PID; refusing to replace it".into());
         }
+        wait_for_log_collector(&existing).await?;
         remove_state();
     }
     let mut cfg = config::load_result()?;
@@ -625,6 +753,11 @@ async fn server_start_unlocked() -> Result<Value, String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create headless log directory: {error}"))?;
     }
+    if fs::symlink_metadata(&log_file_path)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err("headless log is not a regular file".into());
+    }
     let log_file = fs::OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -637,36 +770,22 @@ async fn server_start_unlocked() -> Result<Value, String> {
             )
         })?;
     drop(log_file);
-    let mut command = Command::new(&bin);
-    command.env_clear().envs(environment);
-    #[cfg(windows)]
-    command.creation_flags(HEADLESS_CREATION_FLAGS);
-    let mut child = command
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to spawn llama-server: {error}"))?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("headless server stdout pipe was not available".into());
-        }
+    let (mut collector, collector_identity, stdout, stderr) = spawn_log_collector()?;
+    let child = {
+        let mut command = Command::new(&bin);
+        command.env_clear().envs(environment);
+        #[cfg(windows)]
+        command.creation_flags(HEADLESS_CREATION_FLAGS);
+        command
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .map_err(|error| format!("failed to spawn llama-server: {error}"))?
+        // Drop Command's copies of the pipe writers before waiting on the
+        // server; only the server should keep the collector's input open.
     };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("headless server stderr pipe was not available".into());
-        }
-    };
-    let log_guard = Arc::new(Mutex::new(()));
-    pump_log(stdout, log_file_path.clone(), Arc::clone(&log_guard));
-    pump_log(stderr, log_file_path.clone(), log_guard);
     let pid = child.id();
     let url = configured_server_url(cfg.port);
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
@@ -691,6 +810,16 @@ async fn server_start_unlocked() -> Result<Value, String> {
         }
         return Err(error);
     }
+    if collector
+        .0
+        .as_mut()
+        .expect("pending log collector")
+        .try_wait()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err("headless log collector exited during server startup".into());
+    }
     let state = HeadlessState {
         pid,
         url: url.clone(),
@@ -701,6 +830,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
             .unwrap_or_default(),
         executable: bin.clone(),
         log_path: log_file_path.to_string_lossy().into_owned(),
+        log_collector: Some(collector_identity),
     };
     if let Err(error) = write_state(&state) {
         let _ = terminate_pid(pid);
@@ -716,6 +846,9 @@ async fn server_start_unlocked() -> Result<Value, String> {
     {
         drop(child.release());
     }
+    // The server now owns the log pipe. EOF terminates this independent
+    // collector, and persisted identity lets stop/restart wait for its drain.
+    collector.0.take();
     Ok(json!({
         "state":"running",
         "pid":pid,
@@ -745,7 +878,16 @@ async fn server_stop_unlocked() -> Result<Value, String> {
     }
     if state_process_is_managed(&state) {
         terminate_pid(state.pid)?;
+        // Sending SIGTERM only requests shutdown. Keep the state and command
+        // lock until the server exits so restart cannot race its bound port.
+        wait_for_process_exit(
+            state.pid,
+            Path::new(&state.executable),
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
     }
+    wait_for_log_collector(&state).await?;
     remove_state();
     Ok(json!({"state":"stopped","pid":state.pid,"model":state.model}))
 }
@@ -845,11 +987,33 @@ fn config_value() -> Result<Value, String> {
 fn config_set_value(key: &str, value: &str) -> Result<Value, String> {
     let _command_lock = acquire_command_lock()?;
     let mut cfg = config::load_result()?;
-    apply_config_override(&mut cfg, key, value)?;
+    apply_config_override(&mut cfg, key, value).map_err(|error| {
+        if matches!(key, "active_backend" | "active_build") {
+            format!("{error}; use runtime select <backend> <build> to change the pair together")
+        } else {
+            error
+        }
+    })?;
     let saved = config::save(&cfg)?;
     Ok(json!({
         "ok": true,
         "changed": key,
+        "config": redact_json(serde_json::to_value(saved).map_err(|error| error.to_string())?),
+    }))
+}
+
+fn runtime_select_value(backend: &str, build: &str) -> Result<Value, String> {
+    runtime::validate_runtime_identifiers(backend, build)?;
+    let _command_lock = acquire_command_lock()?;
+    let mut cfg = config::load_result()?;
+    // First-time selection must validate and save both fields as one change.
+    cfg.active_backend = backend.into();
+    cfg.active_build = build.into();
+    cfg.normalize();
+    cfg.validate()?;
+    let saved = config::save(&cfg)?;
+    Ok(json!({
+        "ok": true,
         "config": redact_json(serde_json::to_value(saved).map_err(|error| error.to_string())?),
     }))
 }
@@ -955,6 +1119,7 @@ fn help_value() -> Value {
             "runtime list":"list installed managed runtimes",
             "runtime device":"detect local GPUs and recommended backends",
             "runtime probe <backend> <build>":"run version/help/device/bench preflight",
+            "runtime select <backend> <build>":"save the configured runtime backend and build together",
             "server start":"start the configured model without API-key persistence",
             "server status":"read managed process and /health state",
             "server stop|unload":"stop the managed server process tree",
@@ -976,6 +1141,7 @@ enum CliCommand {
     RuntimesList,
     DeviceProfile,
     RuntimeProbe { backend: String, build: String },
+    RuntimeSelect { backend: String, build: String },
     Doctor,
     ServerStart,
     ServerStatus,
@@ -1016,8 +1182,13 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
                 build: args[3].clone(),
             }),
             Some("probe") => Err("usage: runtime probe <backend> <build>".into()),
+            Some("select") if args.len() == 4 => Ok(CliCommand::RuntimeSelect {
+                backend: args[2].clone(),
+                build: args[3].clone(),
+            }),
+            Some("select") => Err("usage: runtime select <backend> <build>".into()),
             Some("device") => Ok(CliCommand::DeviceProfile),
-            _ => Err("usage: runtime list|probe <backend> <build>|device".into()),
+            _ => Err("usage: runtime list|probe|select <backend> <build>|device".into()),
         },
         "doctor" if args.len() == 1 => Ok(CliCommand::Doctor),
         "server" => match args.get(1).map(String::as_str) {
@@ -1049,6 +1220,7 @@ async fn run(args: &[String]) -> Result<Value, String> {
         CliCommand::RuntimesList => runtimes_value(),
         CliCommand::DeviceProfile => device_value(),
         CliCommand::RuntimeProbe { backend, build } => runtime_probe_value(&backend, &build).await,
+        CliCommand::RuntimeSelect { backend, build } => runtime_select_value(&backend, &build),
         CliCommand::Doctor => Ok(doctor_value()),
         CliCommand::ServerStart => server_start().await,
         CliCommand::ServerStatus => server_status().await,
@@ -1062,9 +1234,31 @@ async fn run(args: &[String]) -> Result<Value, String> {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
+    if args.len() == 1 && args[0] == INTERNAL_LOG_COLLECTOR {
+        // The collector needs no GUI, keyring, migration or async runtime.
+        // Its parent has already created the log directory/file.
+        let result = aiolm_lib::home::resolve_aiolm_home()
+            .map_err(std::io::Error::other)
+            .and_then(|home| {
+                collect_headless_log(
+                    std::io::stdin().lock(),
+                    &home.join("cli").join("headless-server.log"),
+                )
+            });
+        if let Err(error) = result {
+            eprintln!("headless log collector failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    tokio::runtime::Runtime::new()
+        .expect("initialize CLI runtime")
+        .block_on(run_cli(args));
+}
+
+async fn run_cli(args: Vec<String>) {
     if !args.is_empty() && args[0] != "--help" && args[0] != "-h" {
         if let Err(error) = aiolm_lib::branding::prepare_managed_data() {
             println!("{}", json!({"ok":false,"error":error}));
@@ -1194,6 +1388,57 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopping_waits_for_sigterm_cleanup_before_reporting_exit() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        use tokio::time::{timeout, Duration};
+
+        // The shell acknowledges SIGTERM but keeps its process alive until
+        // stdin releases cleanup, just as a server can retain its socket.
+        let mut child = tokio::process::Command::new("sh")
+            .args([
+                "-c",
+                "trap 'read release; exit 0' TERM; printf 'ready\\n'; while :; do read input; done",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        timeout(Duration::from_secs(5), stdout.read_line(&mut ready))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ready, "ready\n");
+        let executable = process_image_path(pid).unwrap();
+
+        terminate_pid(pid).unwrap();
+        let error = wait_for_process_exit(pid, &executable, Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert!(error.contains("state was retained"), "{error}");
+        assert!(child.try_wait().unwrap().is_none());
+
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"release\n")
+            .await
+            .unwrap();
+        let (exited, reaped) = tokio::join!(
+            wait_for_process_exit(pid, &executable, Duration::from_secs(5)),
+            timeout(Duration::from_secs(5), child.wait()),
+        );
+        exited.unwrap();
+        assert!(reaped.unwrap().unwrap().success());
+    }
+
     #[test]
     fn config_json_redaction_covers_nested_values_and_sensitive_argv_pairs() {
         let value = json!({
@@ -1242,6 +1487,7 @@ mod tests {
             started_at: 1,
             executable: String::new(),
             log_path: String::new(),
+            log_collector: None,
         };
         let paths = [current.clone(), previous.clone()];
         assert!(read_first_state(&paths).unwrap().is_none());

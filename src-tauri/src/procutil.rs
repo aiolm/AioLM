@@ -321,6 +321,7 @@ pub fn capture_stdout(
     capture_stdout_cancellable(command, limit, 256 * 1024, None)
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 pub fn capture_stdout_with_cap(
     command: &mut std::process::Command,
     limit: std::time::Duration,

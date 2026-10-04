@@ -23,6 +23,9 @@ jobs:
         with:
           node-version-file: ".node-version"
           cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild
@@ -43,7 +46,11 @@ jobs:
     runs-on: windows-latest
     # Backstop against a hung compiler/linker or Rust test; normal runs
     # finish well within this on windows-latest.
-    timeout-minutes: 40
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -52,6 +59,9 @@ jobs:
         with:
           node-version-file: ".node-version"
           cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild
@@ -70,9 +80,22 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Rust tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features
       - name: Frontend build for Tauri metadata validation
         run: npm run build
+      - name: Build desktop and CLI
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
+      - name: Native CLI with a clean home
+        run: npm run test:native-cli
+      - name: Real CPU runtime and model lifecycle
+        timeout-minutes: 15
+        env:
+          AIOLM_NATIVE_CPU: "1"
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu -- --ignored --nocapture --test-threads=1
+      - name: Windows Credential Manager roundtrip
+        env:
+          AIOLM_VAULT_SMOKE: roundtrip
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib benchmark::sharing::vault::tests::real_vault_roundtrip -- --ignored --exact --test-threads=1
 
   rust-portability:
     name: Native tests (${{ matrix.os }})
@@ -96,6 +119,9 @@ jobs:
         with:
           node-version-file: ".node-version"
           cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Rebuild esbuild

@@ -580,6 +580,7 @@ mod windows_detect {
 
 /// Integrated parts either say so in the name or expose a token carve-out of
 /// shared memory rather than real VRAM.
+#[cfg(any(windows, target_os = "linux", test))]
 fn looks_integrated(name: &str, vram_mb: Option<u64>) -> bool {
     let lower = name.to_lowercase();
     if lower.contains("integrated")
