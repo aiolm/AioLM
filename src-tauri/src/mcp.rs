@@ -23,6 +23,8 @@ const APPROVAL_TITLE: &str = "MCP tool approval required";
 
 #[cfg(target_os = "linux")]
 mod linux_approval;
+#[cfg(target_os = "macos")]
+mod macos_approval;
 #[cfg(windows)]
 mod native_approval;
 static CONFIG_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -535,7 +537,9 @@ async fn confirm_tool_call(
     // is dropped. Keep the dialog process owned by this cancellable future.
     #[cfg(target_os = "linux")]
     let approved = linux_approval::confirm(APPROVAL_TITLE, &description).await?;
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    let approved = macos_approval::confirm(APPROVAL_TITLE, &description).await?;
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     let approved = rfd::AsyncMessageDialog::new()
         .set_title(APPROVAL_TITLE)
         .set_description(description)
