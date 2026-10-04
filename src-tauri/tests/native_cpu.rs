@@ -1,6 +1,6 @@
-//! Explicit live acceptance: real managed CPU/Metal install and CLI inference after
-//! the launcher exits. Only public, hash-pinned model data and a disposable home
-//! are used. Run alone with AIOLM_NATIVE_CPU=1 and --ignored --test-threads=1.
+//! Explicit live acceptance: real managed CPU/Metal install or pinned source build
+//! and CLI inference after the launcher exits. Only public, hash-pinned model data
+//! and a disposable home are used. Run alone with --ignored --test-threads=1.
 use aiolm_lib::runtime;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -14,6 +14,9 @@ use std::time::Duration;
 const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const MODEL_SHA256: &str = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db";
 const MODEL_BYTES: u64 = 491_400_032;
+// A merged llama.cpp pull request, pinned to the head commit that was merged.
+const SOURCE_PULL_REQUEST: &str = "29903";
+const SOURCE_COMMIT: &str = "f07be9f37e5dd3e8bec895f6ffd8d86fd1bbc370";
 
 struct Home(PathBuf);
 
@@ -109,7 +112,7 @@ impl Drop for Home {
 #[ignore = "downloads a public 491 MB model and CPU runtime; set AIOLM_NATIVE_CPU=1 and run alone"]
 fn real_cpu_cli_lifecycle() {
     assert_eq!(std::env::var("AIOLM_NATIVE_CPU").as_deref(), Ok("1"));
-    real_cli_lifecycle("cpu");
+    real_cli_lifecycle("cpu", false);
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -117,10 +120,18 @@ fn real_cpu_cli_lifecycle() {
 #[ignore = "requires an actual Metal device and downloads a public model; set AIOLM_NATIVE_METAL=1"]
 fn real_metal_cli_lifecycle() {
     assert_eq!(std::env::var("AIOLM_NATIVE_METAL").as_deref(), Ok("1"));
-    real_cli_lifecycle("metal");
+    real_cli_lifecycle("metal", false);
 }
 
-fn real_cli_lifecycle(backend: &str) {
+#[test]
+#[ignore = "builds a pinned llama.cpp pull request with the host CMake toolchain; set AIOLM_NATIVE_SOURCE=cpu or metal"]
+fn real_source_build_cli_lifecycle() {
+    let backend = std::env::var("AIOLM_NATIVE_SOURCE").expect("AIOLM_NATIVE_SOURCE");
+    assert!(matches!(backend.as_str(), "cpu" | "metal"), "{backend}");
+    real_cli_lifecycle(&backend, true);
+}
+
+fn real_cli_lifecycle(backend: &str, from_source: bool) {
     let home = Home(std::env::temp_dir().join(format!("aiolm-{backend}-{}", uuid::Uuid::new_v4())));
     std::fs::create_dir_all(home.0.join("aiolm")).unwrap();
     // This integration binary has one explicitly selected test. The installer
@@ -137,21 +148,46 @@ fn real_cli_lifecycle(backend: &str) {
         .build()
         .unwrap();
     let (build, model) = rt.block_on(async {
-        let latest = runtime::latest_for(backend)
+        let build = if from_source {
+            let phase = std::sync::Mutex::new(String::new());
+            let installed = runtime::install_pr_with(
+                &|current, _, _| {
+                    let mut last = phase.lock().unwrap();
+                    if *last != current {
+                        println!("PR source build phase: {current}");
+                        *last = current.to_string();
+                    }
+                },
+                backend,
+                SOURCE_PULL_REQUEST,
+                SOURCE_COMMIT,
+                Arc::new(AtomicBool::new(false)),
+            )
             .await
-            .expect("native release metadata");
-        runtime::install_with(
-            &|_, _, _| {},
-            backend,
-            &latest.build,
-            Arc::new(AtomicBool::new(false)),
-        )
-        .await
-        .expect("managed runtime download, digest, extraction and preflight");
-        println!(
-            "{backend} runtime installed: {} ({})",
-            latest.build, latest.file_name
-        );
+            .expect("pinned PR source download, CMake build, packaging and preflight");
+            println!(
+                "{backend} runtime built from PR #{SOURCE_PULL_REQUEST} at {SOURCE_COMMIT}: {}",
+                installed.build
+            );
+            installed.build
+        } else {
+            let latest = runtime::latest_for(backend)
+                .await
+                .expect("native release metadata");
+            runtime::install_with(
+                &|_, _, _| {},
+                backend,
+                &latest.build,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+            .expect("managed runtime download, digest, extraction and preflight");
+            println!(
+                "{backend} runtime installed: {} ({})",
+                latest.build, latest.file_name
+            );
+            latest.build
+        };
         let model = home.0.join("model with spaces.gguf");
         let mut file = std::fs::File::create(&model).unwrap();
         let mut response = client
@@ -172,7 +208,7 @@ fn real_cli_lifecycle(backend: &str) {
         assert_eq!(bytes, MODEL_BYTES);
         assert_eq!(format!("{:x}", hash.finalize()), MODEL_SHA256);
         println!("Model download and pinned SHA-256 verification passed");
-        (latest.build, model)
+        (build, model)
     });
     assert_eq!(home.cli(&["config", "get"])["active_build"], "");
     home.cli(&["runtime", "select", backend, &build]);
