@@ -234,7 +234,13 @@ fn real_cli_lifecycle(backend: &str) {
             .collect();
         assert!(!answer.trim().is_empty(), "no model answer");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while std::fs::read(&log).unwrap_or_default() == before {
+        loop {
+            let current = std::fs::read(&log).unwrap_or_default();
+            // The bounded collector rewrites its tail; an empty file during
+            // that write is not evidence of new server output.
+            if !current.is_empty() && current != before {
+                break;
+            }
             assert!(
                 std::time::Instant::now() < deadline,
                 "logs stopped after launcher exit"
@@ -242,16 +248,33 @@ fn real_cli_lifecycle(backend: &str) {
             std::thread::sleep(Duration::from_millis(100));
         }
         if backend == "metal" {
-            let content = std::fs::read_to_string(&log).unwrap();
-            assert!(
-                content.lines().any(|line| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let content = std::fs::read_to_string(&log).unwrap_or_default();
+                if let Some(evidence) = content.lines().find(|line| {
                     line.split_once("offloaded ")
                         .and_then(|(_, suffix)| suffix.split('/').next())
                         .and_then(|count| count.parse::<u32>().ok())
                         .is_some_and(|count| count > 0)
-                }),
-                "Metal inference must offload model layers, rather than silently use CPU"
-            );
+                }) {
+                    println!("Metal layer placement: {evidence}");
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Metal inference must offload model layers; retained log ({} bytes):\n{}",
+                    content.len(),
+                    content
+                        .chars()
+                        .rev()
+                        .take(16384)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
         println!("CLI {action}: real {backend} SSE answer and continuing logs passed");
     }
