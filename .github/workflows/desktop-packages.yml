@@ -164,10 +164,15 @@ jobs:
       - name: Probe hosted Metal device availability
         if: matrix.backend == 'metal'
         run: swift scripts/macos-metal-probe.swift
+      - name: Fetch public PR metadata without the shared anonymous API limit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/ggml-org/llama.cpp/pulls/29903 > "$RUNNER_TEMP/aiolm-pull-request.json"
       - name: Real PR source build and CLI lifecycle
         timeout-minutes: 100
         env:
           AIOLM_NATIVE_SOURCE: ${{ matrix.backend }}
+          AIOLM_NATIVE_PULL_REQUEST: ${{ runner.temp }}/aiolm-pull-request.json
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_source_build_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
 
   install:

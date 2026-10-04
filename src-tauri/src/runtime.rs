@@ -3737,8 +3737,42 @@ fn validate_commit_sha(commit: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Public pull request metadata fetched by a live acceptance job, keyed by
+/// number. Only the GitHub lookup is replaced; validation is unchanged.
+#[cfg(feature = "test-fixtures")]
+static PRELOADED_PULL_REQUESTS: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+
+/// Prime live source-build acceptance with a pull request document fetched by
+/// the CI job, whose short-lived token stays outside the app. The source
+/// archive, its commit check, the build and staged preflight use the normal path.
+#[cfg(feature = "test-fixtures")]
+pub fn preload_pull_request(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_GITHUB_RESPONSE_BYTES {
+        return Err("GitHub API response exceeds the 2 MiB limit".into());
+    }
+    let raw = String::from_utf8(bytes.to_vec())
+        .map_err(|error| format!("invalid GitHub pull request response: {error}"))?;
+    let detail: PullRequestDetail = serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid GitHub pull request response: {error}"))?;
+    PRELOADED_PULL_REQUESTS
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| "pull request preload lock was poisoned".to_string())?
+        .insert(detail.number, raw);
+    Ok(())
+}
+
 async fn resolve_pull_request(input: &str) -> Result<ResolvedPullRequest, String> {
     let request = parse_pull_request_ref(input)?;
+    #[cfg(feature = "test-fixtures")]
+    if let Some(raw) = PRELOADED_PULL_REQUESTS
+        .get()
+        .and_then(|preloaded| preloaded.lock().ok()?.get(&request.number).cloned())
+    {
+        let detail: PullRequestDetail = serde_json::from_str(&raw)
+            .map_err(|error| format!("invalid GitHub pull request response: {error}"))?;
+        return parse_pull_request_source(request.number, detail);
+    }
     let response = http()
         .get(format!(
             "https://api.github.com/repos/{LLAMA_REPOSITORY}/pulls/{}",

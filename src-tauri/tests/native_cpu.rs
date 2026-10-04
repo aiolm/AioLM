@@ -142,6 +142,11 @@ fn real_cli_lifecycle(backend: &str, from_source: bool) {
         runtime::preload_release_catalog(&std::fs::read(path).expect("public release catalog"))
             .expect("bounded public release metadata");
     }
+    #[cfg(feature = "test-fixtures")]
+    if let Some(path) = std::env::var_os("AIOLM_NATIVE_PULL_REQUEST") {
+        runtime::preload_pull_request(&std::fs::read(path).expect("public pull request"))
+            .expect("bounded public pull request metadata");
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
