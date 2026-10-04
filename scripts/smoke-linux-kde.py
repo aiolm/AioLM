@@ -25,7 +25,7 @@ def main():
                 path = Path(directory, sub)
                 path.mkdir(mode=0o700, exist_ok=True)
                 env[key] = str(path)
-            env.update(GDK_BACKEND='x11', XDG_CURRENT_DESKTOP='KDE', KDE_SESSION_VERSION='5',
+            env.update(GDK_BACKEND='x11', XDG_CURRENT_DESKTOP='KDE', KDE_SESSION_VERSION='5', KDE_FULL_SESSION='true',
                        TAURI_WEBVIEW_AUTOMATION='true', WEBKIT_DISABLE_DMABUF_RENDERER='1',
                        QT_X11_NO_MITSHM='1', LIBGL_ALWAYS_SOFTWARE='1')
             subprocess.run(['xvfb-run', '-a', '-s', '-screen 0 1280x900x24', 'dbus-run-session', '--',
@@ -42,6 +42,9 @@ def main():
     try:
         for command in [['kwin_x11', '--replace'], ['plasmashell', '--no-respawn'], ['WebKitWebDriver', '--port=4444']]:
             processes.append(subprocess.Popen(command))
+        dbus('org.kde.kded5', '/kded', 'org.kde.kded5', 'loadModule',
+             GLib.Variant('(s)', ('statusnotifierwatcher',)))
+        last_error = 'host not registered'
         for _ in range(150):
             try:
                 available = dbus('org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher',
@@ -49,11 +52,11 @@ def main():
                                  GLib.Variant('(ss)', ('org.kde.StatusNotifierWatcher', 'IsStatusNotifierHostRegistered')))[0]
                 if available:
                     break
-            except GLib.Error:
-                pass
+            except GLib.Error as error:
+                last_error = str(error)
             time.sleep(.2)
         else:
-            raise RuntimeError('Plasma has no registered tray host')
+            raise RuntimeError('Plasma has no registered tray host: ' + last_error)
         debs = list(Path('.codex-target/release/bundle/deb').glob('*.deb'))
         assert len(debs) == 1
         unpacked = Path(os.environ['HOME'], 'package')
