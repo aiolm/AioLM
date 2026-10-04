@@ -26,7 +26,7 @@ API 서버를 중지해도 로드된 모델과 내부 채팅은 유지됩니다.
 
 ## 플랫폼 지원
 
-Windows x64와 Linux x86_64(Ubuntu 24.04 이상) 빌드를 사용할 수 있습니다. Linux는 DEB/AppImage, Windows는 NSIS/MSI 형식입니다. **v0.3.0부터 Linux 패키지도 배포합니다.** [Linux 설치 가이드](install.ko.md#linux)에서 설치 방법을 확인하세요. macOS와 Linux ARM64/NVIDIA DGX 검증은 남아 있습니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참고하세요. 릴리스 파일은 미서명이며 SHA-256 체크섬을 제공합니다.
+Windows x64와 Linux x86_64(Ubuntu 24.04 이상) 빌드를 사용할 수 있습니다. Linux는 DEB/AppImage, Windows는 NSIS/MSI 형식입니다. **v0.2.1부터 Linux 패키지도 배포합니다.** [Linux 설치 가이드](install.ko.md#linux)에서 설치 방법을 확인하세요. macOS와 Linux ARM64/NVIDIA DGX 검증은 남아 있습니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참고하세요. 릴리스 파일은 미서명이며 SHA-256 체크섬을 제공합니다.
 
 ## 다운로드
 

@@ -46,7 +46,7 @@ AioLM将数据保存在 `%USERPROFILE%\.aiolm`，也可以通过环境变量 `AI
 
 适用于 Ubuntu 24.04 或更新版本、x86_64。推荐使用 DEB 集成应用菜单和图标；AppImage 为便携格式。本次验证不涵盖 ARM64 和 NVIDIA DGX。
 
-从同一个[发布版本](https://github.com/aiolm/AioLM/releases/latest)下载 DEB 或 AppImage 及 `checksums.txt`。**从 v0.3.0 开始也提供 Linux 文件。** 如需发布前的验证构建，可登录 GitHub，在成功的 [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 运行的 Artifacts 中下载 `desktop-packages-ubuntu-24.04`。文件过期后请使用[源码构建](development.md)。验证构建并非正式发布版本。
+从同一个[发布版本](https://github.com/aiolm/AioLM/releases/latest)下载 DEB 或 AppImage 及 `checksums.txt`。**从 v0.2.1 开始也提供 Linux 文件。** 如需发布前的验证构建，可登录 GitHub，在成功的 [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 运行的 Artifacts 中下载 `desktop-packages-ubuntu-24.04`。文件过期后请使用[源码构建](development.md)。验证构建并非正式发布版本。
 
 将 SHA-256 值与校验和文件中的对应项进行比较。在仅包含所需版本 DEB 的文件夹内执行:
 

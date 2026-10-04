@@ -46,7 +46,7 @@ AioLMはデータを `%USERPROFILE%\.aiolm` に保存します。環境変数 `A
 
 Ubuntu 24.04 以降、x86_64 が対象です。アプリメニューとアイコンの統合には DEB を推奨します。AppImage はポータブル形式です。ARM64 と NVIDIA DGX は今回の検証対象外です。
 
-同じ[リリース](https://github.com/aiolm/AioLM/releases/latest)から DEB または AppImage と `checksums.txt` を取得してください。**v0.3.0 から Linux ファイルも配布します。** リリース前の検証ビルドが必要な場合は、GitHub にログインし、成功した [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 実行の Artifacts から `desktop-packages-ubuntu-24.04` を取得できます。保存期限が切れている場合は[ソースビルド](development.md)を利用してください。検証ビルドは正式リリースとは異なります。
+同じ[リリース](https://github.com/aiolm/AioLM/releases/latest)から DEB または AppImage と `checksums.txt` を取得してください。**v0.2.1 から Linux ファイルも配布します。** リリース前の検証ビルドが必要な場合は、GitHub にログインし、成功した [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 実行の Artifacts から `desktop-packages-ubuntu-24.04` を取得できます。保存期限が切れている場合は[ソースビルド](development.md)を利用してください。検証ビルドは正式リリースとは異なります。
 
 チェックサムファイルの該当項目と SHA-256 値を比較してください。インストールするバージョンの DEB だけを置いたフォルダーで実行します:
 

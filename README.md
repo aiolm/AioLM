@@ -33,7 +33,7 @@ See [chat personalization](docs/reference/personalization.md).
 
 ## Platform support
 
-Windows x64 and Linux x86_64 (Ubuntu 24.04+) builds are available. Linux uses DEB/AppImage; Windows uses NSIS/MSI. Linux packages are included starting with **v0.3.0**; see the [Linux installation guide](docs/guides/install.md#linux). macOS and Linux ARM64/NVIDIA DGX acceptance remain pending. See [cross-platform validation](docs/reference/cross-platform-validation.md). Release assets are unsigned and include SHA-256 checksums.
+Windows x64 and Linux x86_64 (Ubuntu 24.04+) builds are available. Linux uses DEB/AppImage; Windows uses NSIS/MSI. Linux packages are included starting with **v0.2.1**; see the [Linux installation guide](docs/guides/install.md#linux). macOS and Linux ARM64/NVIDIA DGX acceptance remain pending. See [cross-platform validation](docs/reference/cross-platform-validation.md). Release assets are unsigned and include SHA-256 checksums.
 
 ## Download
 

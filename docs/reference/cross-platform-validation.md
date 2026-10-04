@@ -1,6 +1,6 @@
 # Cross-platform validation
 
-Starting with v0.3.0, releases include Windows x64 NSIS/MSI and Linux x86_64
+Starting with v0.2.1, releases include Windows x64 NSIS/MSI and Linux x86_64
 (Ubuntu 24.04+) DEB/AppImage packages. See the
 [Linux installation guide](../guides/install.md#linux). Additional validation
 packages are available through the desktop-packages workflow. macOS and Linux
