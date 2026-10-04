@@ -70,7 +70,7 @@ jobs:
       - name: Install native desktop verification dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth dbus-x11 webkit2gtk-driver libwebkit2gtk-4.1-0 libayatana-appindicator3-1 zenity python3-gi plasma-workspace kwin-x11
+          sudo apt-get install -y --no-install-recommends xvfb xauth dbus-x11 webkit2gtk-driver libwebkit2gtk-4.1-0 libayatana-appindicator3-1 zenity python3-gi plasma-workspace plasma-desktop kwin-x11
       - name: Download and verify packages
         env:
           GH_TOKEN: ${{ github.token }}
