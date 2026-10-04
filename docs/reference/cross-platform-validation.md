@@ -289,3 +289,23 @@ through a remote machine, a self-hosted runner or a tester for real-model Metal
 acceptance. Intel macOS CPU support needs its own package/run; a successful ARM64
 job is not evidence for Intel. Track native UI, signing, installation and GPU checks
 as pending until their results are recorded.
+
+
+## Published v0.2.1 and website deployment
+
+The [v0.2.1 release workflow](https://github.com/aiolm/AioLM/actions/runs/37201880791)
+passed Windows and Ubuntu 24.04 verification and published NSIS, MSI, DEB and
+AppImage packages from commit `6ba8506`. The
+[corresponding CI](https://github.com/aiolm/AioLM/actions/runs/37201880783) passed
+Windows, Ubuntu, both macOS architectures and frontend checks.
+All six payloads downloaded from the public release matched its SHA-256 manifest.
+The downloaded DEB passed desktop-file validation and an isolated-home installed
+CLI smoke. The published AppImage passed temporary XDG desktop registration,
+icon comparison with the DEB, and removal without changing the user's desktop.
+
+The website's Linux installation guidance was deployed to production from
+merge commit `bb9c21e`; its existing version remains `1.2.0`, with no new website
+release or tag. Production Chrome checks passed the Linux tab, download/document
+links, Linux and Windows clipboard commands and keyboard navigation in all four
+locales. Desktop and mobile views had no horizontal overflow or console/page
+errors, and the readiness endpoint returned `ready`.

@@ -9,7 +9,8 @@ Linux·macOS에서 이어서 수행할 작업을 설명한다. 공통 개발 절
 Windows에서 확인할 수 있는 이식 결함을 수정하고 자동 검증을 추가했다.
 아래 Windows 결과는 Linux·macOS에서의 실행 성공을 의미하지 않는다. 대상 OS의
 CI, 패키지 설치, 실제 모델·GUI 검증은 아래 완료 기준을 충족할 때까지 미완료다.
-배포 버전과 정식 지원 표시는 아직 Windows x64 기준이다.
+v0.2.1부터 Windows x64와 Linux x86_64(Ubuntu 24.04+) 설치 파일을 공개한다.
+macOS와 Linux ARM64/DGX 검증은 별도로 남아 있다.
 
 | 영역 | 구현 내용 | 대상 OS 검증 기준 |
 | --- | --- | --- |
@@ -34,8 +35,8 @@ CPU 인자 정규화는 서버와 perplexity에 적용한다. 인자 문법이 �
 업데이트는 DEB/DMG 파일을 열었다고 완료되는 것이 아니다. DEB는 데스크톱의 패키지
 설치 화면에서 사용자가 마무리해야 하고, DMG는 **기존 앱이 있는 설치 폴더**의 앱을
 교체해야 한다. AppImage와 개발/기타 수동 설치는 릴리스 페이지 안내를 사용한다.
-현재 Windows 릴리스 워크플로는 그대로이며, Linux/macOS 파일이 실제 릴리스에
-게시되기 전에는 해당 업데이트 설치 버튼을 사용할 수 없다.
+v0.2.1 릴리스 워크플로는 Windows NSIS/MSI와 Linux DEB/AppImage를 함께 게시한다.
+macOS 파일이 실제 릴리스에 게시되기 전에는 macOS 업데이트 설치 버튼을 사용할 수 없다.
 
 ## 최초 Windows 검증 (2026-10-03)
 
@@ -507,10 +508,10 @@ Linux에는 위 별도 패키지 데스크톱 검사가 있다.
 - [ ] 계정 기반 Linux 실기 흐름과 macOS GUI·Keychain·MCP·파일 처리 검사.
 - [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.
 - [ ] macOS 서명/공증 계정·CI secrets 구성 및 Gatekeeper 검증.
-- [x] release.yml에 Linux DEB/AppImage 빌드·설치 검사와 Windows/Linux 통합 체크섬 게시 경로 구현. 실제 새 릴리스 게시는 별도 확인 필요.
+- [x] release.yml에 Linux DEB/AppImage 빌드·설치 검사와 Windows/Linux 통합 체크섬 게시 경로 구현. v0.2.1 공개 파일 다운로드와 체크섬 검증 완료.
 - [ ] macOS 검증·서명 완료 후 release.yml에 macOS 게시 경로 추가.
 - [x] README·4개 언어 설치/개요·AioLM-Web에 Linux x86_64 설치 안내 반영. v0.2.0에는 Windows 파일만 있으므로 Linux 검증 아티팩트 경로와 제한을 명시.
-- [ ] Linux 공개 릴리스 파일 게시와 AioLM-Web 배포 후 실제 다운로드 경로 확인.
+- [x] Linux v0.2.1 공개 릴리스 파일 게시와 AioLM-Web 운영 배포 후 실제 다운로드 경로 확인.
 
 실기 확인 없이 체크박스를 완료로 바꾸지 않는다. 실패는 재현 명령, 기대/실제 결과,
 OS/커널·GPU 드라이버·런타임 빌드·모델 해시로 기록하되 개인 경로·토큰·사용자 데이터는
@@ -542,3 +543,29 @@ DEB에는 실행 항목과 아이콘이 이미 포함되어 있으며 설치 smo
 기존 AppImage 실행 항목은 개발 실행으로 덮어쓰지 않고, 도우미가 소유하지 않는
 항목도 보존한다. 실제 AppImage 추출·등록·제거 및 임시 경로 단위 검사를 통과했다.
 Windows/macOS 실행에는 Linux 등록을 적용하지 않는다.
+
+
+## v0.2.1 공개 릴리스 및 웹 운영 배포 (2026-10-04)
+
+[릴리스 작업](https://github.com/aiolm/AioLM/actions/runs/37201880791)은
+커밋 `6ba8506`의 Windows NSIS/MSI 및 Ubuntu 24.04 DEB/AppImage 생성과
+릴리스 전 검사를 통과했다. [공통 CI](https://github.com/aiolm/AioLM/actions/runs/37201880783)도
+Windows, Ubuntu, macOS ARM64/Intel과 프런트엔드 검사를 모두 통과했다.
+
+[공개 v0.2.1](https://github.com/aiolm/AioLM/releases/tag/v0.2.1)에서
+설치 파일 4개, Windows 설치 스크립트, Linux 아이콘 등록 도우미와 체크섬 파일을
+직접 다운로드했다. 6개 배포 파일의 SHA-256이 공개 체크섬과 모두 일치했다.
+공개 DEB를 임시 디렉터리에 추출해 desktop 문법과 창 식별자를 확인하고,
+격리된 홈의 설치 CLI 초기화·설정 저장·런타임 선택·오류 시 설정 보존 검사를 통과했다.
+공개 AppImage와 도우미로 임시 XDG 경로에 아이콘을 등록·검증·제거했으며,
+추출된 아이콘이 DEB의 아이콘과 같은 것도 확인했다.
+
+웹 변경은 [PR #3](https://github.com/aiolm/AioLm-Web/pull/3)의
+병합 커밋 `bb9c21e`로 운영 배포했다. 웹 버전은 기존 `1.2.0`을 유지하며
+이번 작업으로 웹 릴리스나 태그를 생성하지 않았다.
+[운영 사이트](https://aiolm.vercel.app/ko)의 한국어·영어·일본어·중국어에서
+Linux 설치 탭, 다운로드/문서 링크, Linux/Windows 명령 복사와 키보드 탭 전환을
+실제 Chrome으로 확인했다. 1440×1000 및 390×844 화면에서 가로 넘침이 없었고
+페이지·콘솔 오류가 없었다. readiness API도 `ready`를 반환했다.
+
+이 결과는 Windows 실기 GPU/GUI 전체 검증이나 남아 있는 macOS 검증을 대체하지 않는다.
