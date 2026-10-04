@@ -1,0 +1,49 @@
+name: Linux packaged desktop acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_run_id:
+        description: Successful desktop package workflow run to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+      - name: Install native desktop verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb xauth dbus-x11 webkit2gtk-driver libfuse2t64 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 zenity
+      - name: Download and verify packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
+        run: |
+          [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '.path + ":" + .conclusion')" = '.github/workflows/desktop-packages.yml:success'
+          gh run download "$PACKAGE_RUN_ID" --name desktop-packages-ubuntu-24.04 --dir .codex-target/release/bundle
+          cd .codex-target/release/bundle
+          sha256sum --check checksums.txt
+      - name: Installed GUI upgrade preservation and FUSE AppImage
+        run: python3 scripts/smoke-linux-packaged-desktop.py
+      - name: Retain native GUI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-desktop-acceptance
+          path: tmp/linux-package-acceptance/
+          if-no-files-found: ignore
+          retention-days: 14
