@@ -1,6 +1,10 @@
 name: Linux packaged desktop acceptance
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/linux-desktop-acceptance.yml
+      - scripts/smoke-linux-packaged-desktop.py
   workflow_dispatch:
     inputs:
       package_run_id:
@@ -31,7 +35,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
+          PACKAGE_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
+          if [ -z "$PACKAGE_RUN_ID" ]; then
+            PACKAGE_RUN_ID=$(gh run list --workflow desktop-packages.yml --branch "$PACKAGE_BRANCH" --status success --json databaseId --jq '.[0].databaseId')
+          fi
           [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '.path + ":" + .conclusion')" = '.github/workflows/desktop-packages.yml:success'
           gh run download "$PACKAGE_RUN_ID" --name desktop-packages-ubuntu-24.04 --dir .codex-target/release/bundle
