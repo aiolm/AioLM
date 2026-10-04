@@ -72,7 +72,9 @@ jobs:
         timeout-minutes: 20
         env:
           AIOLM_NATIVE_CPU: "1"
-          AIOLM_NATIVE_CLI: .codex-target/release/aiolm-cli
+          # Cargo runs integration tests from src-tauri, so select the release
+          # binary by its absolute workspace path.
+          AIOLM_NATIVE_CLI: ${{ github.workspace }}/.codex-target/release/aiolm-cli
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: macOS Keychain roundtrip
         if: (success() || failure()) && runner.os == 'macOS'
