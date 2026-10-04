@@ -62,7 +62,10 @@ windows-native-keyring-store = "1"
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus-secret-service-keyring-store = { version = "1", features = ["rt-tokio-crypto-rust"] }
+gio = "0.18"
+# Share the desktop plugins' async-io backend. Enabling zbus/tokio globally
+# makes the notification plugin's blocking DBus call nest a Tokio runtime.
+zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["signal"] }

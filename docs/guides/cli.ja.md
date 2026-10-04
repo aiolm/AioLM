@@ -13,6 +13,7 @@
 ./aiolm-cli.exe runtime list   # `runtimes` も別名として使用可能
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
+./aiolm-cli.exe runtime select <backend> <build>
 ./aiolm-cli.exe server start   # loopback、headless モードでは API-key 認証なし
 ./aiolm-cli.exe server status
 ./aiolm-cli.exe server logs [lines]
@@ -24,9 +25,11 @@
 
 ## 初回起動
 
-ヘッドレスサーバーを起動する前にモデルを設定してください。サーバー実行ファイルは、選択した管理ランタイムまたは `PATH` から解決されます。
+デスクトップアプリでランタイムをインストールまたはインポートし、`runtime list` のバックエンドとビルドを選んでモデルを設定してください。`runtime select` は両方の識別子をまとめて検証・保存し、無効な選択では既存設定を変更しません。サーバー起動には選択した管理ランタイムが必要です。Linux/macOS では `.exe` を付けずに `./aiolm-cli` を使用します。
 
 ```powershell
+./aiolm-cli.exe runtime list
+./aiolm-cli.exe runtime select cpu <installed-build>
 ./aiolm-cli.exe config set models_dir "C:\Models"
 ./aiolm-cli.exe config set active_model "C:\Models\model.gguf"
 ./aiolm-cli.exe server start

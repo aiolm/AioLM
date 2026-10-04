@@ -13,6 +13,7 @@
 ./aiolm-cli.exe runtime list   # `runtimes`도 별칭으로 사용 가능
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
+./aiolm-cli.exe runtime select <backend> <build>
 ./aiolm-cli.exe server start   # 루프백, headless 모드에서는 API-key 인증을 사용하지 않음
 ./aiolm-cli.exe server status
 ./aiolm-cli.exe server logs [lines]
@@ -24,9 +25,11 @@
 
 ## 처음 시작하기
 
-headless 서버를 시작하기 전에 모델을 설정하세요. 서버 실행 파일은 선택한 관리형 런타임 또는 `PATH`에서 찾습니다.
+데스크톱 앱에서 런타임을 설치하거나 가져온 다음, `runtime list`의 백엔드·빌드를 선택하고 모델을 설정하세요. `runtime select`는 두 식별자를 함께 검증·저장하며 잘못된 선택은 기존 설정을 바꾸지 않습니다. 서버 시작에는 선택한 관리형 런타임이 필요합니다. Linux/macOS에서는 `.exe` 없이 `./aiolm-cli`를 사용하세요.
 
 ```powershell
+./aiolm-cli.exe runtime list
+./aiolm-cli.exe runtime select cpu <installed-build>
 ./aiolm-cli.exe config set models_dir "C:\Models"
 ./aiolm-cli.exe config set active_model "C:\Models\model.gguf"
 ./aiolm-cli.exe server start

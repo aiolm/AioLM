@@ -64,6 +64,9 @@ pub const CATALOG_BACKENDS: &[&str] =
 
 #[path = "runtime_archive.rs"]
 mod archive;
+#[cfg(target_os = "linux")]
+#[path = "runtime_elf.rs"]
+mod elf;
 
 type AssetCache = HashMap<String, (Instant, Vec<Asset>)>;
 type ErrorCache = HashMap<String, (Instant, String)>;
@@ -1499,14 +1502,11 @@ fn build_environment_for_backend(
         // uses clang++ as an ordinary C++ compiler instead (see the configure
         // arguments below), but setting this when available is harmless and
         // helps mixed ROCm toolchains choose the same compiler everywhere.
-        let mut clangxx_candidates = vec![
-            root.join("llvm").join("bin").join("clang++"),
-            root.join("bin").join("clang++"),
+        let clangxx_name = format!("clang++{}", std::env::consts::EXE_SUFFIX);
+        let clangxx_candidates = [
+            root.join("llvm").join("bin").join(&clangxx_name),
+            root.join("bin").join(&clangxx_name),
         ];
-        #[cfg(windows)]
-        for path in &mut clangxx_candidates {
-            path.set_extension("exe");
-        }
         if let Some(clangxx) = clangxx_candidates.into_iter().find(|path| path.is_file()) {
             set_environment_value(
                 &mut environment,
@@ -1759,6 +1759,7 @@ fn windows_sdk_root() -> Option<PathBuf> {
 /// Locate Ninja in PATH or beside one of the CMake distributions that
 /// aiolm already knows how to find. Windows ROCm builds deliberately use
 /// Ninja because CMake's Visual Studio generator sends HIP sources to cl.exe.
+#[cfg(windows)]
 fn locate_ninja() -> Option<PathBuf> {
     if let Ok(path) = which::which("ninja") {
         if path.is_file() {
@@ -1766,7 +1767,6 @@ fn locate_ninja() -> Option<PathBuf> {
         }
     }
 
-    #[cfg(windows)]
     for cmake in windows_cmake_candidates() {
         let Some(cmake_dir) = cmake.parent() else {
             continue;
@@ -2012,14 +2012,16 @@ fn locate_tool(name: &str) -> Option<PathBuf> {
             continue;
         };
         for relative in ["bin", ""] {
-            let mut candidate = root.join(relative).join(name);
+            let candidate = root.join(relative).join(name);
             #[cfg(windows)]
-            if !candidate
+            let candidate = if candidate
                 .extension()
                 .is_some_and(|extension| extension == "exe")
             {
-                candidate.set_extension("exe");
-            }
+                candidate
+            } else {
+                candidate.with_extension("exe")
+            };
             if candidate.is_file() {
                 return Some(candidate);
             }
@@ -6175,6 +6177,23 @@ fn is_backend_runtime_library(backend: &str, file_name: &str) -> bool {
     if !dynamic {
         return false;
     }
+    // The Linux SDK's HIP/BLAS libraries also depend on relocated compiler
+    // libraries and its private, namespaced system dependencies. Host driver
+    // libraries (libcuda/libamdvlk/libdrm_amdgpu) are deliberately excluded.
+    if cfg!(target_os = "linux")
+        && backend == "rocm"
+        && [
+            "libroctx64.so",
+            "librocroller.so",
+            "librocm_sysdeps_",
+            "libclang-cpp.so",
+            "libllvm.so",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        return true;
+    }
     let prefixes: &[&str] = match backend {
         "cuda" => &[
             "cudart",
@@ -6287,7 +6306,49 @@ fn rocm_runtime_dependencies_complete(destination: &Path) -> bool {
         || blas_library_has_data(&destination.join("rocblas").join("library"));
     let hipblaslt_ok = !directory_has_named_runtime_library(destination, "hipblaslt")
         || blas_library_has_data(&destination.join("hipblaslt").join("library"));
-    rocblas_ok && hipblaslt_ok
+    rocblas_ok && hipblaslt_ok && rocm_shared_library_dependencies(destination).is_ok()
+}
+
+/// Check only redistributable ROCm dependencies, not libraries supplied by the
+/// operating system or GPU driver. Actual ELF dependency names avoid requiring
+/// newer SDK libraries in older bundles that never used them.
+#[cfg(target_os = "linux")]
+fn rocm_shared_library_dependencies(destination: &Path) -> Result<(), String> {
+    let directories = ["", "rocm_sysdeps/lib", "llvm/lib"];
+    let mut libraries = HashMap::new();
+    for relative in directories {
+        let Ok(entries) = fs::read_dir(destination.join(relative)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().is_ok_and(|kind| kind.is_file())
+                && (is_backend_runtime_library("rocm", &name) || name == "libggml-hip.so")
+            {
+                libraries.insert(entry.file_name(), entry.path());
+            }
+        }
+    }
+    for path in libraries.values() {
+        let needed = elf::needed_libraries(path)
+            .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
+        for name in needed {
+            if is_backend_runtime_library("rocm", &name)
+                && !libraries.contains_key(OsStr::new(&name))
+            {
+                return Err(format!(
+                    "{} requires missing packaged library {name}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rocm_shared_library_dependencies(_destination: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn backend_runtime_dependencies_complete(backend: &str, destination: &Path) -> bool {
@@ -6364,7 +6425,17 @@ fn copy_backend_runtime_dependencies_from_roots(
         {
             continue;
         }
-        for relative in ["bin", "lib", "lib64", "lib/x64"] {
+        let mut library_directories =
+            vec![("bin", ""), ("lib", ""), ("lib64", ""), ("lib/x64", "")];
+        if cfg!(target_os = "linux") && backend == "rocm" {
+            library_directories.extend([
+                ("lib/rocm_sysdeps/lib", "rocm_sysdeps/lib"),
+                ("lib64/rocm_sysdeps/lib", "rocm_sysdeps/lib"),
+                ("lib/llvm/lib", "llvm/lib"),
+                ("lib64/llvm/lib", "llvm/lib"),
+            ]);
+        }
+        for (relative, target_relative) in library_directories {
             let directory = root.join(relative);
             let Ok(entries) = fs::read_dir(&directory) else {
                 continue;
@@ -6388,13 +6459,15 @@ fn copy_backend_runtime_dependencies_from_roots(
                     return Err("runtime SDK library link escapes the configured SDK".into());
                 }
                 found += 1;
-                let target = destination.join(entry.file_name());
+                let target_directory = destination.join(target_relative);
+                let target = target_directory.join(entry.file_name());
                 if target.exists() {
                     if backend == "rocm" && sha256_file(&target)? != sha256_file(&path)? {
                         return Err("the installed ROCm libraries do not match the configured SDK. Import a complete runtime bundle built with that SDK instead of mixing vendor libraries.".into());
                     }
                     continue;
                 }
+                fs::create_dir_all(&target_directory).map_err(|error| error.to_string())?;
                 fs::copy(&path, &target).map_err(|error| {
                     format!(
                         "failed to package the {backend} runtime library {}: {error}",
@@ -6437,6 +6510,7 @@ fn copy_backend_runtime_dependencies_from_roots(
         ));
     }
     if backend == "rocm" && !rocm_runtime_dependencies_complete(destination) {
+        rocm_shared_library_dependencies(destination)?;
         return Err(
             "could not package the ROCm rocblas/hipblaslt library data needed at runtime. The HIP SDK's bin/rocblas and bin/hipblaslt directories must be available; the PR was not activated.".into(),
         );
@@ -6568,14 +6642,16 @@ async fn preflight_staged_runtime(
                 "staged runtime preflight failed for {label}: {diagnostic}"
             ));
         }
-        if backend != "cpu"
-            && args == ["--list-devices"]
-            && result
+        let no_devices = if matches!(backend, "cuda" | "rocm" | "vulkan" | "sycl" | "metal") {
+            crate::gpu::select_all_runtime_devices(backend, &probe_devices(&result.text)).is_empty()
+        } else {
+            result
                 .text
                 .lines()
                 .map(str::trim)
                 .all(|line| line.is_empty() || line == "Available devices:" || line == "(none)")
-        {
+        };
+        if backend != "cpu" && args == ["--list-devices"] && no_devices {
             return Err(format!(
                 "staged runtime preflight failed for {label}: runtime reported no accelerator devices"
             ));
@@ -6927,10 +7003,152 @@ mod tests {
         ] {
             assert!(is_backend_runtime_library("rocm", name), "{name}");
         }
-        for name in ["nvcuda.dll", "libcuda.so.1", "libamdvlk64.so"] {
+        for name in [
+            "nvcuda.dll",
+            "libcuda.so.1",
+            "libamdvlk64.so",
+            "libdrm_amdgpu.so.1",
+        ] {
             assert!(!is_backend_runtime_library("cuda", name), "{name}");
             assert!(!is_backend_runtime_library("rocm", name), "{name}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_rocm_bundle_preserves_elf_dependencies_and_repairs_incomplete_bundles() {
+        let root = test_directory("linux-rocm-elf-dependencies");
+        let sdk = root.join("sdk");
+        let bundle = root.join("bundle");
+        fs::create_dir_all(sdk.join("lib/rocblas/library")).unwrap();
+        fs::create_dir_all(sdk.join("lib/hipblaslt/library")).unwrap();
+        fs::create_dir_all(sdk.join("lib/rocm_sysdeps/lib")).unwrap();
+        fs::create_dir_all(sdk.join("lib/llvm/lib")).unwrap();
+        fs::create_dir_all(&bundle).unwrap();
+        for (name, needed) in [
+            (
+                "libamdhip64.so.7",
+                vec!["libamd_comgr.so.3", "libhsa-runtime64.so.1"],
+            ),
+            (
+                "libamd_comgr.so.3",
+                vec!["libclang-cpp.so.23", "libLLVM.so.23"],
+            ),
+            (
+                "libhsa-runtime64.so.1",
+                vec!["librocm_sysdeps_drm_amdgpu.so.1"],
+            ),
+            ("libhipblas.so.3", vec!["librocblas.so.5"]),
+            (
+                "librocblas.so.5",
+                vec!["libhipblaslt.so.1", "libroctx64.so.4"],
+            ),
+            ("libhipblaslt.so.1", vec!["librocroller.so.1"]),
+            ("libroctx64.so.4", vec!["libc.so.6"]),
+            ("librocroller.so.1", vec!["librocm_sysdeps_z.so.1"]),
+            ("rocm_sysdeps/lib/librocm_sysdeps_z.so.1", vec!["libc.so.6"]),
+            (
+                "rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so.1",
+                vec!["libc.so.6"],
+            ),
+            ("llvm/lib/libclang-cpp.so.23", vec!["libLLVM.so.23"]),
+            ("llvm/lib/libLLVM.so.23", vec!["librocm_sysdeps_z.so.1"]),
+        ] {
+            fs::write(sdk.join("lib").join(name), elf::fixture(&needed)).unwrap();
+        }
+        for name in ["rocblas", "hipblaslt"] {
+            fs::write(
+                sdk.join("lib").join(name).join("library/kernels.dat"),
+                b"kernels",
+            )
+            .unwrap();
+        }
+        for name in ["libcuda.so.1", "libamdvlk64.so", "libdrm_amdgpu.so.1"] {
+            fs::write(sdk.join("lib").join(name), b"host driver").unwrap();
+        }
+        fs::write(
+            sdk.join("lib/llvm/lib/libLLVM.a"),
+            b"static compiler archive",
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("libggml-hip.so"),
+            elf::fixture(&["libhipblas.so.3", "libamdhip64.so.7"]),
+        )
+        .unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_backend_runtime_dependencies_from_roots(
+            "rocm",
+            &bundle,
+            &cancel,
+            std::slice::from_ref(&sdk),
+        )
+        .unwrap();
+        assert!(rocm_runtime_dependencies_complete(&bundle));
+        assert!(bundle
+            .join("rocm_sysdeps/lib/librocm_sysdeps_z.so.1")
+            .is_file());
+        assert!(bundle.join("llvm/lib/libLLVM.so.23").is_file());
+        for name in [
+            "libcuda.so.1",
+            "libamdvlk64.so",
+            "libdrm_amdgpu.so.1",
+            "llvm/lib/libLLVM.a",
+        ] {
+            assert!(!bundle.join(name).exists(), "{name}");
+        }
+        // Complete bundles need no SDK, including when another SDK is selected.
+        copy_backend_runtime_dependencies_from_roots("rocm", &bundle, &cancel, &[]).unwrap();
+        let other_sdk = root.join("other-sdk");
+        fs::create_dir_all(other_sdk.join("lib")).unwrap();
+        fs::write(other_sdk.join("lib/libamdhip64.so.7"), b"incompatible HIP").unwrap();
+        copy_backend_runtime_dependencies_from_roots("rocm", &bundle, &cancel, &[other_sdk])
+            .unwrap();
+        // HIP and BLAS alone must not hide a missing transitive SONAME.
+        fs::remove_file(bundle.join("llvm/lib/libLLVM.so.23")).unwrap();
+        assert!(!rocm_runtime_dependencies_complete(&bundle));
+        copy_backend_runtime_dependencies_from_roots(
+            "rocm",
+            &bundle,
+            &cancel,
+            std::slice::from_ref(&sdk),
+        )
+        .unwrap();
+        assert!(rocm_runtime_dependencies_complete(&bundle));
+        // Existing nested libraries retain the same SDK mismatch protection.
+        fs::remove_file(bundle.join("libroctx64.so.4")).unwrap();
+        fs::write(
+            bundle.join("llvm/lib/libLLVM.so.23"),
+            b"different compiler runtime",
+        )
+        .unwrap();
+        let error = copy_backend_runtime_dependencies_from_roots("rocm", &bundle, &cancel, &[sdk])
+            .unwrap_err();
+        assert!(error.contains("do not match the configured SDK"), "{error}");
+        assert_eq!(
+            fs::read(bundle.join("llvm/lib/libLLVM.so.23")).unwrap(),
+            b"different compiler runtime"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn older_rocm_bundles_do_not_require_unused_modern_sdk_libraries() {
+        let root = test_directory("older-rocm-dependencies");
+        fs::create_dir_all(&root).unwrap();
+        for name in ["libamdhip64.so.6", "libhipblas.so.2"] {
+            fs::write(root.join(name), elf::fixture(&["libc.so.6"])).unwrap();
+        }
+        assert!(rocm_runtime_dependencies_complete(&root));
+        copy_backend_runtime_dependencies_from_roots(
+            "rocm",
+            &root,
+            &Arc::new(AtomicBool::new(false)),
+            &[],
+        )
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -8840,6 +9058,7 @@ mod tests {
     async fn cpu_preflight_accepts_a_machine_without_accelerators() {
         use std::os::unix::fs::PermissionsExt;
         let root = test_directory("cpu-preflight");
+        fs::create_dir_all(&root).expect("create staged CPU runtime");
         for name in [server_executable_name(), bench_executable_name()] {
             let path = root.join(name);
             fs::write(&path, b"#!/bin/sh\ncase \"$1\" in\n--version) echo 'version: 0.1.0 (123)';;\n--list-devices) printf 'Available devices:\\n(none)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
@@ -8854,6 +9073,21 @@ mod tests {
             .await
             .unwrap_err()
             .contains("no accelerator"));
+        let server = root.join(server_executable_name());
+        for devices in [
+            "warning: HIP backend could not be loaded\\nAvailable devices:\\n(none)\\n",
+            "Available devices:\\nVulkan0: Synthetic GPU (8192 MiB, 8192 MiB free)\\n",
+        ] {
+            fs::write(&server, format!("#!/bin/sh\ncase \"$1\" in\n--list-devices) printf '{devices}';;\n*) echo 'help';;\nesac\n")).unwrap();
+            assert!(preflight_staged_runtime(&root, "rocm", progress, &cancel)
+                .await
+                .unwrap_err()
+                .contains("no accelerator"));
+        }
+        fs::write(&server, b"#!/bin/sh\ncase \"$1\" in\n--list-devices) printf 'Available devices:\\nROCm0: Synthetic GPU (8192 MiB, 8192 MiB free)\\n';;\n*) echo 'help';;\nesac\n").unwrap();
+        assert!(preflight_staged_runtime(&root, "rocm", progress, &cancel)
+            .await
+            .is_ok());
         let _ = fs::remove_dir_all(root);
     }
 

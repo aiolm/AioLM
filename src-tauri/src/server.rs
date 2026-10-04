@@ -826,6 +826,7 @@ fn auth_header(api_key: &str) -> String {
     format!("Bearer {api_key}")
 }
 
+#[cfg(any(windows, test))]
 fn netstat_line_owns_listener(line: &str, pid: u32, port: u16) -> bool {
     let fields = line.split_whitespace().collect::<Vec<_>>();
     if fields.len() < 5

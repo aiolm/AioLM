@@ -25,6 +25,9 @@ pub(crate) async fn save_config(
     let mut cfg = cfg;
     crate::commands::runtimes::realign_saved_gpu_placement(&latest, &mut cfg).await;
     let prepared = config::profiles::prepare_config_update(&latest, &cfg)?;
+    if prepared.close_to_tray && !latest.close_to_tray && !crate::tray::host_available() {
+        return Err("the desktop has no available system tray host".into());
+    }
     // The tray icon has to follow the close-to-tray setting immediately, so the
     // next close already has somewhere to hide the window. It is applied before
     // the file is written: a tray that cannot be created reports the failure and

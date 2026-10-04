@@ -21,6 +21,8 @@ const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const TOOL_CALL_CANCELLED: &str = "MCP tool call cancelled";
 const APPROVAL_TITLE: &str = "MCP tool approval required";
 
+#[cfg(target_os = "linux")]
+mod linux_approval;
 #[cfg(windows)]
 mod native_approval;
 static CONFIG_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -511,7 +513,8 @@ fn tool_approval_description(server: &McpServer, name: &str, arguments: &Value) 
         return description;
     }
     let mut bounded = description;
-    bounded.truncate(MAX_APPROVAL_DESCRIPTION_BYTES.saturating_sub("\n…".len()));
+    let limit = MAX_APPROVAL_DESCRIPTION_BYTES.saturating_sub("\n…".len());
+    bounded.truncate(bounded.floor_char_boundary(limit));
     bounded.push_str("\n…");
     bounded
 }
@@ -528,7 +531,11 @@ async fn confirm_tool_call(
     let approved = native_approval::Prompt::open(APPROVAL_TITLE, &description)?
         .answer()
         .await?;
-    #[cfg(not(windows))]
+    // Linux: rfd's detached command thread leaves zenity open when its future
+    // is dropped. Keep the dialog process owned by this cancellable future.
+    #[cfg(target_os = "linux")]
+    let approved = linux_approval::confirm(APPROVAL_TITLE, &description).await?;
+    #[cfg(not(any(windows, target_os = "linux")))]
     let approved = rfd::AsyncMessageDialog::new()
         .set_title(APPROVAL_TITLE)
         .set_description(description)
@@ -1503,5 +1510,27 @@ input.on('line', line => {
         assert!(description.contains("search"));
         assert!(description.contains("llama"));
         assert!(description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES);
+    }
+
+    #[test]
+    fn approval_description_truncates_multibyte_arguments_on_utf8_boundaries() {
+        let mut candidate = server("npx");
+        candidate.name = "한글 서버".into();
+        for character in ["é", "가", "🦙"] {
+            for padding in 0..4 {
+                let query = format!(
+                    "{}{}",
+                    "x".repeat(padding),
+                    character.repeat(MAX_APPROVAL_DESCRIPTION_BYTES)
+                );
+                let description =
+                    tool_approval_description(&candidate, "문서검색", &json!({"query": query}));
+                assert!(
+                    description.starts_with("Server: 한글 서버 (test-server)\nTool: 문서검색\n")
+                );
+                assert!(description.ends_with("\n…"));
+                assert!(description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES);
+            }
+        }
     }
 }

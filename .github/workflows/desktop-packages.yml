@@ -1,18 +1,25 @@
-name: Validate Linux and macOS packages
+name: Validate desktop packages
 
 on:
   workflow_dispatch:
+    inputs:
+      package_run_id:
+        description: Recheck installers from a successful package run (empty builds new packages)
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   package:
+    if: inputs.package_run_id == ''
     name: Package (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
+        os: [windows-latest, ubuntu-24.04, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
@@ -29,6 +36,9 @@ jobs:
         with:
           node-version-file: ".node-version"
           cache: npm
+      - name: Setup pinned npm
+        shell: bash
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -47,7 +57,11 @@ jobs:
       - name: Build host packages
         run: npm run package:tauri
       - name: Release CLI with a clean home
-        run: npm run test:native-cli -- .codex-target/release/aiolm-cli
+        run: npm run test:native-cli -- .codex-target/release/aiolm-cli${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Install, reinstall and remove desktop packages
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        timeout-minutes: 15
+        run: node scripts/smoke-installers.mjs
       - name: Collect package checksums
         shell: bash
         run: |
@@ -55,7 +69,7 @@ jobs:
           import hashlib
           from pathlib import Path
           root = Path('.codex-target/release/bundle')
-          files = sorted(p for p in root.rglob('*') if p.is_file() and p.suffix in {'.deb', '.AppImage', '.dmg'})
+          files = sorted(p for p in root.rglob('*') if p.is_file() and p.suffix in {'.deb', '.AppImage', '.dmg', '.exe', '.msi'})
           if not files:
               raise SystemExit('No desktop packages were produced')
           with (root / 'checksums.txt').open('w', encoding='utf-8', newline='\n') as output:
@@ -71,7 +85,42 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
+            .codex-target/release/bundle/**/*.exe
+            .codex-target/release/bundle/**/*.msi
             .codex-target/release/bundle/**/*.deb
             .codex-target/release/bundle/**/*.AppImage
             .codex-target/release/bundle/**/*.dmg
             .codex-target/release/bundle/checksums.txt
+
+  install:
+    if: inputs.package_run_id != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+      - name: Download packages from a successful build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_RUN_ID: ${{ inputs.package_run_id }}
+          PACKAGE_OS: ${{ matrix.os }}
+        run: |
+          [[ "$PACKAGE_RUN_ID" =~ ^[0-9]+$ ]]
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PACKAGE_RUN_ID" --jq '.path + ":" + .conclusion')" = '.github/workflows/desktop-packages.yml:success'
+          gh run download "$PACKAGE_RUN_ID" --name "desktop-packages-$PACKAGE_OS" --dir .codex-target/release/bundle
+          cd .codex-target/release/bundle
+          sha256sum --check checksums.txt
+      - name: Refresh Linux dependency metadata
+        if: runner.os == 'Linux'
+        run: sudo apt-get update
+      - name: Install, reinstall and remove desktop packages
+        run: node scripts/smoke-installers.mjs

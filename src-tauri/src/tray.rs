@@ -33,7 +33,43 @@ pub(crate) fn restore_main_window<R: Runtime>(app: &AppHandle<R>) {
 
 /// Whether the tray icon this module manages is on screen right now.
 pub(crate) fn is_present<R: Runtime>(app: &AppHandle<R>) -> bool {
-    app.tray_by_id(TRAY_ID).is_some()
+    app.tray_by_id(TRAY_ID).is_some() && host_available()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn host_available() -> bool {
+    use gio::glib::variant::ToVariant;
+    // AppIndicator creation can succeed without a desktop hosting its icon.
+    // Check the host again on close, including after a desktop shell restart.
+    let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>) else {
+        return false;
+    };
+    bus.call_sync(
+        Some("org.kde.StatusNotifierWatcher"),
+        "/StatusNotifierWatcher",
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        Some(
+            &(
+                "org.kde.StatusNotifierWatcher",
+                "IsStatusNotifierHostRegistered",
+            )
+                .to_variant(),
+        ),
+        None,
+        gio::DBusCallFlags::NO_AUTO_START,
+        500,
+        None::<&gio::Cancellable>,
+    )
+    .ok()
+    .and_then(|reply| reply.get::<(gio::glib::Variant,)>())
+    .and_then(|(value,)| value.get::<bool>())
+    .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn host_available() -> bool {
+    true
 }
 
 /// Add or remove the tray icon so that it is present exactly while closing the
@@ -59,7 +95,12 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) -> Resu
             .map_err(|_| "failed to remove the tray icon".to_string())?;
         return Ok(());
     }
-    if is_present(app) {
+    if !host_available() {
+        // Keep an existing preference portable to a desktop without a tray.
+        // The close handler will exit normally; other settings can still save.
+        return Ok(());
+    }
+    if app.tray_by_id(TRAY_ID).is_some() {
         return Ok(());
     }
     let show = MenuItem::with_id(app, SHOW_ITEM, SHOW_LABEL, true, None::<&str>)
@@ -103,4 +144,18 @@ pub(crate) fn apply<R: Runtime>(app: &AppHandle<R>, close_to_tray: bool) -> Resu
         .build(app)
         .map(|_| ())
         .map_err(|error| format!("failed to create the tray icon: {error}"))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #[test]
+    #[ignore = "requires an isolated session bus; set AIOLM_TRAY_SMOKE=available or unavailable"]
+    fn real_tray_host_presence() {
+        let expected = match std::env::var("AIOLM_TRAY_SMOKE").as_deref() {
+            Ok("available") => true,
+            Ok("unavailable") => false,
+            _ => panic!("set AIOLM_TRAY_SMOKE=available or unavailable"),
+        };
+        assert_eq!(super::host_available(), expected);
+    }
 }

@@ -44,6 +44,21 @@ pub(super) struct RunLock {
     _file: File,
 }
 
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = self._file.unlock();
+    }
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        // A concurrent Unix spawn can briefly inherit a descriptor before exec.
+        // Closing our handle alone then leaves the lock held by that child.
+        // Release ownership explicitly when the journal/operation ends.
+        let _ = self._file.unlock();
+    }
+}
+
 fn run_lock_path(root: &Path, run_id: &str) -> PathBuf {
     root.join("run-locks")
         .join(format!("{:x}.lock", Sha256::digest(run_id.as_bytes())))
@@ -147,6 +162,30 @@ mod tests {
     use super::super::tests as fixtures;
     use super::super::{list, RunJournal};
     use super::*;
+
+    #[test]
+    fn ending_ownership_releases_locks_while_a_duplicate_handle_exists() {
+        let root = fixtures::root();
+        let lock = RunLock::acquire(&root, "completed").unwrap().unwrap();
+        let inherited = lock._file.try_clone().unwrap();
+        assert!(RunLock::acquire(&root, "completed").unwrap().is_none());
+        drop(lock);
+        let next = RunLock::acquire(&root, "completed").unwrap().unwrap();
+        drop(next);
+        drop(inherited);
+
+        let lock = StoreLock::acquire(&root).unwrap();
+        let inherited = lock._file.try_clone().unwrap();
+        drop(lock);
+        let probe = open_lock(&root.join(".store.lock")).unwrap();
+        probe
+            .try_lock()
+            .expect("completed store operation releases ownership");
+        probe.unlock().unwrap();
+        drop(probe);
+        drop(inherited);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn child(root: &Path, mode: &str) -> std::process::Child {
         crate::procutil::std_command(std::env::current_exe().unwrap())
