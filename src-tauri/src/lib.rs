@@ -14,6 +14,8 @@ pub mod hardware;
 mod hardware_memory;
 pub mod home;
 mod inference_args;
+#[cfg(any(target_os = "macos", test))]
+mod launch_path;
 mod mcp;
 pub mod models;
 pub mod performance_bench;
@@ -104,6 +106,8 @@ fn closes_to_tray(app: &tauri::AppHandle) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    launch_path::extend_for_desktop_launch();
     let context = tauri::generate_context!();
     #[cfg(windows)]
     let instance_startup = startup::InstanceStartupLock::acquire(&context.config().identifier)
