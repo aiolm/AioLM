@@ -74,7 +74,11 @@ function appPids() {
   const result = spawnSync("/usr/bin/pgrep", ["-f", executablePattern], { encoding: "utf8" });
   return result.stdout.split("\n").filter(Boolean).map(Number);
 }
-const openApp = (args = []) => run("/usr/bin/open", ["-a", bundle, ...args]);
+// `open` hands its own environment to the app. Use launchd's defaults, which
+// are what Finder, the Dock and Login Items provide, not this runner's shell.
+const launchdEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+for (const key of ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR"]) if (process.env[key]) launchdEnv[key] = process.env[key];
+const openApp = (args = []) => run("/usr/bin/open", ["-a", bundle, ...args], { env: launchdEnv });
 
 try {
   // The test bundle wraps the debug WebDriver binary with the product's identity.
@@ -155,6 +159,7 @@ createInterface({ input: process.stdin }).on("line", line => {
   assert.equal(listed.failure, undefined, `MCP command lookup from a LaunchServices start: ${listed.failure}`);
   const searchPath = listed.result[0].description.split(":");
   console.log(`LaunchServices app PATH: ${searchPath.join(":")}`);
+  assert.equal(searchPath.slice(0, 4).join(":"), launchdEnv.PATH, "the app must start from launchd's PATH");
   for (const directory of ["/usr/bin", "/usr/local/bin", ...(existsSync("/opt/homebrew/bin") ? ["/opt/homebrew/bin"] : [])]) {
     assert.ok(searchPath.includes(directory), `${directory} is missing from ${searchPath.join(":")}`);
   }
