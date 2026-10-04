@@ -39,8 +39,14 @@ try {
       installedCli("/usr/bin");
       run("sudo", ["dpkg", "-i", deb]);
       installedCli("/usr/bin");
+    } catch (error) {
+      console.error(error);
+      throw error;
     } finally {
-      run("sudo", ["apt-get", "remove", "-y", name]);
+      const installed = spawnSync("dpkg-query", ["-W", "-f=${db:Status-Status}", name], { encoding: "utf8" });
+      if (installed.status === 0 && installed.stdout.trim() !== "not-installed") {
+        run("sudo", ["apt-get", "remove", "-y", name]);
+      }
     }
     assert.ok(!existsSync("/usr/bin/aiolm") && !existsSync("/usr/bin/aiolm-cli"));
     console.log("DEB install, same-version reinstall, installed CLI and removal passed.");
