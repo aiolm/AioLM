@@ -13,6 +13,7 @@ During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli
 ./aiolm-cli.exe runtime list  # `runtimes` is also accepted
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
+./aiolm-cli.exe runtime select <backend> <build>
 ./aiolm-cli.exe server start   # loopback, no API-key auth in headless mode
 ./aiolm-cli.exe server status
 ./aiolm-cli.exe server logs [lines]
@@ -24,9 +25,11 @@ During development, `aiolm-cli.exe` is built at `.codex-target/release/aiolm-cli
 
 ## First start
 
-Configure a model before starting the headless server. The server executable is resolved from the selected managed runtime or from `PATH`.
+Install or import a runtime in the desktop app, then choose its backend/build from `runtime list` and configure a model. `runtime select` saves both identifiers atomically; an invalid selection leaves the settings unchanged. Starting a server requires the selected managed runtime. On Linux/macOS use `./aiolm-cli` without `.exe`.
 
 ```powershell
+./aiolm-cli.exe runtime list
+./aiolm-cli.exe runtime select cpu <installed-build>
 ./aiolm-cli.exe config set models_dir "C:\Models"
 ./aiolm-cli.exe config set active_model "C:\Models\model.gguf"
 ./aiolm-cli.exe server start

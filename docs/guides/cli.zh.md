@@ -13,6 +13,7 @@
 ./aiolm-cli.exe runtime list   # `runtimes` 也可作为别名
 ./aiolm-cli.exe runtime device
 ./aiolm-cli.exe runtime probe <backend> <build>
+./aiolm-cli.exe runtime select <backend> <build>
 ./aiolm-cli.exe server start   # loopback；headless 模式不启用 API-key 认证
 ./aiolm-cli.exe server status
 ./aiolm-cli.exe server logs [lines]
@@ -24,9 +25,11 @@
 
 ## 首次启动
 
-启动无头服务器前，请先配置模型。服务器可执行文件会从选定的托管运行时或 `PATH` 中解析。
+先在桌面应用中安装或导入运行时，再从 `runtime list` 中选择后端和构建并配置模型。`runtime select` 会一起验证并保存两个标识；无效选择不会更改原有设置。启动服务器需要选定的托管运行时。在 Linux/macOS 上使用不带 `.exe` 的 `./aiolm-cli`。
 
 ```powershell
+./aiolm-cli.exe runtime list
+./aiolm-cli.exe runtime select cpu <installed-build>
 ./aiolm-cli.exe config set models_dir "C:\Models"
 ./aiolm-cli.exe config set active_model "C:\Models\model.gguf"
 ./aiolm-cli.exe server start

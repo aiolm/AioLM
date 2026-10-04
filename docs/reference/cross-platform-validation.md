@@ -9,7 +9,7 @@ Windows and local Linux verification and the remaining native checks.
 
 On 2026-10-03–04, local Ubuntu 26.04 x64 verification passed the frontend suite
 (1,450 tests), typecheck, lint, production build, Rust format and Clippy, 721 native
-tests, debug desktop/CLI builds and the CLI smoke with an isolated home. Seven
+tests, debug desktop/CLI builds and the CLI smoke with an isolated home. Eight
 live-environment tests and one internal subprocess fixture were excluded from the
 default result. Build dependencies
 were extracted into a temporary directory without a system install. This does not
@@ -21,20 +21,43 @@ Qwen2.5-0.5B-Instruct Q4_K_M model. CPU runtime ZIP export/import and subsequent
 inference also passed. The native Tauri/WebKitGTK GUI was exercised in isolated
 X11/DBus sessions: onboarding, settings/project persistence, 11 navigation panels,
 Unicode model paths, CPU loading, chat/cancellation/unload and authenticated
-OpenAI/Anthropic loopback routes. Native GTK portal PDF/DOCX selection and PDF grounded chat also passed.
-This does not cover Wayland, IME or tray. A synthetic stdio MCP server passed discovery, call preparation,
+OpenAI/Anthropic loopback routes. Native GTK portal PDF grounded chat and DOCX
+embedding retrieval passed, as did SmolVLM image attachment/sidecar inference,
+actual clipboard copying, completed benchmark history and native CSV/XLSX export.
+IBus Hangul composition passed with actual key events. A separate Weston Wayland
+session passed clean onboarding, all navigation panels, CPU chat and unload
+without JavaScript errors. This does not establish GNOME/KDE tray acceptance.
+A synthetic stdio MCP server passed discovery, call preparation,
 native Yes/No and cancellation with dialog/process cleanup. Detailed results and
 remaining gaps are in the Korean handoff. Linux Secret Service roundtrip/update/
 delete and unavailable-store handling passed on a separate DBus and temporary
 home. A pinned official PR CPU source build, build cancellation cleanup, and
 inference using the source-built runtime also passed.
+The no-tray Wayland close bug was fixed by checking for a registered desktop host.
+Existing preferences remain saveable without that host. A Linux DBus runtime
+feature conflict that panicked during notification submission was corrected;
+actual dunst notification display and Secret Service/GTK portal regression checks
+passed. Personalization editing and skill content in real model requests passed;
+the small test model's instruction-following accuracy is not guaranteed.
 
 The [portability commit's CI](https://github.com/aiolm/AioLM/actions/runs/37033112852)
 stopped at Clippy on Linux and both macOS architectures; their tests and builds
 were skipped. Platform-specific unused code and a missing Unix test fixture
 directory have been corrected locally. CI now also installs the npm version
 declared in `package.json`; `setup-node` alone used the bundled npm version.
-Remote Linux/macOS verification remains pending until the updated commit runs.
+The [final code CI](https://github.com/aiolm/AioLM/actions/runs/37186155836), at
+implementation commit `02a7fa1`, passed
+frontend, Windows, Ubuntu and both macOS checks, builds and isolated CLI tests.
+Windows also passed real CPU install/inference/restart/stop and Credential Manager
+roundtrips. The CLI no longer leaves inherited output handles in detached children
+or mixes taskkill messages into its JSON output.
+The [final code package build](https://github.com/aiolm/AioLM/actions/runs/37186153592)
+passed on all four runners, including Windows/Linux installed-package checks.
+Actual Windows NSIS install/update/remove and MSI
+install/repair/remove, including installed CLI smoke, passed in the
+[installer check](https://github.com/aiolm/AioLM/actions/runs/37184668687).
+That run also passed Ubuntu 24.04 DEB dependency installation, installed CLI,
+same-version reinstall and removal. Cross-version updates remain unverified.
 
 ## Build and test gates
 
@@ -94,8 +117,8 @@ Local DEB/AppImage generation passed with GUI/CLI included and test fixtures/dat
 excluded. The AppImage also launched under `APPIMAGE_EXTRACT_AND_RUN=1` in an
 isolated X11 session and completed a CPU chat and native MCP approval/call.
 The package staging files were scanned for development home/workspace paths in
-UTF-8/UTF-16 with no matches. System installation, FUSE mounting and updates
-remain unverified.
+UTF-8/UTF-16 with no matches. Hosted Ubuntu DEB installation/reinstallation/removal
+passed. FUSE mounting and cross-version updates remain unverified.
 
 | Host | Formats | Local output |
 | --- | --- | --- |
@@ -108,6 +131,12 @@ dispatched. It has read-only repository permissions, no signing credentials and 
 release publication step. Artifacts are for acceptance testing. Run the normal CI
 first, then install and launch the package on a clean target machine/session.
 Package generation does not establish installation or update success.
+
+The workflow also installs, reinstalls/repairs and removes Windows NSIS/MSI and
+Ubuntu DEB packages on disposable hosted runners, checking the installed CLI.
+To repeat installer checks without rebuilding, supply `package_run_id` from a
+successful package workflow in this repository. It verifies artifact checksums
+before installation. The installer script refuses personal/self-hosted machines.
 
 Linux builds inherit the glibc baseline of their build host. The current package
 workflow targets Ubuntu 24.04; do not promise older distribution support from those
