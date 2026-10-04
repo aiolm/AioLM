@@ -2118,7 +2118,22 @@ fn locate_cmake() -> Option<PathBuf> {
             .find(|path| path.is_file())
     }
 
-    #[cfg(not(windows))]
+    // Kitware's app keeps its command-line tools inside the bundle unless the
+    // user also runs its separate command-line installation step.
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        [
+            Some(PathBuf::from("/Applications")),
+            home.map(|home| home.join("Applications")),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|root| root.join("CMake.app/Contents/bin/cmake"))
+        .find(|path| path.is_file())
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         None
     }
@@ -2132,12 +2147,14 @@ fn cmake_not_found_error() -> String {
     let hint = if cfg!(windows) {
         "install it from cmake.org or with `winget install Kitware.CMake`, or add the C++ CMake tools to your Visual Studio install"
     } else if cfg!(target_os = "macos") {
-        "install it with `brew install cmake`, or add the CMake app's bin directory to PATH"
+        "install it with `brew install cmake`, or put the CMake app from cmake.org in Applications"
     } else {
         "install it with your package manager, for example `apt install cmake ninja-build` or `dnf install cmake ninja-build`"
     };
     let searched = if cfg!(windows) {
         "PATH, the standard CMake install directories, and the copies bundled with Visual Studio"
+    } else if cfg!(target_os = "macos") {
+        "PATH, Homebrew and the CMake app in Applications"
     } else {
         "PATH"
     };
