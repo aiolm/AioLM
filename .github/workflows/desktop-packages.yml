@@ -67,11 +67,17 @@ jobs:
       - name: Install, reinstall and remove desktop packages
         timeout-minutes: 15
         run: node scripts/smoke-installers.mjs
+      - name: Fetch public runtime metadata without the shared anonymous API limit
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api 'repos/ggml-org/llama.cpp/releases?per_page=10' > "$RUNNER_TEMP/aiolm-release-catalog.json"
       - name: Real macOS CPU runtime and CLI lifecycle
         if: runner.os == 'macOS'
         timeout-minutes: 20
         env:
           AIOLM_NATIVE_CPU: "1"
+          AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
           # Cargo runs integration tests from src-tauri, so select the release
           # binary by its absolute workspace path.
           AIOLM_NATIVE_CLI: ${{ github.workspace }}/.codex-target/release/aiolm-cli

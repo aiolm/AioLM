@@ -3553,6 +3553,20 @@ pub fn uninstall(backend: &str, build: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Prime live acceptance with public release metadata fetched by the CI job.
+/// Its short-lived GitHub token stays outside the app and runtime processes.
+/// Archive allowlists, digests and staged preflight still use the normal path.
+#[cfg(feature = "test-fixtures")]
+pub fn preload_release_catalog(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_GITHUB_RESPONSE_BYTES {
+        return Err("GitHub API response exceeds the 2 MiB limit".into());
+    }
+    let releases: Vec<Rel> = serde_json::from_slice(bytes)
+        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+    cache_latest(&releases);
+    Ok(())
+}
+
 pub fn clear_api_cache() {
     if let Some(cache) = LATEST_CACHE.get() {
         if let Ok(mut value) = cache.lock() {

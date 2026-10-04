@@ -126,6 +126,11 @@ fn real_cli_lifecycle(backend: &str) {
     // This integration binary has one explicitly selected test. The installer
     // reads only AIOLM_HOME and does not run legacy settings migration.
     std::env::set_var("AIOLM_HOME", home.0.join("aiolm"));
+    #[cfg(feature = "test-fixtures")]
+    if let Some(path) = std::env::var_os("AIOLM_NATIVE_RELEASES") {
+        runtime::preload_release_catalog(&std::fs::read(path).expect("public release catalog"))
+            .expect("bounded public release metadata");
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
