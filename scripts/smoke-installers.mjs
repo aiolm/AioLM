@@ -2,7 +2,7 @@
 // Real package installation is restricted to disposable GitHub-hosted runners.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true", "installer smoke requires GitHub Actions");
@@ -23,7 +23,7 @@ function packageFile(directory, suffix) {
 }
 function installedCli(directory) {
   const extension = process.platform === "win32" ? ".exe" : "";
-  assert.ok(existsSync(join(directory, `aiolm${extension}`)), "installed desktop binary is missing");
+  assert.ok(existsSync(join(directory, `aiolm${extension}`)), `installed desktop binary is missing in ${directory}`);
   assert.ok(!existsSync(join(directory, `fake-llama-server${extension}`)), "test fixture was installed");
   run(process.execPath, ["scripts/smoke-native-cli.mjs", join(directory, `aiolm-cli${extension}`)]);
 }
@@ -33,7 +33,7 @@ try {
     assert.ok(!existsSync("/usr/bin/aiolm"), "refuse to replace an existing installation");
     const deb = packageFile("deb", ".deb");
     const name = run("dpkg-deb", ["-f", deb, "Package"]).trim();
-    assert.equal(name, "aiolm");
+    assert.equal(name, "aio-lm");
     try {
       run("sudo", ["apt-get", "install", "-y", deb]);
       installedCli("/usr/bin");
@@ -60,12 +60,18 @@ try {
     console.log("NSIS install, same-version update, installed CLI and uninstall passed.");
 
     const msi = packageFile("msi", ".msi");
-    const msiInstall = join(root, "msi");
+    // Tauri preserves the previous NSIS location in HKCU after uninstall and
+    // MSI deliberately reuses it. Exercise switching formats at that location.
+    const msiInstall = install;
+    const msiLog = join(root, "msi-install.log");
     try {
-      run("msiexec.exe", ["/i", msi, "/qn", "/norestart", `INSTALLDIR=${msiInstall}`], [0, 3010]);
+      run("msiexec.exe", ["/i", msi, "/qn", "/norestart", "/L*v", msiLog, `INSTALLDIR=${msiInstall}`], [0, 3010]);
       installedCli(msiInstall);
       run("msiexec.exe", ["/fa", msi, "/qn", "/norestart"], [0, 3010]);
       installedCli(msiInstall);
+    } catch (error) {
+      if (existsSync(msiLog)) console.error(readFileSync(msiLog, "utf16le"));
+      throw error;
     } finally {
       run("msiexec.exe", ["/x", msi, "/qn", "/norestart"], [0, 3010, 1605]);
     }
