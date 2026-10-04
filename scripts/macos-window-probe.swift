@@ -10,8 +10,9 @@ let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopEl
     as? [[String: Any]] ?? []
 let visible = windows.contains { window in
     guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-          (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
           let bounds = window[kCGWindowBounds as String] as? [String: NSNumber] else { return false }
+    // Cocoa modal panels can sit above ordinary layer-zero app windows.
+    // Owner PID and dimensions also exclude the test app's small status item.
     return (bounds["Width"]?.doubleValue ?? 0) > 100 && (bounds["Height"]?.doubleValue ?? 0) > 50
 }
 print(visible ? "visible" : "absent")
