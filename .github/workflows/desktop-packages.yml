@@ -51,6 +51,10 @@ jobs:
         run: npm run package:tauri
       - name: Release CLI with a clean home
         run: npm run test:native-cli -- .codex-target/release/aiolm-cli${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Install, reinstall and remove desktop packages
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        timeout-minutes: 15
+        run: node scripts/smoke-installers.mjs
       - name: Collect package checksums
         shell: bash
         run: |
