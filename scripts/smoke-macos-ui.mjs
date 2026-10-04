@@ -31,6 +31,7 @@ env.TAURI_WEBDRIVER_PORT = String(port);
 const executable = resolve(".codex-target/debug/aiolm");
 const probe = resolve("tmp/macos-window-probe");
 let app, session, log = "";
+const exited = child => child.exitCode !== null || child.signalCode !== null;
 
 async function waitFor(check, description) {
   const deadline = Date.now() + 30_000;
@@ -107,27 +108,30 @@ try {
   writeFileSync("tmp/macos-ui.png", screenshot);
   await closeWindow();
   await waitFor(() => !visible(), "close hides the window to its tray");
-  assert.equal(app.exitCode, null, "tray close must keep the app alive");
+  assert.ok(!exited(app), `tray close must keep the app alive: ${app.signalCode}\n${log}`);
   const second = spawn(executable, [], { env, stdio: "ignore" });
   await new Promise((resolve, reject) => { second.once("error", reject); second.once("exit", code => code === 0 ? resolve() : reject(new Error(`secondary launch: ${code}`))); });
   await waitFor(() => visible(), "secondary launch restores the existing window");
   await click("#settings-close-to-tray");
   await waitFor(() => !JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).close_to_tray, "disable tray close");
   await closeWindow();
-  await waitFor(() => app.exitCode !== null, "ordinary window close exits");
-  assert.equal(app.exitCode, 0, log);
+  await waitFor(() => exited(app), "ordinary window close exits");
+  assert.equal(app.exitCode, 0, `${app.signalCode}\n${log}`);
   await launch();
   await waitFor(() => script("return !!document.querySelector('.aiolm-sidebar nav');"), "saved onboarding on relaunch");
   assert.equal(await script("return !!document.querySelector('.setup-form');"), false);
   assert.equal(await script("return JSON.parse(localStorage.getItem('aiolm-preferences')).values.theme;"), "dark");
   await closeWindow();
-  await waitFor(() => app.exitCode !== null, "relaunch closes cleanly");
-  assert.equal(app.exitCode, 0, log);
+  await waitFor(() => exited(app), "relaunch closes cleanly");
+  assert.equal(app.exitCode, 0, `${app.signalCode}\n${log}`);
   console.log(`macOS ${process.arch}: real WKWebView onboarding, native settings, native frame, tray close, single-instance restore and preference persistence passed.`);
+} catch (error) {
+  console.error(`WKWebView failure: exit=${app?.exitCode}, signal=${app?.signalCode}\n${log.slice(-8000)}`);
+  throw error;
 } finally {
-  if (app?.exitCode === null) {
+  if (app && !exited(app)) {
     app.kill("SIGKILL");
-    await new Promise(resolve => app.once("exit", resolve));
+    await Promise.race([new Promise(resolve => app.once("exit", resolve)), delay(5000)]);
   }
   rmSync(root, { recursive: true, force: true });
 }
