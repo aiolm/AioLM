@@ -39,6 +39,10 @@
         "depends": ["zenity"]
       }
     },
+    "macOS": {
+      "minimumSystemVersion": "13.3",
+      "hardenedRuntime": true
+    },
     "windows": {
       "nsis": {
         "installerHooks": "windows/installer-hooks.nsh",
