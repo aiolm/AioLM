@@ -612,8 +612,14 @@ fn state_process_is_managed(state: &HeadlessState) -> bool {
 fn terminate_pid(pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     {
+        // taskkill writes success messages to stdout. Suppress them so stop and
+        // restart retain the CLI's single JSON response contract.
         let status = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map_err(|error| format!("taskkill failed: {error}"))?;
         if !status.success() {
@@ -1235,6 +1241,11 @@ async fn run(args: &[String]) -> Result<Value, String> {
 }
 
 fn main() {
+    #[cfg(windows)]
+    if let Err(error) = isolate_standard_handles() {
+        eprintln!("cannot isolate CLI standard streams: {error}");
+        std::process::exit(1);
+    }
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args.len() == 1 && args[0] == INTERNAL_LOG_COLLECTOR {
         // The collector needs no GUI, keyring, migration or async runtime.
@@ -1256,6 +1267,31 @@ fn main() {
     tokio::runtime::Runtime::new()
         .expect("initialize CLI runtime")
         .block_on(run_cli(args));
+}
+
+#[cfg(windows)]
+fn isolate_standard_handles() -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_DISK, FILE_TYPE_PIPE};
+
+    // Rust Command redirects the child's standard streams, but Windows also
+    // inherits every other inheritable handle. A detached server must not keep
+    // this CLI's JSON output pipe open after the CLI itself has exited. Explicit
+    // Stdio::inherit still works: Command makes its own inheritable duplicate.
+    for handle in [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ] {
+        let kind = unsafe { GetFileType(handle) };
+        if matches!(kind, FILE_TYPE_DISK | FILE_TYPE_PIPE)
+            && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 async fn run_cli(args: Vec<String>) {
@@ -1280,6 +1316,51 @@ async fn run_cli(args: Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn detached_child_does_not_retain_cli_output() {
+        let path = env::temp_dir().join(format!("aiolm-stdio-{}.pid", uuid::Uuid::new_v4()));
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--ignored", "--exact", "tests::detached_stdio_fixture"])
+            .env("AIOLM_STDIO_FIXTURE_PID", &path);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let _ = send.send(command.output());
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(3));
+        if let Ok(pid) = fs::read_to_string(&path) {
+            let _ = terminate_pid(pid.trim().parse().unwrap());
+        }
+        let _ = fs::remove_file(path);
+        reader.join().unwrap();
+        assert!(result
+            .expect("detached child retained CLI output")
+            .unwrap()
+            .status
+            .success());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "subprocess fixture for detached CLI output"]
+    fn detached_stdio_fixture() {
+        let Some(path) = env::var_os("AIOLM_STDIO_FIXTURE_PID") else {
+            return;
+        };
+        isolate_standard_handles().unwrap();
+        let child = Command::new("cmd")
+            .args(["/D", "/C", "ping -n 11 127.0.0.1 > nul"])
+            .creation_flags(HEADLESS_CREATION_FLAGS)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        fs::write(path, child.id().to_string()).unwrap();
+        drop(child);
+    }
 
     #[test]
     fn config_set_accepts_safe_typed_fields() {
