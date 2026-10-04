@@ -52,7 +52,7 @@ async function request(method, path, data) {
 }
 const script = (code, args = []) => request("POST", `/session/${session}/execute/sync`, { script: code, args });
 async function click(selector) {
-  await waitFor(() => script("const e = document.querySelector(arguments[0]); return !!e && !e.disabled && e.getBoundingClientRect().width > 0;", [selector]), selector);
+  await waitFor(() => script("const e = document.querySelector(arguments[0]); return !!e && !e.disabled && !e.closest('[inert], [hidden]') && getComputedStyle(e).visibility === 'visible' && e.getBoundingClientRect().width > 0;", [selector]), selector);
   const found = await request("POST", `/session/${session}/element`, { using: "css selector", value: selector });
   await request("POST", `/session/${session}/element/${found["element-6066-11e4-a52e-4f735466cecf"]}/click`, {});
 }
@@ -96,6 +96,11 @@ try {
   await click("#settings-tab-server");
   await click("#settings-close-to-tray");
   await waitFor(() => JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).close_to_tray, "native settings save");
+  // Snapshot only after fonts and paint boundaries settle. DOM geometry alone
+  // exists while InitialSurface still keeps the actual settings view hidden.
+  await request("POST", `/session/${session}/execute/async`, {
+    script: "const done = arguments[arguments.length - 1]; document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => done(true))));", args: [],
+  });
   const screenshot = Buffer.from(await request("GET", `/session/${session}/screenshot`), "base64");
   assert.ok(screenshot.length > 1000, "WKWebView screenshot must contain rendered content");
   mkdirSync("tmp", { recursive: true });
