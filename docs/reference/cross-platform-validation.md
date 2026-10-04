@@ -282,8 +282,9 @@ review package metadata. The hosted runners execute actual macOS code, including
 both architecture branches; Linux cross-compilation alone cannot establish that.
 The native workflow now uses an opt-in debug WebDriver to automate actual
 WKWebView onboarding, settings and window lifecycle on both macOS architectures.
-The package workflow validates installed DMGs, real CPU inference, Keychain and
-Cocoa approval cancellation. See [macOS validation](macos-validation.md) for the
+The package workflow validates installed DMGs opened through LaunchServices,
+real CPU inference, Keychain and Cocoa approval cancellation, and optionally
+builds a pinned llama.cpp PR from source for CPU and Metal. See [macOS validation](macos-validation.md) for the
 exact coverage, candidate baseline and distribution prerequisites.
 
 Check Metal device availability before describing any hosted run as a Metal test.

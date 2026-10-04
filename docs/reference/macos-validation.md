@@ -28,7 +28,9 @@ The automated checks cover:
 - DMG mount, bundle identifier/version/minimum OS and GUI/CLI architecture;
   exclusion of the fake test server.
 - System and synthetic user Applications installation, replacement and removal;
-  installed GUI launch, installed CLI smoke and settings retained after removal.
+  installed CLI smoke and settings retained after removal. The installed bundle
+  is opened through LaunchServices with launchd's environment, as Finder does,
+  and leaves through the standard quit request that the Dock sends.
 - Managed CPU runtime installation, a hash-pinned Qwen2.5-0.5B-Instruct Q4_K_M
   model, real streaming responses after the CLI exits, restart, continuing logs,
   stop and released ports. The package job selects the release CLI explicitly.
@@ -39,7 +41,11 @@ The automated checks cover:
 
 The [native CI](../../.github/workflows/ci.yml) additionally drives the real
 WKWebView: clean onboarding, saved native settings, native frame, close-to-tray,
-second-launch restore, normal close and preferences after relaunch. The optional
+second-launch restore, normal close and preferences after relaunch. A second
+check wraps the same binary in a disposable bundle and opens it through
+LaunchServices with launchd's PATH: tray close, LaunchServices reopen of the
+running copy without a second instance, an MCP command found only in
+`/usr/local/bin`, the standard quit request and no remaining MCP process. The optional
 `macos-ui-smoke` Cargo feature registers WebDriver only on macOS with debug
 assertions. Ordinary development and distribution builds do not enable it.
 Synthetic screenshots are retained as test evidence, separate from packages.
@@ -62,6 +68,26 @@ Hosted Macs can expose an Apple Paravirtual Metal device. Results from that
 device establish execution in the virtual runner; they do not establish physical
 Apple Silicon performance, memory limits or driver behavior.
 
+With `source_build=true`, the package workflow also builds merged llama.cpp
+PR #29903 at its merged head commit with the runner's Xcode/CMake toolchain:
+CPU on both architectures and Metal on Apple Silicon. The job primes only the
+PR lookup with its scoped token; the source archive, its commit check, CMake
+build, staged preflight, GPU verification and CLI lifecycle use the normal path.
+
+## Commands from Finder and the Dock
+
+LaunchServices starts apps with launchd's PATH, `/usr/bin:/bin:/usr/sbin:/sbin`.
+`open` from Terminal instead passes the shell's environment, so it is not a
+substitute for testing that path. AioLM appends the directories that
+`path_helper` reads from `/etc/paths` and `/etc/paths.d`, plus Homebrew's
+`/opt/homebrew/bin` and `/opt/homebrew/sbin`, without changing existing order or
+running shell startup files. MCP commands such as `npx` and source-build tools
+from the official installers or Homebrew are therefore found after a Finder or
+Dock launch. Commands that only shell startup files add, for example from nvm,
+Volta, asdf or `~/.local/bin`, need an absolute path; a script that starts with
+`#!/usr/bin/env node` also needs `node` in one of those directories. CMake is
+found on that PATH or as `CMake.app` in `/Applications` or `~/Applications`.
+
 ## Recorded acceptance
 
 On 2026-10-04 UTC, all five jobs in the
@@ -79,6 +105,38 @@ hash-pinned model above on an Apple Paravirtual device. Both start and restart
 reported `offloaded 25/25 layers to GPU`, produced real SSE responses after the
 launcher exited, and retained logs; stop released the server port. This is
 virtual-runner evidence, separate from physical Mac acceptance.
+
+### Finder launch and source build audit (2026-10-04/05 UTC)
+
+The LaunchServices check reproduced a Finder/Dock defect in
+[run 37223412302](https://github.com/aiolm/AioLM/actions/runs/37223412302): with
+launchd's PATH, an MCP command in `/usr/local/bin` failed with
+`No such file or directory`. After the PATH fix, both Macs in
+[run 37225429914](https://github.com/aiolm/AioLM/actions/runs/37225429914) passed
+the LaunchServices launch, tray close, reopen without a second instance, MCP
+lookup and standard quit. The app then started with
+`/usr/bin:/bin:/usr/sbin:/sbin` followed by `/usr/local/bin`, the `/etc/paths.d`
+entries and, on Apple Silicon, `/opt/homebrew/bin`.
+
+The first hosted Metal source build exposed a second defect: PR runtimes lacked
+`llama-perplexity`, so GPU verification refused to start any GPU source build.
+With that tool built, [run 37228362827](https://github.com/aiolm/AioLM/actions/runs/37228362827)
+at `d25192b` passed both DMG jobs and every source build: PR #29903 at
+`f07be9f` built for CPU on both architectures and for Metal on Apple Silicon
+(CMake 4.4.2, Apple clang 17), listed `MTL0`, passed GPU verification, reported
+`offloaded 25/25 layers to GPU` at start and restart, answered over SSE and released
+its port on stop. Apple Silicon builds took about 25-30 minutes and Intel about 16.
+Installed DMG apps in system and user Applications were opened through
+LaunchServices and quit through the standard request on both architectures.
+Hosted Intel runners also expose an Apple Paravirtual Metal device. AioLM still
+lets an Intel Mac choose a Metal PR build, although its catalog and
+recommendations treat Intel Metal as unsupported. At `9a9f458`,
+[run 37231505962](https://github.com/aiolm/AioLM/actions/runs/37231505962) again
+passed both DMG jobs and the Apple Silicon CPU/Metal and Intel CPU source builds,
+and all five [native CI jobs](https://github.com/aiolm/AioLM/actions/runs/37229307609)
+passed. Its Intel Metal build compiled and passed the staged preflight, but every later 30-second runtime probe
+timed out during Metal library initialization, leaving the runtime unusable.
+Intel Metal therefore remains unsupported and unverified on physical Intel GPUs.
 
 ## Distribution and remaining device checks
 
@@ -100,9 +158,20 @@ xcrun stapler validate AioLM.dmg
 spctl --assess --type execute --verbose=4 AioLM.app
 ```
 
+Unsigned candidates currently fail `codesign --verify --strict` with
+"code has no resources but signature indicates they must be present": the
+Apple Silicon executable carries only the linker's ad-hoc signature. LaunchServices
+still opens them locally; Developer ID signing must produce a sealed bundle.
+
 Verify a quarantined browser download on a separate clean Mac account as well.
-Remaining device acceptance includes the declared minimum OS, Finder/Dock
-launch, menu interactions, native file selection/cancellation, clipboard and
-Hangul IME, Keychain allow/deny/cancel, explicit MCP Yes/No, actual historical
-upgrades and physical Apple Silicon Metal inference. Keep these
-separate from the automated results.
+Remaining device acceptance includes the declared minimum OS, actual Finder
+double-click and Dock icon/menu clicks, tray menu clicks, native file
+selection/cancellation, clipboard and Hangul IME, Keychain allow/deny/cancel,
+explicit MCP Yes/No, actual historical upgrades and physical Apple Silicon Metal
+inference. Keep these separate from the automated results.
+
+Known platform limits from code review, not device tests: the single-instance
+plugin uses one socket in `/tmp`, so a second macOS user account starts its own
+copy without that plugin's protection; LaunchServices still reuses a copy within
+one account. As on Linux, nothing stops managed `llama-server` processes after
+Force Quit or SIGKILL of AioLM. The standard quit request runs the normal cleanup.
