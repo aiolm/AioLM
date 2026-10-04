@@ -138,21 +138,21 @@ Clippy에서 중단됐다. 세 작업 모두 후속 네이티브 테스트·빌�
 | Vitest 전체 | 145개 파일, 1,450개 테스트 통과 |
 | Vitest 커버리지 | Statements 78.18%, branches 73.23%, lines 82.17% |
 | Rust format, Clippy `-D warnings` | 통과 |
-| Rust 전체 타깃·전체 기능 테스트 | 라이브러리 708 + CLI 11 + 가짜 서버 통합 1 + 로그 통합 1 = 721개 통과 |
+| Rust 전체 타깃·전체 기능 테스트 | 라이브러리 709 + CLI 11 + 가짜 서버 통합 1 + 로그 통합 1 = 722개 통과 |
 | Linux GUI/CLI debug 빌드 | 통과; 실제 GUI 결과는 아래 별도 기록 |
 | 격리된 홈 CLI 초기화·설정 저장/재로딩·빈 런타임 목록·서버 중지 상태 | debug/release 통과 |
 
-Linux 기본 실행에서 실제 환경 opt-in 8개와 로그 통합 검사의 자식 프로세스 fixture 1개는
+Linux 기본 실행에서 실제 환경 opt-in 9개와 로그 통합 검사의 자식 프로세스 fixture 1개는
 제외된다. 실제 모델·설치 결과는 아래 별도 기록하며 기본 테스트 수에 중복 합산하지 않는다.
 
-[최종 코드 CI](https://github.com/aiolm/AioLM/actions/runs/37186155836)에서 프런트엔드,
+[최종 코드 CI](https://github.com/aiolm/AioLM/actions/runs/37192658718)에서 프런트엔드,
 Windows, Ubuntu 24.04, macOS ARM64와 Intel의 검사·GUI/CLI 빌드·빈 홈 CLI 검사가
 모두 통과했다. Windows는 일반 Rust 730개 검사와 실제 CPU 시작·SSE 채팅·로그 갱신·
 재시작·정지·포트 해제, 실제 Credential Manager 저장·읽기·수정·삭제도 통과했다.
 성공한 Mac 빌드는 Metal 추론이나 Cocoa GUI의 실사용 완료를 뜻하지 않는다.
-검증한 구현 커밋은 `02a7fa1`이며 이후 문서 변경과 구분한다.
+검증한 구현 커밋은 `a203ff6`이며 이후 문서 변경과 구분한다.
 
-[최종 코드 패키지 CI](https://github.com/aiolm/AioLM/actions/runs/37186153592)는 Windows
+[최종 코드 패키지 CI](https://github.com/aiolm/AioLM/actions/runs/37192656705)는 Windows
 NSIS/MSI, Ubuntu DEB/AppImage, macOS ARM64/Intel APP/DMG 생성과 각 release CLI
 검사를 모두 통과했다. Windows NSIS/MSI와 Linux DEB의 실제 설치·동일 버전
 재설치/복구·설치된 CLI·제거 검사도 같은 실행에서 통과했다. 패키지를 릴리스로
@@ -179,7 +179,7 @@ SHA-256은 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`다
 | 확인한 GPU 오프로딩 | 0/25 layers | 25/25 layers | 25/25 layers |
 
 CPU 런타임의 ZIP 내보내기 → 새 임시 홈으로 가져오기 → probe → 실제 채팅도
-통과했다. 다른 GPU 순번이나 CUDA·Metal의 결과를 이 표로 대신하지 않는다.
+통과했다. 후속 GPU1·두 GPU 분할 결과는 아래에 따로 기록하며 CUDA·Metal의 결과를 대신하지 않는다.
 
 가상 X11 화면과 별도 DBus·격리된 HOME/XDG 경로에서 실제 Tauri/WebKitGTK 앱을
 WebDriver로 조작했다. 초기 설정의 한국어·어두운 테마 선택, 합성 프로젝트 저장 후
@@ -230,8 +230,8 @@ Linux 실사용 검증에 사용한 로컬 패키지는 다음과 같다. 아래
 
 AppImage는 `APPIMAGE_EXTRACT_AND_RUN=1`로 설치 없이 실행했다. 실행 중인 GUI가
 실제 AppImage에서 추출된 실행 파일인지 확인했고, 저장된 한글 모델 프로필로 실행해
-채팅 응답과 MCP 도구 실행 결과를 받았다. FUSE 마운트 방식이나 데스크톱 메뉴 실행은
-확인하지 않았다.
+채팅 응답과 MCP 도구 실행 결과를 받았다. 후속 GitHub Ubuntu runner에서는 실제
+FUSE 마운트와 마운트된 CLI·AppImage GUI 실행도 통과했다.
 
 두 패키지는 GUI와 CLI를 포함하며 가짜 서버·테스트 모델·설정 파일을 포함하지 않는다.
 DEB staging의 11개, AppDir의 442개 일반 파일을 검사해 개발 PC 홈·워크스페이스
@@ -262,11 +262,69 @@ DEB staging의 11개, AppDir의 442개 일반 파일을 검사해 개발 PC 홈�
 - Windows NSIS 설치·동일 버전 업데이트·삭제와 MSI 설치·복구·삭제 및 각 설치된
   CLI 검사가 [원격 runner](https://github.com/aiolm/AioLM/actions/runs/37184668687)에서
   통과했다. NSIS 제거 후 보존한 설치 경로를 MSI가 재사용하는 동작도 확인했다.
-- GNOME/KDE 트레이, FUSE를 통한 AppImage 실행, 서로 다른 버전 간 실제 업데이트,
-  Windows GPU 추론·GUI 전체 조작은 추가 실기 검증이 필요하다.
+- GNOME/KDE 트레이와 FUSE AppImage는 아래 후속 검사에서 통과했다. 실제 과거
+  배포 바이너리에서의 업데이트, Windows GPU 추론·GUI 전체 조작은 남아 있다.
 - MCP는 현재 stdio만 구현됐다. HTTP 전송을 검사 완료나 지원 기능으로 표시하지 않는다.
 - macOS ARM64/Intel의 CPU/Metal 추론·Cocoa/Keychain·서명·공증은 실제 Mac
   또는 대상 runner에서 확인해야 한다.
+
+### Linux 추가 검증 완료 기록 (2026-10-04)
+
+위 초기 검증의 공백을 실제 네이티브 실행으로 추가 확인했다. 개인 계정·설정과
+분리된 HOME/XDG/DBus 및 합성 자료를 사용했다. 다음 표는 해당 환경에서의 성공을
+뜻하며 모든 배포판·GPU·모델 조합의 보증이 아니다.
+
+| 영역 | 추가로 확인한 실제 동작 |
+| --- | --- |
+| Wayland 입력·창 | Weston에서 클립보드 복사/붙여넣기, IBus 한글 조합, 최대화·복원·크기 변경, 한글·공백 PDF의 GTK 포털 선택/추출·취소 |
+| GNOME 트레이 | GNOME Shell/Mutter와 AppIndicator 확장의 실제 등록, 창 닫기→숨김, native Show→표시, 숨긴 뒤 두 번째 실행→기존 창 표시 |
+| KDE 트레이 | Ubuntu 24.04의 실제 Plasma/KWin·kded StatusNotifier 호스트에서 등록, 숨김, native Show, Quit 후 프로세스 종료 |
+| 잠긴 비밀 저장소 | 실제 Secret Service 잠금 후 headless 실패, 읽기/쓰기 인증 창의 실제 Cancel, daemon 재시작·잠금 해제 후 기존 비밀 값 보존·삭제 |
+| GPU 선택 | Vulkan·ROCm 각각 GPU1 단독과 GPU0+GPU1 layer split의 실제 추론; 선택한 각 장치의 모델 버퍼와 25/25 layer offload 로그 확인 |
+| 심층 모델 검증 | Vulkan·ROCm을 CPU 기준 perplexity와 비교해 통과; 실제 기준 계산 중 취소와 임시 logits 제거 |
+| LoRA·draft | 합성 zero-weight rank-1 LoRA 로드 후 추론, 호환 Qwen 모델의 draft-simple 추론과 실제 draft 토큰 채택 확인 |
+| 모델·경로·세션 | 한글·공백을 포함한 448-byte 경로, 대소문자만 다른 두 GGUF 탐색·동시 세션 추론·언로드 |
+| Hub 다운로드 | 공개 SmolVLM 파일의 실제 다운로드 중 취소·staging 제거, 재시도·SHA-256 일치, 기존 검증 파일 재사용 |
+| 실패·복구 | 읽기 전용 설정 저장 실패 후 원본 보존, 실제 idle unload, 서버 강제 종료 감지·재시작·추론 |
+| API | 포트 충돌 거부, Responses 생성·조회·previous_response_id 후속 대화, 스트림 연결 종료, API 정지 후 모델 유지 |
+| 데이터 이행 | config_version 1의 합성 구버전 폴더 → 새 홈, 설정·원본 보존, 같은/다른 파일시스템의 이행한 런타임 실제 추론과 앱 재시작 |
+| 앱 종료 | 기본/추가 모델 세션·API·MCP 승인 대기 중 창 닫기 → 앱·모델·MCP·승인 창 종료 및 리스닝 포트 닫힘 |
+| 공개 벤치마크 창 | 실제 별도 native WebView에서 공개 한국어 사이트·필터·빈 결과 렌더링 확인; 공개 레코드가 없어 가져오기는 미실행 |
+| DEB 업그레이드 | 합성 이전 버전 패키지 설치 → GUI/설정 저장 → 새 버전 설치 → 설정·WebView 저장값 유지 → 제거 후 데이터 보존 |
+| AppImage | 실제 FUSE mount 확인, 추출 실행 fallback 없이 마운트된 CLI와 AppImage GUI 실행 |
+
+데이터 이행 검사에서 **실행 파일의 Unix 권한이 사라져 Permission denied가 발생하는
+결함**을 찾았다. `copy_tree`가 일반 Unix 권한 비트를 보존하도록 수정했고, 실행 권한과
+private 파일 권한 회귀 테스트 및 실제 이행·추론·재시작을 통과했다. 최종 CI DEB에서
+추출한 앱에서도 같은 이행·추론·재시작을 확인했다. 특별 권한 비트는
+복사하지 않으며 Windows 파일 복사 동작은 변경하지 않았다.
+
+DEB의 이전 버전은 최종 패키지의 Version 필드만 `0.2.0~acceptance0`으로 바꾼
+**합성 fixture**다. 패키지 관리자 업그레이드와 사용자 데이터 보존의 증거이며,
+실제 과거 Linux 릴리스 바이너리·모든 과거 스키마 업그레이드의 증거는 아니다.
+GNOME 검사는 트레이/재실행 범위이며 전체 GNOME 입력·포털 검증으로 확대하지 않는다.
+LoRA 검사는 연결·로드·추론 경로를 확인하며 학습 품질이나 모든 draft 아키텍처를
+검증하지 않는다. 다중 GPU 결과도 현재 장치의 layer split 범위다.
+
+[최종 Linux 패키지 실기 CI](https://github.com/aiolm/AioLM/actions/runs/37193684570)는
+패키지 run `37192656705`를 명시적으로 지정해 DEB 데이터 보존·FUSE·KDE 검사를 모두
+통과했다. [후속 Linux CI](https://github.com/aiolm/AioLM/actions/runs/37193477047)의
+Ubuntu 작업도 일반 테스트·실제 Secret Service 인증 취소·빌드·CLI 검사를 통과했다.
+검사 추가 커밋은 `8bb653f`이며 패키지의 앱 구현은 `a203ff6`과 같다.
+
+반복 가능한 네이티브 검사는 다음에 추가했다:
+
+- [Linux 데스크톱 패키지 CI](../../.github/workflows/linux-desktop-acceptance.yml):
+  성공한 패키지 run의 체크섬을 확인하고 DEB 데이터 보존·FUSE·KDE 트레이를 검사한다.
+  설치 스크립트는 GitHub hosted runner에서만 동작한다.
+- [실제 Secret Service 검사](../../scripts/smoke-linux-vault.py): 임시 홈과 별도 DBus에서
+  잠금·인증 취소·복구를 검사하며 Linux native CI에서도 실행한다.
+
+남은 실기 범위는 외부 유료/인증 API, 계정 기반 공개 공유·복구 및 공개 레코드 가져오기,
+실제 과거 배포 바이너리 업그레이드, 다른 GPU 계열·드라이버·배포판, 모델별 전용
+speculative decoding 구성, 장기간 연속 운용이다. 이런 외부 조건을 확보하지 않은
+검사를 완료로 표시하지 않는다. 현재 제공된 Linux 환경에서 수행한 검사는 위에
+기록했으며 Windows와 macOS의 남은 실기 범위는 별개다.
 
 ## Linux에서 소스 받기
 
@@ -418,7 +476,8 @@ gh run download '<run-id>' --dir tmp/native-packages
 `cpu,metal`, upstream Intel 아카이브에서는 `cpu`로 바꾼다. ARM64에서 CPU와
 Metal이 같은 배포 아카이브를 사용해도 실제 실행 장치가 달라지는지 확인한다.
 
-현재 CI는 CLI와 네이티브 코드 테스트이며 WebView 조작 E2E는 포함하지 않는다.
+macOS CI는 CLI와 네이티브 코드 테스트이며 Mac WebView 조작 E2E는 포함하지 않는다.
+Linux에는 위 별도 패키지 데스크톱 검사가 있다.
 [Tauri의 WebdriverIO embedded driver 안내](https://v2.tauri.app/develop/tests/webdriver/)에
 따라 데스크톱 E2E를 추가할 수 있다. Linux에서 CI를 제어할 수 있지만 아래 실행
 증거는 실제 macOS 환경에서 확보해야 한다:
@@ -438,10 +497,12 @@ Metal이 같은 배포 아카이브를 사용해도 실제 실행 장치가 달�
 ## 정식 지원 완료 기준
 
 - [x] Linux native CI, macOS ARM64/Intel native CI 모두 성공.
-- [ ] 두 플랫폼 실제 패키지 생성·설치·제거·업데이트 완료 확인.
+- [x] Linux DEB 생성·설치·제거·합성 버전 업그레이드 데이터 보존 및 FUSE AppImage 실행.
+- [ ] 실제 과거 릴리스 업그레이드와 macOS 설치·제거·업데이트 완료 확인.
 - [x] Linux CPU/Vulkan/ROCm 실제 모델 테스트와 결과 기록(Ubuntu 26.04 x64, b11349).
 - [ ] macOS CPU/Metal 실제 모델 테스트와 결과 기록.
-- [ ] 네이티브 GUI·Keyring·MCP 승인·프로세스 정리·파일 처리 체크리스트 완료.
+- [x] 위 Linux 환경의 GUI·Secret Service·MCP 승인·프로세스 정리·파일 처리 검사.
+- [ ] 계정 기반 Linux 실기 흐름과 macOS GUI·Keychain·MCP·파일 처리 검사.
 - [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.
 - [ ] macOS 서명/공증 계정·CI secrets 구성 및 Gatekeeper 검증.
 - [ ] Windows 전용 release.yml을 검증된 Linux/macOS 아티팩트까지 게시하도록 확장. 파일명·체크섬 형식은 updater와 일치.

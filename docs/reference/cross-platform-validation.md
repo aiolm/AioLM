@@ -8,8 +8,8 @@ The [Linux/macOS handoff (한국어)](linux-macos-handoff.ko.md) records the com
 Windows and local Linux verification and the remaining native checks.
 
 On 2026-10-03–04, local Ubuntu 26.04 x64 verification passed the frontend suite
-(1,450 tests), typecheck, lint, production build, Rust format and Clippy, 721 native
-tests, debug desktop/CLI builds and the CLI smoke with an isolated home. Eight
+(1,450 tests), typecheck, lint, production build, Rust format and Clippy, 722 native
+tests, debug desktop/CLI builds and the CLI smoke with an isolated home. Nine
 live-environment tests and one internal subprocess fixture were excluded from the
 default result. Build dependencies
 were extracted into a temporary directory without a system install. This does not
@@ -26,7 +26,9 @@ embedding retrieval passed, as did SmolVLM image attachment/sidecar inference,
 actual clipboard copying, completed benchmark history and native CSV/XLSX export.
 IBus Hangul composition passed with actual key events. A separate Weston Wayland
 session passed clean onboarding, all navigation panels, CPU chat and unload
-without JavaScript errors. This does not establish GNOME/KDE tray acceptance.
+without JavaScript errors. Later native checks covered Weston clipboard paste,
+Hangul input, window controls, Unicode PDF portal selection/cancellation, GNOME
+AppIndicator hide/Show/second-launch recovery and actual KDE Plasma tray hide/Show/Quit.
 A synthetic stdio MCP server passed discovery, call preparation,
 native Yes/No and cancellation with dialog/process cleanup. Detailed results and
 remaining gaps are in the Korean handoff. Linux Secret Service roundtrip/update/
@@ -45,19 +47,55 @@ stopped at Clippy on Linux and both macOS architectures; their tests and builds
 were skipped. Platform-specific unused code and a missing Unix test fixture
 directory have been corrected locally. CI now also installs the npm version
 declared in `package.json`; `setup-node` alone used the bundled npm version.
-The [final code CI](https://github.com/aiolm/AioLM/actions/runs/37186155836), at
-implementation commit `02a7fa1`, passed
+The [final code CI](https://github.com/aiolm/AioLM/actions/runs/37192658718), at
+implementation commit `a203ff6`, passed
 frontend, Windows, Ubuntu and both macOS checks, builds and isolated CLI tests.
 Windows also passed real CPU install/inference/restart/stop and Credential Manager
 roundtrips. The CLI no longer leaves inherited output handles in detached children
 or mixes taskkill messages into its JSON output.
-The [final code package build](https://github.com/aiolm/AioLM/actions/runs/37186153592)
+The [final code package build](https://github.com/aiolm/AioLM/actions/runs/37192656705)
 passed on all four runners, including Windows/Linux installed-package checks.
 Actual Windows NSIS install/update/remove and MSI
 install/repair/remove, including installed CLI smoke, passed in the
 [installer check](https://github.com/aiolm/AioLM/actions/runs/37184668687).
 That run also passed Ubuntu 24.04 DEB dependency installation, installed CLI,
-same-version reinstall and removal. Cross-version updates remain unverified.
+same-version reinstall and removal. Genuine historical release upgrades remain
+unverified; the synthetic-version fixture is described below.
+
+The [final Linux packaged desktop run](https://github.com/aiolm/AioLM/actions/runs/37193684570)
+explicitly selected package run `37192656705` and passed both desktop and KDE jobs.
+The Ubuntu job of the [follow-up CI](https://github.com/aiolm/AioLM/actions/runs/37193477047)
+also passed real Secret Service lock/native cancellation/recovery alongside the
+ordinary tests, build and CLI smoke. Verification commit `8bb653f` retains the app
+implementation from `a203ff6`.
+
+Additional Linux acceptance exercised GPU1 and two-device layer splitting with both
+Vulkan and ROCm, CPU-reference perplexity comparison/cancellation, synthetic LoRA
+loading and compatible draft-simple inference. It also covered long case-distinct
+Unicode model paths with simultaneous sessions, actual Hub download cancellation/
+retry/hash/reuse, read-only setting failures, idle unload, crash/restart recovery,
+Responses API persistence/continuation and port conflicts. Closing the final app
+with two models, the API and an MCP approval pending terminated the app, model/MCP
+processes, native dialog and listeners.
+
+Actual legacy-layout migration exposed lost Unix executable permissions. The copy
+now preserves ordinary Unix mode bits, including private-file permissions, without
+special privilege bits; Windows copying is unchanged. A regression test and actual
+GUI migration within and across filesystems, migrated-runtime inference and restart
+passed. Locked Secret Service
+headless refusal, native read/write authentication cancellation and original-secret
+recovery after daemon restart/unlock are now repeatable in Linux CI through
+[`smoke-linux-vault.py`](../../scripts/smoke-linux-vault.py).
+
+[`linux-desktop-acceptance.yml`](../../.github/workflows/linux-desktop-acceptance.yml)
+reuses a successful same-repository package run, verifies checksums and performs
+real DEB persistence, FUSE and KDE checks in disposable hosted runners. Supply its
+`package_run_id` input to select the artifact source. The DEB predecessor is the
+current binary with synthetic version `0.2.0~acceptance0`, not a historical release.
+The public benchmark native window rendered successfully, but no public records
+were available to import. Account-backed sharing, authenticated/paid external APIs,
+other GPU/distribution combinations, model-specific decoding architectures and
+long-duration soak tests still require their external conditions.
 
 ## Build and test gates
 
@@ -86,6 +124,19 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-fea
 cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
 npm run test:native-cli
 ```
+
+On Linux, the native vault acceptance additionally requires `gnome-keyring`,
+`xvfb`, `xauth`, `dbus-x11`, `python3-gi`, `gir1.2-atspi-2.0` and `at-spi2-core`.
+With the Rust toolchain and normal build dependencies available, run:
+
+```sh
+python3 scripts/smoke-linux-vault.py
+```
+
+It creates separate temporary homes and DBus sessions for headless and graphical
+checks. Both actual read/write authentication prompts must be cancelled before
+original-secret recovery can pass; an unavailable accessibility service is a test
+setup failure, not a successful cancellation.
 
 The CLI smoke uses a temporary directory, overrides both the current home and all
 legacy migration roots in the child environment, and removes only its own files.
@@ -118,7 +169,9 @@ excluded. The AppImage also launched under `APPIMAGE_EXTRACT_AND_RUN=1` in an
 isolated X11 session and completed a CPU chat and native MCP approval/call.
 The package staging files were scanned for development home/workspace paths in
 UTF-8/UTF-16 with no matches. Hosted Ubuntu DEB installation/reinstallation/removal
-passed. FUSE mounting and cross-version updates remain unverified.
+passed. A subsequent hosted check passed actual FUSE mount, mounted CLI and
+AppImage GUI launch. DEB upgrade persistence passed using a synthetic predecessor
+whose Version field differs; genuine historical release upgrades remain unverified.
 
 | Host | Formats | Local output |
 | --- | --- | --- |
