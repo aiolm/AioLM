@@ -1,4 +1,4 @@
-name: Validate Linux and macOS packages
+name: Validate desktop packages
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, macos-15-intel]
+        os: [windows-latest, ubuntu-24.04, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
@@ -50,7 +50,7 @@ jobs:
       - name: Build host packages
         run: npm run package:tauri
       - name: Release CLI with a clean home
-        run: npm run test:native-cli -- .codex-target/release/aiolm-cli
+        run: npm run test:native-cli -- .codex-target/release/aiolm-cli${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Collect package checksums
         shell: bash
         run: |
@@ -58,7 +58,7 @@ jobs:
           import hashlib
           from pathlib import Path
           root = Path('.codex-target/release/bundle')
-          files = sorted(p for p in root.rglob('*') if p.is_file() and p.suffix in {'.deb', '.AppImage', '.dmg'})
+          files = sorted(p for p in root.rglob('*') if p.is_file() and p.suffix in {'.deb', '.AppImage', '.dmg', '.exe', '.msi'})
           if not files:
               raise SystemExit('No desktop packages were produced')
           with (root / 'checksums.txt').open('w', encoding='utf-8', newline='\n') as output:
@@ -74,6 +74,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
+            .codex-target/release/bundle/**/*.exe
+            .codex-target/release/bundle/**/*.msi
             .codex-target/release/bundle/**/*.deb
             .codex-target/release/bundle/**/*.AppImage
             .codex-target/release/bundle/**/*.dmg

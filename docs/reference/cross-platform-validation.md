@@ -8,7 +8,7 @@ The [Linux/macOS handoff (한국어)](linux-macos-handoff.ko.md) records the com
 Windows and local Linux verification and the remaining native checks.
 
 On 2026-10-03–04, local Ubuntu 26.04 x64 verification passed the frontend suite
-(1,450 tests), typecheck, lint, production build, Rust format and Clippy, 720 native
+(1,450 tests), typecheck, lint, production build, Rust format and Clippy, 721 native
 tests, debug desktop/CLI builds and the CLI smoke with an isolated home. Seven
 live-environment tests and one internal subprocess fixture were excluded from the
 default result. Build dependencies
@@ -21,10 +21,13 @@ Qwen2.5-0.5B-Instruct Q4_K_M model. CPU runtime ZIP export/import and subsequent
 inference also passed. The native Tauri/WebKitGTK GUI was exercised in isolated
 X11/DBus sessions: onboarding, settings/project persistence, 11 navigation panels,
 Unicode model paths, CPU loading, chat/cancellation/unload and authenticated
-OpenAI/Anthropic loopback routes. This does not cover Wayland, IME, tray or native
-file dialogs. A synthetic stdio MCP server passed discovery, call preparation,
+OpenAI/Anthropic loopback routes. Native GTK portal PDF/DOCX selection and PDF grounded chat also passed.
+This does not cover Wayland, IME or tray. A synthetic stdio MCP server passed discovery, call preparation,
 native Yes/No and cancellation with dialog/process cleanup. Detailed results and
-remaining gaps are in the Korean handoff.
+remaining gaps are in the Korean handoff. Linux Secret Service roundtrip/update/
+delete and unavailable-store handling passed on a separate DBus and temporary
+home. A pinned official PR CPU source build, build cancellation cleanup, and
+inference using the source-built runtime also passed.
 
 The [portability commit's CI](https://github.com/aiolm/AioLM/actions/runs/37033112852)
 stopped at Clippy on Linux and both macOS architectures; their tests and builds
@@ -100,7 +103,7 @@ remain unverified.
 | Linux | DEB, AppImage | `.codex-target/release/bundle/` |
 | macOS | APP, DMG | `.codex-target/release/bundle/` |
 
-The **Validate Linux and macOS packages** GitHub Actions workflow is manually
+The **Validate desktop packages** GitHub Actions workflow is manually
 dispatched. It has read-only repository permissions, no signing credentials and no
 release publication step. Artifacts are for acceptance testing. Run the normal CI
 first, then install and launch the package on a clean target machine/session.
