@@ -42,6 +42,39 @@ AioLM — All-In-One LM与旧应用独立安装。首次启动会将原有设置
 
 AioLM将数据保存在 `%USERPROFILE%\.aiolm`，也可以通过环境变量 `AIOLM_HOME` 指定其他文件夹。早期AioLM版本的数据会在启动时导入该文件夹，托管运行时会被移动而非复制。参见[数据文件夹](../reference/migration.md#data-folder)。
 
-## Linux / macOS (计划中)
+## Linux
 
-Linux/macOS 的实际环境验证尚未完成。主机构建在 Linux 生成 DEB/AppImage，在 macOS 生成 APP/DMG。请参阅[验证步骤](../reference/cross-platform-validation.md)。除生成安装包外，还需验证 macOS 签名、公证和安装。DEB/DMG 更新会在系统安装界面打开已验证的文件，由用户完成安装。AppImage 和手动安装通过发布页面更新。
+适用于 Ubuntu 24.04 或更新版本、x86_64。推荐使用 DEB 集成应用菜单和图标；AppImage 为便携格式。本次验证不涵盖 ARM64 和 NVIDIA DGX。
+
+从同一个[发布版本](https://github.com/aiolm/AioLM/releases/latest)下载 DEB 或 AppImage 及 `checksums.txt`。**v0.2.0 仅包含 Windows 文件。** Linux 文件发布前，可登录 GitHub，在成功的 [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 运行的 Artifacts 中下载 `desktop-packages-ubuntu-24.04`。文件过期后请使用[源码构建](development.md)。验证构建并非正式发布版本。
+
+将 SHA-256 值与校验和文件中的对应项进行比较。在仅包含所需版本 DEB 的文件夹内执行:
+
+```bash
+sha256sum ./AioLM_*_amd64.deb
+sudo apt install ./AioLM_*_amd64.deb
+```
+
+安装后从应用菜单启动 AioLM。DEB 会注册启动项和图标。使用 `sudo apt remove aio-lm` 卸载后，`~/.aiolm` 或 `AIOLM_HOME` 中的数据会保留。
+
+将 AppImage 放在长期保留的文件夹，验证校验和后赋予执行权限。Ubuntu 24.04 或更新版本若缺少 FUSE 2，请安装 `libfuse2t64`:
+
+```bash
+sudo apt install libfuse2t64
+chmod +x ./AioLM_*.AppImage
+./AioLM_*.AppImage
+```
+
+仅运行 AppImage 不会注册应用菜单。请下载同一发布中的 `register-linux-desktop.py`；验证构建使用[对应源码版本的辅助脚本](../../scripts/register-linux-desktop.py)，需要 Python 3。使用发布校验和验证辅助脚本后注册所选 AppImage:
+
+```bash
+python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
+```
+
+该操作将图标和启动项注册到 XDG 用户数据目录，不会移动 AppImage。更改文件路径后请重新注册。切换到 DEB 前，使用 `python3 register-linux-desktop.py --remove` 删除本地注册。开发运行 `npm run tauri -- dev` 会自动注册图标，参见[开发指南](development.md)。
+
+DEB 更新会在系统安装界面打开已验证文件，由用户完成安装。AppImage 通过发布页面更新并重新注册新路径。GPU 加速需要相应驱动和兼容的 llama.cpp 运行时。
+
+## macOS（计划中）
+
+macOS 签名、公证及实际环境验证仍需单独完成。参见[跨平台验证](../reference/cross-platform-validation.md)。

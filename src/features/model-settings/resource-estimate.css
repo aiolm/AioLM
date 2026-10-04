@@ -1,11 +1,13 @@
-/* Two short lines beside the launch action: values, then status or the details toggle. */
+/* Values, their scope, and expandable details beside the launch action. */
 .resource-estimate { min-width: 0; font-size: var(--ui-text-support); line-height: 18px; }
 .resource-estimate-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 16px; }
 .resource-estimate-title { color: var(--ui-muted); font-weight: 650; }
 .resource-estimate-summary dl { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin: 0; }
 .resource-estimate-summary dl > div { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
 .resource-estimate-summary dt { color: var(--ui-muted); font-size: var(--ui-text-support); }
+.resource-estimate-summary .resource-estimate-help { display: inline-flex; align-items: center; gap: 3px; }
 .resource-estimate-summary dd { margin: 0; font-size: var(--ui-text-support); font-weight: 650; font-variant-numeric: tabular-nums; }
+.resource-estimate-scope { margin: 2px 0 0; color: var(--ui-muted); }
 .resource-estimate-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 24px; margin-top: 2px; color: var(--ui-muted); }
 .resource-estimate-details { flex: 1 1 100%; min-width: 0; line-height: 1.5; }
 .resource-estimate-details summary { width: fit-content; padding-block: 3px; line-height: 18px; cursor: pointer; }

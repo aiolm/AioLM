@@ -4,7 +4,7 @@
 
 [Documentation index](docs/README.md) — installation, development, architecture, and policies.
 
-AioLM (All-in-One LM) — Windows desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
+AioLM (All-in-One LM) — Windows/Linux desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
 
 ## Features
 
@@ -33,9 +33,13 @@ See [chat personalization](docs/reference/personalization.md).
 
 ## Platform support
 
-Windows x64 is supported today. **Linux (including NVIDIA DGX) and macOS support is planned**. Native validation builds use DEB/AppImage on Linux and APP/DMG on macOS; Windows uses NSIS/MSI. See [cross-platform validation](docs/reference/cross-platform-validation.md) for CI and acceptance requirements. Windows installers are built on GitHub-hosted CI and published unsigned with SHA-256 checksums.
+Windows x64 and Linux x86_64 (Ubuntu 24.04+) builds are available. Linux uses DEB/AppImage; Windows uses NSIS/MSI. **The v0.2.0 public release contains Windows assets only**; the [Linux installation guide](docs/guides/install.md#linux) explains validation-build downloads until Linux release assets are published. macOS and Linux ARM64/NVIDIA DGX acceptance remain pending. See [cross-platform validation](docs/reference/cross-platform-validation.md). Release assets are unsigned and include SHA-256 checksums.
 
 ## Download
+
+[Linux: DEB / AppImage](docs/guides/install.md#linux)
+
+Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"

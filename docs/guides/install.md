@@ -60,10 +60,39 @@ The updater matches the running application's Windows uninstall registration to 
 
 Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **Control Panel → Programs and Features**. Removing the application keeps your data unless you select **Delete the application data** in the NSIS uninstaller. That option removes the WebView profile and the data folder `%USERPROFILE%\.aiolm`, together with the `%APPDATA%\aiolm` and `%LOCALAPPDATA%\aiolm` folders earlier releases used, but keeps a `models` folder in them. It never removes a folder set with `AIOLM_HOME` or models stored elsewhere, and the MSI uninstaller removes no data; delete those folders separately if desired.
 
-## Linux / macOS (planned)
+## Linux
 
-Linux and macOS native acceptance is still pending. Host builds produce DEB/AppImage
-and APP/DMG packages; see [Cross-platform validation](../reference/cross-platform-validation.md).
-Package generation and checksum verification do not replace macOS signing,
-notarization or installation tests. Published support is tracked in
-[README.md](../../README.md#platform-support).
+Ubuntu 24.04 or newer, x86_64. DEB is recommended for desktop integration; AppImage is portable. ARM64 and NVIDIA DGX systems are not covered by this validation.
+
+Download the DEB or AppImage and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). **v0.2.0 has Windows assets only.** Until Linux assets are published, sign in to GitHub, open a successful [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) run, and download `desktop-packages-ubuntu-24.04` from Artifacts. Artifacts expire; if unavailable, use the [source build instructions](development.md). Validation builds are not published releases.
+
+Compare the SHA-256 value with the corresponding entry in the downloaded checksum file. In the directory containing only the DEB version you want:
+
+```bash
+sha256sum ./AioLM_*_amd64.deb
+sudo apt install ./AioLM_*_amd64.deb
+```
+
+Launch AioLM from the application menu. The DEB installs the launcher and icon. Remove it with `sudo apt remove aio-lm`; data in `~/.aiolm` (or `AIOLM_HOME`) remains.
+
+For AppImage, put the file in a permanent folder, verify its checksum, then make it executable. On Ubuntu 24.04+, install `libfuse2t64` if FUSE 2 is missing:
+
+```bash
+sudo apt install libfuse2t64
+chmod +x ./AioLM_*.AppImage
+./AioLM_*.AppImage
+```
+
+AppImage alone does not register a launcher. Download `register-linux-desktop.py` from the same release (for validation builds, use [the helper from the matching source revision](../../scripts/register-linux-desktop.py)); Python 3 is required. After verifying the helper against the release checksums, register the selected AppImage:
+
+```bash
+python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
+```
+
+This copies the icon and registers a launcher in your XDG user data directory; it does not move the AppImage. If you move or replace the file at a new path, run registration again. Before switching to DEB, remove this local registration with `python3 register-linux-desktop.py --remove`. A development checkout registers its icon automatically with `npm run tauri -- dev`; see [development](development.md).
+
+DEB updates open the verified installer in the system package interface for you to finish. Update AppImage from the release page and register its new path. GPU drivers and a compatible llama.cpp runtime are required for GPU acceleration.
+
+## macOS (planned)
+
+macOS signing, notarization and native acceptance remain separate work. See [cross-platform validation](../reference/cross-platform-validation.md).

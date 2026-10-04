@@ -24,15 +24,16 @@ const details = () => screen.getByText('Estimate details').closest('details')!;
 describe('pre-load resource estimates', () => {
   beforeEach(() => { vi.resetAllMocks(); vi.mocked(api.estimateModelResources).mockResolvedValue(estimate); });
 
-  it('summarizes VRAM, RAM Offload and SSD Offload as point estimates without loading or saving', async () => {
+  it('separates runtime RAM from offload and shows their sum in details', async () => {
     const large = 22.5 * GiB;
     vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, vram_bytes: large, required_vram_bytes: large, vram_capacity_bytes: 24 * GiB });
     render(panel());
     await waitFor(() => expect(screen.getByTestId('resource-vram')).toHaveTextContent('22.50 GiB'));
     expect(screen.getByTestId('resource-ram')).toHaveTextContent('2.00 GiB');
+    expect(screen.getByTestId('resource-host')).toHaveTextContent('512.0 MiB');
     expect(screen.getByTestId('resource-disk')).toHaveTextContent('0 B');
     const summary = screen.getByTestId('resource-vram').closest('dl')!;
-    expect([...summary.querySelectorAll('dt')].map(term => term.textContent)).toEqual(['VRAM', 'RAM Offload', 'SSD Offload']);
+    expect([...summary.querySelectorAll('dt')].map(term => term.textContent)).toEqual(['VRAM', 'Runtime RAM', 'RAM Offload', 'SSD Offload']);
     expect(summary).not.toHaveTextContent(/–/);
     expect(api.estimateModelResources).toHaveBeenCalledWith(cfg, []);
     expect(screen.getByRole('status')).toHaveTextContent('Estimated memory · updates with settings');
@@ -40,18 +41,57 @@ describe('pre-load resource estimates', () => {
     fireEvent.click(screen.getByText('Estimate details'));
     expect(screen.getByText(/estimated values for this configuration, not measurements/)).toBeVisible();
     expect(screen.getByText(/other apps and running models is not subtracted/)).toBeVisible();
-    expect(within(details()).getByText('Fixed host memory').nextSibling).toHaveTextContent('512.0 MiB');
+    expect(within(details()).getByText('Runtime RAM').nextSibling).toHaveTextContent('512.0 MiB');
+    expect(within(details()).getByText('RAM Offload').nextSibling).toHaveTextContent('2.00 GiB');
+    expect(screen.getByTestId('resource-ram-total')).toHaveTextContent('2.50 GiB');
+    expect(screen.getByText('Total RAM = Runtime RAM + RAM Offload.')).toBeVisible();
+    expect(screen.getByTestId('resource-total')).toHaveTextContent('25.00 GiB');
+    expect(screen.getByText(/Selected model only/)).toBeVisible();
+    expect(screen.getByText(/reclaimable OS file cache/)).toBeVisible();
     expect(within(details()).getByText('Total VRAM').nextSibling).toHaveTextContent('24.00 GiB');
   });
 
-  it('shows zero RAM and SSD Offload when the whole model fits in VRAM', async () => {
+  it('shows runtime RAM alongside zero offload when the whole model fits in VRAM', async () => {
     vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, vram_bytes: 7 * GiB, required_vram_bytes: 7 * GiB, ram_offload_bytes: 0 });
     render(panel());
     await waitFor(() => expect(screen.getByTestId('resource-vram')).toHaveTextContent('7.00 GiB'));
     expect(screen.getByTestId('resource-ram')).toHaveTextContent(/^0 B$/);
+    expect(screen.getByTestId('resource-host')).toHaveTextContent('512.0 MiB');
     expect(screen.getByTestId('resource-disk')).toHaveTextContent(/^0 B$/);
     expect(screen.getByText('Estimate details')).toHaveTextContent(/^Estimate details$/);
     expect(within(details()).queryByText('Requested VRAM')).not.toBeInTheDocument();
+  });
+
+  it('explains runtime RAM from the summary help control without opening details', async () => {
+    render(panel());
+    await waitFor(() => expect(screen.getByTestId('resource-host')).toHaveTextContent('512.0 MiB'));
+    const help = screen.getByRole('button', { name: 'About runtime RAM' });
+    fireEvent.focus(help);
+    expect(help).toHaveAttribute('aria-expanded', 'true');
+    expect(help).toHaveAccessibleDescription(/System memory needed even for GPU execution/);
+    expect(details()).not.toHaveAttribute('open');
+    fireEvent.keyDown(help, { key: 'Escape' });
+    expect(help).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Estimate details')).toHaveTextContent(/^Estimate details$/);
+    expect(screen.getByTestId('resource-host').closest('.text-warning')).toBeNull();
+  });
+
+  it('does not add overlapping shared GPU and system memory into a physical total', async () => {
+    vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, notes: ['approximate', 'shared_memory'] });
+    render(panel());
+    await waitFor(() => expect(screen.getByTestId('resource-ram')).toHaveTextContent('2.00 GiB'));
+    fireEvent.click(screen.getByText('Estimate details'));
+    expect(screen.queryByTestId('resource-total')).not.toBeInTheDocument();
+    expect(screen.getByText(/not necessarily separate physical pools/)).toBeVisible();
+  });
+
+  it.each(['host_memory_bytes', 'ram_offload_bytes'] as const)('withholds total RAM when %s is unknown', async field => {
+    vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, [field]: null });
+    render(panel());
+    await waitFor(() => expect(screen.getByTestId('resource-ram-total')).toHaveTextContent('Unavailable'));
+    expect(screen.getByTestId('resource-host')).toHaveTextContent(field === 'host_memory_bytes' ? 'Unavailable' : '512.0 MiB');
+    expect(screen.getByTestId('resource-ram')).toHaveTextContent(field === 'ram_offload_bytes' ? 'Unavailable' : '2.00 GiB');
+    expect(screen.queryByTestId('resource-total')).not.toBeInTheDocument();
   });
 
   it('keeps SSD Offload separate from the size of stored model files', async () => {

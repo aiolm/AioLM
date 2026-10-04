@@ -33,6 +33,9 @@
 //! (`src/llama-context.cpp`); it is not multiplied by the slot count.
 //! `--ctx-size 0` means the trained context, which current runtimes multiply
 //! by the slot count while earlier ones do not (`common/fit.cpp`).
+//! Attention input masks add n_kv_per_stream * n_ubatch elements on the host
+//! and receiving devices (F16 with flash attention, otherwise F32). Eligible
+//! CUDA/ROCm multi-GPU layer pipelines keep four copies per backend.
 //!
 //! Qwen3-Next, Qwen3.5 and Qwen4 hybrids cache only full-attention layers;
 //! recurrent layers hold F32 convolution and delta-net state per sequence.
@@ -757,6 +760,8 @@ struct Launch {
     /// `0` asks for the model's trained context.
     ctx: u64,
     ubatch: u64,
+    /// CUDA/ROCm layer splitting can keep four scheduler input copies.
+    pipeline_backend: bool,
     /// `None` when the runtime chooses (an unverified runtime default) or the
     /// value is not a cache type this estimate knows.
     type_k: Option<KvType>,
@@ -839,6 +844,8 @@ fn launch_settings(cfg: &AppConfig) -> Launch {
         ctx: u64::from(ctx),
         // llama.cpp never runs a physical batch larger than the logical one.
         ubatch: ubatch.clamp(1, batch.max(1)),
+        pipeline_backend: matches!(cfg.active_backend.as_str(), "cuda" | "rocm")
+            && matches!(cfg.gpu.split_mode, SplitMode::None | SplitMode::Layer),
         type_k,
         type_v,
         flash_attn,
@@ -1521,6 +1528,16 @@ fn compute_buffer(
     peak
 }
 
+/// llama-graph.cpp::build_attn_inp_kq_mask reserves [KV cells per stream,
+/// tokens / streams, 1, streams]. Flash attention still needs this input;
+/// only its element type changes (f16 instead of f32). It is shared across
+/// attention layers, not multiplied by layer/head count or cache precision.
+fn attention_mask_bytes(kv_per_stream: u64, tokens: u64, flash_attn: bool) -> u64 {
+    kv_per_stream
+        .saturating_mul(tokens)
+        .saturating_mul(if flash_attn { 2 } else { 4 })
+}
+
 /// One model with its context: the main model or a draft model.
 struct ContextPlan<'a> {
     shape: &'a Shape,
@@ -1585,6 +1602,46 @@ fn context_memory(
     let any_gpu_layer = placement.layer_gpu.iter().any(|on| *on);
     let any_cpu_layer =
         placement.layer_gpu.iter().any(|on| !*on) || placement.largest_cpu_layer > 0;
+    // llama-context.cpp enables pipelining only for full layer offload without
+    // tensor overrides. ggml-backend.cpp keeps GGML_SCHED_MAX_COPIES (4) input
+    // tensors on both the originating host and each receiving GPU. Backends
+    // may disable pipelining when allocation or async/event support is absent.
+    let input_copies = if gpu
+        && launch.pipeline_backend
+        && gpu_devices > 1
+        && plan.ngl > plan.shape.n_layer as u64
+        && launch.args.kv_offload
+        && !plan.overrides.cpu_moe
+        && plan.overrides.n_cpu_moe == 0
+        && plan.overrides.n_cpu_ffn == 0
+    {
+        4
+    } else {
+        1
+    };
+    let attention_layers = (0..plan.shape.kv_layers)
+        .filter(|&il| plan.shape.k_dims[il] > 0 && plan.shape.recurrent_bytes[il] == 0)
+        .collect::<Vec<_>>();
+    let mask = if attention_layers.is_empty() {
+        0
+    } else {
+        attention_mask_bytes(
+            per_stream,
+            launch.ubatch.min(scenario.n_ctx),
+            scenario.flash_attn,
+        )
+        .saturating_mul(input_copies)
+    };
+    let mask_devices = if launch.args.kv_offload {
+        gpu_devices.min(
+            attention_layers
+                .iter()
+                .filter(|&&il| placement.layer_gpu[il])
+                .count() as u64,
+        )
+    } else {
+        0
+    };
     let buffer = |layers, output| {
         compute_buffer(
             plan.shape,
@@ -1602,8 +1659,8 @@ fn context_memory(
         .ubatch
         .saturating_mul(plan.shape.n_embd)
         .saturating_mul(4);
-    let cpu_compute =
-        buffer(any_cpu_layer, !placement.output_gpu).add(ResourceRange::exact(staging));
+    let cpu_compute = buffer(any_cpu_layer, !placement.output_gpu)
+        .add(ResourceRange::exact(staging.saturating_add(mask)));
     let mut ram = ResourceRange::exact(
         placement
             .cpu
@@ -1618,7 +1675,8 @@ fn context_memory(
         let mut gpu_compute = ResourceRange::new(
             device.min_bytes,
             device.max_bytes.saturating_mul(gpu_devices),
-        );
+        )
+        .add(ResourceRange::exact(mask.saturating_mul(mask_devices)));
         if launch.args.op_offload && placement.largest_cpu_layer > 0 {
             gpu_compute.max_bytes = gpu_compute
                 .max_bytes
@@ -2293,6 +2351,63 @@ mod tests {
     }
 
     #[test]
+    fn long_flash_contexts_reserve_host_and_device_attention_masks() {
+        let scratch = Scratch::new();
+        let (values, tensors) = plain("llama");
+        let path = scratch.write("long-context.gguf", &fixture::file(&values, &tensors));
+        let mut cfg = config(&path);
+        cfg.ctx_size = 262_144;
+        cfg.ubatch_size = 512;
+        let env = environment(GPU);
+        let base = estimate(&cfg, &env);
+        cfg.ctx_size *= 2;
+        let longer = estimate(&cfg, &env);
+        // F16 mask is 256 MiB per 256K context at 512 tokens, even with FA.
+        let mask = 256 * MIB;
+        assert_eq!(attention_mask_bytes(262_144, 512, true), mask);
+        assert_eq!(attention_mask_bytes(262_144, 512, false), mask * 2);
+        assert_eq!(
+            longer.ram.unwrap().min_bytes - base.ram.unwrap().min_bytes,
+            mask
+        );
+        assert_eq!(
+            longer.vram.unwrap().min_bytes - base.vram.unwrap().min_bytes,
+            longer.kv_bytes.unwrap() - base.kv_bytes.unwrap() + mask
+        );
+    }
+
+    #[test]
+    fn layer_pipelines_keep_four_mask_copies_on_host_and_each_gpu() {
+        let scratch = Scratch::new();
+        let (values, tensors) = plain("llama");
+        let path = scratch.write("pipeline.gguf", &fixture::file(&values, &tensors));
+        let env = environment(Accelerator::Gpu { devices: 2 });
+        for backend in ["cuda", "rocm"] {
+            let mut cfg = config(&path);
+            cfg.active_backend = backend.into();
+            cfg.ctx_size = 262_144;
+            cfg.ubatch_size = 512;
+            let full = estimate(&cfg, &env);
+            cfg.gpu.split_mode = SplitMode::Layer;
+            assert_eq!(estimate(&cfg, &env), full);
+            cfg.server_args = vec!["--no-kv-offload".into()];
+            let host = estimate(&cfg, &env);
+            let mask = 256 * MIB;
+            let kv = full.kv_bytes.unwrap();
+            assert_eq!(
+                full.vram.unwrap().min_bytes - host.vram.unwrap().min_bytes,
+                kv + 4 * mask * 2,
+                "{backend}"
+            );
+            assert_eq!(
+                host.ram.unwrap().min_bytes + 3 * mask,
+                full.ram.unwrap().min_bytes + kv,
+                "{backend}"
+            );
+        }
+    }
+
+    #[test]
     fn kv_cache_follows_context_cache_types_and_real_head_dimensions() {
         let scratch = Scratch::new();
         let (values, tensors) = plain("llama");
@@ -2682,12 +2797,13 @@ mod tests {
             assert!(estimate.ram.is_none() && estimate.vram.is_none());
         }
 
-        // Keeping the cache on the host moves exactly the cache.
+        // Host attention also removes the GPU's input-mask copy. The host
+        // already holds the mask in either case.
         let host_cache = with_args(&["-nkvo"]);
         let kv = reference.kv_bytes.unwrap();
         assert_eq!(
             reference.vram.unwrap().min_bytes - host_cache.vram.unwrap().min_bytes,
-            kv
+            kv + 4096 * 512 * 2
         );
         assert_eq!(
             host_cache.ram.unwrap().min_bytes - reference.ram.unwrap().min_bytes,
@@ -2873,17 +2989,18 @@ mod tests {
             assert_eq!(longer.kv_bytes, Some(8192 * per_cell));
             assert_eq!(
                 longer.vram.unwrap().min_bytes - base.vram.unwrap().min_bytes,
-                4096 * per_cell
+                4096 * per_cell + 4096 * 512 * 2
             );
             assert_eq!(longer.disk_bytes, base.disk_bytes);
             cfg.ctx_size /= 2;
             cfg.parallel = 2;
             let parallel = estimate(&cfg, &env);
-            // More sequences duplicate recurrent state, not the total KV capacity.
+            // More streams duplicate recurrent state but halve the per-stream
+            // attention mask. Total KV capacity stays the same.
             assert_eq!(parallel.kv_bytes, base.kv_bytes);
             assert_eq!(
-                parallel.vram.unwrap().min_bytes - base.vram.unwrap().min_bytes,
-                3 * 71_680
+                parallel.vram.unwrap().min_bytes + 4096 * 512 * 2,
+                base.vram.unwrap().min_bytes + 3 * 71_680 + 2048 * 512 * 2
             );
             cfg.parallel = 1;
             cfg.server_args = vec!["--no-kv-offload".into()];
@@ -2895,7 +3012,7 @@ mod tests {
             );
             assert_eq!(
                 base.vram.unwrap().min_bytes - cpu_cache.vram.unwrap().min_bytes,
-                caches
+                caches + 4096 * 512 * 2
             );
             cfg.server_args.clear();
             cfg.cache_type_k = "q8_0".into();

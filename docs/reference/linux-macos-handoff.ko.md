@@ -507,8 +507,10 @@ Linux에는 위 별도 패키지 데스크톱 검사가 있다.
 - [ ] 계정 기반 Linux 실기 흐름과 macOS GUI·Keychain·MCP·파일 처리 검사.
 - [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.
 - [ ] macOS 서명/공증 계정·CI secrets 구성 및 Gatekeeper 검증.
-- [ ] Windows 전용 release.yml을 검증된 Linux/macOS 아티팩트까지 게시하도록 확장. 파일명·체크섬 형식은 updater와 일치.
-- [ ] 검증 결과에 맞춰 README의 planned 표시와 설치 가이드를 정식 지원으로 갱신.
+- [x] release.yml에 Linux DEB/AppImage 빌드·설치 검사와 Windows/Linux 통합 체크섬 게시 경로 구현. 실제 새 릴리스 게시는 별도 확인 필요.
+- [ ] macOS 검증·서명 완료 후 release.yml에 macOS 게시 경로 추가.
+- [x] README·4개 언어 설치/개요·AioLM-Web에 Linux x86_64 설치 안내 반영. v0.2.0에는 Windows 파일만 있으므로 Linux 검증 아티팩트 경로와 제한을 명시.
+- [ ] Linux 공개 릴리스 파일 게시와 AioLM-Web 배포 후 실제 다운로드 경로 확인.
 
 실기 확인 없이 체크박스를 완료로 바꾸지 않는다. 실패는 재현 명령, 기대/실제 결과,
 OS/커널·GPU 드라이버·런타임 빌드·모델 해시로 기록하되 개인 경로·토큰·사용자 데이터는
@@ -522,3 +524,21 @@ OS/커널·GPU 드라이버·런타임 빌드·모델 해시로 기록하되 개
 - [Tauri macOS 서명](https://v2.tauri.app/distribute/sign/macos/)
 - [GitHub 호스팅 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 - [Tailwind 브라우저 요구사항](https://tailwindcss.com/docs/compatibility)
+
+
+## Linux 데스크톱 아이콘 등록
+
+개발 바이너리는 시스템 설치 항목이 없어 GNOME에서 기본 톱니바퀴로 보일 수 있다.
+`npm run tauri -- dev`가 Linux에서만 사용자 XDG 경로에 숨겨진 개발용 항목과
+아이콘을 등록한다. Wayland의 `aiolm` app_id와 `aiolm.desktop`,
+`StartupWMClass=aiolm`을 연결한다. 별도 임시 홈의 GNOME Wayland 세션에서
+실제 창이 해당 desktop 항목과 PNG 아이콘으로 연결되는 것을 확인했다.
+등록 전에 열렸던 창은 GNOME이 기존 연결을 캐시하므로, 현재 모델 작업을 마친 뒤
+앱을 다시 열어야 새 아이콘이 적용될 수 있다. 등록 자체는 모델을 중단하지 않는다.
+
+DEB에는 실행 항목과 아이콘이 이미 포함되어 있으며 설치 smoke에서 둘의 존재와
+식별자, desktop 문법을 검사한다. AppImage는 릴리스에 포함할
+`register-linux-desktop.py --appimage <파일>`로 명시적으로 등록한다.
+기존 AppImage 실행 항목은 개발 실행으로 덮어쓰지 않고, 도우미가 소유하지 않는
+항목도 보존한다. 실제 AppImage 추출·등록·제거 및 임시 경로 단위 검사를 통과했다.
+Windows/macOS 실행에는 Linux 등록을 적용하지 않는다.

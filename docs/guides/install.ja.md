@@ -42,6 +42,39 @@ AioLM — All-In-One LMは旧アプリとは別にインストールされます
 
 AioLMはデータを `%USERPROFILE%\.aiolm` に保存します。環境変数 `AIOLM_HOME` で別のフォルダーを指定することもできます。以前のAioLMのデータは起動時にこのフォルダーへ取り込まれ、管理ランタイムはコピーせずに移動されます。[データフォルダー](../reference/migration.md#data-folder)を参照してください。
 
-## Linux / macOS (予定)
+## Linux
 
-Linux/macOS の実環境検証は未完了です。ホストビルドは Linux で DEB/AppImage、macOS で APP/DMG を生成します。[検証手順](../reference/cross-platform-validation.md)を参照してください。パッケージ生成とは別に macOS の署名・公証とインストール検証が必要です。DEB/DMG 更新は検証済みファイルをシステムの画面で開き、ユーザーが完了します。AppImage・手動インストールはリリースページで更新します。
+Ubuntu 24.04 以降、x86_64 が対象です。アプリメニューとアイコンの統合には DEB を推奨します。AppImage はポータブル形式です。ARM64 と NVIDIA DGX は今回の検証対象外です。
+
+同じ[リリース](https://github.com/aiolm/AioLM/releases/latest)から DEB または AppImage と `checksums.txt` を取得してください。**v0.2.0 は Windows ファイルのみです。** Linux ファイルの公開前は、GitHub にログインし、成功した [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 実行の Artifacts から `desktop-packages-ubuntu-24.04` を取得できます。保存期限が切れている場合は[ソースビルド](development.md)を利用してください。検証ビルドは正式リリースとは異なります。
+
+チェックサムファイルの該当項目と SHA-256 値を比較してください。インストールするバージョンの DEB だけを置いたフォルダーで実行します:
+
+```bash
+sha256sum ./AioLM_*_amd64.deb
+sudo apt install ./AioLM_*_amd64.deb
+```
+
+インストール後、アプリメニューから AioLM を起動してください。DEB はランチャーとアイコンを登録します。`sudo apt remove aio-lm` で削除しても `~/.aiolm` または `AIOLM_HOME` のデータは残ります。
+
+AppImage を常用するフォルダーに置き、チェックサムを確認してから実行権限を付けてください。Ubuntu 24.04 以降で FUSE 2 がない場合は `libfuse2t64` をインストールします:
+
+```bash
+sudo apt install libfuse2t64
+chmod +x ./AioLM_*.AppImage
+./AioLM_*.AppImage
+```
+
+AppImage の実行だけではアプリメニューに登録されません。同じリリースから `register-linux-desktop.py` を取得してください。検証ビルドでは[同じソースリビジョンのヘルパー](../../scripts/register-linux-desktop.py)を利用します。Python 3 が必要です。ヘルパーもリリースのチェックサムで検証してから登録します:
+
+```bash
+python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
+```
+
+アイコンとランチャーを XDG ユーザーデータフォルダーに登録します。AppImage 自体は移動しません。ファイルの場所を変更したら再登録してください。DEB に切り替える前に `python3 register-linux-desktop.py --remove` でローカル登録を削除してください。開発実行では `npm run tauri -- dev` がアイコンを自動登録します。[開発ガイド](development.md)を参照してください。
+
+DEB 更新は検証済みファイルをシステムのインストール画面で開き、ユーザーが完了します。AppImage はリリースページから更新し、新しいパスを登録してください。GPU アクセラレーションにはドライバーと互換性のある llama.cpp ランタイムが必要です。
+
+## macOS (予定)
+
+macOS の署名、公証、実環境検証は別途必要です。[検証手順](../reference/cross-platform-validation.md)を参照してください。

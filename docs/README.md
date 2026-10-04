@@ -7,7 +7,7 @@ Guides, technical reference, and policies for the current AioLM implementation.
 | Topic | English | 한국어 | 日本語 | 中文 |
 | --- | --- | --- | --- | --- |
 | Project overview | [English](../README.md) | [한국어](guides/overview.ko.md) | [日本語](guides/overview.ja.md) | [中文](guides/overview.zh.md) |
-| Installation | [English](guides/install.md) | [한국어](guides/install.ko.md) | [日本語](guides/install.ja.md) | [中文](guides/install.zh.md) |
+| Installation (Windows / Linux) | [English](guides/install.md) | [한국어](guides/install.ko.md) | [日本語](guides/install.ja.md) | [中文](guides/install.zh.md) |
 | Command-line interface | [English](guides/cli.md) | [한국어](guides/cli.ko.md) | [日本語](guides/cli.ja.md) | [中文](guides/cli.zh.md) |
 | Development | [English](guides/development.md) | [한국어](guides/development.ko.md) | [日本語](guides/development.ja.md) | [中文](guides/development.zh.md) |
 | API server and model lifecycle | [English](guides/local-api.md) | — | — | — |

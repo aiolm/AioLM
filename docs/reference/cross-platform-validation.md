@@ -1,6 +1,10 @@
 # Cross-platform validation
 
-The published release remains Windows x64 until native acceptance is complete.
+The v0.2.0 public release contains Windows x64 assets only. Linux x86_64
+(Ubuntu 24.04+) validation packages are available through the desktop-packages
+workflow; see the [Linux installation guide](../guides/install.md#linux). The
+release workflow now builds Linux DEB/AppImage alongside Windows NSIS/MSI for
+new releases. macOS and Linux ARM64/DGX acceptance remain separate gates.
 Linux and macOS have host packaging and native CI gates; source changes and a
 passing Windows suite alone are not evidence of support on another OS.
 

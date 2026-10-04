@@ -4,7 +4,7 @@
 
 [ドキュメント一覧](../README.md) — インストール、開発、コード構成、プロジェクトポリシー。
 
-AioLM（All-in-One LM）— `llama.cpp` 用 Windows デスクトップランタイムマネージャー。`llama-server` を利用した Tauri v2 デスクトップ UI で、モデル、ランタイム、チャット、ベンチマークを管理します。
+AioLM（All-in-One LM）— `llama.cpp` 用 Windows/Linux デスクトップランタイムマネージャー。`llama-server` を利用した Tauri v2 デスクトップ UI で、モデル、ランタイム、チャット、ベンチマークを管理します。
 
 モデルのロードと API サーバーの起動は独立しています。モデルをロードすると
 アプリ内チャットで利用でき、外部アプリから接続する場合はサイドバーの
@@ -26,9 +26,13 @@ API サーバーは維持され、API を停止してもモデルとアプリ内
 
 ## プラットフォーム対応
 
-現在は Windows x64 をサポートしています。**Linux（NVIDIA DGX を含む）および macOS 対応を予定**しています。検証用ビルドは Linux で DEB/AppImage、macOS で APP/DMG、Windows で NSIS/MSI を生成します。[プラットフォーム検証](../reference/cross-platform-validation.md)を参照してください。Windows インストーラーは GitHub ホスト型 CI でビルドし、未署名のファイルと SHA-256 チェックサムを配布します。
+Windows x64 と Linux x86_64（Ubuntu 24.04 以降）のビルドを利用できます。Linux は DEB/AppImage、Windows は NSIS/MSI 形式です。**v0.2.0 の公開リリースは Windows ファイルのみです。** Linux ファイルの公開前は[インストールガイド](install.ja.md#linux)から検証ビルドを入手してください。macOS と Linux ARM64/NVIDIA DGX の検証は未完了です。[検証手順](../reference/cross-platform-validation.md)を参照してください。リリースファイルは未署名で SHA-256 チェックサムが付属します。
 
 ## ダウンロード
+
+[Linux: DEB / AppImage](install.ja.md#linux)
+
+Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "irm https://github.com/aiolm/AioLM/releases/latest/download/install.ps1 | iex"

@@ -52,7 +52,7 @@
     "build:cli": "node scripts/build-cli.mjs",
     "package:tauri": "npm run build:cli && npm run build && node scripts/package-tauri.mjs",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri.mjs",
     "test:i18n": "node --experimental-strip-types tests/direct/test-i18n.ts",
     "test:ui": "npm run build:contracts && vitest run"
   },

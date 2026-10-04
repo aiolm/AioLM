@@ -37,6 +37,13 @@ try {
     try {
       run("sudo", ["apt-get", "install", "-y", deb]);
       installedCli("/usr/bin");
+      const desktop = "/usr/share/applications/AioLM.desktop";
+      const entry = readFileSync(desktop, "utf8");
+      assert.match(entry, /^Exec=aiolm$/m);
+      assert.match(entry, /^StartupWMClass=aiolm$/m);
+      assert.match(entry, /^Icon=aiolm$/m);
+      assert.ok(existsSync("/usr/share/icons/hicolor/128x128/apps/aiolm.png"));
+      run("desktop-file-validate", [desktop]);
       run("sudo", ["dpkg", "-i", deb]);
       installedCli("/usr/bin");
     } catch (error) {
