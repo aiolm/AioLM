@@ -153,3 +153,12 @@ work is finished to apply the new identity. Registration itself does not stop mo
 To remove this checkout's local registration before using an installed DEB, run
 `python3 scripts/register-linux-desktop.py --remove`. The helper refuses to
 replace or remove desktop entries it does not own.
+
+## macOS packages and native UI verification
+
+On macOS, `npm run package:tauri` builds APP/DMG for the host architecture.
+Both `aiolm` and the auxiliary `aiolm-cli` are in `AioLM.app/Contents/MacOS`.
+The desktop bundle declares macOS 13.3 as its minimum. Hosted Apple Silicon and
+Intel acceptance, debug-only embedded WebDriver, isolated test homes and pending
+signing requirements are described in [macOS validation](../reference/macos-validation.md).
+Enabling `macos-ui-smoke` does not register automation in release builds.

@@ -224,7 +224,7 @@ oversized lines and file-error recovery. Actual CPU requests after the starting
 CLI exited and after restart produced new logs; stop reclaimed both processes.
 
 MCP native tool schemas are normalized from `inputSchema` for UI/chat consumers.
-Approval descriptions preserve UTF-8 boundaries. Linux approval processes are
+Approval descriptions preserve UTF-8 boundaries. Linux and macOS approval processes are
 owned by their call so cancellation and timeout also close the dialog.
 The CLI command `runtime select <backend> <build>` validates and saves the pair
 together, including first-run configuration. Invalid selections preserve saved
@@ -271,17 +271,20 @@ AIOLM_RUNTIME_INSTALL=1 AIOLM_RUNTIME_BACKENDS=cpu,vulkan,rocm \
 cargo test --locked --manifest-path src-tauri/Cargo.toml --test runtime_install -- --ignored --nocapture --test-threads=1
 ```
 
-On macOS, select `cpu,metal` on Apple Silicon, or `cpu` for the upstream Intel
-archive. The cancellation case uses CPU so it can run on every desktop host.
+On macOS, select `cpu,metal` on an Apple Silicon Mac with an actual Metal device,
+or `cpu` for the upstream Intel archive or a hosted runner without a GPU. The
+cancellation case uses CPU so it can run on every desktop host.
 
 ## macOS work from Linux
 
 Linux can drive the GitHub macOS jobs, inspect logs/artifacts, edit shared code and
 review package metadata. The hosted runners execute actual macOS code, including
 both architecture branches; Linux cross-compilation alone cannot establish that.
-The test workflow does not currently automate the desktop WebView or native dialogs.
-[WebdriverIO's Tauri embedded driver](https://v2.tauri.app/develop/tests/webdriver/)
-can provide desktop E2E coverage on macOS as well as Linux and Windows.
+The native workflow now uses an opt-in debug WebDriver to automate actual
+WKWebView onboarding, settings and window lifecycle on both macOS architectures.
+The package workflow validates installed DMGs, real CPU inference, Keychain and
+Cocoa approval cancellation. See [macOS validation](macos-validation.md) for the
+exact coverage, candidate baseline and distribution prerequisites.
 
 Check Metal device availability before describing any hosted run as a Metal test.
 If the hosted environment does not expose a usable GPU, use an Apple Silicon Mac

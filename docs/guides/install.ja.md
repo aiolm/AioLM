@@ -75,6 +75,6 @@ python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
 
 DEB 更新は検証済みファイルをシステムのインストール画面で開き、ユーザーが完了します。AppImage はリリースページから更新し、新しいパスを登録してください。GPU アクセラレーションにはドライバーと互換性のある llama.cpp ランタイムが必要です。
 
-## macOS (予定)
+## macOS 検証ビルド
 
-macOS の署名、公証、実環境検証は別途必要です。[検証手順](../reference/cross-platform-validation.md)を参照してください。
+Apple Silicon・Intel 別の DMG は macOS Ventura 13.3 以降を対象とします。GitHub Actions の一時的な検証アーティファクトで提供し、v0.2.1 の公開リリースに macOS インストーラーは含まれません。アーキテクチャと SHA-256 を確認し、`AioLM.app` を Applications にコピーしてください。正式配布には Developer ID 署名、公証、残りの実機検証が必要です。取得方法と自動検証の範囲・制限は [macOS 検証](../reference/macos-validation.md)を参照してください。

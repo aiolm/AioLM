@@ -93,6 +93,6 @@ This copies the icon and registers a launcher in your XDG user data directory; i
 
 DEB updates open the verified installer in the system package interface for you to finish. Update AppImage from the release page and register its new path. GPU drivers and a compatible llama.cpp runtime are required for GPU acceleration.
 
-## macOS (planned)
+## macOS validation builds
 
-macOS signing, notarization and native acceptance remain separate work. See [cross-platform validation](../reference/cross-platform-validation.md).
+Separate Apple Silicon and Intel DMGs target macOS Ventura 13.3+. They are available as temporary GitHub Actions validation artifacts; v0.2.1 does not publish macOS installers. Verify the architecture and SHA-256 before copying `AioLM.app` into Applications. Developer ID signing, notarization and remaining device checks are still required for formal distribution. See [macOS validation](../reference/macos-validation.md) for artifact retrieval, automated coverage and limitations.

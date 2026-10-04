@@ -75,6 +75,6 @@ python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
 
 DEB 更新会在系统安装界面打开已验证文件，由用户完成安装。AppImage 通过发布页面更新并重新注册新路径。GPU 加速需要相应驱动和兼容的 llama.cpp 运行时。
 
-## macOS（计划中）
+## macOS 验证构建
 
-macOS 签名、公证及实际环境验证仍需单独完成。参见[跨平台验证](../reference/cross-platform-validation.md)。
+Apple Silicon 和 Intel 分别提供面向 macOS Ventura 13.3 及以上版本的 DMG，通过 GitHub Actions 的临时验证产物获取；v0.2.1 公开发布尚不包含 macOS 安装包。确认架构和 SHA-256 后，将 `AioLM.app` 复制到 Applications。正式分发仍需 Developer ID 签名、公证及其余实机验证。获取方式、自动验证范围及限制参见 [macOS 验证](../reference/macos-validation.md)。
