@@ -2,7 +2,7 @@
 // Install only on a disposable hosted Mac. Preserve the synthetic user's data
 // across a real DMG copy/replacement and remove only the app this run installed.
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -29,25 +29,40 @@ function removeInstalledApp() {
   else rmSync(app, { recursive: true, force: true });
   installed = false;
 }
-async function launchInstalledGui(env, probe) {
-  const child = spawn(join(app, "Contents/MacOS/aiolm"), [], { env, stdio: "ignore" });
-  let error;
-  child.on("error", cause => { error = cause; });
+function installedGuiPids() {
+  const executable = join(app, "Contents/MacOS/aiolm");
+  const pattern = "^" + executable.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+  return spawnSync("/usr/bin/pgrep", ["-f", pattern], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map(Number);
+}
+// Open the installed bundle through LaunchServices, as Finder does, and leave
+// through the standard quit request that the Dock's Quit item sends.
+async function launchInstalledGui(appEnv, probe, terminate) {
+  assert.deepEqual(installedGuiPids(), [], "no installed app may already run");
+  // `open` hands its own environment to the app; use launchd's, as Finder does.
+  const launchdEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+  for (const key of ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR"]) if (process.env[key]) launchdEnv[key] = process.env[key];
+  run("/usr/bin/open", ["-a", app, ...Object.entries(appEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`])], { env: launchdEnv });
+  let pid;
+  const alive = () => spawnSync("/bin/kill", ["-0", String(pid)]).status === 0;
   try {
     const deadline = Date.now() + 30_000;
-    while (run(probe, [String(child.pid)]).trim() !== "visible") {
-      assert.ok(!error && child.exitCode === null && Date.now() < deadline, `installed GUI did not show its window: ${error ?? child.exitCode}`);
+    while (installedGuiPids().length !== 1) {
+      assert.ok(Date.now() < deadline, "LaunchServices did not start the installed GUI");
+      await delay(200);
+    }
+    [pid] = installedGuiPids();
+    while (run(probe, [String(pid)]).trim() !== "visible") {
+      assert.ok(alive() && Date.now() < deadline, "installed GUI did not show its window");
+      await delay(200);
+    }
+    run(terminate, [String(pid)]);
+    const quitDeadline = Date.now() + 20_000;
+    while (alive()) {
+      assert.ok(Date.now() < quitDeadline, "installed GUI did not quit on request");
       await delay(200);
     }
   } finally {
-    if (child.exitCode === null) {
-      child.kill("SIGTERM");
-      await Promise.race([new Promise(resolve => child.once("exit", resolve)), delay(5000)]);
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-        await new Promise(resolve => child.once("exit", resolve));
-      }
-    }
+    if (pid !== undefined && alive()) spawnSync("/bin/kill", ["-KILL", String(pid)]);
   }
 }
 
@@ -76,15 +91,18 @@ try {
 
   const home = join(root, "synthetic home 한글");
   mkdirSync(home);
-  const env = { ...process.env };
-  for (const name of Object.keys(env)) if (/^(AIOLM_|LLAMA_BOARD_)/i.test(name)) delete env[name];
-  Object.assign(env, {
+  const appEnv = {
     HOME: home, USERPROFILE: home, APPDATA: join(home, "roaming"), LOCALAPPDATA: join(home, "local"),
     XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"),
     XDG_CACHE_HOME: join(home, "cache"), AIOLM_HOME: join(home, "aiolm"),
-  });
+  };
+  const env = { ...process.env };
+  for (const name of Object.keys(env)) if (/^(AIOLM_|LLAMA_BOARD_)/i.test(name)) delete env[name];
+  Object.assign(env, appEnv);
   const probe = join(root, "window-probe");
   run("swiftc", ["scripts/macos-window-probe.swift", "-o", probe]);
+  const terminate = join(root, "terminate-app");
+  run("swiftc", ["scripts/macos-terminate-app.swift", "-o", terminate]);
   const userApplications = join(home, "Applications");
   mkdirSync(userApplications);
   const cli = (...args) => JSON.parse(run(join(app, "Contents/MacOS/aiolm-cli"), args, { env }));
@@ -107,13 +125,13 @@ try {
         assert.equal(cli("config", "get").ctx_size, 8192, "app replacement must retain user settings");
       }
       assert.equal(cli("server", "status").state, "stopped");
-      await launchInstalledGui(env, probe);
+      await launchInstalledGui(appEnv, probe, terminate);
     }
     removeInstalledApp();
     assert.ok(!existsSync(app));
   }
   assert.equal(JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).ctx_size, 8192);
-  console.log(`macOS ${process.arch}: DMG metadata, GUI/CLI architecture, system/user Applications install, real installed GUI launch, replacement, settings persistence and removal passed.`);
+  console.log(`macOS ${process.arch}: DMG metadata, GUI/CLI architecture, system/user Applications install, LaunchServices GUI launch and quit, replacement, settings persistence and removal passed.`);
 } finally {
   if (installed) removeInstalledApp();
   if (mounted) run("/usr/bin/hdiutil", ["detach", mount]);
