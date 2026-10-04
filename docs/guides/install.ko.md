@@ -50,7 +50,7 @@ AioLM은 데이터를 `%USERPROFILE%\.aiolm`에 보관하며, `AIOLM_HOME` 환�
 
 Ubuntu 24.04 이상, x86_64 기준입니다. 앱 메뉴·아이콘 통합에는 DEB를 권장하며, AppImage는 이동식 실행 파일입니다. ARM64 및 NVIDIA DGX는 이번 검증 범위에 포함되지 않습니다.
 
-같은 [릴리스](https://github.com/aiolm/AioLM/releases/latest)에서 DEB 또는 AppImage와 `checksums.txt`를 받으세요. **v0.2.0에는 Windows 파일만 있습니다.** Linux 파일이 공개되기 전에는 GitHub에 로그인하여 성공한 [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 실행의 Artifacts에서 `desktop-packages-ubuntu-24.04`를 받으세요. 보관 기간이 지나 파일이 없다면 [소스 빌드 안내](development.md)를 이용하세요. 검증 빌드는 정식 릴리스와 구분됩니다.
+같은 [릴리스](https://github.com/aiolm/AioLM/releases/latest)에서 DEB 또는 AppImage와 `checksums.txt`를 받으세요. **v0.3.0부터 Linux 파일도 제공합니다.** 정식 릴리스 이전의 검증 빌드가 필요하면 GitHub에 로그인하여 성공한 [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) 실행의 Artifacts에서 `desktop-packages-ubuntu-24.04`를 받으세요. 보관 기간이 지나 파일이 없다면 [소스 빌드 안내](development.md)를 이용하세요. 검증 빌드는 정식 릴리스와 구분됩니다.
 
 다운로드한 체크섬 파일의 해당 항목과 SHA-256 값을 비교하세요. 설치할 버전의 DEB만 있는 폴더에서 실행합니다:
 

@@ -64,7 +64,7 @@ Open **Settings → Apps → Installed apps → AioLM → Uninstall**, or use **
 
 Ubuntu 24.04 or newer, x86_64. DEB is recommended for desktop integration; AppImage is portable. ARM64 and NVIDIA DGX systems are not covered by this validation.
 
-Download the DEB or AppImage and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). **v0.2.0 has Windows assets only.** Until Linux assets are published, sign in to GitHub, open a successful [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) run, and download `desktop-packages-ubuntu-24.04` from Artifacts. Artifacts expire; if unavailable, use the [source build instructions](development.md). Validation builds are not published releases.
+Download the DEB or AppImage and `checksums.txt` from the same [release](https://github.com/aiolm/AioLM/releases/latest). **Linux assets are included starting with v0.3.0.** For pre-release validation builds, sign in to GitHub, open a successful [Validate desktop packages](https://github.com/aiolm/AioLM/actions/workflows/desktop-packages.yml) run, and download `desktop-packages-ubuntu-24.04` from Artifacts. Artifacts expire; if unavailable, use the [source build instructions](development.md). Validation builds are not published releases.
 
 Compare the SHA-256 value with the corresponding entry in the downloaded checksum file. In the directory containing only the DEB version you want:
 
