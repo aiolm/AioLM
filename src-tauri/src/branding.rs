@@ -196,6 +196,18 @@ pub(crate) fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
             })?;
             let mut output = File::create(&destination).map_err(|e| e.to_string())?;
             let bytes = std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                // Runtime tools must remain executable after importing an old
+                // installation or moving data across filesystems. Keep private
+                // files private as well, without copying special privilege bits.
+                output
+                    .set_permissions(fs::Permissions::from_mode(
+                        metadata.permissions().mode() & 0o777,
+                    ))
+                    .map_err(|e| e.to_string())?;
+            }
             // Runtime verification records are keyed by file modification times.
             if let Ok(modified) = metadata.modified() {
                 output.set_modified(modified).map_err(|e| e.to_string())?;
@@ -395,6 +407,36 @@ mod tests {
             .unwrap()
             .contains("aiolm/models"));
         assert!(!new.join("headless-state.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_preserves_runtime_execution_and_private_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = fixture();
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(old.join("runtimes")).unwrap();
+        let tool = old.join("runtimes/llama-server");
+        fs::write(&tool, "#!/bin/sh\nprintf migrated").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o750)).unwrap();
+        fs::write(old.join("config.json"), r#"{"ctx_size":8192}"#).unwrap();
+        fs::set_permissions(old.join("config.json"), fs::Permissions::from_mode(0o600)).unwrap();
+
+        copy_root(&old, &new, &[], true).unwrap();
+
+        let output = std::process::Command::new(new.join("runtimes/llama-server"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"migrated");
+        for (path, mode) in [("runtimes/llama-server", 0o750), ("config.json", 0o600)] {
+            assert_eq!(
+                fs::metadata(new.join(path)).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
