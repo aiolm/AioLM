@@ -94,7 +94,7 @@ jobs:
         timeout-minutes: 15
         env:
           AIOLM_NATIVE_CPU: "1"
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu -- --ignored --nocapture --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: Windows Credential Manager roundtrip
         if: success() || failure()
         env:
