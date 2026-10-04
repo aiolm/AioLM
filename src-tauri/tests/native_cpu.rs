@@ -180,6 +180,9 @@ fn real_cli_lifecycle(backend: &str) {
     home.cli(&["config", "set", "ctx_size", "2048"]);
     if backend == "metal" {
         home.cli(&["config", "set", "ngl", "999"]);
+        // Recent llama.cpp releases hide backend layer-placement messages at
+        // their default verbosity. Require explicit GPU evidence in this test.
+        home.cli(&["config", "set", "server_args", r#"["-lv","5"]"#]);
     }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
