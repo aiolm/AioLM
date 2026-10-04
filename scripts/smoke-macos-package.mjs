@@ -41,7 +41,8 @@ async function launchInstalledGui(appEnv, probe, terminate) {
   // `open` hands its own environment to the app; use launchd's, as Finder does.
   const launchdEnv = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
   for (const key of ["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR"]) if (process.env[key]) launchdEnv[key] = process.env[key];
-  run("/usr/bin/open", ["-a", app, ...Object.entries(appEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`])], { env: launchdEnv });
+  const output = join(root, "installed-gui.log");
+  run("/usr/bin/open", ["-a", app, "--stdout", output, "--stderr", output, ...Object.entries(appEnv).flatMap(([key, value]) => ["--env", `${key}=${value}`])], { env: launchdEnv });
   let pid;
   const alive = () => spawnSync("/bin/kill", ["-0", String(pid)]).status === 0;
   try {
@@ -61,6 +62,20 @@ async function launchInstalledGui(appEnv, probe, terminate) {
       assert.ok(Date.now() < quitDeadline, "installed GUI did not quit on request");
       await delay(200);
     }
+  } catch (error) {
+    // Keep what LaunchServices, code signing and the app itself reported.
+    const report = (program, args) => {
+      const result = spawnSync(program, args, { encoding: "utf8", timeout: 60_000 });
+      return `$ ${program} ${args.join(" ")}\n${result.stdout}${result.stderr}`;
+    };
+    console.error([
+      report("/bin/ps", ["-axo", "pid,ppid,stat,command"]).split("\n").filter(line => /aiolm|AioLM|^\$ /.test(line)).join("\n"),
+      existsSync(output) ? `app output:\n${readFileSync(output, "utf8").slice(-8000)}` : "app output: (none)",
+      report("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=4", app]),
+      report("/usr/bin/codesign", ["--display", "--verbose=4", app]),
+      report("/usr/bin/log", ["show", "--last", "3m", "--style", "compact", "--predicate", 'eventMessage CONTAINS[c] "aiolm" OR process CONTAINS[c] "aiolm"']).slice(-12000),
+    ].join("\n\n"));
+    throw error;
   } finally {
     if (pid !== undefined && alive()) spawnSync("/bin/kill", ["-KILL", String(pid)]);
   }
