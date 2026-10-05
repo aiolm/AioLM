@@ -115,7 +115,9 @@ fn real_cpu_cli_lifecycle() {
     real_cli_lifecycle("cpu", Install::Catalog);
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+// Apple silicon installs upstream's archive; Intel Macs install AioLM's
+// published Metal bundle through the same catalog call.
+#[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires an actual Metal device and downloads a public model; set AIOLM_NATIVE_METAL=1"]
 fn real_metal_cli_lifecycle() {
@@ -157,6 +159,11 @@ fn real_cli_lifecycle(backend: &str, install: Install) {
     if let Some(path) = std::env::var_os("AIOLM_NATIVE_RELEASES") {
         runtime::preload_release_catalog(&std::fs::read(path).expect("public release catalog"))
             .expect("bounded public release metadata");
+    }
+    #[cfg(feature = "test-fixtures")]
+    if let Some(path) = std::env::var_os("AIOLM_NATIVE_PUBLISHED") {
+        runtime::preload_published_runtimes(&std::fs::read(path).expect("AioLM releases"))
+            .expect("bounded AioLM release metadata");
     }
     #[cfg(feature = "test-fixtures")]
     if let Some(path) = std::env::var_os("AIOLM_NATIVE_PULL_REQUEST") {

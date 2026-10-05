@@ -4112,7 +4112,32 @@ fn newest_published_runtime<'a>(
         .map(|(_, build, asset)| (build, asset))
 }
 
+/// AioLM release listing fetched by a live acceptance job with its scoped
+/// token, so the shared anonymous API limit cannot fail the check.
+#[cfg(feature = "test-fixtures")]
+static PRELOADED_PUBLISHED_RUNTIMES: OnceLock<String> = OnceLock::new();
+
+/// Prime live acceptance of AioLM-published runtimes. Only the release lookup
+/// is replaced; the download, digest and bundle verification are unchanged.
+#[cfg(feature = "test-fixtures")]
+pub fn preload_published_runtimes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_GITHUB_RESPONSE_BYTES {
+        return Err("GitHub API response exceeds the 2 MiB limit".into());
+    }
+    let raw = String::from_utf8(bytes.to_vec())
+        .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
+    serde_json::from_str::<Vec<Rel>>(&raw)
+        .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
+    PRELOADED_PUBLISHED_RUNTIMES
+        .set(raw)
+        .map_err(|_| "AioLM runtime releases were already preloaded".to_string())
+}
+
 async fn latest_published_runtime(backend: &str) -> Result<LatestInfo, String> {
+    #[cfg(feature = "test-fixtures")]
+    if let Some(raw) = PRELOADED_PUBLISHED_RUNTIMES.get() {
+        return published_runtime_from(raw, backend);
+    }
     let response = http()
         .get(format!(
             "https://api.github.com/repos/{PR_ARTIFACT_REPOSITORY}/releases?per_page=30"
@@ -4128,7 +4153,11 @@ async fn latest_published_runtime(backend: &str) -> Result<LatestInfo, String> {
             api_error(status, &raw)
         ));
     }
-    let releases: Vec<Rel> = serde_json::from_str(&raw)
+    published_runtime_from(&raw, backend)
+}
+
+fn published_runtime_from(raw: &str, backend: &str) -> Result<LatestInfo, String> {
+    let releases: Vec<Rel> = serde_json::from_str(raw)
         .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
     let (build, asset) =
         newest_published_runtime(&releases, backend, release_platform(), bundle_architecture())
