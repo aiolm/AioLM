@@ -72,7 +72,7 @@ Apple Silicon performance, memory limits or driver behavior.
 
 With `source_build=true`, the package workflow also builds merged llama.cpp
 PR #29903 at its merged head commit with the runner's Xcode/CMake toolchain:
-CPU and Metal on both architectures. The job primes only the
+CPU on both architectures and Metal on Apple Silicon. The job primes only the
 PR lookup with its scoped token; the source archive, its commit check, CMake
 build, staged preflight, GPU verification and CLI lifecycle use the normal path.
 
@@ -130,53 +130,36 @@ at `d25192b` passed both DMG jobs and every source build: PR #29903 at
 its port on stop. Apple Silicon builds took about 25-30 minutes and Intel about 16.
 Installed DMG apps in system and user Applications were opened through
 LaunchServices and quit through the standard request on both architectures.
-Hosted Intel runners also expose an Apple Paravirtual Metal device. AioLM still
-lets an Intel Mac choose a Metal PR build, although its catalog and
-recommendations treat Intel Metal as unsupported. At `9a9f458`,
+Hosted Intel runners also expose an Apple Paravirtual Metal device. At `9a9f458`,
 [run 37231505962](https://github.com/aiolm/AioLM/actions/runs/37231505962) again
 passed both DMG jobs and the Apple Silicon CPU/Metal and Intel CPU source builds,
 and all five [native CI jobs](https://github.com/aiolm/AioLM/actions/runs/37229307609)
-passed. Its Intel Metal build compiled and passed the staged preflight, but every
-later probe, then limited to 30 seconds, timed out during Metal initialization.
-A diagnostic build measured cold initialization at 32-35 seconds for each new
-executable path, with or without a precompiled Metal library, and 0.2 seconds
-once cached. After the probe budget became 90 seconds,
-[run 37271921406](https://github.com/aiolm/AioLM/actions/runs/37271921406) at
-`96e0f63` passed all six jobs. The Intel Metal source build listed `MTL0` in
-34 seconds, passed GPU verification, offloaded 25/25 layers at start and restart,
-answered over SSE and released its port; the
-[native CI](https://github.com/aiolm/AioLM/actions/runs/37271928250) also passed.
+passed.
 
-## Intel Mac Metal runtime
+A diagnostic build measured cold Metal initialization at 32-35 seconds on that
+Intel device for each new executable path, with or without a precompiled Metal
+library, and 0.2 seconds once cached; hosted Apple Silicon took about 20 seconds.
+Because activation renames the staged runtime, the first probe after an install
+is always cold, so macOS probes now allow 90 seconds.
 
-Upstream x64 releases disable Metal, so AioLM provides that runtime itself:
+## Intel Mac Metal is not supported
+
+Upstream's x64 macOS release disables Metal, and AioLM cannot verify accuracy,
+speed or memory on physical AMD or Intel Mac GPUs. Intel Macs therefore use the
+CPU runtime:
 
 - Intel Macs detect their GPUs from `system_profiler SPDisplaysDataType -json`
-  (vendor, model, dedicated or shared memory) and recommend Metal for a detected
-  GPU. Native CI requires this on the hosted Intel runner.
-- The [Metal runtime workflow](../../.github/workflows/macos-metal-runtime.yml)
-  builds the newest (or a requested) `bNNNN` tag from the official repository
-  with AioLM's source builder on an Intel runner. A source archive has no Git
-  history, so the release number and commit are pinned in llama.cpp's build
-  information, and the build is refused unless the server reports them. A second
-  runner installs the exported bundle and runs GPU verification, start/restart
-  SSE inference with layer offloading and stop.
-- Dispatched from `main` with `publish=true`, it publishes
-  `aiolm-bNNNN-metal-macos-x64.zip` as the prerelease
-  `runtime-bNNNN-metal-macos-x64` after the `pr-runtime-publish` approval.
-  Pull requests that change the workflow only build and verify.
-- The app's Metal catalog on Intel Macs installs the newest such release through
-  the verified bundle path: GitHub's SHA-256 digest, file manifest, backend and
-  build, staged preflight and activation. Until a release is published, the row
-  explains that none exists and a PR can still be built for Metal from source.
+  (vendor, model, dedicated or shared memory) for the device profile, but Metal
+  is never recommended there, including for a virtual Apple GPU. Native CI
+  requires Metal to be recommended on Apple Silicon and unsupported on Intel.
+- The catalog offers no Metal runtime for Intel Macs, and Metal PR source builds
+  are refused before any source is downloaded.
 
-[Run 37279602840](https://github.com/aiolm/AioLM/actions/runs/37279602840) built
-`b11406` (`8216c84`). The installed bundle reported build 11406, commit
-`8216c8462`, listed `MTL0`, offloaded 25/25 layers at start and restart, answered
-over SSE and released its port. Its [native CI](https://github.com/aiolm/AioLM/actions/runs/37279602834)
-detected the hosted Intel GPU and recommended Metal. No runtime release has been
-published yet; that requires this branch on `main` and the approval. Physical
-AMD and Intel GPUs remain unverified.
+During this audit an Intel Metal PR build did run on the hosted paravirtual GPU
+([run 37271921406](https://github.com/aiolm/AioLM/actions/runs/37271921406)), and an
+AioLM-built release bundle and publishing workflow were prototyped and then
+removed unpublished. That virtual-device result is not evidence for physical
+Intel Mac GPUs.
 
 ## Distribution and remaining device checks
 
