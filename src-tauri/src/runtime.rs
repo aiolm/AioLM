@@ -34,11 +34,13 @@ const MAX_PROBE_OUTPUT: usize = 256 * 1024;
 /// the toolchain printed, never the banner it started with.
 const MAX_BUILD_LOG_TAIL: usize = 256 * 1024;
 const MAX_BUILD_DETAIL_CHARS: usize = 4096;
-// macOS CPU archives also contain Metal. Cold device/backend initialization
-// exceeded eight seconds in native acceptance, even after installation passed.
+// macOS CPU archives also contain Metal. Metal caches its initialization per
+// executable path, so the first probe after activation (which renames the
+// staged runtime) starts cold. That took about 20 seconds on hosted Apple
+// silicon and 32-35 seconds on hosted Intel, then 0.2 seconds once cached.
 // Keep interactive probes bounded while allowing that initialization to finish.
 #[cfg(target_os = "macos")]
-const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
 #[cfg(not(target_os = "macos"))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 /// The staged preflight is the very first execution of a just-extracted
