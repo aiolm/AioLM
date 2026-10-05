@@ -495,9 +495,10 @@ Ventura 13.3은 패키지 최소 버전 정책이며 호스팅 검증 OS는 macO
 - 선언한 최소 macOS 13.3에서의 실행 및 WebKit 호환성 확인.
 - Apple Silicon의 실제 Metal GPU 추론. 호스팅 CI가 GPU를 제공하는지는 `llama-server --list-devices`로 먼저 확인.
 - Intel Metal은 실제 장치·소스 빌드가 지원하는 범위를 별도로 확인. Intel x64 CPU 추론과 고정 PR CPU 소스 빌드는
-  호스팅 검증에 포함됐다. 호스팅 Intel 러너의 Apple Paravirtual 장치에서 Metal PR 빌드는 컴파일과 단계별 사전 점검을
-  통과했지만 이후 30초 런타임 프로브가 Metal 라이브러리 초기화 중 시간 초과됐다. 앱은 Intel Metal을 미지원으로
-  추천하지만 PR 빌드 선택은 허용하므로 차단 또는 제한 시간 정책 결정이 필요하다.
+  호스팅 검증에 포함됐다. Metal 초기화는 실행 파일 경로별로 캐시되며 호스팅 Intel에서 첫 초기화가 32~35초 걸려
+  기존 30초 프로브 제한을 넘었다. 제한을 90초로 늘린 뒤 Apple Paravirtual 장치에서 Intel Metal PR 빌드의
+  GPU 검증, 25/25 레이어 오프로딩, SSE 추론, 정지까지 통과했다. 상위 x64 릴리스는 Metal을 끄므로 카탈로그
+  런타임은 없고, 앱 추천은 Intel Mac GPU를 감지하지 않는다. 물리 AMD·Intel GPU는 미검증이다.
 
 호스팅 Mac에서 Metal 장치를 사용할 수 없으면 원격 Apple Silicon 장비,
 자체 runner 또는 Mac 사용자 테스터가 필요하다. ARM64 성공 결과로 Intel 검증을

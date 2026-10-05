@@ -51,8 +51,10 @@ assertions. Ordinary development and distribution builds do not enable it.
 Synthetic screenshots are retained as test evidence, separate from packages.
 Installer/UI scripts refuse to run outside disposable GitHub-hosted Macs.
 
-macOS runtime probe commands have a 30-second budget; other platforms keep their
-existing budget. Timeout diagnostics retain bounded initialization output.
+macOS runtime probe commands have a 90-second budget; other platforms keep their
+existing budget. Metal caches its initialization per executable path, so the first
+probe after a runtime is activated starts cold: about 20 seconds on hosted Apple
+Silicon and 32-35 seconds on hosted Intel, then about 0.2 seconds. Timeout diagnostics retain bounded initialization output.
 For hosted CPU/Metal acceptance, the job fetches public release metadata using
 its scoped GitHub token. The test fixture primes the ordinary catalog cache,
 then downloads and verifies the actual runtime through the normal installer.
@@ -70,7 +72,7 @@ Apple Silicon performance, memory limits or driver behavior.
 
 With `source_build=true`, the package workflow also builds merged llama.cpp
 PR #29903 at its merged head commit with the runner's Xcode/CMake toolchain:
-CPU on both architectures and Metal on Apple Silicon. The job primes only the
+CPU and Metal on both architectures. The job primes only the
 PR lookup with its scoped token; the source archive, its commit check, CMake
 build, staged preflight, GPU verification and CLI lifecycle use the normal path.
 
@@ -134,9 +136,21 @@ recommendations treat Intel Metal as unsupported. At `9a9f458`,
 [run 37231505962](https://github.com/aiolm/AioLM/actions/runs/37231505962) again
 passed both DMG jobs and the Apple Silicon CPU/Metal and Intel CPU source builds,
 and all five [native CI jobs](https://github.com/aiolm/AioLM/actions/runs/37229307609)
-passed. Its Intel Metal build compiled and passed the staged preflight, but every later 30-second runtime probe
-timed out during Metal library initialization, leaving the runtime unusable.
-Intel Metal therefore remains unsupported and unverified on physical Intel GPUs.
+passed. Its Intel Metal build compiled and passed the staged preflight, but every
+later probe, then limited to 30 seconds, timed out during Metal initialization.
+A diagnostic build measured cold initialization at 32-35 seconds for each new
+executable path, with or without a precompiled Metal library, and 0.2 seconds
+once cached. After the probe budget became 90 seconds,
+[run 37271921406](https://github.com/aiolm/AioLM/actions/runs/37271921406) at
+`96e0f63` passed all six jobs. The Intel Metal source build listed `MTL0` in
+34 seconds, passed GPU verification, offloaded 25/25 layers at start and restart,
+answered over SSE and released its port; the
+[native CI](https://github.com/aiolm/AioLM/actions/runs/37271928250) also passed.
+
+Intel Metal is therefore usable through a PR source build on the hosted
+paravirtual device. It is still not a catalog runtime, because upstream x64
+releases disable Metal, and AioLM's recommendations do not detect Intel Mac GPUs.
+Physical AMD and Intel GPUs remain unverified.
 
 ## Distribution and remaining device checks
 
