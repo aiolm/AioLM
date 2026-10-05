@@ -435,8 +435,12 @@ jobs:
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
           }
-          $manifest | Set-Content -LiteralPath (Join-Path $assetDir "checksums.txt") -Encoding ascii
-          Get-Content (Join-Path $assetDir "checksums.txt")
+          # LF line endings, so `sha256sum -c` and `shasum -a 256 -c` accept the file;
+          # Set-Content on Windows would write CRLF.
+          $checksumPath = Join-Path $assetDir "checksums.txt"
+          [IO.File]::WriteAllText($checksumPath, (($manifest -join "`n") + "`n"), [Text.Encoding]::ASCII)
+          if ([IO.File]::ReadAllText($checksumPath).Contains("`r")) { throw "checksums.txt must use LF line endings" }
+          Get-Content $checksumPath
       - name: Publish GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:

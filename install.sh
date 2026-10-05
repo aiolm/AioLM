@@ -128,7 +128,8 @@ else
     checksums="$(field "$fields" checksums)"
     if [ -n "$checksums" ] && trusted_url "$checksums"; then
       download -o "$workdir/checksums.txt" "$checksums"
-      expected="$(awk -v file="$name" '$2 == file && $1 ~ /^[0-9a-fA-F]{64}$/ { print $1; exit }' "$workdir/checksums.txt")"
+      # Releases up to v0.3.0 wrote checksums.txt with CRLF line endings.
+      expected="$(awk -v file="$name" '{ sub(/\r$/, "") } $2 == file && $1 ~ /^[0-9a-fA-F]{64}$/ { print $1; exit }' "$workdir/checksums.txt")"
     fi
   fi
   [ -n "$expected" ] || fail "$name has no SHA-256 digest and no matching entry in checksums.txt"
