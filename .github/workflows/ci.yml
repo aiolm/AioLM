@@ -90,10 +90,16 @@ jobs:
       - name: Native CLI with a clean home
         run: npm run test:native-cli
 
+      - name: Fetch public runtime metadata without the shared anonymous API limit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api 'repos/ggml-org/llama.cpp/releases?per_page=10' > "$RUNNER_TEMP/aiolm-release-catalog.json"
       - name: Real CPU runtime and model lifecycle
         timeout-minutes: 15
         env:
           AIOLM_NATIVE_CPU: "1"
+          AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: Windows Credential Manager roundtrip
         if: success() || failure()
