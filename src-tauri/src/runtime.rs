@@ -5239,14 +5239,32 @@ fn missing_source_build_toolchain(backend: &str, view: &ToolchainView<'_>) -> Op
     }
 }
 
-fn source_build_toolchain_error(backend: &str) -> Option<String> {
-    if backend == "metal" && !cfg!(target_os = "macos") {
+/// Backends a source build cannot target on this OS and architecture.
+fn source_build_platform_error(backend: &str, os: &str, arch: &str) -> Option<String> {
+    if backend == "metal" && os != "macos" {
         return Some("Metal source builds require macOS and the Xcode command line tools.".into());
     }
-    if cfg!(target_os = "macos") && matches!(backend, "cuda" | "rocm") {
+    // Upstream's x64 build disables Metal, and its accuracy and memory use on
+    // Intel Mac GPUs are not verified, so Intel Macs build for the CPU only.
+    if backend == "metal" && arch != "aarch64" {
+        return Some(
+            "Metal PR builds are supported on Apple silicon Macs only; select cpu on an Intel Mac."
+                .into(),
+        );
+    }
+    if os == "macos" && matches!(backend, "cuda" | "rocm") {
         return Some(format!(
             "{backend} source builds are not supported on macOS; select metal or cpu."
         ));
+    }
+    None
+}
+
+fn source_build_toolchain_error(backend: &str) -> Option<String> {
+    if let Some(error) =
+        source_build_platform_error(backend, std::env::consts::OS, std::env::consts::ARCH)
+    {
+        return Some(error);
     }
     let executable = |name: &str| locate_tool(name).is_some();
     let rocm_sdk_present = rocm_sdk_is_configured();
@@ -8884,6 +8902,17 @@ mod tests {
     }
 
     // ---- L5 / L6: what gets built ----
+
+    #[test]
+    fn metal_source_builds_target_apple_silicon_macs_only() {
+        assert!(source_build_platform_error("metal", "macos", "aarch64").is_none());
+        assert!(source_build_platform_error("metal", "macos", "x86_64")
+            .is_some_and(|error| error.contains("Apple silicon")));
+        assert!(source_build_platform_error("metal", "linux", "aarch64").is_some());
+        assert!(source_build_platform_error("cpu", "macos", "x86_64").is_none());
+        assert!(source_build_platform_error("rocm", "macos", "aarch64").is_some());
+        assert!(source_build_platform_error("vulkan", "linux", "x86_64").is_none());
+    }
 
     #[test]
     fn a_pr_build_produces_the_server_bench_and_verification_tools_and_nothing_else() {
