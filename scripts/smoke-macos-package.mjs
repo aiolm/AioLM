@@ -157,7 +157,29 @@ try {
     assert.ok(!existsSync(app));
   }
   assert.equal(JSON.parse(readFileSync(join(env.AIOLM_HOME, "config.json"), "utf8")).ctx_size, 8192);
-  console.log(`macOS ${process.arch}: DMG metadata, GUI/CLI architecture, system/user Applications install, LaunchServices GUI launch and quit, replacement, settings persistence and removal passed.`);
+
+  // install.sh verifies and installs the same DMG into a synthetic folder.
+  run("/usr/bin/hdiutil", ["detach", mount]);
+  mounted = false;
+  const dmg = join(directory, files[0]);
+  const digest = run("/usr/bin/shasum", ["-a", "256", dmg]).split(" ")[0];
+  const scriptApplications = join(home, "Script Applications");
+  const installEnv = { ...env, AIOLM_DMG: dmg, AIOLM_DMG_SHA256: digest, AIOLM_APPLICATIONS_DIR: scriptApplications };
+  const mismatch = spawnSync("/bin/bash", ["install.sh"], { env: { ...installEnv, AIOLM_DMG_SHA256: "0".repeat(64) }, encoding: "utf8" });
+  assert.notEqual(mismatch.status, 0);
+  assert.match(mismatch.stderr, /SHA-256 mismatch/);
+  assert.ok(!existsSync(join(scriptApplications, "AioLM.app")), "a rejected download must not install");
+  app = join(scriptApplications, "AioLM.app");
+  installed = true;
+  for (const pass of ["install", "replacement"]) {
+    assert.match(run("/bin/bash", ["install.sh"], { env: installEnv }), /Installed AioLM/, pass);
+    run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
+    const plist = JSON.parse(run("/usr/bin/plutil", ["-convert", "json", "-o", "-", join(app, "Contents/Info.plist")]));
+    assert.equal(plist.CFBundleShortVersionString, version);
+    assert.equal(cli("config", "get").ctx_size, 8192, `install.sh ${pass} must retain user settings`);
+  }
+  removeInstalledApp();
+  console.log(`macOS ${process.arch}: DMG metadata, ad-hoc signature, GUI/CLI architecture, system/user Applications install, LaunchServices GUI launch and quit, replacement, settings persistence, install.sh verification/install/replacement and removal passed.`);
 } finally {
   if (installed) removeInstalledApp();
   if (mounted) run("/usr/bin/hdiutil", ["detach", mount]);
