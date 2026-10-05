@@ -4,7 +4,7 @@ macOS candidates target **Ventura 13.3 or later**, with separate Apple Silicon
 (`aarch64`) and Intel (`x64`) DMGs. The minimum is a packaging policy chosen for
 Tailwind v4's [Safari 16.4 baseline](https://tailwindcss.com/docs/compatibility).
 Hosted tests run macOS 15; they do not establish execution on macOS 13.3.
-The published v0.2.1 release still contains Windows and Linux packages only.
+Releases include both DMGs and `install.sh` starting with v0.3.0; v0.2.1 and earlier contain Windows and Linux packages only.
 
 ## Hosted acceptance
 

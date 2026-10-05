@@ -77,7 +77,7 @@ DEB 更新は検証済みファイルをシステムのインストール画面�
 
 ## macOS
 
-AioLM は Apple Silicon と Intel Mac の macOS Ventura 13.3 以降に対応します。Metal による GPU 高速化は Apple Silicon で利用でき、Intel Mac は CPU ランタイムを使用します。macOS パッケージはそれを含む最初のリリースから公開され、v0.2.1 には含まれません。それまでは GitHub Actions の検証アーティファクトから DMG を取得できます。[macOS 検証](../reference/macos-validation.md)を参照してください。
+AioLM は Apple Silicon と Intel Mac の macOS Ventura 13.3 以降に対応します。Metal による GPU 高速化は Apple Silicon で利用でき、Intel Mac は CPU ランタイムを使用します。macOS パッケージは **v0.3.0** から含まれます。ホスト環境での検証と残りの実機確認は [macOS 検証](../reference/macos-validation.md)を参照してください。
 
 ### ターミナルからインストール
 

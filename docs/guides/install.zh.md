@@ -77,7 +77,7 @@ DEB 更新会在系统安装界面打开已验证文件，由用户完成安装�
 
 ## macOS
 
-AioLM 支持 Apple Silicon 和 Intel Mac 上的 macOS Ventura 13.3 及以上版本。Apple Silicon 可使用 Metal GPU 加速，Intel Mac 使用 CPU 运行时。macOS 安装包从首个包含它们的版本开始发布，v0.2.1 尚未包含。在此之前，可从 GitHub Actions 验证产物获取 DMG，参见 [macOS 验证](../reference/macos-validation.md)。
+AioLM 支持 Apple Silicon 和 Intel Mac 上的 macOS Ventura 13.3 及以上版本。Apple Silicon 可使用 Metal GPU 加速，Intel Mac 使用 CPU 运行时。macOS 安装包从 **v0.3.0** 开始提供。托管验证及其余实机检查参见 [macOS 验证](../reference/macos-validation.md)。
 
 ### 通过终端安装
 

@@ -95,7 +95,7 @@ DEB updates open the verified installer in the system package interface for you 
 
 ## macOS
 
-AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Metal GPU acceleration is available on Apple silicon; Intel Macs use the CPU runtime. macOS packages are published from the first release that includes them; v0.2.1 has none. Until then, validation DMGs are available as GitHub Actions artifacts; see [macOS validation](../reference/macos-validation.md).
+AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Metal GPU acceleration is available on Apple silicon; Intel Macs use the CPU runtime. macOS packages are included starting with **v0.3.0**. Hosted acceptance and remaining device checks are described in [macOS validation](../reference/macos-validation.md).
 
 ### Install from the terminal
 

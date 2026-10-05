@@ -81,7 +81,7 @@ DEB 업데이트는 검증한 설치 파일을 시스템 설치 화면으로 열
 
 ## macOS
 
-AioLM은 Apple Silicon과 Intel Mac의 macOS Ventura 13.3 이상을 지원합니다. Metal GPU 가속은 Apple Silicon에서 사용하며 Intel Mac은 CPU 런타임을 사용합니다. macOS 패키지는 이를 포함하는 첫 릴리스부터 게시되며 v0.2.1에는 없습니다. 그전까지는 GitHub Actions 검증 아티팩트로 DMG를 받을 수 있습니다. [macOS 검증 안내](../reference/macos-validation.md)를 참고하세요.
+AioLM은 Apple Silicon과 Intel Mac의 macOS Ventura 13.3 이상을 지원합니다. Metal GPU 가속은 Apple Silicon에서 사용하며 Intel Mac은 CPU 런타임을 사용합니다. macOS 패키지는 **v0.3.0**부터 포함됩니다. 호스팅 검증과 남은 실기 확인은 [macOS 검증 안내](../reference/macos-validation.md)를 참고하세요.
 
 ### 터미널로 설치
 
