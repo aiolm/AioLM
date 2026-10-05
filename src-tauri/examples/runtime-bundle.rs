@@ -1,6 +1,8 @@
 //! Developer packaging utility. Uses the same verified, cancellable bundle
 //! path as the UI. For staging exports, set APPDATA/XDG_DATA_HOME to an isolated
 //! directory; never overwrite an installed official build with a local one.
+//! `release` builds an official llama.cpp tag from source into AIOLM_HOME, as
+//! the runtime workflow does before exporting a bundle AioLM publishes.
 use aiolm_lib::runtime;
 use std::{
     path::Path,
@@ -36,6 +38,17 @@ async fn main() -> Result<(), String> {
             .map_err(|error| error.to_string())?
             .map(|info| format!("{} sha256={}", info.path, info.archive_sha256))
         }
+        [action, backend, build, commit] if action == "release" => {
+            runtime::install_release_source_with(
+                &|phase, _, _| eprintln!("{phase}"),
+                backend,
+                build,
+                commit,
+                cancel,
+            )
+            .await
+            .map(|installed| installed.dir)
+        }
         [action, archive] if action == "import" => runtime::import_bundle(
             Path::new(archive),
             &|phase, _, _| eprintln!("{phase}"),
@@ -44,7 +57,7 @@ async fn main() -> Result<(), String> {
         .await
         .map(|installed| installed.dir),
         _ => Err(
-            "usage: runtime-bundle export <backend> <build> <output.zip> | import <bundle.zip>"
+            "usage: runtime-bundle export <backend> <build> <output.zip> | import <bundle.zip> | release <backend> <bNNNN> <commit>"
                 .into(),
         ),
     };

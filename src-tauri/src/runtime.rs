@@ -4906,7 +4906,76 @@ pub async fn install_pr_with(
             )
         }
     })?;
+    let archive_url = source_archive_url(&origin)?;
+    let commit = origin.commit.clone();
+    build_source_runtime(
+        progress,
+        backend,
+        &build,
+        &archive_url,
+        &commit,
+        &cmake,
+        Some(&mut origin),
+        None,
+        cancel,
+    )
+    .await
+}
 
+/// Build llama.cpp `release` from the official repository at `commit` with
+/// the host toolchain, exactly as a PR build is produced. AioLM uses this to
+/// publish runtimes upstream does not ship, such as Metal for Intel Macs.
+///
+/// A source archive carries no Git history, so llama.cpp would report build 0
+/// and an unknown commit. The release number and commit are written into its
+/// build information, and the built server must report them back.
+pub async fn install_release_source_with(
+    progress: ProgressSink<'_>,
+    backend: &str,
+    release: &str,
+    commit: &str,
+    cancel: Arc<AtomicBool>,
+) -> Result<InstalledRuntime, String> {
+    if !is_build_tag(release) {
+        return Err(format!("{release} is not a llama.cpp release tag"));
+    }
+    validate_runtime_identifiers(backend, release)?;
+    let commit = commit.trim().to_ascii_lowercase();
+    validate_commit_sha(&commit)?;
+    let number = release[1..]
+        .parse::<u64>()
+        .map_err(|_| format!("{release} is not a llama.cpp release tag"))?;
+    let cmake = source_build_preflight(backend).await?;
+    let archive_url = format!("https://codeload.github.com/{LLAMA_REPOSITORY}/zip/{commit}");
+    build_source_runtime(
+        progress,
+        backend,
+        release,
+        &archive_url,
+        &commit,
+        &cmake,
+        None,
+        Some(number),
+        cancel,
+    )
+    .await
+}
+
+/// Download, verify, configure, build, package and activate one source tree.
+/// `provenance` is recorded for PR builds; `release_number` pins the build
+/// information of an official release tag.
+#[allow(clippy::too_many_arguments)]
+async fn build_source_runtime(
+    progress: ProgressSink<'_>,
+    backend: &str,
+    build: &str,
+    archive_url: &str,
+    commit: &str,
+    cmake: &Path,
+    mut provenance: Option<&mut RuntimeSource>,
+    release_number: Option<u64>,
+    cancel: Arc<AtomicBool>,
+) -> Result<InstalledRuntime, String> {
     let root = runtimes_root();
     let download_root = crate::home::aiolm_home().join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -4949,13 +5018,12 @@ pub async fn install_pr_with(
     cleanup.track_directory(workspace.clone());
 
     let result = async {
-        let archive_url = source_archive_url(&origin)?;
         progress("resolving", 1.0, 1.0);
         progress("downloading source", 0.0, 0.0);
         download_to_file(
             progress,
             "downloading source",
-            &archive_url,
+            archive_url,
             &archive_path,
             &cancel,
         )
@@ -4965,9 +5033,12 @@ pub async fn install_pr_with(
         // computed here from the bytes we received. It records what was built;
         // it cannot confirm that those bytes were the right ones. The real
         // check is the commit id carried by the extracted tree, below.
-        origin.archive_sha256 = tokio::task::spawn_blocking(move || sha256_file(&hash_path))
+        let archive_sha256 = tokio::task::spawn_blocking(move || sha256_file(&hash_path))
             .await
             .map_err(|error| format!("runtime source hash task failed: {error}"))??;
+        if let Some(origin) = provenance.as_deref_mut() {
+            origin.archive_sha256 = archive_sha256;
+        }
         progress("recorded source digest", 1.0, 1.0);
 
         if cancel.load(Ordering::Acquire) {
@@ -4990,7 +5061,7 @@ pub async fn install_pr_with(
         // source archive's top-level directory after the ref it was asked for,
         // and we asked by commit id. A tree that carries a different commit is
         // not the one the user approved, so it is refused rather than built.
-        origin.commit_check = match archive_commit_check(&source_root, &origin.commit) {
+        let commit_check = match archive_commit_check(&source_root, commit) {
             ArchiveCommitCheck::Matches => COMMIT_CHECK_MATCHED.to_string(),
             ArchiveCommitCheck::Unknown => {
                 return Err(format!(
@@ -4999,11 +5070,20 @@ pub async fn install_pr_with(
             }
             ArchiveCommitCheck::Mismatch(found) => {
                 return Err(format!(
-                    "the downloaded source is not the commit you confirmed: the archive contains {found}, not {}. The download was not used.",
-                    origin.commit
+                    "the downloaded source is not the commit you confirmed: the archive contains {found}, not {commit}. The download was not used."
                 ));
             }
         };
+        if let Some(origin) = provenance.as_deref_mut() {
+            origin.commit_check = commit_check;
+        }
+        if let Some(number) = release_number {
+            let info_root = source_root.clone();
+            let short = commit[..9].to_string();
+            tokio::task::spawn_blocking(move || pin_release_build_info(&info_root, number, &short))
+                .await
+                .map_err(|error| format!("runtime build information task failed: {error}"))??;
+        }
 
         // Only asked for a CUDA build, and only after the source is on disk,
         // so a machine with no NVIDIA driver never pays for the probe.
@@ -5019,7 +5099,7 @@ pub async fn install_pr_with(
             source_build_configure_args(backend, &source_root, &build_root, &architectures)?;
         progress("configuring", 0.0, 0.0);
         run_cmake_command(
-            &cmake,
+            cmake,
             backend,
             progress,
             "configuring",
@@ -5032,7 +5112,7 @@ pub async fn install_pr_with(
         let build_args = source_build_args(&build_root);
         progress("building", 0.0, 0.0);
         run_cmake_command(
-            &cmake,
+            cmake,
             backend,
             progress,
             "building",
@@ -5069,34 +5149,48 @@ pub async fn install_pr_with(
             .await
             .map_err(|error| format!("runtime size task failed: {error}"))?;
         let version = preflight_staged_runtime(&staging, backend, progress, &cancel).await?;
+        if let Some(number) = release_number {
+            let reported = version.as_ref().map(|version| (version.build, version.commit.as_str()));
+            if !reported.is_some_and(|(build, short)| {
+                build == number && !short.is_empty() && commit.starts_with(&short.to_ascii_lowercase())
+            }) {
+                return Err(format!(
+                    "the built server reports {reported:?}, not release b{number} at {commit}; no runtime was activated"
+                ));
+            }
+        }
         if let Some(version) = version.as_ref() {
             write_version_manifest(&staging, version);
         }
         // Provenance is part of the safety contract for a PR runtime. If the
         // manifest cannot be written, leave the staged bytes unactivated
         // rather than silently installing an unattributed build.
-        write_source_manifest(&staging, &origin)?;
+        if let Some(origin) = provenance.as_deref() {
+            write_source_manifest(&staging, origin)?;
+        }
         if cancel.load(Ordering::Acquire) {
             return Err("runtime install cancelled".into());
         }
-        let destination = runtime_dir(backend, &build)?;
+        let destination = runtime_dir(backend, build)?;
         // Read before the swap: after it, the old manifest is gone. One
         // directory per pull request means a rebuild displaces the previous
         // commit, and the user should be told which one.
-        let replaced = runtime_replacement(read_source_manifest(&destination).as_ref(), &origin);
+        let replaced = provenance.as_deref().and_then(|origin| {
+            runtime_replacement(read_source_manifest(&destination).as_ref(), origin)
+        });
         let replace_staging = staging.clone();
         tokio::task::spawn_blocking(move || replace_runtime(&replace_staging, &destination))
             .await
             .map_err(|error| format!("runtime activation task failed: {error}"))??;
         progress("installed", 1.0, 1.0);
-        let dest = runtime_dir(backend, &build)?;
+        let dest = runtime_dir(backend, build)?;
         let installed = InstalledRuntime {
-            build: build.clone(),
+            build: build.to_string(),
             backend: backend.into(),
             dir: dest.to_string_lossy().into_owned(),
             size_mb,
             version,
-            source: Some(origin.clone()),
+            source: provenance.as_deref().cloned(),
             replaced,
         };
         cleanup.commit();
@@ -5911,6 +6005,35 @@ enum ArchiveCommitCheck {
 /// provenance - unlike a digest this machine computed from those same bytes.
 /// It is a provenance/layout check, not a cryptographic signature; the HTTPS
 /// connection and the exact commit request provide the transport boundary.
+/// Give a release built from a Git-less source archive its real build number
+/// and commit. llama.cpp otherwise falls back to build 0 and "unknown", which
+/// would misidentify the runtime in version labels and benchmark records.
+fn pin_release_build_info(source_root: &Path, number: u64, commit: &str) -> Result<(), String> {
+    let path = source_root.join("cmake").join("build-info.cmake");
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let pinned = text
+        .replacen(
+            "set(BUILD_NUMBER 0)",
+            &format!("set(BUILD_NUMBER {number})"),
+            1,
+        )
+        .replacen(
+            "set(BUILD_COMMIT \"unknown\")",
+            &format!("set(BUILD_COMMIT \"{commit}\")"),
+            1,
+        );
+    if !pinned.contains(&format!("set(BUILD_NUMBER {number})"))
+        || !pinned.contains(&format!("set(BUILD_COMMIT \"{commit}\")"))
+    {
+        return Err(format!(
+            "{} no longer has the default build number and commit lines; release build information cannot be pinned",
+            path.display()
+        ));
+    }
+    fs::write(&path, pinned).map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
 fn archive_commit_check(source_root: &Path, expected: &str) -> ArchiveCommitCheck {
     let Some(name) = source_root.file_name().and_then(|name| name.to_str()) else {
         return ArchiveCommitCheck::Unknown;
@@ -8884,6 +9007,37 @@ mod tests {
     }
 
     // ---- L5 / L6: what gets built ----
+
+    #[test]
+    fn release_build_information_is_pinned_or_refused() {
+        let root = std::env::temp_dir().join(format!("aiolm-build-info-{}", short_nonce()));
+        fs::create_dir_all(root.join("cmake")).unwrap();
+        let path = root.join("cmake").join("build-info.cmake");
+        fs::write(
+            &path,
+            "set(BUILD_NUMBER 0)
+set(BUILD_COMMIT \"unknown\")
+set(BUILD_COMPILER \"unknown\")
+",
+        )
+        .unwrap();
+        pin_release_build_info(&root, 11393, "f07be9f37").unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "set(BUILD_NUMBER 11393)
+set(BUILD_COMMIT \"f07be9f37\")
+set(BUILD_COMPILER \"unknown\")
+"
+        );
+        fs::write(
+            &path,
+            "set(BUILD_NUMBER 7)
+",
+        )
+        .unwrap();
+        assert!(pin_release_build_info(&root, 11393, "f07be9f37").is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn a_pr_build_produces_the_server_bench_and_verification_tools_and_nothing_else() {

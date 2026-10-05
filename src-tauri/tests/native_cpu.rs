@@ -112,7 +112,7 @@ impl Drop for Home {
 #[ignore = "downloads a public 491 MB model and CPU runtime; set AIOLM_NATIVE_CPU=1 and run alone"]
 fn real_cpu_cli_lifecycle() {
     assert_eq!(std::env::var("AIOLM_NATIVE_CPU").as_deref(), Ok("1"));
-    real_cli_lifecycle("cpu", false);
+    real_cli_lifecycle("cpu", Install::Catalog);
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -120,7 +120,7 @@ fn real_cpu_cli_lifecycle() {
 #[ignore = "requires an actual Metal device and downloads a public model; set AIOLM_NATIVE_METAL=1"]
 fn real_metal_cli_lifecycle() {
     assert_eq!(std::env::var("AIOLM_NATIVE_METAL").as_deref(), Ok("1"));
-    real_cli_lifecycle("metal", false);
+    real_cli_lifecycle("metal", Install::Catalog);
 }
 
 #[test]
@@ -128,10 +128,26 @@ fn real_metal_cli_lifecycle() {
 fn real_source_build_cli_lifecycle() {
     let backend = std::env::var("AIOLM_NATIVE_SOURCE").expect("AIOLM_NATIVE_SOURCE");
     assert!(matches!(backend.as_str(), "cpu" | "metal"), "{backend}");
-    real_cli_lifecycle(&backend, true);
+    real_cli_lifecycle(&backend, Install::PullRequest);
 }
 
-fn real_cli_lifecycle(backend: &str, from_source: bool) {
+#[test]
+#[ignore = "installs an AioLM runtime bundle; set AIOLM_NATIVE_BUNDLE and AIOLM_NATIVE_BUNDLE_BACKEND"]
+fn real_bundle_cli_lifecycle() {
+    let bundle =
+        PathBuf::from(std::env::var_os("AIOLM_NATIVE_BUNDLE").expect("AIOLM_NATIVE_BUNDLE"));
+    let backend =
+        std::env::var("AIOLM_NATIVE_BUNDLE_BACKEND").expect("AIOLM_NATIVE_BUNDLE_BACKEND");
+    real_cli_lifecycle(&backend, Install::Bundle(bundle));
+}
+
+enum Install {
+    Catalog,
+    PullRequest,
+    Bundle(PathBuf),
+}
+
+fn real_cli_lifecycle(backend: &str, install: Install) {
     let home = Home(std::env::temp_dir().join(format!("aiolm-{backend}-{}", uuid::Uuid::new_v4())));
     std::fs::create_dir_all(home.0.join("aiolm")).unwrap();
     // This integration binary has one explicitly selected test. The installer
@@ -153,7 +169,18 @@ fn real_cli_lifecycle(backend: &str, from_source: bool) {
         .build()
         .unwrap();
     let (build, model) = rt.block_on(async {
-        let build = if from_source {
+        let build = if let Install::Bundle(path) = &install {
+            let installed =
+                runtime::import_bundle(path, &|_, _, _| {}, Arc::new(AtomicBool::new(false)))
+                    .await
+                    .expect("bundle digest, file manifest, staged preflight and activation");
+            assert_eq!(installed.backend, backend);
+            println!(
+                "{backend} runtime bundle installed: {} ({:?})",
+                installed.build, installed.version
+            );
+            installed.build
+        } else if matches!(install, Install::PullRequest) {
             let phase = std::sync::Mutex::new(String::new());
             let installed = runtime::install_pr_with(
                 &|current, _, _| {
