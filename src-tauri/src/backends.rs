@@ -74,7 +74,12 @@ pub fn recommend(profile: &DeviceProfile) -> Vec<BackendSuitability> {
         .any(|gpu| gpu.vendor != GpuVendor::Unknown);
 
     let mut recommendations = vec![
-        if profile.os == "macos" && profile.has_vendor(GpuVendor::Apple) {
+        // Intel Macs are not a Metal target, even when their GPU (including a
+        // virtual Apple GPU) is detected: upstream's x64 build disables Metal.
+        if profile.os == "macos"
+            && profile.arch == "aarch64"
+            && profile.has_vendor(GpuVendor::Apple)
+        {
             entry(
                 "metal",
                 BackendFit::Recommended,
@@ -338,10 +343,15 @@ mod tests {
         );
         let mut intel = profile(
             "x86_64",
-            vec![gpu(GpuVendor::Intel, "Intel Test GPU", true)],
+            vec![
+                gpu(GpuVendor::Intel, "Intel Test GPU", true),
+                gpu(GpuVendor::Amd, "AMD Test GPU", false),
+                gpu(GpuVendor::Apple, "Test Paravirtual Graphics", true),
+            ],
         );
         intel.os = "macos".into();
         assert_eq!(shown_by_default(&recommend(&intel)), vec!["cpu"]);
+        assert_eq!(fit_of(&recommend(&intel), "metal"), BackendFit::Unsupported);
     }
 
     #[test]

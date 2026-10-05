@@ -79,6 +79,20 @@ python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
 
 DEB 업데이트는 검증한 설치 파일을 시스템 설치 화면으로 열며 사용자가 설치를 마무리합니다. AppImage는 릴리스 페이지에서 업데이트하고 새 경로를 등록하세요. GPU 가속에는 GPU 드라이버와 호환되는 llama.cpp 런타임이 필요합니다.
 
-## macOS (예정)
+## macOS
 
-macOS 서명·공증 및 실제 환경 검증은 별도로 남아 있습니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참고하세요.
+AioLM은 Apple Silicon과 Intel Mac의 macOS Ventura 13.3 이상을 지원합니다. Metal GPU 가속은 Apple Silicon에서 사용하며 Intel Mac은 CPU 런타임을 사용합니다. macOS 패키지는 **v0.3.0**부터 포함됩니다. 호스팅 검증과 남은 실기 확인은 [macOS 검증 안내](../reference/macos-validation.md)를 참고하세요.
+
+### 터미널로 설치
+
+```bash
+curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
+```
+
+스크립트는 Mac에 맞는 DMG를 받아 릴리스의 SHA-256과 비교한 뒤 `AioLM.app`을 `/Applications`에, 쓸 수 없으면 `~/Applications`에 복사합니다. 실행 전에 AioLM을 종료하세요. `AIOLM_RELEASE=v0.3.0`으로 릴리스를 고르고, `AIOLM_DRY_RUN=1`은 검증까지만 하며, `AIOLM_APPLICATIONS_DIR`로 설치 폴더를 바꿀 수 있습니다. 현재 소스: <https://github.com/aiolm/AioLM/blob/main/install.sh>
+
+### DMG로 직접 설치
+
+`AioLM_<버전>_aarch64.dmg`(Apple Silicon) 또는 `AioLM_<버전>_x64.dmg`(Intel)를 받아 `shasum -a 256` 값을 같은 릴리스의 `checksums.txt`와 비교한 뒤, 열어서 AioLM을 Applications로 끌어 놓으세요. 앱은 ad-hoc 서명만 있고 공증되지 않았으므로 브라우저로 받은 사본은 첫 실행이 차단됩니다. 한 번 실행을 시도한 뒤 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 선택하세요. macOS 13·14에서는 앱을 Control-클릭하고 **열기**를 선택해도 됩니다. 설치한 사본마다 한 번만 필요합니다.
+
+AioLM 데이터는 `~/.aiolm`에 있으며 앱을 교체하거나 제거해도 유지됩니다. 앱이 `/Applications` 또는 `~/Applications`에 있으면 설정의 **다운로드 및 설치**가 Mac에 맞는 DMG를 받으므로 새 사본으로 앱을 교체하세요. 서명되지 않은 빌드는 코드 식별값이 바뀌므로, 업데이트 후 벤치마크 공유 자격 증명 같은 Keychain 항목 접근을 다시 물을 수 있습니다. 제거하려면 AioLM을 종료하고 `AioLM.app`을 휴지통으로 옮기세요. 데이터까지 지우려면 `~/.aiolm`을 삭제합니다.

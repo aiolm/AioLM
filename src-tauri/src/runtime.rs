@@ -34,6 +34,14 @@ const MAX_PROBE_OUTPUT: usize = 256 * 1024;
 /// the toolchain printed, never the banner it started with.
 const MAX_BUILD_LOG_TAIL: usize = 256 * 1024;
 const MAX_BUILD_DETAIL_CHARS: usize = 4096;
+// macOS CPU archives also contain Metal. Metal caches its initialization per
+// executable path, so the first probe after activation (which renames the
+// staged runtime) starts cold. That took about 20 seconds on hosted Apple
+// silicon and 32-35 seconds on hosted Intel, then 0.2 seconds once cached.
+// Keep interactive probes bounded while allowing that initialization to finish.
+#[cfg(target_os = "macos")]
+const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
+#[cfg(not(target_os = "macos"))]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 /// The staged preflight is the very first execution of a just-extracted
 /// runtime, so Windows still has to page in and virus-scan 100-250 MB of fresh
@@ -2112,7 +2120,22 @@ fn locate_cmake() -> Option<PathBuf> {
             .find(|path| path.is_file())
     }
 
-    #[cfg(not(windows))]
+    // Kitware's app keeps its command-line tools inside the bundle unless the
+    // user also runs its separate command-line installation step.
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        [
+            Some(PathBuf::from("/Applications")),
+            home.map(|home| home.join("Applications")),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|root| root.join("CMake.app/Contents/bin/cmake"))
+        .find(|path| path.is_file())
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         None
     }
@@ -2126,12 +2149,14 @@ fn cmake_not_found_error() -> String {
     let hint = if cfg!(windows) {
         "install it from cmake.org or with `winget install Kitware.CMake`, or add the C++ CMake tools to your Visual Studio install"
     } else if cfg!(target_os = "macos") {
-        "install it with `brew install cmake`, or add the CMake app's bin directory to PATH"
+        "install it with `brew install cmake`, or put the CMake app from cmake.org in Applications"
     } else {
         "install it with your package manager, for example `apt install cmake ninja-build` or `dnf install cmake ninja-build`"
     };
     let searched = if cfg!(windows) {
         "PATH, the standard CMake install directories, and the copies bundled with Visual Studio"
+    } else if cfg!(target_os = "macos") {
+        "PATH, Homebrew and the CMake app in Applications"
     } else {
         "PATH"
     };
@@ -2503,17 +2528,32 @@ async fn run_probe_with_cancel_and_environment(
         }
         ProbeWaitOutcome::TimedOut => {
             terminate_probe(&mut child).await;
-            let _ = finish_probe_reader(stdout_task).await;
-            if let Some(task) = stderr_task {
-                let _ = finish_probe_reader(task).await;
-            }
+            let stdout = finish_probe_reader(stdout_task).await;
+            let stderr = match stderr_task {
+                Some(task) => finish_probe_reader(task).await,
+                None => Vec::new(),
+            };
+            let text = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+            let detail: String = text
+                .chars()
+                .rev()
+                .take(MAX_BUILD_DETAIL_CHARS)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             return ProbeCommand {
                 success: false,
-                text: String::new(),
+                text,
                 diagnostic: Some(format!(
-                    "runtime probe timed out after {}s: {}",
+                    "runtime probe timed out after {}s: {}\n{}",
                     limit.as_secs(),
-                    args.join(" ")
+                    args.join(" "),
+                    detail.trim(),
                 )),
             };
         }
@@ -3532,6 +3572,20 @@ pub fn uninstall(backend: &str, build: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Prime live acceptance with public release metadata fetched by the CI job.
+/// Its short-lived GitHub token stays outside the app and runtime processes.
+/// Archive allowlists, digests and staged preflight still use the normal path.
+#[cfg(feature = "test-fixtures")]
+pub fn preload_release_catalog(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_GITHUB_RESPONSE_BYTES {
+        return Err("GitHub API response exceeds the 2 MiB limit".into());
+    }
+    let releases: Vec<Rel> = serde_json::from_slice(bytes)
+        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+    cache_latest(&releases);
+    Ok(())
+}
+
 pub fn clear_api_cache() {
     if let Some(cache) = LATEST_CACHE.get() {
         if let Ok(mut value) = cache.lock() {
@@ -3685,8 +3739,42 @@ fn validate_commit_sha(commit: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Public pull request metadata fetched by a live acceptance job, keyed by
+/// number. Only the GitHub lookup is replaced; validation is unchanged.
+#[cfg(feature = "test-fixtures")]
+static PRELOADED_PULL_REQUESTS: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+
+/// Prime live source-build acceptance with a pull request document fetched by
+/// the CI job, whose short-lived token stays outside the app. The source
+/// archive, its commit check, the build and staged preflight use the normal path.
+#[cfg(feature = "test-fixtures")]
+pub fn preload_pull_request(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_GITHUB_RESPONSE_BYTES {
+        return Err("GitHub API response exceeds the 2 MiB limit".into());
+    }
+    let raw = String::from_utf8(bytes.to_vec())
+        .map_err(|error| format!("invalid GitHub pull request response: {error}"))?;
+    let detail: PullRequestDetail = serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid GitHub pull request response: {error}"))?;
+    PRELOADED_PULL_REQUESTS
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| "pull request preload lock was poisoned".to_string())?
+        .insert(detail.number, raw);
+    Ok(())
+}
+
 async fn resolve_pull_request(input: &str) -> Result<ResolvedPullRequest, String> {
     let request = parse_pull_request_ref(input)?;
+    #[cfg(feature = "test-fixtures")]
+    if let Some(raw) = PRELOADED_PULL_REQUESTS
+        .get()
+        .and_then(|preloaded| preloaded.lock().ok()?.get(&request.number).cloned())
+    {
+        let detail: PullRequestDetail = serde_json::from_str(&raw)
+            .map_err(|error| format!("invalid GitHub pull request response: {error}"))?;
+        return parse_pull_request_source(request.number, detail);
+    }
     let response = http()
         .get(format!(
             "https://api.github.com/repos/{LLAMA_REPOSITORY}/pulls/{}",
@@ -5151,14 +5239,32 @@ fn missing_source_build_toolchain(backend: &str, view: &ToolchainView<'_>) -> Op
     }
 }
 
-fn source_build_toolchain_error(backend: &str) -> Option<String> {
-    if backend == "metal" && !cfg!(target_os = "macos") {
+/// Backends a source build cannot target on this OS and architecture.
+fn source_build_platform_error(backend: &str, os: &str, arch: &str) -> Option<String> {
+    if backend == "metal" && os != "macos" {
         return Some("Metal source builds require macOS and the Xcode command line tools.".into());
     }
-    if cfg!(target_os = "macos") && matches!(backend, "cuda" | "rocm") {
+    // Upstream's x64 build disables Metal, and its accuracy and memory use on
+    // Intel Mac GPUs are not verified, so Intel Macs build for the CPU only.
+    if backend == "metal" && arch != "aarch64" {
+        return Some(
+            "Metal PR builds are supported on Apple silicon Macs only; select cpu on an Intel Mac."
+                .into(),
+        );
+    }
+    if os == "macos" && matches!(backend, "cuda" | "rocm") {
         return Some(format!(
             "{backend} source builds are not supported on macOS; select metal or cpu."
         ));
+    }
+    None
+}
+
+fn source_build_toolchain_error(backend: &str) -> Option<String> {
+    if let Some(error) =
+        source_build_platform_error(backend, std::env::consts::OS, std::env::consts::ARCH)
+    {
+        return Some(error);
     }
     let executable = |name: &str| locate_tool(name).is_some();
     let rocm_sdk_present = rocm_sdk_is_configured();
@@ -5420,13 +5526,15 @@ async fn detected_cuda_capabilities() -> Vec<String> {
 /// What a PR build produces, stated once so the UI, the docs and the build
 /// itself cannot drift apart.
 ///
-/// aiolm builds the server and the benchmark tool, and nothing else.
+/// aiolm builds the server, the benchmark tool and the perplexity tool that
+/// GPU verification runs before a device placement may start; without it a
+/// GPU PR runtime could never pass that check. Nothing else is built.
 /// Tests and examples are off because they roughly double the build for code
 /// aiolm never runs. The server's optional embedded web UI is **not**
 /// built here: aiolm uses the loopback API directly, so no Node
 /// toolchain is needed and no UI asset is fetched at build time - the same
 /// reason the network options in `SOURCE_BUILD_OFFLINE_OPTIONS` are off.
-pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-bench"];
+pub const SOURCE_BUILD_TARGETS: &[&str] = &["llama-server", "llama-bench", "llama-perplexity"];
 
 fn source_build_configure_args(
     backend: &str,
@@ -7627,11 +7735,12 @@ mod tests {
     }
 
     #[test]
-    fn staged_preflight_budget_dwarfs_the_interactive_probe() {
+    fn staged_preflight_allows_more_time_than_an_interactive_probe() {
         // The first launch of a freshly extracted 100-250 MB runtime is
         // dominated by on-access virus scanning; the 8s interactive budget
         // aborts the install before llama-server reaches main().
-        assert!(STAGED_PREFLIGHT_TIMEOUT >= PROBE_TIMEOUT * 10);
+        assert!(STAGED_PREFLIGHT_TIMEOUT > PROBE_TIMEOUT);
+        assert!(STAGED_PREFLIGHT_TIMEOUT >= Duration::from_secs(180));
     }
 
     #[test]
@@ -8795,11 +8904,26 @@ mod tests {
     // ---- L5 / L6: what gets built ----
 
     #[test]
-    fn a_pr_build_produces_the_server_and_the_bench_tool_and_nothing_else() {
+    fn metal_source_builds_target_apple_silicon_macs_only() {
+        assert!(source_build_platform_error("metal", "macos", "aarch64").is_none());
+        assert!(source_build_platform_error("metal", "macos", "x86_64")
+            .is_some_and(|error| error.contains("Apple silicon")));
+        assert!(source_build_platform_error("metal", "linux", "aarch64").is_some());
+        assert!(source_build_platform_error("cpu", "macos", "x86_64").is_none());
+        assert!(source_build_platform_error("rocm", "macos", "aarch64").is_some());
+        assert!(source_build_platform_error("vulkan", "linux", "x86_64").is_none());
+    }
+
+    #[test]
+    fn a_pr_build_produces_the_server_bench_and_verification_tools_and_nothing_else() {
         let args = source_build_args(Path::new("build"));
         for target in SOURCE_BUILD_TARGETS {
             assert!(args.iter().any(|arg| arg == target), "{target}");
         }
+        // GPU verification refuses a runtime without it before the server starts.
+        assert!(
+            SOURCE_BUILD_TARGETS.contains(&perplexity_executable_name().trim_end_matches(".exe"))
+        );
         assert!(args.iter().any(|arg| arg == "--target"));
         assert!(args.iter().any(|arg| arg == "Release"));
         assert!(args.iter().any(|arg| arg == "--parallel"));
@@ -9521,6 +9645,41 @@ mod tests {
         let output = read_probe_output(payload.as_slice()).await;
         assert_eq!(output.len(), MAX_PROBE_OUTPUT);
         assert!(output.iter().all(|byte| *byte == b'x'));
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_probe_retains_its_initialization_diagnostic() {
+        let binary = which::which("node").expect("Node test fixture");
+        let result = run_probe_with(
+            &binary,
+            &["-e", "process.stderr.write('synthetic backend initialization\\n'); setInterval(() => {}, 1000);"],
+            Duration::from_secs(3),
+        ).await;
+        assert!(!result.success);
+        assert!(result.text.contains("synthetic backend initialization"));
+        assert!(result
+            .diagnostic
+            .unwrap()
+            .contains("synthetic backend initialization"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_cold_device_probe_can_finish_after_eight_seconds() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = test_directory("cold-device-probe");
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join("synthetic-runtime");
+        fs::write(
+            &binary,
+            "#!/bin/sh\n/bin/sleep 9\nprintf 'Available devices:\\n(none)\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = run_probe(&binary, &["--list-devices"]).await;
+        let _ = fs::remove_dir_all(root);
+        assert!(result.success, "{:?}", result.diagnostic);
+        assert!(result.text.contains("Available devices:"));
     }
 
     #[test]

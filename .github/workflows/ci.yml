@@ -89,11 +89,18 @@ jobs:
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
       - name: Native CLI with a clean home
         run: npm run test:native-cli
+
+      - name: Fetch public runtime metadata without the shared anonymous API limit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api 'repos/ggml-org/llama.cpp/releases?per_page=10' > "$RUNNER_TEMP/aiolm-release-catalog.json"
       - name: Real CPU runtime and model lifecycle
         timeout-minutes: 15
         env:
           AIOLM_NATIVE_CPU: "1"
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu -- --ignored --nocapture --test-threads=1
+          AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
       - name: Windows Credential Manager roundtrip
         if: success() || failure()
         env:
@@ -153,3 +160,61 @@ jobs:
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
       - name: Native CLI with a clean home
         run: npm run test:native-cli
+      - name: Detected macOS GPU and Metal support
+        if: runner.os == 'macOS'
+        run: |
+          home="$(mktemp -d)"
+          HOME="$home" AIOLM_HOME="$home/aiolm" .codex-target/debug/aiolm-cli runtime device > "$RUNNER_TEMP/aiolm-device.json"
+          cat "$RUNNER_TEMP/aiolm-device.json"
+          # Metal is recommended on Apple silicon and never on Intel Macs.
+          node -e 'const device = require(process.argv[1]); if (device.profile.gpus.length === 0) throw new Error("no GPU was detected"); const metal = device.backends.find(item => item.backend === "metal"); const expected = process.arch === "arm64" ? "recommended" : "unsupported"; if (metal?.fit !== expected) throw new Error("Metal should be " + expected + ": " + JSON.stringify(metal));' "$RUNNER_TEMP/aiolm-device.json"
+      - name: Fetch public runtime metadata without the shared anonymous API limit
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api 'repos/ggml-org/llama.cpp/releases?per_page=10' > "$RUNNER_TEMP/aiolm-release-catalog.json"
+      - name: Real macOS CPU model lifecycle
+        id: macos_cpu
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        env:
+          AIOLM_NATIVE_CPU: "1"
+          AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_cpu_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1
+      - name: Build macOS debug app with embedded WebDriver
+        if: runner.os == 'macOS'
+        env:
+          TAURI_CONFIG: '{"build":{"devUrl":null}}'
+        run: |
+          mkdir -p tmp
+          swiftc scripts/macos-window-probe.swift -o tmp/macos-window-probe
+          cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm --no-default-features --features macos-ui-smoke
+      - name: Real WKWebView onboarding, settings and window lifecycle
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: node scripts/smoke-macos-ui.mjs
+      - name: Real LaunchServices launch, reopen, command lookup and quit
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: |
+          swiftc scripts/macos-terminate-app.swift -o tmp/macos-terminate-app
+          node scripts/smoke-macos-launch.mjs
+      - name: Retain synthetic macOS UI evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-ui-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tmp/macos-ui.png
+      - name: Probe hosted Metal device availability
+        if: (success() || failure()) && runner.os == 'macOS'
+        id: metal
+        run: swift scripts/macos-metal-probe.swift >> "$GITHUB_OUTPUT"
+      - name: Real Metal model lifecycle when the runner exposes a GPU
+        if: (success() || failure()) && runner.os == 'macOS' && matrix.os == 'macos-15' && steps.macos_cpu.outcome == 'success' && steps.metal.outputs.available == 'true'
+        timeout-minutes: 20
+        env:
+          AIOLM_NATIVE_METAL: "1"
+          AIOLM_NATIVE_RELEASES: ${{ runner.temp }}/aiolm-release-catalog.json
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --test native_cpu real_metal_cli_lifecycle -- --ignored --exact --nocapture --test-threads=1

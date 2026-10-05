@@ -469,7 +469,7 @@ DEB/AppImage와 두 Mac 아키텍처의 DMG·체크섬을 아티팩트로 보관
 
 ```sh
 gh run list --workflow ci.yml --branch main
-gh workflow run desktop-packages.yml --ref main
+gh workflow run desktop-packages.yml --ref '<source-branch>' -f platforms=macos
 gh run list --workflow desktop-packages.yml
 gh run view '<run-id>' --log-failed
 gh run download '<run-id>' --dir tmp/native-packages
@@ -479,19 +479,25 @@ gh run download '<run-id>' --dir tmp/native-packages
 `cpu,metal`, upstream Intel 아카이브에서는 `cpu`로 바꾼다. ARM64에서 CPU와
 Metal이 같은 배포 아카이브를 사용해도 실제 실행 장치가 달라지는지 확인한다.
 
-macOS CI는 CLI와 네이티브 코드 테스트이며 Mac WebView 조작 E2E는 포함하지 않는다.
-Linux에는 위 별도 패키지 데스크톱 검사가 있다.
-[Tauri의 WebdriverIO embedded driver 안내](https://v2.tauri.app/develop/tests/webdriver/)에
-따라 데스크톱 E2E를 추가할 수 있다. Linux에서 CI를 제어할 수 있지만 아래 실행
-증거는 실제 macOS 환경에서 확보해야 한다:
+macOS CI에는 opt-in 디버그 WebDriver로 실제 WKWebView 초기 설정·설정 저장·트레이
+닫기·재실행 복구를 조작하는 검증이 추가됐다. 패키지 작업은 시스템/사용자 Applications
+설치·교체·제거와 설치된 GUI/CLI, CPU 모델 추론, Keychain 저장·수정·삭제 및 Cocoa
+승인 창 취소·시간 초과를 검사한다. `platforms=macos`로 두 Mac 작업만 실행할 수 있다.
+Ventura 13.3은 패키지 최소 버전 정책이며 호스팅 검증 OS는 macOS 15다.
+[macOS 검증 안내](macos-validation.md)에 범위와 배포 전제 조건을 정리했다.
+아래 항목의 추가 실기 증거는 여전히 필요하다:
 
-- WKWebView 렌더링, Cocoa 파일/승인 대화상자, 한글 IME, Keychain 허용/거부/취소.
-- Finder/Dock 실행·재실행·트레이/메뉴·닫기 동작.
-- DMG에서 시스템/사용자 Applications로 설치·교체 후 사용자 데이터 보존.
-- Developer ID 서명·공증·다운로드 격리 속성/Gatekeeper. 미서명 CI DMG는 공개 배포 검증을 대신하지 않는다.
-- 최소 macOS 버전과 Tailwind v4의 Safari 16.4 수준 WebKit 요구사항 확정.
+- Cocoa 파일 선택/취소, 승인 Yes/No, 한글 IME, 클립보드, Keychain 허용/거부/취소.
+- 실제 Finder 더블클릭·Dock 아이콘 클릭과 트레이/메뉴 막대 클릭. LaunchServices 실행·재열기·표준 종료와
+  launchd PATH에서의 MCP 명령 탐색은 호스팅 자동 검증에 포함됐다.
+- 실제 과거 릴리스에서의 업데이트 완료와 사용자 데이터 보존.
+- 실제 Mac에서 Gatekeeper "그래도 열기" 클릭. 호스팅 러너에서는 ad-hoc 서명 DMG가 "손상됨"이 아닌 미공증 경고를 띄움을 확인했다.
+  Developer ID 서명·공증은 선택 사항으로, 자격 증명이 있으면 이 단계를 없앤다.
+- 선언한 최소 macOS 13.3에서의 실행 및 WebKit 호환성 확인.
 - Apple Silicon의 실제 Metal GPU 추론. 호스팅 CI가 GPU를 제공하는지는 `llama-server --list-devices`로 먼저 확인.
-- Intel x64 CPU 실행. Intel Metal은 실제 장치·소스 빌드가 지원하는 범위를 별도로 확인.
+- Intel Mac의 Metal은 지원하지 않는다. 상위 x64 릴리스가 Metal을 끄고 물리 AMD·Intel GPU의 정확성·속도·메모리를
+  검증할 수 없기 때문이다. Intel Mac은 GPU를 감지하지만 Metal을 추천하지 않고, Metal PR 소스 빌드는 다운로드 전에
+  거부하며, CPU 런타임을 사용한다. Intel x64 CPU 추론과 고정 PR CPU 소스 빌드는 호스팅 검증에 포함됐다.
 
 호스팅 Mac에서 Metal 장치를 사용할 수 없으면 원격 Apple Silicon 장비,
 자체 runner 또는 Mac 사용자 테스터가 필요하다. ARM64 성공 결과로 Intel 검증을
@@ -507,9 +513,12 @@ Linux에는 위 별도 패키지 데스크톱 검사가 있다.
 - [x] 위 Linux 환경의 GUI·Secret Service·MCP 승인·프로세스 정리·파일 처리 검사.
 - [ ] 계정 기반 Linux 실기 흐름과 macOS GUI·Keychain·MCP·파일 처리 검사.
 - [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.
-- [ ] macOS 서명/공증 계정·CI secrets 구성 및 Gatekeeper 검증.
+- [x] 자격 증명 없는 macOS 배포 방식 결정: ad-hoc 서명 DMG와 SHA-256 검증 `install.sh`.
+- [x] 격리 속성을 붙인 DMG 사본의 Gatekeeper 판정 확인(호스팅 macOS 15): ad-hoc 서명 전 Apple Silicon은 "손상됨",
+  서명 후 두 아키텍처 모두 "그래도 열기"로 넘어갈 수 있는 미공증 경고.
+- [ ] 실제 Mac에서 "그래도 열기" 클릭과 macOS 13·14 Control-클릭 열기 확인. (선택) Developer ID 서명·공증 구성.
 - [x] release.yml에 Linux DEB/AppImage 빌드·설치 검사와 Windows/Linux 통합 체크섬 게시 경로 구현. v0.2.1 공개 파일 다운로드와 체크섬 검증 완료.
-- [ ] macOS 검증·서명 완료 후 release.yml에 macOS 게시 경로 추가.
+- [x] release.yml에 macOS DMG·`install.sh` 빌드·검증·게시 경로 추가. 실제 macOS 릴리스는 아직 게시하지 않았다.
 - [x] README·4개 언어 설치/개요·AioLM-Web에 Linux x86_64 설치 안내 반영. v0.2.0에는 Windows 파일만 있으므로 Linux 검증 아티팩트 경로와 제한을 명시.
 - [x] Linux v0.2.1 공개 릴리스 파일 게시와 AioLM-Web 운영 배포 후 실제 다운로드 경로 확인.
 

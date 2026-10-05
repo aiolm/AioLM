@@ -1,6 +1,6 @@
-//! Explicit live acceptance: real managed CPU install and CLI inference after
-//! the launcher exits. Only public, hash-pinned model data and a disposable home
-//! are used. Run alone with AIOLM_NATIVE_CPU=1 and --ignored --test-threads=1.
+//! Explicit live acceptance: real managed CPU/Metal install or pinned source build
+//! and CLI inference after the launcher exits. Only public, hash-pinned model data
+//! and a disposable home are used. Run alone with --ignored --test-threads=1.
 use aiolm_lib::runtime;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -14,12 +14,17 @@ use std::time::Duration;
 const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf";
 const MODEL_SHA256: &str = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db";
 const MODEL_BYTES: u64 = 491_400_032;
+// A merged llama.cpp pull request, pinned to the head commit that was merged.
+const SOURCE_PULL_REQUEST: &str = "29903";
+const SOURCE_COMMIT: &str = "f07be9f37e5dd3e8bec895f6ffd8d86fd1bbc370";
 
 struct Home(PathBuf);
 
 impl Home {
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_aiolm-cli"));
+        let executable = std::env::var_os("AIOLM_NATIVE_CLI")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_aiolm-cli").into());
+        let mut command = Command::new(executable);
         for (key, _) in std::env::vars_os() {
             let upper = key.to_string_lossy().to_ascii_uppercase();
             if upper.starts_with("AIOLM_") || upper.starts_with("LLAMA_BOARD_") {
@@ -107,32 +112,87 @@ impl Drop for Home {
 #[ignore = "downloads a public 491 MB model and CPU runtime; set AIOLM_NATIVE_CPU=1 and run alone"]
 fn real_cpu_cli_lifecycle() {
     assert_eq!(std::env::var("AIOLM_NATIVE_CPU").as_deref(), Ok("1"));
-    let home = Home(std::env::temp_dir().join(format!("aiolm-cpu-{}", uuid::Uuid::new_v4())));
+    real_cli_lifecycle("cpu", false);
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+#[ignore = "requires an actual Metal device and downloads a public model; set AIOLM_NATIVE_METAL=1"]
+fn real_metal_cli_lifecycle() {
+    assert_eq!(std::env::var("AIOLM_NATIVE_METAL").as_deref(), Ok("1"));
+    real_cli_lifecycle("metal", false);
+}
+
+#[test]
+#[ignore = "builds a pinned llama.cpp pull request with the host CMake toolchain; set AIOLM_NATIVE_SOURCE=cpu or metal"]
+fn real_source_build_cli_lifecycle() {
+    let backend = std::env::var("AIOLM_NATIVE_SOURCE").expect("AIOLM_NATIVE_SOURCE");
+    assert!(matches!(backend.as_str(), "cpu" | "metal"), "{backend}");
+    real_cli_lifecycle(&backend, true);
+}
+
+fn real_cli_lifecycle(backend: &str, from_source: bool) {
+    let home = Home(std::env::temp_dir().join(format!("aiolm-{backend}-{}", uuid::Uuid::new_v4())));
     std::fs::create_dir_all(home.0.join("aiolm")).unwrap();
     // This integration binary has one explicitly selected test. The installer
     // reads only AIOLM_HOME and does not run legacy settings migration.
     std::env::set_var("AIOLM_HOME", home.0.join("aiolm"));
+    #[cfg(feature = "test-fixtures")]
+    if let Some(path) = std::env::var_os("AIOLM_NATIVE_RELEASES") {
+        runtime::preload_release_catalog(&std::fs::read(path).expect("public release catalog"))
+            .expect("bounded public release metadata");
+    }
+    #[cfg(feature = "test-fixtures")]
+    if let Some(path) = std::env::var_os("AIOLM_NATIVE_PULL_REQUEST") {
+        runtime::preload_pull_request(&std::fs::read(path).expect("public pull request"))
+            .expect("bounded public pull request metadata");
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
         .build()
         .unwrap();
     let (build, model) = rt.block_on(async {
-        let latest = runtime::latest_for("cpu")
+        let build = if from_source {
+            let phase = std::sync::Mutex::new(String::new());
+            let installed = runtime::install_pr_with(
+                &|current, _, _| {
+                    let mut last = phase.lock().unwrap();
+                    if *last != current {
+                        println!("PR source build phase: {current}");
+                        *last = current.to_string();
+                    }
+                },
+                backend,
+                SOURCE_PULL_REQUEST,
+                SOURCE_COMMIT,
+                Arc::new(AtomicBool::new(false)),
+            )
             .await
-            .expect("CPU release metadata");
-        runtime::install_with(
-            &|_, _, _| {},
-            "cpu",
-            &latest.build,
-            Arc::new(AtomicBool::new(false)),
-        )
-        .await
-        .expect("managed CPU download, digest, extraction and preflight");
-        println!(
-            "CPU runtime installed: {} ({})",
-            latest.build, latest.file_name
-        );
+            .expect("pinned PR source download, CMake build, packaging and preflight");
+            println!(
+                "{backend} runtime built from PR #{SOURCE_PULL_REQUEST} at {SOURCE_COMMIT}: {}",
+                installed.build
+            );
+            installed.build
+        } else {
+            let latest = runtime::latest_for(backend)
+                .await
+                .expect("native release metadata");
+            runtime::install_with(
+                &|_, _, _| {},
+                backend,
+                &latest.build,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .await
+            .expect("managed runtime download, digest, extraction and preflight");
+            println!(
+                "{backend} runtime installed: {} ({})",
+                latest.build, latest.file_name
+            );
+            latest.build
+        };
         let model = home.0.join("model with spaces.gguf");
         let mut file = std::fs::File::create(&model).unwrap();
         let mut response = client
@@ -153,18 +213,37 @@ fn real_cpu_cli_lifecycle() {
         assert_eq!(bytes, MODEL_BYTES);
         assert_eq!(format!("{:x}", hash.finalize()), MODEL_SHA256);
         println!("Model download and pinned SHA-256 verification passed");
-        (latest.build, model)
+        (build, model)
     });
     assert_eq!(home.cli(&["config", "get"])["active_build"], "");
-    home.cli(&["runtime", "select", "cpu", &build]);
+    home.cli(&["runtime", "select", backend, &build]);
     home.cli(&["config", "set", "active_model", model.to_str().unwrap()]);
     home.cli(&["config", "set", "ctx_size", "2048"]);
+    if backend == "metal" {
+        home.cli(&["config", "set", "ngl", "999"]);
+        // Recent llama.cpp releases hide backend layer-placement messages at
+        // their default verbosity. Require explicit GPU evidence in this test.
+        home.cli(&["config", "set", "server_args", r#"["-lv","5"]"#]);
+    }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     home.cli(&["config", "set", "port", &port.to_string()]);
     println!("Probing selected runtime before launch");
-    home.cli(&["runtime", "probe", "cpu", &build]);
+    let capabilities = home.cli(&["runtime", "probe", backend, &build]);
+    println!("Runtime devices: {}", capabilities["devices"]);
+    assert_eq!(
+        capabilities["state"], "available",
+        "runtime preflight diagnostics: {}",
+        capabilities["diagnostics"]
+    );
+    if backend == "metal" {
+        let devices: Vec<String> = serde_json::from_value(capabilities["devices"].clone()).unwrap();
+        assert!(
+            !aiolm_lib::gpu::select_all_runtime_devices("metal", &devices).is_empty(),
+            "Metal runtime must enumerate a real device"
+        );
+    }
     println!("Selected runtime capability probe passed");
     let mut last_pid = None;
     for action in ["start", "restart"] {
@@ -204,14 +283,49 @@ fn real_cpu_cli_lifecycle() {
             .collect();
         assert!(!answer.trim().is_empty(), "no model answer");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while std::fs::read(&log).unwrap_or_default() == before {
+        loop {
+            let current = std::fs::read(&log).unwrap_or_default();
+            // The bounded collector rewrites its tail; an empty file during
+            // that write is not evidence of new server output.
+            if !current.is_empty() && current != before {
+                break;
+            }
             assert!(
                 std::time::Instant::now() < deadline,
                 "logs stopped after launcher exit"
             );
             std::thread::sleep(Duration::from_millis(100));
         }
-        println!("CLI {action}: real CPU SSE answer and continuing logs passed");
+        if backend == "metal" {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let content = std::fs::read_to_string(&log).unwrap_or_default();
+                if let Some(evidence) = content.lines().find(|line| {
+                    line.split_once("offloaded ")
+                        .and_then(|(_, suffix)| suffix.split('/').next())
+                        .and_then(|count| count.parse::<u32>().ok())
+                        .is_some_and(|count| count > 0)
+                }) {
+                    println!("Metal layer placement: {evidence}");
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Metal inference must offload model layers; retained log ({} bytes):\n{}",
+                    content.len(),
+                    content
+                        .chars()
+                        .rev()
+                        .take(16384)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        println!("CLI {action}: real {backend} SSE answer and continuing logs passed");
     }
     assert_eq!(home.cli(&["server", "stop"])["state"], "stopped");
     assert_eq!(home.cli(&["server", "status"])["state"], "stopped");

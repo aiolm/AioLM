@@ -367,7 +367,7 @@ describe("RuntimesPanel pull-request builds", () => {
   it("states what the build produces before the user agrees to it", async () => {
     renderPanel();
     await reviewPullRequest();
-    expect(screen.getByText(/llama-server and llama-bench targets only/)).toBeInTheDocument();
+    expect(screen.getByText(/llama-server, llama-bench and llama-perplexity targets only/)).toBeInTheDocument();
     expect(screen.getByText(/embedded web UI is disabled/)).toBeInTheDocument();
     expect(screen.getByText(/BoringSSL, libcurl and OpenSSL support are off/)).toBeInTheDocument();
     // The backend is cuda here, so the architecture policy is disclosed too.
