@@ -186,8 +186,20 @@ identity `-`; the strict, sealed ad-hoc signature, LaunchServices launch and qui
 replacement and settings retention passed, and `install.sh` rejected a mismatched
 checksum, then installed and replaced the app with settings kept.
 
-Hosted copying and launching do not prove downloaded-app Gatekeeper behavior;
-check a quarantined browser download on a separate clean Mac account.
+A [Gatekeeper comparison](https://github.com/aiolm/AioLM/actions/runs/37315465231)
+gave copies of the DMGs from before and after ad-hoc signing Safari's quarantine
+attribute, installed them as a user would and opened them on hosted macOS 15:
+
+- Apple Silicon before ad-hoc signing: "AioLM is damaged and can't be opened. You
+  should move it to the Trash." `codesign`, `spctl` and `syspolicy_check` reported
+  the incomplete signature. Intel builds had no signature at all and did not show it.
+- After ad-hoc signing, both architectures: "AioLM Not Opened. Apple could not
+  verify…" with **Done**, the unnotarized-app prompt that **Open Anyway** in System
+  Settings resolves. `codesign --verify --deep --strict` passes; `syspolicy_check`
+  reports only the missing notarization ticket and an internal XProtect check.
+
+Clicking **Open Anyway**, macOS 13/14 Control-click **Open**, and a real browser
+download on a physical Mac were not exercised.
 
 Developer ID signing and notarization would remove the Gatekeeper step and keep
 Keychain access stable across updates. They need a Developer ID Application
