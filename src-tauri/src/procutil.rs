@@ -704,8 +704,10 @@ mod tests {
         let mut child = TransientChild::spawn(&mut command).unwrap();
         let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
+        // Only the fixture's start-up: a cold PowerShell on a busy hosted
+        // runner has taken longer than 10 seconds to print the child's PID.
         tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(60),
             stdout.read_line(&mut line),
         )
         .await
@@ -802,8 +804,10 @@ mod tests {
         let parent = ProcessExitProbe::open(child.id().unwrap()).unwrap();
         let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
         let mut line = String::new();
+        // Only the fixture's start-up: a cold PowerShell on a busy hosted
+        // runner has taken longer than 10 seconds to print the child's PID.
         tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(60),
             stdout.read_line(&mut line),
         )
         .await
