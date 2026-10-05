@@ -49,7 +49,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.build }}
         run: |
-          build="${REQUESTED:-$(gh api repos/ggml-org/llama.cpp/releases/latest --jq .tag_name)}"
+          # Build tags are published as prereleases; "latest" names a semver release.
+          build="${REQUESTED:-$(gh api 'repos/ggml-org/llama.cpp/releases?per_page=30' --jq '[.[] | select(.tag_name | test("^b[0-9]+$"))][0].tag_name')}"
           [[ "$build" =~ ^b[0-9]{1,15}$ ]] || { echo "invalid release tag: $build"; exit 1; }
           commit="$(gh api "repos/ggml-org/llama.cpp/commits/$build" --jq .sha)"
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit for $build: $commit"; exit 1; }
