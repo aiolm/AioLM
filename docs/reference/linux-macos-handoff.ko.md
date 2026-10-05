@@ -497,8 +497,10 @@ Ventura 13.3은 패키지 최소 버전 정책이며 호스팅 검증 OS는 macO
 - Intel Metal은 실제 장치·소스 빌드가 지원하는 범위를 별도로 확인. Intel x64 CPU 추론과 고정 PR CPU 소스 빌드는
   호스팅 검증에 포함됐다. Metal 초기화는 실행 파일 경로별로 캐시되며 호스팅 Intel에서 첫 초기화가 32~35초 걸려
   기존 30초 프로브 제한을 넘었다. 제한을 90초로 늘린 뒤 Apple Paravirtual 장치에서 Intel Metal PR 빌드의
-  GPU 검증, 25/25 레이어 오프로딩, SSE 추론, 정지까지 통과했다. 상위 x64 릴리스는 Metal을 끄므로 카탈로그
-  런타임은 없고, 앱 추천은 Intel Mac GPU를 감지하지 않는다. 물리 AMD·Intel GPU는 미검증이다.
+  GPU 검증, 25/25 레이어 오프로딩, SSE 추론, 정지까지 통과했다. 상위 x64 릴리스는 Metal을 끄므로 AioLM이
+  공식 bNNNN 태그를 빌드·검증해 `runtime-bNNNN-metal-macos-x64` 프리릴리스로 게시하고, 앱은 Intel Mac GPU를
+  감지해 Metal을 추천하고 그 번들을 다이제스트·매니페스트·사전 점검을 거쳐 설치한다. 게시는 main 병합 후
+  `macos-metal-runtime.yml`을 `publish=true`로 실행하고 `pr-runtime-publish` 승인을 받아야 한다. 물리 AMD·Intel GPU는 미검증이다.
 
 호스팅 Mac에서 Metal 장치를 사용할 수 없으면 원격 Apple Silicon 장비,
 자체 runner 또는 Mac 사용자 테스터가 필요하다. ARM64 성공 결과로 Intel 검증을

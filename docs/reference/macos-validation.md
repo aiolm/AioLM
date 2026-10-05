@@ -147,10 +147,36 @@ once cached. After the probe budget became 90 seconds,
 answered over SSE and released its port; the
 [native CI](https://github.com/aiolm/AioLM/actions/runs/37271928250) also passed.
 
-Intel Metal is therefore usable through a PR source build on the hosted
-paravirtual device. It is still not a catalog runtime, because upstream x64
-releases disable Metal, and AioLM's recommendations do not detect Intel Mac GPUs.
-Physical AMD and Intel GPUs remain unverified.
+## Intel Mac Metal runtime
+
+Upstream x64 releases disable Metal, so AioLM provides that runtime itself:
+
+- Intel Macs detect their GPUs from `system_profiler SPDisplaysDataType -json`
+  (vendor, model, dedicated or shared memory) and recommend Metal for a detected
+  GPU. Native CI requires this on the hosted Intel runner.
+- The [Metal runtime workflow](../../.github/workflows/macos-metal-runtime.yml)
+  builds the newest (or a requested) `bNNNN` tag from the official repository
+  with AioLM's source builder on an Intel runner. A source archive has no Git
+  history, so the release number and commit are pinned in llama.cpp's build
+  information, and the build is refused unless the server reports them. A second
+  runner installs the exported bundle and runs GPU verification, start/restart
+  SSE inference with layer offloading and stop.
+- Dispatched from `main` with `publish=true`, it publishes
+  `aiolm-bNNNN-metal-macos-x64.zip` as the prerelease
+  `runtime-bNNNN-metal-macos-x64` after the `pr-runtime-publish` approval.
+  Pull requests that change the workflow only build and verify.
+- The app's Metal catalog on Intel Macs installs the newest such release through
+  the verified bundle path: GitHub's SHA-256 digest, file manifest, backend and
+  build, staged preflight and activation. Until a release is published, the row
+  explains that none exists and a PR can still be built for Metal from source.
+
+[Run 37279602840](https://github.com/aiolm/AioLM/actions/runs/37279602840) built
+`b11406` (`8216c84`). The installed bundle reported build 11406, commit
+`8216c8462`, listed `MTL0`, offloaded 25/25 layers at start and restart, answered
+over SSE and released its port. Its [native CI](https://github.com/aiolm/AioLM/actions/runs/37279602834)
+detected the hosted Intel GPU and recommended Metal. No runtime release has been
+published yet; that requires this branch on `main` and the approval. Physical
+AMD and Intel GPUs remain unverified.
 
 ## Distribution and remaining device checks
 
