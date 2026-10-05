@@ -744,8 +744,8 @@ fn macos_cpu_name() -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn detect_gpus() -> (Vec<GpuDevice>, String) {
-    // Apple silicon always exposes a Metal GPU sharing system memory; Intel
-    // Macs are not a llama.cpp GPU catalog target.
+    // Apple silicon always exposes one Metal GPU sharing system memory. Intel
+    // Macs can have AMD, Intel or virtual GPUs, which System Information lists.
     if std::env::consts::ARCH == "aarch64" {
         (
             vec![GpuDevice {
@@ -762,8 +762,94 @@ fn detect_gpus() -> (Vec<GpuDevice>, String) {
             "macos-arch".into(),
         )
     } else {
-        (Vec::new(), "macos-arch".into())
+        let mut command = crate::procutil::std_command("/usr/sbin/system_profiler");
+        command.args(["SPDisplaysDataType", "-json"]);
+        match crate::procutil::capture_stdout(&mut command, std::time::Duration::from_secs(15)) {
+            Ok(output) if output.status.success() => (
+                macos_display_gpus(&String::from_utf8_lossy(&output.stdout)),
+                "macos-system-profiler".into(),
+            ),
+            _ => (Vec::new(), "unavailable".into()),
+        }
     }
+}
+
+/// GPUs in `system_profiler SPDisplaysDataType -json`, in its stable order.
+/// Vendor fields are tokens such as `sppci_vendor_amd` or text such as
+/// `Apple (0x106b)`, so they are matched by name. Built-in GPUs share memory.
+#[cfg(any(target_os = "macos", test))]
+fn macos_display_gpus(json: &str) -> Vec<GpuDevice> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let text = |entry: &serde_json::Value, key: &str| {
+        entry
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let megabytes = |value: String| {
+        let (amount, unit) = value.split_once(' ')?;
+        let amount = amount.trim().parse::<u64>().ok()?;
+        match unit.trim().to_ascii_uppercase().as_str() {
+            "GB" => amount.checked_mul(1024),
+            "MB" => Some(amount),
+            _ => None,
+        }
+    };
+    value
+        .get("SPDisplaysDataType")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let name = text(entry, "sppci_model").or_else(|| text(entry, "_name"))?;
+            let vendor_text = text(entry, "spdisplays_vendor")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            // "ati" also occurs in "corporation", so test the other names first.
+            let vendor = if vendor_text.contains("intel") {
+                GpuVendor::Intel
+            } else if vendor_text.contains("nvidia") {
+                GpuVendor::Nvidia
+            } else if vendor_text.contains("amd") || vendor_text.contains("ati") {
+                GpuVendor::Amd
+            } else if vendor_text.contains("apple") {
+                GpuVendor::Apple
+            } else {
+                GpuVendor::Unknown
+            };
+            let integrated = text(entry, "sppci_bus").as_deref() == Some("spdisplays_builtin")
+                || matches!(vendor, GpuVendor::Intel | GpuVendor::Apple);
+            let device_id = text(entry, "spdisplays_device-id")
+                .map(|id| id.trim_start_matches("0x").to_ascii_lowercase());
+            Some(GpuDevice {
+                vendor,
+                vram_mb: if integrated {
+                    None
+                } else {
+                    text(entry, "spdisplays_vram").and_then(megabytes)
+                },
+                driver: None,
+                pci_id: None,
+                integrated,
+                // System Information lists GPUs in a fixed slot order, so the
+                // id stays the same until the set of installed GPUs changes.
+                stable_id: format!(
+                    "macos-gpu-{index}-{}",
+                    device_id.unwrap_or_else(|| name
+                        .chars()
+                        .filter(char::is_ascii_alphanumeric)
+                        .collect::<String>()
+                        .to_ascii_lowercase())
+                ),
+                name,
+            })
+        })
+        .collect()
 }
 
 #[cfg(windows)]
@@ -802,6 +888,65 @@ fn detect_cpu_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intel_mac_system_information_gpus_keep_vendor_memory_and_slot() {
+        let json = r#"{"SPDisplaysDataType":[
+            {"_name":"Intel UHD Graphics 630","sppci_model":"Intel UHD Graphics 630","spdisplays_vendor":"sppci_vendor_intel","sppci_bus":"spdisplays_builtin","spdisplays_vram_shared":"1536 MB","spdisplays_device-id":"0x3e9b"},
+            {"_name":"AMD Radeon Test Pro","sppci_model":"AMD Radeon Test Pro","spdisplays_vendor":"sppci_vendor_amd","sppci_bus":"spdisplays_pcie_device","spdisplays_vram":"8 GB","spdisplays_device-id":"0x7340"},
+            {"_name":"Test Paravirtual Graphics","spdisplays_vendor":"Apple (0x106b)","spdisplays_vram":"64 MB"},
+            {"_name":"Test Accelerator","spdisplays_vendor":"NVIDIA Corporation","spdisplays_vram":"2048 MB","sppci_bus":"spdisplays_pcie_device"},
+            {"spdisplays_vendor":"sppci_vendor_amd"}
+        ]}"#;
+        let gpus = macos_display_gpus(json);
+        let summary: Vec<_> = gpus
+            .iter()
+            .map(|gpu| {
+                (
+                    gpu.vendor,
+                    gpu.name.as_str(),
+                    gpu.vram_mb,
+                    gpu.integrated,
+                    gpu.stable_id.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (
+                    GpuVendor::Intel,
+                    "Intel UHD Graphics 630",
+                    None,
+                    true,
+                    "macos-gpu-0-3e9b"
+                ),
+                (
+                    GpuVendor::Amd,
+                    "AMD Radeon Test Pro",
+                    Some(8192),
+                    false,
+                    "macos-gpu-1-7340"
+                ),
+                (
+                    GpuVendor::Apple,
+                    "Test Paravirtual Graphics",
+                    None,
+                    true,
+                    "macos-gpu-2-testparavirtualgraphics"
+                ),
+                (
+                    GpuVendor::Nvidia,
+                    "Test Accelerator",
+                    Some(2048),
+                    false,
+                    "macos-gpu-3-testaccelerator"
+                ),
+            ]
+        );
+        assert!(macos_display_gpus("not json").is_empty());
+        assert!(macos_display_gpus(r#"{"SPDisplaysDataType":{}}"#).is_empty());
+    }
 
     #[test]
     fn pci_marketing_names_are_matched_by_slot_not_enumeration_order() {

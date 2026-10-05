@@ -74,12 +74,23 @@ pub fn recommend(profile: &DeviceProfile) -> Vec<BackendSuitability> {
         .any(|gpu| gpu.vendor != GpuVendor::Unknown);
 
     let mut recommendations = vec![
-        if profile.os == "macos" && profile.has_vendor(GpuVendor::Apple) {
+        if profile.os == "macos"
+            && profile.arch == "aarch64"
+            && profile.has_vendor(GpuVendor::Apple)
+        {
             entry(
                 "metal",
                 BackendFit::Recommended,
                 "vendorMatch",
                 device_name(profile, GpuVendor::Apple),
+            )
+        } else if profile.os == "macos" && has_gpu {
+            // Metal drives the AMD, Intel or virtual GPU of an Intel Mac.
+            entry(
+                "metal",
+                BackendFit::Recommended,
+                "vendorMatch",
+                profile.primary_gpu().map(|gpu| gpu.name.clone()),
             )
         } else {
             entry("metal", BackendFit::Unsupported, "osNotSupported", None)
