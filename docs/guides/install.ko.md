@@ -89,7 +89,7 @@ AioLM은 Apple Silicon과 Intel Mac의 macOS Ventura 13.3 이상을 지원합니
 curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
 ```
 
-스크립트는 Mac에 맞는 DMG를 받아 릴리스의 SHA-256과 비교한 뒤 `AioLM.app`을 `/Applications`에, 쓸 수 없으면 `~/Applications`에 복사합니다. 실행 전에 AioLM을 종료하세요. `AIOLM_RELEASE=v0.3.0`으로 릴리스를 고르고, `AIOLM_DRY_RUN=1`은 검증까지만 하며, `AIOLM_APPLICATIONS_DIR`로 설치 폴더를 바꿀 수 있습니다. 현재 소스: <https://github.com/aiolm/AioLM/blob/main/install.sh>
+스크립트는 Mac에 맞는 DMG를 받아 릴리스의 SHA-256과 비교한 뒤(GitHub API 사용 한도에 걸리면 릴리스 다운로드 링크와 `checksums.txt`를 사용) `AioLM.app`을 `/Applications`에, 쓸 수 없으면 `~/Applications`에 복사합니다. 실행 전에 AioLM을 종료하세요. `AIOLM_RELEASE=v0.3.0`으로 릴리스를 고르고, `AIOLM_DRY_RUN=1`은 검증까지만 하며, `AIOLM_APPLICATIONS_DIR`로 설치 폴더를 바꿀 수 있습니다. 현재 소스: <https://github.com/aiolm/AioLM/blob/main/install.sh>
 
 ### DMG로 직접 설치
 

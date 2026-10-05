@@ -518,7 +518,7 @@ Ventura 13.3은 패키지 최소 버전 정책이며 호스팅 검증 OS는 macO
   서명 후 두 아키텍처 모두 "그래도 열기"로 넘어갈 수 있는 미공증 경고.
 - [ ] 실제 Mac에서 "그래도 열기" 클릭과 macOS 13·14 Control-클릭 열기 확인. (선택) Developer ID 서명·공증 구성.
 - [x] release.yml에 Linux DEB/AppImage 빌드·설치 검사와 Windows/Linux 통합 체크섬 게시 경로 구현. v0.2.1 공개 파일 다운로드와 체크섬 검증 완료.
-- [x] release.yml에 macOS DMG·`install.sh` 빌드·검증·게시 경로 추가. 실제 macOS 릴리스는 아직 게시하지 않았다.
+- [x] release.yml에 macOS DMG·`install.sh` 빌드·검증·게시 경로 추가. v0.3.0에서 Windows·Linux·macOS를 함께 게시했고, 공개 자산 체크섬과 공개 릴리스 대상 `install.sh` 설치(ARM·Intel, API 차단 대체 경로 포함)를 확인했다.
 - [x] README·4개 언어 설치/개요·AioLM-Web에 Linux x86_64 설치 안내 반영. v0.2.0에는 Windows 파일만 있으므로 Linux 검증 아티팩트 경로와 제한을 명시.
 - [x] Linux v0.2.1 공개 릴리스 파일 게시와 AioLM-Web 운영 배포 후 실제 다운로드 경로 확인.
 
