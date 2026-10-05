@@ -142,6 +142,7 @@ jobs:
           - { os: macos-15, backend: cpu }
           - { os: macos-15, backend: metal }
           - { os: macos-15-intel, backend: cpu }
+          - { os: macos-15-intel, backend: metal }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
