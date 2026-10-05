@@ -154,13 +154,13 @@ jobs:
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bins
       - name: Native CLI with a clean home
         run: npm run test:native-cli
-      - name: Detected macOS GPU
+      - name: Detected macOS GPU and Metal recommendation
         if: runner.os == 'macOS'
         run: |
           home="$(mktemp -d)"
           HOME="$home" AIOLM_HOME="$home/aiolm" .codex-target/debug/aiolm-cli runtime device > "$RUNNER_TEMP/aiolm-device.json"
           cat "$RUNNER_TEMP/aiolm-device.json"
-          node -e 'const device = require(process.argv[1]); if (device.profile.gpus.length === 0) throw new Error("no GPU was detected");' "$RUNNER_TEMP/aiolm-device.json"
+          node -e 'const device = require(process.argv[1]); if (device.profile.gpus.length === 0) throw new Error("no GPU was detected"); const metal = device.backends.find(item => item.backend === "metal"); if (metal?.fit !== "recommended") throw new Error("Metal is not recommended: " + JSON.stringify(metal));' "$RUNNER_TEMP/aiolm-device.json"
       - name: Fetch public runtime metadata without the shared anonymous API limit
         if: runner.os == 'macOS'
         env:

@@ -3398,7 +3398,7 @@ pub async fn import_bundle(
     progress: ProgressSink<'_>,
     cancel: Arc<AtomicBool>,
 ) -> Result<InstalledRuntime, String> {
-    import_bundle_with_digest(archive, None, None, None, progress, cancel).await
+    import_bundle_with_digest(archive, None, None, None, None, progress, cancel).await
 }
 
 async fn import_bundle_with_digest(
@@ -3406,6 +3406,7 @@ async fn import_bundle_with_digest(
     expected_archive_sha256: Option<&str>,
     expected_backend: Option<&str>,
     expected_source: Option<&RuntimeSource>,
+    expected_build: Option<&str>,
     progress: ProgressSink<'_>,
     cancel: Arc<AtomicBool>,
 ) -> Result<InstalledRuntime, String> {
@@ -3434,7 +3435,7 @@ async fn import_bundle_with_digest(
             .map_err(|error| format!("runtime bundle hash task failed: {error}"))??;
         if actual != expected {
             return Err(format!(
-                "prebuilt PR artifact digest mismatch: expected {expected}, got {actual}"
+                "runtime bundle digest mismatch: expected {expected}, got {actual}"
             ));
         }
     }
@@ -3452,6 +3453,7 @@ async fn import_bundle_with_digest(
     let extract_cancel = cancel.clone();
     let expected_backend = expected_backend.map(str::to_owned);
     let expected_source = expected_source.cloned();
+    let expected_build = expected_build.map(str::to_owned);
     let verified = match tokio::task::spawn_blocking(move || {
         extract(&extract_archive, &extracted, &extract_cancel)?;
         let runtime_root = find_bundle_runtime_root(&extracted)?;
@@ -3461,6 +3463,14 @@ async fn import_bundle_with_digest(
             return Err("runtime bundle directory does not match its manifest".into());
         }
         verify_bundle_files(&runtime_root, &manifest)?;
+        if let Some(expected) = expected_build {
+            if manifest.build != expected {
+                return Err(format!(
+                    "runtime bundle contains build {}, not {expected}",
+                    manifest.build
+                ));
+            }
+        }
         if let Some(expected) = expected_backend {
             if manifest.backend != expected {
                 return Err(format!(
@@ -4051,9 +4061,134 @@ pub fn catalog_supports(backend: &str, os: &str, arch: &str) -> bool {
         ("windows", "aarch64") => matches!(backend, "cpu" | "cuda"),
         ("linux", "aarch64") => matches!(backend, "cpu" | "vulkan" | "cuda"),
         ("macos", "aarch64") => matches!(backend, "cpu" | "metal"),
-        ("macos", "x86_64") => backend == "cpu",
+        ("macos", "x86_64") => matches!(backend, "cpu" | "metal"),
         _ => false,
     }
+}
+
+/// Upstream's Intel macOS archive disables Metal, so AioLM builds that runtime
+/// from the official release tag (`install_release_source_with`) and publishes
+/// it beside its PR runtimes. Its archive is an AioLM runtime bundle.
+pub fn published_by_aiolm(backend: &str, os: &str, arch: &str) -> bool {
+    backend == "metal" && os == "macos" && arch == "x86_64"
+}
+
+/// Release tag and bundle name of an AioLM-published runtime.
+pub fn published_runtime_names(
+    build: &str,
+    backend: &str,
+    platform: &str,
+    architecture: &str,
+) -> (String, String) {
+    (
+        format!("runtime-{build}-{backend}-{platform}-{architecture}"),
+        format!("aiolm-{build}-{backend}-{platform}-{architecture}.zip"),
+    )
+}
+
+/// The newest published build whose release carries the exact bundle.
+fn newest_published_runtime<'a>(
+    releases: &'a [Rel],
+    backend: &str,
+    platform: &str,
+    architecture: &str,
+) -> Option<(String, &'a Asset)> {
+    let suffix = format!("-{backend}-{platform}-{architecture}");
+    releases
+        .iter()
+        .filter_map(|release| {
+            let build = release
+                .tag_name
+                .strip_prefix("runtime-")?
+                .strip_suffix(&suffix)?;
+            if !is_build_tag(build) {
+                return None;
+            }
+            let (_, bundle) = published_runtime_names(build, backend, platform, architecture);
+            let asset = release.assets.iter().find(|asset| asset.name == bundle)?;
+            Some((build[1..].parse::<u64>().ok()?, build.to_string(), asset))
+        })
+        .max_by_key(|(number, _, _)| *number)
+        .map(|(_, build, asset)| (build, asset))
+}
+
+async fn latest_published_runtime(backend: &str) -> Result<LatestInfo, String> {
+    let response = http()
+        .get(format!(
+            "https://api.github.com/repos/{PR_ARTIFACT_REPOSITORY}/releases?per_page=30"
+        ))
+        .send()
+        .await
+        .map_err(|error| format!("AioLM runtime lookup failed: {error}"))?;
+    let status = response.status();
+    let raw = bounded_github_text(response).await?;
+    if !status.is_success() {
+        return Err(format!(
+            "AioLM runtime lookup failed: {}",
+            api_error(status, &raw)
+        ));
+    }
+    let releases: Vec<Rel> = serde_json::from_str(&raw)
+        .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
+    let (build, asset) =
+        newest_published_runtime(&releases, backend, release_platform(), bundle_architecture())
+            .ok_or_else(|| {
+                format!(
+                    "AioLM has not published a {backend} runtime for {} {} yet; a llama.cpp PR can still be built for {backend} from source",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                )
+            })?;
+    Ok(LatestInfo {
+        build,
+        file_name: asset.name.clone(),
+        url: asset.browser_download_url.clone(),
+        digest: asset.digest.clone(),
+    })
+}
+
+/// Download an AioLM-published bundle and install it through the verified
+/// bundle path: GitHub's digest, the file manifest, backend and build, staged
+/// preflight and activation.
+async fn install_published_runtime(
+    progress: ProgressSink<'_>,
+    backend: &str,
+    build: &str,
+    info: &LatestInfo,
+    digest: &str,
+    cancel: Arc<AtomicBool>,
+) -> Result<InstalledRuntime, String> {
+    let root = runtimes_root();
+    let download_root = crate::home::aiolm_home().join("downloads");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
+    if let Some(error) = free_space_error(
+        "AioLM runtime",
+        &download_root,
+        INSTALLED_RUNTIME_BYTES.saturating_mul(2),
+        available_bytes(&download_root),
+    ) {
+        return Err(error);
+    }
+    let archive_path = download_root.join(format!(".{}-{}", short_nonce(), info.file_name));
+    let cleanup_path = archive_path.clone();
+    let result = async {
+        progress("downloading", 0.0, 0.0);
+        download_to_file(progress, "downloading", &info.url, &archive_path, &cancel).await?;
+        import_bundle_with_digest(
+            &archive_path,
+            Some(digest),
+            Some(backend),
+            None,
+            Some(build),
+            progress,
+            cancel,
+        )
+        .await
+    }
+    .await;
+    let _ = tokio::task::spawn_blocking(move || fs::remove_file(cleanup_path)).await;
+    result
 }
 
 fn backend_asset_for<'a>(
@@ -4062,7 +4197,7 @@ fn backend_asset_for<'a>(
     os: &str,
     arch: &str,
 ) -> Option<&'a Asset> {
-    if !catalog_supports(backend, os, arch) {
+    if !catalog_supports(backend, os, arch) || published_by_aiolm(backend, os, arch) {
         return None;
     }
     let architecture = match arch {
@@ -4379,6 +4514,9 @@ pub async fn latest_for(backend: &str) -> Result<LatestInfo, String> {
             std::env::consts::ARCH
         ));
     }
+    if published_by_aiolm(backend, std::env::consts::OS, std::env::consts::ARCH) {
+        return latest_published_runtime(backend).await;
+    }
     let releases = recent_releases().await?;
     let (release, asset) = newest_with_asset(&releases, backend).ok_or_else(|| {
         let newest = releases
@@ -4637,6 +4775,9 @@ pub async fn install_with(
         "release asset has no SHA-256 digest; refusing unverified install".to_string()
     })?)?;
     validate_download_url(&info.url)?;
+    if published_by_aiolm(backend, std::env::consts::OS, std::env::consts::ARCH) {
+        return install_published_runtime(progress, backend, build, &info, &expected, cancel).await;
+    }
     let companions = companion_assets(build, &info.file_name).await?;
 
     let root = runtimes_root();
@@ -4833,6 +4974,7 @@ async fn install_pr_artifact_with(
             Some(&artifact.sha256),
             Some(backend),
             Some(source),
+            None,
             progress,
             cancel,
         )
@@ -9872,6 +10014,32 @@ set(BUILD_COMPILER \"unknown\")
             companion_asset_name("b123", names[7]).as_deref(),
             Some("cudart-llama-b123-bin-ubuntu-cuda-13.4-x64.tar.gz")
         );
+    }
+
+    #[test]
+    fn intel_mac_metal_comes_from_the_newest_complete_aiolm_bundle() {
+        let releases: Vec<Rel> = serde_json::from_str(
+            r#"[
+            {"tag_name":"v0.2.1","assets":[{"name":"AioLM_0.2.1_x64.dmg","browser_download_url":"https://github.com/a/b/x"}]},
+            {"tag_name":"runtime-b300-metal-macos-x64","assets":[]},
+            {"tag_name":"runtime-b250-metal-macos-arm64","assets":[{"name":"aiolm-b250-metal-macos-arm64.zip","browser_download_url":"https://github.com/a/b/x"}]},
+            {"tag_name":"runtime-b150-metal-macos-x64","assets":[{"name":"aiolm-b150-metal-macos-x64.zip","browser_download_url":"https://github.com/a/b/150","digest":"sha256:00"}]},
+            {"tag_name":"runtime-bad-metal-macos-x64","assets":[{"name":"aiolm-bad-metal-macos-x64.zip","browser_download_url":"https://github.com/a/b/x"}]},
+            {"tag_name":"pr-runtime-123","assets":[{"name":"aiolm-pr123-cpu-win-x64.zip","browser_download_url":"https://github.com/a/b/x"}]},
+            {"tag_name":"runtime-b100-metal-macos-x64","assets":[{"name":"aiolm-b100-metal-macos-x64.zip","browser_download_url":"https://github.com/a/b/100"}]}
+            ]"#,
+        )
+        .unwrap();
+        let (build, asset) = newest_published_runtime(&releases, "metal", "macos", "x64").unwrap();
+        assert_eq!(
+            (build.as_str(), asset.browser_download_url.as_str()),
+            ("b150", "https://github.com/a/b/150")
+        );
+        assert!(newest_published_runtime(&releases, "cpu", "macos", "x64").is_none());
+        assert!(published_by_aiolm("metal", "macos", "x86_64"));
+        assert!(!published_by_aiolm("metal", "macos", "aarch64"));
+        assert!(!published_by_aiolm("cpu", "macos", "x86_64"));
+        assert!(catalog_supports("metal", "macos", "x86_64"));
     }
 
     #[test]

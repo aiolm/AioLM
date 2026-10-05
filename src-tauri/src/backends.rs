@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn apple_silicon_recommends_metal_and_intel_macos_uses_cpu() {
+    fn macs_recommend_metal_for_a_detected_gpu_and_cpu_otherwise() {
         let mut apple = profile(
             "aarch64",
             vec![gpu(GpuVendor::Apple, "Apple Test Chip", true)],
@@ -349,10 +349,23 @@ mod tests {
         );
         let mut intel = profile(
             "x86_64",
-            vec![gpu(GpuVendor::Intel, "Intel Test GPU", true)],
+            vec![
+                gpu(GpuVendor::Intel, "Intel Test GPU", true),
+                gpu(GpuVendor::Amd, "AMD Test GPU", false),
+            ],
         );
         intel.os = "macos".into();
-        assert_eq!(shown_by_default(&recommend(&intel)), vec!["cpu"]);
+        let recommended = recommend(&intel);
+        assert_eq!(shown_by_default(&recommended), vec!["metal"]);
+        let metal = recommended
+            .iter()
+            .find(|item| item.backend == "metal")
+            .unwrap();
+        assert_eq!(metal.device.as_deref(), Some("AMD Test GPU"));
+        assert_eq!(fit_of(&recommended, "rocm"), BackendFit::Unsupported);
+        let mut no_gpu = profile("x86_64", Vec::new());
+        no_gpu.os = "macos".into();
+        assert_eq!(shown_by_default(&recommend(&no_gpu)), vec!["cpu"]);
     }
 
     #[test]
