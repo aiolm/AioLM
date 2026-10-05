@@ -161,6 +161,29 @@ AioLM-built release bundle and publishing workflow were prototyped and then
 removed unpublished. That virtual-device result is not evidence for physical
 Intel Mac GPUs.
 
+## Published v0.3.0
+
+The [v0.3.0 release run](https://github.com/aiolm/AioLM/actions/runs/37326668883)
+built and checked Windows, Linux and both macOS packages and published them on
+2026-10-05 after the `release-publish` approval. The first attempt
+(run 37318444693) was cancelled before publication: platform-independent jsdom
+tests timed out on the Intel Mac, so the macOS release jobs now keep native checks
+only, and Windows process-tree fixtures now allow a slow PowerShell start.
+
+Every downloaded asset matched GitHub's SHA-256 digest and `checksums.txt`, and the
+published `install.sh` matched `main`. That `checksums.txt` uses CRLF line
+endings (as does v0.2.1), so `sha256sum -c` rejects it until the CR is removed;
+later releases write LF.
+
+On hosted macOS 15, the documented one-line command installed the published DMG
+on Intel: SHA-256 verified, strict signature valid, no quarantine attribute,
+LaunchServices launch with launchd's PATH, standard quit and reinstall. On Apple
+Silicon the same command stopped at the GitHub API's anonymous limit. The fixed
+script falls back to the release download links and `checksums.txt`; a
+[check against v0.3.0](https://github.com/aiolm/AioLM/actions/runs/37334645617)
+passed on both architectures through the API and with `api.github.com` blocked.
+v0.3.0 still ships the earlier `install.sh`; the fix ships with the next release.
+
 ## Distribution and remaining device checks
 
 macOS is distributed without Apple credentials:
@@ -178,7 +201,7 @@ macOS is distributed without Apple credentials:
   mismatch to install nothing.
 - The [release workflow](../../.github/workflows/release.yml) builds, checks and
   publishes both DMGs and `install.sh` with the Windows/Linux assets when `main`
-  carries a new version. No macOS release has been published yet.
+  carries a new version.
 
 [Run 37298629080](https://github.com/aiolm/AioLM/actions/runs/37298629080) at `e5fa2df`
 passed both architectures: Tauri signed `aiolm-cli`, `aiolm` and the bundle with

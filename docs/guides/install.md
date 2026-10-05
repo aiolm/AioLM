@@ -103,7 +103,7 @@ AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Meta
 curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
 ```
 
-The script downloads the DMG for your Mac, verifies its SHA-256 against the release, and copies `AioLM.app` into `/Applications`, or `~/Applications` when that folder is not writable. Quit AioLM first. `AIOLM_RELEASE=v0.3.0` selects a release, `AIOLM_DRY_RUN=1` stops after verification, and `AIOLM_APPLICATIONS_DIR` chooses another folder. Current source: <https://github.com/aiolm/AioLM/blob/main/install.sh>
+The script downloads the DMG for your Mac, verifies its SHA-256 against the release (falling back to the release download links and `checksums.txt` when the GitHub API is rate limited), and copies `AioLM.app` into `/Applications`, or `~/Applications` when that folder is not writable. Quit AioLM first. `AIOLM_RELEASE=v0.3.0` selects a release, `AIOLM_DRY_RUN=1` stops after verification, and `AIOLM_APPLICATIONS_DIR` chooses another folder. Current source: <https://github.com/aiolm/AioLM/blob/main/install.sh>
 
 ### Install the DMG manually
 
