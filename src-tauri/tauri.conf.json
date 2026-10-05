@@ -41,7 +41,8 @@
     },
     "macOS": {
       "minimumSystemVersion": "13.3",
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "signingIdentity": "-"
     },
     "windows": {
       "nsis": {

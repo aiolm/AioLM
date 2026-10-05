@@ -107,6 +107,13 @@ try {
     assert.equal(run("/usr/bin/lipo", ["-archs", binary]).trim(), arch);
   }
   assert.ok(!existsSync(join(source, "Contents/MacOS/fake-llama-server")));
+  // Ad-hoc signing seals the whole bundle without a Developer ID, so the
+  // signature verifies strictly instead of reporting missing resources.
+  run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", source]);
+  const signature = path => spawnSync("/usr/bin/codesign", ["--display", "--verbose=4", path], { encoding: "utf8" }).stderr;
+  assert.match(signature(source), /Signature=adhoc/);
+  assert.match(signature(source), /Sealed Resources version=/);
+  for (const name of ["aiolm", "aiolm-cli"]) assert.match(signature(join(source, "Contents/MacOS", name)), /Signature=adhoc/);
 
   const home = join(root, "synthetic home 한글");
   mkdirSync(home);
