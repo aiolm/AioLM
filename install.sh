@@ -113,26 +113,42 @@ else
     metadata_url="https://api.github.com/repos/$REPOSITORY/releases/tags/$release"
   fi
   info "Resolving AioLM release ($release)"
-  download -H "Accept: application/vnd.github+json" -o "$workdir/release.json" "$metadata_url" || fail "could not read release $release from GitHub"
-  fields="$(release_fields "$workdir/release.json" "$package_arch")"
-  tag="$(field "$fields" tag)"
-  name="$(field "$fields" name)"
-  url="$(field "$fields" url)"
-  [ -n "$url" ] || fail "release ${tag:-$release} does not include a macOS package for this Mac ($name)"
+  expected=""
+  if download -H "Accept: application/vnd.github+json" -o "$workdir/release.json" "$metadata_url" 2>/dev/null; then
+    fields="$(release_fields "$workdir/release.json" "$package_arch")"
+    tag="$(field "$fields" tag)"
+    name="$(field "$fields" name)"
+    url="$(field "$fields" url)"
+    [ -n "$url" ] || fail "release ${tag:-$release} does not include a macOS package for this Mac ($name)"
+    expected="$(field "$fields" digest)"
+    expected="${expected#sha256:}"
+    checksums="$(field "$fields" checksums)"
+  else
+    # The anonymous API limit is shared by every user behind one address. The
+    # release pages and download links are not subject to it.
+    info "GitHub API unavailable; using the release download links and checksums.txt"
+    if [ "$release" = "latest" ]; then
+      tag="$(/usr/bin/curl -fsSI --proto '=https' --tlsv1.2 -o /dev/null -w '%{redirect_url}' "https://github.com/$REPOSITORY/releases/latest")" || fail "could not find the latest AioLM release"
+      tag="${tag##*/}"
+    else
+      tag="$release"
+    fi
+    [[ "$tag" =~ ^[A-Za-z0-9._-]+$ ]] || fail "could not find the latest AioLM release"
+    name="AioLM_${tag#v}_${package_arch}.dmg"
+    url="https://github.com/$REPOSITORY/releases/download/$tag/$name"
+    checksums="https://github.com/$REPOSITORY/releases/download/$tag/checksums.txt"
+  fi
   trusted_url "$url" || fail "release asset URL is not a trusted HTTPS GitHub URL: $url"
-  expected_version="$(field "$fields" version)"
-  expected="$(field "$fields" digest)"
-  expected="${expected#sha256:}"
+  expected_version="${tag#v}"
   if ! [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]]; then
     expected=""
-    checksums="$(field "$fields" checksums)"
     if [ -n "$checksums" ] && trusted_url "$checksums"; then
-      download -o "$workdir/checksums.txt" "$checksums"
+      download -o "$workdir/checksums.txt" "$checksums" || fail "could not download checksums.txt for $tag"
       # Releases up to v0.3.0 wrote checksums.txt with CRLF line endings.
       expected="$(awk -v file="$name" '{ sub(/\r$/, "") } $2 == file && $1 ~ /^[0-9a-fA-F]{64}$/ { print $1; exit }' "$workdir/checksums.txt")"
     fi
   fi
-  [ -n "$expected" ] || fail "$name has no SHA-256 digest and no matching entry in checksums.txt"
+  [ -n "$expected" ] || fail "release $tag does not provide a SHA-256 for $name; it may not include a macOS package for this Mac"
   expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
   dmg="$workdir/$name"
   info "Downloading $name"
