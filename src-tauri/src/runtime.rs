@@ -3398,7 +3398,7 @@ pub async fn import_bundle(
     progress: ProgressSink<'_>,
     cancel: Arc<AtomicBool>,
 ) -> Result<InstalledRuntime, String> {
-    import_bundle_with_digest(archive, None, None, None, None, progress, cancel).await
+    import_bundle_with_digest(archive, None, None, None, progress, cancel).await
 }
 
 async fn import_bundle_with_digest(
@@ -3406,7 +3406,6 @@ async fn import_bundle_with_digest(
     expected_archive_sha256: Option<&str>,
     expected_backend: Option<&str>,
     expected_source: Option<&RuntimeSource>,
-    expected_build: Option<&str>,
     progress: ProgressSink<'_>,
     cancel: Arc<AtomicBool>,
 ) -> Result<InstalledRuntime, String> {
@@ -3435,7 +3434,7 @@ async fn import_bundle_with_digest(
             .map_err(|error| format!("runtime bundle hash task failed: {error}"))??;
         if actual != expected {
             return Err(format!(
-                "runtime bundle digest mismatch: expected {expected}, got {actual}"
+                "prebuilt PR artifact digest mismatch: expected {expected}, got {actual}"
             ));
         }
     }
@@ -3453,7 +3452,6 @@ async fn import_bundle_with_digest(
     let extract_cancel = cancel.clone();
     let expected_backend = expected_backend.map(str::to_owned);
     let expected_source = expected_source.cloned();
-    let expected_build = expected_build.map(str::to_owned);
     let verified = match tokio::task::spawn_blocking(move || {
         extract(&extract_archive, &extracted, &extract_cancel)?;
         let runtime_root = find_bundle_runtime_root(&extracted)?;
@@ -3463,14 +3461,6 @@ async fn import_bundle_with_digest(
             return Err("runtime bundle directory does not match its manifest".into());
         }
         verify_bundle_files(&runtime_root, &manifest)?;
-        if let Some(expected) = expected_build {
-            if manifest.build != expected {
-                return Err(format!(
-                    "runtime bundle contains build {}, not {expected}",
-                    manifest.build
-                ));
-            }
-        }
         if let Some(expected) = expected_backend {
             if manifest.backend != expected {
                 return Err(format!(
@@ -4061,163 +4051,9 @@ pub fn catalog_supports(backend: &str, os: &str, arch: &str) -> bool {
         ("windows", "aarch64") => matches!(backend, "cpu" | "cuda"),
         ("linux", "aarch64") => matches!(backend, "cpu" | "vulkan" | "cuda"),
         ("macos", "aarch64") => matches!(backend, "cpu" | "metal"),
-        ("macos", "x86_64") => matches!(backend, "cpu" | "metal"),
+        ("macos", "x86_64") => backend == "cpu",
         _ => false,
     }
-}
-
-/// Upstream's Intel macOS archive disables Metal, so AioLM builds that runtime
-/// from the official release tag (`install_release_source_with`) and publishes
-/// it beside its PR runtimes. Its archive is an AioLM runtime bundle.
-pub fn published_by_aiolm(backend: &str, os: &str, arch: &str) -> bool {
-    backend == "metal" && os == "macos" && arch == "x86_64"
-}
-
-/// Release tag and bundle name of an AioLM-published runtime.
-pub fn published_runtime_names(
-    build: &str,
-    backend: &str,
-    platform: &str,
-    architecture: &str,
-) -> (String, String) {
-    (
-        format!("runtime-{build}-{backend}-{platform}-{architecture}"),
-        format!("aiolm-{build}-{backend}-{platform}-{architecture}.zip"),
-    )
-}
-
-/// The newest published build whose release carries the exact bundle.
-fn newest_published_runtime<'a>(
-    releases: &'a [Rel],
-    backend: &str,
-    platform: &str,
-    architecture: &str,
-) -> Option<(String, &'a Asset)> {
-    let suffix = format!("-{backend}-{platform}-{architecture}");
-    releases
-        .iter()
-        .filter_map(|release| {
-            let build = release
-                .tag_name
-                .strip_prefix("runtime-")?
-                .strip_suffix(&suffix)?;
-            if !is_build_tag(build) {
-                return None;
-            }
-            let (_, bundle) = published_runtime_names(build, backend, platform, architecture);
-            let asset = release.assets.iter().find(|asset| asset.name == bundle)?;
-            Some((build[1..].parse::<u64>().ok()?, build.to_string(), asset))
-        })
-        .max_by_key(|(number, _, _)| *number)
-        .map(|(_, build, asset)| (build, asset))
-}
-
-/// AioLM release listing fetched by a live acceptance job with its scoped
-/// token, so the shared anonymous API limit cannot fail the check.
-#[cfg(feature = "test-fixtures")]
-static PRELOADED_PUBLISHED_RUNTIMES: OnceLock<String> = OnceLock::new();
-
-/// Prime live acceptance of AioLM-published runtimes. Only the release lookup
-/// is replaced; the download, digest and bundle verification are unchanged.
-#[cfg(feature = "test-fixtures")]
-pub fn preload_published_runtimes(bytes: &[u8]) -> Result<(), String> {
-    if bytes.len() > MAX_GITHUB_RESPONSE_BYTES {
-        return Err("GitHub API response exceeds the 2 MiB limit".into());
-    }
-    let raw = String::from_utf8(bytes.to_vec())
-        .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
-    serde_json::from_str::<Vec<Rel>>(&raw)
-        .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
-    PRELOADED_PUBLISHED_RUNTIMES
-        .set(raw)
-        .map_err(|_| "AioLM runtime releases were already preloaded".to_string())
-}
-
-async fn latest_published_runtime(backend: &str) -> Result<LatestInfo, String> {
-    #[cfg(feature = "test-fixtures")]
-    if let Some(raw) = PRELOADED_PUBLISHED_RUNTIMES.get() {
-        return published_runtime_from(raw, backend);
-    }
-    let response = http()
-        .get(format!(
-            "https://api.github.com/repos/{PR_ARTIFACT_REPOSITORY}/releases?per_page=30"
-        ))
-        .send()
-        .await
-        .map_err(|error| format!("AioLM runtime lookup failed: {error}"))?;
-    let status = response.status();
-    let raw = bounded_github_text(response).await?;
-    if !status.is_success() {
-        return Err(format!(
-            "AioLM runtime lookup failed: {}",
-            api_error(status, &raw)
-        ));
-    }
-    published_runtime_from(&raw, backend)
-}
-
-fn published_runtime_from(raw: &str, backend: &str) -> Result<LatestInfo, String> {
-    let releases: Vec<Rel> = serde_json::from_str(raw)
-        .map_err(|error| format!("invalid AioLM runtime release response: {error}"))?;
-    let (build, asset) =
-        newest_published_runtime(&releases, backend, release_platform(), bundle_architecture())
-            .ok_or_else(|| {
-                format!(
-                    "AioLM has not published a {backend} runtime for {} {} yet; a llama.cpp PR can still be built for {backend} from source",
-                    std::env::consts::OS,
-                    std::env::consts::ARCH
-                )
-            })?;
-    Ok(LatestInfo {
-        build,
-        file_name: asset.name.clone(),
-        url: asset.browser_download_url.clone(),
-        digest: asset.digest.clone(),
-    })
-}
-
-/// Download an AioLM-published bundle and install it through the verified
-/// bundle path: GitHub's digest, the file manifest, backend and build, staged
-/// preflight and activation.
-async fn install_published_runtime(
-    progress: ProgressSink<'_>,
-    backend: &str,
-    build: &str,
-    info: &LatestInfo,
-    digest: &str,
-    cancel: Arc<AtomicBool>,
-) -> Result<InstalledRuntime, String> {
-    let root = runtimes_root();
-    let download_root = crate::home::aiolm_home().join("downloads");
-    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-    fs::create_dir_all(&download_root).map_err(|error| error.to_string())?;
-    if let Some(error) = free_space_error(
-        "AioLM runtime",
-        &download_root,
-        INSTALLED_RUNTIME_BYTES.saturating_mul(2),
-        available_bytes(&download_root),
-    ) {
-        return Err(error);
-    }
-    let archive_path = download_root.join(format!(".{}-{}", short_nonce(), info.file_name));
-    let cleanup_path = archive_path.clone();
-    let result = async {
-        progress("downloading", 0.0, 0.0);
-        download_to_file(progress, "downloading", &info.url, &archive_path, &cancel).await?;
-        import_bundle_with_digest(
-            &archive_path,
-            Some(digest),
-            Some(backend),
-            None,
-            Some(build),
-            progress,
-            cancel,
-        )
-        .await
-    }
-    .await;
-    let _ = tokio::task::spawn_blocking(move || fs::remove_file(cleanup_path)).await;
-    result
 }
 
 fn backend_asset_for<'a>(
@@ -4226,7 +4062,7 @@ fn backend_asset_for<'a>(
     os: &str,
     arch: &str,
 ) -> Option<&'a Asset> {
-    if !catalog_supports(backend, os, arch) || published_by_aiolm(backend, os, arch) {
+    if !catalog_supports(backend, os, arch) {
         return None;
     }
     let architecture = match arch {
@@ -4543,9 +4379,6 @@ pub async fn latest_for(backend: &str) -> Result<LatestInfo, String> {
             std::env::consts::ARCH
         ));
     }
-    if published_by_aiolm(backend, std::env::consts::OS, std::env::consts::ARCH) {
-        return latest_published_runtime(backend).await;
-    }
     let releases = recent_releases().await?;
     let (release, asset) = newest_with_asset(&releases, backend).ok_or_else(|| {
         let newest = releases
@@ -4804,9 +4637,6 @@ pub async fn install_with(
         "release asset has no SHA-256 digest; refusing unverified install".to_string()
     })?)?;
     validate_download_url(&info.url)?;
-    if published_by_aiolm(backend, std::env::consts::OS, std::env::consts::ARCH) {
-        return install_published_runtime(progress, backend, build, &info, &expected, cancel).await;
-    }
     let companions = companion_assets(build, &info.file_name).await?;
 
     let root = runtimes_root();
@@ -5003,7 +4833,6 @@ async fn install_pr_artifact_with(
             Some(&artifact.sha256),
             Some(backend),
             Some(source),
-            None,
             progress,
             cancel,
         )
@@ -5077,76 +4906,7 @@ pub async fn install_pr_with(
             )
         }
     })?;
-    let archive_url = source_archive_url(&origin)?;
-    let commit = origin.commit.clone();
-    build_source_runtime(
-        progress,
-        backend,
-        &build,
-        &archive_url,
-        &commit,
-        &cmake,
-        Some(&mut origin),
-        None,
-        cancel,
-    )
-    .await
-}
 
-/// Build llama.cpp `release` from the official repository at `commit` with
-/// the host toolchain, exactly as a PR build is produced. AioLM uses this to
-/// publish runtimes upstream does not ship, such as Metal for Intel Macs.
-///
-/// A source archive carries no Git history, so llama.cpp would report build 0
-/// and an unknown commit. The release number and commit are written into its
-/// build information, and the built server must report them back.
-pub async fn install_release_source_with(
-    progress: ProgressSink<'_>,
-    backend: &str,
-    release: &str,
-    commit: &str,
-    cancel: Arc<AtomicBool>,
-) -> Result<InstalledRuntime, String> {
-    if !is_build_tag(release) {
-        return Err(format!("{release} is not a llama.cpp release tag"));
-    }
-    validate_runtime_identifiers(backend, release)?;
-    let commit = commit.trim().to_ascii_lowercase();
-    validate_commit_sha(&commit)?;
-    let number = release[1..]
-        .parse::<u64>()
-        .map_err(|_| format!("{release} is not a llama.cpp release tag"))?;
-    let cmake = source_build_preflight(backend).await?;
-    let archive_url = format!("https://codeload.github.com/{LLAMA_REPOSITORY}/zip/{commit}");
-    build_source_runtime(
-        progress,
-        backend,
-        release,
-        &archive_url,
-        &commit,
-        &cmake,
-        None,
-        Some(number),
-        cancel,
-    )
-    .await
-}
-
-/// Download, verify, configure, build, package and activate one source tree.
-/// `provenance` is recorded for PR builds; `release_number` pins the build
-/// information of an official release tag.
-#[allow(clippy::too_many_arguments)]
-async fn build_source_runtime(
-    progress: ProgressSink<'_>,
-    backend: &str,
-    build: &str,
-    archive_url: &str,
-    commit: &str,
-    cmake: &Path,
-    mut provenance: Option<&mut RuntimeSource>,
-    release_number: Option<u64>,
-    cancel: Arc<AtomicBool>,
-) -> Result<InstalledRuntime, String> {
     let root = runtimes_root();
     let download_root = crate::home::aiolm_home().join("downloads");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -5189,12 +4949,13 @@ async fn build_source_runtime(
     cleanup.track_directory(workspace.clone());
 
     let result = async {
+        let archive_url = source_archive_url(&origin)?;
         progress("resolving", 1.0, 1.0);
         progress("downloading source", 0.0, 0.0);
         download_to_file(
             progress,
             "downloading source",
-            archive_url,
+            &archive_url,
             &archive_path,
             &cancel,
         )
@@ -5204,12 +4965,9 @@ async fn build_source_runtime(
         // computed here from the bytes we received. It records what was built;
         // it cannot confirm that those bytes were the right ones. The real
         // check is the commit id carried by the extracted tree, below.
-        let archive_sha256 = tokio::task::spawn_blocking(move || sha256_file(&hash_path))
+        origin.archive_sha256 = tokio::task::spawn_blocking(move || sha256_file(&hash_path))
             .await
             .map_err(|error| format!("runtime source hash task failed: {error}"))??;
-        if let Some(origin) = provenance.as_deref_mut() {
-            origin.archive_sha256 = archive_sha256;
-        }
         progress("recorded source digest", 1.0, 1.0);
 
         if cancel.load(Ordering::Acquire) {
@@ -5232,7 +4990,7 @@ async fn build_source_runtime(
         // source archive's top-level directory after the ref it was asked for,
         // and we asked by commit id. A tree that carries a different commit is
         // not the one the user approved, so it is refused rather than built.
-        let commit_check = match archive_commit_check(&source_root, commit) {
+        origin.commit_check = match archive_commit_check(&source_root, &origin.commit) {
             ArchiveCommitCheck::Matches => COMMIT_CHECK_MATCHED.to_string(),
             ArchiveCommitCheck::Unknown => {
                 return Err(format!(
@@ -5241,20 +4999,11 @@ async fn build_source_runtime(
             }
             ArchiveCommitCheck::Mismatch(found) => {
                 return Err(format!(
-                    "the downloaded source is not the commit you confirmed: the archive contains {found}, not {commit}. The download was not used."
+                    "the downloaded source is not the commit you confirmed: the archive contains {found}, not {}. The download was not used.",
+                    origin.commit
                 ));
             }
         };
-        if let Some(origin) = provenance.as_deref_mut() {
-            origin.commit_check = commit_check;
-        }
-        if let Some(number) = release_number {
-            let info_root = source_root.clone();
-            let short = commit[..9].to_string();
-            tokio::task::spawn_blocking(move || pin_release_build_info(&info_root, number, &short))
-                .await
-                .map_err(|error| format!("runtime build information task failed: {error}"))??;
-        }
 
         // Only asked for a CUDA build, and only after the source is on disk,
         // so a machine with no NVIDIA driver never pays for the probe.
@@ -5270,7 +5019,7 @@ async fn build_source_runtime(
             source_build_configure_args(backend, &source_root, &build_root, &architectures)?;
         progress("configuring", 0.0, 0.0);
         run_cmake_command(
-            cmake,
+            &cmake,
             backend,
             progress,
             "configuring",
@@ -5283,7 +5032,7 @@ async fn build_source_runtime(
         let build_args = source_build_args(&build_root);
         progress("building", 0.0, 0.0);
         run_cmake_command(
-            cmake,
+            &cmake,
             backend,
             progress,
             "building",
@@ -5320,48 +5069,34 @@ async fn build_source_runtime(
             .await
             .map_err(|error| format!("runtime size task failed: {error}"))?;
         let version = preflight_staged_runtime(&staging, backend, progress, &cancel).await?;
-        if let Some(number) = release_number {
-            let reported = version.as_ref().map(|version| (version.build, version.commit.as_str()));
-            if !reported.is_some_and(|(build, short)| {
-                build == number && !short.is_empty() && commit.starts_with(&short.to_ascii_lowercase())
-            }) {
-                return Err(format!(
-                    "the built server reports {reported:?}, not release b{number} at {commit}; no runtime was activated"
-                ));
-            }
-        }
         if let Some(version) = version.as_ref() {
             write_version_manifest(&staging, version);
         }
         // Provenance is part of the safety contract for a PR runtime. If the
         // manifest cannot be written, leave the staged bytes unactivated
         // rather than silently installing an unattributed build.
-        if let Some(origin) = provenance.as_deref() {
-            write_source_manifest(&staging, origin)?;
-        }
+        write_source_manifest(&staging, &origin)?;
         if cancel.load(Ordering::Acquire) {
             return Err("runtime install cancelled".into());
         }
-        let destination = runtime_dir(backend, build)?;
+        let destination = runtime_dir(backend, &build)?;
         // Read before the swap: after it, the old manifest is gone. One
         // directory per pull request means a rebuild displaces the previous
         // commit, and the user should be told which one.
-        let replaced = provenance.as_deref().and_then(|origin| {
-            runtime_replacement(read_source_manifest(&destination).as_ref(), origin)
-        });
+        let replaced = runtime_replacement(read_source_manifest(&destination).as_ref(), &origin);
         let replace_staging = staging.clone();
         tokio::task::spawn_blocking(move || replace_runtime(&replace_staging, &destination))
             .await
             .map_err(|error| format!("runtime activation task failed: {error}"))??;
         progress("installed", 1.0, 1.0);
-        let dest = runtime_dir(backend, build)?;
+        let dest = runtime_dir(backend, &build)?;
         let installed = InstalledRuntime {
-            build: build.to_string(),
+            build: build.clone(),
             backend: backend.into(),
             dir: dest.to_string_lossy().into_owned(),
             size_mb,
             version,
-            source: provenance.as_deref().cloned(),
+            source: Some(origin.clone()),
             replaced,
         };
         cleanup.commit();
@@ -6176,35 +5911,6 @@ enum ArchiveCommitCheck {
 /// provenance - unlike a digest this machine computed from those same bytes.
 /// It is a provenance/layout check, not a cryptographic signature; the HTTPS
 /// connection and the exact commit request provide the transport boundary.
-/// Give a release built from a Git-less source archive its real build number
-/// and commit. llama.cpp otherwise falls back to build 0 and "unknown", which
-/// would misidentify the runtime in version labels and benchmark records.
-fn pin_release_build_info(source_root: &Path, number: u64, commit: &str) -> Result<(), String> {
-    let path = source_root.join("cmake").join("build-info.cmake");
-    let text = fs::read_to_string(&path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let pinned = text
-        .replacen(
-            "set(BUILD_NUMBER 0)",
-            &format!("set(BUILD_NUMBER {number})"),
-            1,
-        )
-        .replacen(
-            "set(BUILD_COMMIT \"unknown\")",
-            &format!("set(BUILD_COMMIT \"{commit}\")"),
-            1,
-        );
-    if !pinned.contains(&format!("set(BUILD_NUMBER {number})"))
-        || !pinned.contains(&format!("set(BUILD_COMMIT \"{commit}\")"))
-    {
-        return Err(format!(
-            "{} no longer has the default build number and commit lines; release build information cannot be pinned",
-            path.display()
-        ));
-    }
-    fs::write(&path, pinned).map_err(|error| format!("cannot write {}: {error}", path.display()))
-}
-
 fn archive_commit_check(source_root: &Path, expected: &str) -> ArchiveCommitCheck {
     let Some(name) = source_root.file_name().and_then(|name| name.to_str()) else {
         return ArchiveCommitCheck::Unknown;
@@ -9180,37 +8886,6 @@ mod tests {
     // ---- L5 / L6: what gets built ----
 
     #[test]
-    fn release_build_information_is_pinned_or_refused() {
-        let root = std::env::temp_dir().join(format!("aiolm-build-info-{}", short_nonce()));
-        fs::create_dir_all(root.join("cmake")).unwrap();
-        let path = root.join("cmake").join("build-info.cmake");
-        fs::write(
-            &path,
-            "set(BUILD_NUMBER 0)
-set(BUILD_COMMIT \"unknown\")
-set(BUILD_COMPILER \"unknown\")
-",
-        )
-        .unwrap();
-        pin_release_build_info(&root, 11393, "f07be9f37").unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "set(BUILD_NUMBER 11393)
-set(BUILD_COMMIT \"f07be9f37\")
-set(BUILD_COMPILER \"unknown\")
-"
-        );
-        fs::write(
-            &path,
-            "set(BUILD_NUMBER 7)
-",
-        )
-        .unwrap();
-        assert!(pin_release_build_info(&root, 11393, "f07be9f37").is_err());
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
     fn a_pr_build_produces_the_server_bench_and_verification_tools_and_nothing_else() {
         let args = source_build_args(Path::new("build"));
         for target in SOURCE_BUILD_TARGETS {
@@ -10043,32 +9718,6 @@ set(BUILD_COMPILER \"unknown\")
             companion_asset_name("b123", names[7]).as_deref(),
             Some("cudart-llama-b123-bin-ubuntu-cuda-13.4-x64.tar.gz")
         );
-    }
-
-    #[test]
-    fn intel_mac_metal_comes_from_the_newest_complete_aiolm_bundle() {
-        let releases: Vec<Rel> = serde_json::from_str(
-            r#"[
-            {"tag_name":"v0.2.1","assets":[{"name":"AioLM_0.2.1_x64.dmg","browser_download_url":"https://github.com/a/b/x"}]},
-            {"tag_name":"runtime-b300-metal-macos-x64","assets":[]},
-            {"tag_name":"runtime-b250-metal-macos-arm64","assets":[{"name":"aiolm-b250-metal-macos-arm64.zip","browser_download_url":"https://github.com/a/b/x"}]},
-            {"tag_name":"runtime-b150-metal-macos-x64","assets":[{"name":"aiolm-b150-metal-macos-x64.zip","browser_download_url":"https://github.com/a/b/150","digest":"sha256:00"}]},
-            {"tag_name":"runtime-bad-metal-macos-x64","assets":[{"name":"aiolm-bad-metal-macos-x64.zip","browser_download_url":"https://github.com/a/b/x"}]},
-            {"tag_name":"pr-runtime-123","assets":[{"name":"aiolm-pr123-cpu-win-x64.zip","browser_download_url":"https://github.com/a/b/x"}]},
-            {"tag_name":"runtime-b100-metal-macos-x64","assets":[{"name":"aiolm-b100-metal-macos-x64.zip","browser_download_url":"https://github.com/a/b/100"}]}
-            ]"#,
-        )
-        .unwrap();
-        let (build, asset) = newest_published_runtime(&releases, "metal", "macos", "x64").unwrap();
-        assert_eq!(
-            (build.as_str(), asset.browser_download_url.as_str()),
-            ("b150", "https://github.com/a/b/150")
-        );
-        assert!(newest_published_runtime(&releases, "cpu", "macos", "x64").is_none());
-        assert!(published_by_aiolm("metal", "macos", "x86_64"));
-        assert!(!published_by_aiolm("metal", "macos", "aarch64"));
-        assert!(!published_by_aiolm("cpu", "macos", "x86_64"));
-        assert!(catalog_supports("metal", "macos", "x86_64"));
     }
 
     #[test]
