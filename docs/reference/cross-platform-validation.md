@@ -206,9 +206,12 @@ Before a macOS public release, choose a minimum supported macOS version and veri
 the resulting WebKit requirements. Tailwind v4 requires Safari 16.4-level WebKit;
 the bundler's default deployment target alone is not a UI compatibility promise.
 See [Tailwind browser requirements](https://tailwindcss.com/docs/compatibility).
-Configure Developer ID signing and notarization
-through CI secrets, then test the downloaded artifact under Gatekeeper. Unsigned CI
-DMGs do not establish that experience. See [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
+macOS 13.3 is the declared minimum. Releases publish ad-hoc signed DMGs and a
+verified `install.sh` without Apple credentials; browser downloads need a one-time
+Gatekeeper **Open Anyway**. Developer ID signing and notarization through CI secrets
+would remove that step; test the downloaded artifact under Gatekeeper either way.
+See [macOS validation](macos-validation.md#distribution-and-remaining-device-checks)
+and [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 
 ## Native acceptance
 

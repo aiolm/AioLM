@@ -163,13 +163,36 @@ Intel Mac GPUs.
 
 ## Distribution and remaining device checks
 
-These candidates have no Developer ID signing or notarization. Hosted copying
-and launching do not prove downloaded-app Gatekeeper acceptance. Formal macOS
-publication remains separate from the Windows/Linux release workflow.
+macOS is distributed without Apple credentials:
 
-The repository needs a Developer ID Application certificate and its password,
-the signing identity, and Apple notarization credentials before that workflow can
-be connected. Follow [Tauri's signing setup](https://v2.tauri.app/distribute/sign/macos/)
+- The bundle is ad-hoc signed (`signingIdentity: "-"`). The package check requires
+  `codesign --verify --deep --strict` to pass and an ad-hoc, sealed signature on
+  the app and both executables. This is not a Developer ID: Gatekeeper blocks the
+  first launch of a browser-downloaded copy until the user chooses **Open Anyway**
+  (see the [installation guide](../guides/install.md#macos)). Each build has a new
+  code identity, so Keychain may ask for access again after an update.
+- [`install.sh`](../../install.sh) resolves the release, verifies the DMG's SHA-256
+  from GitHub's digest or `checksums.txt`, checks the bundle identity, version and
+  signature, and installs into `/Applications` or `~/Applications`. The package
+  check installs and replaces the built DMG through it and requires a checksum
+  mismatch to install nothing.
+- The [release workflow](../../.github/workflows/release.yml) builds, checks and
+  publishes both DMGs and `install.sh` with the Windows/Linux assets when `main`
+  carries a new version. No macOS release has been published yet.
+
+[Run 37298629080](https://github.com/aiolm/AioLM/actions/runs/37298629080) at `e5fa2df`
+passed both architectures: Tauri signed `aiolm-cli`, `aiolm` and the bundle with
+identity `-`; the strict, sealed ad-hoc signature, LaunchServices launch and quit,
+replacement and settings retention passed, and `install.sh` rejected a mismatched
+checksum, then installed and replaced the app with settings kept.
+
+Hosted copying and launching do not prove downloaded-app Gatekeeper behavior;
+check a quarantined browser download on a separate clean Mac account.
+
+Developer ID signing and notarization would remove the Gatekeeper step and keep
+Keychain access stable across updates. They need a Developer ID Application
+certificate and its password, the signing identity, and Apple notarization
+credentials. Follow [Tauri's signing setup](https://v2.tauri.app/distribute/sign/macos/)
 and use repository secrets; never put a certificate, private key or account
 identifier into source or a package. Once configured, verify the actual app/DMG:
 
@@ -181,12 +204,10 @@ xcrun stapler validate AioLM.dmg
 spctl --assess --type execute --verbose=4 AioLM.app
 ```
 
-Unsigned candidates currently fail `codesign --verify --strict` with
-"code has no resources but signature indicates they must be present": the
-Apple Silicon executable carries only the linker's ad-hoc signature. LaunchServices
-still opens them locally; Developer ID signing must produce a sealed bundle.
+Before ad-hoc signing, candidates failed `codesign --verify --strict` with
+"code has no resources but signature indicates they must be present", because the
+Apple Silicon executable carried only the linker's signature.
 
-Verify a quarantined browser download on a separate clean Mac account as well.
 Remaining device acceptance includes the declared minimum OS, actual Finder
 double-click and Dock icon/menu clicks, tray menu clicks, native file
 selection/cancellation, clipboard and Hangul IME, Keychain allow/deny/cancel,

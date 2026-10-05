@@ -93,6 +93,20 @@ This copies the icon and registers a launcher in your XDG user data directory; i
 
 DEB updates open the verified installer in the system package interface for you to finish. Update AppImage from the release page and register its new path. GPU drivers and a compatible llama.cpp runtime are required for GPU acceleration.
 
-## macOS validation builds
+## macOS
 
-Separate Apple Silicon and Intel DMGs target macOS Ventura 13.3+. They are available as temporary GitHub Actions validation artifacts; v0.2.1 does not publish macOS installers. Verify the architecture and SHA-256 before copying `AioLM.app` into Applications. Developer ID signing, notarization and remaining device checks are still required for formal distribution. See [macOS validation](../reference/macos-validation.md) for artifact retrieval, automated coverage and limitations.
+AioLM supports macOS Ventura 13.3 or later on Apple silicon and Intel Macs. Metal GPU acceleration is available on Apple silicon; Intel Macs use the CPU runtime. macOS packages are published from the first release that includes them; v0.2.1 has none. Until then, validation DMGs are available as GitHub Actions artifacts; see [macOS validation](../reference/macos-validation.md).
+
+### Install from the terminal
+
+```bash
+curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
+```
+
+The script downloads the DMG for your Mac, verifies its SHA-256 against the release, and copies `AioLM.app` into `/Applications`, or `~/Applications` when that folder is not writable. Quit AioLM first. `AIOLM_RELEASE=v0.3.0` selects a release, `AIOLM_DRY_RUN=1` stops after verification, and `AIOLM_APPLICATIONS_DIR` chooses another folder. Current source: <https://github.com/aiolm/AioLM/blob/main/install.sh>
+
+### Install the DMG manually
+
+Download `AioLM_<version>_aarch64.dmg` (Apple silicon) or `AioLM_<version>_x64.dmg` (Intel), compare `shasum -a 256` with `checksums.txt` from the same release, open it and drag AioLM to Applications. The app is ad-hoc signed but not notarized, so macOS blocks the first launch of a browser-downloaded copy: open it once, then choose **System Settings → Privacy & Security → Open Anyway**. On macOS 13 and 14 you can instead Control-click the app and choose **Open**. This is needed once per installed copy.
+
+AioLM keeps its data in `~/.aiolm`; replacing or removing the app keeps it. When the app is installed in `/Applications` or `~/Applications`, **Download and install** in settings downloads the DMG for your Mac; replace the app with the new copy. Because unsigned builds change their code identity, macOS may ask again for access to Keychain items such as benchmark sharing credentials after an update. To uninstall, quit AioLM and move `AioLM.app` to the Trash; delete `~/.aiolm` to remove your data.

@@ -25,7 +25,7 @@ API 服务器，停止 API 服务器也不会卸载模型或中断应用内聊�
 
 ## 平台支持
 
-可使用 Windows x64 和 Linux x86_64（Ubuntu 24.04 或更新版本）构建。Linux 使用 DEB/AppImage，Windows 使用 NSIS/MSI。**从 v0.2.1 开始也提供 Linux 安装包。** 请参阅[安装指南](install.zh.md#linux)。macOS 和 Linux ARM64/NVIDIA DGX 验证尚未完成。参见[跨平台验证](../reference/cross-platform-validation.md)。发布文件未签名，并附有 SHA-256 校验和。
+可使用 Windows x64 和 Linux x86_64（Ubuntu 24.04 或更新版本）构建。Linux 使用 DEB/AppImage，Windows 使用 NSIS/MSI。**从 v0.2.1 开始也提供 Linux 安装包。** 请参阅[安装指南](install.zh.md#linux)。面向 macOS 13.3 及以上版本的 Apple Silicon（Metal）和 Intel（CPU）DMG 从首个包含它们的版本开始发布，仅有临时（ad-hoc）签名且未经公证，参见 [macOS 安装](install.zh.md#macos)。Linux ARM64/NVIDIA DGX 验证尚未完成。参见[跨平台验证](../reference/cross-platform-validation.md)。发布文件未签名，并附有 SHA-256 校验和。
 
 ## 下载
 

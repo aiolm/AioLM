@@ -491,7 +491,8 @@ Ventura 13.3은 패키지 최소 버전 정책이며 호스팅 검증 OS는 macO
 - 실제 Finder 더블클릭·Dock 아이콘 클릭과 트레이/메뉴 막대 클릭. LaunchServices 실행·재열기·표준 종료와
   launchd PATH에서의 MCP 명령 탐색은 호스팅 자동 검증에 포함됐다.
 - 실제 과거 릴리스에서의 업데이트 완료와 사용자 데이터 보존.
-- Developer ID 서명·공증·다운로드 격리 속성/Gatekeeper. 미서명 CI DMG는 공개 배포 검증을 대신하지 않는다.
+- 격리 속성이 붙은 브라우저 다운로드의 Gatekeeper "그래도 열기" 동작. DMG는 ad-hoc 서명(엄격 검증 통과)이며 공증은 없다.
+  Developer ID 서명·공증은 선택 사항으로, 자격 증명이 있으면 이 단계를 없앤다.
 - 선언한 최소 macOS 13.3에서의 실행 및 WebKit 호환성 확인.
 - Apple Silicon의 실제 Metal GPU 추론. 호스팅 CI가 GPU를 제공하는지는 `llama-server --list-devices`로 먼저 확인.
 - Intel Mac의 Metal은 지원하지 않는다. 상위 x64 릴리스가 Metal을 끄고 물리 AMD·Intel GPU의 정확성·속도·메모리를
@@ -512,9 +513,10 @@ Ventura 13.3은 패키지 최소 버전 정책이며 호스팅 검증 OS는 macO
 - [x] 위 Linux 환경의 GUI·Secret Service·MCP 승인·프로세스 정리·파일 처리 검사.
 - [ ] 계정 기반 Linux 실기 흐름과 macOS GUI·Keychain·MCP·파일 처리 검사.
 - [ ] macOS 최소 버전, Linux 배포판/glibc·그래픽 환경 지원 범위 확정.
-- [ ] macOS 서명/공증 계정·CI secrets 구성 및 Gatekeeper 검증.
+- [x] 자격 증명 없는 macOS 배포 방식 결정: ad-hoc 서명 DMG와 SHA-256 검증 `install.sh`.
+- [ ] 브라우저 다운로드의 Gatekeeper "그래도 열기" 실기 확인. (선택) Developer ID 서명·공증 구성.
 - [x] release.yml에 Linux DEB/AppImage 빌드·설치 검사와 Windows/Linux 통합 체크섬 게시 경로 구현. v0.2.1 공개 파일 다운로드와 체크섬 검증 완료.
-- [ ] macOS 검증·서명 완료 후 release.yml에 macOS 게시 경로 추가.
+- [x] release.yml에 macOS DMG·`install.sh` 빌드·검증·게시 경로 추가. 실제 macOS 릴리스는 아직 게시하지 않았다.
 - [x] README·4개 언어 설치/개요·AioLM-Web에 Linux x86_64 설치 안내 반영. v0.2.0에는 Windows 파일만 있으므로 Linux 검증 아티팩트 경로와 제한을 명시.
 - [x] Linux v0.2.1 공개 릴리스 파일 게시와 AioLM-Web 운영 배포 후 실제 다운로드 경로 확인.
 

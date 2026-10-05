@@ -75,6 +75,20 @@ python3 register-linux-desktop.py --appimage ./AioLM_*.AppImage
 
 DEB 更新は検証済みファイルをシステムのインストール画面で開き、ユーザーが完了します。AppImage はリリースページから更新し、新しいパスを登録してください。GPU アクセラレーションにはドライバーと互換性のある llama.cpp ランタイムが必要です。
 
-## macOS 検証ビルド
+## macOS
 
-Apple Silicon・Intel 別の DMG は macOS Ventura 13.3 以降を対象とします。GitHub Actions の一時的な検証アーティファクトで提供し、v0.2.1 の公開リリースに macOS インストーラーは含まれません。アーキテクチャと SHA-256 を確認し、`AioLM.app` を Applications にコピーしてください。正式配布には Developer ID 署名、公証、残りの実機検証が必要です。取得方法と自動検証の範囲・制限は [macOS 検証](../reference/macos-validation.md)を参照してください。
+AioLM は Apple Silicon と Intel Mac の macOS Ventura 13.3 以降に対応します。Metal による GPU 高速化は Apple Silicon で利用でき、Intel Mac は CPU ランタイムを使用します。macOS パッケージはそれを含む最初のリリースから公開され、v0.2.1 には含まれません。それまでは GitHub Actions の検証アーティファクトから DMG を取得できます。[macOS 検証](../reference/macos-validation.md)を参照してください。
+
+### ターミナルからインストール
+
+```bash
+curl -fsSL https://github.com/aiolm/AioLM/releases/latest/download/install.sh | bash
+```
+
+スクリプトは Mac に合った DMG をダウンロードし、リリースの SHA-256 と照合してから `AioLM.app` を `/Applications`（書き込めない場合は `~/Applications`）にコピーします。実行前に AioLM を終了してください。`AIOLM_RELEASE=v0.3.0` でリリースを選び、`AIOLM_DRY_RUN=1` は検証のみ行い、`AIOLM_APPLICATIONS_DIR` でインストール先を変更できます。現在のソース: <https://github.com/aiolm/AioLM/blob/main/install.sh>
+
+### DMG から手動でインストール
+
+`AioLM_<バージョン>_aarch64.dmg`（Apple Silicon）または `AioLM_<バージョン>_x64.dmg`（Intel）をダウンロードし、`shasum -a 256` の値を同じリリースの `checksums.txt` と比較してから開き、AioLM を Applications にドラッグします。アプリはアドホック署名のみで公証されていないため、ブラウザーで取得したコピーは初回起動がブロックされます。一度開こうとした後、**システム設定 → プライバシーとセキュリティ → このまま開く**を選択してください。macOS 13・14 ではアプリを Control キーを押しながらクリックして**開く**を選ぶこともできます。インストールしたコピーごとに一度だけ必要です。
+
+AioLM のデータは `~/.aiolm` に保存され、アプリを置き換えたり削除したりしても残ります。アプリが `/Applications` または `~/Applications` にある場合、設定の**ダウンロードしてインストール**が Mac に合った DMG を取得するので、新しいコピーでアプリを置き換えてください。未署名ビルドはコード識別子が変わるため、更新後にベンチマーク共有の認証情報など Keychain 項目へのアクセスを再度求められることがあります。アンインストールするには AioLM を終了して `AioLM.app` をゴミ箱に移動し、データも削除する場合は `~/.aiolm` を削除します。
