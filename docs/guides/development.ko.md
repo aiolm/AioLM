@@ -4,7 +4,7 @@
 
 ## 요구사항
 
-- Windows 10/11 x64
+- Windows 10/11 x64, Linux x86_64(Ubuntu 24.04 이상) 또는 macOS 13.3 이상(Apple Silicon·Intel, Xcode 명령줄 도구)
 - Node `22.23.2` / npm `12.0.2` (`.node-version`, `package.json#engines`)
 - Rust `1.98.0` + `rustfmt`/`clippy` (`rust-toolchain.toml`)
 - Tauri v2 사전 요구사항

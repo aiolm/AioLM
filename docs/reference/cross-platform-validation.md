@@ -1,10 +1,12 @@
 # Cross-platform validation
 
 Starting with v0.2.1, releases include Windows x64 NSIS/MSI and Linux x86_64
-(Ubuntu 24.04+) DEB/AppImage packages. See the
-[Linux installation guide](../guides/install.md#linux). Additional validation
-packages are available through the desktop-packages workflow. macOS and Linux
-ARM64/DGX acceptance remain separate gates.
+(Ubuntu 24.04+) DEB/AppImage packages, and starting with v0.3.0 macOS 13.3+
+DMGs for Apple Silicon and Intel. See the
+[Linux](../guides/install.md#linux) and [macOS](../guides/install.md#macos)
+installation guides. Additional validation packages are available through the
+desktop-packages workflow. Physical-Mac device checks and Linux ARM64/DGX
+acceptance remain separate gates.
 Linux and macOS have host packaging and native CI gates; source changes and a
 passing Windows suite alone are not evidence of support on another OS.
 

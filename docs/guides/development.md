@@ -4,7 +4,7 @@
 
 ## Requirements
 
-- Windows 10/11 x64 or Linux x86_64 (Ubuntu 24.04+); macOS for native portability validation
+- Windows 10/11 x64, Linux x86_64 (Ubuntu 24.04+) or macOS 13.3+ (Apple silicon or Intel; Xcode command line tools)
 - Node `22.23.2` / npm `12.0.2` (`.node-version`, `package.json#engines`)
 - Rust `1.98.0` + `rustfmt`/`clippy` (`rust-toolchain.toml`)
 - Tauri v2 prerequisites
@@ -131,7 +131,7 @@ $env:AIOLM_BENCHMARK_API_URL = "https://benchmarks.example.com"
 npm run package:tauri
 ```
 
-The Windows and Linux release jobs supply it from the `AIOLM_BENCHMARK_API_URL`
+The Windows, Linux and macOS release jobs supply it from the `AIOLM_BENCHMARK_API_URL`
 repository variable, and an empty variable builds installers that use the
 official website. `cargo test` rejects any other value that a release build
 cannot use, such as a URL with a path or plain HTTP, so a typo fails

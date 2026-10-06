@@ -4,7 +4,7 @@
 
 ## 要件
 
-- Windows 10/11 x64
+- Windows 10/11 x64、Linux x86_64（Ubuntu 24.04 以降）または macOS 13.3 以降（Apple Silicon・Intel、Xcode コマンドラインツール）
 - Node `22.23.2` / npm `12.0.2`（`.node-version`, `package.json#engines`）
 - Rust `1.98.0` + `rustfmt`/`clippy` (`rust-toolchain.toml`)
 - Tauri v2 前提

@@ -4,7 +4,7 @@
 
 [Documentation index](docs/README.md) — installation, development, architecture, and policies.
 
-AioLM (All-in-One LM) — Windows/Linux desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
+AioLM (All-in-One LM) — Windows/macOS/Linux desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
 
 ## Features
 
@@ -33,7 +33,7 @@ See [chat personalization](docs/reference/personalization.md).
 
 ## Platform support
 
-Windows x64 and Linux x86_64 (Ubuntu 24.04+) builds are available. Linux uses DEB/AppImage; Windows uses NSIS/MSI. Linux packages are included starting with **v0.2.1**; see the [Linux installation guide](docs/guides/install.md#linux). macOS 13.3+ DMGs for Apple Silicon (with Metal) and Intel (CPU) are included starting with **v0.3.0**, ad-hoc signed but not notarized, with a verified [terminal installer](docs/guides/install.md#macos); [macOS validation](docs/reference/macos-validation.md) describes the hosted checks and remaining device work. Linux ARM64/NVIDIA DGX acceptance remains pending. See [cross-platform validation](docs/reference/cross-platform-validation.md). Release assets are unsigned and include SHA-256 checksums.
+Windows x64, macOS 13.3+ (Apple Silicon and Intel) and Linux x86_64 (Ubuntu 24.04+) builds are available. Windows uses NSIS/MSI, macOS uses DMG and Linux uses DEB/AppImage. Linux packages are included starting with **v0.2.1**; see the [Linux installation guide](docs/guides/install.md#linux). macOS 13.3+ DMGs for Apple Silicon (with Metal) and Intel (CPU) are included starting with **v0.3.0**, ad-hoc signed but not notarized, with a verified [terminal installer](docs/guides/install.md#macos); [macOS validation](docs/reference/macos-validation.md) describes the hosted checks and remaining device work. Linux ARM64/NVIDIA DGX acceptance remains pending. See [cross-platform validation](docs/reference/cross-platform-validation.md). Release assets are unsigned and include SHA-256 checksums.
 
 ## Download
 

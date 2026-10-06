@@ -4,7 +4,7 @@
 
 [문서 목차](../README.md) — 설치·개발 가이드, 코드 구조, 프로젝트 정책을 모았습니다.
 
-AioLM(All-in-One LM) — `llama.cpp`용 Windows/Linux 데스크톱 런타임 매니저. `llama-server` 기반의 Tauri v2 데스크톱 UI에서 모델, 런타임, 채팅, 벤치마크를 관리합니다.
+AioLM(All-in-One LM) — `llama.cpp`용 Windows/macOS/Linux 데스크톱 런타임 매니저. `llama-server` 기반의 Tauri v2 데스크톱 UI에서 모델, 런타임, 채팅, 벤치마크를 관리합니다.
 
 모델 로드와 API 서버 실행은 독립적입니다. 모델을 로드하면 앱 내부 채팅에서
 사용할 수 있고, 외부 앱에서 연결하려면 사이드바의 **API 서버**에서 서버를
@@ -26,7 +26,7 @@ API 서버를 중지해도 로드된 모델과 내부 채팅은 유지됩니다.
 
 ## 플랫폼 지원
 
-Windows x64와 Linux x86_64(Ubuntu 24.04 이상) 빌드를 사용할 수 있습니다. Linux는 DEB/AppImage, Windows는 NSIS/MSI 형식입니다. **v0.2.1부터 Linux 패키지도 배포합니다.** [Linux 설치 가이드](install.ko.md#linux)에서 설치 방법을 확인하세요. macOS 13.3 이상용 Apple Silicon(Metal)·Intel(CPU) DMG는 **v0.3.0**부터 배포하며, ad-hoc 서명만 있고 공증되지 않았습니다. [macOS 설치](install.ko.md#macos)를 참고하세요. Linux ARM64/NVIDIA DGX 검증은 남아 있습니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참고하세요. 릴리스 파일은 미서명이며 SHA-256 체크섬을 제공합니다.
+Windows x64, macOS 13.3 이상(Apple Silicon·Intel), Linux x86_64(Ubuntu 24.04 이상) 빌드를 사용할 수 있습니다. Windows는 NSIS/MSI, macOS는 DMG, Linux는 DEB/AppImage 형식입니다. **v0.2.1부터 Linux 패키지도 배포합니다.** [Linux 설치 가이드](install.ko.md#linux)에서 설치 방법을 확인하세요. macOS 13.3 이상용 Apple Silicon(Metal)·Intel(CPU) DMG는 **v0.3.0**부터 배포하며, ad-hoc 서명만 있고 공증되지 않았습니다. [macOS 설치](install.ko.md#macos)를 참고하세요. Linux ARM64/NVIDIA DGX 검증은 남아 있습니다. [플랫폼별 검증 절차](../reference/cross-platform-validation.md)를 참고하세요. 릴리스 파일은 미서명이며 SHA-256 체크섬을 제공합니다.
 
 ## 다운로드
 
