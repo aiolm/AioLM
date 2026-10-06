@@ -48,7 +48,7 @@ describe('model metadata badges', () => {
   });
   it('localizes badge descriptions and identifies the source', () => {
     render(<I18nProvider initialLocale="ko"><ModelBadges model="Qwen3-8B-Q4_K_M.gguf" metadata={{ architecture: 'qwen3' }} /></I18nProvider>);
-    expect(screen.getByTitle('아키텍처: qwen3 · GGUF 메타데이터')).toBeVisible();
+    expect(screen.getByTitle('아키텍처: qwen3 · 모델 메타데이터')).toBeVisible();
     expect(screen.getByTitle('양자화: Q4_K_M · 모델명에서 읽은 정보')).toBeVisible();
   });
   it('prioritizes capabilities and omits administrative and duplicate tags only from the summary', () => {

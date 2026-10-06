@@ -12,6 +12,9 @@ import * as api from "../../shared/api/index";
 // a hand-written `app-*` class, or never generates a competing rule.
 
 vi.mock("../../shared/api/index", () => ({
+  PROVIDERS: ['llama.cpp', 'vllm', 'mlx-vlm'],
+  providerOf: (cfg: Partial<AppConfig>) => cfg.active_provider ?? 'llama.cpp',
+  modelLoadable: (model: { is_vision: boolean }, provider: string) => provider === 'llama.cpp' && !model.is_vision,
   isNativeRuntimeAvailable: () => false,
   listModels: vi.fn(),
   deleteModel: vi.fn(),
@@ -80,6 +83,15 @@ function storeFor(cfg: AppConfig): AppStore {
 }
 
 describe("ModelsPanel CSS cascade", () => {
+  it('rescans compatibility using the selected vLLM installation when the runtime changes', async () => {
+    localStorage.clear();
+    mocked.listModels.mockReset().mockResolvedValue({ models: [], truncated: false });
+    const cfg: AppConfig = { ...baseCfg, models_dir: 'synthetic/models', active_provider: 'vllm', active_runtime: 'metal-one' };
+    const view = render(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ModelsPanel, { store: storeFor(cfg) }) }));
+    await waitFor(() => expect(mocked.listModels).toHaveBeenCalledWith('synthetic/models', expect.any(String), { provider: 'vllm', runtime: 'metal-one' }));
+    view.rerender(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ModelsPanel, { store: storeFor({ ...cfg, active_runtime: 'metal-two' }) }) }));
+    await waitFor(() => expect(mocked.listModels).toHaveBeenLastCalledWith('synthetic/models', expect.any(String), { provider: 'vllm', runtime: 'metal-two' }));
+  });
   it("preserves current execution settings when a legacy profile has an incomplete runtime", async () => {
     localStorage.clear();
     localStorage.setItem("aiolm-model-profiles", JSON.stringify({
@@ -211,7 +223,7 @@ describe("ModelsPanel CSS cascade", () => {
       initialLocale: "en",
       children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models" }) }),
     }));
-    await screen.findByRole("heading", { name: "No GGUF models found" });
+    await screen.findByRole("heading", { name: "No models found" });
     expect(screen.getByRole("button", { name: "Rescan" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Browse" })).toBeVisible();
     expect(view.container.querySelector("details.models-folder")).toBeNull();

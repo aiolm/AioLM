@@ -1,4 +1,5 @@
 import ModelBadges from '../../shared/ui/ModelBadges';
+import { CustomSelect } from '../../shared/ui/CustomSelect';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
@@ -26,6 +27,7 @@ import { startModelScan } from '../../shared/runtime/modelScan';
 import { formatMebibytes } from '../../shared/lib/units';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
+import { providerCopy } from '../../shared/i18n/providerCopy';
 
 
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
@@ -33,11 +35,14 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const copy = executionText[locale];
 
   const cfg = store.cfg;
+  const selectedProvider = api.providerOf(cfg ?? {});
+  const selectedRuntime = cfg?.active_runtime ?? '';
   const [models, setModels] = useState<api.GgufModel[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanTruncated, setScanTruncated] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState<api.ProviderId | 'all'>('all');
   const [dir, setDir] = useState(cfg?.models_dir ?? "");
   const [folderSaved, setFolderSaved] = useState(false);
   const [scanRequest, setScanRequest] = useState(0);
@@ -75,7 +80,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     setScanning(true);
     setScanError(null);
     try {
-      const job = startModelScan(dir);
+      const job = startModelScan(dir, selectedProvider !== 'llama.cpp' && selectedRuntime ? { provider: selectedProvider, runtime: selectedRuntime } : undefined);
       pendingScan.current = job;
       const result = await job.result;
       if (!isCurrentScan(generation, scanGeneration.current)) return;
@@ -91,7 +96,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         setScanning(false);
       }
     }
-  }, [dir, t, onModels]);
+  }, [dir, t, onModels, selectedProvider, selectedRuntime]);
 
   const cancelScan = useCallback(() => {
     scanGeneration.current = nextScanGeneration(scanGeneration.current);
@@ -136,6 +141,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   const normalizedQuery = modelQuery.trim().toLowerCase();
   const visible = (models ?? []).filter((model) => {
+    if (providerFilter !== 'all' && !api.modelCompatibleForLibrary(model, providerFilter)) return false;
     if (!showVision && model.is_vision) return false;
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
@@ -145,7 +151,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   // Starting a row applies its own model, so the only setup a row can be
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
-  const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
+  const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeProvider: cfg.active_provider, activeRuntime: cfg.active_runtime, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
   const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => session.model));
   if (isServerRunning(store.status.state) && store.status.model) loadedModels.add(store.status.model);
 
@@ -250,9 +256,9 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const performSelectAndStart = async (model: api.GgufModel) => {
     const switching = serverRunning && liveModel !== model.path;
     try {
-      if (switching) await store.stop();
       const next = await store.updateConfig({ active_model: model.path });
-      await store.start(next);
+      // Backend preflight completes before replacing the running process.
+      await store.start(next, switching);
       notify(switching ? `${t("panel.restartServer")}: ${model.name}` : `${t("panel.serverStarted")}: ${model.name}`);
     } catch (error) {
       notify(isLifecycleCancellation(error) ? t("ui.taskCancelled") : `${t("panel.startFailed")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -402,6 +408,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       {focus !== "lora" && <div className="models-list-toolbar">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
         <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
+        <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.PROVIDERS.map(provider => ({ value: provider, label: provider === 'vllm' ? 'vLLM' : provider === 'mlx-vlm' ? 'MLX' : provider }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
         {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
       </div>}
@@ -453,7 +460,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 className="models-model-name app-list-row__action flex-col items-start"
 
               >
-                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges mode="compact" model={model.name} localPath={model.path} />
+                <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges mode="compact" model={model.name} artifact={model.artifact} {...(model.artifact?.format === 'gguf' || !model.artifact ? { localPath: model.path } : {})} />
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
               <span className="models-model-size" >{formatMebibytes(model.size_mb)}</span>
@@ -461,7 +468,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 {model.is_vision && <Badge>{t("ui.visionTag")}</Badge>}
                 {running && <StatusBadge label={copy.running} tone="success" />}
                 {model.is_vision && <button type="button" onClick={() => { if (cfg?.mmproj !== model.path) void setProjector(model); }} disabled={incomplete || cfg?.mmproj === model.path || store.busy || !projectorChangeAllowed(store.status.state)} title={!projectorChangeAllowed(store.status.state) ? t("ui.stopBeforeProjector") : undefined} aria-label={`${cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")}: ${displayName}`} className="app-button app-button--secondary app-button--sm shrink-0"><StableLabel value={cfg?.mmproj === model.path ? t("ui.rowProjectorActive") : t("ui.rowUseProjector")} labels={[t("ui.rowProjectorActive"), t("ui.rowUseProjector")]} /></button>}
-                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || runtimeGap} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
+                {!onSelectModel && <button type="button" onClick={() => { if (!running) void selectAndStart(model); }} disabled={incomplete || running || store.busy || (!modelSettings && runtimeGap)} title={runtimeGap ? runSetupGapMessage('runtime', locale) : undefined} aria-label={`${actionLabel}: ${displayName}`} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={actionLabel} labels={[t("ui.rowRunning"), t("ui.rowRestartSwitch"), t("ui.rowStart")]} /></button>}
               </div>
               <code className="models-model-path">{normalizeDisplayPath(model.path)}</code>
               <div className="models-file-actions">

@@ -1,3 +1,4 @@
+import { providerOf } from '../../shared/api/providers';
 import type { AppConfig } from '../../shared/api/types';
 import { modelPathIdentity } from '../../shared/lib/displayPaths';
 import { profileSettingsSnapshot, profileTargetKey } from '../../shared/config/settingsProfiles';
@@ -23,15 +24,15 @@ function read(): Saved {
 export function rememberExecution(cfg: AppConfig) {
   if (!cfg.active_model) return;
   const value = read();
-  value.models[identity(cfg.active_model)] = executionSnapshot(cfg);
+  value.models[providerOf(cfg) === 'llama.cpp' ? identity(cfg.active_model) : profileTargetKey(cfg.active_model, 'default', providerOf(cfg))] = executionSnapshot(cfg);
   window.localStorage.setItem(MODEL_EXECUTION_KEY, JSON.stringify(value));
 }
 
 export function restoreExecution(cfg: AppConfig, path: string): Partial<AppConfig> {
   if (identity(cfg.active_model) === identity(path)) return { ...executionSnapshot(cfg), active_model: path };
-  const application = cfg.settings_profiles?.applied[profileTargetKey(path)];
+  const application = cfg.settings_profiles?.applied[profileTargetKey(path, 'default', providerOf(cfg))];
   const persisted = application && identity(application.model) === identity(path) ? application.settings : undefined;
-  const saved = persisted ?? read().models[identity(path)];
+  const saved = persisted ?? read().models[profileTargetKey(path, 'default', providerOf(cfg))] ?? (providerOf(cfg) === 'llama.cpp' ? read().models[identity(path)] : undefined);
   // Re-capture through the allowlist even when local storage was manually edited.
   return { ...executionSnapshot({ ...cfg, mmproj: '', spec_draft_model: '', spec_type: 'none', lora_adapters: [], ...saved }), active_model: path };
 }
@@ -44,5 +45,6 @@ export function previewExecution(cfg: AppConfig, path: string): Partial<AppConfi
 export function forgetExecution(path: string) {
   const value = read();
   delete value.models[identity(path)];
+  for (const key of Object.keys(value.models)) if (key === profileTargetKey(path) || key.endsWith(`:${profileTargetKey(path)}`)) delete value.models[key];
   window.localStorage.setItem(MODEL_EXECUTION_KEY, JSON.stringify(value));
 }

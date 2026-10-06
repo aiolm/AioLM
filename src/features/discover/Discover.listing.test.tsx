@@ -9,7 +9,8 @@ import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
-vi.mock("../../shared/api/index", () => ({
+vi.mock("../../shared/api/index", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../shared/api/index")>(),
   isNativeRuntimeAvailable: vi.fn(() => true), hfOpenModelCard: vi.fn(async () => undefined),
   onModelDownloadProgress: vi.fn(async () => () => undefined), hfSearchModels: vi.fn(), hfModelFiles: vi.fn(), hfDownloadModel: vi.fn(), hfInstalledFiles: vi.fn(),
 }));
@@ -203,7 +204,7 @@ describe("Discover listing and installed files", () => {
     fireEvent.click(screen.getByRole("button", { name: "Search models" }));
     await waitFor(() => expect(api.hfSearchModels).toHaveBeenCalledTimes(2));
     releaseFiles([{ path: "late.gguf", size_bytes: 1, is_mmproj: false, download_url: "" }]);
-    await waitFor(() => expect(screen.getByText("Select a repository to inspect its GGUF files and choose a quant.")).toBeVisible());
+    await waitFor(() => expect(screen.getByText("Select a repository to inspect model files.")).toBeVisible());
     expect(screen.queryByText("late.gguf")).toBeNull();
   });
 

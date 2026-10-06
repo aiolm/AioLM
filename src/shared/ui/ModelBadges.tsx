@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { ModelMetadata } from '../api/types';
+import type { ModelArtifact } from '../api/providers';
 import { useI18n } from '../i18n/i18n';
 import { useVisibleModelMetadata } from './useVisibleModelMetadata';
 import ModelPublisher, { modelPublishers, modelPublisherLabels } from './ModelPublisher';
@@ -139,14 +140,18 @@ function CompactModelBadges({ badges, total }: { badges: ModelBadge[]; total: nu
   </span>;
 }
 
-export default function ModelBadges({ model, metadata, localPath, tags, repository, mode = 'compact' }: {
-  model: string; metadata?: ModelMetadata; localPath?: string; tags?: string[]; repository?: string; mode?: 'compact' | 'detail';
+export default function ModelBadges({ model, metadata, artifact, localPath, tags, repository, mode = 'compact' }: {
+  model: string; metadata?: ModelMetadata; artifact?: ModelArtifact; localPath?: string; tags?: string[]; repository?: string; mode?: 'compact' | 'detail';
 }) {
   const { t } = useI18n();
-  const visible = useVisibleModelMetadata(metadata ? undefined : localPath);
+  const visible = useVisibleModelMetadata(metadata || artifact && artifact.format !== 'gguf' ? undefined : localPath);
   const details = metadata ?? visible.metadata;
   const badges = modelBadges(model, details, tags);
-  const people = modelPublishers(details, repository);
+  if (artifact) {
+    const values = [artifact.format, ...artifact.architectures, artifact.model_type, ...Object.entries(artifact.modalities).filter(([, supported]) => supported).map(([modality]) => modality)];
+    for (const value of values) if (value && !badges.some(badge => badge.value.toLowerCase() === value.toLowerCase())) badges.push({ kind: 'tag', value, source: 'metadata' });
+  }
+  const people = modelPublishers(details, repository ?? artifact?.repository);
   if (!badges.length && !localPath && !people.length) return null;
   const summary = <><ModelPublisher metadata={details} repository={repository} compact />
     <CompactModelBadges badges={summaryModelBadges(badges, people)} total={badges.length + Math.max(0, people.length - 1)} /></>;

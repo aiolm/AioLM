@@ -4,7 +4,7 @@ import type { AppConfig } from '../../shared/api/types';
 import { createTestStore } from '../../testing/appStore';
 import { useExecutionStore } from './useExecutionStore';
 import { restoreExecution } from './modelExecutionState';
-import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
+import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import { emptyGpuPlacement } from '../../shared/runtime/sessionUtils';
 
 describe('execution store', () => {
@@ -103,7 +103,7 @@ describe('execution store', () => {
     expect(base.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'saved.gguf', temperature: 0.6 }), false);
     expect(base.cfg!.settings_profiles!.applied[profileTargetKey('saved.gguf')]).toMatchObject({ profile_id: profile.id, profile_revision: 2, system_prompt: 'Latest prompt' });
     expect(base.cfg!.settings_profiles!.applied[profileTargetKey(other.model)]).toEqual(other);
-    expect(base.cfg!.settings_profiles!.entries).toEqual([profile]);
+    expect(base.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([profile]);
   });
   it('serializes selections and makes explicit project configuration take precedence', async () => {
     const base = createTestStore({ active_model: 'a.gguf' });
@@ -180,7 +180,7 @@ describe('execution store', () => {
       entries: [defaultSettingsProfile(), profile], applied: { [profileTargetKey('a.gguf')]: materializeProfileApplication({ ...base.cfg!, temperature: 0.4 }, 'New prompt', profile) } };
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.store.updateConfig({ temperature: 0.4, settings_profiles: library }); });
-    expect(base.cfg?.settings_profiles).toEqual(library);
+    expect(base.cfg?.settings_profiles).toEqual(ensureProfileLibrary(library));
     expect(base.updateConfig).toHaveBeenCalledOnce();
   });
   it('writes direct execution edits into the selected global profile without creating a copy', async () => {
@@ -203,7 +203,7 @@ describe('execution store', () => {
     expect(saved).not.toHaveProperty('source_id');
     await act(async () => { await hook.result.current.store.updateConfig({ temperature: 0.7 }); });
     expect(base.cfg!.settings_profiles!.applied[key].profile_id).toBe(source.id);
-    expect(base.cfg!.settings_profiles!.entries).toHaveLength(1);
+    expect(base.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
   });
   it('saves session execution changes in a named profile without accessing model memory', async () => {
     const definition = { id: 'saved', name: 'Saved', enabled: false, models: { primary_model: 'session.gguf', mmproj: '', draft_model: '' },
@@ -227,7 +227,7 @@ describe('execution store', () => {
       applied: { 'model:': materializeProfileApplication(base.cfg!, '', source) } };
     const hook = renderHook(() => useExecutionStore(base));
     await act(async () => { await hook.result.current.selectModel('first.gguf'); });
-    expect(base.cfg!.settings_profiles!.entries).toEqual([source]);
+    expect(base.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([source]);
     expect(base.cfg!.settings_profiles!.applied[profileTargetKey('first.gguf')]).toMatchObject({ profile_id: source.id, profile_name: 'Default' });
     expect(base.cfg!.settings_profiles!.applied).not.toHaveProperty('model:');
   });
