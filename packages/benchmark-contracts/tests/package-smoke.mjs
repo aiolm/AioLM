@@ -71,7 +71,24 @@ try {
     import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
     assert.equal(validatePublicBenchmark(payload), payload);
+    for (const [name, format] of [['vllm', 'hf-safetensors'], ['mlx-vlm', 'mlx']]) {
+      const python = { ...payload, schema_version: 2, runtime: { ...payload.runtime, name }, model: { ...payload.model, format } };
+      assert.equal(validatePublicBenchmark(python), python);
+      assert.throws(() => validatePublicBenchmark({ ...python, schema_version: 1 }));
+      assert.throws(() => validatePublicBenchmark({ ...python, model: { ...python.model, format: 'gguf' } }));
+      assert.throws(() => validatePublicBenchmark({ ...python, execution: { ...python.execution, settings: { gpu_layers: 0 } } }));
+    }
     assert.equal(summarizePublicBenchmarkRows(payload.measurements.rows).find(row => row.concurrency === 2).speedup, 2);
+    for (const format of ['hf-safetensors', 'mlx', 'gguf']) {
+      const metal = { ...payload, schema_version: 2,
+        runtime: { name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' },
+        model: { ...payload.model, format } };
+      assert.equal(validatePublicBenchmark(metal), metal);
+      for (const runtime of [{ ...metal.runtime, variant: undefined }, { ...metal.runtime, plugin_version: undefined },
+        { ...metal.runtime, backend: 'cuda' }, { ...metal.runtime, name: 'mlx-vlm' }]) {
+        assert.throws(() => validatePublicBenchmark({ ...metal, runtime }));
+      }
+    }
     assert.throws(() => validatePublicBenchmark({ ...payload, local_path: '/private/model.gguf' }));
     assert.throws(() => validatePublicBenchmark({ ...payload, constructor: 'private' }));
     assert.equal(validateBenchmarkReceipt({ submission_id: payload.submission_id, id: 'accepted-1' }, payload.submission_id).id, 'accepted-1');
@@ -115,23 +132,24 @@ try {
     const label = input => formatRuntimeVersionLabel(input);
     assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b10638' }), '0.3.0-dev(10638)');
     assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 10638 }), '0.3.0-dev(10638)');
-    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev' }), '0.3.0-dev(?)');
-    assert.equal(label({ name: 'llama.cpp', build: 'b10638' }), '?(10638)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev' }), '0.3.0-dev');
+    assert.equal(label({ name: 'llama.cpp', build: 'b10638' }), 'b10638');
     assert.equal(label({ name: 'llama.cpp', version: null, build: null }), null);
     assert.equal(label({ name: 'llama.cpp', version: 'unknown', build: '' }), null);
     assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev (build 10638, commit bf9421646)', build: 'b1' }), '0.3.0-dev(10638)');
     assert.equal(label({ name: 'llama.cpp', version: 'compiler: x\\nversion: 0.3.0-dev (build 10638, commit bf9421646)' }), '0.3.0-dev(10638)');
-    assert.equal(label({ name: 'llama.cpp', version: 'version: 4589 (1a2b3c4)', build: 'b9999' }), '?(4589)');
-    assert.equal(label({ name: 'llama.cpp', version: 'b123-abcdef', build: 'b9999' }), '?(123)');
-    assert.equal(label({ name: 'llama.cpp', build: 'pr12345' }), '?(pr12345)');
+    assert.equal(label({ name: 'llama.cpp', version: 'version: 4589 (1a2b3c4)', build: 'b9999' }), 'b4589');
+    assert.equal(label({ name: 'llama.cpp', version: 'b123-abcdef', build: 'b9999' }), 'b123');
+    assert.equal(label({ name: 'llama.cpp', build: 'pr12345' }), 'pr12345');
     assert.equal(label({ name: 'llama.cpp', version: '0.0.0-dev (build 0, commit unknown)', build: 'pr12345' }), '0.0.0-dev(pr12345)');
     assert.equal(label({ name: 'llama.cpp', version: 'version: 0 (unknown)', build: 0 }), null);
-    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b0' }), '0.3.0-dev(?)');
-    assert.equal(label({ name: 'llama.cpp', build: 'local_b10840_nop2p' }), '?(local_b10840_nop2p)');
+    assert.equal(label({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b0' }), '0.3.0-dev');
+    assert.equal(label({ name: 'llama.cpp', build: 'local_b10840_nop2p' }), 'local_b10840_nop2p');
     assert.equal(label({ name: 'vllm', version: '0.6.3.post1' }), '0.6.3.post1');
     assert.equal(label({ name: 'MLX', version: 'b123-abcdef', build: 'b7' }), 'b123-abcdef(b7)');
     assert.equal(label({ version: 'version: 0.3.0-dev (build 10638)' }), 'version: 0.3.0-dev (build 10638)');
     assert.equal(label({ name: 'vllm' }), null);
+    assert.equal(label({ name: 'vllm', variant: 'vllm-metal', version: '0.30.0', plugin_version: '0.30.0', build: 'stale-build' }), 'vllm-metal 0.30.0 · vLLM 0.30.0');
   `);
   execFileSync(process.execPath, ['node-smoke.mjs'], { cwd: consumer, stdio: 'pipe', windowsHide: true });
 
@@ -177,7 +195,8 @@ try {
     const publication: BenchmarkPublicationRequest = validatePublicationRequest({ benchmark: payload, description_md: '' });
     const runtimeInput: RuntimeVersionLabelInput = { name: payload.runtime.name, version: payload.runtime.version, build: payload.runtime.build };
     const runtimeLabel: string | null = formatRuntimeVersionLabel(runtimeInput);
-    export { summaries, receipt, publication, runtimeLabel };
+    const metalIdentity: PublicBenchmarkSubmission['runtime'] = { name: 'vllm', version: '0.30.0', backend: 'metal', build: null, variant: 'vllm-metal', plugin_version: '0.30.0' };
+    export { summaries, receipt, publication, runtimeLabel, metalIdentity };
   `);
   const program = ts.createProgram([join(consumer, 'consumer.ts')], { strict: true, noEmit: true, types: [], target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext });
   const diagnostics = ts.getPreEmitDiagnostics(program);
