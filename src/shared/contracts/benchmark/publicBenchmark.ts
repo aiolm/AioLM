@@ -73,6 +73,8 @@ const PRIVATE_OPTIONS: ReadonlySet<string> = new Set([
   '--ui-config-file', '--webui-config-file', '--mcp-servers-config',
   '--api-key', '--api-key-file', '--ssl-key-file', '--ssl-cert-file',
   '--host', '--port', '--path', '--api-prefix', '-a', '--alias',
+  '--served-model-name', '--embedding-model', '--draft-model', '--adapter-path', '--lora-modules',
+  '--speculative-config', '--download-dir', '--tokenizer', '--chat-template', '--model-loader-extra-config',
   '-r', '--reverse-prompt',
 ]);
 /**
@@ -124,20 +126,30 @@ export function toPublicBenchmark(record: {
   if (p && p.corpus.profile !== request.context_profile) throw new Error('Benchmark corpus does not match its provenance.');
   const environment = p?.environment;
   const config = p?.execution_config;
-  const args = effectiveArguments(result.args ?? []);
+  const provider = result.provider ?? 'llama.cpp';
+  const python = provider !== 'llama.cpp';
+  // Python launch prefixes contain a private interpreter/model identity.
+  // Publish only tokens beginning at the first actual server option.
+  const launchArgs = result.args ?? [];
+  const hostIndex = launchArgs.indexOf('--host');
+  const serverArgs = python ? (hostIndex < 0 ? [] : launchArgs.slice(hostIndex)) : launchArgs;
+  const args = effectiveArguments(serverArgs);
   return validatePublicBenchmark({
-    schema_version: 1, submission_id: submissionId, app_version: safeLabel(p?.app_version),
-    method: p ? { id: p.method.id, version: p.method.version } : null,
+    schema_version: python ? 2 : 1, submission_id: submissionId, app_version: safeLabel(p?.app_version),
+    method: p ? { id: p.method.id, version: python ? 2 : p.method.version } : null,
     workload: { corpus: request.context_profile, corpus_version: p?.corpus.version ?? null, corpus_sha256: p?.corpus.sha256 ?? null,
       prompt_lengths: [...request.prompt_lengths], generation_length: request.generation_length, batch_sizes: [...request.batch_sizes], repetitions: request.repetitions, warmup: request.warmup },
     model: p ? { status: p.model.status, sha256: p.model.sha256, size_bytes: p.model.size_bytes,
-      ...(p.model.metadata ? { metadata: modelMetadata(p.model.metadata) } : {}),
-    } : { status: 'unidentified', sha256: null, size_bytes: null },
-    runtime: { name: 'llama.cpp', version: runtimeVersion(result.runtime_version), backend: safeLabel(record.backend), build: safeLabel(record.build) },
+      ...(!python && p.model.metadata ? { metadata: modelMetadata(p.model.metadata) } : {}),
+      ...(python ? { format: result.model_format ?? 'unknown' } : {}),
+    } : { status: 'unidentified', sha256: null, size_bytes: null, ...(python ? { format: result.model_format ?? 'unknown' } : {}) },
+    runtime: { name: provider, version: runtimeVersion(result.runtime_version), backend: safeLabel(python ? result.runtime_accelerator : record.backend), build: safeLabel(python ? result.runtime_version : record.build),
+      ...(result.runtime_variant === 'vllm-metal' ? { variant: 'vllm-metal' as const, plugin_version: safeLabel(result.runtime_plugin_version) ?? '' } : {}),
+    },
     environment: environment ? { os: safeLabel(environment.os), arch: safeLabel(environment.arch), cpu: cpu(environment.cpu),
       ...(environment.system_memory_bytes !== undefined ? { system_memory_bytes: environment.system_memory_bytes } : {}),
       installed_gpus: environment.installed_gpus.map(gpu), execution: { mode: environment.execution.mode, selected_gpus: environment.execution.selected_gpus.map(gpu), selection_complete: environment.execution.selection_complete } } : null,
-    execution: { context_size: result.context_size, parallel: result.parallel, settings: config ? {
+    execution: { context_size: result.context_size, parallel: result.parallel, settings: config && !python ? {
       gpu_layers: config.gpu_layers, threads: config.threads, threads_batch: config.threads_batch,
       flash_attention: safeLabel(config.flash_attention), cache_type_k: safeLabel(config.cache_type_k), cache_type_v: safeLabel(config.cache_type_v),
       split_mode: safeLabel(config.split_mode), tensor_split: config.tensor_split ? [...config.tensor_split] : null,

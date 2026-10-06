@@ -8,6 +8,7 @@ import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { CACHE_TYPE_OPTIONS, SPEC_TYPE_OPTIONS } from '../../shared/config/tuningValidation';
 import { effectiveArguments } from '../../shared/contracts/benchmark/publicBenchmark';
 import type { PerformanceBenchmarkRecord } from './performanceRecords';
+import providerLaunchOptions from '../../shared/config/providerLaunchOptions.json';
 
 export type BenchmarkProfileSource = Pick<PublicBenchmarkSubmission, 'runtime' | 'execution'>;
 const record = (value: unknown): Record<string, unknown> => {
@@ -19,11 +20,13 @@ const record = (value: unknown): Record<string, unknown> => {
  * arbitrary configuration fields from a public API response. */
 export function validateBenchmarkProfileSource(value: unknown): BenchmarkProfileSource {
   const source = record(value);
+  const runtime = record(source.runtime);
+  const python = runtime.name === 'vllm' || runtime.name === 'mlx-vlm';
   const validated = validatePublicBenchmark({
-    schema_version: 1, submission_id: '00000000-0000-4000-8000-000000000001', app_version: null, method: null,
+    schema_version: python ? 2 : 1, submission_id: '00000000-0000-4000-8000-000000000001', app_version: null, method: null,
     workload: { corpus: 'code_python', corpus_version: null, corpus_sha256: null,
       prompt_lengths: [1], generation_length: 1, batch_sizes: [], repetitions: 1, warmup: false },
-    model: { status: 'unidentified', sha256: null, size_bytes: null }, environment: null,
+    model: { status: 'unidentified', sha256: null, size_bytes: null, ...(python ? { format: runtime.name === 'vllm' ? 'hf-safetensors' : 'mlx' } : {}) }, environment: null,
     runtime: source.runtime, execution: source.execution, measurements: { status: 'complete', rows: [] },
   });
   if (validated.execution.context_size <= 0 || validated.execution.parallel <= 0) {
@@ -38,13 +41,13 @@ export function publicBenchmarkProfileSource(value: unknown, id: string): Benchm
   return validateBenchmarkProfileSource(detail.benchmark);
 }
 
-// TODO(runtime support): Persist the measured runtime name in local records
-// when adding vLLM or MLX; only existing llama.cpp records may use this fallback.
 export function localBenchmarkProfileSource(value: PerformanceBenchmarkRecord): BenchmarkProfileSource {
   return validateBenchmarkProfileSource({
-    runtime: { name: 'llama.cpp', version: null, backend: value.backend || null, build: value.build || null },
+    runtime: { name: value.result.provider ?? 'llama.cpp', version: value.result.runtime_version ?? null, backend: value.result.provider && value.result.provider !== 'llama.cpp' ? value.result.runtime_accelerator ?? null : value.backend || null, build: value.result.provider && value.result.provider !== 'llama.cpp' ? value.result.runtime_version : value.build || null,
+      ...(value.result.runtime_variant === 'vllm-metal' ? { variant: 'vllm-metal', plugin_version: value.result.runtime_plugin_version } : {}),
+    },
     execution: { context_size: value.result.context_size, parallel: value.result.parallel,
-      settings: value.result.provenance?.execution_config ?? null,
+      settings: value.result.provider && value.result.provider !== 'llama.cpp' ? null : value.result.provenance?.execution_config ?? null,
       effective_args: effectiveArguments(value.result.args) },
   });
 }
@@ -64,16 +67,39 @@ const rawSwitches = new Set(['--cont-batching', '--no-cont-batching', '-cb', '-n
 const isOption = (token: string | undefined) => token !== undefined && /^--?[a-zA-Z]/.test(token);
 const emptyGpu = (): NonNullable<ExecutionSettings['gpu']> => ({ gpu_ids: [], main_gpu: null, split_mode: 'none', tensor_split: [], draft_gpu_id: null });
 
-// TODO(runtime support): Dispatch by the validated source.runtime.name when
-// adding vLLM or MLX. Each importer must create a profile for that same runtime,
-// retain its engine identifier and validate its own settings/options/defaults.
-// Keep the llama.cpp catalog and allowlists below specific to llama.cpp; do not
-// translate another engine's settings into these fields. Profile application
-// must require a matching runtime, with installation/version compatibility
-// checked before execution. Unsupported settings must be reported explicitly.
+// Each engine restores only its portable options; installation selection is
+// supplied independently when the imported profile is applied.
 export function benchmarkSettingsProfile(source: BenchmarkProfileSource, id: string): { profile: SettingsProfile; omitted: boolean } {
   if (!/^[A-Za-z0-9_-]{1,110}$/.test(id)) throw new Error('Invalid benchmark profile id.');
   const validated = validateBenchmarkProfileSource(source);
+  if (validated.runtime.name !== 'llama.cpp') {
+    const provider = validated.runtime.name;
+    const options: Record<string, unknown> = {};
+    let omitted = false;
+    const args = validated.execution.effective_args ?? [];
+    for (let index = 0; index < args.length; index++) {
+      const token = args[index];
+      const equal = token.indexOf('=');
+      const flag = equal < 0 ? token : token.slice(0, equal);
+      const inline = equal < 0 ? undefined : token.slice(equal + 1);
+      const negative = flag.startsWith('--no-');
+      const option = providerLaunchOptions[provider].find(option => option.flag === (negative ? flag.replace('--no-', '--') : flag));
+      if (!option) { omitted = true; if (inline === undefined && args[index + 1] && !args[index + 1].startsWith('--')) index++; continue; }
+      if (['flag', 'toggle'].includes(option.kind)) {
+        if (inline !== undefined && inline !== 'true' && inline !== 'false') { omitted = true; continue; }
+        const enabled = inline === undefined || inline === 'true';
+        options[option.key] = negative ? !enabled : enabled;
+      }
+      else {
+        const value = inline ?? args[++index];
+        if (!value) { omitted = true; continue; }
+        const parsed = ['integer', 'number'].includes(option.kind) ? Number(value) : value;
+        if (typeof parsed === 'number' && (!Number.isFinite(parsed) || option.kind === 'integer' && !Number.isSafeInteger(parsed))) { omitted = true; continue; }
+        options[option.key] = parsed;
+      }
+    }
+    return { profile: { id: `profile-benchmark-${id}`, name: `Benchmark ${id.slice(0, 12)}`, provider, scope: 'global', revision: 1, settings: { provider_options: { [provider]: options } }, system_prompt: '' }, omitted };
+  }
   const settings: Partial<ExecutionSettings> = { server_args: [] };
   const defaults = tuningResetValues();
   let omitted = false;
@@ -132,11 +158,8 @@ export function benchmarkSettingsProfile(source: BenchmarkProfileSource, id: str
         tensor_split: captured.tensor_split ?? settings.gpu?.tensor_split ?? [] };
     } else if (captured.split_mode) omitted = true;
   }
-  if (validated.runtime.backend && validated.runtime.build) {
-    settings.active_backend = validated.runtime.backend;
-    settings.active_build = validated.runtime.build;
-  } else if (validated.runtime.backend || validated.runtime.build) omitted = true;
   settings.runtime_defaults = RUNTIME_DEFAULT_KEYS.filter(key => settings[key as keyof ExecutionSettings] === undefined);
+  if (Boolean(validated.runtime.backend) !== Boolean(validated.runtime.build)) omitted = true;
   return { profile: { id: `profile-benchmark-${id}`, name: `Benchmark ${id.slice(0, 12)}`, scope: 'global',
-    revision: 1, settings, system_prompt: '', legacy: true, coverage: [...MODEL_PROFILE_KEYS] }, omitted };
+    provider: 'llama.cpp', revision: 1, settings, system_prompt: '', legacy: true, coverage: [...MODEL_PROFILE_KEYS] }, omitted };
 }

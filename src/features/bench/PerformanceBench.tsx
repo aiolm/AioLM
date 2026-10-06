@@ -8,6 +8,7 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import ProgressBar from '../../shared/ui/ProgressBar';
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
+import { providerOf } from '../../shared/api/providers';
 import type { AppStore } from "../../shared/state/store";
 import { finishTask, registerTask, updateTask, useTasks } from "../../shared/state/taskRegistry";
 import { useI18n } from "../../shared/i18n/i18n";
@@ -32,7 +33,7 @@ import { applyProfile } from '../model-settings/profileWorkspaceState';
 import { modelActions } from '../../shared/i18n/modelActions';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { withoutCancelledTrials } from './benchmarkCancellation';
-import { formatRecordedRuntimeVersion } from '../../shared/runtime/runtimeUtils';
+import { formatBenchmarkRuntimeVersion } from '../../shared/runtime/runtimeUtils';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import { executionText } from '../../shared/i18n/executionI18n';
 import { useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
@@ -123,9 +124,9 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const profileImport = useBenchmarkProfileImport(store);
   const modelCopy = modelActions(locale);
   const runCopy = executionText[locale];
-  const installedRuntimes = useInstalledRuntimes();
   const modelSettings = useModelSettings();
   const [targetApplication, setTargetApplication] = useState<ProfileApplication | null>(() => store.cfg ? benchmarkTarget(store.cfg).application : null);
+  const installedRuntimes = useInstalledRuntimes(providerOf(targetApplication?.settings ?? store.cfg ?? {}) === 'llama.cpp');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsError, setSessionsError] = useState(false);
   const [sessionsReady, setSessionsReady] = useState(false);
@@ -187,7 +188,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   // does. Naming what is missing beats a run button that is dead for reasons
   // the panel never states.
   const setupGaps = targetConfig
-    ? runSetupGaps({ activeModel: model, activeBackend: targetConfig.active_backend, activeBuild: targetConfig.active_build })
+    ? runSetupGaps({ activeModel: model, activeProvider: targetConfig.active_provider, activeRuntime: targetConfig.active_runtime, activeBackend: targetConfig.active_backend, activeBuild: targetConfig.active_build })
     : [];
   const canRun = !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptLengths.length * (batchSizes.length + 1) * (validRepetitions ? repetitionsNumber : 0);
@@ -311,7 +312,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       void store.refreshStatus();
     }
     finalResult = withoutCancelledTrials(finalResult);
-    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: runId, createdAt, model: cfg.active_model, backend: cfg.active_backend, build: cfg.active_build, request, result: finalResult };
+    const saved: PerformanceBenchmarkRecord = { schemaVersion: 1, id: runId, createdAt, model: cfg.active_model, backend: finalResult.provider && finalResult.provider !== 'llama.cpp' ? finalResult.runtime_accelerator ?? '' : cfg.active_backend, build: finalResult.provider && finalResult.provider !== 'llama.cpp' ? finalResult.runtime_version : cfg.active_build, request, result: finalResult };
     const emptyCancellation = finalResult.status === 'cancelled' && !finalResult.rows.length;
     setRows(finalResult.rows); setResult(emptyCancellation ? null : finalResult); setRecord(emptyCancellation ? null : saved);
     historyRevisionRef.current++;
@@ -397,7 +398,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
           <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} data-icon="settings" onClick={() => editModel('model')}>{modelCopy.settings}</button>
           {targetDiffers && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={busy} onClick={() => { const current = store.getConfig?.() ?? store.cfg; if (current) setTargetApplication(benchmarkTarget(current).application); }}>{modelCopy.importDefault}</button>}
         </div>}
-        <ModelBadges mode="compact" model={displayedModel.model} localPath={displayedModel.model} />
+        <ModelBadges mode="compact" model={displayedModel.model} localPath={providerOf(displayedTarget?.config ?? {}) === 'llama.cpp' ? displayedModel.model : undefined} />
       </div>
       <div className="performance-setup-body">
         <div className="performance-setup-environment">
@@ -457,7 +458,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
     {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
-    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges mode="compact" model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges mode="compact" model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />
     {selectedRecord && <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />}
     <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} revision={sharingRevision} />
@@ -471,7 +472,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
       <div><dt>{copy.warmup}</dt><dd>{selectedRecord.request.warmup ? copy.enabled : copy.disabled}</dd></div>
       <div><dt>{copy.contextSize}</dt><dd>{selectedRecord.result.context_size > 0 ? selectedRecord.result.context_size.toLocaleString() : copy.unavailable}</dd></div>
       <div><dt>{copy.parallel}</dt><dd>{selectedRecord.result.parallel > 0 ? selectedRecord.result.parallel : copy.unavailable}</dd></div>
-      <div><dt>{copy.runtimeVersion}</dt><dd>{formatRecordedRuntimeVersion(selectedRecord.result.runtime_version, selectedRecord.build, copy.unavailable)}</dd></div>
+      <div><dt>{copy.runtimeVersion}</dt><dd>{formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)}</dd></div>
       <div><dt>{copy.executionDevice}</dt><dd>{provenance?.environment?.execution?.mode === 'cpu' ? 'CPU' : selectedGpuLabel || copy.unavailable}</dd></div>
       <div><dt>{copy.processor}</dt><dd>{provenance?.environment?.cpu ? `${normalizeDisplayText(provenance.environment.cpu.name)} · ${formatCpuCores(provenance.environment.cpu)}` : copy.unavailable}</dd></div>
       <div><dt>{copy.systemMemory}</dt><dd>{typeof provenance?.environment?.system_memory_bytes === 'number' ? formatBytes(provenance.environment.system_memory_bytes) : copy.unavailable}</dd></div>

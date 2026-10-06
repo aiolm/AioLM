@@ -30,6 +30,18 @@ beforeEach(() => { vi.clearAllMocks(); vi.mocked(rtProbe).mockResolvedValue(capa
 afterEach(cleanup);
 
 describe('benchmark execution environment', () => {
+  it.each(['vllm', 'mlx-vlm'] as const)('describes %s without native settings or native CPU placement leaking into the environment', async provider => {
+    render(view({ ...cfg, active_provider: provider, active_runtime: '', active_backend: 'cpu', ngl: 0,
+      provider_options: { [provider]: { max_tokens: 512 }, 'llama.cpp': { stale: 'native-only' } } }));
+    expect(term('Inference engine')).toHaveTextContent(provider === 'vllm' ? 'vLLM' : 'MLX');
+    expect(term('Runtime')).toHaveTextContent('Choose a runtime');
+    expect(term('max_tokens')).toHaveTextContent('512');
+    expect(term('Selected GPU')).toHaveTextContent('Runtime selects the GPU at launch');
+    expect(screen.queryByText('GPU layers')).not.toBeInTheDocument();
+    expect(screen.queryByText('native-only')).not.toBeInTheDocument();
+    await act(async () => {});
+    expect(rtProbe).not.toHaveBeenCalled();
+  });
   it('shows only selected hardware with physical capacities and profile settings', async () => {
     render(view());
     expect(term('Selected GPU')).toHaveTextContent('Example GPU B · 16.00 GiB VRAM');

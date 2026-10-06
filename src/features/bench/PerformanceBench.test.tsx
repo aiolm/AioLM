@@ -181,7 +181,7 @@ describe("Performance benchmark workflow", () => {
     const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
     expect(runConfig).toMatchObject({ ngl: 12, ctx_size: 8192, temperature: 0.2 });
     expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: revised.id, profile_revision: 2 });
-    expect(runConfig.settings_profiles?.entries[0]).toEqual(revised);
+    expect(runConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual({ ...revised, provider: 'llama.cpp' });
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -200,7 +200,7 @@ describe("Performance benchmark workflow", () => {
     const runConfig = mocked.runPerformanceBench.mock.calls[0][0];
     expect(runConfig).toMatchObject({ active_model: original.config.active_model, ngl: 16, ctx_size: 8192, temperature: 0.2 });
     expect(runConfig.settings_profiles?.applied[profileTargetKey(runConfig.active_model)]).toMatchObject({ profile_id: 'profile-fallback' });
-    expect(runConfig.settings_profiles?.entries.map(profile => profile.id)).toEqual(['profile-fallback']);
+    expect(runConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(['profile-fallback']);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -414,7 +414,7 @@ describe("Performance benchmark workflow", () => {
     }));
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Run benchmark" }));
-    const summary = await screen.findByText("Effective llama-server arguments");
+    const summary = await screen.findByText("Effective runtime arguments");
     // A negative value belongs to its option; a switch stays on a line of its own.
     expect(summary.parentElement?.querySelector("code")?.textContent).toBe([
       '"--model" "C:/models/test.gguf"',

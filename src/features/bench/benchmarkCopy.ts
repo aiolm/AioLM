@@ -31,7 +31,7 @@ const en = {
   details: "Run configuration", seconds: "s", milliseconds: "ms", tokens: "tok/s", processor: "Processor", systemMemory: "System memory",
   running: "Measuring…", cleanup: "Finishing benchmark…", measuringSingle: "Measuring single requests…", measuringBatch: "Measuring concurrent requests…",
   exportAllCsv: "Export all history", contextSize: "Server context tokens", parallel: "Server request slots", runtimeVersion: "Runtime version", enabled: "Enabled", disabled: "Disabled",
-  effectiveArgs: "Effective llama-server arguments",
+  effectiveArgs: "Effective runtime arguments",
 } as const;
 
 type BenchmarkCopy = { [K in keyof typeof en]: string };
@@ -65,7 +65,7 @@ const ko: BenchmarkCopy = {
   details: "실행 설정", seconds: "s", milliseconds: "ms", tokens: "tok/s", processor: "프로세서", systemMemory: "시스템 메모리",
   running: "측정 중…", cleanup: "벤치마크 마무리 중…", measuringSingle: "단일 요청 측정 중…", measuringBatch: "동시 요청 측정 중…",
   exportAllCsv: "전체 이력 내보내기", contextSize: "서버 컨텍스트 토큰", parallel: "서버 요청 슬롯", runtimeVersion: "런타임 버전", enabled: "사용", disabled: "사용 안 함",
-  effectiveArgs: "실제 llama-server 인자",
+  effectiveArgs: "실제 런타임 인자",
 };
 
 const ja: BenchmarkCopy = {
@@ -97,7 +97,7 @@ const ja: BenchmarkCopy = {
   details: "実行設定", seconds: "s", milliseconds: "ms", tokens: "tok/s", processor: "プロセッサ", systemMemory: "システムメモリ",
   running: "測定中…", cleanup: "ベンチマークを終了中…", measuringSingle: "単一リクエストを測定中…", measuringBatch: "同時リクエストを測定中…",
   exportAllCsv: "すべての履歴を書き出す", contextSize: "サーバーのコンテキストトークン", parallel: "サーバーのリクエスト枠", runtimeVersion: "ランタイムバージョン", enabled: "有効", disabled: "無効",
-  effectiveArgs: "実際の llama-server 引数",
+  effectiveArgs: "実際のランタイム引数",
 };
 
 const zh: BenchmarkCopy = {
@@ -129,7 +129,7 @@ const zh: BenchmarkCopy = {
   details: "运行配置", seconds: "s", milliseconds: "ms", tokens: "tok/s", processor: "处理器", systemMemory: "系统内存",
   running: "正在测量…", cleanup: "正在结束基准测试…", measuringSingle: "正在测量单个请求…", measuringBatch: "正在测量并发请求…",
   exportAllCsv: "导出全部历史", contextSize: "服务器上下文令牌", parallel: "服务器请求槽位", runtimeVersion: "运行时版本", enabled: "启用", disabled: "禁用",
-  effectiveArgs: "实际 llama-server 参数",
+  effectiveArgs: "实际运行时参数",
 };
 
 const copies: Record<Locale, BenchmarkCopy> = { en, ko, ja, zh };
