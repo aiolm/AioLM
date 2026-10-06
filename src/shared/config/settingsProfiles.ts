@@ -1,4 +1,5 @@
 import type { AppConfig } from '../api/types';
+import { PROVIDERS, providerOf, type ProviderId } from '../api/providers';
 import { modelPathIdentity } from '../lib/displayPaths';
 import { EXECUTION_KEYS, executionSettings, type ExecutionKey, type ExecutionSettings } from './executionSettings';
 import { RUNTIME_DEFAULT_KEYS } from './tuningDefaults';
@@ -7,8 +8,11 @@ import { canonicalServerOptionName, mapChatOptionAliases } from './tuningValidat
 import { cloneGpuPlacement } from '../runtime/sessionUtils';
 
 export interface SettingsProfile {
+  provider?: ProviderId;
+  legacy_runtime?: Record<string, unknown>;
   id: string;
   name: string;
+  /** Model scope is accepted only when reading older libraries; normalization shares it within the engine. */
   scope: 'model' | 'global';
   model_key?: string;
   revision: number;
@@ -21,6 +25,7 @@ export interface SettingsProfile {
 }
 
 export interface ProfileApplication {
+  provider?: ProviderId;
   model: string;
   profile_id?: string;
   profile_name?: string;
@@ -30,6 +35,8 @@ export interface ProfileApplication {
 }
 
 export interface SettingsProfileLibrary {
+  provider_defaults?: Partial<Record<ProviderId, string>>;
+  provider_recent?: Partial<Record<ProviderId, string>>;
   version: 1;
   revision: number;
   entries: SettingsProfile[];
@@ -38,16 +45,11 @@ export interface SettingsProfileLibrary {
   legacy_imported: boolean;
 }
 
-export const MODEL_PROFILE_KEYS = EXECUTION_KEYS.filter(key => key !== 'active_model');
-/**
- * Fields a profile owns whatever model it is applied to. The runtime pair is
- * one of them: a profile that did not own it left the runtime at whatever the
- * configuration already held, so a model launched on the last runtime selected
- * anywhere rather than on the one its profile names. Owning it here makes the
- * profile the only place a runtime is chosen.
- */
+export const RUNTIME_SELECTION_KEYS = ['active_provider', 'active_runtime', 'active_backend', 'active_build'] as const;
+export const MODEL_PROFILE_KEYS = EXECUTION_KEYS.filter((key): key is Exclude<ExecutionKey, 'active_model' | typeof RUNTIME_SELECTION_KEYS[number]> => key !== 'active_model' && !(RUNTIME_SELECTION_KEYS as readonly string[]).includes(key));
+/** Original shared-profile coverage, retained for older partial profiles. New captures own all engine options. */
 export const GLOBAL_PROFILE_KEYS: readonly ExecutionKey[] = [
-  'runtime_defaults', 'active_backend', 'active_build', 'ctx_size', 'batch_size', 'ubatch_size', 'keep', 'cache_type_k', 'cache_type_v',
+  'provider_options', 'runtime_defaults', 'ctx_size', 'batch_size', 'ubatch_size', 'keep', 'cache_type_k', 'cache_type_v',
   'flash_attn', 'threads', 'parallel', 'request_timeout_seconds', 'sleep_idle_seconds',
   'temperature', 'top_p', 'top_k', 'chat_options', 'reasoning', 'reasoning_format', 'reasoning_effort',
   'reasoning_budget', 'reasoning_budget_message', 'reasoning_preserve',
@@ -69,18 +71,64 @@ export const DEFAULT_PROFILE_KEYS: readonly ExecutionKey[] = MODEL_PROFILE_KEYS
 
 /** A fresh profile inherits product/runtime defaults without capturing any user configuration. */
 export function defaultSettingsProfile(): SettingsProfile {
-  return { id: DEFAULT_SETTINGS_PROFILE_ID, name: 'Default', scope: 'global', revision: 1, system_prompt: '',
+  return { provider: 'llama.cpp', id: DEFAULT_SETTINGS_PROFILE_ID, name: 'Default', scope: 'global', revision: 1, system_prompt: '',
     settings: { runtime_defaults: DEFAULT_PROFILE_KEYS.filter(key => RUNTIME_DEFAULT_KEYS.includes(key)), chat_options: {} },
     legacy: true, coverage: [...DEFAULT_PROFILE_KEYS] };
 }
 
 export function ensureProfileLibrary(library: SettingsProfileLibrary): SettingsProfileLibrary {
+  const source = library;
+  library = structuredClone(library);
+  for (const profile of library.entries) {
+    profile.provider ??= 'llama.cpp';
+    if (profile.scope === 'model') {
+      profile.coverage = [...ownedKeys(profile)];
+      profile.legacy = true;
+      profile.scope = 'global';
+    }
+    delete profile.model_key;
+    delete profile.source_id;
+    delete profile.source_scope;
+    const legacy: Record<string, unknown> = {};
+    for (const key of RUNTIME_SELECTION_KEYS) {
+      if (profile.settings[key] !== undefined) legacy[key] = profile.settings[key];
+      delete profile.settings[key];
+    }
+    if (Object.keys(legacy).length) profile.legacy_runtime = { ...profile.legacy_runtime, ...legacy };
+    if (profile.coverage) profile.coverage = profile.coverage.filter(key => !(RUNTIME_SELECTION_KEYS as readonly string[]).includes(key));
+  }
+  for (const application of Object.values(library.applied)) {
+    application.provider ??= 'llama.cpp';
+    for (const key of RUNTIME_SELECTION_KEYS) delete application.settings[key];
+  }
   library = migrateModelPathKeys(library);
-  const populated = library.entries.length ? library : { ...library, entries: [defaultSettingsProfile()] };
-  const selected = populated.entries.find(entry => entry.id === populated.default_profile_id)
-    ?? populated.entries.find(entry => entry.id === DEFAULT_SETTINGS_PROFILE_ID)
-    ?? populated.entries.find(entry => entry.scope === 'global') ?? populated.entries[0];
-  return setDefaultSettingsProfile(populated, selected.id);
+  const populated = library;
+  let llamaProfiles = populated.entries.filter(entry => entry.provider === 'llama.cpp');
+  if (!llamaProfiles.length) {
+    let id = DEFAULT_SETTINGS_PROFILE_ID;
+    for (let suffix = 2; populated.entries.some(entry => entry.id === id); suffix++) id = `${DEFAULT_SETTINGS_PROFILE_ID}-${suffix}`;
+    const profile = { ...defaultSettingsProfile(), id };
+    populated.entries.push(profile);
+    llamaProfiles = [profile];
+  }
+  const selected = llamaProfiles.find(entry => entry.id === populated.default_profile_id)
+    ?? llamaProfiles.find(entry => entry.id === populated.provider_defaults?.['llama.cpp'])
+    ?? llamaProfiles.find(entry => entry.id === DEFAULT_SETTINGS_PROFILE_ID)
+    ?? llamaProfiles.find(entry => entry.scope === 'global') ?? llamaProfiles[0];
+  const normalized = setDefaultSettingsProfile(populated, selected.id);
+  normalized.provider_defaults ??= {};
+  normalized.provider_recent ??= {};
+  normalized.provider_defaults['llama.cpp'] ??= normalized.default_profile_id;
+  for (const provider of PROVIDERS.filter(provider => provider !== 'llama.cpp')) {
+    if (normalized.entries.some(entry => entry.id === normalized.provider_defaults?.[provider] && entry.provider === provider && entry.scope === 'global')) continue;
+    let id = `profile-default-${provider}`;
+    for (let suffix = 2; normalized.entries.some(entry => entry.id === id && (entry.provider !== provider || entry.scope !== 'global')); suffix++) id = `profile-default-${provider}-${suffix}`;
+    if (!normalized.entries.some(entry => entry.id === id)) normalized.entries.push({ id, provider, name: 'Default', scope: 'global', revision: 1,
+      settings: { provider_options: { [provider]: {} } }, system_prompt: '' });
+    normalized.provider_defaults[provider] = id;
+  }
+  normalized.provider_recent = Object.fromEntries(Object.entries(normalized.provider_recent).filter(([provider, id]) => normalized.entries.some(entry => entry.id === id && (entry.provider ?? 'llama.cpp') === provider)));
+  return JSON.stringify(source) === JSON.stringify(normalized) ? source : normalized;
 }
 
 /** A designated default must be applicable to every model without changing its saved identity. */
@@ -88,7 +136,8 @@ export function setDefaultSettingsProfile(library: SettingsProfileLibrary, id: s
   const selected = library.entries.find(entry => entry.id === id);
   if (!selected) throw new Error('This profile is no longer available.');
   const promoted = selected.scope === 'model' || selected.model_key !== undefined || selected.source_id !== undefined || selected.source_scope !== undefined;
-  if (library.default_profile_id === id && !promoted) return library;
+  const provider = selected.provider ?? 'llama.cpp';
+  if ((library.provider_defaults?.[provider] ?? (provider === 'llama.cpp' ? library.default_profile_id : undefined)) === id && !promoted) return library;
   let profile = selected;
   if (promoted) {
     profile = { ...selected, scope: 'global', revision: selected.revision + 1,
@@ -97,24 +146,18 @@ export function setDefaultSettingsProfile(library: SettingsProfileLibrary, id: s
     delete profile.source_id;
     delete profile.source_scope;
   }
-  return { ...library, default_profile_id: id, entries: library.entries.map(entry => entry.id === id ? profile : entry) };
+  return { ...library, ...(provider === 'llama.cpp' ? { default_profile_id: id } : {}),
+    provider_defaults: { ...library.provider_defaults, [provider]: id }, entries: library.entries.map(entry => entry.id === id ? profile : entry) };
 }
 
-export function defaultSettingsProfileEntry(library: SettingsProfileLibrary): SettingsProfile {
+export function defaultSettingsProfileEntry(library: SettingsProfileLibrary, provider: ProviderId = 'llama.cpp'): SettingsProfile {
   const normalized = ensureProfileLibrary(library);
-  return normalized.entries.find(entry => entry.id === normalized.default_profile_id)!;
+  return normalized.entries.find(entry => entry.id === (normalized.provider_defaults?.[provider] ?? normalized.default_profile_id))!;
 }
 
-/** Removing a source includes the model copies created from that source. */
+/** Migrated copies are independent shared profiles; deleting one preserves the others. */
 export function profileDeletionIds(library: SettingsProfileLibrary, id: string): Set<string> {
-  const defaultId = defaultSettingsProfileEntry(library).id;
-  const removed = new Set(library.entries.some(entry => entry.id === id) ? [id] : []);
-  let previousSize = -1;
-  while (removed.size !== previousSize) {
-    previousSize = removed.size;
-    for (const entry of library.entries) if (entry.id !== defaultId && entry.source_id && removed.has(entry.source_id)) removed.add(entry.id);
-  }
-  return removed;
+  return new Set(library.entries.some(entry => entry.id === id) ? [id] : []);
 }
 
 export function canDeleteSettingsProfile(library: SettingsProfileLibrary, id: string): boolean {
@@ -122,7 +165,7 @@ export function canDeleteSettingsProfile(library: SettingsProfileLibrary, id: st
 }
 
 export function profileDeletionReason(library: SettingsProfileLibrary, id: string): 'default' | undefined {
-  return defaultSettingsProfileEntry(library).id === id ? 'default' : undefined;
+  return Object.values(ensureProfileLibrary(library).provider_defaults ?? {}).includes(id) ? 'default' : undefined;
 }
 
 export function deleteSettingsProfile(source: SettingsProfileLibrary, id: string): SettingsProfileLibrary {
@@ -131,13 +174,14 @@ export function deleteSettingsProfile(source: SettingsProfileLibrary, id: string
   const removed = profileDeletionIds(library, id);
   if (!removed.size) throw new Error('This profile is no longer available.');
   const entries = library.entries.filter(entry => !removed.has(entry.id));
-  const fallback = defaultSettingsProfileEntry(library);
   const applied = Object.fromEntries(Object.entries(library.applied).map(([key, application]) => {
     if (!application.profile_id || !removed.has(application.profile_id)) return [key, application];
+    const fallback = defaultSettingsProfileEntry(library, application.provider ?? 'llama.cpp');
     const cfg = applySettingsProfile(profileApplicationConfig(application), fallback);
     return [key, materializeProfileApplication(cfg, fallback.system_prompt ?? application.system_prompt, fallback)];
   }));
-  return { ...library, entries, applied };
+  const provider_recent = Object.fromEntries(Object.entries(library.provider_recent ?? {}).filter(([, recent]) => !removed.has(recent)));
+  return { ...library, entries, applied, provider_recent };
 }
 
 /** Expand saved execution fields with product defaults without reading another target's configuration. */
@@ -146,13 +190,13 @@ export function profileApplicationConfig(application: ProfileApplication): AppCo
     id: 'profile-application-defaults', name: 'Default', scope: 'global', revision: 1,
     legacy: true, coverage: [...MODEL_PROFILE_KEYS], settings: {},
   });
-  return { ...baseline, ...profileSettingsSnapshot(application.settings), active_model: application.model,
+  return { ...baseline, ...profileSettingsSnapshot({ ...application.settings, active_provider: application.provider }), active_provider: application.provider ?? 'llama.cpp', active_model: application.model,
     runtime_defaults: application.settings.runtime_defaults ?? (baseline.runtime_defaults ?? []).filter(field => !(field in application.settings)) };
 }
 
-export function profileTargetKey(modelPath: string, sessionId = 'default'): string {
+export function profileTargetKey(modelPath: string, sessionId = 'default', provider: ProviderId = 'llama.cpp'): string {
   return sessionId === 'default'
-    ? `model:${modelPathIdentity(modelPath)}`
+    ? `${provider === 'llama.cpp' ? '' : `provider:${provider}:`}model:${modelPathIdentity(modelPath)}`
     : `session:${sessionId}`;
 }
 
@@ -164,7 +208,7 @@ function migrateModelPathKeys(library: SettingsProfileLibrary): SettingsProfileL
   for (const [key, application] of Object.entries(library.applied)) {
     const modelKey = profileTargetKey(application.model);
     const legacyKey = `model:${application.model.trim().replace(/\\/g, '/').toLowerCase()}`;
-    const target = key === legacyKey ? modelKey : key;
+    const target = key === legacyKey || key === modelKey ? profileTargetKey(application.model, 'default', application.provider) : key;
     if (applied[target] && JSON.stringify(sortedValue(applied[target])) !== JSON.stringify(sortedValue(application))) {
       throw new Error('Conflicting saved settings for the same model path.');
     }
@@ -215,29 +259,39 @@ function profileArgs(args: readonly string[]): string[] {
 /** Library snapshots must not duplicate credentials or app-managed CLI arguments. */
 export function profileSettingsSnapshot(cfg: Partial<AppConfig>): Partial<ExecutionSettings> {
   const settings = settingsSnapshot(cfg);
+  for (const key of RUNTIME_SELECTION_KEYS) delete settings[key];
+  const provider = providerOf(cfg);
+  if (provider === 'llama.cpp') delete settings.provider_options;
+  else {
+    for (const key of Object.keys(settings)) if (!['provider_options', 'request_timeout_seconds', 'sleep_idle_seconds'].includes(key)) delete settings[key as ExecutionKey];
+    settings.provider_options = { [provider]: structuredClone(cfg.provider_options?.[provider] ?? {}) };
+  }
   if (settings.server_args) settings.server_args = profileArgs(settings.server_args);
   return settings;
 }
 
-function captureSettings(cfg: AppConfig, scope: SettingsProfile['scope']): Partial<ExecutionSettings> {
-  const allowed = scope === 'global' ? GLOBAL_PROFILE_KEYS : MODEL_PROFILE_KEYS;
+function captureSettings(cfg: AppConfig): Partial<ExecutionSettings> {
+  if (providerOf(cfg) !== 'llama.cpp') return profileSettingsSnapshot(cfg);
+  const allowed: readonly ExecutionKey[] = MODEL_PROFILE_KEYS;
   const snapshot = profileSettingsSnapshot(cfg);
   const settings = Object.fromEntries(Object.entries(snapshot).filter(([key]) => allowed.includes(key as ExecutionKey))) as Partial<ExecutionSettings>;
   settings.runtime_defaults = [...new Set((cfg.runtime_defaults ?? []).filter(key => allowed.includes(key as ExecutionKey)))].sort();
   return settings;
 }
 
-export function captureProfile(cfg: AppConfig, name: string, scope: SettingsProfile['scope'], systemPrompt: string): SettingsProfile {
+/** The legacy scope argument is accepted for callers importing old settings; every new profile is shared. */
+export function captureProfile(cfg: AppConfig, name: string, _scope: SettingsProfile['scope'], systemPrompt: string): SettingsProfile {
   if (!name.trim()) throw new Error('A profile name is required.');
-  if (scope === 'model' && !cfg.active_model.trim()) throw new Error('Choose a model before saving its profile.');
   return {
-    id: `profile-${crypto.randomUUID()}`, name: name.trim(), scope, revision: 1,
-    ...(scope === 'model' ? { model_key: profileTargetKey(cfg.active_model) } : {}),
-    settings: captureSettings(cfg, scope), system_prompt: systemPrompt,
+    id: `profile-${crypto.randomUUID()}`, name: name.trim(), scope: 'global', revision: 1,
+    provider: providerOf(cfg),
+    ...(providerOf(cfg) === 'llama.cpp' ? { legacy: true, coverage: [...MODEL_PROFILE_KEYS] } : {}),
+    settings: captureSettings(cfg), system_prompt: systemPrompt,
   };
 }
 
 function ownedKeys(profile: SettingsProfile): readonly ExecutionKey[] {
+  if ((profile.provider ?? 'llama.cpp') !== 'llama.cpp') return ['provider_options', 'request_timeout_seconds', 'sleep_idle_seconds'];
   if (!profile.legacy) return profile.scope === 'global' ? GLOBAL_PROFILE_KEYS : MODEL_PROFILE_KEYS;
   const fields = profile.coverage ?? [...Object.keys(profile.settings), ...(profile.settings.runtime_defaults ?? [])];
   return MODEL_PROFILE_KEYS.filter(key => fields.includes(key));
@@ -246,6 +300,12 @@ function ownedKeys(profile: SettingsProfile): readonly ExecutionKey[] {
 /** An explicit save updates the chosen entry and captures every editable field. */
 export function saveSettingsProfile(entry: SettingsProfile, cfg: AppConfig, systemPrompt: string,
   excludedKeys: ReadonlySet<string> = new Set(), preservePrompt = false): SettingsProfile {
+  if ((entry.provider ?? 'llama.cpp') !== providerOf(cfg)) throw new Error('This profile belongs to another runtime provider.');
+  entry = { ...entry, scope: 'global', ...(entry.scope === 'model' ? { legacy: true, coverage: [...ownedKeys(entry)] } : {}) };
+  delete entry.model_key;
+  delete entry.source_id;
+  delete entry.source_scope;
+  if (providerOf(cfg) !== 'llama.cpp') return { ...entry, revision: entry.revision + 1, settings: profileSettingsSnapshot(cfg), ...(!preservePrompt ? { system_prompt: systemPrompt } : {}) };
   const fields: ExecutionKey[] = MODEL_PROFILE_KEYS.filter(key => key !== 'runtime_defaults' && !excludedKeys.has(key));
   const snapshot = profileSettingsSnapshot(cfg);
   const settings = structuredClone(entry.settings);
@@ -271,10 +331,10 @@ export function saveSettingsProfile(entry: SettingsProfile, cfg: AppConfig, syst
 
 /** Copy only the profile's owned fields; legacy profiles keep their original partial coverage. */
 export function applySettingsProfile(cfg: AppConfig, profile: SettingsProfile): AppConfig {
-  if (profile.scope === 'model' && profile.model_key && profile.model_key !== profileTargetKey(cfg.active_model)) {
-    throw new Error('This profile belongs to a different model.');
-  }
+  if ((profile.provider ?? 'llama.cpp') !== providerOf(cfg)) throw new Error('This profile belongs to another runtime provider.');
   const keys = ownedKeys(profile);
+  if (providerOf(cfg) !== 'llama.cpp') return { ...cfg, ...Object.fromEntries(Object.entries(profile.settings).filter(([key]) => key !== 'provider_options' && keys.includes(key as ExecutionKey))),
+    provider_options: { ...cfg.provider_options, [providerOf(cfg)]: structuredClone(profile.settings.provider_options?.[providerOf(cfg)] ?? {}) } };
   const defaults = tuningResetValues();
   const settings = settingsSnapshot(profile.settings);
   const patch: Partial<ExecutionSettings> = {};
@@ -294,6 +354,7 @@ export function applySettingsProfile(cfg: AppConfig, profile: SettingsProfile): 
     Object.assign(patch, { [key]: structuredClone(value) });
   }
   patch.runtime_defaults = [...inherited].sort();
+  delete patch.provider_options;
   return { ...cfg, ...patch };
 }
 
@@ -416,14 +477,15 @@ export function changedSettings(saved: Partial<ExecutionSettings>, current: Part
 }
 
 export function profileMatches(profile: SettingsProfile, cfg: AppConfig, systemPrompt: string): boolean {
-  if (profile.scope === 'model' && profile.model_key && profile.model_key !== profileTargetKey(cfg.active_model)) return false;
+  if ((profile.provider ?? 'llama.cpp') !== providerOf(cfg)) return false;
   if (profile.system_prompt !== undefined && profile.system_prompt.trim() !== systemPrompt.trim()) return false;
-  return settingsEqual(settingsSnapshot(applySettingsProfile(cfg, profile)), settingsSnapshot(cfg));
+  return settingsEqual(profileSettingsSnapshot(applySettingsProfile(cfg, profile)), profileSettingsSnapshot(cfg));
 }
 
 export function materializeProfileApplication(cfg: AppConfig, systemPrompt: string, profile: SettingsProfile): ProfileApplication {
   return {
     model: cfg.active_model,
+    provider: providerOf(cfg),
     profile_id: profile.id, profile_name: profile.name, profile_revision: profile.revision,
     settings: profileSettingsSnapshot(cfg), system_prompt: systemPrompt,
   };

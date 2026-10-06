@@ -45,7 +45,7 @@ describe('profile workspace selection', () => {
     const source = captureProfile(testConfig, 'Shared', 'global', 'Original prompt');
     const copy = { ...captureProfile(testConfig, source.name, 'model', 'Copy prompt'), source_id: source.id, source_scope: 'global' as const };
     const updated = overwriteProfile(copy, { ...testConfig, ngl: 17, temperature: 0.4 }, 'Edited prompt', false);
-    expect(updated).toMatchObject({ id: copy.id, scope: 'model', model_key: copy.model_key, settings: { ngl: 17, temperature: 0.4 }, system_prompt: 'Edited prompt' });
+    expect(updated).toMatchObject({ id: copy.id, scope: 'global', settings: { ngl: 17, temperature: 0.4 }, system_prompt: 'Edited prompt' });
     expect(updated).not.toHaveProperty('source_id');
     expect(updated).not.toHaveProperty('source_scope');
     expect(copy.source_id).toBe(source.id);
@@ -53,11 +53,11 @@ describe('profile workspace selection', () => {
     expect(source.system_prompt).toBe('Original prompt');
   });
 
-  it('uses a selected model profile directly and rejects applying it to another model', () => {
+  it('shares a selected profile across models while rejecting missing identities', () => {
     const profile = captureProfile(testConfig, 'Model settings', 'model', 'Prompt');
     const library = { ...emptyProfileLibrary(), entries: [profile] };
     expect(profileForChoice(library, profile)).toBe(profile);
-    expect(() => applyProfile({ ...testConfig, active_model: 'other.gguf' }, profile, false)).toThrow('different model');
+    expect(applyProfile({ ...testConfig, active_model: 'other.gguf' }, profile, false)).toMatchObject({ active_model: 'other.gguf', temperature: testConfig.temperature });
     expect(() => profileForChoice(emptyProfileLibrary(), profile)).toThrow('no longer available');
   });
 

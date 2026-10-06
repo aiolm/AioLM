@@ -17,6 +17,7 @@ vi.mock("../../shared/api/index", () => ({
   sessionList: vi.fn(async () => []),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
   sessionStart: vi.fn(), sessionStop: vi.fn(), sessionUnload: vi.fn(),
+  isNativeRuntimeAvailable: vi.fn(() => false), rtList: vi.fn(async () => []), providerRuntimes: vi.fn(async () => []),
 }));
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 const definition: api.SessionDefinition = {
@@ -49,10 +50,22 @@ describe("session model settings", () => {
     for (const task of getTaskSnapshot()) removeTask(task.id);
     vi.mocked(useModelSettings).mockReturnValue(settings);
     mocked.sessionList.mockResolvedValue([]);
+    mocked.isNativeRuntimeAvailable.mockReturnValue(false);
+    mocked.providerRuntimes.mockResolvedValue([]);
     mocked.sessionUnload.mockResolvedValue(undefined);
     mocked.sessionStart.mockResolvedValue({ id: "work", name: "Work session", state: "running" });
     setSessionActivity("work", false);
     setSessionActivity("default", false);
+  });
+  it('names the running Python engine even when the saved session had a llama build', async () => {
+    mocked.isNativeRuntimeAvailable.mockReturnValue(true);
+    mocked.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);
+    mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'Work session', state: 'running', model: 'synthetic-snapshot',
+      engine: { provider: 'vllm', runtime_id: 'synthetic-metal', upstream_model: 'served-model', modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {} } }]);
+    renderPanel();
+    await selectWork();
+    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu · metal · managed')).toBeVisible();
+    expect(sessionRow().queryByText(/test-build/)).not.toBeInTheDocument();
   });
   it("opens the loaded default target without overriding it with saved settings", () => {
     const store = renderPanel(cfg, { state: "running", model: "models/live.gguf" });
@@ -157,7 +170,7 @@ describe("session model settings", () => {
     fireEvent.click(sessionRow().getByRole("button", { name: "Load session" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ ctx_size: 16384 }), false));
     expect(store.updateConfig).toHaveBeenCalledOnce();
-    expect(store.cfg!.settings_profiles!.entries).toEqual(before.settings_profiles!.entries);
+    expect(store.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(before.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp'));
     expect(store.cfg!.settings_profiles!.applied[key].profile_id).toBe(application.profile_id);
     expect(store.cfg!.settings_profiles!.applied[profileTargetKey(cfg.active_model)]).toEqual(before.settings_profiles!.applied[profileTargetKey(cfg.active_model)]);
   });

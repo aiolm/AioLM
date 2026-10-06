@@ -14,6 +14,8 @@ import { tuningResetValues } from '../../shared/config/tuningResetValues';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
+  providerCatalog: async () => [{ id: 'llama.cpp', engine: 'llama.cpp', server: 'llama-server', availability: { supported: true, detail: '' }, options: [] }],
+  providerRuntimes: async () => [{ id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', version: 'b123', accelerator: 'cpu', installation: 'managed', location: 'runtime', available: true, problems: [] }],
   listModels: vi.fn(async () => ({ models: [
     { name: 'a.gguf', path: 'models/a.gguf', size_mb: 3000, is_vision: false },
     { name: 'b.gguf', path: 'models/b.gguf', size_mb: 1500, is_vision: false },
@@ -50,6 +52,76 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('applies a common profile from the fixed selector before selecting a primary model', async () => {
+    const initialConfig = { ...cfg, active_model: '', settings_profiles: undefined };
+    const first = { ...captureProfile(initialConfig, 'Initial setup', 'global', ''), id: 'initial-setup' };
+    const selected = { ...captureProfile({ ...initialConfig, temperature: 0.3 }, 'Selected setup', 'global', ''), id: 'selected-setup' };
+    const library = { ...emptyProfileLibrary(), entries: [first, selected], default_profile_id: first.id, legacy_imported: true };
+    const { onProfileCommit } = mount({ initialConfig: { ...initialConfig, settings_profiles: library } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Settings profiles' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Global · Selected setup' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalled());
+    expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ active_model: '', temperature: 0.3 }), expect.anything(), true);
+    expect(screen.getByRole('combobox', { name: 'Settings profiles' })).toHaveTextContent('Selected setup');
+  });
+
+  it('offers GGUF language models as llama draft companions and excludes snapshot directories', async () => {
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [
+      { name: 'language.gguf', path: 'models/language.gguf', size_mb: 1, is_vision: false },
+      { name: 'Snapshot model', path: 'models/snapshot', size_mb: 1, is_vision: false },
+      { name: 'mmproj.gguf', path: 'models/mmproj.gguf', size_mb: 1, is_vision: true },
+    ], truncated: false });
+    mount({ initialSection: 'adapters' });
+    await waitFor(() => expect(api.listModels).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model' }));
+    expect(screen.getByRole('option', { name: 'language.gguf' })).toBeVisible();
+    expect(screen.queryByRole('option', { name: 'Snapshot model' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'mmproj.gguf' })).not.toBeInTheDocument();
+  });
+
+  it.each(['unsupported', 'readiness'] as const)('keeps a saved model visible and blocks launch for a newly selected runtime %s failure', async failure => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['wide', 'narrow'].map(id => ({
+      id, provider: 'vllm' as const, engine: 'vllm', server: 'vllm', accelerator: 'synthetic',
+      installation: 'external', location: 'synthetic-runtime', available: true, problems: [],
+    })));
+    const scan: typeof api.listModels = async (_directory, _scan, selection) => ({ models: [{
+      name: 'Saved snapshot', path: 'models/snapshot', size_mb: 1, is_vision: false,
+      compatibility: [{ provider: 'vllm', status: selection?.runtime === 'narrow' && failure === 'unsupported' ? 'unsupported' : 'supported',
+        tasks: ['generate'], modalities: { text: true, image: false, audio: false, video: false },
+        limitations: [], readiness: selection?.runtime === 'narrow' && failure === 'readiness' ? ['Selected runtime cannot load this snapshot.'] : [], evidence: 'runtime-probe',
+        reasons: selection?.runtime === 'narrow' && failure === 'unsupported' ? [{ code: 'architecture-not-registered', detail: 'Selected runtime cannot load this snapshot.' }] : [],
+      }],
+    }], truncated: false });
+    vi.mocked(api.listModels).mockImplementationOnce(scan).mockImplementationOnce(scan);
+    const { onApply } = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
+    fireEvent.click(screen.getByRole('option', { name: 'narrow · synthetic · external' }));
+    await waitFor(() => expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible());
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Model path' })).toHaveValue('models/snapshot');
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('restores unsaved system prompts independently when switching inference engines', async () => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue(['llama.cpp', 'vllm', 'mlx-vlm'].map(id => ({ id: id as api.ProviderId,
+      engine: id, server: 'synthetic-server', availability: { supported: true, detail: '' }, options: [] })));
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    mount({ initialSection: 'sampling' });
+    fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved llama prompt' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
+    fireEvent.click(screen.getByRole('option', { name: 'vLLM' }));
+    await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue(''));
+    fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved vLLM prompt' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
+    fireEvent.click(screen.getByRole('option', { name: 'llama.cpp' }));
+    await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved llama prompt'));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
+    fireEvent.click(screen.getByRole('option', { name: 'vLLM' }));
+    await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved vLLM prompt'));
+  });
 
   it('keeps the selected model summary compact and exposes all metadata without changing settings', async () => {
     vi.mocked(api.modelMetadata).mockResolvedValueOnce({ architecture: 'future-architecture', author: 'Synthetic Author',
@@ -113,9 +185,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(applyTarget).toBe(true);
     expect(next.ngl).toBe(25);
     expect(edit.application.profile_id).toBe(source.id);
-    expect(edit.library.entries).toHaveLength(1);
-    expect(edit.library.entries[0]).toMatchObject({ id: source.id, name: source.name, settings: { ngl: 25 } });
-    expect(getSaved().settings_profiles?.entries[0]).toMatchObject({ id: source.id, settings: { ngl: 25 } });
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: source.id, name: source.name, settings: { ngl: 25 } });
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: source.id, settings: { ngl: 25 } });
     expect(screen.getByRole('dialog', { name: 'Model & settings' })).toBeVisible();
     expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
   });
@@ -140,7 +212,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
-    expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 1, settings: expect.objectContaining({ ctx_size: 8192 }) })]);
     expect(screen.getByRole('tab', { name: 'Performance & memory' })).toHaveAttribute('aria-selected', 'true');
     expect(numeric('ctx_size')).toHaveValue(8192);
 
@@ -154,7 +226,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Editable profile' })).toBeVisible());
     expect(onProfileCommit).toHaveBeenCalledTimes(2);
-    expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: expect.objectContaining({ ctx_size: 8192 }) })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, revision: source.revision + 2, system_prompt: 'Updated prompt', settings: expect.objectContaining({ ctx_size: 8192 }) })]);
     expect(appliedProfile(getSaved())).toMatchObject({ profile_id: source.id, profile_revision: source.revision + 2, system_prompt: 'Updated prompt' });
     expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -178,7 +250,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const preview = within(screen.getByRole('region', { name: 'Preview' }));
     expect(preview.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
     expect(preview.queryByRole('button', { name: 'Select this profile' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
     expect(screen.queryByRole('region', { name: 'Preset profiles' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
@@ -285,17 +357,16 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('requires a managed runtime before starting and never offers a system runtime', async () => {
     mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
     await waitFor(() => expect(api.rtList).toHaveBeenCalled());
-    fireEvent.click(within(screen.getByRole('tablist', { name: 'Model & settings' })).getByRole('tab', { name: 'Runtime & GPU' }));
-    expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toHaveTextContent('Select a runtime');
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime & GPU' }));
+    expect(screen.getByRole('combobox', { name: 'Runtime' })).toHaveTextContent('Choose a runtime');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
     const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
-    expect(options).toContain('cpu · ?(123)');
+    expect(options).toContain('b123 · cpu · managed');
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
     // The disabled start says why, and offers the section that fixes it.
     expect(screen.getByText('No runtime is selected.')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Choose a runtime' }));
-    expect(screen.getByRole('combobox', { name: 'Runtime & GPU' })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Runtime' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
   });
 
@@ -409,7 +480,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onReloadProfile } = mount({ initialSection: 'tuning', initialConfig: { ...saved, settings_profiles: { ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(numeric('ctx_size'), { target: { value: '16384' } });
     expect(screen.getByRole('heading', { name: 'Base profile · Editing' })).toBeVisible();
-    expect(screen.getByText('Model profile · unsaved changes')).toBeVisible();
+    expect(screen.getByText('Global profile · unsaved changes')).toBeVisible();
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
     expect(screen.getByRole('heading', { name: 'Base profile' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Revert' })).not.toBeInTheDocument();
@@ -429,12 +500,12 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await act(async () => { fireEvent.click(screen.getByText('Create new profile', { selector: 'button' })); });
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.queryByLabelText('Profile name')).not.toBeInTheDocument());
-    expect(getSaved().settings_profiles?.entries).toEqual([expect.objectContaining({ name: 'Default' }), expect.objectContaining({ name: 'Recovered profile' }), expect.objectContaining({ name: 'Concise', system_prompt: 'Use concise answers.' })]);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ name: 'Default' }), expect.objectContaining({ name: 'Recovered profile' }), expect.objectContaining({ name: 'Concise', system_prompt: 'Use concise answers.' })]);
     const assignment = appliedProfile(getSaved())!;
     expect(assignment.profile_id).toBe(getSaved().settings_profiles?.entries.find(profile => profile.name === 'Concise')?.id);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
-    expect(getSaved().settings_profiles?.entries).toHaveLength(3);
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(3);
   });
 
   it('keeps invalid inputs while browsing profile previews and allows reverting the working draft', async () => {
@@ -493,8 +564,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
     const edit = vi.mocked(onProfileCommit).mock.calls[0][1];
     expect(edit.application.profile_id).toBe(copy.id);
-    expect(edit.library.entries.find(entry => entry.id === copy.id)?.settings.ngl).toBe(25);
-    expect(edit.library.entries.find(entry => entry.id === source.id)?.settings).toEqual(source.settings);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === copy.id)?.settings.ngl).toBe(25);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === source.id)?.settings).toEqual(source.settings);
   });
 
   it('reloads saved target values after renaming a profile without storing the working edits', async () => {
@@ -510,7 +581,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Saved profile · Editing' })).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
-    expect(getSaved().settings_profiles?.entries[0]).toMatchObject({ name: 'Renamed profile', system_prompt: 'Saved prompt' });
+    expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ name: 'Renamed profile', system_prompt: 'Saved prompt' });
   });
 
   it('preserves Working profile values and invalid drafts when only the default designation changes', async () => {
@@ -654,7 +725,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(edit.application.system_prompt).toBe('');
     expect(edit.application.profile_id).toBe(source.id);
     expect(edit.application.profile_name).toBe(source.name);
-    expect(edit.library.entries).toEqual([expect.objectContaining({ id: source.id, name: source.name, revision: source.revision + 1, system_prompt: '', settings: expect.objectContaining({ runtime_defaults: expect.arrayContaining(['ctx_size', 'temperature']), chat_options: {} }) }), defaultSettingsProfile()]);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([expect.objectContaining({ id: source.id, name: source.name, revision: source.revision + 1, system_prompt: '', settings: expect.objectContaining({ runtime_defaults: expect.arrayContaining(['ctx_size', 'temperature']), chat_options: {} }) }), defaultSettingsProfile()]);
     const stored = edit.library.entries[0];
     expect(stored.settings).toEqual(edit.application.settings);
     expect(source.settings.ctx_size).toBe(12288);

@@ -7,7 +7,7 @@ import { executionSettings } from '../../shared/config/executionSettings';
 import { sessionConfig } from '../../shared/runtime/sessionUtils';
 import { setSessionActivity } from '../../shared/state/sessionActivity';
 import type { ModelSettingsDialogProps } from './ModelSettingsDialog';
-import { ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
+import { MANAGE_MODEL_RUNTIMES, ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
 import { captureProfile, deleteSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey, setDefaultSettingsProfile } from '../../shared/config/settingsProfiles';
 import { SettingsDeliveryError, type ProfileEditorResult } from './profileEditor';
 
@@ -83,6 +83,19 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); });
 
 describe('model settings target application', () => {
+  it('opens runtime management for the edited engine without persisting the draft', async () => {
+    const store = createTestStore();
+    const dialog = await open(store, { target: { kind: 'default' } });
+    const listener = vi.fn();
+    window.addEventListener(MANAGE_MODEL_RUNTIMES, listener);
+    try {
+      act(() => dialog.onManageRuntimes?.({ ...store.cfg!, active_provider: 'vllm', active_runtime: 'synthetic-metal' }));
+      expect(listener).toHaveBeenCalledOnce();
+      expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ provider: 'vllm' });
+      expect(context.suspended).toBe(true);
+      expect(store.updateConfig).not.toHaveBeenCalled();
+    } finally { window.removeEventListener(MANAGE_MODEL_RUNTIMES, listener); }
+  });
   it('reopens a saved stopped model with its selected profile and prompt', async () => {
     const store = createTestStore();
     const dialog = await open(store, { target: { kind: 'default' } });
@@ -124,8 +137,8 @@ describe('model settings target application', () => {
     await act(async () => { await apply(dialog, { ...dialog.initialConfig, active_model: 'chosen.gguf', ctx_size: 8192, ngl: 7 }, 'save'); });
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'chosen.gguf', ctx_size: 8192, ngl: 7 }), expect.objectContaining({ model: 'chosen.gguf', profile_id: 'profile-old', system_prompt: 'Old prompt' }));
     expect(store.cfg?.active_model).toBe('model.gguf');
-    expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
-    expect(store.cfg?.settings_profiles?.entries[0]).toMatchObject({ id: 'profile-old', settings: { ngl: 7, ctx_size: kind === 'benchmark' ? 4096 : 8192 } });
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'profile-old', settings: { ngl: 7, ctx_size: kind === 'benchmark' ? 4096 : 8192 } });
     expect(store.cfg?.settings_profiles?.applied).toEqual(previous);
     expect(store.updateConfig).toHaveBeenCalledOnce(); expect(store.start).not.toHaveBeenCalled();
     expect(mocks.sessionStart).not.toHaveBeenCalled(); expect(mocks.preflightLaunch).not.toHaveBeenCalled();
@@ -202,7 +215,7 @@ describe('model settings target application', () => {
     await act(async () => { await dialog.onApply(draft, 'save', edit); });
     expect(store.updateConfig).toHaveBeenCalledOnce();
     expect(store.cfg).toMatchObject({ active_model: 'model.gguf', temperature: 0.8 });
-    expect(store.cfg?.settings_profiles?.entries[0].name).toBe('Renamed');
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].name).toBe('Renamed');
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].system_prompt).toBe('Old prompt');
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'project.gguf', temperature: 0.4 }), expect.objectContaining({ system_prompt: 'Project prompt' }));
     expect(store.start).not.toHaveBeenCalled();
@@ -234,8 +247,8 @@ describe('model settings target application', () => {
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')]).toMatchObject({
       profile_id: 'profile-new', settings: { temperature: 0.8 }, system_prompt: 'New prompt',
     });
-    expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
-    expect(store.cfg?.settings_profiles?.entries[1]).toMatchObject({ settings: { temperature: 0.8 }, system_prompt: 'New prompt' });
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).toMatchObject({ settings: { temperature: 0.8 }, system_prompt: 'New prompt' });
   });
 
   it('opens full saved settings for another model using the same selected profile', async () => {
@@ -250,7 +263,7 @@ describe('model settings target application', () => {
     act(() => context.open({ target: { kind: 'default' }, config: { ...store.cfg!, active_model: 'other.gguf' } }));
     expect(mocks.dialog!.initialConfig).toMatchObject({ active_model: 'other.gguf', active_backend: 'cuda', active_build: 'b456', ngl: 7 });
     expect(mocks.dialog!.initialApplication).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Saved shared prompt' });
-    expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('other.gguf')]).toMatchObject({ settings: { ngl: 0 }, system_prompt: 'Old prompt' });
   });
 });
@@ -266,7 +279,7 @@ describe('profile actions within an open editor', () => {
     expect(store.cfg?.settings_profiles?.default_profile_id).toBe('profile-new');
     expect(store.cfg?.temperature).toBe(0.8);
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].profile_id).toBe('profile-old');
-    expect(store.cfg?.settings_profiles?.entries[1].settings.temperature).toBe(0.8);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].settings.temperature).toBe(0.8);
     expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
   });
 
@@ -303,7 +316,7 @@ describe('profile actions within an open editor', () => {
     const dialog = await open(store, { target: { kind: 'project', id: 'project' }, config: { ...store.cfg!, temperature: 1.2 }, application: removed });
     expect(dialog.initialConfig.temperature).toBe(0.8);
     expect(dialog.initialApplication).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Old prompt' });
-    expect(dialog.initialConfig.settings_profiles?.entries).toHaveLength(2);
+    expect(dialog.initialConfig.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
@@ -319,10 +332,10 @@ describe('profile actions within an open editor', () => {
     edit.library = deleteSettingsProfile(edit.library, 'profile-old');
     await act(async () => { await dialog.onProfileCommit(dialog.initialConfig, edit, false); });
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'target.gguf', temperature: 0.25 }), expect.objectContaining({ profile_id: 'profile-new', system_prompt: 'New prompt' }));
-    expect(store.cfg?.settings_profiles?.entries.map(entry => entry.id)).toEqual(['profile-new']);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(entry => entry.id)).toEqual(['profile-new']);
     expect(mocks.dialog?.initialConfig.active_model).toBe('target.gguf');
     const reloaded = await mocks.dialog!.onReloadProfile('target.gguf');
-    expect(reloaded.config.settings_profiles?.entries.map(entry => entry.id)).toEqual(['profile-new']);
+    expect(reloaded.config.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(entry => entry.id)).toEqual(['profile-new']);
     expect(reloaded.application.profile_id).toBe('profile-new');
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -357,11 +370,11 @@ describe('profile actions within an open editor', () => {
     expect(store.cfg).toMatchObject({ temperature: 0.8, ctx_size: 4096 });
     expect(saved?.config).toMatchObject({ temperature: 0.8, ctx_size: 4096 });
     expect(saved?.application.profile_id).toBe('profile-old');
-    expect(store.cfg?.settings_profiles?.entries[1].name).toBe('Renamed');
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
     expect(mocks.sessionList).not.toHaveBeenCalled();
     expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
     act(() => mocks.dialog!.onClose());
-    expect(store.cfg?.settings_profiles?.entries[1].name).toBe('Renamed');
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
   });
 
   it('reloads the latest saved profile without rewriting the previous target snapshot', async () => {
@@ -418,7 +431,7 @@ describe('profile actions within an open editor', () => {
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'target.gguf', ngl: 7 }), expect.objectContaining({ profile_id: 'profile-new', system_prompt: 'New prompt' }));
     expect(store.cfg).toMatchObject({ active_model: 'model.gguf', ctx_size: 4096 });
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('model.gguf')].profile_id).toBe('profile-old');
-    expect(store.cfg?.settings_profiles?.entries[1].name).toBe('Changed');
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Changed');
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
     let reloaded!: Awaited<ReturnType<ModelSettingsDialogProps['onReloadProfile']>>;
     await act(async () => { reloaded = await mocks.dialog!.onReloadProfile('target.gguf'); });
@@ -443,7 +456,7 @@ describe('profile actions within an open editor', () => {
     const edit = { baseRevision: saved.saved.settings_profiles!.revision, library: structuredClone(saved.saved.settings_profiles!), application: saved.application };
     await act(async () => { await mocks.dialog!.onProfileCommit(saved.saved, edit, true); });
     expect(store.cfg?.settings_profiles?.revision).toBe(3);
-    expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
     expect(context.getRequestProfile('default', store.cfg!)?.system_prompt).toBe('New prompt');
     expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
   });
@@ -459,7 +472,7 @@ describe('profile actions within an open editor', () => {
     await act(async () => { try { await dialog.onProfileCommit(draft, edit, true); } catch (cause) { failure = cause; } });
     expect(failure).toBeInstanceOf(SettingsDeliveryError);
     expect(store.cfg?.settings_profiles?.revision).toBe(2);
-    expect(store.cfg?.settings_profiles?.entries[1].name).toBe('Renamed');
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1].name).toBe('Renamed');
     const restored = await mocks.dialog!.onReloadProfile('model.gguf');
     expect(restored.config.temperature).toBe(0.8);
     expect(restored.config.settings_profiles?.revision).toBe(2);
@@ -488,8 +501,8 @@ describe('model launch preparation', () => {
     const dialog = await open(store, { target: { kind: 'default' } });
     await act(async () => { await apply(dialog, { ...dialog.initialConfig, ctx_size: 200 }, 'start'); });
     expect(store.cfg?.ctx_size).toBe(512);
-    expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
-    expect(store.cfg?.settings_profiles?.entries[0]).toMatchObject({ id: 'profile-old', settings: { ctx_size: 512 } });
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'profile-old', settings: { ctx_size: 512 } });
     expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ ctx_size: 512 }), true);
     expect(store.stop).not.toHaveBeenCalled();
   });
@@ -571,7 +584,7 @@ describe('model launch preparation', () => {
     expect(reopened.initialApplication?.system_prompt).toBe('New prompt');
     await act(async () => { await apply(reopened, reopened.initialConfig, 'start', 'profile-new'); });
     expect(store.start).toHaveBeenCalledTimes(2);
-    expect(store.cfg?.settings_profiles?.entries).toHaveLength(2);
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
     expect(store.cfg?.settings_profiles?.applied[profileTargetKey('replacement.gguf')].system_prompt).toBe('New prompt');
     expect(store.stop).not.toHaveBeenCalled();
   });
@@ -614,7 +627,7 @@ describe('model launch preparation', () => {
     expect(mocks.applyRequestSettings).toHaveBeenCalledOnce();
     expect(context.getRequestProfile('default', store.cfg!)?.system_prompt).toBe('Only the prompt changed');
     expect(store.start).not.toHaveBeenCalled();
-    expect(store.cfg?.settings_profiles?.entries[0].system_prompt).toBe('Only the prompt changed');
+    expect(store.cfg?.settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].system_prompt).toBe('Only the prompt changed');
   });
 
   it('uses the saved profile after another entry point restarts the same model', async () => {

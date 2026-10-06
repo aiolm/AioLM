@@ -1,3 +1,5 @@
+import { providerOf } from '../../shared/api/providers';
+import { mergeProviderRequestSettings } from '../../shared/config/providerRequestSettings';
 import { createContext, lazy, Suspense, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
@@ -38,7 +40,7 @@ export const useModelSettings = () => useContext(Context);
 
 function assignedTarget(config: api.AppConfig, application?: ProfileApplication, sessionId = 'default'): ProfileCommitResult {
   const library = application?.profile_id && config.settings_profiles ? ensureProfileLibrary(config.settings_profiles) : profileLibrary(config);
-  const resolved = resolveProfileForExecution(config, library, application, profileTargetKey(config.active_model, sessionId));
+  const resolved = resolveProfileForExecution(config, library, application, profileTargetKey(config.active_model, sessionId, providerOf(config)));
   return { config: { ...executionConfig(config, resolved.application.settings), settings_profiles: resolved.library }, application: resolved.application };
 }
 const messages = {
@@ -63,7 +65,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const liveProfiles = useRef(new Map<string, { model: string; pid?: number; application: ProfileApplication }>());
   const deletedProfileFallbacks = useRef(new Map<string, ProfileApplication>());
   const requestFallback = useCallback((id: string, model: string) => {
-    const key = profileTargetKey(model, id);
+    const key = profileTargetKey(model, id, providerOf(latest.current.getConfig() ?? {}));
     const fallback = deletedProfileFallbacks.current.get(key);
     if (!fallback || profileTargetKey(fallback.model) !== profileTargetKey(model)) return undefined;
     const current = latest.current.getConfig()?.settings_profiles?.applied[key];
@@ -111,7 +113,8 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     if (status?.model) cfg.active_model = status.model;
     if (status?.mmproj !== undefined) cfg.mmproj = status.mmproj;
     const replacement = requestFallback(id, cfg.active_model);
-    if (replacement) {
+    if (replacement && (replacement.provider ?? 'llama.cpp') === providerOf(cfg)) {
+      cfg.provider_options = mergeProviderRequestSettings(cfg, replacement.settings.provider_options);
       Object.assign(cfg, Object.fromEntries(REQUEST_KEYS.filter(key => replacement.settings[key] !== undefined).map(key => [key, structuredClone(replacement.settings[key])])));
       const requestKeys: readonly string[] = REQUEST_KEYS;
       cfg.runtime_defaults = [...(cfg.runtime_defaults ?? []).filter(key => !requestKeys.includes(key)), ...(replacement.settings.runtime_defaults ?? []).filter(key => requestKeys.includes(key))];
@@ -247,7 +250,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       const requestOnly = status?.state === 'running' && !serverSettingsChanged(live, next);
       if (intent === 'start' && (sessionHasActivity(id) || (status?.active_requests ?? 0) > 0 || (current.stop_existing_sessions_on_load !== false && (anySessionActivity() || list.some(session => (session.active_requests ?? 0) > 0))))) throw new Error(copy.activity);
       if (status?.state === 'running' && !liveProfiles.current.has(id)) liveProfiles.current.set(id, { model: live.active_model, pid: status.pid,
-        application: structuredClone(resolveProfileApplicationOrDefault(live, profileLibrary(live), appliedProfile(live, id), profileTargetKey(live.active_model, id)).application) });
+        application: structuredClone(resolveProfileApplicationOrDefault(live, profileLibrary(live), appliedProfile(live, id), profileTargetKey(live.active_model, id, providerOf(live))).application) });
       if (intent === 'start') next = await api.preflightLaunch(next);
       application = { ...profile.application, model: next.active_model, settings: profileSettingsSnapshot(next) };
       const edit = { ...profile, application };
@@ -280,7 +283,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         });
       }
       application = appliedProfile(saved, id) ?? { ...application, settings: profileSettingsSnapshot(saved) };
-      deletedProfileFallbacks.current.delete(profileTargetKey(saved.active_model, id));
+      deletedProfileFallbacks.current.delete(profileTargetKey(saved.active_model, id, providerOf(saved)));
       persisted = saved;
       // A successful save is retained if a subsequent launch fails or is cancelled.
       const result = { config: saved, application };
@@ -343,6 +346,6 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       liveApplication={liveApplication}
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
       onCancelStart={launching ? stopTarget : undefined} onStop={stopTarget}
-      onManageRuntimes={() => { setSuspended(true); window.dispatchEvent(new Event(MANAGE_MODEL_RUNTIMES)); }} /></Suspense>}
+      onManageRuntimes={cfg => { setSuspended(true); window.dispatchEvent(new CustomEvent(MANAGE_MODEL_RUNTIMES, { detail: { provider: providerOf(cfg ?? editor.initial) } })); }} /></Suspense>}
   </Context.Provider>;
 }

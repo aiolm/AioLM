@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
 import { captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
-import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, requestProfileFromApplication, type ProfileEditorResult } from './profileEditor';
+import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, rebaseStaleProfileEdit, requestProfileFromApplication, type ProfileEditorResult } from './profileEditor';
 import { emptyGpuPlacement, sessionConfig } from '../../shared/runtime/sessionUtils';
 
 function fixture() {
@@ -20,11 +20,27 @@ function fixture() {
 beforeEach(() => localStorage.clear());
 
 describe('profile editor persistence', () => {
+  it('rebases independent runtime default and recent selections and rejects competing selections for one runtime', () => {
+    const base = fixture().current.settings_profiles;
+    base.provider_defaults = { 'llama.cpp': 'profile-default', vllm: 'vllm-old' };
+    base.provider_recent = { vllm: 'vllm-old', 'mlx-vlm': 'mlx-old' };
+    const latest = structuredClone(base);
+    latest.provider_defaults!.vllm = 'vllm-new';
+    latest.provider_recent!.vllm = 'vllm-new';
+    const edited = structuredClone(base);
+    edited.provider_recent!['mlx-vlm'] = 'mlx-new';
+    const merged = rebaseStaleProfileEdit(base, latest, edited);
+    expect(merged?.provider_defaults?.vllm).toBe('vllm-new');
+    expect(merged?.provider_recent).toEqual({ vllm: 'vllm-new', 'mlx-vlm': 'mlx-new' });
+    edited.provider_defaults!.vllm = 'vllm-competing';
+    expect(rebaseStaleProfileEdit(base, latest, edited)).toBeNull();
+    expect(base.provider_recent).toEqual({ vllm: 'vllm-old', 'mlx-vlm': 'mlx-old' });
+  });
   it('reads a migrated library without writing browser storage or modifying config', () => {
     localStorage.setItem('aiolm-model-profiles', JSON.stringify({ version: 4, server: [], model: [{ id: 'old', name: 'Old', system_prompt: 'Saved prompt' }] }));
     const before = localStorage.getItem('aiolm-model-profiles');
     const library = profileLibrary(testConfig);
-    expect(library.entries).toHaveLength(1);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
     expect(library.legacy_imported).toBe(true);
     expect(localStorage.getItem('aiolm-model-profiles')).toBe(before);
     expect(testConfig).not.toHaveProperty('settings_profiles');
@@ -37,7 +53,7 @@ describe('profile editor persistence', () => {
     expect(next.revision).toBe(5);
     expect(next.applied[profileTargetKey(testConfig.active_model)]).toEqual({ ...application, profile_name: 'Renamed' });
     expect(next.applied[profileTargetKey('other.gguf')]).toEqual({ ...other, profile_name: 'Renamed' });
-    expect(current.settings_profiles.entries[0]).toMatchObject({ revision: 1, name: 'Shared', system_prompt: 'Original prompt' });
+    expect(current.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ revision: 1, name: 'Shared', system_prompt: 'Original prompt' });
   });
 
   it('rejects library edits that leave saved targets referencing a removed profile', () => {
@@ -46,7 +62,7 @@ describe('profile editor persistence', () => {
     expect(() => mergeProfileEditor(current, edit)).toThrow('Every model must reference an available profile');
     expect(current.settings_profiles.applied[profileTargetKey(testConfig.active_model)]).toEqual(application);
     expect(current.settings_profiles.applied[profileTargetKey('other.gguf')]).toEqual(other);
-    expect(current.settings_profiles.entries).toHaveLength(2);
+    expect(current.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
   });
 
   it('rejects saving an application whose selected profile was removed', () => {
@@ -62,7 +78,7 @@ describe('profile editor persistence', () => {
     const next = mergeProfileEditor(current, edit, 'default');
     expect(next.applied[profileTargetKey(testConfig.active_model)]).toMatchObject({ system_prompt: 'Edited prompt', settings: { chat_options: { stop: ['new stop'] } } });
     expect(next.applied[profileTargetKey('other.gguf')]).toEqual(other);
-    expect(next.entries[0].system_prompt).toBe('Original prompt');
+    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].system_prompt).toBe('Original prompt');
     edit.application.system_prompt = 'Changed later';
     expect(next.applied[profileTargetKey(testConfig.active_model)].system_prompt).toBe('Edited prompt');
   });
@@ -75,9 +91,9 @@ describe('profile editor persistence', () => {
     edit.application = { ...edit.application, profile_revision: 2, system_prompt: 'Final prompt',
       settings: { ...edit.application.settings, active_backend: 'vulkan', active_build: 'normalized-build', ngl: 9, mmproj: 'models/vision.gguf', runtime_defaults: [] } };
     const next = mergeProfileEditor(current, edit, sessionId);
-    expect(next.entries[0]).toMatchObject({ id: 'shared', scope: 'global', revision: 2, system_prompt: 'Final prompt',
-      settings: { active_backend: 'vulkan', active_build: 'normalized-build', ngl: 9, mmproj: 'models/vision.gguf' } });
-    expect(next.entries[0].coverage).toContain('active_backend');
+    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'shared', scope: 'global', revision: 2, system_prompt: 'Final prompt',
+      settings: { ngl: 9, mmproj: 'models/vision.gguf' } });
+    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).not.toContain('active_backend');
     expect(next.applied[profileTargetKey(other.model)]).toEqual(other);
     if (sessionId === undefined) expect(next.applied).toEqual(current.settings_profiles.applied);
     else expect(next.applied[profileTargetKey(testConfig.active_model, sessionId)]).toMatchObject({ profile_id: 'shared', profile_revision: 2, system_prompt: 'Final prompt' });
@@ -93,9 +109,9 @@ describe('profile editor persistence', () => {
     edit.application = { ...edit.application, system_prompt: 'Workload prompt', settings: { ...edit.application.settings,
       temperature: 1.5, threads: 7, ngl: 12, runtime_defaults: [] } };
     const next = mergeProfileEditor(current, edit);
-    expect(next.entries[0]).toMatchObject({ id: 'shared', revision: 2, system_prompt: 'Original prompt',
+    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ id: 'shared', revision: 2, system_prompt: 'Original prompt',
       settings: { temperature: 0.2, threads: 7, ngl: 12, runtime_defaults: ['temperature'] } });
-    expect(next.entries[0].coverage).toContain('ngl');
+    expect(next.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0].coverage).toContain('ngl');
     expect(next.applied).toEqual(current.settings_profiles.applied);
   });
 

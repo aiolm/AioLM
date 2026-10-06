@@ -1,4 +1,5 @@
 import type { AppConfig } from '../api/types';
+import { PROVIDERS, providerOf, type ProviderId } from '../api/providers';
 import type { ExecutionSettings } from './executionSettings';
 import {
   emptyProfileLibrary, MODEL_PROFILE_KEYS,
@@ -79,7 +80,7 @@ function promoteLegacyArgs(raw: RecordValue, source: string): RecordValue {
   return mapped;
 }
 
-function validateSettings(value: RecordValue, source: string): Partial<ExecutionSettings> {
+function validateSettings(value: RecordValue, source: string, provider: ProviderId = 'llama.cpp'): Partial<ExecutionSettings> {
   for (const key of MODEL_PROFILE_KEYS) {
     const field = value[key];
     if (field === undefined) continue;
@@ -97,6 +98,12 @@ function validateSettings(value: RecordValue, source: string): Partial<Execution
       if (!Array.isArray(gpu.tensor_split) || gpu.tensor_split.some(item => typeof item !== 'number' || !Number.isFinite(item))) invalid(`${source}.gpu.tensor_split`);
       if (gpu.main_gpu !== null) optionalString(gpu.main_gpu, `${source}.gpu.main_gpu`);
       if (gpu.draft_gpu_id !== null) optionalString(gpu.draft_gpu_id, `${source}.gpu.draft_gpu_id`);
+    } else if (key === 'provider_options') {
+      const providers = record(field, `${source}.${key}`);
+      for (const [provider, options] of Object.entries(providers)) {
+        if (!['llama.cpp', 'vllm', 'mlx-vlm'].includes(provider)) invalid(`${source}.${key}`);
+        record(options, `${source}.${key}.${provider}`);
+      }
     } else if (key === 'lora_adapters') {
       if (!Array.isArray(field)) invalid(`${source}.${key}`);
       for (const item of field) {
@@ -106,7 +113,7 @@ function validateSettings(value: RecordValue, source: string): Partial<Execution
       }
     } else string(field, `${source}.${key}`);
   }
-  return profileSettingsSnapshot(value as Partial<AppConfig>);
+  return profileSettingsSnapshot({ ...value, active_provider: provider } as Partial<AppConfig>);
 }
 
 function legacyId(kind: string, id: string, index: number): string {
@@ -131,6 +138,8 @@ function importEntry(value: unknown, kind: 'server' | 'model' | 'loading', index
     if (backend === '' || backend === 'PATH') { mapped.active_backend = ''; mapped.active_build = ''; }
   }
   const settings = validateSettings(mapped, source);
+  const legacyRuntime = (typeof mapped.active_backend === 'string' || typeof mapped.active_build === 'string')
+    ? { ...(typeof mapped.active_backend === 'string' ? { active_backend: mapped.active_backend } : {}), ...(typeof mapped.active_build === 'string' ? { active_build: mapped.active_build } : {}) } : undefined;
   const prompt = optionalString(raw.system_prompt, `${source}.system_prompt`);
   if (raw.stop_strings !== undefined) {
     const stops = strings(raw.stop_strings, `${source}.stop_strings`);
@@ -152,7 +161,7 @@ function importEntry(value: unknown, kind: 'server' | 'model' | 'loading', index
   return { originalId: id, profile: {
     id: legacyId(kind, id, index), name, scope: modelPath ? 'model' : 'global',
     ...(modelPath ? { model_key: profileTargetKey(modelPath) } : {}), revision: 1,
-    settings, ...(prompt !== undefined ? { system_prompt: prompt } : {}), legacy: true, coverage,
+    settings, ...(legacyRuntime ? { legacy_runtime: legacyRuntime } : {}), ...(prompt !== undefined ? { system_prompt: prompt } : {}), legacy: true, coverage,
   } };
 }
 
@@ -204,7 +213,7 @@ function existingLibrary(cfg: AppConfig): SettingsProfileLibrary {
     record(entry, 'settings profile');
     if (typeof entry.id !== 'string' || ids.has(entry.id)) invalid('settings profile ID');
     ids.add(entry.id);
-    validateSettings(record(entry.settings, 'profile settings'), 'profile settings');
+    validateSettings(record(entry.settings, 'profile settings'), 'profile settings', entry.provider ?? 'llama.cpp');
   }
   return structuredClone(value);
 }
@@ -223,6 +232,14 @@ export function migrateProfileLibrary(cfg: AppConfig, storage: Pick<Storage, 'ge
     const raw = record(executionRaw, EXECUTION_KEY);
     if (raw.version !== 1) invalid(EXECUTION_KEY);
     for (const [path, settings] of Object.entries(record(raw.models, EXECUTION_KEY))) {
+      const provider = PROVIDERS.find(provider => provider !== 'llama.cpp' && path.startsWith(`provider:${provider}:model:`));
+      if (provider) {
+        const model = path.slice(`provider:${provider}:model:`.length);
+        const key = profileTargetKey(model, 'default', provider);
+        if (model && !library.applied[key]) library.applied[key] = { provider, model,
+          settings: validateSettings(record(settings, EXECUTION_KEY), EXECUTION_KEY, provider), system_prompt: '' };
+        continue;
+      }
       remembered.set(profileTargetKey(path), { path, settings: validateSettings(promoteLegacyArgs(record(settings, EXECUTION_KEY), EXECUTION_KEY), EXECUTION_KEY) });
     }
   }
@@ -231,14 +248,14 @@ export function migrateProfileLibrary(cfg: AppConfig, storage: Pick<Storage, 'ge
   }
 
   const paths = new Map<string, string>();
-  for (const path of [...Object.keys(stored.activeServerIds), ...Object.keys(stored.activeModelIds), ...[...remembered.values()].map(item => item.path), cfg.active_model]) {
+  for (const path of [...Object.keys(stored.activeServerIds), ...Object.keys(stored.activeModelIds), ...[...remembered.values()].map(item => item.path), providerOf(cfg) === 'llama.cpp' ? cfg.active_model : '']) {
     if (path) paths.set(profileTargetKey(path), path);
   }
   for (const [key, path] of paths) {
     if (library.applied[key]) continue;
     const model = generationProfile(stored, path, cfg.active_model);
     let settings: Partial<ExecutionSettings>;
-    if (key === profileTargetKey(cfg.active_model)) settings = profileSettingsSnapshot(cfg);
+    if (providerOf(cfg) === 'llama.cpp' && key === profileTargetKey(cfg.active_model)) settings = profileSettingsSnapshot(cfg);
     else if (remembered.has(key)) settings = remembered.get(key)!.settings;
     else {
       const serverId = selected(stored.activeServerIds, path) ?? stored.activeServerId;
@@ -256,7 +273,7 @@ export function migrateProfileLibrary(cfg: AppConfig, storage: Pick<Storage, 'ge
       ? stored.model.find(item => item.originalId === definition.model_profile_id)?.profile
       : generationProfile(stored, definition.models.primary_model, definition.models.primary_model);
     const target = sessionConfig(cfg, definition);
-    library.applied[key] = { model: target.active_model, settings: profileSettingsSnapshot(target), system_prompt: profile?.system_prompt ?? '' };
+    library.applied[key] = { provider: providerOf(target), model: target.active_model, settings: profileSettingsSnapshot(target), system_prompt: providerOf(target) === 'llama.cpp' ? profile?.system_prompt ?? '' : '' };
   }
   library.legacy_imported = true;
   return ensureProfileAssignments(cfg, library);

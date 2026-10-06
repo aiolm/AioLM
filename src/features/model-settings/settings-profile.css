@@ -10,6 +10,8 @@
 .settings-profile-banner p.settings-profile-feedback { color: var(--ui-accent); font-weight: 500; }
 .settings-profile-buttons { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
 .settings-profile-buttons .app-button { max-width: 100%; }
+.settings-profile-picker { flex: 1 1 160px; min-width: 0; max-width: 260px; }
+.settings-profile-picker .app-custom-select-trigger { width: 100%; }
 .settings-profile-groups { display: grid; gap: 18px; margin: 22px 0; }
 .settings-profile-group { min-width: 0; }
 .settings-profile-group-heading { margin: 0 0 8px; font-size: var(--ui-text-support); font-weight: 600; }

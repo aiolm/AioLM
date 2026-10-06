@@ -1,4 +1,5 @@
 import type { AppConfig } from '../api/types';
+import { providerOf } from '../api/providers';
 import { sessionConfig } from '../runtime/sessionUtils';
 import {
   applySettingsProfile, defaultSettingsProfileEntry, ensureProfileLibrary, materializeProfileApplication,
@@ -10,10 +11,6 @@ export interface ResolvedProfileApplication {
   library: SettingsProfileLibrary;
   application: ProfileApplication;
   profile: SettingsProfile;
-}
-
-function compatible(profile: SettingsProfile, model: string): boolean {
-  return profile.scope === 'global' || Boolean(model && (!profile.model_key || profile.model_key === profileTargetKey(model)));
 }
 
 function assignedApplication(saved: ProfileApplication, profile: SettingsProfile): ProfileApplication {
@@ -35,30 +32,31 @@ function recoveredId(library: SettingsProfileLibrary, targetKey: string): string
 
 export function applyDefaultProfile(cfg: AppConfig, source: SettingsProfileLibrary): ResolvedProfileApplication {
   const library = ensureProfileLibrary(source);
-  const profile = defaultSettingsProfileEntry(library);
+  const profile = defaultSettingsProfileEntry(library, providerOf(cfg));
   return { library, profile, application: materializeProfileApplication(applySettingsProfile(cfg, profile), profile.system_prompt ?? '', profile) };
 }
 
 /** Explicit references to removed profiles use the designated default; anonymous legacy values are recovered. */
 export function resolveProfileApplicationOrDefault(
-  cfg: AppConfig, library: SettingsProfileLibrary, saved?: ProfileApplication, targetKey = profileTargetKey(cfg.active_model),
+  cfg: AppConfig, library: SettingsProfileLibrary, saved?: ProfileApplication, targetKey = profileTargetKey(cfg.active_model, 'default', providerOf(cfg)),
 ): ResolvedProfileApplication {
-  if (saved?.profile_id && !library.entries.some(entry => entry.id === saved.profile_id)) {
-    return applyDefaultProfile({ ...cfg, ...saved.settings, active_model: saved.model }, library);
+  if (saved && ((saved.provider ?? 'llama.cpp') !== providerOf(cfg) || saved.profile_id && !library.entries.some(entry => entry.id === saved.profile_id))) {
+    return applyDefaultProfile(cfg, library);
   }
   return resolveProfileApplication(cfg, library, saved, targetKey);
 }
 
 /** Resolve the current saved profile for a new edit or execution without changing live snapshots. */
 export function resolveProfileForExecution(
-  cfg: AppConfig, source: SettingsProfileLibrary, saved?: ProfileApplication, targetKey = profileTargetKey(cfg.active_model),
+  cfg: AppConfig, source: SettingsProfileLibrary, saved?: ProfileApplication, targetKey = profileTargetKey(cfg.active_model, 'default', providerOf(cfg)),
 ): ResolvedProfileApplication {
   const library = ensureProfileLibrary(source);
   const reference = saved ?? library.applied[targetKey];
+  if (reference && (reference.provider ?? 'llama.cpp') !== providerOf(cfg)) return applyDefaultProfile(cfg, library);
   if (!reference) return applyDefaultProfile(cfg, library);
-  const target = { ...cfg, ...(profileTargetKey(reference.model) === profileTargetKey(cfg.active_model) ? reference.settings : {}), active_model: cfg.active_model };
+  const target = { ...cfg, ...(profileTargetKey(reference.model) === profileTargetKey(cfg.active_model) ? profileSettingsSnapshot({ ...reference.settings, active_provider: providerOf(cfg) }) : {}), active_model: cfg.active_model };
   if (reference.profile_id) {
-    const profile = library.entries.find(entry => entry.id === reference.profile_id && compatible(entry, cfg.active_model));
+    const profile = library.entries.find(entry => entry.id === reference.profile_id && (entry.provider ?? 'llama.cpp') === providerOf(cfg));
     if (!profile) return applyDefaultProfile(target, library);
     return { library, profile, application: materializeProfileApplication(applySettingsProfile(target, profile),
       profile.system_prompt ?? reference.system_prompt, profile) };
@@ -73,22 +71,23 @@ export function resolveProfileApplication(
   cfg: AppConfig,
   source: SettingsProfileLibrary,
   saved?: ProfileApplication,
-  targetKey = profileTargetKey(cfg.active_model),
+  targetKey = profileTargetKey(cfg.active_model, 'default', providerOf(cfg)),
 ): ResolvedProfileApplication {
   let library = ensureProfileLibrary(source);
   const prompt = saved?.system_prompt ?? '';
-  const target = saved ? { ...cfg, ...saved.settings, active_model: saved.model } : cfg;
-  const assigned = library.entries.find(entry => entry.id === saved?.profile_id && compatible(entry, target.active_model));
+  const target = saved ? { ...cfg, ...profileSettingsSnapshot({ ...saved.settings, active_provider: providerOf(cfg) }), active_model: saved.model } : cfg;
+  const assigned = library.entries.find(entry => entry.id === saved?.profile_id && (entry.provider ?? 'llama.cpp') === providerOf(cfg));
   if (assigned) {
     return { library, profile: assigned, application: assignedApplication(structuredClone(saved!), assigned) };
   }
-  let profile = library.entries.find(entry => compatible(entry, target.active_model) && profileMatches(entry, target, prompt));
+  let profile = library.entries.find(entry => profileMatches(entry, target, prompt));
   // Before a model is chosen, the initial workspace belongs to its portable default profile.
-  if (!profile && !target.active_model && !saved) profile = defaultSettingsProfileEntry(library);
+  if (!profile && !target.active_model && !saved) profile = defaultSettingsProfileEntry(library, providerOf(cfg));
   if (!profile) {
     profile = {
-      id: recoveredId(library, targetKey), name: 'Recovered profile', scope: target.active_model ? 'model' : 'global', revision: 1,
-      ...(target.active_model ? { model_key: profileTargetKey(target.active_model) } : { legacy: true, coverage: [...MODEL_PROFILE_KEYS] }),
+      id: recoveredId(library, targetKey), name: 'Recovered profile', scope: 'global', revision: 1,
+      provider: providerOf(cfg),
+      legacy: true, coverage: [...MODEL_PROFILE_KEYS],
       settings: profileSettingsSnapshot(target), system_prompt: prompt,
     };
     library = { ...library, entries: [...library.entries, profile] };
@@ -117,7 +116,7 @@ export function ensureProfileAssignments(cfg: AppConfig, source: SettingsProfile
     const sessionModel = sessionModels.get(key);
     if (sessionModel !== undefined && sessionModel !== profileTargetKey(application.model)) continue;
     const assigned = application.profile_id ? profiles.get(application.profile_id) : undefined;
-    if (assigned && compatible(assigned, application.model)) {
+    if (assigned && (assigned.provider ?? 'llama.cpp') === (application.provider ?? 'llama.cpp')) {
       // Named snapshots retain their saved values and revision. Only recovery
       // needs to reconstruct defaults and search profiles by their settings.
       library.applied[key] = assignedApplication(application, assigned);
@@ -126,7 +125,7 @@ export function ensureProfileAssignments(cfg: AppConfig, source: SettingsProfile
     const target = { ...cfg, ...profileApplicationConfig(application) };
     applyResolved(key, resolveProfileApplication(target, library, application, key));
   }
-  const currentKey = profileTargetKey(cfg.active_model);
+  const currentKey = profileTargetKey(cfg.active_model, 'default', providerOf(cfg));
   if (!library.applied[currentKey]) {
     if (!cfg.active_model) {
       library.applied[currentKey] = applyDefaultProfile(cfg, library).application;

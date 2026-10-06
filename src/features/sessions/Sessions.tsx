@@ -19,7 +19,7 @@ import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
-import { runtimeVersionLabel, useInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import {
   DEFAULT_SESSION_ID,
   cloneGpuPlacement,
@@ -76,7 +76,6 @@ function modelLabel(path: string, empty: string): string {
 }
 
 export default function SessionsPanel({ store, active = true }: { store: AppStore; active?: boolean }) {
-  const installedRuntimes = useInstalledRuntimes();
   const { t, locale } = useI18n();
   const modelSettings = useModelSettings();
   const cfg = store.cfg;
@@ -444,8 +443,8 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           const live = rowState === "running" || rowState === "starting" || rowState === "stopping";
           const model = live ? rowStatus?.model || rowDefinition.models.primary_model : rowDefinition.models.primary_model;
           const runtime = live ? rowStatus?.execution ?? rowDefinition.execution : rowDefinition.execution;
-          const backend = runtime?.active_backend ?? cfg?.active_backend ?? "PATH";
-          const build = runtime?.active_build ?? cfg?.active_build;
+          const runtimeConfig = { ...cfg, ...runtime, ...(live && rowStatus?.engine
+            ? { active_provider: rowStatus.engine.provider, active_runtime: rowStatus.engine.runtime_id } : {}) };
           const controlsDisabled = busyId !== null || savingId !== null || store.busy;
           return (
             <article key={definition.id} className={`app-list-row session-entry${expanded ? " is-selected" : ""}`} aria-label={rowName}>
@@ -473,7 +472,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                   <label className="text-xs ui-color-muted">{t("ui.sessionName")}<input className="app-input mt-1" value={normalizeDisplayText(rowDefinition.name)} onChange={(event) => updateEditing({ name: event.target.value })} placeholder={t("ui.sessionNamePlaceholder")} /></label>
                 </div>}
                 <div className="session-entry-diagnostics text-xs ui-color-muted">
-                  <span>{backend}{build ? ` / ${runtimeVersionLabel(installedRuntimes, backend, build)}` : ""}</span>
+                  <span><RuntimeSelectionLabel config={runtimeConfig} /></span>
                   {rowStatus && <span>{t("ui.sessionPortLabel", { port: sessionPort(rowStatus) || "—" })}</span>}
                   {rowStatus?.pid && <span>{t("ui.sessionPidLabel", { pid: rowStatus.pid })}</span>}
                   {rowStatus?.active_requests !== undefined && <span>{t("ui.sessionRequestsLabel", { count: rowStatus.active_requests })}</span>}

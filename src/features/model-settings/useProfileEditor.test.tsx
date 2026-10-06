@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
-import { applySettingsProfile, captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, saveSettingsProfile, type SettingsProfile } from '../../shared/config/settingsProfiles';
+import { applySettingsProfile, captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, saveSettingsProfile, type SettingsProfile } from '../../shared/config/settingsProfiles';
 import { testConfig } from '../../testing/appStore';
 import { mergeProfileEditor, profileLibraryConfigPatch } from './profileEditor';
 import { useProfileEditor } from './useProfileEditor';
@@ -35,14 +35,12 @@ describe('profile editor persistence', () => {
     act(() => { selected = hook.result.current.resetModel(testConfig); });
     hook.rerender({ draft: selected });
     expect(hook.result.current.selected.id).toBe('profile-default');
-    expect(hook.result.current.library.entries).toEqual([defaultSettingsProfile()]);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([defaultSettingsProfile()]);
     const saved = hook.result.current.result();
     const named = saved.library.entries.find(entry => entry.id === saved.application.profile_id)!;
-    // The Default profile owns the runtime, and a fresh one names none: choosing
-    // a model no longer carries whichever runtime was selected last into it. The
-    // tuning fields it owns keep their runtime defaults.
-    expect(named).toMatchObject({ id: 'profile-default', name: 'Default', scope: 'global', settings: { active_backend: '', active_build: '', ngl: tuningResetValues().ngl } });
-    expect(saved.library.entries).toHaveLength(1);
+    // Choosing a model retains the selected runtime and inherited tuning defaults.
+    expect(named).toMatchObject({ id: 'profile-default', name: 'Default', scope: 'global', settings: { ngl: tuningResetValues().ngl } });
+    expect(saved.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(1);
     expect(saved.application.profile_name).toBe('Default');
   });
 
@@ -74,14 +72,14 @@ describe('profile editor persistence', () => {
     expect(hook.result.current.selected.id).toBe(previous.id);
     expect(hook.result.current.systemPrompt).toBe('Latest saved prompt');
     expect(selected).toMatchObject({ active_model: nextModel.active_model, ctx_size: 16384, temperature: 0.25, ngl: 17,
-      active_backend: latestConfig.active_backend, active_build: latestConfig.active_build, gpu: latestConfig.gpu,
+      active_backend: nextModel.active_backend, active_build: nextModel.active_build, gpu: latestConfig.gpu,
       mmproj: latestConfig.mmproj, spec_draft_model: latestConfig.spec_draft_model, lora_adapters: latestConfig.lora_adapters });
     expect(hook.result.current.savedApplication.profile_revision).toBe(latest.revision);
     expect(hook.result.current.library).toEqual(before);
     const edit = hook.result.current.result();
     expect(edit.application).toMatchObject({ profile_id: previous.id, system_prompt: 'Latest saved prompt', settings: { ctx_size: 16384, temperature: 0.25, ngl: 17 } });
-    expect(edit.library.entries).toHaveLength(entries.length);
-    expect(edit.library.entries.filter(entry => entry.id !== previous.id)).toEqual(before.entries.filter(entry => entry.id !== previous.id));
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(entries.length);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').filter(entry => entry.id !== previous.id)).toEqual(before.entries.filter(entry => (entry.provider ?? 'llama.cpp') === 'llama.cpp' && entry.id !== previous.id));
     expect(edit.library.applied).toEqual(before.applied);
   });
 
@@ -93,7 +91,7 @@ describe('profile editor persistence', () => {
     const name = profileDisplayName(source, locale);
     expect(() => hook.result.current.prepareSaveAs(name, 'global')).toThrow('already exists');
     expect(() => hook.result.current.prepareRename(other.id, name)).toThrow('already exists');
-    expect(hook.result.current.library.entries).toEqual([source, other]);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([source, other]);
   });
 
   it('keeps prepared application values separate until the saved result is accepted', () => {
@@ -127,7 +125,7 @@ describe('profile editor persistence', () => {
     expect(hook.result.current.working).toBe(false);
     expect(hook.result.current.selected?.id).toBe(profile.id);
     expect(hook.result.current.result().application.profile_id).toBe(profile.id);
-    expect(hook.result.current.library.entries).toEqual([profile, defaultSettingsProfile()]);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([profile]);
 
     accept(hook, hook.result.current.prepareApply(profile));
     expect(hook.result.current.working).toBe(false);
@@ -140,12 +138,12 @@ describe('profile editor persistence', () => {
     const originalLibrary = structuredClone(hook.result.current.library);
     act(() => { hook.result.current.setSystemPrompt('Working prompt'); });
     const prepared = hook.result.current.prepareSaveAs('  New settings  ', scope);
-    const source = prepared.edit.library.entries.find(profile => profile.scope === scope && profile.name === 'New settings')!;
+    const source = prepared.edit.library.entries.find(profile => profile.scope === 'global' && profile.name === 'New settings')!;
     const applied = prepared.edit.library.entries.find(profile => profile.id === prepared.edit.application.profile_id)!;
 
     expect(source.name).toBe('New settings');
-    expect(applied).toMatchObject({ id: source.id, scope, system_prompt: 'Working prompt' });
-    expect(prepared.edit.library.entries).toHaveLength(originalLibrary.entries.length + 1);
+    expect(applied).toMatchObject({ id: source.id, scope: 'global', system_prompt: 'Working prompt' });
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(originalLibrary.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').length + 1);
     expect(prepared.edit.application).toMatchObject({ model: cfg.active_model, profile_name: 'New settings', settings: { temperature: 0.4, ngl: 7 }, system_prompt: 'Working prompt' });
     if (scope === 'global') {
       expect(source.settings.ngl).toBe(7);
@@ -169,7 +167,7 @@ describe('profile editor persistence', () => {
 
     expect(prepared.applyTarget).toBe(true);
     expect(prepared.edit.application).toMatchObject({ profile_id: profile.id, profile_revision: 2, settings: { temperature: 0.3 } });
-    expect(hook.result.current.library.entries[0]).toEqual(profile);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()] }).entries[0]);
     expect(hook.result.current.working).toBe(true);
 
     accept(hook, prepared);
@@ -184,10 +182,10 @@ describe('profile editor persistence', () => {
     const prepared = hook.result.current.prepareUpdate(other.id);
 
     expect(prepared.applyTarget).toBe(false);
-    expect(prepared.edit.library.entries[0]).toEqual(active);
-    expect(prepared.edit.library.entries[1]).toMatchObject({ id: other.id, revision: 2, settings: { temperature: 1.1 }, system_prompt: 'Current prompt' });
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(active);
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).toMatchObject({ id: other.id, revision: 2, settings: { temperature: 1.1 }, system_prompt: 'Current prompt' });
     expect(hook.result.current.selected?.id).toBe(active.id);
-    expect(hook.result.current.library.entries).toEqual([active, other, defaultSettingsProfile()]);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([active, other]);
   });
 
   it('updates the selected global profile without creating a model copy', () => {
@@ -201,10 +199,10 @@ describe('profile editor persistence', () => {
 
     expect(prepared.applyTarget).toBe(true);
     expect(prepared.edit.application).toMatchObject({ profile_id: activeId, settings: { temperature: 0.3 } });
-    expect(prepared.edit.library.entries.find(profile => profile.id === source.id)).toMatchObject({ revision: 2, settings: { temperature: 0.3 } });
-    expect(prepared.edit.library.entries.find(profile => profile.id === activeId)).toMatchObject({ revision: activeRevision + 1, settings: { temperature: 0.3 } });
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === source.id)).toMatchObject({ revision: 2, settings: { temperature: 0.3 } });
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === activeId)).toMatchObject({ revision: activeRevision + 1, settings: { temperature: 0.3 } });
     expect(activeId).toBe(source.id);
-    expect(prepared.edit.library.entries.filter(profile => profile.name === source.name)).toHaveLength(1);
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').filter(profile => profile.name === source.name)).toHaveLength(1);
   });
 
   it('saves every editable option and prompt into the selected global profile without changing another entry', () => {
@@ -220,14 +218,14 @@ describe('profile editor persistence', () => {
     const saved = edit.library.entries.find(entry => entry.id === source.id)!;
     expect(edit.saveMode).toBe('all');
     expect(edit.application).toMatchObject({ profile_id: source.id, profile_revision: saved.revision, system_prompt: 'Saved instruction' });
-    expect(edit.library.entries).toHaveLength(2);
-    expect(edit.library.entries[1]).toEqual(copy);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toHaveLength(2);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [copy] }).entries[0]);
     expect(saved).toMatchObject({ id: source.id, scope: 'global', system_prompt: 'Saved instruction',
-      settings: { ngl: 17, active_backend: cfg.active_backend, active_build: cfg.active_build, gpu: cfg.gpu,
+      settings: { ngl: 17, gpu: cfg.gpu,
         spec_draft_model: cfg.spec_draft_model, mmproj: cfg.mmproj, lora_adapters: cfg.lora_adapters, server_args: cfg.server_args } });
     expect(applySettingsProfile({ ...testConfig, active_model: 'other.gguf' }, saved)).toMatchObject({ active_model: 'other.gguf',
-      temperature: 0.3, ngl: 17, active_backend: cfg.active_backend, gpu: cfg.gpu, mmproj: cfg.mmproj, lora_adapters: cfg.lora_adapters });
-    expect(hook.result.current.library.entries).toEqual([source, copy]);
+      temperature: 0.3, ngl: 17, active_backend: testConfig.active_backend, active_build: testConfig.active_build, gpu: cfg.gpu, mmproj: cfg.mmproj, lora_adapters: cfg.lora_adapters });
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [source, copy] }).entries.filter(entry => entry.provider === 'llama.cpp'));
   });
 
   it('saves the explicitly selected generated entry without writing through to its source', () => {
@@ -237,9 +235,9 @@ describe('profile editor persistence', () => {
     hook.rerender({ draft: { ...testConfig, temperature: 0.25, ngl: 8 } });
     const edit = hook.result.current.result();
     expect(edit.application.profile_id).toBe(copy.id);
-    expect(edit.library.entries[0]).toEqual(source);
-    expect(edit.library.entries[1]).toMatchObject({ id: copy.id, settings: { temperature: 0.25, ngl: 8 } });
-    expect(edit.library.entries[1]).not.toHaveProperty('source_id');
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(source);
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).toMatchObject({ id: copy.id, settings: { temperature: 0.25, ngl: 8 } });
+    expect(edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[1]).not.toHaveProperty('source_id');
   });
 
   it('renames a profile without overwriting its saved settings with the current editor values', () => {
@@ -248,8 +246,8 @@ describe('profile editor persistence', () => {
     const prepared = hook.result.current.prepareRename(profile.id, 'Renamed');
 
     expect(prepared.applyTarget).toBe(false);
-    expect(prepared.edit.library.entries[0]).toEqual({ ...profile, name: 'Renamed', revision: 2 });
-    expect(hook.result.current.library.entries[0]).toEqual(profile);
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual({ ...profile, name: 'Renamed', revision: 2 });
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()] }).entries[0]);
   });
 
   it('rejects a global rename that would collide in another model with a linked copy', () => {
@@ -262,21 +260,21 @@ describe('profile editor persistence', () => {
     const hook = editor(entries, false, structuredClone(testConfig), currentCopy);
 
     expect(() => hook.result.current.prepareRename(source.id, '  Occupied  ')).toThrow('already exists');
-    expect(hook.result.current.library.entries).toEqual(entries);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries }).entries.filter(entry => entry.provider === 'llama.cpp'));
     expect(hook.result.current.selected?.name).toBe('Original');
   });
 
-  it('renames linked copies only in their original name while allowing matching names in unaffected models', () => {
+  it('renames only the selected shared profile and leaves migrated copies independent', () => {
     const source = captureProfile(testConfig, 'Original', 'global', 'Shared prompt');
     const currentCopy = { ...captureProfile(testConfig, source.name, 'model', 'Current prompt'), source_id: source.id, source_scope: 'global' as const };
     const otherConfig = { ...testConfig, active_model: 'other.gguf' };
     const renamedCopy = { ...captureProfile(otherConfig, 'Local name', 'model', 'Other prompt'), source_id: source.id, source_scope: 'global' as const };
     const existing = captureProfile(otherConfig, 'Renamed', 'model', 'Separate prompt');
     const hook = editor([source, currentCopy, renamedCopy, existing], false, structuredClone(testConfig), currentCopy);
-    const prepared = hook.result.current.prepareRename(source.id, 'Renamed');
+    const prepared = hook.result.current.prepareRename(source.id, 'Unique name');
 
-    expect(prepared.edit.library.entries).toEqual([
-      { ...source, name: 'Renamed', revision: 2 }, { ...currentCopy, name: 'Renamed', revision: 2 }, renamedCopy, existing,
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([
+      { ...source, name: 'Unique name', revision: 2 }, ...ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [currentCopy, renamedCopy, existing] }).entries.filter(entry => entry.provider === 'llama.cpp'),
     ]);
   });
 
@@ -287,10 +285,10 @@ describe('profile editor persistence', () => {
     const originalSettings = structuredClone(hook.result.current.savedApplication!.settings);
     const prepared = hook.result.current.prepareDelete(profile.id);
     expect(prepared.applyTarget).toBe(false);
-    expect(prepared.edit.library.entries).toEqual([remaining]);
+    expect(prepared.edit.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([remaining]);
     expect(prepared.edit.library.applied[profileTargetKey(testConfig.active_model)]).toMatchObject({ profile_id: remaining.id,
       system_prompt: 'Fallback prompt', settings: { temperature: 0.55 } });
-    expect(hook.result.current.library.entries).toEqual([profile, remaining]);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([profile, remaining]);
     expect(hook.result.current.savedApplication).toMatchObject({ settings: originalSettings, system_prompt: 'Current prompt' });
     expect(hook.result.current.savedApplication.profile_id).toBe(profile.id);
     accept(hook, prepared);
@@ -312,7 +310,7 @@ describe('profile editor persistence', () => {
     expect(prepared.applyTarget).toBe(false);
     expect(patch).not.toHaveProperty('temperature');
     expect(patch.settings_profiles).toMatchObject({ default_profile_id: active.id });
-    expect(patch.settings_profiles!.entries.find(entry => entry.id === active.id)).toMatchObject({ name: active.name, scope: 'global',
+    expect(patch.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(entry => entry.id === active.id)).toMatchObject({ name: active.name, scope: 'global',
       settings: { temperature: testConfig.temperature }, system_prompt: 'Current prompt' });
     expect(patch.settings_profiles!.applied[profileTargetKey(testConfig.active_model)]).toMatchObject({ profile_id: active.id,
       settings: { temperature: testConfig.temperature }, system_prompt: 'Current prompt' });
@@ -364,8 +362,8 @@ describe('profile editor scope', () => {
     const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
 
     expect(updated).toMatchObject({ id: profile.id, scope: 'global', revision: 2,
-      settings: { ngl: 6, temperature: 0.7, active_backend: testConfig.active_backend, runtime_defaults: ['ngl'] } });
-    expect(updated.coverage).toEqual(expect.arrayContaining(['ngl', 'active_backend', 'active_build', 'gpu', 'chat_options']));
+      settings: { ngl: 6, temperature: 0.7, runtime_defaults: ['ngl'] } });
+    expect(updated.coverage).toEqual(expect.arrayContaining(['ngl', 'gpu', 'chat_options']));
     expect(updated).not.toHaveProperty('model_key');
     expect(updated.system_prompt).toBe('Unrelated prompt');
   });
@@ -378,14 +376,15 @@ describe('profile editor scope', () => {
     const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
 
     expect(updated).toMatchObject({ id: profile.id, revision: 2, system_prompt: 'Updated', settings: { temperature: testConfig.temperature, ngl: testConfig.ngl, runtime_defaults: [] } });
-    expect(updated).not.toHaveProperty('legacy');
-    expect(updated).not.toHaveProperty('coverage');
+    expect(updated).toMatchObject({ scope: 'global', legacy: true });
+    expect(updated.coverage).toContain('ngl');
+    expect(updated).not.toHaveProperty('model_key');
   });
 
   it('creates a partial benchmark profile that leaves request and measurement settings untouched on reuse', () => {
     const hook = editor([], true, { ...testConfig, ctx_size: 32768, temperature: 0.1, threads: 4, runtime_defaults: ['temperature', 'threads'] });
     const prepared = hook.result.current.prepareSaveAs('Benchmark tuning', 'global');
-    const created = prepared.edit.library.entries.find(profile => profile.id !== 'profile-default' && profile.scope === 'global')!;
+    const created = prepared.edit.library.entries.find(profile => profile.id === prepared.edit.application.profile_id)!;
 
     expect(created).toMatchObject({ scope: 'global', legacy: true, settings: { threads: 4, runtime_defaults: ['threads'] } });
     for (const field of ['ctx_size', 'temperature', 'chat_options', 'parallel']) {
@@ -404,12 +403,12 @@ describe('profile editor scope', () => {
     const hook = editor([profile], true);
     const selected = hook.result.current.prepareApply(profile).config;
     expect(selected).toMatchObject({ active_backend: testConfig.active_backend, active_build: testConfig.active_build, threads: 3 });
-    expect(hook.result.current.library.entries[0]).toEqual(profile);
+    expect(hook.result.current.library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toEqual(ensureProfileLibrary({ ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()] }).entries[0]);
     hook.rerender({ draft: { ...selected, threads: 7 } });
     const updated = hook.result.current.prepareUpdate(profile.id).edit.library.entries[0];
 
-    expect(updated).toMatchObject({ id: profile.id, scope: profile.scope, revision: 2, settings: { active_backend: testConfig.active_backend, threads: 7, runtime_defaults: [] } });
-    expect(updated.coverage).toContain('active_backend');
+    expect(updated).toMatchObject({ id: profile.id, scope: profile.scope, revision: 2, settings: { threads: 7, runtime_defaults: [] } });
+    expect(updated.coverage).not.toContain('active_backend');
     expect(updated.coverage).not.toContain('temperature');
     expect(updated).not.toHaveProperty('system_prompt');
   });

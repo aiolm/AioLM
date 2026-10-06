@@ -20,7 +20,7 @@ const en = {
   previousRuntimeDefaultUnknown: 'Previous runtime default (value unavailable)', automatic: 'automatic',
   empty: 'None', on: 'On', off: 'Off', prompt: 'System prompt',
   sampling: 'Sampling', capacity: 'Capacity and performance', reasoning: 'Reasoning', runtime: 'Runtime and model', advanced: 'Additional settings',
-  error: 'The profile could not be saved. Try again.', saveGlobalHint: 'Selecting this profile for another model uses all its saved settings.',
+  error: 'The profile could not be saved. Try again.', saveGlobalHint: 'This profile is shared by all models using the selected inference engine.',
 };
 type Copy = typeof en;
 const ko: Copy = {
@@ -45,7 +45,7 @@ const ko: Copy = {
   previousRuntimeDefaultUnknown: '이전 런타임 기본값 (값 확인 불가)', automatic: '자동 선택',
   empty: '없음', on: '켜짐', off: '꺼짐', prompt: '시스템 프롬프트',
   sampling: '샘플링', capacity: '용량 및 성능', reasoning: '추론', runtime: '런타임 및 모델', advanced: '추가 설정',
-  error: '프로필을 저장하지 못했습니다. 다시 시도하세요.', saveGlobalHint: '다른 모델에서 이 프로필을 선택하면 저장된 모든 설정을 사용합니다.',
+  error: '프로필을 저장하지 못했습니다. 다시 시도하세요.', saveGlobalHint: '이 프로필은 선택한 추론 엔진의 모든 모델에서 공용으로 사용합니다.',
 };
 const ja: Copy = {
   profiles: '設定プロファイル', editingTitle: '{name} · 編集中', editing: '編集中',
@@ -69,7 +69,7 @@ const ja: Copy = {
   previousRuntimeDefaultUnknown: '以前のランタイムの既定値（値を確認できません）', automatic: '自動選択',
   empty: 'なし', on: 'オン', off: 'オフ', prompt: 'システムプロンプト',
   sampling: 'サンプリング', capacity: '容量とパフォーマンス', reasoning: '推論', runtime: 'ランタイムとモデル', advanced: '追加設定',
-  error: 'プロファイルを保存できませんでした。再試行してください。', saveGlobalHint: '別のモデルでこのプロファイルを選択すると、保存済みのすべての設定を使用します。',
+  error: 'プロファイルを保存できませんでした。再試行してください。', saveGlobalHint: 'このプロファイルは選択した推論エンジンのすべてのモデルで共有されます。',
 };
 const zh: Copy = {
   profiles: '设置预设', editingTitle: '{name} · 编辑中', editing: '编辑中',
@@ -93,12 +93,15 @@ const zh: Copy = {
   previousRuntimeDefaultUnknown: '原运行时默认值（无法确认具体值）', automatic: '自动选择',
   empty: '无', on: '开', off: '关', prompt: '系统提示词',
   sampling: '采样', capacity: '容量和性能', reasoning: '推理', runtime: '运行时和模型', advanced: '其他设置',
-  error: '无法保存预设。请重试。', saveGlobalHint: '为其他模型选择此预设时，会使用其中保存的全部设置。',
+  error: '无法保存预设。请重试。', saveGlobalHint: '此预设可供所选推理引擎的所有模型共用。',
 };
 
 export const profileControlCopy = { en, ko, ja, zh };
 
 const fieldLabels: Record<string, [string, string, string, string]> = {
+  active_provider: ['Inference engine', '추론 엔진', '推論エンジン', '推理引擎'],
+  active_runtime: ['Runtime', '런타임', 'ランタイム', '运行时'],
+  provider_options: ['Engine options', '엔진 옵션', 'エンジンのオプション', '引擎选项'],
   temperature: ['Temperature', '온도', '温度', '温度'], top_p: ['Top P', 'Top P', 'Top P', 'Top P'], top_k: ['Top K', 'Top K', 'Top K', 'Top K'],
   min_p: ['Min P', 'Min P', 'Min P', 'Min P'], max_tokens: ['Maximum output tokens', '최대 출력 토큰', '最大出力トークン', '最大输出令牌'],
   stop: ['Stop sequences', '중지 문자열', '停止文字列', '停止字符串'], seed: ['Seed', '시드', 'シード', '随机种子'],

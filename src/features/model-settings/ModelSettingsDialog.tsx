@@ -34,9 +34,10 @@ import { useSelectedModelMetadata } from './useModelContextLimit';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
 import { formatMebibytes } from '../../shared/lib/units';
-import { formatRuntimeVersion } from '../../shared/runtime/runtimeUtils';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import './model-settings.css';
+import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
+import { providerCopy } from '../../shared/i18n/providerCopy';
 
 export interface ModelSettingsDialogProps {
   open: boolean; initialConfig: api.AppConfig; targetLabel: string;
@@ -69,6 +70,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [baseline, setBaseline] = useState(() => executionSettings(initial.current));
   const [settings, setSettings] = useState<ExecutionSettings>(() => executionSettings(initial.current));
   const cfg = useMemo(() => executionConfig(initialConfig, settings), [initialConfig, settings]);
+  const provider = api.providerOf(cfg);
+  const llama = provider === 'llama.cpp';
+  const providerDrafts = useRef<Partial<Record<api.ProviderId, { settings: ExecutionSettings; prompt: string }>>>({});
+  const [providerReady, setProviderReady] = useState(false);
+  const [profileBannerTarget, setProfileBannerTarget] = useState<HTMLDivElement | null>(null);
   const latest = useRef(cfg); latest.current = cfg;
   const [section, setSection] = useState(normalizeSection(initialSection));
   const body = useRef<HTMLDivElement>(null);
@@ -100,9 +106,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const invoker = useRef<HTMLElement | null>(null);
-  const runtime = useServerOptions(cfg.active_backend, cfg.active_build, open);
-  const catalog = useModelCatalog(initialConfig.models_dir, open);
-  const selectedMetadata = useSelectedModelMetadata(cfg.active_model, open);
+  const runtime = useServerOptions(llama ? cfg.active_backend : '', llama ? cfg.active_build : '', open && llama);
+  const catalog = useModelCatalog(initialConfig.models_dir, open, cfg);
+  const selectedMetadata = useSelectedModelMetadata(llama ? cfg.active_model : '', open && llama);
   const contextLimit = selectedMetadata?.context_length;
   const disabled = busy || applying;
   const benchmark = mode === 'benchmark';
@@ -138,10 +144,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     if (!open) return;
     let active = true;
     setResourceError('');
-    void Promise.all([api.rtList(), api.deviceProfile()]).then(([runtimes, device]) => { if (active) { setResources({ runtimes, device }); setResourcesLoaded(true); } })
+    void Promise.all([llama ? api.rtList() : Promise.resolve([]), api.deviceProfile()]).then(([runtimes, device]) => { if (active) { setResources({ runtimes, device }); setResourcesLoaded(true); } })
       .catch(cause => { if (active) setResourceError(String(cause)); });
     return () => { active = false; };
-  }, [open, resourceRevision]);
+  }, [open, resourceRevision, llama]);
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
@@ -171,11 +177,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     if (!path.trim() || path === cfg.active_model) return;
     const load = () => {
       try {
-        const restored = previewExecution(saved.current, path);
-        const next = executionSettings({ ...initial.current, ...restored, active_model: path,
+        const restored = previewExecution(cfg, path);
+        const next = executionSettings({ ...cfg, ...restored, active_model: path,
           mmproj: restored.mmproj ?? '', spec_draft_model: restored.spec_draft_model ?? '', lora_adapters: restored.lora_adapters ?? [],
           ...(mode === 'session' ? { gpu: initial.current.gpu } : {}) });
-        const assigned = executionSettings(profiles.resetModel(executionConfig(initial.current, next), sessionId));
+        const assigned = executionSettings(profiles.resetModel(executionConfig(cfg, next), sessionId));
         setSettings(assigned); setBaseline(assigned); setPathDraft(normalizeDisplayPath(path)); setInvalid(new Set()); setProfileDirty(false); setEditorRevision(value => value + 1); setError('');
       } catch (cause) { setError(String(cause)); }
     };
@@ -224,7 +230,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     finally { applyLock.current = false; setApplying(false); }
   };
   const apply = async (intent: 'save' | 'start') => {
-    if (disabled || applyLock.current || invalid.size || profileDirty || pathPending || !cfg.active_model.trim()) return;
+    if (disabled || applyLock.current || invalid.size || profileDirty || pathPending || intent === 'start' && !cfg.active_model.trim()) return;
     if (intent === 'save') {
       await commitProfile(() => ({ config: structuredClone(latest.current), edit: profiles.result(), applyTarget: true })).catch(() => undefined);
       return;
@@ -241,7 +247,21 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     }
     finally { applyLock.current = false; setApplying(false); }
   };
-  const runtimeMissing = !!cfg.active_backend && !resources.runtimes.some(item => item.backend === cfg.active_backend && item.build === cfg.active_build);
+  const runtimeMissing = llama ? !!cfg.active_backend && !resources.runtimes.some(item => item.backend === cfg.active_backend && item.build === cfg.active_build) : !providerReady;
+  const runtimeSelected = llama ? !!cfg.active_backend && !!cfg.active_build : !!cfg.active_runtime;
+  const chooseProvider = (nextProvider: api.ProviderId) => {
+    if (nextProvider === provider) return;
+    providerDrafts.current[provider] = { settings: structuredClone(settings), prompt: profiles.systemPrompt };
+    const remembered = providerDrafts.current[nextProvider];
+    const currentModel = catalog.models.find(model => model.path === cfg.active_model);
+    const next = remembered ? { ...executionConfig(cfg, remembered.settings), active_provider: nextProvider, active_runtime: remembered.settings.active_runtime ?? '' } : { ...cfg, active_provider: nextProvider, active_runtime: '',
+      active_model: currentModel && api.modelLoadable(currentModel, nextProvider) ? cfg.active_model : '',
+      ...(nextProvider === 'llama.cpp' ? {} : { mmproj: '', spec_draft_model: '' }) };
+    const resolved = profiles.resetModel(next, sessionId);
+    if (remembered) profiles.setSystemPrompt(remembered.prompt);
+    setSettings(executionSettings(remembered ? next : resolved));
+    setPathDraft(normalizeDisplayPath(next.active_model)); setInvalid(new Set()); setEditorRevision(value => value + 1);
+  };
   // A probe of the previous runtime survives a backend switch until the new one
   // answers; its device list describes a backend that is no longer active.
   const devices = runtime.capabilities?.backend === cfg.active_backend ? runtimeGpuDevices(cfg.active_backend, runtime.capabilities.devices) : [];
@@ -265,23 +285,26 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceKey]);
   const sections = (['model', 'profiles', 'runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'] as const).filter(value => !benchmark || !['sampling', 'reasoning'].includes(value));
-  const models = catalog.models.filter(model => !model.is_vision && `${model.name} ${normalizeDisplayPath(model.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const models = catalog.models.filter(model => api.modelLoadable(model, provider) && `${model.name} ${normalizeDisplayPath(model.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const selected = catalog.models.find(model => model.path === cfg.active_model);
-  const incomplete = !!selected?.shards?.missing.length;
+  const compatibility = selected?.compatibility?.find(item => item.provider === provider);
+  const incompatible = !!compatibility && !api.modelLoadable(selected!, provider);
+  const compatibilityBlocked = incompatible || !!compatibility?.readiness.length;
+  const incomplete = !!selected?.shards?.missing.length || !!selected?.artifact?.incomplete || !!selected?.artifact?.missing.length;
   // What still has to be chosen before the start button can do anything. The
   // installed list is only consulted once it has loaded, so a slow read never
   // reports an installed runtime as missing — but a list that loaded empty is
   // consulted too, so a selected runtime with nothing installed is reported.
   const setupGaps = runSetupGaps({
     activeModel: cfg.active_model,
-    activeBackend: cfg.active_backend,
-    activeBuild: cfg.active_build,
+    activeBackend: llama ? cfg.active_backend : cfg.active_runtime ?? '',
+    activeBuild: llama ? cfg.active_build : cfg.active_runtime ?? '',
     modelIncomplete: incomplete,
     ...(resourcesLoaded ? { runtimeInstalled: !runtimeMissing } : {}),
   });
   const editorKey = `${cfg.active_model}:${editorRevision}`;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
-    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
+    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
       ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]), icon: <ModelIcon model={cfg[key]} /> }] : [])]} onChange={value => change({ [key]: value })} />
     <input className="app-input" aria-label={`${label} — ${copy.path}`} aria-describedby={`${id}-${key}-help`} value={normalizeDisplayPath(cfg[key])} disabled={disabled} onChange={event => change({ [key]: restoreDisplayPath(cfg[key], event.target.value) })} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
@@ -299,20 +322,27 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     onCancel={event => { event.preventDefault(); if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) setPending(null); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell">
-        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} /></div>
+        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></div>
           <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></header>
         <div className="model-settings-layout" inert={!!pending || confirmSave || disabled}>
           <TabNav items={sections.map(value => ({ id: value, label: copy[value] }))} active={section as (typeof sections)[number]} onSelect={showSection} label={copy.title}
             tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />
-          <div className="model-settings-body" ref={body} id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${section}`}>
-            <SettingsProfileControl items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
-              defaultProfileId={defaultSettingsProfileEntry(profiles.library).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
+          <div className="model-settings-content">
+            <div className="model-settings-context">
+              <div className="model-settings-runtime-selection">
+              <ProviderRuntimeControl compact cfg={cfg} disabled={disabled} onProvider={chooseProvider} onChange={change} onReady={setProviderReady} revision={resourceRevision} />
+              </div>
+              <div ref={setProfileBannerTarget} />
+            </div>
+            <div className="model-settings-body" ref={body} id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${section}`}>
+            <SettingsProfileControl bannerTarget={profileBannerTarget} items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
+              defaultProfileId={defaultSettingsProfileEntry(profiles.library, provider).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
               modelPath={cfg.active_model} currentSettings={settings} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={section === 'profiles'}
               disabled={disabled} blocked={invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
               onApply={id => commitProfile(() => { const profile = profiles.available.find(item => item.id === id); if (!profile) throw new Error('This profile is no longer available.'); return profiles.prepareApply(profile); })}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
-              saveAction={<><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
+              saveAction={<><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
             {running && !liveMatches && <p className="model-settings-profile-status">{serverChanged ? profileCopy.next : profileCopy.request}</p>}
             {benchmark && <FeedbackBanner tone="info" className="model-settings-scope">{copy.benchmarkControlled}</FeedbackBanner>}
             <div hidden={section !== 'model'} className="model-settings-fields">
@@ -328,22 +358,21 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
                 const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
                 event.preventDefault(); buttons[next]?.focus();
-              }}>{models.map(model => <li key={model.path}><button type="button" className={`app-list-row${cfg.active_model === model.path ? ' is-selected' : ''}`} disabled={!!model.shards?.missing.length}
-                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} /><small>{formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
+              }}>{models.map(model => <li key={model.path}><button type="button" className={`app-list-row${cfg.active_model === model.path ? ' is-selected' : ''}`} disabled={!!model.shards?.missing.length || !!model.artifact?.incomplete || !!model.artifact?.missing.length}
+                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} artifact={model.artifact} /><small>{model.artifact?.format} · {model.artifact ? Object.entries(model.artifact.modalities).filter(([, enabled]) => enabled).map(([name]) => name).join(", ") : ""} · {formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
               <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} data-icon="open" onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
             </div>
             <div hidden={section !== 'runtime'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}</div>
-              <label>{copy.runtime}<CustomSelect ariaLabel={copy.runtime} ariaDescribedBy={`${id}-runtime-help`} value={`${cfg.active_backend}/${cfg.active_build}`} options={[{ value: '/', label: copy.selectRuntime, disabled: true }, ...resources.runtimes.map(item => ({ value: `${item.backend}/${item.build}`, label: `${item.backend} · ${formatRuntimeVersion(item.build, item.version)}` })), ...(runtimeMissing ? [{ value: `${cfg.active_backend}/${cfg.active_build}`, label: `${cfg.active_backend} · ${formatRuntimeVersion(cfg.active_build)}` }] : [])]}
-                onChange={value => { const item = resources.runtimes.find(item => item.backend + '/' + item.build === value); change({ active_backend: item?.backend ?? '', active_build: item?.build ?? '' }); }} /><span id={`${id}-runtime-help`} className="app-section-hint">{help.runtime}</span></label>
+
               {runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
-              {(resourceError || runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
-              <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} onInvalid={setFieldInvalid} />
+              {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
+              {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} onInvalid={setFieldInvalid} />}
             </div>
-            <div hidden={!['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
-              {!benchmark && section === 'sampling' && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} aria-describedby={`${id}-prompt-hint`} className="app-textarea app-textarea--editable" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small id={`${id}-prompt-hint`} className="app-section-hint">{profileCopy.promptHint}</small></div>}
+            {!benchmark && section === 'sampling' && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} className="app-textarea app-textarea--editable" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small className="app-section-hint">{profileCopy.promptHint}</small></div>}
+            <div hidden={!llama || !['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
               <div hidden={section !== 'adapters'} className="model-settings-fields">
                 {sidecar('mmproj', copy.projector, true)}{sidecar('spec_draft_model', copy.draftModel, false)}
                 <h3>LoRA</h3><p id={`${id}-lora-help`} className="app-section-hint">{help.loraPath}</p>
@@ -356,12 +385,15 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               <DraftTuningEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} section={section} disabled={disabled} benchmark={benchmark} runtime={runtime} contextLimit={contextLimit} onChange={change} onInvalid={setFieldInvalid}
                 onResetDrafts={() => { setTuningRevision(value => value + 1); setInvalid(previous => new Set([...previous].filter(key => key.startsWith('gpu_')))); }} />
             </div>
-            <div hidden={section !== 'advanced'}><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></div>
+            <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
+            {!llama && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(section) && <ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} />}
             </SettingsProfileControl>
+            </div>
           </div>
         </div>
         <footer className="model-settings-footer">
-          <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{t('ui.modelShardsMissing', { count: selected!.shards!.missing.length, total: selected!.shards!.total })}</FeedbackBanner>}
+          <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
+              {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || compatibility?.status}</FeedbackBanner>}
               {!benchmark && mode !== 'project' && !live && setupGaps.length > 0 && <FeedbackBanner tone="warning" title={executionCopy.blockedTitle}><ul className="model-settings-blocked" aria-label={executionCopy.blockedTitle}>
                 {setupGaps.map(gap => <li key={gap}><span>{runSetupGapMessage(gap, locale)}</span>
                   {gap === 'model' && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => showSection('model')}>{executionCopy.needModelAction}</button>}
@@ -370,11 +402,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 </li>)}
               </ul></FeedbackBanner>}</div>
           <div className="model-settings-footer-bar">
-            <ResourceEstimatePanel cfg={cfg} options={runtime.options} verified={runtime.verified} runtimeDevices={runtime.capabilities?.devices} open={open} invalid={invalid.size > 0 || pathPending} benchmark={benchmark} />
+            {llama ? <ResourceEstimatePanel cfg={cfg} options={runtime.options} verified={runtime.verified} runtimeDevices={runtime.capabilities?.devices} open={open} invalid={invalid.size > 0 || pathPending} benchmark={benchmark} /> : <span>{providerCopy[locale].modalities}: {selected?.artifact ? Object.entries(selected.artifact.modalities).filter(([, supported]) => supported).map(([name]) => name).join(', ') : '—'}</span>}
               <div className="model-settings-actions">
                 {!benchmark && mode !== 'project' && (live
                   ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
-                  : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !cfg.active_backend || !cfg.active_build || incomplete || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
+                  : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
                 {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" onClick={onCancelStart}>{copy.cancel}</button>}
               </div>
           </div>

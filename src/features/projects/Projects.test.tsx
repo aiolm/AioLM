@@ -17,12 +17,24 @@ vi.mock("../../shared/api/index", () => ({
   rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', executable: 'llama-server', state: 'available', version: 'test', flags: [], devices: [], diagnostics: [], server_help: '' })),
   isNativeRuntimeAvailable: vi.fn(() => false),
   rtList: vi.fn(async () => []),
+  providerRuntimes: vi.fn(async () => []),
 }));
 
 const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 describe("Project configuration snapshots", () => {
-  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); });
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); mockedApi.isNativeRuntimeAvailable.mockReturnValue(false); mockedApi.providerRuntimes.mockResolvedValue([]); });
+
+  it('displays the Python runtime and its context instead of stale llama settings', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    mockedApi.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);
+    const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-metal', active_backend: 'vulkan', active_build: 'stale-build', ctx_size: 8192,
+      provider_options: { vllm: { max_model_len: 512 } } });
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu · metal · managed')).toBeVisible();
+    expect(screen.getByTestId('project-prompt-preview')).toHaveTextContent('512');
+    expect(screen.getByTestId('project-prompt-preview')).not.toHaveTextContent('stale-build');
+  });
 
   it("applies model settings to the project editor before explicit project save", async () => {
     const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
@@ -94,8 +106,8 @@ describe("Project configuration snapshots", () => {
     expect(saved).toMatchObject({ ctx_size: 16384, temperature: 0.3, chat_options: { stop: ['finished'] } });
     expect(application).toMatchObject({ model: saved.active_model, system_prompt: 'Project prompt', settings: { ctx_size: 16384, temperature: 0.3 } });
     expect(application.profile_id).not.toBe(existing.id);
-    expect(saved.settings_profiles!.entries.find(profile => profile.id === application.profile_id)).toMatchObject({ settings: { ctx_size: 16384 }, system_prompt: 'Project prompt' });
-    expect(saved.settings_profiles!.entries.find(profile => profile.id === existing.id)).toEqual(existing);
+    expect(saved.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === application.profile_id)).toMatchObject({ settings: { ctx_size: 16384 }, system_prompt: 'Project prompt' });
+    expect(saved.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').find(profile => profile.id === existing.id)).toEqual(existing);
     expect(readProjects()[0].profileApplication?.profile_id).toBe(application.profile_id);
     expect(store.start).not.toHaveBeenCalled();
   });
@@ -114,7 +126,7 @@ describe("Project configuration snapshots", () => {
     await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
     const library = store.getConfig()!.settings_profiles!;
     expect(library.applied[profileTargetKey(projectCfg.active_model)]).toMatchObject({ profile_id: savedProfile.id, profile_name: 'Research', system_prompt: 'Research prompt' });
-    expect(library.entries).toEqual([defaultSettingsProfile(), active, savedProfile]);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([defaultSettingsProfile(), active, savedProfile]);
     expect(store.start).not.toHaveBeenCalled();
   });
 
@@ -154,7 +166,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
     await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBe(fallback.id));
     expect(store.getConfig()).toMatchObject({ ctx_size: 8192, temperature: 0.4 });
-    expect(store.getConfig()!.settings_profiles!.entries).toEqual([fallback, active]);
+    expect(store.getConfig()!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual([fallback, active]);
     expect(store.getConfig()!.settings_profiles!.applied[profileTargetKey(project.config.active_model)]).toMatchObject({ profile_id: fallback.id, system_prompt: 'Default instruction' });
     expect(readProjects()[0]).toMatchObject({ config: { ctx_size: 8192, temperature: 0.4 }, systemPrompt: 'Default instruction', profileApplication: { profile_id: fallback.id } });
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Default instruction');
@@ -208,7 +220,7 @@ describe("Project configuration snapshots", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save project' }));
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Current saved instruction', config: { ctx_size: 8192 },
       profileApplication: { profile_id: profile.id, profile_revision: profile.revision } });
-    expect(store.cfg!.settings_profiles.entries).toEqual(entries);
+    expect(store.cfg!.settings_profiles.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(entries);
     expect(store.cfg!.ctx_size).toBe(4096);
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
@@ -225,14 +237,15 @@ describe("Project configuration snapshots", () => {
     writeProjects([project]); setActiveProjectId(project.id);
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile instruction');
-    expect(screen.getByText('vulkan · ?(456)')).toBeVisible();
+    expect(screen.getByText('llama.cpp · cpu · b123')).toBeVisible();
     expect(screen.getByText('32,768')).toBeVisible();
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Old profile instruction', config: { ctx_size: 4096 } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
-    await waitFor(() => expect(store.getConfig()).toMatchObject({ ctx_size: 32768, temperature: 0.3, active_backend: 'vulkan', active_build: 'b456' }));
+    await waitFor(() => expect(store.getConfig()).toMatchObject({ ctx_size: 32768, temperature: 0.3, active_backend: 'cpu', active_build: 'b123' }));
     expect(readProjects()[0]).toMatchObject({ systemPrompt: 'Revised profile instruction', config: { ctx_size: 32768 },
       profileApplication: { profile_id: revised.id, profile_revision: 2 }, toolIds: ['docs:search'], documentBindings: [{ name: 'notes.md', path: 'notes.md' }] });
-    expect(store.cfg!.settings_profiles!.entries).toEqual(entries);
+    expect(store.cfg!.settings_profiles!.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp').map(profile => profile.id)).toEqual(entries.map(profile => profile.id));
+    expect(store.cfg!.settings_profiles!.entries.find(profile => profile.id === revised.id)).toMatchObject({ revision: 2, legacy_runtime: { active_backend: 'vulkan', active_build: 'b456' } });
     expect(store.start).not.toHaveBeenCalled();
   });
 

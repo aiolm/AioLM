@@ -1,3 +1,4 @@
+import { providerOf } from '../../shared/api/providers';
 import type { AppConfig } from '../../shared/api/types';
 import { emptyProfileLibrary, ensureProfileLibrary, profileApplicationConfig, profileTargetKey, saveSettingsProfile, type ProfileApplication, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
 import { migrateProfileLibrary } from '../../shared/config/profileMigration';
@@ -40,7 +41,7 @@ export function profileLibrary(cfg: AppConfig): SettingsProfileLibrary {
 }
 
 export function appliedProfile(cfg: AppConfig, sessionId = 'default'): ProfileApplication | undefined {
-  const application = profileLibrary(cfg).applied[profileTargetKey(cfg.active_model, sessionId)];
+  const application = profileLibrary(cfg).applied[profileTargetKey(cfg.active_model, sessionId, providerOf(cfg))];
   return application && profileTargetKey(application.model) === profileTargetKey(cfg.active_model) ? application : undefined;
 }
 
@@ -71,7 +72,7 @@ export function mergeProfileEditor(current: AppConfig, edit: ProfileEditorResult
     application = { ...application, profile_name: saved.name, profile_revision: saved.revision };
   }
   if (sessionId !== undefined) {
-    next.applied[profileTargetKey(application.model, sessionId)] = application;
+    next.applied[profileTargetKey(application.model, sessionId, application.provider ?? 'llama.cpp')] = application;
   }
   const available = new Set(next.entries.map(profile => profile.id));
   for (const [key, application] of Object.entries(next.applied)) {
@@ -159,15 +160,27 @@ export function rebaseStaleProfileEdit(base: SettingsProfileLibrary | undefined,
     if (latestValue !== undefined && same(latestValue, editedValue)) { applied[key] = structuredClone(editedValue); continue; }
     return null;
   }
-  return { ...structuredClone(latest), entries: mergedEntries, applied, default_profile_id, legacy_imported: edited.legacy_imported || latest.legacy_imported };
+  const mergeSelections = (base: Record<string, string> = {}, latest: Record<string, string> = {}, edited: Record<string, string> = {}) => {
+    const merged: Record<string, string> = {};
+    for (const key of new Set([...Object.keys(base), ...Object.keys(latest), ...Object.keys(edited)])) {
+      const value = edited[key] === base[key] ? latest[key] : edited[key];
+      if (edited[key] !== base[key] && latest[key] !== base[key] && latest[key] !== edited[key]) return null;
+      if (value !== undefined) merged[key] = value;
+    }
+    return merged;
+  };
+  const provider_defaults = mergeSelections(base.provider_defaults, latest.provider_defaults, edited.provider_defaults);
+  const provider_recent = mergeSelections(base.provider_recent, latest.provider_recent, edited.provider_recent);
+  if (!provider_defaults || !provider_recent) return null;
+  return { ...structuredClone(latest), entries: mergedEntries, applied, default_profile_id, provider_defaults, provider_recent, legacy_imported: edited.legacy_imported || latest.legacy_imported };
 }
 
 /** Persist replacement settings with the library when a profile is deleted. */
 export function profileLibraryConfigPatch(current: AppConfig, edit: ProfileEditorResult): Partial<AppConfig> {
   const library = mergeProfileEditor(current, edit);
   const removed = new Set((current.settings_profiles?.entries ?? []).filter(entry => !library.entries.some(next => next.id === entry.id)).map(entry => entry.id));
-  const replacement = (model: string, sessionId = 'default') => {
-    const key = profileTargetKey(model, sessionId);
+  const replacement = (model: string, sessionId = 'default', provider = providerOf(current)) => {
+    const key = profileTargetKey(model, sessionId, provider);
     const previous = current.settings_profiles?.applied[key];
     const next = library.applied[key];
     return previous?.profile_id && removed.has(previous.profile_id) && next && profileTargetKey(next.model) === profileTargetKey(model) ? next : undefined;
@@ -177,7 +190,7 @@ export function profileLibraryConfigPatch(current: AppConfig, edit: ProfileEdito
   if (active) Object.assign(patch, executionChanges(current, executionConfig(current, active.settings)));
   let changed = false;
   const sessions = current.sessions?.map(definition => {
-    const application = replacement(definition.models.primary_model, definition.id);
+    const application = replacement(definition.models.primary_model, definition.id, providerOf(sessionConfig(current, definition)));
     if (!application) return definition;
     changed = true;
     const next = settingsForSession(definition, executionConfig(sessionConfig(current, definition), application.settings));

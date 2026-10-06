@@ -15,7 +15,7 @@ describe('project settings snapshots', () => {
     const project = projectFromConfig('Research', 'Use project instructions', cfg);
     const restored = importProject(exportProject(project));
     expect(Object.keys(restored.config).sort()).toEqual([...EXECUTION_KEYS].sort());
-    expect(restored.config).toEqual(executionSettings(cfg));
+    expect(restored.config).toEqual({ ...executionSettings(cfg), active_provider: 'llama.cpp', active_runtime: '', provider_options: {} });
     expect(restored.systemPrompt).toBe('Use project instructions');
     expect(restored.config).not.toHaveProperty('models_dir');
     expect(restored.config).not.toHaveProperty('settings_profiles');

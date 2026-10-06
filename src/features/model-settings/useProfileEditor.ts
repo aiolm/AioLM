@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import type { AppConfig } from '../../shared/api/types';
+import { providerOf } from '../../shared/api/providers';
 import { defaultSettingsProfileEntry, deleteSettingsProfile, materializeProfileApplication, profileDeletionIds, profileTargetKey, setDefaultSettingsProfile, settingsEqual, type ProfileApplication, type SettingsProfile } from '../../shared/config/settingsProfiles';
 import { applyDefaultProfile, resolveProfileApplication, resolveProfileApplicationOrDefault, resolveProfileForExecution } from '../../shared/config/profileAssignments';
 import { executionConfig } from '../../shared/config/executionSettings';
@@ -16,8 +17,8 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
   const savedSettings = useRef(cfg);
   const [systemPrompt, setPrompt] = useState(resolved.application.system_prompt);
   const working = !settingsEqual(cfg, savedSettings.current) || systemPrompt !== original.current.system_prompt;
-  const selected = library.entries.find(entry => entry.id === original.current.profile_id) ?? resolved.profile;
-  const available = library.entries.filter(entry => entry.scope === 'global' || entry.model_key === profileTargetKey(cfg.active_model));
+  const selected = library.entries.find(entry => entry.id === original.current.profile_id && (entry.provider ?? 'llama.cpp') === providerOf(cfg)) ?? defaultSettingsProfileEntry(library, providerOf(cfg));
+  const available = library.entries.filter(entry => (entry.provider ?? 'llama.cpp') === providerOf(cfg));
   const setSystemPrompt = setPrompt;
   const prepared = (nextLibrary = library, next = cfg, profile: SettingsProfile = selected, prompt = systemPrompt, applyTarget = true, saveMode?: ProfileEditorResult['saveMode']): { config: AppConfig; applyTarget: boolean; edit: ProfileEditorResult } => ({
     config: next, applyTarget, edit: { baseRevision: library.revision, baseLibrary: structuredClone(library), library: nextLibrary,
@@ -26,13 +27,13 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
   const prepareApply = (choice: ProfileChoice) => {
     const nextLibrary = structuredClone(library);
     const profile = profileForChoice(nextLibrary, choice);
+    nextLibrary.provider_recent = { ...nextLibrary.provider_recent, [providerOf(cfg)]: profile.id };
     const next = applyProfile(cfg, profile, benchmark);
     return prepared(nextLibrary, next, profile, benchmark ? systemPrompt : profile.system_prompt ?? systemPrompt);
   };
-  const prepareSaveAs = (name: string, scope: SettingsProfile['scope']) => {
-    if (available.some(entry => (entry.scope === scope || scope === 'global' && entry.scope === 'model')
-      && (entry.name === name.trim() || displayName(entry) === name.trim()))) throw new Error('A profile with this name already exists.');
-    const entry = newProfile(cfg, name, scope, systemPrompt, benchmark);
+  const prepareSaveAs = (name: string, _scope: SettingsProfile['scope'] = 'global') => {
+    if (available.some(entry => entry.name === name.trim() || displayName(entry) === name.trim())) throw new Error('A profile with this name already exists.');
+    const entry = newProfile(cfg, name, 'global', systemPrompt, benchmark);
     const nextLibrary = structuredClone(library); nextLibrary.entries.push(entry);
     return prepared(nextLibrary, cfg, entry, systemPrompt, true, benchmark ? 'benchmark' : 'all');
   };
@@ -52,7 +53,7 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
     nextLibrary.entries = nextLibrary.entries.map(item => renamedIds.has(item.id)
       ? { ...item, name: name.trim(), revision: item.revision + 1 } : item);
     if (nextLibrary.entries.some(item => renamedIds.has(item.id) && nextLibrary.entries.some(other => other.id !== item.id
-      && other.scope === item.scope && other.model_key === item.model_key && (other.name === item.name || displayName(other) === item.name)))) {
+      && (other.provider ?? 'llama.cpp') === (item.provider ?? 'llama.cpp') && (other.name === item.name || displayName(other) === item.name)))) {
       throw new Error('A profile with this name already exists.');
     }
     return prepared(nextLibrary, cfg, selected, systemPrompt, false);
@@ -60,17 +61,18 @@ export function useProfileEditor(initial: AppConfig, cfg: AppConfig, initialAppl
   const prepareDelete = (id: string) => {
     const nextLibrary = deleteSettingsProfile(library, id);
     if (profileDeletionIds(library, id).has(selected.id)) {
-      const fallback = defaultSettingsProfileEntry(nextLibrary);
+      const fallback = defaultSettingsProfileEntry(nextLibrary, providerOf(cfg));
       return prepared(nextLibrary, applyProfile(cfg, fallback, benchmark), fallback, benchmark ? systemPrompt : fallback.system_prompt ?? '', false);
     }
     return prepared(nextLibrary, cfg, selected, systemPrompt, false);
   };
   const prepareSetDefault = (id: string) => prepared(setDefaultSettingsProfile(library, id), cfg, selected, systemPrompt, false);
   const resetModel = (next: AppConfig, sessionId = 'default') => {
-    const key = profileTargetKey(next.active_model, sessionId);
+    const key = profileTargetKey(next.active_model, sessionId, providerOf(next));
     const previous = library.applied[key];
-    const application = previous && profileTargetKey(previous.model) === profileTargetKey(next.active_model) ? previous
-      : applyDefaultProfile(next, library).application;
+    const recent = library.entries.find(entry => entry.id === library.provider_recent?.[providerOf(next)] && (entry.provider ?? 'llama.cpp') === providerOf(next));
+    const application = previous && (previous.provider ?? 'llama.cpp') === providerOf(next) && profileTargetKey(previous.model) === profileTargetKey(next.active_model) ? previous
+      : recent ? materializeProfileApplication(applyProfile(next, recent, benchmark), recent.system_prompt ?? '', recent) : applyDefaultProfile(next, library).application;
     const assignment = resolveProfileForExecution(next, library,
       application, key);
     original.current = assignment.application;

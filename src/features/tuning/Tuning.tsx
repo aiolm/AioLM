@@ -14,6 +14,11 @@ import TuningEscapeSection from "./TuningEscapeSection";
 import TuningServerOptions from './TuningServerOptions';
 import { useServerOptions } from './useServerOptions';
 import { tuningDisplayConfig } from './tuningResetState';
+import { providerOf } from '../../shared/api/providers';
+import { ProviderOptions } from '../model-settings/ProviderControls';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import { providerCopy } from '../../shared/i18n/providerCopy';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { serverOptionMatches } from '../../shared/config/serverOptions';
 import { serverOptionsText } from '../../shared/i18n/serverOptionsI18n';
 import type { ViewId } from '../../shared/types/navigation';
@@ -58,6 +63,23 @@ function visibleFields<T extends { category: TuningCategoryId; advancedOnly?: bo
 
 /** Tuning panel: server-side values require restart; sampling applies next chat. */
 export default function TuningPanel({ store, section = "server", onNavigate }: { store: AppStore; section?: TuningSection; onNavigate?: (view: ViewId) => void }) {
+  return providerOf(store.cfg ?? {}) === 'llama.cpp' ? <LlamaTuningPanel store={store} section={section} onNavigate={onNavigate} /> : <ProviderTuningPanel store={store} />;
+}
+
+function ProviderTuningPanel({ store }: { store: AppStore }) {
+  const { locale } = useI18n();
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const onInvalid = () => undefined;
+  if (!store.cfg) return null;
+  return <div className="app-page-scroll tuning-panel"><header className="app-page-header"><div><h2 className="app-page-title">{providerCopy[locale].options}</h2><p><RuntimeSelectionLabel config={store.cfg} /></p></div></header>
+    {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+    <ProviderOptions cfg={store.cfg} disabled={store.busy || saving} onInvalid={onInvalid} onChange={patch => {
+      setSaving(true); setError(''); void store.updateConfig(patch).catch(cause => setError(String(cause))).finally(() => setSaving(false));
+    }} /></div>;
+}
+
+function LlamaTuningPanel({ store, section, onNavigate }: { store: AppStore; section: TuningSection; onNavigate?: (view: ViewId) => void }) {
   const runtime = useServerOptions(store.cfg?.active_backend ?? '', store.cfg?.active_build ?? '');
   const tuning = useTuningController(store, runtime.options);
   return <TuningEditor store={store} section={section} onNavigate={onNavigate} runtime={runtime} tuning={tuning} />;

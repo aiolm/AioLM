@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
-import { MODEL_PROFILE_KEYS, settingsSnapshot, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
+import { MODEL_PROFILE_KEYS, profileSettingsSnapshot, settingsSnapshot, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
 import { RUNTIME_DEFAULT_KEYS } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { testConfig } from '../../testing/appStore';
 import { BENCHMARK_CONTROLLED_KEYS, resetProfileSettings } from './profileResetState';
 
 const manualSettings = {
-  active_backend: 'vulkan', active_build: 'custom-build', runtime_defaults: ['temperature'],
+  provider_options: {}, runtime_defaults: ['temperature'],
   ngl: 4, ctx_size: 32768, batch_size: 16, ubatch_size: 8, keep: 12,
   cache_type_k: 'q8_0', cache_type_v: 'q8_0', flash_attn: 'off', n_cpu_moe: 3, threads: 7,
   temperature: 0.2, top_p: 0.6, top_k: 12,
@@ -21,7 +21,7 @@ const manualSettings = {
   gpu: { gpu_ids: ['runtime:vulkan:Vulkan0'], main_gpu: 'runtime:vulkan:Vulkan0', split_mode: 'layer', tensor_split: [1], draft_gpu_id: 'runtime:vulkan:Vulkan0' },
 } satisfies Required<Pick<AppConfig, typeof MODEL_PROFILE_KEYS[number]>>;
 
-const customConfig = (): AppConfig => ({ ...structuredClone(testConfig), ...structuredClone(manualSettings) });
+const customConfig = (): AppConfig => ({ ...structuredClone(testConfig), active_backend: 'vulkan', active_build: 'custom-build', ...structuredClone(manualSettings) });
 
 describe('full profile defaults', () => {
   it('resets every profile field while retaining the selected model', () => {
@@ -31,7 +31,7 @@ describe('full profile defaults', () => {
     expect(Object.keys(manualSettings).sort()).toEqual([...MODEL_PROFILE_KEYS].sort());
     expect(settingsSnapshot(reset)).toEqual({
       ...tuningResetValues(), runtime_defaults: [...RUNTIME_DEFAULT_KEYS].sort(),
-      active_backend: '', active_build: '', spec_draft_device: '', spec_draft_model: '', mmproj: '',
+      active_backend: 'vulkan', active_build: 'custom-build', provider_options: {}, spec_draft_device: '', spec_draft_model: '', mmproj: '',
       server_args: [], chat_options: {}, lora_adapters: [],
       gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none', tensor_split: [], draft_gpu_id: null },
     });
@@ -45,8 +45,9 @@ describe('full profile defaults', () => {
     const fresh = resetProfileSettings({ ...structuredClone(testConfig), runtime_defaults: [] }, false);
     const inherited = resetProfileSettings({ ...customConfig(), runtime_defaults: [...RUNTIME_DEFAULT_KEYS] }, false);
 
-    expect(settingsSnapshot(reset)).toEqual(settingsSnapshot(fresh));
-    expect(settingsSnapshot(reset)).toEqual(settingsSnapshot(inherited));
+    expect(profileSettingsSnapshot(reset)).toEqual(profileSettingsSnapshot(fresh));
+    expect(reset).toMatchObject({ active_backend: 'vulkan', active_build: 'custom-build' });
+    expect(profileSettingsSnapshot(reset)).toEqual(profileSettingsSnapshot(inherited));
   });
 
   it.each([false, true])('preserves benchmark workload settings with inherited markers set to %s', inherited => {
@@ -61,7 +62,7 @@ describe('full profile defaults', () => {
     }
     for (const key of controlledDefaults) expect(reset.runtime_defaults?.includes(key), key).toBe(inherited);
     expect(reset.runtime_defaults).toEqual(RUNTIME_DEFAULT_KEYS.filter(key => inherited || !BENCHMARK_CONTROLLED_KEYS.has(key)).sort());
-    expect(reset).toMatchObject({ active_model: cfg.active_model, active_backend: '', active_build: '', mmproj: '',
+    expect(reset).toMatchObject({ active_model: cfg.active_model, active_backend: cfg.active_backend, active_build: cfg.active_build, mmproj: '',
       spec_draft_model: '', server_args: [], lora_adapters: [], threads: tuningResetValues().threads });
     expect(cfg).toEqual(original);
   });
