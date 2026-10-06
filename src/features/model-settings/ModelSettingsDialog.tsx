@@ -147,7 +147,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     if (!element) return;
     if (open) {
       if (!element.open) { invoker.current = document.activeElement as HTMLElement | null; element.showModal(); }
-      requestAnimationFrame(() => heading.current?.focus());
+      // Focus the heading on the next frame, unless focus has moved to a control by then.
+      const opened = document.activeElement;
+      const frame = requestAnimationFrame(() => { if (document.activeElement === opened) heading.current?.focus(); });
+      return () => cancelAnimationFrame(frame);
     } else if (element.open) { element.close(); invoker.current?.focus(); }
   }, [open]);
   useEffect(() => { const element = dialog.current; return () => { if (element?.open) element.close(); invoker.current?.focus(); }; }, []);

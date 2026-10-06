@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import { I18nProvider, type Locale } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
@@ -82,6 +82,19 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(api.estimateModelResources).toHaveBeenLastCalledWith(expect.objectContaining({ ngl: 25, ctx_size: 8192 }), expect.any(Array)));
     expect(onApply).not.toHaveBeenCalled();
     expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
+  it('focuses its heading after opening unless focus already moved to a control', async () => {
+    const nextFrame = () => act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    mount({ initialSection: 'tuning' });
+    await nextFrame();
+    expect(screen.getByRole('heading', { name: 'Model & settings' })).toHaveFocus();
+    cleanup();
+    mount({ initialSection: 'tuning' });
+    // A control focused before the opening frame keeps its focus.
+    numeric('ctx_size').focus();
+    await nextFrame();
+    expect(numeric('ctx_size')).toHaveFocus();
   });
 
   it.each(['default', 'session', 'benchmark', 'project'] as const)('saves edited options into the named selected profile from the %s target', async mode => {
