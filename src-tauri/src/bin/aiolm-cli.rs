@@ -1,5 +1,5 @@
 use aiolm_lib::{
-    backends, config, deletable_model_path, hardware, models, runtime, server,
+    backends, config, deletable_model_path, delete_owned_snapshot, hardware, runtime, server,
     validate_launch_config,
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ const MAX_HEADLESS_LOG_LINE_BYTES: usize = 64 * 1024;
 const INTERNAL_LOG_COLLECTOR: &str = "--internal-headless-log";
 const MAX_HEADLESS_STATE_BYTES: u64 = 64 * 1024;
 const STALE_LOCK_SECONDS: u64 = 15 * 60;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,6 +35,8 @@ struct HeadlessState {
     log_path: String,
     #[serde(default)]
     log_collector: Option<LogCollectorIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -629,8 +632,15 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
+        // New headless servers own a process group; legacy servers may not.
+        // Never signal the CLI's inherited group for an older saved record.
+        let target = if unsafe { libc::getpgid(pid as libc::pid_t) } == pid as libc::pid_t {
+            format!("-{pid}")
+        } else {
+            pid.to_string()
+        };
         let status = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
+            .args(["-TERM", "--", &target])
             .status()
             .map_err(|error| format!("kill failed: {error}"))?;
         if !status.success() {
@@ -719,6 +729,7 @@ async fn server_status() -> Result<Value, String> {
         "pid": state.pid,
         "url": configured_server_url(cfg.port),
         "model": state.model,
+        "engine": state.engine,
         "health": health,
         "started_at": state.started_at,
         "log_path": log_path(),
@@ -744,16 +755,28 @@ async fn server_start_unlocked() -> Result<Value, String> {
     cfg.normalize();
     let resolved_gpu = validate_launch_config(&mut cfg).await?;
     if cfg.active_model.trim().is_empty() {
-        return Err("active_model is empty; select a GGUF model first".into());
+        return Err(
+            "active_model is empty; select a compatible model file or snapshot first".into(),
+        );
     }
-    if !Path::new(&cfg.active_model).is_file() {
+    if !Path::new(&cfg.active_model).exists() {
         return Err(format!("active model does not exist: {}", cfg.active_model));
     }
     let bin = server::server_bin(&cfg)?;
-    let args = server::build_args_with_gpu(&cfg, "", &resolved_gpu);
-    // validate_launch_config above guarantees a managed runtime.
-    let environment =
-        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?;
+    let provider = aiolm_lib::providers::provider_of(&cfg);
+    let (args, environment) = if provider == aiolm_lib::providers::ProviderId::Llama {
+        (
+            server::build_args_with_gpu(&cfg, "", &resolved_gpu),
+            runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?,
+        )
+    } else {
+        let selected = aiolm_lib::providers::selected_python_runtime(&cfg)?;
+        let engine = aiolm_lib::providers::launch::engine_command(&cfg, &selected, cfg.port, "")?;
+        let mut environment = aiolm_lib::providers::python_env::engine_environment();
+        environment.extend(engine.env);
+        (engine.args, environment)
+    };
+    let engine_info = aiolm_lib::providers::execution::probed_info(&cfg).await?;
     let log_file_path = log_path();
     if let Some(parent) = log_file_path.parent() {
         fs::create_dir_all(parent)
@@ -782,13 +805,18 @@ async fn server_start_unlocked() -> Result<Value, String> {
         command.env_clear().envs(environment);
         #[cfg(windows)]
         command.creation_flags(HEADLESS_CREATION_FLAGS);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         command
             .args(&args)
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)
             .spawn()
-            .map_err(|error| format!("failed to spawn llama-server: {error}"))?
+            .map_err(|error| format!("failed to spawn {}: {error}", provider.server()))?
         // Drop Command's copies of the pipe writers before waiting on the
         // server; only the server should keep the collector's input open.
     };
@@ -800,6 +828,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         state.url = url.clone();
         state.model = cfg.active_model.clone();
         state.lifecycle = server::Lifecycle::Starting;
+        state.engine = Some(engine_info.clone());
     }
     let err = Arc::new(server::ErrBuf::default());
     if let Err(error) = server::wait_ready(
@@ -837,6 +866,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         executable: bin.clone(),
         log_path: log_file_path.to_string_lossy().into_owned(),
         log_collector: Some(collector_identity),
+        engine: Some(serde_json::to_value(engine_info).map_err(|error| error.to_string())?),
     };
     if let Err(error) = write_state(&state) {
         let _ = terminate_pid(pid);
@@ -976,6 +1006,7 @@ fn apply_config_override(
             cfg.lora_adapters = serde_json::from_str(value)
                 .map_err(|error| format!("lora_adapters must be a JSON array: {error}"))?;
         }
+        "provider_options" => cfg.provider_options = parse_provider_options(value)?,
         _ => return Err(format!("unsupported config field: {key}")),
     }
     cfg.runtime_defaults.retain(|field| field != key);
@@ -988,6 +1019,34 @@ fn config_value() -> Result<Value, String> {
     serde_json::to_value(cfg)
         .map(redact_json)
         .map_err(|error| format!("cannot serialize config: {error}"))
+}
+
+/// `provider_options` replaces the whole provider-keyed map. Each provider's
+/// options must pass the shared schema and binding validation before anything
+/// is saved. That validation reads no engine or file, so options for an engine
+/// this host cannot run stay editable.
+fn parse_provider_options(
+    value: &str,
+) -> Result<std::collections::BTreeMap<String, serde_json::Map<String, Value>>, String> {
+    use aiolm_lib::providers::ProviderId;
+    let options: std::collections::BTreeMap<String, serde_json::Map<String, Value>> =
+        serde_json::from_str(value).map_err(|error| {
+            format!("provider_options must be a JSON object of provider option objects: {error}")
+        })?;
+    for (key, values) in &options {
+        let provider = ProviderId::parse(key)
+            .filter(|provider| provider.is_python() && provider.as_str() == key)
+            .ok_or_else(|| format!("provider options cannot be saved for '{key}'"))?;
+        let issues = aiolm_lib::providers::launch::option_issues(provider, values);
+        if !issues.is_empty() {
+            let messages = issues
+                .iter()
+                .map(|issue| issue.message.as_str())
+                .collect::<Vec<_>>();
+            return Err(format!("invalid {key} options: {}", messages.join("; ")));
+        }
+    }
+    Ok(options)
 }
 
 fn config_set_value(key: &str, value: &str) -> Result<Value, String> {
@@ -1009,12 +1068,24 @@ fn config_set_value(key: &str, value: &str) -> Result<Value, String> {
 }
 
 fn runtime_select_value(backend: &str, build: &str) -> Result<Value, String> {
-    runtime::validate_runtime_identifiers(backend, build)?;
+    let provider =
+        aiolm_lib::providers::ProviderId::parse(backend).filter(|provider| provider.is_python());
+    if provider.is_none() {
+        runtime::validate_runtime_identifiers(backend, build)?;
+    }
     let _command_lock = acquire_command_lock()?;
     let mut cfg = config::load_result()?;
     // First-time selection must validate and save both fields as one change.
-    cfg.active_backend = backend.into();
-    cfg.active_build = build.into();
+    if let Some(provider) = provider {
+        cfg.active_provider = provider.as_str().into();
+        cfg.active_runtime = build.into();
+        aiolm_lib::providers::selected_python_runtime(&cfg)?;
+    } else {
+        cfg.active_provider = "llama.cpp".into();
+        cfg.active_runtime.clear();
+        cfg.active_backend = backend.into();
+        cfg.active_build = build.into();
+    }
     cfg.normalize();
     cfg.validate()?;
     let saved = config::save(&cfg)?;
@@ -1034,6 +1105,27 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
     } else {
         root.join(requested)
     };
+    if candidate.is_dir() {
+        // The running server's draft, embedding and LoRA bindings were fixed
+        // when it started and may differ from the saved configuration now.
+        if read_state()?.is_some_and(|state| state_process_is_managed(&state)) {
+            return Err("stop the headless server before deleting a snapshot".into());
+        }
+        let deleted = delete_owned_snapshot(&cfg, &candidate)?;
+        let preserved = deleted.exists();
+        return Ok(
+            json!({"ok":true,"deleted":deleted,"kind":"snapshot","unlisted_files_preserved":preserved,"models_dir":root}),
+        );
+    }
+    if read_state()?.is_some_and(|state| {
+        state_process_is_managed(&state)
+            && fs::canonicalize(&state.model)
+                .ok()
+                .zip(fs::canonicalize(&candidate).ok())
+                .is_some_and(|(model, candidate)| model == candidate)
+    }) {
+        return Err("stop the headless server before deleting the model it is using".into());
+    }
     let safe = deletable_model_path(
         root,
         &candidate,
@@ -1054,6 +1146,14 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
 }
 
 async fn runtime_probe_value(backend: &str, build: &str) -> Result<Value, String> {
+    if let Some(provider) =
+        aiolm_lib::providers::ProviderId::parse(backend).filter(|provider| provider.is_python())
+    {
+        return serde_json::to_value(
+            aiolm_lib::providers::python_env::reprobe(provider, build).await?,
+        )
+        .map_err(|error| error.to_string());
+    }
     let capabilities = runtime::probe(backend, build).await?;
     serde_json::to_value(capabilities)
         .map_err(|error| format!("cannot serialize runtime probe: {error}"))
@@ -1084,8 +1184,18 @@ fn server_logs_value(lines: usize) -> Result<Value, String> {
 
 fn models_value() -> Result<Value, String> {
     let cfg = config::load_result()?;
-    let scan = models::scan(&cfg.models_dir)?;
-    serde_json::to_value(scan).map_err(|error| format!("cannot serialize model scan: {error}"))
+    let catalog = aiolm_lib::scan_model_catalog(
+        &cfg.models_dir,
+        &std::sync::atomic::AtomicBool::new(false),
+        Some((
+            aiolm_lib::providers::provider_of(&cfg),
+            aiolm_lib::providers::runtime_id_of(&cfg),
+        )),
+    )?;
+    Ok(
+        json!({ "models": catalog.models.into_iter().map(|model| json!({ "name":model.artifact.name, "path":model.artifact.path, "size_mb":model.artifact.size_bytes as f64 / 1048576.0,
+        "is_vision":model.artifact.role == aiolm_lib::providers::artifacts::ArtifactRole::Projector, "artifact":model.artifact, "compatibility":model.compatibility, "shards":model.shards })).collect::<Vec<_>>(), "truncated":catalog.truncated }),
+    )
 }
 
 fn device_value() -> Result<Value, String> {
@@ -1096,19 +1206,46 @@ fn device_value() -> Result<Value, String> {
 }
 
 fn runtimes_value() -> Result<Value, String> {
-    serde_json::to_value(runtime::list_installed())
+    serde_json::to_value(aiolm_lib::providers::list_runtime_instances())
         .map_err(|error| format!("cannot serialize runtime list: {error}"))
 }
 
-fn doctor_value() -> Value {
+async fn doctor_value() -> Value {
+    use aiolm_lib::providers::{provider_of, runtime_id_of, ProviderId};
     let cfg = config::load_result().ok();
-    let runtime = cfg
-        .as_ref()
-        .and_then(|value| server::server_bin(value).ok());
+    let provider = cfg.as_ref().map(provider_of);
+    let runtime = match &cfg {
+        Some(cfg) if provider_of(cfg).is_python() => Some(
+            match aiolm_lib::providers::refresh_selected_python_runtime(cfg, None).await {
+                Ok(_) => server::server_bin(cfg),
+                Err(error) => Err(error),
+            },
+        ),
+        Some(cfg) => Some(server::server_bin(cfg)),
+        None => None,
+    };
+    let runtimes = aiolm_lib::providers::list_runtime_instances();
+    let counts = ProviderId::ALL
+        .into_iter()
+        .map(|provider| {
+            let count = runtimes
+                .iter()
+                .filter(|runtime| runtime.provider == provider)
+                .count();
+            (provider.as_str().to_owned(), json!(count))
+        })
+        .collect::<serde_json::Map<_, _>>();
     json!({
         "config_loaded": cfg.is_some(),
-        "server_executable": runtime,
-        "runtime_count": runtime::list_installed().len(),
+        "provider": provider,
+        "server": provider.map(ProviderId::server),
+        "runtime": cfg.as_ref().map(runtime_id_of),
+        "server_executable": runtime.as_ref().and_then(|value| value.as_ref().ok()),
+        "runtime_ready": runtime.as_ref().is_some_and(Result::is_ok),
+        "readiness_source": if provider.is_some_and(ProviderId::is_python) { "live-python-probe" } else { "executable-presence" },
+        "runtime_problem": runtime.and_then(Result::err),
+        "runtime_count": runtimes.len(),
+        "runtime_counts": counts,
         "state_file": state_path(),
         "credentials": "not persisted or emitted by this CLI",
     })
@@ -1120,18 +1257,26 @@ fn help_value() -> Value {
         "commands":{
             "config get":"print persisted configuration",
             "config set <field> <value>":"change a non-secret typed configuration field",
-            "models list":"scan configured GGUF/mmproj files",
-            "models delete <path>":"delete a non-active GGUF/mmproj inside models_dir",
-            "runtime list":"list installed managed runtimes",
+            "config set provider_options <json>":"replace the vllm/mlx-vlm option map; every value must pass the engine option schema",
+            "models list":"scan model files and snapshots with engine compatibility",
+            "models delete <path>":"delete a non-active GGUF/mmproj file, or an app-downloaded snapshot folder (only the files its manifest lists; other files stay)",
+            "runtime list":"list native and Python engine installations",
+            "runtime select <vllm|mlx-vlm> <id>":"select an installed Python engine runtime",
+            "runtime register <vllm|mlx-vlm> <python>":"probe and register an existing engine environment",
+            "runtime install <vllm|mlx-vlm> [python]":"install the pinned engine in an isolated environment; Ctrl-C cancels and removes the partial environment",
+            "runtime remove <vllm|mlx-vlm> <id>":"remove an environment; external Python files are preserved",
+            "runtime export <vllm|mlx-vlm> <id> <zip>":"export exact package wheels for offline import on a compatible OS, architecture and Python ABI; destination must be new",
+            "runtime import <zip>":"verify a portable Python runtime bundle and recreate a new isolated environment offline; Ctrl-C cancels and cleans up",
             "runtime device":"detect local GPUs and recommended backends",
             "runtime probe <backend> <build>":"run version/help/device/bench preflight",
+            "runtime probe <vllm|mlx-vlm> <id>":"re-probe a registered Python engine environment",
             "runtime select <backend> <build>":"save the configured runtime backend and build together",
-            "server start":"start the configured model without API-key persistence",
+            "server start":"start the selected provider's server with the active model, without API-key persistence",
             "server status":"read managed process and /health state",
             "server stop|unload":"stop the managed server process tree",
             "server restart":"stop and start the managed server",
             "server logs [lines]":"read the bounded headless server log tail",
-            "doctor":"print machine-readable diagnostics"
+            "doctor":"print machine-readable diagnostics for the selected provider and runtime"
         },
         "safety":"headless start intentionally disables API-key auth; use only on a trusted machine/local bind",
     })
@@ -1141,19 +1286,52 @@ fn help_value() -> Value {
 enum CliCommand {
     Help,
     ConfigGet,
-    ConfigSet { key: String, value: String },
+    ConfigSet {
+        key: String,
+        value: String,
+    },
     ModelsList,
-    ModelsDelete { path: String },
+    ModelsDelete {
+        path: String,
+    },
     RuntimesList,
     DeviceProfile,
-    RuntimeProbe { backend: String, build: String },
-    RuntimeSelect { backend: String, build: String },
+    RuntimeProbe {
+        backend: String,
+        build: String,
+    },
+    RuntimeSelect {
+        backend: String,
+        build: String,
+    },
+    RuntimeRegister {
+        provider: String,
+        python: String,
+    },
+    RuntimeInstall {
+        provider: String,
+        python: Option<String>,
+    },
+    RuntimeRemove {
+        provider: String,
+        runtime: String,
+    },
+    RuntimeExport {
+        provider: String,
+        runtime: String,
+        path: String,
+    },
+    RuntimeImport {
+        path: String,
+    },
     Doctor,
     ServerStart,
     ServerStatus,
     ServerStop,
     ServerRestart,
-    ServerLogs { lines: usize },
+    ServerLogs {
+        lines: usize,
+    },
 }
 
 fn parse_command(args: &[String]) -> Result<CliCommand, String> {
@@ -1183,6 +1361,13 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
         },
         "runtime" | "runtimes" => match args.get(1).map(String::as_str) {
             Some("list") if args.len() == 2 => Ok(CliCommand::RuntimesList),
+            Some("register") if args.len() == 4 => Ok(CliCommand::RuntimeRegister { provider: args[2].clone(), python: args[3].clone() }),
+            Some("install") if (3..=4).contains(&args.len()) => Ok(CliCommand::RuntimeInstall { provider: args[2].clone(), python: args.get(3).cloned() }),
+            Some("remove") if args.len() == 4 => Ok(CliCommand::RuntimeRemove { provider: args[2].clone(), runtime: args[3].clone() }),
+            Some("export") if args.len() == 5 => Ok(CliCommand::RuntimeExport { provider: args[2].clone(), runtime: args[3].clone(), path: args[4].clone() }),
+            Some("import") if args.len() == 3 => Ok(CliCommand::RuntimeImport { path: args[2].clone() }),
+            Some("export") => Err("usage: runtime export <vllm|mlx-vlm> <id> <zip>".into()),
+            Some("import") => Err("usage: runtime import <zip>".into()),
             Some("probe") if args.len() == 4 => Ok(CliCommand::RuntimeProbe {
                 backend: args[2].clone(),
                 build: args[3].clone(),
@@ -1194,7 +1379,8 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
             }),
             Some("select") => Err("usage: runtime select <backend> <build>".into()),
             Some("device") => Ok(CliCommand::DeviceProfile),
-            _ => Err("usage: runtime list|probe|select <backend> <build>|device".into()),
+            Some("register" | "install" | "remove") => Err("usage: runtime register <vllm|mlx-vlm> <python> | install <vllm|mlx-vlm> [python] | remove <vllm|mlx-vlm> <id>".into()),
+            _ => Err("usage: runtime list|probe|select <backend> <build>|register|install|remove|export|import|device".into()),
         },
         "doctor" if args.len() == 1 => Ok(CliCommand::Doctor),
         "server" => match args.get(1).map(String::as_str) {
@@ -1227,7 +1413,92 @@ async fn run(args: &[String]) -> Result<Value, String> {
         CliCommand::DeviceProfile => device_value(),
         CliCommand::RuntimeProbe { backend, build } => runtime_probe_value(&backend, &build).await,
         CliCommand::RuntimeSelect { backend, build } => runtime_select_value(&backend, &build),
-        CliCommand::Doctor => Ok(doctor_value()),
+        CliCommand::RuntimeRegister { provider, python } => {
+            let provider = aiolm_lib::providers::ProviderId::parse(&provider)
+                .filter(|provider| provider.is_python())
+                .ok_or("select vllm or mlx-vlm")?;
+            let _lock = acquire_command_lock()?;
+            serde_json::to_value(
+                aiolm_lib::providers::python_env::register_external(provider, Path::new(&python))
+                    .await?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        CliCommand::RuntimeInstall { provider, python } => {
+            let provider = aiolm_lib::providers::ProviderId::parse(&provider)
+                .filter(|provider| provider.is_python())
+                .ok_or("select vllm or mlx-vlm")?;
+            let _lock = acquire_command_lock()?;
+            let cancel = Arc::new(AtomicBool::new(false));
+            let install = aiolm_lib::providers::python_env::install_managed(
+                provider,
+                python.map(PathBuf::from),
+                None,
+                cancel.clone(),
+                |progress| eprintln!("{}", progress.line),
+            );
+            serde_json::to_value(
+                run_interruptible(install, tokio::signal::ctrl_c(), &cancel).await?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        CliCommand::RuntimeRemove { provider, runtime } => {
+            let provider = aiolm_lib::providers::ProviderId::parse(&provider)
+                .filter(|provider| provider.is_python())
+                .ok_or("select vllm or mlx-vlm")?;
+            let _lock = acquire_command_lock()?;
+            let cfg = config::load_result()?;
+            if aiolm_lib::providers::provider_of(&cfg) == provider && cfg.active_runtime == runtime
+            {
+                return Err("select another runtime before removing this environment".into());
+            }
+            if read_state()?.is_some_and(|state| {
+                state_process_is_managed(&state) && process_is_alive(state.pid)
+            }) {
+                return Err("stop the headless server before removing a runtime".into());
+            }
+            aiolm_lib::providers::python_env::remove(provider, &runtime)?;
+            Ok(json!({"ok":true,"provider":provider,"runtime":runtime}))
+        }
+        CliCommand::RuntimeExport {
+            provider,
+            runtime,
+            path,
+        } => {
+            let provider = aiolm_lib::providers::ProviderId::parse(&provider)
+                .filter(|provider| provider.is_python())
+                .ok_or("select vllm or mlx-vlm")?;
+            let _lock = acquire_command_lock()?;
+            ensure_portable_server_stopped()?;
+            let destination = PathBuf::from(path);
+            if destination.exists() {
+                return Err("portable export destination already exists; choose a new file".into());
+            }
+            let cancel = Arc::new(AtomicBool::new(false));
+            let export = aiolm_lib::providers::portable::export_bundle(
+                provider,
+                &runtime,
+                &destination,
+                cancel.clone(),
+                |progress| eprintln!("{}", progress.line),
+            );
+            serde_json::to_value(run_interruptible(export, tokio::signal::ctrl_c(), &cancel).await?)
+                .map_err(|error| error.to_string())
+        }
+        CliCommand::RuntimeImport { path } => {
+            let _lock = acquire_command_lock()?;
+            ensure_portable_server_stopped()?;
+            let archive = PathBuf::from(path);
+            let cancel = Arc::new(AtomicBool::new(false));
+            let import = aiolm_lib::providers::portable::import_bundle(
+                &archive,
+                cancel.clone(),
+                |progress| eprintln!("{}", progress.line),
+            );
+            serde_json::to_value(run_interruptible(import, tokio::signal::ctrl_c(), &cancel).await?)
+                .map_err(|error| error.to_string())
+        }
+        CliCommand::Doctor => Ok(doctor_value().await),
         CliCommand::ServerStart => server_start().await,
         CliCommand::ServerStatus => server_status().await,
         CliCommand::ServerStop => server_stop().await,
@@ -1237,6 +1508,35 @@ async fn run(args: &[String]) -> Result<Value, String> {
             server_start_unlocked().await
         }
         CliCommand::ServerLogs { lines } => server_logs_value(lines),
+    }
+}
+
+fn ensure_portable_server_stopped() -> Result<(), String> {
+    if read_state()?
+        .is_some_and(|state| state_process_is_managed(&state) && process_is_alive(state.pid))
+    {
+        return Err("stop the headless server before importing or exporting a runtime".into());
+    }
+    Ok(())
+}
+
+/// Run `work` to completion. When `interrupt` (Ctrl-C) fires first, raise
+/// `cancel` and keep waiting, so the work can stop its child processes and
+/// remove what it staged before the CLI exits.
+async fn run_interruptible<T>(
+    work: impl std::future::Future<Output = Result<T, String>>,
+    interrupt: impl std::future::Future<Output = std::io::Result<()>>,
+    cancel: &AtomicBool,
+) -> Result<T, String> {
+    tokio::pin!(work);
+    tokio::select! {
+        result = &mut work => result,
+        Ok(()) = interrupt => {
+            cancel.store(true, Ordering::Release);
+            eprintln!("cancelling; waiting for the installer to stop and remove its staging folder");
+            // Work that finished as the interrupt arrived is kept and reported.
+            work.await.map_err(|error| format!("runtime installation cancelled: {error}"))
+        }
     }
 }
 
@@ -1363,6 +1663,108 @@ mod tests {
     }
 
     #[test]
+    fn provider_options_round_trip_typed_vllm_and_mlx_maps() {
+        // Paths need not exist and no engine is probed: settings for an engine
+        // this host cannot run remain editable.
+        let options = json!({
+            "vllm": {
+                "runner": "generate", "max_model_len": 32768, "gpu_memory_utilization": 0.85,
+                "enable_prefix_caching": false, "limit_mm_per_prompt": {"image": 2},
+                "enable_auto_tool_choice": true, "tool_call_parser": "hermes", "temperature": 0.7,
+                "lora_adapters": [{"name": "style", "path": "/synthetic/adapters/style"}],
+                "request_lora": "style", "max_lora_rank": 32,
+                "extra_args": ["--disable-log-requests"], "trust_remote_code": false
+            },
+            "mlx-vlm": {
+                "embedding_model": "/synthetic/models/embedder", "kv_bits": 4, "kv_quant_scheme": "uniform",
+                "draft_model": "/synthetic/models/draft", "draft_kind": "mtp", "enable_thinking": true,
+                "lora_adapters": [{"name": "solo", "path": "/synthetic/adapters/solo"}]
+            }
+        });
+        let mut cfg = config::AppConfig::default();
+        apply_config_override(&mut cfg, "provider_options", &options.to_string())
+            .expect("schema-valid options should be accepted");
+        let saved = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(saved["provider_options"], options);
+        let reloaded: config::AppConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(
+            serde_json::to_value(&reloaded.provider_options).unwrap(),
+            options
+        );
+
+        // An empty map clears every provider's options.
+        apply_config_override(&mut cfg, "provider_options", "{}").unwrap();
+        assert!(cfg.provider_options.is_empty());
+    }
+
+    #[test]
+    fn provider_options_reject_invalid_maps_without_partial_changes() {
+        let mut cfg = config::AppConfig::default();
+        apply_config_override(
+            &mut cfg,
+            "provider_options",
+            r#"{"vllm":{"max_num_seqs":8}}"#,
+        )
+        .unwrap();
+        let before = serde_json::to_value(&cfg).unwrap();
+        for (value, expected) in [
+            ("{not json", "JSON object"),
+            (r#"["vllm"]"#, "JSON object"),
+            (r#"{"vllm":[1]}"#, "JSON object"),
+            (r#"{"sglang":{}}"#, "cannot be saved for 'sglang'"),
+            (
+                r#"{"llama.cpp":{"ctx_size":4096}}"#,
+                "cannot be saved for 'llama.cpp'",
+            ),
+            (r#"{" vllm":{}}"#, "cannot be saved for ' vllm'"),
+            (
+                r#"{"vllm":{"max_num_seqs":16},"mlx-vlm":{"no_such_option":1}}"#,
+                "invalid mlx-vlm options",
+            ),
+            (r#"{"vllm":{"max_model_len":"long"}}"#, "integer"),
+            (r#"{"vllm":{"gpu_memory_utilization":2}}"#, "between"),
+            (r#"{"vllm":{"runner":"train"}}"#, "does not accept"),
+            (
+                r#"{"vllm":{"trust_remote_code":true}}"#,
+                "trust_remote_code",
+            ),
+            (r#"{"vllm":{"extra_args":["--port=9000"]}}"#, "--port"),
+            (
+                r#"{"vllm":{"extra_args":["--max-model-len=4"]}}"#,
+                "--max-model-len",
+            ),
+            (
+                r#"{"vllm":{"draft_model":"/synthetic/draft"}}"#,
+                "speculative_config",
+            ),
+            (
+                r#"{"vllm":{"request_lora":"missing"}}"#,
+                "configured adapter",
+            ),
+            (
+                r#"{"vllm":{"enable_auto_tool_choice":true}}"#,
+                "tool_call_parser",
+            ),
+            (
+                r#"{"mlx-vlm":{"lora_adapters":[{"name":"a","path":"/x"},{"name":"b","path":"/y"}]}}"#,
+                "one adapter",
+            ),
+            (
+                r#"{"mlx-vlm":{"lora_adapters":[{"name":"bad name","path":"/x"}]}}"#,
+                "adapter name",
+            ),
+        ] {
+            let error = apply_config_override(&mut cfg, "provider_options", value).unwrap_err();
+            assert!(error.contains(expected), "{value}: {error}");
+            assert_eq!(
+                serde_json::to_value(&cfg).unwrap(),
+                before,
+                "{value} changed the configuration"
+            );
+        }
+    }
+
+    #[test]
     fn config_set_accepts_safe_typed_fields() {
         let mut cfg = config::AppConfig::default();
         apply_config_override(&mut cfg, "ctx_size", "8192").expect("context should parse");
@@ -1439,6 +1841,133 @@ mod tests {
                 .collect::<Vec<_>>()
         )
         .is_err());
+    }
+
+    #[test]
+    fn parser_keeps_runtime_syntax_and_adds_python_engine_lifecycle() {
+        let parse = |args: &[&str]| {
+            parse_command(
+                &args
+                    .iter()
+                    .map(|value| (*value).into())
+                    .collect::<Vec<String>>(),
+            )
+        };
+        assert_eq!(
+            parse(&["runtime", "select", "cpu", "b1234"]),
+            Ok(CliCommand::RuntimeSelect {
+                backend: "cpu".into(),
+                build: "b1234".into()
+            })
+        );
+        assert_eq!(parse(&["runtimes", "list"]), Ok(CliCommand::RuntimesList));
+        assert_eq!(
+            parse(&[
+                "runtime",
+                "export",
+                "vllm",
+                "portable-1",
+                "bundle with spaces.zip"
+            ]),
+            Ok(CliCommand::RuntimeExport {
+                provider: "vllm".into(),
+                runtime: "portable-1".into(),
+                path: "bundle with spaces.zip".into()
+            })
+        );
+        assert_eq!(
+            parse(&["runtime", "import", "bundle with spaces.zip"]),
+            Ok(CliCommand::RuntimeImport {
+                path: "bundle with spaces.zip".into()
+            })
+        );
+        assert!(parse(&["runtime", "export", "vllm", "portable-1"]).is_err());
+        assert!(parse(&["runtime", "import"]).is_err());
+        assert_eq!(
+            parse(&["runtime", "install", "vllm"]),
+            Ok(CliCommand::RuntimeInstall {
+                provider: "vllm".into(),
+                python: None
+            })
+        );
+        assert_eq!(
+            parse(&["runtime", "install", "mlx-vlm", "python3"]),
+            Ok(CliCommand::RuntimeInstall {
+                provider: "mlx-vlm".into(),
+                python: Some("python3".into())
+            })
+        );
+        assert_eq!(
+            parse(&["runtime", "remove", "vllm", "managed-1"]),
+            Ok(CliCommand::RuntimeRemove {
+                provider: "vllm".into(),
+                runtime: "managed-1".into()
+            })
+        );
+        assert_eq!(
+            parse(&["models", "delete", "hf/example/model"]),
+            Ok(CliCommand::ModelsDelete {
+                path: "hf/example/model".into()
+            })
+        );
+        assert!(parse(&["runtime", "remove", "vllm"])
+            .unwrap_err()
+            .contains("remove <vllm|mlx-vlm> <id>"));
+        assert!(parse(&["runtime", "install"]).is_err());
+        let help = help_value();
+        assert!(help["commands"]["models delete <path>"]
+            .as_str()
+            .unwrap()
+            .contains("snapshot"));
+        assert!(help["commands"]["runtime install <vllm|mlx-vlm> [python]"]
+            .as_str()
+            .unwrap()
+            .contains("Ctrl-C"));
+    }
+
+    #[tokio::test]
+    async fn interrupt_cancels_work_and_waits_for_its_cleanup() {
+        let cancel = AtomicBool::new(false);
+        let cleaned = AtomicBool::new(false);
+        let work = async {
+            while !cancel.load(Ordering::Acquire) {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            cleaned.store(true, Ordering::Release);
+            Err::<(), String>("staged environment removed".into())
+        };
+        let error = run_interruptible(work, async { Ok(()) }, &cancel)
+            .await
+            .unwrap_err();
+        assert!(error.contains("cancelled") && error.contains("staged environment removed"));
+        assert!(
+            cleaned.load(Ordering::Acquire),
+            "the CLI returns only after cleanup finished"
+        );
+
+        // Work that completed as the interrupt arrived is not reported as cancelled.
+        let cancel = AtomicBool::new(false);
+        let finished = async {
+            while !cancel.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+            Ok::<_, String>(7)
+        };
+        assert_eq!(
+            run_interruptible(finished, async { Ok(()) }, &cancel).await,
+            Ok(7)
+        );
+
+        // A handler that cannot be installed does not cancel anything.
+        let cancel = AtomicBool::new(false);
+        let unavailable = async { Err(std::io::Error::other("no console")) };
+        let slow = async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            Ok::<_, String>(1)
+        };
+        assert_eq!(run_interruptible(slow, unavailable, &cancel).await, Ok(1));
+        assert!(!cancel.load(Ordering::Acquire));
     }
 
     #[test]
@@ -1569,6 +2098,7 @@ mod tests {
             executable: String::new(),
             log_path: String::new(),
             log_collector: None,
+            engine: None,
         };
         let paths = [current.clone(), previous.clone()];
         assert!(read_first_state(&paths).unwrap().is_none());
