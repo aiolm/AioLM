@@ -4,11 +4,12 @@
 
 [Documentation index](docs/README.md) — installation, development, architecture, and policies.
 
-AioLM (All-in-One LM) — Windows/macOS/Linux desktop runtime manager for `llama.cpp`. Uses `llama-server` with a Tauri v2 desktop UI for models, runtimes, chat, and benchmarks.
+AioLM (All-in-One LM) — Windows/macOS/Linux desktop runtime manager with a Tauri v2 UI for models, runtimes, chat, and benchmarks. Select llama.cpp, vLLM on Linux or Apple Silicon macOS via vllm-metal, or MLX on Apple Silicon macOS; see [inference runtimes](docs/reference/inference-runtimes.md) for compatibility and validation limits.
 
 ## Features
 
-- GGUF model discovery and safe management
+- GGUF and safetensors snapshot discovery, runtime compatibility filters and safe management
+- Engine-specific settings profiles, execution options and multimodal inputs
 - Managed runtimes (CPU/Vulkan/ROCm/CUDA/SYCL/OpenVINO) with portable ZIP support
 - PR builds by number/URL with provenance review
 - Streaming chat with local threads, document context, and embeddings

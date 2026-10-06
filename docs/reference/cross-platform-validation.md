@@ -1,5 +1,30 @@
 # Cross-platform validation
 
+## Inference engine acceptance
+
+The [inference runtime adapters](inference-runtimes.md) add Linux vLLM and Apple Silicon macOS vllm-metal/MLX targets. A Windows build/test pass verifies shared application behavior, not native inference on those platforms. Use a fresh temporary `AIOLM_HOME` and synthetic fixtures for CLI and migration checks; explicitly selected real models are reserved for native inference acceptance.
+
+| Check | llama.cpp | vLLM on Linux | mlx-vlm on Apple Silicon |
+| --- | --- | --- | --- |
+| Runtime management | Existing binary install/probe/remove | Managed install or external registration; version, accelerator, registry and flags probe; cancellation and removal | Same environment lifecycle with Apple Silicon/Metal availability |
+| Artifact loading | GGUF and complete shard groups | Complete local safetensors snapshot with supported architecture | Complete supported MLX/HF snapshot and processor/tokenizer assets |
+| Configuration | Independent profile, selected installation, supported flags, save/restart | Provider profile and supported launch/request options | Provider profile and supported launch/request options |
+| Generation | Stream, reasoning, cancel, idle unload and restart | Same behaviors with actual usage metadata | Same behaviors with actual usage metadata |
+| Multimodal | Test each modality claimed by the model/projector/runtime | Test each claimed image/audio/video input and unsupported-input rejection | Test each claimed input, including owned local video paths and unsupported-input rejection |
+| Tools | MCP call/approval/rejection and follow-up | Model-compatible tool parser and automatic tool choice enabled | Supported model tool template and follow-up |
+| Documents | Embeddings when available and lexical fallback | Pooling/embedding session, explicit target and cache namespace | Embedding model/companion, explicit target and cache namespace |
+| Companions | Supported GGUF LoRA/draft bindings | Valid local PEFT LoRA and supported speculative binding | Valid MLX LoRA and supported draft/embedding bindings |
+| Measurement | Authoritative tokens, cold-cache benchmarks and correctness gate | Exact usage/tokenization, worker memory, provider-specific verification coverage | Exact usage/tokenization, cache reset, worker memory, host/device verification |
+| Ownership | Stop/cancel only app-owned processes and files | Process groups, interrupted installs/downloads and manifest-owned deletion | Process groups, interrupted installs/downloads and manifest-owned deletion |
+
+For each native test, record the engine version, model revision, supported modalities and method coverage. A partial numerical comparison is not a full-vocabulary verification pass. Unknown memory/context values, untested modalities and unavailable reference kernels remain explicit gaps until native evidence establishes them.
+
+Exercise the complete discovery journey for each engine: search the appropriate artifact format, download an immutable snapshot or GGUF with its supplied loading companions, cancel and retry, check complete/incomplete installation marks, configure the downloaded model without changing the selected engine, and launch it. Test runtime selection before selecting a model, an incompatible model after changing installations, and a failed replacement preflight preserving the current process. After changing a registered interpreter's packages or device visibility, verify fresh launch/doctor/deep diagnostics and cache identity. Inspect project/session labels, tools and document retrieval after switching engines. For Python bundles, export the exact installed wheel closure, import offline into a fresh home with a matching interpreter, and run inference from the new identity. Check cancellation, hash corruption, ABI mismatch and preservation of existing environments. Follow the [native runtime acceptance guide](provider-native-acceptance.md); native Python-engine acceptance remains not-run until executed on those hosts.
+
+vllm-metal requires a separate Apple Silicon macOS 15+ acceptance run with native arm64 Python 3.12 and the matched 0.30.0 core/plugin wheels. Test managed installation, cancellation/cleanup, registration and removal without changing an external environment. Record active Metal platform/device and both versions. Check supported HF, MLX and GGUF artifacts separately; reject unsupported quantization, shards, projectors and missing tokenizer assets. Image chat, tools, pooling/RAG, LoRA and speculative bindings each need a model and settings that the Metal loader supports. Verify audio/video chat refusal separately from any transcription endpoint. Exercise streaming, cancellation, unload/restart, cold-cache token usage, history/public identity and plugin-specific verification-cache invalidation. Quantized formats without a CPU reference remain unavailable to deep verification; an eligible HF comparison remains partial. Process-group RSS alone does not establish total unified GPU memory use.
+
+## Desktop packages
+
 Starting with v0.2.1, releases include Windows x64 NSIS/MSI and Linux x86_64
 (Ubuntu 24.04+) DEB/AppImage packages, and starting with v0.3.0 macOS 13.3+
 DMGs for Apple Silicon and Intel. See the
