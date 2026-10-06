@@ -4,7 +4,7 @@
 
 [文档目录](../README.md) — 安装、开发、代码结构及项目政策。
 
-AioLM（All-in-One LM）— `llama.cpp` 的 Windows/Linux 桌面运行时管理器。通过基于 `llama-server` 的 Tauri v2 桌面 UI，管理模型、运行时、聊天和基准测试。
+AioLM（All-in-One LM）— `llama.cpp` 的 Windows/macOS/Linux 桌面运行时管理器。通过基于 `llama-server` 的 Tauri v2 桌面 UI，管理模型、运行时、聊天和基准测试。
 
 模型加载与 API 服务器启动相互独立。加载模型后即可使用应用内聊天；若要让外部
 应用连接，请在侧边栏的 **API 服务器** 中启动服务器，复制 URL、密钥和模型 ID，
@@ -25,7 +25,7 @@ API 服务器，停止 API 服务器也不会卸载模型或中断应用内聊�
 
 ## 平台支持
 
-可使用 Windows x64 和 Linux x86_64（Ubuntu 24.04 或更新版本）构建。Linux 使用 DEB/AppImage，Windows 使用 NSIS/MSI。**从 v0.2.1 开始也提供 Linux 安装包。** 请参阅[安装指南](install.zh.md#linux)。面向 macOS 13.3 及以上版本的 Apple Silicon（Metal）和 Intel（CPU）DMG 从 **v0.3.0** 开始提供，仅有临时（ad-hoc）签名且未经公证，参见 [macOS 安装](install.zh.md#macos)。Linux ARM64/NVIDIA DGX 验证尚未完成。参见[跨平台验证](../reference/cross-platform-validation.md)。发布文件未签名，并附有 SHA-256 校验和。
+可使用 Windows x64、macOS 13.3 或更新版本（Apple Silicon 和 Intel）以及 Linux x86_64（Ubuntu 24.04 或更新版本）构建。Windows 使用 NSIS/MSI，macOS 使用 DMG，Linux 使用 DEB/AppImage。**从 v0.2.1 开始也提供 Linux 安装包。** 请参阅[安装指南](install.zh.md#linux)。面向 macOS 13.3 及以上版本的 Apple Silicon（Metal）和 Intel（CPU）DMG 从 **v0.3.0** 开始提供，仅有临时（ad-hoc）签名且未经公证，参见 [macOS 安装](install.zh.md#macos)。Linux ARM64/NVIDIA DGX 验证尚未完成。参见[跨平台验证](../reference/cross-platform-validation.md)。发布文件未签名，并附有 SHA-256 校验和。
 
 ## 下载
 

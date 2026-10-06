@@ -4,7 +4,7 @@
 
 ## 要求
 
-- Windows 10/11 x64
+- Windows 10/11 x64、Linux x86_64（Ubuntu 24.04 或更新版本）或 macOS 13.3 或更新版本（Apple Silicon 或 Intel，需 Xcode 命令行工具）
 - Node `22.23.2` / npm `12.0.2`（`.node-version`、`package.json#engines`）
 - Rust `1.98.0` + `rustfmt`/`clippy` (`rust-toolchain.toml`)
 - Tauri v2 前置条件
