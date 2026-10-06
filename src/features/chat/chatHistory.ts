@@ -2,6 +2,7 @@ import type { ChatCitation, DocumentAttachment, ImageAttachment } from "./chatTy
 import { invoke, isNativeRuntimeAvailable } from "../../shared/api/transport.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
 import { sanitizeResponseMetrics, type ResponseMetrics } from "../../shared/lib/metrics.ts";
+import { copyMediaPreparation, validMediaPreparation } from './mediaPreparationHistory.ts';
 
 export type { ChatCitation } from "./chatTypes.ts";
 
@@ -76,7 +77,10 @@ function browserStorage(): ChatStorage | null {
 function validImage(value: unknown): value is ImageAttachment {
   if (value === null || typeof value !== "object") return false;
   const image = value as Partial<ImageAttachment>;
-  return typeof image.name === "string" && typeof image.dataUrl === "string";
+  return typeof image.name === "string" && typeof image.dataUrl === "string"
+    && (image.kind === undefined || ['image', 'audio', 'video'].includes(image.kind))
+    && (image.ref === undefined || /^[a-f0-9]{64}\.(?:png|jpe?g|webp|wav|mp3|flac|mp4|webm)$/.test(image.ref))
+    && (image.preparation === undefined || validMediaPreparation(image.preparation, image));
 }
 
 function validDocument(value: unknown): value is DocumentAttachment {
@@ -166,7 +170,9 @@ function safeThread(thread: ChatThread): ChatThread {
       if (message.images !== undefined) {
         safeMessage.images = message.images.slice(0, 4).map((image) => ({
           name: image.name,
-          dataUrl: image.dataUrl.length <= LOCAL_IMAGE_LIMIT ? image.dataUrl : "",
+          ...(image.ref ? { ref: image.ref, kind: image.kind ?? 'image', mime: image.mime, sizeBytes: image.sizeBytes } : {}),
+          ...(image.preparation && validMediaPreparation(image.preparation, image) ? { preparation: copyMediaPreparation(image.preparation) } : {}),
+          dataUrl: image.ref ? '' : image.dataUrl.length <= (isNativeRuntimeAvailable() ? 64 * 1024 * 1024 : LOCAL_IMAGE_LIMIT) ? image.dataUrl : "",
         }));
       }
       if (message.documents !== undefined) {

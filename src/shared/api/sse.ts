@@ -126,7 +126,7 @@ export class SseParser {
     const choices = Array.isArray(json.choices) ? json.choices : [];
     const choice = asRecord(choices[0]);
     const delta = asRecord(choice.delta);
-    const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+    const reasoning = typeof delta.reasoning_content === "string" ? delta.reasoning_content : typeof delta.reasoning === 'string' ? delta.reasoning : "";
     const content = typeof delta.content === "string" ? delta.content : "";
     const rawToolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
     const toolCalls: ToolCallDelta[] = rawToolCalls

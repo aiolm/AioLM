@@ -8,6 +8,7 @@ import { useI18n } from "../../shared/i18n/i18n";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
+import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useChatThreads } from "./useChatThreads";
 import { useChatAttachments } from "./useChatAttachments";
 import { useChatMcpTools } from "./useChatMcpTools";
@@ -16,6 +17,7 @@ import ChatThreadSidebar from "./ChatThreadSidebar";
 import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
+import { providerCopy } from '../../shared/i18n/providerCopy';
 import { notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus } from "../../shared/runtime/sessionUtils";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
@@ -27,6 +29,10 @@ import { useChatSkills } from "./useChatSkills";
 import ChatSkillPicker from "./ChatSkillPicker";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
+import { embeddingSessions, selectEmbeddingSession } from './embeddingTarget';
+import { embeddingTargetCopy } from './embeddingTargetCopy';
+import { canPrepareAttachment } from './mediaPreprocessing';
+import { mediaPreparationCopy } from './mediaPreparationCopy';
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -41,6 +47,9 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState("default");
+  const [embeddingSelection, setEmbeddingSelection] = useState('auto');
+  const [audioSessionId, setAudioSessionId] = useState('');
+  const [videoFrames, setVideoFrames] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -75,10 +84,20 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [sessionsLoaded, selectedSessionAvailable]);
 
   const selectedStatus = selectedSession ?? store.status;
+  const embeddingCandidates = [{ ...store.status, id: 'default', name: t('ui.defaultSession') }, ...sessions];
+  const embeddingChoice = selectEmbeddingSession(embeddingCandidates, selectedSessionId, embeddingSelection);
+  const embeddingCopy = embeddingTargetCopy[locale];
   const serverOn = isServerRunning(selectedStatus.state);
-  const visionReady = serverOn && !!selectedStatus.mmproj;
+  const modalities = selectedStatus.engine?.modalities;
+  const visionReady = serverOn && (modalities?.image ?? !!selectedStatus.mmproj);
+  const speechSessions = embeddingCandidates.filter(session => isServerRunning(session.state)
+    && session.engine?.tasks?.includes('transcription'));
+  const mediaOptions = { audioSessionId: speechSessions.some(session => session.id === audioSessionId) ? audioSessionId : undefined, videoFrames };
+  const mediaCopy = mediaPreparationCopy[locale];
 
-  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, setError: (message) => setError(message) });
+  const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, modalities,
+    audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: videoFrames && visionReady,
+    setError: (message) => setError(message) });
   const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools({ setError: (message) => setError(message) });
 
   const skills = useChatSkills();
@@ -117,7 +136,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     setError, error, contextWarning, contextSources, aborting, pendingToolCall, streamingDraft,
     failedRef, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   } = useChatSend({
-    store, effectiveConfig, sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
+    store, effectiveConfig, engine: selectedStatus.engine, mediaPreprocessing: mediaOptions,
+    embeddingTarget: embeddingChoice ? { model: embeddingChoice.engine!.embedding_model!, baseUrl: embeddingChoice.url!, apiKey: embeddingChoice.api_key ?? '',
+      namespace: embeddingChoice.engine!.embedding_namespace ?? `${embeddingChoice.engine!.provider}:${embeddingChoice.model}` }
+      : selectedStatus.engine || embeddingSelection !== 'auto' ? { model: '', baseUrl: '', apiKey: '', namespace: '' } : undefined,
+    sessionId: selectedSessionId, preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
     modelProfile: effectiveConfig ? modelSettings?.getRequestProfile(selectedSessionId, effectiveConfig) : undefined,
     input, setInput, attachments, documents, setAttachments, setDocuments,
     mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
@@ -189,7 +212,10 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     };
   }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
 
-  const canSend = serverOn && !!apiKey && !!model && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const incompatibleMedia = attachments.some(attachment => {
+    return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);
+  });
+  const canSend = serverOn && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
   useEffect(() => {
@@ -249,10 +275,38 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
         ]}
         selectedSessionId={selectedSessionId}
+        embedding={selectedStatus.engine || embeddingSessions(embeddingCandidates).length ? {
+          label: embeddingCopy.label, hint: embeddingCopy.hint, value: embeddingSelection,
+          options: [{ value: 'auto', label: embeddingCopy.auto }, { value: 'lexical', label: embeddingCopy.lexical },
+            ...embeddingSessions(embeddingCandidates).map(session => ({ value: session.id, label: `${session.name || session.id} · ${session.engine!.embedding_model}` })),
+            ...(!['auto', 'lexical'].includes(embeddingSelection) && !embeddingSessions(embeddingCandidates).some(session => session.id === embeddingSelection)
+              ? [{ value: embeddingSelection, label: embeddingCopy.lexical }] : [])],
+          onChange: value => { if (requireIdle()) setEmbeddingSelection(value); },
+        } : undefined}
         model={model || configuredModel}
+        runtimeConfig={selectedStatus.engine ? { ...effectiveConfig, active_provider: selectedStatus.engine.provider, active_runtime: selectedStatus.engine.runtime_id } : effectiveConfig}
         onSelectSession={(id) => { if (requireIdle()) { setSelectedSessionId(id); skills.clearSelectedSkills(); } }}
         ct={ct}
       />
+
+      <details className="mb-3 rounded-lg border p-3 ui-border-color-border">
+        <summary>{mediaCopy.label}</summary>
+        <p className="my-2 text-sm">{mediaCopy.hint}</p>
+        <label className="mr-3 inline-flex items-center gap-2">
+          {mediaCopy.audio}
+          <CustomSelect value={audioSessionId} disabled={phase !== 'idle' || pendingToolCall !== null}
+            onChange={setAudioSessionId} ariaLabel={mediaCopy.audio}
+            options={[{ value: '', label: mediaCopy.native },
+              ...speechSessions.map(session => ({ value: session.id, label: `${session.name || session.id} · ${session.model}` })),
+              ...(audioSessionId && !speechSessions.some(session => session.id === audioSessionId)
+                ? [{ value: audioSessionId, label: `${audioSessionId} · ${t('ui.sessionStopped')}`, disabled: true }] : [])]} />
+        </label>
+        <label className="inline-flex items-center gap-2">
+          <input type="checkbox" checked={videoFrames} disabled={!visionReady || phase !== 'idle' || pendingToolCall !== null}
+            onChange={event => setVideoFrames(event.target.checked)} />
+          {mediaCopy.video}
+        </label>
+      </details>
 
       <div className="chat-layout">
         <ChatThreadSidebar
@@ -296,7 +350,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           />
 
           <ChatComposer
-            contextWarning={contextWarning}
+            locale={locale}
+            contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null].filter(Boolean).join(' ') || null}
             contextSources={contextSources}
             mcpCatalog={mcpCatalog}
             selectedMcpTools={selectedMcpTools}

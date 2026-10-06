@@ -1,6 +1,7 @@
 import type { ChatContentPart, ChatMessage } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
 import type { ChatCitation, DocumentAttachment, DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
+import { validMediaPreparation } from './mediaPreparationHistory.ts';
 
 export type { DocumentAttachment, DocumentChunk, ImageAttachment, RankedDocumentChunk } from "./chatTypes.ts";
 
@@ -153,7 +154,20 @@ export function buildMultimodalContent(text: string, images: ImageAttachment[]):
   const parts: ChatContentPart[] = [];
   if (text.trim()) parts.push({ type: "text", text: text.trim() });
   for (const image of images) {
-    parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
+    if (image.preparation) {
+      if (!validMediaPreparation(image.preparation, image)) throw new Error(`Attachment preparation is unavailable: ${image.name}`);
+      if (image.preparation.kind === 'transcription') {
+        parts.push({ type: 'text', text: `[Audio transcript: ${image.name}]\n${image.preparation.text}\n[/Audio transcript]` });
+      } else {
+        parts.push({ type: 'text', text: `[Sampled video frames: ${image.name}. Audio track is not included.]` });
+        for (const frame of image.preparation.frames) {
+          parts.push({ type: 'text', text: `[Frame at ${frame.timestampSeconds.toFixed(2)} seconds]` });
+          parts.push({ type: 'aiolm_media', media: { ref: frame.ref, kind: 'image' } });
+        }
+      }
+    } else if (image.ref) parts.push({ type: 'aiolm_media', media: { ref: image.ref, kind: image.kind ?? 'image' } });
+    else if ((image.kind ?? 'image') === 'image' && image.dataUrl) parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
+    else throw new Error(`Attachment is unavailable: ${image.name}`);
   }
   return parts;
 }
@@ -182,7 +196,7 @@ export function estimateTextTokens(text: string): number {
 export function estimateMessageTokens(message: ChatMessage): number {
   const content = message.content;
   const textTokens = typeof content === "string" ? estimateTextTokens(content) : estimateTextTokens(contentText(content));
-  const imageTokens = typeof content === "string" ? 0 : content.filter((part) => part.type === "image_url").length * 256;
+  const imageTokens = typeof content === "string" ? 0 : content.filter((part) => part.type === "image_url" || (part.type === 'aiolm_media' && part.media.kind === 'image')).length * 256;
   return Math.max(4, textTokens + imageTokens + 4);
 }
 

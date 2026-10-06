@@ -11,6 +11,8 @@ import {
 import { mapChatOptionAliases, type JsonObject } from "../config/tuningValidation.ts";
 import { readBoundedResponseText } from "./http.ts";
 import type { ChatDelta, ChatMessage, ChatRequestBody, ChatSampling } from "./types.ts";
+import { resolveMedia } from './commands.ts';
+import { providerRequestFields } from '../config/providerRequestSettings.ts';
 
 function asJsonObject(value: unknown): JsonObject | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -23,6 +25,21 @@ export function buildChatRequestBody(
   messages: ChatMessage[],
   sampling: ChatSampling,
 ): ChatRequestBody {
+  if ((sampling.provider ?? sampling.engine?.provider ?? 'llama.cpp') !== 'llama.cpp') {
+    const engine = sampling.engine;
+    if (!engine) throw new Error('Runtime request capabilities are not ready.');
+    if (engine.tasks && !engine.tasks.includes('generate')) throw new Error('Select a generation session for chat; this session serves a different task.');
+    if (sampling.tools?.length && engine.tools_auto === false) throw new Error('Enable automatic tool choice and select the model tool parser in the runtime profile.');
+    const fields = { ...(sampling.provider_options === undefined ? engine.request_fields : providerRequestFields(engine.provider, sampling.provider_options)) };
+    if (typeof fields.max_tokens === 'number' && Number.isFinite(fields.max_tokens)
+      && typeof sampling.max_tokens_limit === 'number' && Number.isSafeInteger(sampling.max_tokens_limit) && sampling.max_tokens_limit > 0) {
+      fields.max_tokens = Math.min(fields.max_tokens, sampling.max_tokens_limit);
+    }
+    const selectedLora = engine.provider === 'vllm' && typeof sampling.provider_options?.request_lora === 'string' ? sampling.provider_options.request_lora : undefined;
+    return { ...fields, model: selectedLora || (sampling.provider_options === undefined ? engine.request_lora : undefined) || engine.upstream_model,
+      messages, stream: true, stream_options: { include_usage: true },
+      ...(sampling.tools?.length ? { tools: sampling.tools } : {}) };
+  }
   const options = mapChatOptionAliases(sampling.options ?? {});
   const streamOptions = asJsonObject(options.stream_options) ?? {};
   const body: ChatRequestBody = {
@@ -106,7 +123,7 @@ export async function chatStream(
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(buildChatRequestBody(model, messages, sampling)),
+    body: JSON.stringify(buildChatRequestBody(model, await materializeMedia(messages, sampling, signal), sampling)),
     signal,
   });
   if (!res.ok) {
@@ -116,6 +133,22 @@ export async function chatStream(
   if (!res.body) throw new Error("The server returned an empty response stream.");
 
   return consumeChatStream(res.body, onDelta);
+}
+
+async function materializeMedia(messages: ChatMessage[], sampling: ChatSampling, signal?: AbortSignal): Promise<ChatMessage[]> {
+  const provider = sampling.engine?.provider ?? sampling.provider ?? 'llama.cpp';
+  return Promise.all(messages.map(async message => {
+    if (typeof message.content === 'string') return message;
+    const content = await Promise.all(message.content.map(async part => {
+      signal?.throwIfAborted();
+      const kind = part.type === 'aiolm_media' ? part.media.kind : part.type === 'image_url' ? 'image' : part.type === 'input_audio' ? 'audio' : ['input_video', 'video_url'].includes(part.type) ? 'video' : 'text';
+      if (sampling.engine && !sampling.engine.modalities[kind as keyof typeof sampling.engine.modalities]) throw new Error(`The running model does not support ${kind} input.`);
+      const resolved = part.type === 'aiolm_media' ? await resolveMedia(part.media.ref, provider) : part;
+      signal?.throwIfAborted();
+      return resolved;
+    }));
+    return { ...message, content };
+  }));
 }
 
 export async function nativeChatStream(
@@ -132,7 +165,7 @@ export async function nativeChatStream(
   const response = await fetch(nativeChatUrl(baseUrl), {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify(buildNativeChatRequestBody(model, messages, sampling, previousResponseId)),
+    body: JSON.stringify(buildNativeChatRequestBody(model, await materializeMedia(messages, sampling, signal), sampling, previousResponseId)),
     signal,
   });
   if (!response.ok) {
@@ -163,7 +196,7 @@ export async function anthropicMessagesStream(
       "anthropic-version": "2023-06-01",
       "x-api-key": apiKey,
     },
-    body: JSON.stringify(buildAnthropicMessagesRequestBody(model, messages, sampling, tools)),
+    body: JSON.stringify(buildAnthropicMessagesRequestBody(model, await materializeMedia(messages, sampling, signal), sampling, tools)),
     signal,
   });
   if (!response.ok) {

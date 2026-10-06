@@ -4,6 +4,8 @@ import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import type { AppConfig } from '../../shared/api/types';
 
 interface ChatConversationHeaderProps {
   threadPanelOpen: boolean;
@@ -17,13 +19,15 @@ interface ChatConversationHeaderProps {
   sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
   selectedSessionId: string;
   model: string;
+  runtimeConfig?: Partial<AppConfig> | null;
   onSelectSession: (id: string) => void;
   ct: (key: ChatTextKey) => string;
+  embedding?: { label: string; hint: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void };
 }
 
 export default function ChatConversationHeader({
   threadPanelOpen, setThreadPanelOpen, activeThread, activeProjectName, phase, onUpdateThread,
-  sessionLabel, sessionOptions, selectedSessionId, model, onSelectSession, ct, targetBusy = false,
+  sessionLabel, sessionOptions, selectedSessionId, model, runtimeConfig, onSelectSession, ct, embedding, targetBusy = false,
 }: ChatConversationHeaderProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
@@ -81,7 +85,13 @@ export default function ChatConversationHeader({
             <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-session-target">{sessionLabel}</label>
             <CustomSelect id="chat-session-target" className="chat-session-picker mt-1.5" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
             {model && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted" title={normalizeDisplayPath(model)}><ModelIcon model={model} />{modelDisplayName(model)}</p>}
+            {runtimeConfig && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted"><RuntimeSelectionLabel config={runtimeConfig} /></p>}
           </div>
+          {embedding && <div>
+            <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-embedding-target">{embedding.label}</label>
+            <CustomSelect id="chat-embedding-target" value={embedding.value} options={embedding.options} disabled={phase !== 'idle' || targetBusy} onChange={embedding.onChange} ariaDescribedBy="chat-embedding-hint" />
+            <p id="chat-embedding-hint" className="mt-1.5 text-xs ui-color-muted">{embedding.hint}</p>
+          </div>}
           <div>
             <label className="block text-xs font-medium ui-color-ink"  htmlFor="chat-thread-title">{ct("title")}</label>
             <input

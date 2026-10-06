@@ -14,11 +14,12 @@ import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializ
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
-vi.mock("../../shared/api/index", () => ({
+vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return ({
   pickAttachment: vi.fn(),
   readDocumentText: vi.fn(),
   readDocumentBinding: vi.fn(),
-  readImageData: vi.fn(),
+  readImageData,
+  importMedia: vi.fn(async (path: string) => ({ name: path.split(/[\\/]/).pop(), dataUrl: await readImageData(path), kind: 'image' })),
   embedText: vi.fn(),
   chatStream: vi.fn(),
   serverActivity: vi.fn(async () => undefined),
@@ -32,7 +33,7 @@ vi.mock("../../shared/api/index", () => ({
   apiServerStatus: vi.fn(async () => ({ running: false, port: 8080 })),
   startApiServer: vi.fn(),
   stopApiServer: vi.fn(),
-}));
+}); });
 
 const mocked = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
@@ -215,7 +216,7 @@ describe("ChatPanel unified attachments", () => {
     renderPanel();
     mocked.pickAttachment.mockResolvedValue("C:/images/photo.png");
     fireEvent.click(await screen.findByRole("button", { name: "Attach file" }));
-    const error = await screen.findByText(/Select an mmproj vision sidecar/);
+    const error = await screen.findByText(/does not support image input/);
     expect(mocked.readImageData).not.toHaveBeenCalled();
     expect(mocked.readDocumentText).not.toHaveBeenCalled();
 
@@ -375,7 +376,7 @@ describe("ChatPanel document context warning", () => {
       active_model: "models/work.gguf", ctx_size: 16384, temperature: 0.5, ngl: 17,
     }), false));
     const library = panelStore.getConfig()!.settings_profiles!;
-    expect(library.entries).toEqual(entries);
+    expect(library.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')).toEqual(entries);
     expect(library.applied["session:work"]).toMatchObject({ profile_id: selected.id, profile_revision: 2, system_prompt: "Latest instruction" });
     expect(library.applied[profileTargetKey(cfg.active_model)]).toEqual(defaultApplication);
     expect(panelStore.cfg!.sessions![0]).toMatchObject({ id: "work", name: "Work", enabled: false, execution: { ctx_size: 16384, temperature: 0.5 } });

@@ -1,3 +1,4 @@
+import MediaPreview from './MediaPreview';
 import { memo } from "react";
 import type { ChatHistoryMessage } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
@@ -60,7 +61,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
             >{message.reasoning}</div>
           </details>
         )}
-        {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <img key={image.dataUrl} src={image.dataUrl} alt={normalizeDisplayText(image.name)} loading="lazy" decoding="async" width={144} height={144} className="h-36 w-36 max-h-40 max-w-40 rounded-lg border object-contain ui-border-color-border ui-background-mono-bg"  />)}</div> : null}
+        {message.images?.length ? <div className="mb-2.5 flex flex-wrap gap-2">{message.images.map((image) => <MediaPreview locale={locale} key={image.ref ?? image.dataUrl} attachment={image} />)}</div> : null}
         {message.documents?.length ? <div className="mb-2 flex flex-wrap gap-1.5">{message.documents.map((document) => <Badge key={document.path}>{text("document")} · {normalizeDisplayText(document.name)}</Badge>)}</div> : null}
         {/* Only the assistant's side is markdown. What the user typed is shown
             back exactly as typed, since they did not ask for it to be formatted. */}

@@ -71,6 +71,20 @@ beforeEach(() => {
 });
 
 describe("conversations in the data folder", () => {
+  it('keeps the original audio/video and exact prepared content across native save and reload', async () => {
+    const audio = { name: 'speech.wav', kind: 'audio' as const, ref: `${'a'.repeat(64)}.wav`, dataUrl: '',
+      preparation: { kind: 'transcription' as const, text: 'Keep this transcript.', sessionId: 'speech', model: 'whisper-small' } };
+    const video = { name: 'scene.mp4', kind: 'video' as const, ref: `${'b'.repeat(64)}.mp4`, dataUrl: '',
+      preparation: { kind: 'video-frames' as const, frames: [{ ref: `${'c'.repeat(64)}.jpg`, timestampSeconds: 2.5 }] } };
+    const conversation = thread('prepared', 'Summarize');
+    conversation.messages[0].images = [audio, video];
+    const history = await freshHistory();
+    await history.loadChatWorkspaceAsync();
+    expect(await history.saveChatWorkspaceAsync({ activeThreadId: conversation.id, threads: [conversation] })).toBe('native');
+    expect((native.files.get(conversation.id) as ChatThread).messages[0].images).toEqual([audio, video]);
+    const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
+    expect(loaded.threads.find(item => item.id === conversation.id)?.messages[0].images).toEqual([audio, video]);
+  });
   it("moves the browser profile's conversations into the data folder once", async () => {
     const workspace: ChatWorkspace = {
       activeThreadId: "thread-2",

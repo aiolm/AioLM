@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/index';
+import { buildChatRequestBody } from '../../shared/api/chat';
 import { emptyProfileLibrary, profileTargetKey, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { createTestStore } from '../../testing/appStore';
 import { requestProfileFromApplication } from '../model-settings/profileEditor';
@@ -69,5 +70,20 @@ describe('chat profile application', () => {
     const { result } = setup({ modelProfile: null });
     await act(async () => { await result.current.send(); });
     expect(systemPrompt()).toBe('You are a helpful assistant.');
+  });
+  it('bounds vLLM output by its selected context without changing saved options', async () => {
+    const cfg = createTestStore().cfg!;
+    const options = { max_model_len: 128, max_tokens: 2048, temperature: 0.4 };
+    const engine: api.EngineInfo = { provider: 'vllm', runtime_id: 'synthetic-metal', upstream_model: 'served-model',
+      modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {} };
+    const { result } = setup({ effectiveConfig: { ...cfg, active_provider: 'vllm', provider_options: { vllm: options } }, engine });
+    await act(async () => { await result.current.send(); });
+    const [, , model, messages, sampling] = vi.mocked(api.chatStream).mock.calls[0];
+    const body = buildChatRequestBody(model, messages, sampling);
+    expect(body.max_tokens).toBeGreaterThan(0);
+    expect(body.max_tokens).toBeLessThan(128);
+    expect(body.temperature).toBe(0.4);
+    expect(body).not.toHaveProperty('max_tokens_limit');
+    expect(options.max_tokens).toBe(2048);
   });
 });

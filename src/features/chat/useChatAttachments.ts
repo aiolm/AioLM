@@ -3,12 +3,23 @@ import * as api from "../../shared/api/index";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 
 interface UseChatAttachmentsOptions {
+  modalities?: api.Modalities;
   visionReady: boolean;
   /** Mirrors the panel's shared error banner: pass a message to show it, `null` to clear it. */
   setError: (message: string | null) => void;
+  /**
+   * Explicit preprocessing availability (wired by the chat owner, default off
+   * so unsupported inputs stay refused):
+   * - audio: a running local transcription session is explicitly selected;
+   *   its transcript is inserted as labeled text without changing runtimes.
+   * - video: the answering model is image-capable; at most four sampled
+   *   frames travel as image parts with a no-audio-track label.
+   */
+  audioPreprocessAvailable?: boolean;
+  videoPreprocessAvailable?: boolean;
 }
 
-export function useChatAttachments({ visionReady, setError }: UseChatAttachmentsOptions) {
+export function useChatAttachments({ visionReady, modalities, setError, audioPreprocessAvailable = false, videoPreprocessAvailable = false }: UseChatAttachmentsOptions) {
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState<"idle" | "reading" | "ready" | "failed">("idle");
@@ -20,13 +31,23 @@ export function useChatAttachments({ visionReady, setError }: UseChatAttachments
       const path = await api.pickAttachment();
       if (!path) { setAttachmentStatus(attachmentStatus); return; }
       const name = path.split(/[\\/]/).pop() ?? "file";
-      if (/\.(png|jpe?g|webp)$/i.test(path)) {
-        if (!visionReady) {
-          throw new Error("Select an mmproj vision sidecar in Models or Tuning before attaching an image.");
+      if (/\.(png|jpe?g|webp|wav|mp3|flac|mp4|webm)$/i.test(path)) {
+        const kind = /\.(wav|mp3|flac)$/i.test(path) ? 'audio' : /\.(mp4|webm)$/i.test(path) ? 'video' : 'image';
+        const usable = kind === 'audio'
+          ? (modalities?.audio === true || audioPreprocessAvailable)
+          : kind === 'video'
+            ? (modalities?.video === true || videoPreprocessAvailable)
+            : (modalities?.image ?? visionReady);
+        if (!usable) {
+          throw new Error(kind === 'audio' && !audioPreprocessAvailable
+            ? 'The running model does not support audio input. Select a local transcription session to insert its transcript as labeled text.'
+            : kind === 'video' && !videoPreprocessAvailable
+              ? 'The running model does not support video input. Use an image-capable model to send sampled frames.'
+              : `The running model does not support ${kind} input.`);
         }
-        if (attachments.length >= 4) throw new Error("You can attach up to 4 images per message.");
-        const dataUrl = await api.readImageData(path);
-        setAttachments((current) => current.length >= 4 ? current : [...current, { name, dataUrl }]);
+        if (attachments.length >= 4) throw new Error("You can attach up to 4 media files per message.");
+        const attachment = await api.importMedia(path);
+        setAttachments((current) => current.length >= 4 ? current : [...current, { ...attachment, name }]);
       } else {
         if (documents.some((document) => document.path === path)) {
           setAttachmentStatus("ready");
@@ -48,7 +69,7 @@ export function useChatAttachments({ visionReady, setError }: UseChatAttachments
   };
 
   const removeAttachment = (dataUrl: string) => {
-    setAttachments((current) => current.filter((item) => item.dataUrl !== dataUrl));
+    setAttachments((current) => current.filter((item) => (item.ref ?? item.dataUrl) !== dataUrl));
   };
 
   const removeDocument = (path: string) => {

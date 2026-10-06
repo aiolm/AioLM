@@ -6,7 +6,7 @@ import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
 import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
-import { usesRuntimeDefault } from "../../shared/config/tuningDefaults";
+import { chatContextBudget } from './providerChatContext';
 import type { AppPreferences } from "../../shared/config/preferences";
 import { buildResponseMetrics } from "../../shared/lib/metrics";
 import type { ChatMcpTool } from "./useChatMcpTools";
@@ -17,12 +17,16 @@ import { notifyCompletion } from "../../shared/lib/notifications";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { answerSkillToolCall, buildPersonalizedSystemPrompt, hasPersonalization, MAX_SKILL_READS_PER_RESPONSE, prepareTurnPersonalization, SKILL_TOOL_NAME, skillToolDefinition, type TurnPersonalization } from "./chatPersonalization";
+import { canPrepareAttachment, prepareChatAttachments, type MediaPreprocessingOptions } from './mediaPreprocessing';
 
 export type { PendingToolCall } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
 
 interface UseChatSendOptions {
+  embeddingTarget?: { model: string; baseUrl: string; apiKey: string; namespace: string };
+  engine?: api.EngineInfo;
+  mediaPreprocessing?: MediaPreprocessingOptions;
   store: AppStore;
   effectiveConfig?: api.AppConfig | null;
   modelProfile?: ModelProfile | null;
@@ -57,7 +61,7 @@ interface UseChatSendOptions {
 // (completion, tool call, or error), not once per animation frame, and any still-pending
 // rAF is cancelled at each of those terminal transitions to avoid a redundant flush.
 export function useChatSend({
-  store, effectiveConfig, modelProfile, sessionId = "default", preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
+  store, effectiveConfig, modelProfile, engine, embeddingTarget, mediaPreprocessing, sessionId = "default", preferences, baseUrl, apiKey, model, activeThread, msgs, setMsgs,
   input, setInput, attachments, documents, setAttachments, setDocuments,
   mcpEntryByFunctionName, mcpDefinitions, atBottomRef, phase, setPhase,
   selectedSkillIds = [], onSkillsAccepted, locale = "en",
@@ -79,6 +83,9 @@ export function useChatSend({
   const skillReadsRef = useRef(0);
   const turnRef = useRef<{
     config: api.AppConfig | null;
+    engine?: api.EngineInfo;
+    mediaPreprocessing?: MediaPreprocessingOptions;
+    embeddingTarget?: UseChatSendOptions['embeddingTarget'];
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -157,7 +164,10 @@ export function useChatSend({
     const toolFollowup = !!historyOverride;
     const failed = failedRef.current;
     const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
-    const images = toolFollowup ? [] : (retry ? failed?.images ?? [] : attachments);
+    let images = toolFollowup ? [] : (retry ? failed?.images ?? [] : attachments);
+    if (!toolFollowup && engine && images.some(image => !canPrepareAttachment(image, engine.modalities, mediaPreprocessing ?? { videoFrames: false }))) {
+      setError('The running model does not support one of the attached inputs.'); return;
+    }
     const pendingDocuments = toolFollowup ? [] : (retry ? failed?.documents ?? [] : documents);
     if (!toolFollowup && !text && images.length === 0 && pendingDocuments.length === 0) return;
     if (!toolFollowup && !canSend && !retry) return;
@@ -171,6 +181,9 @@ export function useChatSend({
       const profile = modelProfile !== undefined ? modelProfile : config ? requestProfileFromApplication(appliedProfile(config, sessionId)) : null;
       turnRef.current = {
         config,
+        engine: engine ? structuredClone(engine) : undefined,
+        mediaPreprocessing: mediaPreprocessing ? structuredClone(mediaPreprocessing) : undefined,
+        embeddingTarget: embeddingTarget ? structuredClone(embeddingTarget) : undefined,
         baseUrl: baseUrl!, apiKey, model, sessionId,
         systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || "You are a helpful assistant.",
         tools: structuredClone(mcpDefinitions),
@@ -209,13 +222,22 @@ export function useChatSend({
       controller.signal.throwIfAborted();
 
       if (!toolFollowup) {
+        if (images.length && (turn.engine || turn.mediaPreprocessing)) {
+          images = await prepareChatAttachments(images, turn.engine?.modalities ?? {
+            text: true, image: !!turn.config?.mmproj, audio: false, video: false,
+          }, turn.mediaPreprocessing ?? { videoFrames: false }, controller.signal);
+          controller.signal.throwIfAborted();
+        }
         // A retry resends the failed turn's own snapshot; only a new message rereads the files.
         turn.personalization = retry && failed ? failed.personalization ?? null : await prepareTurnPersonalization(text, skillIds, controller.signal, pt);
         controller.signal.throwIfAborted();
         if (turn.personalization?.catalog.length && !turn.toolEntries.has(SKILL_TOOL_NAME)) turn.tools = [...turn.tools, skillToolDefinition()];
       }
 
-      const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, turn.model, turn.apiKey, turn.baseUrl);
+      const target = turn.embeddingTarget ?? (turn.engine?.provider && turn.engine.provider !== 'llama.cpp'
+        ? { model: turn.engine.embedding_model ?? '', baseUrl: turn.baseUrl, apiKey: turn.apiKey, namespace: turn.engine.embedding_namespace ?? '' }
+        : { model: turn.model, baseUrl: turn.baseUrl, apiKey: turn.apiKey, namespace: `llama.cpp:${turn.model}` });
+      const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, target.model, target.apiKey, target.baseUrl, target.namespace);
       controller.signal.throwIfAborted();
       if (documentChunksTruncated) documentTruncationRef.current = true;
       setContextSources(retrievalSources);
@@ -230,9 +252,8 @@ export function useChatSend({
         ...msgs.map(toChatMessage),
         userMessage,
       ]);
-      const contextSize = Math.max(512, requestConfig?.ctx_size ?? 4096);
-      const runtimeContext = requestConfig ? usesRuntimeDefault(requestConfig, "ctx_size") : false;
-      const maxContextTokens = Math.max(256, Math.floor(contextSize * 0.75));
+      const { contextSize, runtimeContext } = chatContextBudget(requestConfig);
+      const maxContextTokens = Math.max(1, Math.floor(contextSize * 0.75));
       // Trimming would truncate the system message; local instructions are never cut silently.
       if (!historyOverride && !(retry && failed) && !runtimeContext && hasPersonalization(turn.personalization)) {
         const systemTokens = estimateMessageTokens(systemMessage);
@@ -268,6 +289,10 @@ export function useChatSend({
       });
       assistantAppended = true;
       const sampling = {
+        provider: requestConfig?.active_provider,
+        provider_options: requestConfig?.provider_options?.[requestConfig.active_provider ?? 'llama.cpp'],
+        engine: turn.engine,
+        max_tokens_limit: runtimeContext ? undefined : Math.max(1, Math.floor(contextSize - promptTokens - 64)),
         temperature: requestConfig?.temperature ?? QWEN38_DEFAULTS.temperature,
         runtime_defaults: requestConfig?.runtime_defaults,
         top_p: requestConfig?.top_p ?? QWEN38_DEFAULTS.top_p,

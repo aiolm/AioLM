@@ -12,7 +12,8 @@ import type { PendingToolCall, RequestMetricsAccumulator } from "./chatSendTypes
 type Msg = ChatHistoryMessage;
 
 export function sameImages(left: ImageAttachment[] | undefined, right: ImageAttachment[]) {
-  return (left ?? []).length === right.length && (left ?? []).every((image, index) => image.dataUrl === right[index]?.dataUrl);
+  return (left ?? []).length === right.length && (left ?? []).every((image, index) => (image.ref ?? image.dataUrl) === (right[index]?.ref ?? right[index]?.dataUrl)
+    && JSON.stringify(image.preparation) === JSON.stringify(right[index]?.preparation));
 }
 
 export function toChatMessage(message: Msg): api.ChatMessage {
@@ -59,16 +60,16 @@ export interface RetrievalResult {
 }
 
 /** Vector-ranks attached documents against `text`, falling back to lexical order when embeddings are unavailable. */
-export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string): Promise<RetrievalResult> {
+export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string, namespace = baseUrl): Promise<RetrievalResult> {
   let documentContext: string | null = null;
   let retrievalSources = pendingDocuments.map((document) => `${document.name} (lexical fallback)`);
   let retrievalCitations: ChatCitation[] = pendingDocuments.map((document) => ({ name: document.name, path: document.path, offset: 0 }));
   let documentChunksTruncated = false;
-  if (pendingDocuments.length > 0 && text) {
+  if (pendingDocuments.length > 0 && text && model) {
     try {
       documentChunksTruncated = documentChunksExceedSearchLimit(pendingDocuments);
       const chunks = splitDocumentChunks(pendingDocuments, undefined, MAX_SEARCHABLE_DOCUMENT_CHUNKS);
-      const cachedVectors = await loadDocumentVectors(model, chunks, baseUrl);
+      const cachedVectors = await loadDocumentVectors(model, chunks, namespace);
       let chunkVectors: number[][];
       let queryVector: number[] | undefined;
       if (cachedVectors) {
@@ -78,7 +79,7 @@ export async function retrieveDocumentContext(pendingDocuments: DocumentAttachme
         const vectors = await api.embedText(baseUrl, apiKey, model, [...chunks.map((chunk) => chunk.text), text]);
         chunkVectors = vectors.slice(0, chunks.length);
         queryVector = vectors[chunks.length];
-        void saveDocumentVectors(model, chunks, chunkVectors, baseUrl).catch(() => undefined);
+        void saveDocumentVectors(model, chunks, chunkVectors, namespace).catch(() => undefined);
       }
       if (queryVector) {
         const rankedVectors = [...chunkVectors, queryVector];
