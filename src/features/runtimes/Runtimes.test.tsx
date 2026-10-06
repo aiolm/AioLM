@@ -7,6 +7,9 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 
 vi.mock("../../shared/api/index", () => ({
+  isNativeRuntimeAvailable: () => false,
+  providerCatalog: vi.fn(async () => []),
+  providerRuntimes: vi.fn(async () => []),
   rtList: vi.fn(),
   rtLatest: vi.fn(),
   rtInstall: vi.fn(),
@@ -105,6 +108,32 @@ async function startPullRequestBuild() {
 }
 
 describe("RuntimesPanel pull-request builds", () => {
+  it('follows a model editor engine request independently of the saved execution engine', async () => {
+    mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    try {
+      render(<I18nProvider initialLocale="en"><RuntimesPanel store={store} engineRequest={{ provider: 'vllm', revision: 1 }} /></I18nProvider>);
+      expect(await screen.findByRole('button', { name: 'Install isolated environment' })).toBeVisible();
+      expect(screen.getByRole('combobox', { name: 'Inference engine' })).toHaveTextContent('vLLM');
+      expect(mocked.rtLatest).not.toHaveBeenCalled();
+      expect(mocked.rtList).not.toHaveBeenCalled();
+    } finally { mocked.providerCatalog.mockResolvedValue([]); }
+  });
+  it.each(['vllm', 'mlx-vlm'] as const)('opens %s management as the primary engine inventory without reading native releases or changing execution', async provider => {
+    const updateConfig = vi.fn();
+    const selectedStore = { ...store, cfg: { active_provider: provider, active_runtime: 'synthetic-runtime' }, updateConfig } as unknown as AppStore;
+    mocked.providerCatalog.mockResolvedValue([{ id: provider, engine: provider, server: provider, availability: { supported: true, detail: '' }, options: [] }]);
+    mocked.providerRuntimes.mockResolvedValue([]);
+    try {
+      render(<I18nProvider initialLocale="en"><RuntimesPanel store={selectedStore} /></I18nProvider>);
+      expect(await screen.findByRole('button', { name: 'Install isolated environment' })).toBeVisible();
+      expect(screen.getByRole('combobox', { name: 'Inference engine' })).toHaveTextContent(provider === 'vllm' ? 'vLLM' : 'MLX');
+      expect(screen.queryByText('Backend to build')).not.toBeInTheDocument();
+      expect(screen.queryByText('Show all backends')).not.toBeInTheDocument();
+      expect(mocked.rtLatest).not.toHaveBeenCalled();
+      expect(mocked.rtList).not.toHaveBeenCalled();
+      expect(updateConfig).not.toHaveBeenCalled();
+    } finally { mocked.providerCatalog.mockResolvedValue([]); mocked.providerRuntimes.mockResolvedValue([]); }
+  });
   it("probes only the build the user picks and reports the result under that build", async () => {
     // Nothing is probed on entry: the panel has no runtime of its own to
     // describe, and which build matters is the user's choice, not a setting.
@@ -120,11 +149,11 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(screen.getByRole("button", { name: "Probe again" })).toBeDisabled();
     expect(mocked.rtProbe).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) ?(10638)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledWith("cuda", "b10638"));
     await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: ["--ctx-size"], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
 
-    expect(advanced).toHaveTextContent("Showing cuda ?(10638).");
+    expect(advanced).toHaveTextContent("Showing cuda b10638.");
     // A re-probe repeats the same build rather than picking one for the user.
     fireEvent.click(screen.getByRole("button", { name: "Probe again" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledTimes(2));
@@ -169,7 +198,7 @@ describe("RuntimesPanel pull-request builds", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel build" });
     expect(cancel.closest("details")).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel install" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) ?(10638)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" })).toBeDisabled();
     fireEvent.click(cancel);
     await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledTimes(1));
   });
@@ -261,7 +290,7 @@ describe("RuntimesPanel pull-request builds", () => {
 
   it("offers export for each installed runtime", async () => {
     renderPanel();
-    const exportButton = await screen.findByRole("button", { name: "Export runtime: cuda ?(10638)" });
+    const exportButton = await screen.findByRole("button", { name: "Export runtime: cuda b10638" });
     fireEvent.click(exportButton);
     await waitFor(() => expect(mocked.rtExport).toHaveBeenCalledWith("cuda", "b10638"));
   });
@@ -499,7 +528,7 @@ describe("RuntimesPanel pull-request builds", () => {
     } } as unknown as AppStore;
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(RuntimesPanel, { store: configured, active: true }) }));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Remove: CUDA (NVIDIA) ?(10638)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove: CUDA (NVIDIA) b10638" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("These use this runtime and will be left without one:");

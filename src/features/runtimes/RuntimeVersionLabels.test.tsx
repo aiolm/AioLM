@@ -23,8 +23,8 @@ describe("runtime version labels", () => {
 
   it("never lends another build's version to the latest release", () => {
     const { container } = renderRow([{ backend: "cuda", build: "b10600", dir: "runtimes/cuda-b10600", size_mb: 512, version: { semver: "0.2.9", build: 10600, commit: "abc" } }]);
-    expect(container.querySelector(".runtime-group__latest")).toHaveTextContent("Latest ?(10638)");
-    expect(screen.getByRole("button", { name: "Install ?(10638): CUDA (NVIDIA)" })).toBeInTheDocument();
+    expect(container.querySelector(".runtime-group__latest")).toHaveTextContent("Latest b10638");
+    expect(screen.getByRole("button", { name: "Install b10638: CUDA (NVIDIA)" })).toBeInTheDocument();
   });
 
   it("shows the probed version as one label, not the raw banner beside it", () => {

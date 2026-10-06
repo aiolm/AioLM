@@ -24,7 +24,8 @@ import Onboarding, { type SetupChoices } from "../features/onboarding/Onboarding
 import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
-import { useRuntimeVersionLabel } from "../shared/runtime/installedRuntimes";
+import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
+import { PROVIDERS, providerDisplayName, providerOf, type ProviderId } from '../shared/api/providers';
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { applyTypography } from "../shared/config/typography";
 import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
@@ -137,6 +138,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const executionCopy = executionText[locale];
   const [executionSection, setExecutionSection] = useState<{ id: ExecutionSection; revision: number }>({ id: 'setup', revision: 0 });
   const [view, setView] = useState<ViewId>("chat");
+  const [runtimeEngineRequest, setRuntimeEngineRequest] = useState<{ provider: ProviderId; revision: number }>();
   const [visited, setVisited] = useState<Set<ViewId>>(() => new Set(["chat"]));
   const [developerSection, setDeveloperSection] = useState<"api" | "diagnostics">("api");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -248,7 +250,11 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   };
   const navigateRef = useRef(navigate); navigateRef.current = navigate;
   useEffect(() => {
-    const manage = () => { navigateRef.current('runtimes'); };
+    const manage = (event: Event) => {
+      const provider = (event as CustomEvent<{ provider?: ProviderId }>).detail?.provider;
+      if (provider && PROVIDERS.includes(provider)) setRuntimeEngineRequest(previous => ({ provider, revision: (previous?.revision ?? 0) + 1 }));
+      navigateRef.current('runtimes');
+    };
     window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);
     return () => window.removeEventListener(MANAGE_MODEL_RUNTIMES, manage);
   }, []);
@@ -264,14 +270,12 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     }
   };
 
-  const runtimeLabel = useRuntimeVersionLabel(store.status.execution?.active_backend ?? "", store.status.execution?.active_build ?? "");
   const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "diagnostics";
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? store.status.model : undefined;
-  const backendLabel = store.status.execution?.active_backend
-    ? `${store.status.execution.active_backend}${store.status.execution.active_build ? ` · ${runtimeLabel}` : ""}`
-    : t("load.pathRuntime");
+  const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
+  const backendLabel = providerDisplayName(providerOf(runtimeConfig ?? {}));
 
 
   const brand = <div className="aiolm-brand"><AioMark /><strong>AioLM</strong></div>;
@@ -302,7 +306,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{shortModel(liveModel, modelCopy.choose)}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}>{liveModel && <span className="aiolm-context-label">{backendLabel}</span>}<svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
+        <div className="aiolm-runtime-context" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{shortModel(liveModel, modelCopy.choose)}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
         <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">
@@ -323,7 +327,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           {panel("models", <ModelWorkspace store={store} active={view === 'models'} section={executionSection} onNavigate={navigate} onSelectModel={selectModel} />)}
           {panel("discover", <DiscoverPanel store={store} active={view === "discover"} onSelectModel={selectModel} onOpenModels={openModels} />)}
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
-          {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} onOpenProfiles={openProfiles} /></>)}
+          {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} /></>)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
           <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} onNavigate={navigate} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>

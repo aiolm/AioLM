@@ -18,6 +18,7 @@ import ApiExamples, { type ApiFormat } from './ApiExamples';
 import { apiServerCopy } from './apiServerCopy';
 import { useApiServer } from './useApiServer';
 import './api-server.css';
+import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 
 type Props = { store: AppStore; section?: 'api' | 'diagnostics'; onNavigate?: (view: ViewId) => void };
 
@@ -39,6 +40,7 @@ function ModelDiagnostics({ store }: { store: AppStore }) {
         <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
           {store.status.model && <> · <span title={normalizeDisplayPath(store.status.model)}>{modelDisplayName(store.status.model)}</span></>}
         </p>
+        <p className="api-hint"><RuntimeSelectionLabel config={store.status.engine ? { ...store.cfg, active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : store.cfg} /></p>
         <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
       </section>
     </div>

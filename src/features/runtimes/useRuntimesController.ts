@@ -17,7 +17,7 @@ import { runExportRuntime, runImportRuntime, runInstall, runInstallPullRequest, 
  * The panel manages installed builds and nothing else: it probes exactly the
  * build the user asks about and never reads the execution configuration, which
  * belongs to the profile a model is launched with. */
-export function useRuntimesController(store: AppStore, active: boolean) {
+export function useRuntimesController(store: AppStore, active: boolean, native = true) {
   const { locale, t } = useI18n();
   const [rows, setRows] = useState<BackendRow[]>(initialRows);
   const [flash, flashT] = useFlashMessage();
@@ -140,9 +140,9 @@ export function useRuntimesController(store: AppStore, active: boolean) {
         setDevice(report);
         if (!prBackendTouched.current) setPrBackend(defaultPrBackendForDevice(report));
       }).catch(() => setDevice(null));
-      void refresh();
+      if (native) void refresh();
     }
-  }, [active, refresh]);
+  }, [active, native, refresh]);
 
   // Keep the native progress subscription for the lifetime of the mounted
   // panel. App keeps the panel mounted after first visit, so navigating away

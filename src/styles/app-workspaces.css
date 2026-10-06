@@ -26,6 +26,14 @@
    group perimeter or filter wrapper outline. */
 .runtimes-layout { display: grid; grid-template-columns: minmax(0,1fr); gap: 20px; align-items: start; }
 .runtimes-main { display: flex; flex-direction: column; min-width: 0; }
+.engine-select { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--ui-text-support); }
+.runtime-engine-context { margin-block-end: 16px; }
+.runtime-engine-context .engine-select { max-width: 24rem; }
+.provider-runtime-list { display: grid; gap: 8px; margin-block: 12px; }
+.provider-runtime-row { flex-wrap: wrap; gap: 12px; }
+.provider-runtime-row > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.provider-runtime-row strong, .provider-runtime-row small { display: block; }
+.provider-runtime-row .app-page-actions { flex-wrap: wrap; }
 .runtimes-aside { display: grid; gap: 10px; align-content: start; min-width: 0; }
 .runtime-profiles-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
 .runtime-device-summary { min-width: 0; }
