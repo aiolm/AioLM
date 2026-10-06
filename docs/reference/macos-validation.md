@@ -184,6 +184,18 @@ script falls back to the release download links and `checksums.txt`; a
 passed on both architectures through the API and with `api.github.com` blocked.
 v0.3.0 still ships the earlier `install.sh`; the fix ships with the next release.
 
+## Published v0.3.1
+
+The [v0.3.1 release run](https://github.com/aiolm/AioLM/actions/runs/37395239052)
+published the same platforms on 2026-10-06 with the fixed `install.sh` and an
+LF `checksums.txt`; `sha256sum -c checksums.txt` accepted all nine assets and
+each matched GitHub's digest. On hosted macOS 15, the documented one-line command
+installed the published DMG on both architectures with `api.github.com` blocked,
+then launched it through LaunchServices with launchd's PATH, quit it and
+reinstalled it ([run 37400018647](https://github.com/aiolm/AioLM/actions/runs/37400018647)).
+The Apple Silicon runner had also exhausted the anonymous API limit, so its
+unblocked dry run and reinstall used the same fallback.
+
 ## Distribution and remaining device checks
 
 macOS is distributed without Apple credentials:
