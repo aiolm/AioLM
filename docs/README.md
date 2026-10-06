@@ -24,6 +24,8 @@ Guides, technical reference, and policies for the current AioLM implementation.
 - [Inference runtimes](reference/inference-runtimes.md): engine selection, provider-specific profiles, compatible artifacts, Python environments and multimodal routing.
 - [Provider native acceptance](reference/provider-native-acceptance.md): Linux GPU and Apple Silicon continuation procedures, isolated CLI harness, and explicit actual-engine validation status.
 - [Linux·Mac 런타임 검증 인계](reference/provider-runtime-handoff.ko.md): 기기에서 이어서 실행할 전체 기능 점검과 번들·멀티모달 검증 절차.
+- [Linux 기기 작업 인계](reference/linux-device-handoff.ko.md): 세션과 로컬 조사 기록을 반영한 Git 수신, GPU·전체 메뉴·번들·패키지 검증 및 결과 제출 절차.
+- [Mac 기기 작업 인계](reference/macos-device-handoff.ko.md): Apple Silicon/Intel별 작업, 분리된 Metal·MLX 환경, 실제 기기·Finder·Keychain·DMG 검증 절차.
 - [Chat response metrics](reference/chat-metrics.md): PP/TG counts, durations, throughput, request timing, and persistence.
 - [Chat personalization](reference/personalization.md): user AGENTS.md files, skill discovery and manual invocation, and the in-app editor.
 - [Benchmarks](reference/benchmarks.md): serving workloads, metric definitions, result history, and CSV export.

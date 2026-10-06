@@ -2,13 +2,15 @@
 
 이번 변경은 llama.cpp, Linux vLLM, Apple Silicon의 vllm-metal 및 mlx-vlm을 같은 앱에서 선택하는 구현입니다. 런타임별 프로필·옵션·모델 호환성, 검색·다운로드·실행, 세션·프로젝트·대화 기록, 도구·문서 검색·벤치마크·검증 경로를 포함합니다. 현재 장비는 Windows이며 Linux와 Mac은 연결되어 있지 않습니다. 해당 추론 엔진의 실제 설치·모델 추론은 **미실행**입니다.
 
+Git으로 기기에서 이어갈 때는 [Linux 작업 문서](linux-device-handoff.ko.md) 또는 [Mac 작업 문서](macos-device-handoff.ko.md)를 사용합니다. 세션의 구현 커밋과 `tmp`의 유효한 조사·검증 내용을 반영한 우선순위, 실제 실행 명령, 결과 제출 기준이 들어 있습니다. 이 문서는 공통 흐름의 요약입니다.
+
 ## 기기에서 시작하기
 
 화면 검증에서는 다음도 확인합니다. 모델 설정에서 추론 엔진·런타임·프로필 선택 영역은 고정되고 본문만 스크롤되어야 합니다. 엔진을 바꾼 뒤 각 설정 탭에는 해당 항목의 지원 옵션만 보여야 하며, 프로필 미리보기에 다른 엔진의 GPU·캐시 설정이 섞이지 않아야 합니다. 모델을 고르기 전에도 고정 영역에서 공통 프로필을 선택할 수 있습니다.
 
 런타임 메뉴에서 llama.cpp·vLLM·MLX를 각각 선택해 설치 목록과 운영체제 지원 여부를 확인합니다. 모델 설정에서 런타임 관리로 이동하면 편집 중인 엔진의 목록이 열려야 합니다. 찾아보기의 엔진 선택은 실행 설정을 변경하지 않아야 하며, 다른 엔진으로 찾은 모델을 실행 설정으로 가져올 때 기존 엔진의 런타임 ID가 재사용되지 않아야 합니다. 앱 상단·세션·프로젝트·채팅·벤치마크·진단은 실제 선택되거나 실행 중인 엔진을 표시해야 합니다. API·MCP·앱 설정은 엔진 공통 기능입니다.
 
-변경된 전체 작업 트리를 새 파일과 함께 기기로 옮깁니다. 사용자 설정과 Windows의 `.codex-target`, `node_modules`, `dist`는 옮길 필요가 없습니다. 저장소 설치 안내에 따라 의존성을 준비하고 `package.json`의 Node/npm 버전과 `src-tauri/Cargo.toml`의 Rust 버전을 사용합니다.
+구현과 문서 커밋이 공유된 Git 브랜치를 기기에서 받습니다. 사용자 설정과 Windows의 `.codex-target`, `node_modules`, `dist`는 옮기지 않습니다. 저장소 설치 안내에 따라 의존성을 준비하고 `package.json`의 Node/npm 버전과 `rust-toolchain.toml`의 Rust 버전을 사용합니다.
 
 ```sh
 npm ci
@@ -23,7 +25,7 @@ npm run build:cli
 python3 -B -m unittest discover -s src-tauri/src/providers -p '*_tests.py'
 ```
 
-실제 추론은 [기기 검증 안내](provider-native-acceptance.md)를 따라 Linux vLLM, Mac vllm-metal, Mac mlx-vlm 각각 실행합니다. 모델은 미리 다운로드하고 스냅샷의 정확한 커밋을 지정합니다. 자동 검증은 모델이나 엔진을 임의로 다운로드하지 않습니다. 사용자 환경 대신 새 임시 `AIOLM_HOME`을 사용하세요.
+실제 추론은 [기기 검증 안내](provider-native-acceptance.md)를 따라 Linux vLLM, Mac vllm-metal, Mac mlx-vlm 각각 실행합니다. 모델은 미리 다운로드하고 스냅샷의 정확한 커밋을 지정합니다. 자동 검증은 모델이나 엔진을 임의로 다운로드하지 않습니다. CLI harness는 자체 임시 홈과 이전 경로를 격리합니다. GUI의 최초 실행·이전·자격 증명 검증은 별도 테스트 OS 계정에서 합니다. `AIOLM_HOME` 변경만으로 기존 이전 경로와 OS 자격 증명 저장소까지 격리되지는 않습니다.
 
 vllm-metal은 macOS 15 이상, Apple Silicon, 네이티브 arm64 CPython 3.12 및 맞는 0.30.0 코어·플러그인 휠이 필요합니다. 관리형 Linux vLLM은 0.31.0, mlx-vlm은 0.7.6입니다. 실제 플랫폼·버전·MLX·소스 리비전은 앱의 런타임 검사로 확인합니다. 등록 환경의 패키지를 변경했다면 다시 검사하세요.
 
@@ -58,11 +60,11 @@ vllm-metal은 macOS 15 이상, Apple Silicon, 네이티브 arm64 CPython 3.12 �
 Python 번들은 가상 환경을 복사하지 않고 정확한 의존성 휠·해시·플랫폼·ABI를 보관합니다. 대상에는 호환되는 기본 Python이 필요하며 모델은 별도로 관리합니다. 내보내기는 휠을 다운로드할 수 있지만 가져오기는 로컬 휠만 사용합니다. Metal의 고정 mlx-lm 소스는 설치된 파일 해시로 확인합니다. 헤드리스 서버를 먼저 중지하고 새 파일로 내보내세요.
 
 ```sh
-.build/cli/aiolm-cli runtime export vllm <runtime-id> <new-bundle.zip>
-.build/cli/aiolm-cli runtime import <bundle.zip>
+.codex-target/release/aiolm-cli runtime export vllm <runtime-id> <new-bundle.zip>
+.codex-target/release/aiolm-cli runtime import <bundle.zip>
 node scripts/smoke-provider-runtime.mjs --engine vllm \
   --runtime-bundle <bundle.zip> --model <snapshot-directory> \
-  --revision <full-40-character-commit> --cli .build/cli/aiolm-cli \
+  --revision <full-40-character-commit> --cli .codex-target/release/aiolm-cli \
   --out tmp/provider-acceptance-portable.json
 ```
 

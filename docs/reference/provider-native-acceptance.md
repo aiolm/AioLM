@@ -132,7 +132,7 @@ node scripts/smoke-provider-runtime.mjs --engine vllm \
   --python /opt/homebrew/bin/python3.12 \
   --model /data/models/qwen2.5-0.5b-metal-snapshot \
   --revision 0123456789abcdef0123456789abcdef01234567 \
-  --cli ./src-tauri/target/release/aiolm-cli --port 18080 \
+  --cli .codex-target/release/aiolm-cli --port 18080 \
   --out tmp/provider-acceptance-vllm-metal.json
 
 # Apple Silicon mlx-vlm (native arm64 CPython 3.12).
@@ -140,7 +140,7 @@ node scripts/smoke-provider-runtime.mjs --engine mlx-vlm \
   --python /opt/homebrew/bin/python3.12 \
   --model /data/models/qwen2.5-0.5b-mlx-4bit \
   --revision 0123456789abcdef0123456789abcdef01234567 \
-  --cli ./src-tauri/target/release/aiolm-cli --port 18080 \
+  --cli .codex-target/release/aiolm-cli --port 18080 \
   --out tmp/provider-acceptance-mlx-vlm.json
 
 # GGUF with a supplied companion directory (vLLM case; no download).
@@ -230,7 +230,7 @@ with a recorded 40-char revision, and a free loopback port.
 ```sh
 /usr/bin/python3 -c "import vllm, sys; print(vllm.__version__, sys.version)"
 export AIOLM_HOME="$(mktemp -d)/aiolm"   # throwaway only; harness uses its own temp home
-.build/cli/aiolm-cli doctor              # replace with the real CLI path
+.codex-target/release/aiolm-cli doctor
 node scripts/smoke-provider-runtime.mjs --engine vllm \
   --python /usr/bin/python3 \
   --model /data/models/qwen2.5-0.5b-snapshot \
@@ -257,7 +257,7 @@ node scripts/smoke-provider-runtime.mjs --engine vllm \
   --python /opt/homebrew/bin/python3.12 \
   --model /data/models/qwen2.5-0.5b-metal-snapshot \
   --revision <40-char-sha-from-manifest> \
-  --cli ./src-tauri/target/release/aiolm-cli --port 18080 \
+  --cli .codex-target/release/aiolm-cli --port 18080 \
   --out tmp/provider-acceptance-vllm-metal.json
 ```
 
@@ -278,7 +278,7 @@ node scripts/smoke-provider-runtime.mjs --engine mlx-vlm \
   --python /opt/homebrew/bin/python3.12 \
   --model /data/models/qwen2.5-0.5b-mlx-4bit \
   --revision <40-char-sha-from-manifest> \
-  --cli ./src-tauri/target/release/aiolm-cli --port 18080 \
+  --cli .codex-target/release/aiolm-cli --port 18080 \
   --out tmp/provider-acceptance-mlx-vlm.json
 ```
 
@@ -291,13 +291,13 @@ Ctrl-C cancels with staging cleanup. Exact commands on a native host:
 
 ```sh
 # 1. Register explicitly, then export the runtime to a NEW zip path.
-.build/cli/aiolm-cli runtime register vllm /usr/bin/python3
-.build/cli/aiolm-cli runtime export vllm <runtime-id> /data/bundles/vllm-0.31.0-linux.zip
+.codex-target/release/aiolm-cli runtime register vllm /usr/bin/python3
+.codex-target/release/aiolm-cli runtime export vllm <runtime-id> /data/bundles/vllm-0.31.0-linux.zip
 
 # 2. Import into a fresh isolated home and prove the id resolves there.
 export AIOLM_HOME="$(mktemp -d)/aiolm"
-.build/cli/aiolm-cli runtime import /data/bundles/vllm-0.31.0-linux.zip
-.build/cli/aiolm-cli runtime list        # imported id present, available:true
+.codex-target/release/aiolm-cli runtime import /data/bundles/vllm-0.31.0-linux.zip
+.codex-target/release/aiolm-cli runtime list        # imported id present, available:true
 
 # 3. The harness creates its own fresh home: import the bundle there too.
 node scripts/smoke-provider-runtime.mjs --engine vllm \
