@@ -4,7 +4,7 @@ import type { HfInstalledFile, HfSortKey } from "./models.ts";
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
-  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata, ModelScanResult,
+  LatestInfo, McpServer, McpTool, McpToolPayload, ModelDownloadProgress, ModelMetadata,
   PullRequestPreview, RuntimeBundleInfo, RuntimeCapabilities, ServerStatus,
   SessionListResult, SessionStatus, SessionSummary,
   VerificationRecord,
@@ -14,24 +14,49 @@ import type {
 export const getConfig = () => invoke<AppConfig>("get_config");
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
 
-export const listModels = (modelsDir: string, scanId?: string) => invoke<ModelScanResult>("list_models", { modelsDir, ...(scanId ? { scanId } : {}) });
+export { listModelArtifacts as listModels } from './providers.ts';
 export const cancelModelScan = (scanId: string) => invoke<void>("cancel_model_scan", { scanId });
 export const deleteModel = (path: string, paths?: string[]) => invoke<void>("delete_model", { path, ...(paths ? { paths } : {}) });
 export const pickModelsDir = () => invoke<string | null>("pick_models_dir");
 export const pickLoraAdapter = () => invoke<string | null>("pick_lora_adapter");
 /** An empty query lists the catalog itself, which is what Discover opens on. */
-export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "downloads") =>
-  invoke<HfModel[]>("hf_search_models", { query, limit, sort });
+export const hfSearchModels = (query: string, limit = 20, sort: HfSortKey = "downloads", format?: 'gguf' | 'safetensors' | 'mlx') =>
+  invoke<HfModel[]>("hf_search_models", { query, limit, sort, ...(format ? { format } : {}) });
 export const hfInstalledFiles = (repoId: string, files: string[], modelsDir: string) =>
   invoke<HfInstalledFile[]>("hf_installed_files", { repoId, files, modelsDir });
 export const hfModelFiles = (repoId: string) => invoke<HfFile[]>("hf_model_files", { repoId });
 export const hfOpenModelCard = (repoId: string) => invoke<void>("hf_open_model_card", { repoId });
-export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string) =>
-  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir });
+/** A split GGUF downloads all parts from one revision and returns its first entrypoint. */
+export const hfDownloadModel = (repoId: string, filePath: string, modelsDir: string, includeCompanions?: boolean) =>
+  invoke<DownloadedModel>("hf_download_model", { repoId, filePath, modelsDir, ...(includeCompanions !== undefined ? { includeCompanions } : {}) });
 export const hfCancelDownload = () => invoke<void>("hf_cancel_download");
+export const hfDownloadSnapshot = (repoId: string, modelsDir: string) => invoke<import('./providers').ModelArtifact>('hf_download_snapshot', { repoId, modelsDir });
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
 export const pickImage = () => invoke<string | null>("pick_image");
 export const readImageData = (path: string) => invoke<string>("read_image_data", { path });
+export const importMedia = (path: string) => invoke<import('../../features/chat/chatTypes').ImageAttachment>('import_media', { path });
+export const resolveMedia = (reference: string, providerId: import('./providers').ProviderId) => invoke<import('./types').ChatContentPart>('resolve_media', { reference, providerId });
+export interface MediaTranscription { text: string; sessionId: string; model: string }
+async function mediaOperation<T>(command: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  const operationId = crypto.randomUUID();
+  const cancel = () => { void invoke<void>('cancel_media_operation', { operationId }).catch(() => undefined); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await invoke<T>(command, { ...args, operationId });
+    signal?.throwIfAborted();
+    return result;
+  } finally {
+    signal?.removeEventListener('abort', cancel);
+  }
+}
+/** Uses one explicitly selected local speech session and immutable audio. */
+export const transcribeMedia = (reference: string, sessionId: string, signal?: AbortSignal) =>
+  mediaOperation<MediaTranscription>('transcribe_media', { reference, sessionId }, signal);
+export interface VideoFrames { frames: import('../../features/chat/chatTypes').PreparedVideoFrame[] }
+/** Samples local video into immutable images; never reads a caller URL. */
+export const extractVideoFrames = (reference: string, signal?: AbortSignal, maxFrames = 4) =>
+  mediaOperation<VideoFrames>('extract_video_frames', { reference, maxFrames }, signal);
 export const pickDocument = () => invoke<string | null>("pick_document");
 export const readDocumentText = (path: string) => invoke<string>("read_document_text", { path });
 export const readDocumentBinding = (path: string) => invoke<string>("read_document_binding", { path });

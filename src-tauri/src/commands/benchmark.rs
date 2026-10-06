@@ -160,10 +160,46 @@ pub(crate) async fn run_performance_bench(
     if let Err(error) = validation {
         return Ok(performance_bench::failed(&request, &cfg, error));
     }
-    let root = benchmark::data_root()?;
-    // Revoke ephemeral sharing permits the moment a measurement owns the
-    // operation lock, so publishing work overlapping this start is discarded.
+    // Preflight refreshes Python runtime evidence once, before the history
+    // header freezes the measured version and accelerator.
     crate::benchmark::sharing::permits::note_measurement_start();
+    state.bench_cancel.store(false, Ordering::Release);
+    let cancel = state.bench_cancel.clone();
+    let _ = app.emit(
+        "performance-bench-progress",
+        performance_bench::PerformanceBenchProgress {
+            run_id: request.run_id.clone(),
+            phase: "loading",
+            completed: 0,
+            total: request.prompt_lengths.len()
+                * (1 + request.batch_sizes.len())
+                * request.repetitions as usize,
+            row: None,
+            message: None,
+        },
+    );
+    let launch = super::launch::validate_launch_config_with_cancel(&mut cfg, Some(&cancel)).await;
+    // A Python engine's identity is what its own runtime probe reported, never
+    // the legacy llama.cpp backend/build fields that may still sit in cfg.
+    let provider = crate::providers::provider_of(&cfg);
+    let engine_probe = if provider.is_python() {
+        // A rejected preflight still gets a durable failure record. An
+        // unreadable runtime is unidentified, rather than legacy llama fields.
+        crate::providers::selected_python_runtime(&cfg)
+            .ok()
+            .and_then(|runtime| runtime.probe)
+    } else {
+        None
+    };
+    let (backend, build) = match &engine_probe {
+        Some(probe) => (probe.accelerator.clone(), probe.version.clone()),
+        None if provider.is_python() => (
+            String::new(),
+            performance_bench::UNKNOWN_RUNTIME_VERSION.into(),
+        ),
+        None => (cfg.active_backend.clone(), cfg.active_build.clone()),
+    };
+    let root = benchmark::data_root()?;
     let initial = performance_bench::failed(&request, &cfg, "benchmark has not completed".into());
     let created = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -173,25 +209,11 @@ pub(crate) async fn run_performance_bench(
         &root,
         json!({
             "schemaVersion": 1, "id": request.run_id, "createdAt": created,
-            "model": cfg.active_model, "backend": cfg.active_backend, "build": cfg.active_build,
+            "model": cfg.active_model, "backend": backend, "build": build,
             "request": request, "result": initial,
         }),
     )?);
-    state.bench_cancel.store(false, Ordering::Release);
-    let cancel = state.bench_cancel.clone();
-    let loading = performance_bench::PerformanceBenchProgress {
-        run_id: request.run_id.clone(),
-        phase: "loading",
-        completed: 0,
-        total: request.prompt_lengths.len()
-            * (1 + request.batch_sizes.len())
-            * request.repetitions as usize,
-        row: None,
-        message: None,
-    };
-    let _ = app.emit("performance-bench-progress", loading);
-    let gpu = match super::launch::validate_launch_config_with_cancel(&mut cfg, Some(&cancel)).await
-    {
+    let gpu = match launch {
         Ok(gpu) => gpu,
         Err(error) => {
             let mut result = performance_bench::failed(&request, &cfg, error);
@@ -203,20 +225,25 @@ pub(crate) async fn run_performance_bench(
             return Ok(result);
         }
     };
-    let capability = if !cfg.active_backend.is_empty() {
-        runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, &cancel)
-            .await
-            .ok()
-    } else {
-        None
-    };
+    let capability =
+        if provider == crate::providers::ProviderId::Llama && !cfg.active_backend.is_empty() {
+            runtime::probe_cancellable(&cfg.active_backend, &cfg.active_build, &cancel)
+                .await
+                .ok()
+        } else {
+            None
+        };
     // The probe keeps the whole `--version` output, which is a banner plus
     // compiler lines. A benchmark records the version it was measured on, so
     // take the one line that states it and leave the diagnostics behind.
-    let version = capability
-        .as_ref()
-        .and_then(|value| runtime::version_label(&value.version))
-        .unwrap_or_else(|| performance_bench::UNKNOWN_RUNTIME_VERSION.to_string());
+    let version = match &engine_probe {
+        Some(probe) if !probe.version.is_empty() => probe.version.clone(),
+        Some(_) => performance_bench::UNKNOWN_RUNTIME_VERSION.into(),
+        None => capability
+            .as_ref()
+            .and_then(|value| runtime::version_label(&value.version))
+            .unwrap_or_else(|| performance_bench::UNKNOWN_RUNTIME_VERSION.to_string()),
+    };
     let cache_ram_supported = capability.as_ref().is_some_and(|value| {
         value
             .flags

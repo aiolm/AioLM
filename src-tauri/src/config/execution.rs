@@ -5,6 +5,9 @@ use serde_json::{Map, Value};
 pub type ExecutionSettings = Map<String, Value>;
 
 pub const EXECUTION_FIELDS: &[&str] = &[
+    "active_provider",
+    "active_runtime",
+    "provider_options",
     "runtime_defaults",
     "ngl",
     "ctx_size",
@@ -59,6 +62,48 @@ pub const REQUEST_FIELDS: &[&str] = &[
 pub fn apply_request_settings(live: &AppConfig, edited: &AppConfig) -> Result<AppConfig, String> {
     if live.active_model != edited.active_model {
         return Err("request settings target does not match the running model".into());
+    }
+    if live.active_provider != edited.active_provider
+        || live.active_runtime != edited.active_runtime
+    {
+        return Err("request settings cannot change the running runtime".into());
+    }
+    if crate::providers::provider_of(live) != crate::providers::ProviderId::Llama {
+        let provider = crate::providers::provider_of(live);
+        let mut next = live.clone();
+        let saved = next
+            .provider_options
+            .entry(provider.as_str().into())
+            .or_default();
+        let edited_options = crate::providers::launch::provider_options(edited, provider);
+        for option in crate::providers::options::schema(provider)
+            .iter()
+            .filter(|option| option.target == crate::providers::options::OptionTarget::Request)
+        {
+            match edited_options.get(option.key) {
+                Some(value) => {
+                    saved.insert(option.key.into(), value.clone());
+                }
+                None => {
+                    saved.remove(option.key);
+                }
+            }
+        }
+        if provider == crate::providers::ProviderId::Vllm {
+            match edited_options.get(crate::providers::launch::REQUEST_LORA_KEY) {
+                Some(value) => {
+                    saved.insert(
+                        crate::providers::launch::REQUEST_LORA_KEY.into(),
+                        value.clone(),
+                    );
+                }
+                None => {
+                    saved.remove(crate::providers::launch::REQUEST_LORA_KEY);
+                }
+            }
+        }
+        crate::providers::execution::validate(&next)?;
+        return Ok(next);
     }
     let mut request = snapshot(edited);
     request.retain(|key, _| REQUEST_FIELDS.contains(&key.as_str()));

@@ -9,15 +9,11 @@ const MAX_APPLICATIONS: usize = 4_096;
 const MAX_LIBRARY_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_PROMPT_BYTES: usize = 262_144;
 
-/// Fields a profile owns whatever model it is applied to. The runtime pair is
-/// one of them: a profile that did not own it left the runtime at whatever the
-/// configuration already held, so a model launched on the last runtime selected
-/// anywhere rather than on the one its profile names. Owning it here makes the
-/// profile the only place a runtime is chosen. Mirrors `GLOBAL_PROFILE_KEYS`.
+/// A profile owns provider options, never the selected runtime installation.
+/// Mirrors `GLOBAL_PROFILE_KEYS`.
 const GLOBAL_FIELDS: &[&str] = &[
     "runtime_defaults",
-    "active_backend",
-    "active_build",
+    "provider_options",
     "ctx_size",
     "batch_size",
     "ubatch_size",
@@ -49,6 +45,10 @@ pub struct SettingsProfileLibrary {
     pub entries: Vec<SettingsProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile_id: Option<String>,
+    #[serde(default)]
+    pub provider_defaults: BTreeMap<String, String>,
+    #[serde(default)]
+    pub provider_recent: BTreeMap<String, String>,
     pub applied: BTreeMap<String, ProfileApplication>,
     pub legacy_imported: bool,
 }
@@ -70,6 +70,10 @@ pub enum ProfileSourceScope {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsProfile {
+    #[serde(default = "llama_provider")]
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_runtime: Option<Map<String, Value>>,
     pub id: String,
     pub name: String,
     pub scope: ProfileScope,
@@ -92,6 +96,8 @@ pub struct SettingsProfile {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileApplication {
+    #[serde(default = "llama_provider")]
+    pub provider: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
@@ -107,6 +113,10 @@ pub struct ProfileApplication {
 /// that are otherwise model-scoped, so a new installation inherits the runtime
 /// default for each one instead of leaving it on a captured value. Owning
 /// fields outside `GLOBAL_FIELDS` is the legacy coverage form.
+fn llama_provider() -> String {
+    crate::providers::ProviderId::Llama.as_str().into()
+}
+
 fn default_profile() -> SettingsProfile {
     let mut defaults = crate::tuning_defaults::keys()
         .filter(|key| model_field(key))
@@ -121,6 +131,8 @@ fn default_profile() -> SettingsProfile {
     coverage.sort_unstable();
     coverage.dedup();
     SettingsProfile {
+        provider: llama_provider(),
+        legacy_runtime: None,
         id: "profile-default".into(),
         name: "Default".into(),
         scope: ProfileScope::Global,
@@ -139,10 +151,26 @@ fn default_profile() -> SettingsProfile {
     }
 }
 
+fn provider_default(provider: crate::providers::ProviderId) -> SettingsProfile {
+    let mut profile = default_profile();
+    if provider != crate::providers::ProviderId::Llama {
+        profile.provider = provider.as_str().into();
+        profile.id = format!("profile-default-{}", provider.as_str());
+        profile.settings = Map::from_iter([(
+            "provider_options".into(),
+            serde_json::json!({provider.as_str(): {}}),
+        )]);
+        profile.legacy = None;
+        profile.coverage = None;
+    }
+    profile
+}
+
 impl Default for SettingsProfileLibrary {
     fn default() -> Self {
         let profile = default_profile();
         let application = ProfileApplication {
+            provider: llama_provider(),
             model: String::new(),
             profile_id: Some(profile.id.clone()),
             profile_name: Some(profile.name.clone()),
@@ -150,11 +178,21 @@ impl Default for SettingsProfileLibrary {
             settings: profile.settings.clone(),
             system_prompt: String::new(),
         };
+        let entries = crate::providers::ProviderId::ALL
+            .into_iter()
+            .map(provider_default)
+            .collect::<Vec<_>>();
+        let provider_defaults = entries
+            .iter()
+            .map(|entry| (entry.provider.clone(), entry.id.clone()))
+            .collect();
         Self {
             version: 1,
             revision: 0,
             default_profile_id: Some(profile.id.clone()),
-            entries: vec![profile],
+            provider_defaults,
+            provider_recent: BTreeMap::new(),
+            entries,
             applied: BTreeMap::from([("model:".into(), application)]),
             legacy_imported: false,
         }
@@ -179,6 +217,18 @@ fn model_key(path: &str) -> String {
     format!("model:{}", display.replace('\\', "/").to_lowercase())
 }
 
+pub fn application_key(model: &str, session: &str, provider: &str) -> String {
+    if session != "default" {
+        return format!("session:{session}");
+    }
+    let model = model_key(model);
+    if provider == crate::providers::LLAMA_PROVIDER {
+        model
+    } else {
+        format!("provider:{provider}:{model}")
+    }
+}
+
 /// Original spelling survives in applications even when earlier keys were folded.
 fn migrate_model_path_keys(library: &mut SettingsProfileLibrary) -> Result<(), String> {
     let mut applied = BTreeMap::new();
@@ -189,7 +239,12 @@ fn migrate_model_path_keys(library: &mut SettingsProfileLibrary) -> Result<(), S
             "model:{}",
             application.model.trim().replace('\\', "/").to_lowercase()
         );
-        let target = if key == &legacy { &model } else { key };
+        let owned = application_key(&application.model, "default", &application.provider);
+        let target = if key == &legacy || key == &model {
+            &owned
+        } else {
+            key
+        };
         if applied
             .get(target)
             .is_some_and(|previous| previous != application)
@@ -250,11 +305,29 @@ fn profile_snapshot(cfg: &AppConfig) -> Map<String, Value> {
     }
     let mut settings = execution::snapshot(&cfg);
     settings.remove("active_model");
+    settings.retain(|key, _| !runtime_field(key));
+    if crate::providers::provider_of(&cfg) == crate::providers::ProviderId::Llama {
+        settings.remove("provider_options");
+    } else {
+        let options =
+            crate::providers::launch::provider_options(&cfg, crate::providers::provider_of(&cfg));
+        settings.retain(|key, _| {
+            matches!(
+                key.as_str(),
+                "provider_options" | "request_timeout_seconds" | "sleep_idle_seconds"
+            )
+        });
+        settings.insert(
+            "provider_options".into(),
+            serde_json::json!({cfg.active_provider.clone(): options}),
+        );
+    }
     settings
 }
 
 fn expanded_snapshot(application: &ProfileApplication) -> Result<Map<String, Value>, String> {
     let mut cfg = settings_config(&application.settings)?;
+    cfg.active_provider = application.provider.clone();
     if !application.settings.contains_key("runtime_defaults") {
         cfg.runtime_defaults = execution::EXECUTION_FIELDS
             .iter()
@@ -286,25 +359,25 @@ fn recovered_profile(
         id = format!("{base_id}-{suffix}");
         suffix += 1;
     }
-    let scope = if application.model.is_empty() {
-        ProfileScope::Global
-    } else {
-        ProfileScope::Model
-    };
-    let key = (scope == ProfileScope::Model).then(|| model_key(&application.model));
+    let scope = ProfileScope::Global;
+    let key = None;
     let mut name = "Recovered profile".to_owned();
     let mut suffix = 2;
     while library
         .entries
         .iter()
-        .any(|entry| entry.name == name && entry.scope == scope && entry.model_key == key)
+        .any(|entry| entry.provider == application.provider && entry.name == name)
     {
         name = format!("Recovered profile ({suffix})");
         suffix += 1;
     }
     let legacy = (scope == ProfileScope::Global).then_some(true);
+    let mut settings = settings;
+    settings.retain(|key, _| !runtime_field(key));
     let coverage = legacy.map(|_| settings.keys().cloned().collect());
     Ok(SettingsProfile {
+        provider: application.provider.clone(),
+        legacy_runtime: None,
         id,
         name,
         scope,
@@ -347,56 +420,81 @@ fn runtime_pair(settings: &Map<String, Value>) -> Option<(String, String)> {
 /// This runs once, on the schema upgrade, so a runtime later cleared on
 /// purpose — by uninstalling its build, say — stays cleared.
 fn adopt_profile_runtimes(library: &mut SettingsProfileLibrary, backend: &str, build: &str) {
-    let ids = library
-        .entries
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect::<Vec<_>>();
     let configured =
         (!backend.is_empty() && !build.is_empty()).then(|| (backend.to_owned(), build.to_owned()));
-    for (index, id) in ids.iter().enumerate() {
-        let seed = library
-            .applied
-            .values()
-            .filter(|application| application.profile_id.as_deref() == Some(id.as_str()))
-            .find_map(|application| runtime_pair(&application.settings))
+    for profile in &mut library.entries {
+        if profile.provider != crate::providers::LLAMA_PROVIDER {
+            continue;
+        }
+        let selected = runtime_pair(&profile.settings)
+            .or_else(|| {
+                library
+                    .applied
+                    .values()
+                    .filter(|application| {
+                        application.profile_id.as_deref() == Some(profile.id.as_str())
+                    })
+                    .find_map(|application| runtime_pair(&application.settings))
+            })
             .or_else(|| configured.clone());
-        let profile = &mut library.entries[index];
-        let mut changed = false;
-        // Legacy profiles carry their coverage explicitly; the others own the
-        // pair through their scope as soon as `GLOBAL_FIELDS` lists it.
-        if let Some(coverage) = profile.coverage.as_mut() {
-            for field in ["active_backend", "active_build"] {
-                if !coverage.iter().any(|key| key == field) {
-                    coverage.push(field.to_owned());
-                    changed = true;
-                }
-            }
-            coverage.sort_unstable();
-        }
-        let current = (
-            text_setting(&profile.settings, "active_backend"),
-            text_setting(&profile.settings, "active_build"),
-        );
-        if current.0.is_empty() || current.1.is_empty() {
-            // Seeds a profile that names no runtime, and drops a half-written
-            // pair that cannot name one either: covering the fields makes an
-            // incomplete pair a rejected configuration where it used to be
-            // ignored as uncovered.
-            let next = seed.unwrap_or_default();
-            if next != current {
-                profile
-                    .settings
-                    .insert("active_backend".into(), Value::String(next.0));
-                profile
-                    .settings
-                    .insert("active_build".into(), Value::String(next.1));
-                changed = true;
+        let mut legacy = profile.legacy_runtime.take().unwrap_or_default();
+        for key in ["active_backend", "active_build"] {
+            if let Some(value) = profile.settings.remove(key) {
+                legacy.insert(key.into(), value);
             }
         }
-        if changed {
-            profile.revision = profile.revision.saturating_add(1);
+        if let Some((backend, build)) = selected {
+            legacy.insert("active_backend".into(), Value::String(backend));
+            legacy.insert("active_build".into(), Value::String(build));
         }
+        profile.legacy_runtime = (!legacy.is_empty()).then_some(legacy);
+    }
+    separate_profile_runtimes(library);
+}
+
+fn separate_profile_runtimes(library: &mut SettingsProfileLibrary) {
+    for profile in &mut library.entries {
+        let mut legacy = profile.legacy_runtime.take().unwrap_or_default();
+        for key in [
+            "active_backend",
+            "active_build",
+            "active_provider",
+            "active_runtime",
+        ] {
+            if let Some(value) = profile.settings.remove(key) {
+                legacy.insert(key.into(), value);
+            }
+        }
+        profile.legacy_runtime = (!legacy.is_empty()).then_some(legacy);
+        if let Some(coverage) = &mut profile.coverage {
+            coverage.retain(|key| !runtime_field(key));
+        }
+    }
+    for application in library.applied.values_mut() {
+        application.settings.retain(|key, _| !runtime_field(key));
+    }
+}
+
+fn share_profiles(library: &mut SettingsProfileLibrary) {
+    // Retain each legacy profile and application identity while sharing its
+    // original field coverage with every model of the same engine.
+    for profile in &mut library.entries {
+        if profile.scope == ProfileScope::Model {
+            if profile.legacy != Some(true) {
+                profile.coverage = Some(
+                    execution::EXECUTION_FIELDS
+                        .iter()
+                        .filter(|key| model_field(key))
+                        .map(|key| (*key).to_owned())
+                        .collect(),
+                );
+            }
+            profile.legacy = Some(true);
+            profile.scope = ProfileScope::Global;
+        }
+        profile.model_key = None;
+        profile.source_id = None;
+        profile.source_scope = None;
     }
 }
 
@@ -405,9 +503,11 @@ pub(super) fn initialize_profiles(
     cfg: &mut AppConfig,
     had_saved_library: bool,
     adopt_runtimes: bool,
+    separate_runtimes: bool,
 ) -> Result<(), String> {
     let mut library = cfg.settings_profiles.take().unwrap_or_default();
     migrate_model_path_keys(&mut library)?;
+    share_profiles(&mut library);
     if library.entries.is_empty() {
         library.entries.push(default_profile());
     }
@@ -462,7 +562,10 @@ pub(super) fn initialize_profiles(
     if !cfg.active_model.is_empty() {
         library.applied.remove("model:");
     }
-    let mut targets = vec![(model_key(&cfg.active_model), cfg.clone())];
+    let mut targets = vec![(
+        application_key(&cfg.active_model, "default", &cfg.active_provider),
+        cfg.clone(),
+    )];
     for definition in &cfg.sessions {
         if !definition.models.primary_model.is_empty() && definition.id != "default" {
             targets.push((
@@ -476,6 +579,7 @@ pub(super) fn initialize_profiles(
             library.applied.insert(
                 target,
                 ProfileApplication {
+                    provider: execution.active_provider.clone(),
                     model: execution.active_model.clone(),
                     profile_id: None,
                     profile_name: None,
@@ -490,6 +594,7 @@ pub(super) fn initialize_profiles(
     for (target, mut application) in applications {
         let selected = library.entries.iter().find(|profile| {
             application.profile_id.as_deref() == Some(profile.id.as_str())
+                && profile.provider == application.provider
                 && compatible(profile, &application.model)
         });
         if let Some(profile) = selected {
@@ -510,6 +615,7 @@ pub(super) fn initialize_profiles(
             let expanded = expanded_snapshot(&application)?;
             let matching = library.entries.iter().find(|profile| {
                 compatible(profile, &application.model)
+                    && profile.provider == application.provider
                     && profile.system_prompt.as_deref().unwrap_or_default()
                         == application.system_prompt
                     && (profile.settings == application.settings || profile.settings == expanded)
@@ -531,6 +637,51 @@ pub(super) fn initialize_profiles(
     if adopt_runtimes {
         adopt_profile_runtimes(&mut library, &cfg.active_backend, &cfg.active_build);
     }
+    if separate_runtimes {
+        separate_profile_runtimes(&mut library);
+    }
+    for application in library.applied.values_mut() {
+        application.settings.retain(|key, _| !runtime_field(key));
+    }
+    library.provider_defaults.insert(
+        llama_provider(),
+        library.default_profile_id.clone().unwrap_or_default(),
+    );
+    for provider in [
+        crate::providers::ProviderId::Vllm,
+        crate::providers::ProviderId::MlxVlm,
+    ] {
+        if library.entries.iter().any(|entry| {
+            Some(&entry.id) == library.provider_defaults.get(provider.as_str())
+                && entry.provider == provider.as_str()
+                && entry.scope == ProfileScope::Global
+        }) {
+            continue;
+        }
+        let mut id = format!("profile-default-{}", provider.as_str());
+        let mut suffix = 2;
+        while library.entries.iter().any(|entry| {
+            entry.id == id
+                && (entry.provider != provider.as_str() || entry.scope != ProfileScope::Global)
+        }) {
+            id = format!("profile-default-{}-{suffix}", provider.as_str());
+            suffix += 1;
+        }
+        if !library.entries.iter().any(|entry| entry.id == id) {
+            let mut profile = provider_default(provider);
+            profile.id = id.clone();
+            library.entries.push(profile);
+        }
+        library
+            .provider_defaults
+            .insert(provider.as_str().into(), id);
+    }
+    library.provider_recent.retain(|provider, id| {
+        library
+            .entries
+            .iter()
+            .any(|entry| &entry.id == id && &entry.provider == provider)
+    });
     cfg.settings_profiles = Some(library);
     Ok(())
 }
@@ -543,7 +694,14 @@ fn text_valid(value: &str, field: &str, max: usize, required: bool) -> Result<()
 }
 
 fn model_field(key: &str) -> bool {
-    key != "active_model" && execution::EXECUTION_FIELDS.contains(&key)
+    key != "active_model" && !runtime_field(key) && execution::EXECUTION_FIELDS.contains(&key)
+}
+
+fn runtime_field(key: &str) -> bool {
+    matches!(
+        key,
+        "active_provider" | "active_runtime" | "active_backend" | "active_build"
+    )
 }
 
 fn authentication_argument(argument: &str) -> bool {
@@ -652,6 +810,26 @@ impl SettingsProfileLibrary {
         if default.scope != ProfileScope::Global {
             return Err("the default settings profile must apply to every model".into());
         }
+        for (provider, id) in &self.provider_defaults {
+            if crate::providers::ProviderId::parse(provider).is_none()
+                || !self.entries.iter().any(|entry| {
+                    &entry.id == id
+                        && &entry.provider == provider
+                        && entry.scope == ProfileScope::Global
+                })
+            {
+                return Err("invalid provider default profile".into());
+            }
+        }
+        for (provider, id) in &self.provider_recent {
+            if !self
+                .entries
+                .iter()
+                .any(|entry| &entry.id == id && &entry.provider == provider)
+            {
+                return Err("invalid recent provider profile".into());
+            }
+        }
         if self.entries.len() > MAX_PROFILES || self.applied.len() > MAX_APPLICATIONS {
             return Err("too many saved settings profiles or applications".into());
         }
@@ -661,6 +839,30 @@ impl SettingsProfileLibrary {
         }
         let mut ids = HashSet::new();
         for profile in &self.entries {
+            let provider = crate::providers::ProviderId::parse(&profile.provider)
+                .ok_or("unknown profile provider")?;
+            if profile.settings.keys().any(|key| runtime_field(key)) {
+                return Err("profiles cannot select or change the runtime".into());
+            }
+            if provider != crate::providers::ProviderId::Llama
+                && profile.settings.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "provider_options" | "request_timeout_seconds" | "sleep_idle_seconds"
+                    )
+                })
+            {
+                return Err("profile contains options belonging to llama.cpp".into());
+            }
+            if let Some(options) = profile
+                .settings
+                .get("provider_options")
+                .and_then(Value::as_object)
+            {
+                if options.keys().any(|key| key != provider.as_str()) {
+                    return Err("profile contains another provider's options".into());
+                }
+            }
             text_valid(&profile.id, "id", 128, true)?;
             text_valid(&profile.name, "name", 256, true)?;
             if !ids.insert(&profile.id) {
@@ -716,7 +918,7 @@ impl SettingsProfileLibrary {
                 &application.model,
                 "application model",
                 32_768,
-                target != "model:",
+                target != &application_key("", "default", &application.provider),
             )?;
             let id = application
                 .profile_id
@@ -728,7 +930,8 @@ impl SettingsProfileLibrary {
                 .iter()
                 .find(|entry| entry.id == id)
                 .ok_or("the applied settings profile no longer exists")?;
-            if !compatible(profile, &application.model)
+            if profile.provider != application.provider
+                || !compatible(profile, &application.model)
                 || application.model.is_empty() && profile.scope != ProfileScope::Global
             {
                 return Err("the applied settings profile belongs to a different model".into());
@@ -813,8 +1016,13 @@ pub fn validate_update(
                         let replacement = incoming.applied.get(target).ok_or(
                             "deleted profile targets must be assigned to the default profile",
                         )?;
-                        if replacement.profile_id != incoming.default_profile_id
+                        let fallback = incoming
+                            .provider_defaults
+                            .get(&application.provider)
+                            .or(incoming.default_profile_id.as_ref());
+                        if replacement.profile_id.as_ref() != fallback
                             || replacement.model != application.model
+                            || replacement.provider != application.provider
                         {
                             return Err(
                                 "deleted profile targets must be assigned to the default profile"
@@ -906,15 +1114,32 @@ pub fn prepare_config_update(
         for (target, application) in reassigned {
             let mut effective = settings_config(&application.settings)?;
             effective.active_model = application.model.clone();
-            if target == model_key(&prepared.active_model)
+            if target
+                == application_key(&prepared.active_model, "default", &prepared.active_provider)
                 && model_key(&application.model) == model_key(&prepared.active_model)
             {
+                effective.active_provider = prepared.active_provider.clone();
+                effective.active_runtime = prepared.active_runtime.clone();
+                effective.active_backend = prepared.active_backend.clone();
+                effective.active_build = prepared.active_build.clone();
                 prepared = execution::merge_launch(&prepared, &effective)?;
             } else if let Some(id) = target.strip_prefix("session:") {
+                let runtime = prepared
+                    .sessions
+                    .iter()
+                    .find(|entry| entry.id == id)
+                    .map(|definition| execution::session_config(&prepared, definition))
+                    .transpose()?;
                 if let Some(definition) = prepared.sessions.iter_mut().find(|entry| {
                     entry.id == id
                         && model_key(&entry.models.primary_model) == model_key(&application.model)
                 }) {
+                    if let Some(runtime) = runtime {
+                        effective.active_provider = runtime.active_provider;
+                        effective.active_runtime = runtime.active_runtime;
+                        effective.active_backend = runtime.active_backend;
+                        effective.active_build = runtime.active_build;
+                    }
                     let mut settings = execution::snapshot(&effective);
                     for binding in ["active_model", "mmproj", "spec_draft_model", "gpu"] {
                         settings.remove(binding);
@@ -1055,87 +1280,66 @@ mod tests {
     }
 
     #[test]
-    fn upgraded_profiles_adopt_the_runtime_they_were_last_applied_with() {
-        // A profile written before it owned the runtime has none to apply, and
-        // applying it would clear the pair and refuse the next launch. Seeding
-        // keeps each profile running on what it already ran on: its own
-        // application first, the configuration's selection otherwise.
+    fn legacy_runtime_pairs_move_to_metadata_without_changing_profile_values_or_revisions() {
         let mut library = library();
-        for key in ["active_backend", "active_build"] {
-            let value = if key == "active_backend" {
-                "cuda"
-            } else {
-                "b6215"
-            };
-            library
-                .applied
-                .get_mut("model:models/sample.gguf")
-                .unwrap()
-                .settings
-                .insert(key.into(), json!(value));
-        }
-        let revisions = library
-            .entries
-            .iter()
-            .map(|entry| entry.revision)
-            .collect::<Vec<_>>();
-
+        library
+            .applied
+            .get_mut("model:models/sample.gguf")
+            .unwrap()
+            .settings
+            .extend(Map::from_iter([
+                ("active_backend".into(), json!("cuda")),
+                ("active_build".into(), json!("b6215")),
+            ]));
+        let before = library.entries.clone();
         adopt_profile_runtimes(&mut library, "vulkan", "b11035");
-
-        // The applied snapshot names a runtime, so its profile keeps that one.
-        assert_eq!(library.entries[0].settings["active_backend"], json!("cuda"));
-        assert_eq!(library.entries[0].settings["active_build"], json!("b6215"));
-        // The default profile has no application of its own and falls back to
-        // the configuration, and now covers the pair so it stops inheriting it.
         assert_eq!(
-            library.entries[1].settings["active_backend"],
+            library.entries[0].legacy_runtime.as_ref().unwrap()["active_backend"],
+            json!("cuda")
+        );
+        assert_eq!(
+            library.entries[0].legacy_runtime.as_ref().unwrap()["active_build"],
+            json!("b6215")
+        );
+        assert_eq!(
+            library.entries[1].legacy_runtime.as_ref().unwrap()["active_backend"],
             json!("vulkan")
         );
-        assert_eq!(library.entries[1].settings["active_build"], json!("b11035"));
-        let coverage = library.entries[1].coverage.as_ref().unwrap();
-        assert!(coverage.iter().any(|key| key == "active_backend"));
-        assert!(coverage.iter().any(|key| key == "active_build"));
-        for (entry, revision) in library.entries.iter().zip(revisions) {
-            assert!(entry.revision > revision);
+        for (profile, previous) in library.entries.iter().zip(before) {
+            assert_eq!(profile.settings, previous.settings);
+            assert_eq!(profile.revision, previous.revision);
+            assert!(!profile
+                .coverage
+                .as_ref()
+                .is_some_and(|fields| fields.iter().any(|field| runtime_field(field))));
         }
-        library.validate().expect("seeded profiles stay valid");
+        assert!(library
+            .applied
+            .values()
+            .all(|value| !value.settings.keys().any(|field| runtime_field(field))));
+        library.validate().unwrap();
     }
 
     #[test]
-    fn adopting_runtimes_leaves_a_deliberately_cleared_profile_alone() {
-        // Uninstalling a build clears it from the profiles that named it. The
-        // upgrade seeding must never put it back, so it keeps a pair it finds
-        // and adds nothing when there is no runtime to add.
-        let mut library = library();
-        library.entries[0]
-            .settings
-            .insert("active_backend".into(), json!("rocm"));
-        library.entries[0]
-            .settings
-            .insert("active_build".into(), json!("b11029"));
-
-        adopt_profile_runtimes(&mut library, "", "");
-
-        assert_eq!(library.entries[0].settings["active_backend"], json!("rocm"));
-        assert_eq!(library.entries[0].settings["active_build"], json!("b11029"));
-        assert!(!library.entries[1].settings.contains_key("active_backend"));
-    }
-
-    #[test]
-    fn adopting_runtimes_drops_a_half_written_pair_that_names_no_runtime() {
-        // A pair with only one half was ignored while the profile did not cover
-        // it. Covering it makes the same pair a configuration the app refuses to
-        // load, so the upgrade has to settle it rather than carry it forward.
-        let mut library = library();
-        library.entries[0]
-            .settings
-            .insert("active_backend".into(), json!("rocm"));
-
-        adopt_profile_runtimes(&mut library, "", "");
-
-        assert_eq!(library.entries[0].settings["active_backend"], json!(""));
-        assert_eq!(library.entries[0].settings["active_build"], json!(""));
-        library.validate().expect("settled profiles stay loadable");
+    fn deliberately_cleared_and_partial_runtime_values_are_preserved_only_as_metadata() {
+        for (backend, build) in [("rocm", "b11029"), ("rocm", ""), ("", "")] {
+            let mut library = library();
+            library.entries[0].settings.extend(Map::from_iter([
+                ("active_backend".into(), json!(backend)),
+                ("active_build".into(), json!(build)),
+            ]));
+            adopt_profile_runtimes(&mut library, "", "");
+            assert_eq!(
+                library.entries[0].legacy_runtime.as_ref().unwrap()["active_backend"],
+                json!(backend)
+            );
+            assert_eq!(
+                library.entries[0].legacy_runtime.as_ref().unwrap()["active_build"],
+                json!(build)
+            );
+            assert!(!library.entries[0].settings.contains_key("active_backend"));
+            library.validate().unwrap();
+        }
     }
 
     fn library() -> SettingsProfileLibrary {
@@ -1152,6 +1356,19 @@ mod tests {
         }))
         .unwrap();
         library.entries.push(default_profile());
+        for provider in [
+            crate::providers::ProviderId::Vllm,
+            crate::providers::ProviderId::MlxVlm,
+        ] {
+            let profile = provider_default(provider);
+            library
+                .provider_defaults
+                .insert(profile.provider.clone(), profile.id.clone());
+            library.entries.push(profile);
+        }
+        library
+            .provider_defaults
+            .insert(llama_provider(), "profile-default".into());
         library
     }
 
@@ -1196,10 +1413,8 @@ mod tests {
         assert_eq!(profiles.applied["model:/models/Example.gguf"], application);
         assert_eq!(profiles.applied["session:kept"], application);
         assert!(!profiles.applied.contains_key("model:/models/example.gguf"));
-        assert_eq!(
-            profiles.entries[0].model_key.as_deref(),
-            Some("model:/models/Example.gguf")
-        );
+        assert_eq!(profiles.entries[0].scope, ProfileScope::Global);
+        assert_eq!(profiles.entries[0].model_key, None);
         profiles.validate().unwrap();
         let restored =
             super::super::migrate_value(serde_json::to_value(&migrated).unwrap()).unwrap();
@@ -1438,29 +1653,26 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_legacy_runtime_values_survive_only_outside_apply_coverage() {
-        for field in ["active_backend", "active_build"] {
+    fn runtime_fields_are_rejected_in_profiles_even_outside_legacy_coverage() {
+        for field in [
+            "active_backend",
+            "active_build",
+            "active_provider",
+            "active_runtime",
+        ] {
             let mut saved = library();
-            let profile = &mut saved.entries[0];
-            profile.legacy = Some(true);
-            profile.coverage = Some(vec!["temperature".into()]);
-            profile.settings.insert(field.into(), json!("saved-value"));
-            assert!(saved.validate().is_ok(), "{field}");
-            assert_eq!(saved.entries[0].settings[field], json!("saved-value"));
-
-            let mut invalid = saved.clone();
-            invalid.entries[0].legacy = None;
-            assert!(invalid.validate().is_err());
-            let mut invalid = saved.clone();
-            invalid.entries[0]
-                .coverage
-                .as_mut()
-                .unwrap()
-                .push(field.into());
-            assert!(invalid.validate().is_err());
-            let mut invalid = saved.clone();
-            invalid.entries[0].coverage = None;
-            assert!(invalid.validate().is_err());
+            saved.entries[0].legacy = Some(true);
+            saved.entries[0].coverage = Some(vec!["temperature".into()]);
+            saved.entries[0]
+                .settings
+                .insert(field.into(), json!("saved-value"));
+            assert!(saved.validate().is_err());
+            separate_profile_runtimes(&mut saved);
+            assert_eq!(
+                saved.entries[0].legacy_runtime.as_ref().unwrap()[field],
+                json!("saved-value")
+            );
+            saved.validate().unwrap();
         }
     }
 
@@ -1695,7 +1907,7 @@ mod tests {
         });
         let migrated = super::super::migrate_value(old).unwrap();
         let profiles = migrated.settings_profiles.as_ref().unwrap();
-        assert_eq!(profiles.entries.len(), 2);
+        assert_eq!(profiles.entries.len(), 4);
         assert_eq!(profiles.entries[0].id, "profile-default");
         assert_eq!(profiles.entries[0].name, "Default");
         assert_eq!(profiles.entries[0].scope, ProfileScope::Global);
@@ -1737,7 +1949,73 @@ mod tests {
         with_profiles["settings_profiles"] = serde_json::to_value(library()).unwrap();
         with_profiles["active_model"] = json!("models/sample.gguf");
         let migrated = super::super::migrate_value(with_profiles).unwrap();
-        assert_eq!(migrated.settings_profiles, Some(library()));
+        let mut expected = library();
+        share_profiles(&mut expected);
+        assert_eq!(migrated.settings_profiles, Some(expected));
+    }
+
+    #[test]
+    fn legacy_model_profiles_become_shared_without_changing_engine_values_or_applications() {
+        let mut saved = SettingsProfileLibrary::default();
+        saved.revision = 12;
+        for provider in crate::providers::ProviderId::ALL {
+            let mut profile = provider_default(provider);
+            profile.id = format!("saved-{}", provider.as_str());
+            profile.name = "Same name in each engine".into();
+            profile.scope = ProfileScope::Model;
+            profile.model_key = Some("model:models/old-model".into());
+            profile.source_id = Some(format!("source-{}", provider.as_str()));
+            profile.source_scope = Some(ProfileSourceScope::Global);
+            profile.revision = 8;
+            profile.system_prompt = Some("Preserved prompt".into());
+            let application = ProfileApplication {
+                provider: profile.provider.clone(),
+                model: "models/old-model".into(),
+                profile_id: Some(profile.id.clone()),
+                profile_name: Some(profile.name.clone()),
+                profile_revision: Some(7),
+                settings: profile.settings.clone(),
+                system_prompt: "Saved prompt".into(),
+            };
+            saved.applied.insert(
+                application_key(&application.model, "default", &application.provider),
+                application,
+            );
+            saved.entries.push(profile);
+        }
+        let restored = super::super::migrate_value(json!({
+            "config_version": super::super::CURRENT_CONFIG_VERSION,
+            "settings_profiles": saved,
+        }))
+        .unwrap();
+        let profiles = restored.settings_profiles.as_ref().unwrap();
+        assert_eq!(profiles.revision, saved.revision);
+        assert_eq!(profiles.applied, saved.applied);
+        for original in saved
+            .entries
+            .iter()
+            .filter(|entry| entry.scope == ProfileScope::Model)
+        {
+            let profile = profiles
+                .entries
+                .iter()
+                .find(|entry| entry.id == original.id)
+                .unwrap();
+            assert_eq!(profile.scope, ProfileScope::Global);
+            assert_eq!(profile.provider, original.provider);
+            assert_eq!(profile.revision, original.revision);
+            assert_eq!(profile.name, original.name);
+            assert_eq!(profile.settings, original.settings);
+            assert_eq!(profile.system_prompt, original.system_prompt);
+            assert!(
+                profile.model_key.is_none()
+                    && profile.source_id.is_none()
+                    && profile.source_scope.is_none()
+            );
+        }
+        profiles.validate().unwrap();
+        let again = super::super::migrate_value(serde_json::to_value(&restored).unwrap()).unwrap();
+        assert_eq!(again.settings_profiles, restored.settings_profiles);
     }
 
     #[test]
@@ -1873,6 +2151,9 @@ mod tests {
         promoted.scope = ProfileScope::Global;
         promoted.model_key = None;
         deleted_default.default_profile_id = Some(promoted.id.clone());
+        deleted_default
+            .provider_defaults
+            .insert(llama_provider(), promoted.id.clone());
         assert!(validate_update(Some(&current), Some(&deleted_default)).is_ok());
     }
 
@@ -1924,7 +2205,7 @@ mod tests {
             "models_dir": "models", "active_model": "models/sample.gguf", "settings_profiles": profiles
         })).unwrap();
         let mut profiles = migrated.settings_profiles.unwrap();
-        assert_eq!(profiles.entries.len(), 2);
+        assert_eq!(profiles.entries.len(), 4);
         assert_eq!(
             profiles
                 .applied
@@ -1964,10 +2245,14 @@ mod tests {
         let mut selected = original;
         selected.entries.push(other);
         selected.default_profile_id = Some("preferred".into());
+        selected
+            .provider_defaults
+            .insert(llama_provider(), "preferred".into());
         assert!(selected.validate().is_ok());
         let restored = super::super::migrate_value(json!({
             "models_dir": "models", "active_model": "models/sample.gguf", "settings_profiles": selected
         })).unwrap();
+        share_profiles(&mut selected);
         assert_eq!(restored.settings_profiles.as_ref(), Some(&selected));
 
         let mut same_name = library();
@@ -1986,7 +2271,9 @@ mod tests {
             let restored = super::super::migrate_value(json!({
                 "models_dir": "models", "active_model": "models/sample.gguf", "settings_profiles": raw
             })).unwrap();
-            assert_eq!(restored.settings_profiles.unwrap(), library());
+            let mut expected = library();
+            share_profiles(&mut expected);
+            assert_eq!(restored.settings_profiles.unwrap(), expected);
         }
         let mut only_model = library();
         only_model.entries.retain(|entry| entry.id == "profile-1");
@@ -2002,7 +2289,7 @@ mod tests {
             "models_dir": "models", "active_model": "models/sample.gguf", "settings_profiles": only_model
         })).unwrap().settings_profiles.unwrap();
         assert_eq!(restored.default_profile_id.as_deref(), Some("profile-1"));
-        assert_eq!(restored.entries.len(), 1);
+        assert_eq!(restored.entries.len(), 3);
         let promoted = &restored.entries[0];
         assert_eq!(promoted.scope, ProfileScope::Global);
         assert_eq!(promoted.settings, original_settings);
@@ -2017,6 +2304,42 @@ mod tests {
         assert_eq!(promoted.legacy, Some(true));
         assert!(promoted.coverage.as_ref().unwrap().contains(&"ngl".into()));
         assert_eq!(restored.applied, original_applied);
+    }
+
+    #[test]
+    fn every_provider_can_save_and_reload_before_selecting_a_model() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-profile-no-model-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("config.json");
+        for provider in crate::providers::ProviderId::ALL {
+            let cfg = super::super::migrate_value(json!({
+                "config_version": super::super::CURRENT_CONFIG_VERSION,
+                "models_dir": "models", "active_provider": provider.as_str(),
+                "active_model": "", "active_runtime": ""
+            }))
+            .unwrap();
+            cfg.validate().unwrap();
+            let key = application_key("", "default", provider.as_str());
+            let profiles = cfg.settings_profiles.as_ref().unwrap();
+            assert!(profiles.applied[&key].model.is_empty());
+            super::super::save_to_path(&cfg, &path).unwrap();
+            let loaded = super::super::load_from_path(&path).unwrap();
+            assert_eq!(loaded.active_provider, provider.as_str());
+            assert!(loaded.active_model.is_empty());
+            assert_eq!(loaded.settings_profiles, cfg.settings_profiles);
+
+            let mut invalid = profiles.clone();
+            let empty = invalid.applied.remove(&key).unwrap();
+            invalid
+                .applied
+                .insert("session:missing-model".into(), empty.clone());
+            assert!(invalid.validate().is_err());
+            invalid.applied.remove("session:missing-model");
+            invalid.applied.insert("model:missing-model".into(), empty);
+            assert!(invalid.validate().is_err());
+        }
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]

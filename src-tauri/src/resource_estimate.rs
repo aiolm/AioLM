@@ -1744,6 +1744,32 @@ fn draft_layers(cfg: &AppConfig) -> u64 {
 }
 
 pub fn estimate(cfg: &AppConfig, env: &Environment) -> ResourceEstimate {
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        // Python providers can also load a single GGUF (including Metal).
+        // Artifact inspection accounts for the selected format without using
+        // llama.cpp's placement or KV formulas for another engine.
+        let path = Path::new(&cfg.active_model);
+        let artifact = crate::providers::execution::inspect(path)
+            .unwrap_or_else(|_| crate::providers::artifacts::inspect_snapshot(path));
+        return ResourceEstimate {
+            vram_bytes: None,
+            ram_offload_bytes: None,
+            ssd_offload_bytes: None,
+            required_vram_bytes: None,
+            host_memory_bytes: None,
+            vram_capacity_bytes: env.vram_capacity_bytes,
+            ram_capacity_bytes: env.ram_capacity_bytes,
+            disk_bytes: artifact.size_bytes,
+            disk_complete: artifact.ready_files(),
+            model_bytes: artifact.size_bytes,
+            auxiliary_bytes: 0,
+            kv_bytes: None,
+            notes: vec![
+                EstimateNote::UnsupportedArchitecture,
+                EstimateNote::Automatic,
+            ],
+        };
+    }
     let memory = estimate_memory(cfg, env);
     let mut notes: BTreeSet<_> = memory.notes.iter().copied().collect();
     let required_vram_bytes = memory.vram.map(ResourceRange::planned);
@@ -2252,6 +2278,23 @@ mod tests {
             accelerator,
             shared_memory: false,
         }
+    }
+
+    #[test]
+    fn python_provider_disk_accounting_accepts_gguf_without_inventing_memory() {
+        let scratch = Scratch::new();
+        let (values, tensors) = plain("llama");
+        let path = scratch.write("metal-model.gguf", &fixture::file(&values, &tensors));
+        let mut cfg = config(&path);
+        cfg.active_provider = "vllm".into();
+        let result = super::estimate(&cfg, &environment(GPU));
+        let size = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(result.model_bytes, size);
+        assert_eq!(result.disk_bytes, size);
+        assert!(result.disk_complete);
+        assert_eq!(result.required_vram_bytes, None);
+        assert_eq!(result.host_memory_bytes, None);
+        assert_eq!(result.kv_bytes, None);
     }
 
     fn adapter(path: &Path) -> LoraAdapterConfig {

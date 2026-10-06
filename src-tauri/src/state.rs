@@ -22,6 +22,7 @@ pub(crate) struct AppState {
     pub(crate) discover_cancel: Arc<AtomicBool>,
     pub(crate) verify_cancel: Arc<AtomicBool>,
     pub(crate) model_scans: Arc<models::ScanRegistry>,
+    pub(crate) media_jobs: Arc<crate::media::jobs::MediaJobs>,
     /// The external API listener. It is independent of every model process:
     /// starting, stopping or replacing models never touches it, and stopping
     /// it never unloads a model.
@@ -62,6 +63,7 @@ impl Default for AppState {
             discover_cancel: Arc::new(AtomicBool::new(false)),
             verify_cancel: Arc::new(AtomicBool::new(false)),
             model_scans: Arc::new(models::ScanRegistry::default()),
+            media_jobs: Arc::new(crate::media::jobs::MediaJobs::default()),
             gateway: Arc::new(Mutex::new(None)),
             api_control: tokio::sync::Mutex::new(()),
             api_key: new_api_key(),
@@ -90,6 +92,7 @@ impl AppState {
     }
 
     pub(crate) fn begin_normal_exit(&self) {
+        self.media_jobs.cancel_all();
         let mut normal_exit = self
             .normal_exit
             .lock()

@@ -86,7 +86,7 @@ fn grant_selected_attachment(state: &AppState, path: &Path) -> Result<String, St
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("cannot select attachment: {error}"))?;
-    let selection = if image_mime_type(&canonical).is_some() {
+    let selection = if crate::media::mime(&canonical).is_some() {
         &state.selected_image
     } else if document_extension(&canonical) {
         &state.selected_document
@@ -111,7 +111,7 @@ pub(crate) async fn pick_attachment(state: State<'_, AppState>) -> Result<Option
         .lock()
         .map_err(|_| "document selection state was poisoned".to_string())? = None;
     let path = tokio::task::spawn_blocking(|| {
-        let extensions: Vec<&str> = IMAGE_EXTENSIONS
+        let extensions: Vec<&str> = crate::media::EXTENSIONS
             .iter()
             .chain(DOCUMENT_EXTENSIONS)
             .copied()
@@ -379,6 +379,88 @@ pub(crate) async fn read_image_data(
     })
     .await
     .map_err(|error| format!("image read task failed: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) async fn import_media(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::media::Attachment, String> {
+    let canonical = {
+        let mut selected = state
+            .selected_image
+            .lock()
+            .map_err(|_| "media selection state was poisoned")?;
+        let canonical = ensure_selected_image_path(selected.as_deref(), Path::new(&path))?;
+        *selected = None;
+        canonical
+    };
+    tokio::task::spawn_blocking(move || {
+        let file = open_verified_file(&canonical, &canonical, "media")?;
+        crate::media::import_selected(&canonical, file)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn resolve_media(
+    reference: String,
+    provider_id: String,
+) -> Result<serde_json::Value, String> {
+    let provider =
+        crate::providers::ProviderId::parse(&provider_id).ok_or("unknown media provider")?;
+    tokio::task::spawn_blocking(move || crate::media::resolve(&reference, provider))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn cancel_media_operation(
+    state: State<'_, AppState>,
+    operation_id: String,
+) -> Result<(), String> {
+    state.media_jobs.cancel(&operation_id)
+}
+
+#[tauri::command]
+pub(crate) async fn transcribe_media(
+    state: State<'_, AppState>,
+    reference: String,
+    session_id: String,
+    operation_id: String,
+) -> Result<crate::gateway::Transcription, String> {
+    if state.exiting.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("application is exiting".into());
+    }
+    let job = state.media_jobs.begin(operation_id)?;
+    if job.cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("media preparation cancelled".into());
+    }
+    let audio = tokio::task::spawn_blocking(move || crate::media::read_owned_audio(&reference))
+        .await
+        .map_err(|error| error.to_string())??;
+    crate::gateway::transcribe_audio(state.model_source(), session_id, audio, job.cancel.clone())
+        .await
+}
+
+#[tauri::command]
+pub(crate) async fn extract_video_frames(
+    state: tauri::State<'_, crate::state::AppState>,
+    reference: String,
+    operation_id: String,
+    max_frames: Option<usize>,
+) -> Result<crate::media::preprocessing::VideoFrames, String> {
+    if state.exiting.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("application is exiting".into());
+    }
+    let job = state.media_jobs.begin(operation_id)?;
+    crate::media::preprocessing::extract_video_frames(
+        &reference,
+        max_frames.unwrap_or(4),
+        job.cancel.clone(),
+    )
+    .await
 }
 
 #[cfg(test)]

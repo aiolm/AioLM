@@ -207,6 +207,7 @@ pub(super) async fn start_on_target(
         }
     }
     let api_key = format!("lb-{}", Uuid::new_v4().simple());
+    let engine = crate::providers::execution::probed_info(&worker_cfg).await?;
     let (child, url, api_key_file) = match server::spawn(&worker_cfg, &api_key, err, &resolved_gpu)
     {
         Ok(value) => value,
@@ -263,6 +264,7 @@ pub(super) async fn start_on_target(
                 String::new()
             },
         );
+        server.engine = Some(engine);
     }
 
     match server::wait_ready(
@@ -490,6 +492,11 @@ pub(crate) async fn apply_request_settings(
         .ok_or_else(|| "running execution settings are unavailable".to_string())?;
     let next = config::execution::apply_request_settings(live, &cfg)?;
     let snapshot = config::execution::snapshot(&next);
+    let mut engine = crate::providers::execution::info(&next)?;
+    if let Some(previous) = &server.engine {
+        engine.modalities = previous.modalities;
+    }
+    server.engine = Some(engine);
     server.execution = Some(next);
     Ok(snapshot)
 }
@@ -560,6 +567,12 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
 
     let mut response = serde_json::Map::new();
     response.insert("state".into(), server.lifecycle.as_str().into());
+    if let Some(engine) = &server.engine {
+        response.insert(
+            "engine".into(),
+            serde_json::to_value(engine).map_err(|error| error.to_string())?,
+        );
+    }
     response.insert("active_requests".into(), server.active_requests.into());
     response.insert("idle_seconds".into(), server.idle_seconds().into());
     if let Some(execution) = &server.execution {

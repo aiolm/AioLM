@@ -375,6 +375,38 @@ pub fn read_metadata(path: &Path) -> Result<ModelMetadata, String> {
     Ok(metadata)
 }
 
+/// Input modalities a multimodal projector (`mmproj`) file encodes, as its own
+/// header states them. Keys are llama.cpp's `KEY_HAS_VISION_ENC` and
+/// `KEY_HAS_AUDIO_ENC` from `tools/mtmd/clip-impl.h`. `None` means the header
+/// does not say, which is not the same as `false`.
+#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProjectorModalities {
+    pub vision: Option<bool>,
+    pub audio: Option<bool>,
+}
+
+pub fn read_projector_modalities(path: &Path) -> Result<ProjectorModalities, String> {
+    let (mut reader, keys) = open_header(path)?;
+    let mut modalities = ProjectorModalities::default();
+    for _ in 0..keys {
+        let key = reader.string()?;
+        let kind = reader.u32()?;
+        let slot = match key.as_str() {
+            "clip.has_vision_encoder" => Some(&mut modalities.vision),
+            "clip.has_audio_encoder" => Some(&mut modalities.audio),
+            _ => None,
+        };
+        match slot {
+            Some(slot) if kind == 7 => *slot = Some(reader.bytes::<1>()?[0] != 0),
+            _ => skip_value(&mut reader, kind)?,
+        }
+        if modalities.vision.is_some() && modalities.audio.is_some() {
+            break;
+        }
+    }
+    Ok(modalities)
+}
+
 fn read_string_array<R: Read + Seek>(
     reader: &mut Reader<R>,
     kind: u32,
@@ -1016,6 +1048,44 @@ pub fn read_model_facts(path: &Path) -> Result<ModelFacts, String> {
     Ok(facts)
 }
 
+/// Bounded per-tensor type evidence for loaders with a narrower GGUF scope.
+/// `general.file_type` names a predominant type and cannot prove that every
+/// tensor is usable. This reads only tensor descriptors, never weight data.
+pub fn read_tensor_types(path: &Path) -> Result<Vec<(String, u32)>, String> {
+    if read_model_facts(path)?.tensors.is_none() {
+        return Err("GGUF tensor table extends beyond the file or has invalid offsets".into());
+    }
+    let (mut reader, tensors, keys) = open_header_with_tensors(path)?;
+    if tensors == 0 || tensors > MAX_TENSORS {
+        return Err("GGUF has an empty or implausible tensor table".into());
+    }
+    for _ in 0..keys {
+        reader.string()?;
+        let kind = reader.u32()?;
+        skip_value(&mut reader, kind)?;
+    }
+    let mut types = Vec::with_capacity(tensors as usize);
+    for _ in 0..tensors {
+        let name = reader.string()?;
+        if name.is_empty() || name.len() as u64 > MAX_TENSOR_NAME_BYTES {
+            return Err("GGUF tensor name is empty or implausibly long".into());
+        }
+        let dimensions = reader.u32()?;
+        if dimensions == 0 || dimensions > MAX_TENSOR_DIMS {
+            return Err("GGUF tensor declares invalid dimensions".into());
+        }
+        for _ in 0..dimensions {
+            if reader.u64()? == 0 {
+                return Err("GGUF tensor declares an empty dimension".into());
+            }
+        }
+        let kind = reader.u32()?;
+        reader.u64()?; // offset, validated against the file by read_model_facts
+        types.push((name, kind));
+    }
+    Ok(types)
+}
+
 /// Synthetic GGUF files for tests: metadata plus a tensor table whose data
 /// is zero-filled, so every tensor's size is exactly what the test declares.
 #[cfg(test)]
@@ -1154,6 +1224,47 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(metadata.context_length, Some(8_192));
+    }
+
+    #[test]
+    fn projector_modalities_come_from_the_clip_encoder_flags() {
+        let both = in_temporary_file(
+            &header(&[
+                ("general.architecture", 8, string("clip")),
+                ("clip.has_vision_encoder", 7, vec![1]),
+                ("clip.has_audio_encoder", 7, vec![1]),
+            ]),
+            read_projector_modalities,
+        )
+        .unwrap();
+        assert_eq!(
+            both,
+            ProjectorModalities {
+                vision: Some(true),
+                audio: Some(true)
+            }
+        );
+        let vision = in_temporary_file(
+            &header(&[
+                ("clip.has_vision_encoder", 7, vec![1]),
+                ("clip.has_audio_encoder", 7, vec![0]),
+            ]),
+            read_projector_modalities,
+        )
+        .unwrap();
+        assert_eq!(
+            vision,
+            ProjectorModalities {
+                vision: Some(true),
+                audio: Some(false)
+            }
+        );
+        let unstated = in_temporary_file(
+            &header(&[("general.architecture", 8, string("clip"))]),
+            read_projector_modalities,
+        )
+        .unwrap();
+        assert_eq!(unstated, ProjectorModalities::default());
     }
 
     #[test]
@@ -1485,5 +1596,28 @@ mod tests {
                 .tensors,
             None
         );
+    }
+
+    #[test]
+    fn per_tensor_type_evidence_rejects_truncation_and_malformed_dimensions() {
+        let mut bytes = fixture::file(&[], &[("blk.0.attn_q.weight".into(), vec![32, 32], 4096)]);
+        let path =
+            std::env::temp_dir().join(format!("aiolm-tensor-types-{}.gguf", uuid::Uuid::new_v4()));
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            read_tensor_types(&path).unwrap(),
+            vec![("blk.0.attn_q.weight".into(), 0)]
+        );
+        let name = b"blk.0.attn_q.weight";
+        let start = bytes
+            .windows(name.len())
+            .position(|window| window == name)
+            .unwrap();
+        bytes[start + name.len()..start + name.len() + 4].copy_from_slice(&5u32.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(read_tensor_types(&path).is_err());
+        std::fs::write(&path, &bytes[..40]).unwrap();
+        assert!(read_tensor_types(&path).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }

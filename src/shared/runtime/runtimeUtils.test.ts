@@ -7,15 +7,15 @@ describe("runtime version labels", () => {
   });
 
   it("marks a version nobody recorded instead of inventing one", () => {
-    expect(formatRuntimeVersion("b10638")).toBe("?(10638)");
-    expect(formatRuntimeVersion("b10603", null)).toBe("?(10603)");
-    expect(formatRuntimeVersion("b10638", { semver: "", build: 10638, commit: "" })).toBe("?(10638)");
+    expect(formatRuntimeVersion("b10638")).toBe("b10638");
+    expect(formatRuntimeVersion("b10603", null)).toBe("b10603");
+    expect(formatRuntimeVersion("b10638", { semver: "", build: 10638, commit: "" })).toBe("b10638");
   });
 
   it("prefers the build the binary reported over a PR or local storage id", () => {
     expect(formatRuntimeVersion("pr12345", { semver: "0.3.0-dev", build: 10640, commit: "abc" })).toBe("0.3.0-dev(10640)");
-    expect(formatRuntimeVersion("pr12345")).toBe("?(pr12345)");
-    expect(formatRuntimeVersion("local_b10840_nop2p")).toBe("?(local_b10840_nop2p)");
+    expect(formatRuntimeVersion("pr12345")).toBe("pr12345");
+    expect(formatRuntimeVersion("local_b10840_nop2p")).toBe("local_b10840_nop2p");
     // llama.cpp reports build 0 when compiled without git: no number to prefer.
     expect(formatRuntimeVersion("pr12345", { semver: "0.0.0-dev", build: 0, commit: "" })).toBe("0.0.0-dev(pr12345)");
   });
@@ -28,9 +28,9 @@ describe("runtime version labels", () => {
   it("keeps the runtime a benchmark measured after the installation changes", () => {
     expect(formatRecordedRuntimeVersion("0.3.0-dev (build 123, commit abc123)", "b999", "n/a")).toBe("0.3.0-dev(123)");
     expect(formatRecordedRuntimeVersion("compiler: test\nversion: 0.3.0-dev (build 123)", "b999", "n/a")).toBe("0.3.0-dev(123)");
-    expect(formatRecordedRuntimeVersion("version: 4589 (1a2b3c4)", "b999", "n/a")).toBe("?(4589)");
-    expect(formatRecordedRuntimeVersion("b123-abcdef", "b999", "n/a")).toBe("?(123)");
-    expect(formatRecordedRuntimeVersion("unknown", "b123", "n/a")).toBe("?(123)");
+    expect(formatRecordedRuntimeVersion("version: 4589 (1a2b3c4)", "b999", "n/a")).toBe("b4589");
+    expect(formatRecordedRuntimeVersion("b123-abcdef", "b999", "n/a")).toBe("b123");
+    expect(formatRecordedRuntimeVersion("unknown", "b123", "n/a")).toBe("b123");
     expect(formatRecordedRuntimeVersion("", "", "n/a")).toBe("n/a");
   });
 });

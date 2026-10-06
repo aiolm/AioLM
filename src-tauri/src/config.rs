@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub mod execution;
 pub mod profiles;
 
-const CURRENT_CONFIG_VERSION: u32 = 12;
+const CURRENT_CONFIG_VERSION: u32 = 13;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
@@ -454,6 +454,24 @@ pub struct AppConfig {
     pub gpu: GpuPlacement,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_profiles: Option<profiles::SettingsProfileLibrary>,
+    /// The serving provider every launch from this configuration uses
+    /// (`llama.cpp`, `vllm`, `mlx-vlm`). Configuration written before
+    /// providers existed has none, which always meant llama.cpp; schema 13
+    /// writes it explicitly. Profiles never change it.
+    pub active_provider: String,
+    /// Runtime id of a non-llama provider (see `providers::python_env`).
+    /// llama.cpp runtimes stay identified by `active_backend`/`active_build`.
+    pub active_runtime: String,
+    /// Options for each non-llama provider, keyed by provider id. Each map is
+    /// validated against its own provider's schema only; a value saved for one
+    /// provider is never read by another. Unsupported values are kept and
+    /// reported until the user corrects them.
+    pub provider_options:
+        std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+    /// The runtime most recently selected for each provider, so switching back
+    /// to a provider restores its runtime instead of guessing one.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub recent_runtimes: std::collections::BTreeMap<String, String>,
 }
 
 fn default_iters() -> u32 {
@@ -558,6 +576,10 @@ impl Default for AppConfig {
             sessions: Vec::new(),
             gpu: GpuPlacement::default(),
             settings_profiles: Some(profiles::SettingsProfileLibrary::default()),
+            active_provider: crate::providers::LLAMA_PROVIDER.into(),
+            active_runtime: String::new(),
+            provider_options: std::collections::BTreeMap::new(),
+            recent_runtimes: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -653,6 +675,13 @@ impl AppConfig {
         if !matches!(self.flash_attn.as_str(), "auto" | "on" | "off") {
             self.flash_attn = "auto".into();
         }
+        self.active_provider = self.active_provider.trim().to_owned();
+        if self.active_provider.is_empty() {
+            self.active_provider = crate::providers::LLAMA_PROVIDER.into();
+        }
+        self.active_runtime = self.active_runtime.trim().to_owned();
+        self.provider_options
+            .retain(|_, options| !options.is_empty());
         let mut execution_base = self.clone();
         execution_base.sessions.clear();
         execution_base.settings_profiles = None;
@@ -686,6 +715,20 @@ impl AppConfig {
         }
         if self.active_backend.is_empty() != self.active_build.is_empty() {
             return Err("active runtime backend and build must be selected together".into());
+        }
+        validate_provider_selection(
+            &self.active_provider,
+            &self.active_runtime,
+            &self.provider_options,
+        )?;
+        for (provider, runtime) in &self.recent_runtimes {
+            if !crate::providers::ProviderId::parse(provider)
+                .is_some_and(|id| id.as_str() == provider)
+                || runtime.len() > 128
+                || runtime.contains('\0')
+            {
+                return Err("invalid recent runtime selection".into());
+            }
         }
         if self.models_dir.len() > 32_768 || self.active_model.len() > 32_768 {
             return Err("model paths are too long".into());
@@ -789,6 +832,46 @@ impl AppConfig {
         }
         Ok(())
     }
+}
+
+const MAX_PROVIDER_OPTIONS_BYTES: usize = 262_144;
+
+/// Structural checks only. Option values are validated against the provider
+/// schema when they are displayed or launched, so an unsupported saved value
+/// stays visible as an issue instead of making the whole configuration fail to
+/// load.
+pub(crate) fn validate_provider_selection(
+    provider: &str,
+    runtime: &str,
+    options: &std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
+) -> Result<(), String> {
+    use crate::providers::ProviderId;
+    let selected = ProviderId::parse(provider)
+        .ok_or_else(|| format!("unknown inference provider: {provider}"))?;
+    if !runtime.is_empty() {
+        if selected == ProviderId::Llama {
+            return Err("llama.cpp runtimes are selected by backend and build".into());
+        }
+        crate::providers::python_env::validate_id(runtime)?;
+    }
+    for key in options.keys() {
+        match ProviderId::parse(key) {
+            Some(ProviderId::Llama) | None => {
+                return Err(format!("provider options cannot be saved for '{key}'"))
+            }
+            Some(id) if id.as_str() == key => {}
+            Some(_) => {
+                return Err(format!(
+                    "provider options require a canonical engine name: '{key}'"
+                ))
+            }
+        }
+    }
+    let bytes = serde_json::to_vec(options).map_err(|error| error.to_string())?;
+    if bytes.len() > MAX_PROVIDER_OPTIONS_BYTES {
+        return Err("provider options are too large".into());
+    }
+    Ok(())
 }
 
 fn migrate(cfg: AppConfig) -> Result<AppConfig, String> {
@@ -981,21 +1064,44 @@ fn migrate_with_presence(
         // type default, so a config written before either existed migrates
         // for free through the container-level `#[serde(default)]` on
         // `AppConfig` itself; no per-field repair is needed here.
-        2..=11 => {}
+        2..=12 => {}
         CURRENT_CONFIG_VERSION => {}
         _ => unreachable!("future config versions are rejected above"),
     }
     migrate_server_args(&mut cfg, raw);
     cfg.normalize();
+    // Configuration written before schema 13 only ever described llama.cpp.
+    // Sessions with their own execution settings keep the provider they were
+    // saved for even if the global selection later changes.
+    if cfg.config_version < 13 {
+        cfg.active_provider = crate::providers::LLAMA_PROVIDER.into();
+        cfg.active_runtime.clear();
+        let inherited: serde_json::Map<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
+            "active_provider": crate::providers::LLAMA_PROVIDER,
+            "active_runtime": "", "active_backend": cfg.active_backend, "active_build": cfg.active_build
+        })).expect("legacy runtime selection is an object");
+        for session in &mut cfg.sessions {
+            if session.execution.is_none() && session.id != "default" {
+                session.execution = Some(inherited.clone());
+            }
+            if let Some(execution) = session.execution.as_mut() {
+                execution
+                    .entry("active_provider")
+                    .or_insert_with(|| crate::providers::LLAMA_PROVIDER.into());
+            }
+        }
+    }
     // Profiles written before schema 12 did not own the runtime pair, so they
     // carry no runtime to apply and have to adopt the one they last ran on.
     let adopt_runtimes = cfg.config_version < 12;
+    let separate_runtimes = cfg.config_version < 13;
     if let Some(raw) = raw {
         profiles::initialize_profiles(
             &mut cfg,
             raw.get("settings_profiles")
                 .is_some_and(|value| !value.is_null()),
             adopt_runtimes,
+            separate_runtimes,
         )?;
     } else if cfg.settings_profiles.is_none() {
         cfg.settings_profiles = Some(profiles::SettingsProfileLibrary::default());
@@ -1057,6 +1163,21 @@ fn load_from_path(path: &Path) -> Result<AppConfig, String> {
     let was_old = cfg.config_version < CURRENT_CONFIG_VERSION;
     let migrated = migrate_value(raw_value.clone())?;
     if was_old {
+        let backup = path.with_extension(format!(
+            "v{}-before-v{}.json",
+            cfg.config_version, CURRENT_CONFIG_VERSION
+        ));
+        if !backup.exists() {
+            // Preserve the exact pre-migration document, including unknown fields.
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&backup)
+                .map_err(|error| format!("failed to back up settings before migration: {error}"))?;
+            std::io::Write::write_all(&mut file, raw.as_bytes())
+                .map_err(|error| error.to_string())?;
+            file.sync_all().map_err(|error| error.to_string())?;
+        }
         let serialized = serde_json::to_vec_pretty(&migrated)
             .map_err(|error| format!("failed to serialize migrated config: {error}"))?;
         atomic_write(path, &serialized)?;
@@ -1373,14 +1494,58 @@ mod tests {
     }
 
     #[test]
-    fn first_install_loads_and_saves_only_one_default_profile() {
+    fn engine_option_keys_match_the_keys_used_by_launch_and_recent_selection() {
+        let mut cfg = AppConfig::default();
+        cfg.provider_options.insert(
+            "vllm".into(),
+            serde_json::json!({"temperature":0.5})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        cfg.recent_runtimes
+            .insert("mlx-vlm".into(), "synthetic-runtime".into());
+        cfg.validate().unwrap();
+        let mut wrong_options = cfg.clone();
+        let options = wrong_options.provider_options.remove("vllm").unwrap();
+        wrong_options
+            .provider_options
+            .insert(" vllm".into(), options);
+        assert!(wrong_options.validate().unwrap_err().contains("canonical"));
+        cfg.recent_runtimes
+            .insert(" mlx-vlm".into(), "synthetic-runtime".into());
+        assert!(cfg.validate().unwrap_err().contains("recent runtime"));
+    }
+
+    #[test]
+    fn runtime_migration_keeps_exact_original_bytes_and_preserves_an_existing_backup() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-provider-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        let original = "{\n  \"config_version\": 12, \"future_field\": {\"preserved\":true}\n}\n";
+        fs::write(&path, original).unwrap();
+        let migrated = load_from_path(&path).unwrap();
+        assert_eq!(migrated.config_version, 13);
+        assert_eq!(migrated.active_provider, "llama.cpp");
+        let backup = path.with_extension("v12-before-v13.json");
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        // A second older document cannot replace the first recovery point.
+        fs::write(&path, "{\"config_version\":12,\"ctx_size\":8192}").unwrap();
+        assert_eq!(load_from_path(&path).unwrap().ctx_size, 8192);
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn first_install_loads_and_saves_one_default_for_each_provider() {
         let directory =
             std::env::temp_dir().join(format!("aiolm-profile-initialization-{}", Uuid::new_v4()));
         let path = directory.join("config.json");
         let mut cfg = load_from_path(&path).unwrap();
         let profiles = cfg.settings_profiles.as_ref().unwrap();
         assert_eq!(profiles, &profiles::SettingsProfileLibrary::default());
-        assert_eq!(profiles.entries.len(), 1);
+        assert_eq!(profiles.entries.len(), 3);
         assert_eq!(
             profiles.applied["model:"].profile_id.as_deref(),
             Some("profile-default")
@@ -1402,7 +1567,15 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cfg.config_version, CURRENT_CONFIG_VERSION);
-        assert!(cfg.sessions[0].execution.is_none());
+        assert_eq!(
+            cfg.sessions[0].execution.as_ref().unwrap()["active_provider"],
+            "llama.cpp"
+        );
+        assert!(!cfg.sessions[0]
+            .execution
+            .as_ref()
+            .unwrap()
+            .contains_key("temperature"));
         let migrated = migrate_value(serde_json::json!({
             "config_version":11,
             "sessions":[{"id":"isolated","model_profile_id":" profile-a ","execution":{"temperature":99,"ctx_size":256}}]

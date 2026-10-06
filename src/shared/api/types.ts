@@ -4,6 +4,10 @@ import type { ExecutionSettings, SessionExecutionSettings } from '../config/exec
 import type { SettingsProfileLibrary } from '../config/settingsProfiles';
 
 export interface AppConfig {
+  active_provider?: import('./providers').ProviderId;
+  active_runtime?: string;
+  provider_options?: Partial<Record<import('./providers').ProviderId, Record<string, unknown>>>;
+  recent_runtimes?: Partial<Record<import('./providers').ProviderId, string>>;
   settings_profiles?: SettingsProfileLibrary;
   runtime_defaults?: string[];
   config_version: number;
@@ -64,6 +68,8 @@ export interface LoraAdapterConfig {
 }
 
 export interface GgufModel {
+  artifact?: import('./providers').ModelArtifact;
+  compatibility?: import('./providers').ModelCompatibility[];
   name: string;
   path: string;
   size_mb: number;
@@ -113,13 +119,17 @@ export interface HfFile {
   size_bytes: number;
   oid?: string;
   is_mmproj: boolean;
+  /** Same-repository loading assets exist; launch compatibility is checked separately. */
+  companions_available?: boolean;
   download_url: string;
 }
 
 export interface DownloadedModel {
   repo_id: string;
+  /** First shard for a split model; otherwise the selected file. */
   file_path: string;
   path: string;
+  /** Total bytes across the model's files, including reused completed shards. */
   size_bytes: number;
 }
 
@@ -316,6 +326,11 @@ export interface LatestInfo {
 /** One stored answer to "does this runtime compute correctly on these GPUs?" */
 export interface VerificationRecord {
   verdict: "pass" | "fail" | "unsupported";
+  method?: 'mlx-host-device-kld' | 'vllm-topk-partition-kld';
+  coverage?: 'full' | 'partial';
+  median_kld?: number;
+  median_kld_lower_bound?: number;
+  top_k?: number;
   ratio?: number;
   detail: string;
   suite_version: number;
@@ -375,6 +390,11 @@ export interface PerformanceBenchmarkRow {
 }
 
 export interface PerformanceBenchmarkResult {
+  provider?: import('./providers').ProviderId;
+  model_format?: import('./providers').ModelArtifact['format'];
+  runtime_accelerator?: string;
+  runtime_variant?: string;
+  runtime_plugin_version?: string;
   run_id: string;
   rows: PerformanceBenchmarkRow[];
   status: "complete" | "partial" | "cancelled" | "failed";
@@ -400,6 +420,9 @@ export interface BenchmarkModelIdentity {
   status: 'sha256' | 'unidentified' | 'multipart';
   sha256: string | null;
   size_bytes: number | null;
+  format?: 'gguf' | 'hf-safetensors' | 'mlx' | 'unknown';
+  revision?: string;
+  local_fingerprint?: string;
   metadata?: import('@aiolm/benchmark-contracts').BenchmarkModelMetadata | null;
 }
 
@@ -473,6 +496,7 @@ export interface SessionDefinition {
 }
 
 export interface SessionStatus {
+  engine?: import('./providers').EngineInfo;
   id: string;
   name: string;
   state: ServerState;
@@ -502,6 +526,7 @@ export type SessionSummary = Omit<SessionStatus, 'api_key' | 'log_tail' | 'error
 export type ServerState = "stopped" | "starting" | "running" | "stopping" | "failed" | "crashed";
 
 export interface ServerStatus {
+  engine?: import('./providers').EngineInfo;
   state: ServerState;
   url?: string;
   model?: string;
@@ -614,11 +639,20 @@ export interface ChatImagePart {
   image_url: { url: string };
 }
 
-export type ChatContentPart = ChatTextPart | ChatImagePart;
+export type ChatContentPart = ChatTextPart | ChatImagePart
+  | { type: 'input_audio'; input_audio: { data: string; format: string } }
+  | { type: 'input_video'; input_video: { data?: string; url?: string } }
+  | { type: 'video_url'; video_url: { url: string } }
+  | { type: 'aiolm_media'; media: { ref: string; kind: 'image' | 'audio' | 'video' } };
 
 export type ChatDelta = StreamDelta;
 
 export interface ChatSampling {
+  provider?: import('./providers').ProviderId;
+  provider_options?: Record<string, unknown>;
+  engine?: import('./providers').EngineInfo;
+  /** Request-only output bound computed from the selected session's known context. */
+  max_tokens_limit?: number;
   runtime_defaults?: string[];
   temperature: number;
   top_p: number;

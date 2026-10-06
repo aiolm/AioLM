@@ -8,6 +8,7 @@
 #[cfg(test)]
 mod api_tests;
 mod http;
+mod multipart;
 mod routing;
 
 pub use routing::ModelSource;
@@ -318,6 +319,12 @@ async fn route(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
         }
         ("POST", "/v1/completions") => proxy_openai(stream, ctx, request, "completions").await,
         ("POST", "/v1/embeddings") => proxy_openai(stream, ctx, request, "embeddings").await,
+        ("POST", "/v1/audio/transcriptions") => {
+            proxy_audio(stream, ctx, request, "audio/transcriptions").await
+        }
+        ("POST", "/v1/audio/translations") => {
+            proxy_audio(stream, ctx, request, "audio/translations").await
+        }
         ("POST", "/v1/messages") => handle_messages(stream, ctx, request).await,
         (_, "/v1/responses") => handle_responses(stream, ctx, request).await,
         (_, path) if path.starts_with("/v1/responses/") => {
@@ -329,6 +336,8 @@ async fn route(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
             | "/v1/chat/completions"
             | "/v1/completions"
             | "/v1/embeddings"
+            | "/v1/audio/transcriptions"
+            | "/v1/audio/translations"
             | "/v1/messages",
         ) => Err(ApiError::new(
             405,
@@ -409,7 +418,7 @@ async fn proxy_openai(
     request: Request,
     endpoint: &str,
 ) -> Handled {
-    let parsed: Value = serde_json::from_slice(&request.body).map_err(|error| {
+    let mut parsed: Value = serde_json::from_slice(&request.body).map_err(|error| {
         ApiError::new(
             400,
             "invalid_json",
@@ -427,11 +436,59 @@ async fn proxy_openai(
         stream,
         upstream_post(&lease, endpoint)
             .header("Content-Type", "application/json")
-            .body(request.body)
+            .json({
+                lease.adapt(endpoint, &mut parsed)?;
+                &parsed
+            })
             .send(),
     )
     .await?
     .map_err(upstream_failure)?;
+    relay_openai_response(stream, response).await
+}
+
+async fn proxy_audio(
+    stream: &mut TcpStream,
+    ctx: &Ctx,
+    request: Request,
+    endpoint: &str,
+) -> Handled {
+    let content_type = request
+        .headers
+        .get("content-type")
+        .map(String::as_str)
+        .unwrap_or_default();
+    let mut form = multipart::AudioForm::parse(content_type, &request.body)
+        .map_err(|error| ApiError::new(400, "invalid_audio_form", error))?;
+    let mut fields = Value::Object(form.fields.clone());
+    let lease = ctx
+        .models
+        .acquire(requested_model(&fields)?)
+        .map_err(RouteError::into_api_error)?;
+    lease.adapt(endpoint, &mut fields)?;
+    form.fields = fields.as_object().cloned().ok_or_else(|| {
+        ApiError::new(
+            400,
+            "invalid_audio_form",
+            "audio fields must remain an object",
+        )
+    })?;
+    let body = form
+        .encode()
+        .map_err(|error| ApiError::new(400, "invalid_audio_form", error))?;
+    let response = unless_client_leaves(
+        stream,
+        upstream_post(&lease, endpoint)
+            .header("Content-Type", form.content_type())
+            .body(body)
+            .send(),
+    )
+    .await?
+    .map_err(upstream_failure)?;
+    relay_openai_response(stream, response).await
+}
+
+async fn relay_openai_response(stream: &mut TcpStream, response: reqwest::Response) -> Handled {
     let status = response.status().as_u16();
     let content_type = response
         .headers()
@@ -454,6 +511,87 @@ async fn proxy_openai(
         .await
         .map_err(|error| format!("gateway shutdown failed: {error}"))?;
     Ok(())
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Transcription {
+    pub text: String,
+    pub session_id: String,
+    pub model: String,
+}
+
+/// Local attachment transcription uses the same selected-session lease and
+/// protocol adapter as the public API, with no caller-controlled URL or key.
+pub(crate) async fn transcribe_audio(
+    models: ModelSource,
+    session_id: String,
+    audio: crate::media::OwnedAudio,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<Transcription, String> {
+    let lease = models
+        .acquire_session(&session_id)
+        .map_err(|error| error.message)?;
+    let mut form = multipart::AudioForm::from_audio(audio);
+    let mut fields = json!({"response_format":"json"});
+    lease
+        .adapt("audio/transcriptions", &mut fields)
+        .map_err(|error| error.message)?;
+    form.fields = fields
+        .as_object()
+        .cloned()
+        .ok_or("transcription fields must be an object")?;
+    let model = fields
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let body = form.encode()?;
+    let work = async {
+        let response = upstream_post(&lease, "audio/transcriptions")
+            .header("Content-Type", form.content_type())
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| upstream_failure(error).message)?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "transcription failed (HTTP {}): {}",
+                response.status().as_u16(),
+                bounded_upstream_text(response).await
+            ));
+        }
+        let bytes = bounded_upstream_bytes(response, 1024 * 1024).await?;
+        let response: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid transcription response: {error}"))?;
+        let text = response
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty() && text.len() <= 64 * 1024)
+            .ok_or("transcription returned empty or oversized text")?
+            .to_owned();
+        Ok(Transcription {
+            text,
+            session_id,
+            model,
+        })
+    };
+    let cancelled = async {
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("media preparation cancelled".into());
+    }
+    tokio::select! {
+        result = work => result,
+        _ = cancelled => Err("media preparation cancelled".into()),
+        _ = tokio::time::sleep(Duration::from_secs(600)) => Err("transcription did not finish within ten minutes".into()),
+    }
 }
 
 async fn handle_messages(stream: &mut TcpStream, ctx: &Ctx, request: Request) -> Handled {
@@ -482,6 +620,8 @@ async fn handle_messages(stream: &mut TcpStream, ctx: &Ctx, request: Request) ->
         .models
         .acquire(requested_model(&body)?)
         .map_err(RouteError::into_api_error)?;
+    let mut openai_request = openai_request;
+    lease.adapt("chat/completions", &mut openai_request)?;
     let mut request_builder = upstream_post(&lease, "chat/completions").json(&openai_request);
     if stream_requested {
         request_builder = request_builder.header("Accept", "text/event-stream");
@@ -589,6 +729,8 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
         .models
         .acquire(requested_model(&body)?)
         .map_err(RouteError::into_api_error)?;
+    let mut openai_request = openai_request;
+    lease.adapt("chat/completions", &mut openai_request)?;
     let mut request_builder = upstream_post(&lease, "chat/completions").json(&openai_request);
     if stream_requested {
         request_builder = request_builder.header("Accept", "text/event-stream");
@@ -677,10 +819,11 @@ fn response_content_to_openai(value: &Value) -> Result<Value, String> {
             "input_image" | "image" => {
                 let image = block.get("image_url").or_else(|| block.get("url")).cloned().unwrap_or(Value::Null);
                 let url = image.as_str().map(str::to_owned).or_else(|| block.get("image_url").and_then(|value| value.get("url")).and_then(Value::as_str).map(str::to_owned));
-                if let Some(url) = url { output.push(json!({"type":"image_url","image_url":{"url":url}})); }
+                let url = url.ok_or_else(|| "Responses image input requires an image URL or data URI".to_string())?;
+                output.push(json!({"type":"image_url","image_url":{"url":url}}));
             }
             "function_call_output" => output.push(json!({"type":"text","text":block.get("output").cloned().unwrap_or(Value::String(String::new()))})),
-            _ => {}
+            _ => return Err(format!("Responses input type {kind} cannot be represented by this adapter; use /v1/chat/completions for supported audio and video input")),
         }
     }
     Ok(
@@ -1106,7 +1249,7 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
                 converted.push(json!({
                     "role": "tool",
                     "tool_call_id": block.get("tool_use_id").cloned().unwrap_or(Value::Null),
-                    "content": block.get("content").cloned().unwrap_or(Value::String(String::new()))
+                    "content": content_blocks_to_openai(block.get("content").unwrap_or(&Value::String(String::new())))?
                 }));
             }
             let tool_calls: Vec<Value> = blocks
@@ -1123,10 +1266,12 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
                     })
                 })
                 .collect();
+            let remaining = content_blocks_to_openai(&content)?;
             if !tool_calls.is_empty() {
-                converted.push(json!({"role":"assistant","content":content_blocks_to_openai(&content)?,"tool_calls":tool_calls}));
-            } else if !had_tool_result {
-                converted.push(json!({"role":role,"content":content_blocks_to_openai(&content)?}));
+                converted
+                    .push(json!({"role":"assistant","content":remaining,"tool_calls":tool_calls}));
+            } else if !had_tool_result || remaining.as_str().is_none_or(|text| !text.is_empty()) {
+                converted.push(json!({"role":role,"content":remaining}));
             }
         } else {
             converted.push(json!({"role":role,"content":content_blocks_to_openai(&content)?}));
@@ -1166,7 +1311,9 @@ fn content_blocks_to_openai(value: &Value) -> Result<Value, String> {
         match block.get("type").and_then(Value::as_str).unwrap_or_default() {
             "text" | "thinking" => if let Some(value) = block.get(if block.get("type").and_then(Value::as_str) == Some("thinking") { "thinking" } else { "text" }).and_then(Value::as_str) { text.push_str(value); },
             "image" => output.push(json!({"type":"image_url","image_url":{"url":block.get("source").and_then(|source| source.get("data")).and_then(Value::as_str).map(|data| format!("data:{};base64,{}", block.get("source").and_then(|source| source.get("media_type")).and_then(Value::as_str).unwrap_or("image/png"), data)).or_else(|| block.get("source").and_then(|source| source.get("url")).and_then(Value::as_str).map(str::to_owned))}})),
-            _ => {}
+            // These blocks are translated to separate OpenAI tool messages above.
+            "tool_use" | "tool_result" => {}
+            kind => return Err(format!("Anthropic input type {kind} cannot be represented by this adapter; use /v1/chat/completions for supported audio and video input")),
         }
     }
     if output.is_empty() {
@@ -1266,6 +1413,39 @@ mod tests {
         let output = anthropic_to_openai(&request).unwrap();
         assert_eq!(output["messages"][0]["content"], "hello");
         assert_eq!(output["tools"][0]["function"]["name"], "search");
+    }
+
+    #[test]
+    fn wire_adapters_refuse_unrepresentable_media_instead_of_dropping_it() {
+        for kind in ["input_audio", "input_video", "future_media"] {
+            let content = json!([{"type":"text","text":"describe"},{"type":kind}]);
+            assert!(response_content_to_openai(&content)
+                .unwrap_err()
+                .contains(kind));
+            assert!(content_blocks_to_openai(&content)
+                .unwrap_err()
+                .contains(kind));
+        }
+        assert!(response_content_to_openai(&json!([{"type":"input_image"}])).is_err());
+        // A tool result must not suppress validation of other blocks in the same message.
+        assert!(
+            anthropic_to_openai(&json!({"messages":[{"role":"user","content":[
+                {"type":"tool_result","tool_use_id":"call","content":"done"},
+                {"type":"input_audio"}
+            ]}]}))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn anthropic_tool_results_preserve_other_user_content() {
+        let output = anthropic_to_openai(&json!({"messages":[{"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"call","content":[{"type":"text","text":"done"}]},
+            {"type":"text","text":"next question"}
+        ]}]}))
+        .unwrap();
+        assert_eq!(output["messages"][0]["content"], "done");
+        assert_eq!(output["messages"][1]["content"], "next question");
     }
 
     #[test]

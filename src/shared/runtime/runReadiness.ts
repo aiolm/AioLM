@@ -10,6 +10,8 @@ import { executionText } from "../i18n/executionI18n";
 export type RunSetupGap = "model" | "modelShards" | "runtime" | "runtimeMissing";
 
 export interface RunSetup {
+  activeProvider?: string;
+  activeRuntime?: string;
   activeModel: string;
   activeBackend: string;
   activeBuild: string;
@@ -32,7 +34,9 @@ export function runSetupGaps(setup: RunSetup): RunSetupGap[] {
   const gaps: RunSetupGap[] = [];
   if (!setup.activeModel.trim()) gaps.push("model");
   else if (setup.modelIncomplete) gaps.push("modelShards");
-  if (!setup.activeBackend.trim() || !setup.activeBuild.trim()) gaps.push("runtime");
+  const selected = setup.activeProvider && setup.activeProvider !== 'llama.cpp'
+    ? !!setup.activeRuntime?.trim() : !!setup.activeBackend.trim() && !!setup.activeBuild.trim();
+  if (!selected) gaps.push("runtime");
   else if (setup.runtimeInstalled === false) gaps.push("runtimeMissing");
   return gaps;
 }

@@ -43,6 +43,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
+pub(crate) mod engine;
+
 /// Bump when the probe text, canary weights, or comparison change meaning, so
 /// stored verdicts are never reinterpreted under a different procedure.
 pub const SUITE_VERSION: u32 = 1;
@@ -177,6 +179,23 @@ pub struct Record {
     pub detail: String,
     pub suite_version: u32,
     pub recorded_at: String,
+    /// Which comparison produced the verdict. Absent for llama-perplexity
+    /// records; set by the Python engine checks in `engine`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// `full` when the divergence covers the whole vocabulary, `partial` when
+    /// the engine only exposes part of each distribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<String>,
+    /// Exact full-vocabulary median KL divergence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub median_kld: Option<f64>,
+    /// Median of a lower bound on the KL divergence; never the divergence itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub median_kld_lower_bound: Option<f64>,
+    /// Device log-probabilities per position behind a partial comparison.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -553,6 +572,11 @@ fn record(verdict: Verdict, ratio: Option<f64>, detail: impl Into<String>) -> Re
         detail: detail.into(),
         suite_version: SUITE_VERSION,
         recorded_at: chrono_now(),
+        method: None,
+        coverage: None,
+        median_kld: None,
+        median_kld_lower_bound: None,
+        top_k: None,
     }
 }
 

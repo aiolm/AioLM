@@ -64,11 +64,21 @@ fn encoded(entry: &Entry) -> Result<Vec<u8>, String> {
 
 fn metadata(result: &PerformanceBenchResult) -> Value {
     // Serialize metadata without walking/cloning accumulated rows each trial.
+    // Engine identity comes from the run, so the accelerator a Python runtime
+    // reported replaces the start event's placeholder.
     let mut value = json!({
         "run_id": result.run_id, "status": result.status, "message": result.message,
         "args": result.args, "runtime_version": result.runtime_version,
         "context_size": result.context_size, "parallel": result.parallel,
+        "provider": result.provider, "model_format": result.model_format,
+        "runtime_accelerator": result.runtime_accelerator,
     });
+    if let Some(variant) = &result.runtime_variant {
+        value["runtime_variant"] = json!(variant);
+    }
+    if let Some(version) = &result.runtime_plugin_version {
+        value["runtime_plugin_version"] = json!(version);
+    }
     if let Some(provenance) = &result.provenance {
         value["provenance"] = json!(provenance);
     }
@@ -177,6 +187,20 @@ fn validate_record(record: &Value) -> Result<(), String> {
             serde_json::from_value(value.clone())
                 .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
         provenance.validate(&request.context_profile)?;
+    }
+    for name in ["runtime_variant", "runtime_plugin_version"] {
+        if record
+            .get("result")
+            .and_then(|result| result.get(name))
+            .is_some_and(|value| {
+                !value.is_null()
+                    && !value.as_str().is_some_and(|text| {
+                        !text.is_empty() && text.len() <= 256 && !text.chars().any(char::is_control)
+                    })
+            })
+        {
+            return Err(format!("invalid benchmark {name}"));
+        }
     }
     if request.run_id != id
         || record.pointer("/result/run_id").and_then(Value::as_str) != Some(id)
@@ -720,6 +744,112 @@ mod tests {
         assert_eq!(reopened.records[0]["result"]["status"], "complete");
         assert!(reopened.records[0]["result"].get("provenance").is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_python_engine_run_keeps_the_identity_its_runtime_reported() {
+        let root = root();
+        let mut initial = record("engine-identity", 10);
+        initial["backend"] = json!("metal");
+        initial["build"] = json!("0.7.6");
+        let request = serde_json::from_value(initial["request"].clone()).unwrap();
+        let cfg = crate::config::AppConfig {
+            active_provider: "mlx-vlm".into(),
+            ..Default::default()
+        };
+        initial["result"] = json!(crate::performance_bench::failed(
+            &request,
+            &cfg,
+            "pending".into()
+        ));
+        let journal = RunJournal::begin(&root, initial).unwrap();
+        let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
+        result.runtime_accelerator = Some("metal".into());
+        result.runtime_version = "0.7.6".into();
+        result.rows.push(row());
+        result.status = "complete";
+        result.message = None;
+        journal.checkpoint(&result).unwrap();
+        journal.finish(&result).unwrap();
+        drop(journal);
+        let stored = list(&root, 0, 20).unwrap().records.remove(0);
+        assert_eq!(stored["backend"], "metal");
+        assert_eq!(stored["result"]["provider"], "mlx-vlm");
+        assert_eq!(stored["result"]["runtime_accelerator"], "metal");
+        assert_eq!(stored["result"]["runtime_version"], "0.7.6");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn metal_plugin_identity_and_formats_survive_interrupted_and_finished_history() {
+        use crate::providers::artifacts::ArtifactFormat;
+        let root = root();
+        for (index, format) in [
+            ArtifactFormat::HfSafetensors,
+            ArtifactFormat::Mlx,
+            ArtifactFormat::Gguf,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = format!("metal-history-{index}");
+            let mut initial = record(&id, 10 + index as u64);
+            initial["backend"] = json!("metal");
+            initial["build"] = json!("0.30.0");
+            let request = serde_json::from_value(initial["request"].clone()).unwrap();
+            let cfg = crate::config::AppConfig {
+                active_provider: "vllm".into(),
+                ..Default::default()
+            };
+            let mut result = crate::performance_bench::failed(&request, &cfg, "pending".into());
+            initial["result"] = json!(&result);
+            let journal = RunJournal::begin(&root, initial).unwrap();
+            result.runtime_accelerator = Some("metal".into());
+            result.runtime_variant = Some("vllm-metal".into());
+            result.runtime_version = "0.30.0".into();
+            result.runtime_plugin_version = Some("0.30.1".into());
+            result.model_format = format;
+            result.rows.push(row());
+            journal.checkpoint(&result).unwrap();
+            if index != 0 {
+                result.status = "complete";
+                result.message = None;
+                journal.finish(&result).unwrap();
+            }
+            drop(journal);
+            let stored = list(&root, 0, 20)
+                .unwrap()
+                .records
+                .into_iter()
+                .find(|value| value["id"] == id)
+                .unwrap();
+            assert_eq!(stored["result"]["runtime_version"], "0.30.0");
+            assert_eq!(stored["result"]["runtime_variant"], "vllm-metal");
+            assert_eq!(stored["result"]["runtime_plugin_version"], "0.30.1");
+            assert_eq!(stored["result"]["runtime_accelerator"], "metal");
+            assert_eq!(stored["result"]["model_format"], json!(format));
+            assert_eq!(stored["result"]["provider"], "vllm");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn history_accepts_legacy_identity_and_rejects_malformed_plugin_labels() {
+        let legacy = record("synthetic-metal-labels", 10);
+        assert!(validate_record(&legacy).is_ok());
+        let mut metal = legacy.clone();
+        metal["result"]["runtime_variant"] = json!("vllm-metal");
+        metal["result"]["runtime_plugin_version"] = json!("0.30.0");
+        assert!(validate_record(&metal).is_ok());
+        for bad in [
+            json!(7),
+            json!(""),
+            json!("0.30.0\nspoofed"),
+            json!("x".repeat(257)),
+        ] {
+            for field in ["runtime_variant", "runtime_plugin_version"] {
+                let mut malformed = metal.clone();
+                malformed["result"][field] = bad.clone();
+                assert!(validate_record(&malformed).is_err(), "{field}: {bad}");
+            }
+        }
     }
     #[test]
     fn write_failures_are_reported_without_losing_prior_measurements() {

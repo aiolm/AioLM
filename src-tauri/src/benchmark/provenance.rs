@@ -129,6 +129,27 @@ pub(crate) struct BenchmarkProvenance {
 }
 
 impl BenchmarkProvenance {
+    /// Snapshots are never hashed, so a snapshot format with a digest is forged;
+    /// the fingerprint and revision keep the shapes the app writes.
+    fn snapshot_identity_valid(&self) -> bool {
+        use crate::providers::artifacts::ArtifactFormat;
+        let model = &self.model;
+        let snapshot = matches!(
+            model.format,
+            Some(ArtifactFormat::HfSafetensors | ArtifactFormat::Mlx)
+        );
+        (!snapshot || (model.status == "unidentified" && model.sha256.is_none()))
+            && model.local_fingerprint.as_deref().is_none_or(|value| {
+                value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            && model.revision.as_deref().is_none_or(|value| {
+                (1..=128).contains(&value.len())
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-/".contains(&byte))
+            })
+    }
+
     pub(crate) fn validate(&self, profile: &str) -> Result<(), String> {
         let digest =
             |value: &str| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
@@ -139,13 +160,14 @@ impl BenchmarkProvenance {
             "unidentified" => self.model.sha256.is_none(),
             "multipart" => self.model.sha256.is_none() && self.model.size_bytes.is_none(),
             _ => false,
-        } && self
-            .model
-            .metadata
-            .as_ref()
-            // Records written before model metadata existed carry none, and
-            // stay valid; one that carries metadata must carry a usable shape.
-            .is_none_or(super::model_metadata::BenchmarkModelMetadata::is_valid);
+        } && self.snapshot_identity_valid()
+            && self
+                .model
+                .metadata
+                .as_ref()
+                // Records written before model metadata existed carry none, and
+                // stay valid; one that carries metadata must carry a usable shape.
+                .is_none_or(super::model_metadata::BenchmarkModelMetadata::is_valid);
         if self.schema_version != 1
             || self.method.id != "cold-prompt-serving"
             || self.method.version != 1
@@ -203,6 +225,7 @@ pub(crate) fn capture(
     corpus_profile: &str,
     corpus_hash: String,
 ) -> BenchmarkProvenance {
+    let python = crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama;
     // Custom CLI overrides can change placement after structured configuration.
     // Do not certify GPU usage in that case, or equate runtime indexes with OS IDs.
     let overrides = cfg.server_args.iter().any(|arg| {
@@ -223,7 +246,8 @@ pub(crate) fn capture(
     });
     let auxiliary_model =
         !cfg.mmproj.trim().is_empty() || crate::tuning_defaults::speculative_enabled(cfg);
-    let cpu_only = !overrides
+    let cpu_only = !python
+        && !overrides
         && (cfg.active_backend == "cpu"
             || (cfg.ngl == 0
                 && !auxiliary_model
@@ -233,7 +257,7 @@ pub(crate) fn capture(
         .as_deref()
         .map(|value| value.split(',').map(str::to_owned).collect::<Vec<_>>())
         .unwrap_or_default();
-    let selected_gpus: Vec<BenchmarkGpu> = if cpu_only || overrides {
+    let selected_gpus: Vec<BenchmarkGpu> = if python || cpu_only || overrides {
         vec![]
     } else {
         cfg.gpu
@@ -243,12 +267,15 @@ pub(crate) fn capture(
             .map(BenchmarkGpu::from)
             .collect()
     };
-    let selection_complete = cpu_only
-        || (!overrides
-            && !auxiliary_model
-            && !devices.is_empty()
-            && selected_gpus.len() == devices.len());
-    let mode = if overrides {
+    let selection_complete = !python
+        && (cpu_only
+            || (!overrides
+                && !auxiliary_model
+                && !devices.is_empty()
+                && selected_gpus.len() == devices.len()));
+    let mode = if python {
+        "automatic"
+    } else if overrides {
         "unknown"
     } else if cpu_only {
         "cpu"
@@ -280,7 +307,7 @@ pub(crate) fn capture(
             execution: Execution {
                 mode: mode.into(),
                 selected_gpus,
-                devices: if cpu_only || overrides {
+                devices: if python || cpu_only || overrides {
                     vec![]
                 } else {
                     devices
@@ -382,6 +409,9 @@ mod tests {
                 status: "unidentified".into(),
                 sha256: None,
                 size_bytes: None,
+                format: None,
+                revision: None,
+                local_fingerprint: None,
                 metadata: None,
             },
             "novel_en",
@@ -562,6 +592,9 @@ mod tests {
             status: "multipart".into(),
             sha256: None,
             size_bytes: None,
+            format: None,
+            revision: None,
+            local_fingerprint: None,
             metadata: Some(super::super::model_metadata::BenchmarkModelMetadata {
                 format: "GGUF".into(),
                 name: Some("Synthetic 70B".into()),
@@ -580,6 +613,42 @@ mod tests {
         assert!(provenance.validate("novel_en").is_ok());
         assert!(provenance.model.sha256.is_none());
         assert!(provenance.model.size_bytes.is_none());
+    }
+
+    #[test]
+    fn a_snapshot_identity_cannot_claim_a_digest_or_a_malformed_fingerprint() {
+        use crate::providers::artifacts::ArtifactFormat;
+        let cfg = AppConfig {
+            active_provider: "mlx-vlm".into(),
+            ..Default::default()
+        };
+        let mut provenance = capture_for(
+            &cfg,
+            &ResolvedGpu {
+                device_flag: Some("stale-llama-device".into()),
+                ..Default::default()
+            },
+        );
+        provenance.corpus.sha256 = "a".repeat(64);
+        assert_eq!(provenance.environment.execution.mode, "automatic");
+        assert!(provenance.environment.execution.selected_gpus.is_empty());
+        assert!(provenance.environment.execution.devices.is_empty());
+        provenance.model.format = Some(ArtifactFormat::Mlx);
+        provenance.model.size_bytes = Some(4096);
+        provenance.model.revision = Some("0123456789abcdef0123456789abcdef01234567".into());
+        provenance.model.local_fingerprint = Some("b".repeat(64));
+        assert!(provenance.validate("novel_en").is_ok());
+
+        let mut forged = provenance.clone();
+        forged.model.status = "sha256".into();
+        forged.model.sha256 = Some("c".repeat(64));
+        assert!(forged.validate("novel_en").is_err());
+        let mut malformed = provenance.clone();
+        malformed.model.local_fingerprint = Some("not-a-fingerprint".into());
+        assert!(malformed.validate("novel_en").is_err());
+        let mut injected = provenance;
+        injected.model.revision = Some("main\nrevision".into());
+        assert!(injected.validate("novel_en").is_err());
     }
 
     #[test]

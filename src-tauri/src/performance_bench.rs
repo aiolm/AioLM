@@ -1,7 +1,8 @@
-//! Repeatable cold-prompt serving benchmarks on an isolated llama-server.
+//! Repeatable cold-prompt serving benchmarks on the selected provider's isolated server.
 //! The application configuration and its managed server are never replaced.
 mod corpus;
 mod protocol;
+mod providers;
 
 use crate::{config::AppConfig, gpu::ResolvedGpu, performance_memory::PeakMemorySampler, server};
 use futures_util::{stream::FuturesUnordered, StreamExt};
@@ -17,6 +18,9 @@ use std::time::{Duration, Instant};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Warmup prompt length. Python engines prepare an exact prompt for it, so it
+/// never exceeds the longest measured prompt.
+const WARMUP_TOKENS: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PerformanceBenchRequest {
@@ -57,6 +61,14 @@ pub const UNKNOWN_RUNTIME_VERSION: &str = "unknown";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PerformanceBenchResult {
+    pub provider: crate::providers::ProviderId,
+    pub model_format: crate::providers::artifacts::ArtifactFormat,
+    pub runtime_accelerator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_variant: Option<String>,
+    /// Plugin version, separate from the core engine's `runtime_version`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_plugin_version: Option<String>,
     pub run_id: String,
     pub rows: Vec<PerformanceBenchRow>,
     pub status: &'static str,
@@ -67,6 +79,24 @@ pub struct PerformanceBenchResult {
     pub parallel: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) provenance: Option<crate::benchmark::provenance::BenchmarkProvenance>,
+}
+
+impl PerformanceBenchResult {
+    fn record_runtime(&mut self, probe: &crate::providers::python_env::ProbeRecord) {
+        self.runtime_accelerator = Some(probe.accelerator.clone());
+        self.runtime_version = if probe.version.is_empty() {
+            UNKNOWN_RUNTIME_VERSION.into()
+        } else {
+            probe.version.clone()
+        };
+        self.runtime_variant = None;
+        self.runtime_plugin_version = None;
+        if self.provider == crate::providers::ProviderId::Vllm && probe.variant == "vllm-metal" {
+            self.runtime_variant = Some(probe.variant.clone());
+            self.runtime_plugin_version =
+                (!probe.metal_version.is_empty()).then(|| probe.metal_version.clone());
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -129,6 +159,25 @@ pub fn failed(
     message: String,
 ) -> PerformanceBenchResult {
     PerformanceBenchResult {
+        provider: crate::providers::provider_of(cfg),
+        runtime_accelerator: None,
+        runtime_variant: None,
+        runtime_plugin_version: None,
+        model_format: if crate::providers::provider_of(cfg) == crate::providers::ProviderId::Llama {
+            crate::providers::artifacts::ArtifactFormat::Gguf
+        } else {
+            let path = std::path::Path::new(&cfg.active_model);
+            if path.is_dir() {
+                crate::providers::artifacts::inspect_snapshot(path).format
+            } else {
+                crate::providers::artifacts::inspect_gguf(
+                    path,
+                    std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+                    &[],
+                )
+                .format
+            }
+        },
         run_id: request.run_id.clone(),
         rows: vec![],
         status: "failed",
@@ -158,6 +207,27 @@ fn isolated_config(
         .div_ceil(256)
         * 256;
     isolated.ctx_size = per_slot * isolated.parallel;
+    let provider = crate::providers::provider_of(cfg);
+    if provider != crate::providers::ProviderId::Llama {
+        let options = isolated
+            .provider_options
+            .entry(provider.as_str().into())
+            .or_default();
+        if provider == crate::providers::ProviderId::Vllm {
+            options.insert("max_model_len".into(), serde_json::json!(per_slot));
+            options.insert("max_num_seqs".into(), serde_json::json!(isolated.parallel));
+            options.insert("enable_prefix_caching".into(), serde_json::json!(false));
+            options.insert(
+                "enable_prompt_tokens_details".into(),
+                serde_json::json!(true),
+            );
+            options.insert("generation_config".into(), serde_json::json!("vllm"));
+        } else {
+            options.insert("max_num_seqs".into(), serde_json::json!(isolated.parallel));
+            options.insert("max_kv_size".into(), serde_json::json!(per_slot));
+            options.insert("enable_thinking".into(), serde_json::json!(false));
+        }
+    }
     isolated.keep = 0;
     isolated.sleep_idle_seconds = -1;
     isolated.request_timeout_seconds = REQUEST_TIMEOUT.as_secs() as u32;
@@ -420,6 +490,13 @@ async fn trial(
     progress: &Progress,
 ) -> Result<Vec<protocol::Measurement>, String> {
     let phase = if concurrency == 1 { "single" } else { "batch" };
+    if let Some(engine) = &endpoint.engine {
+        tokio::select! {
+            biased;
+            _ = protocol::cancelled(cancel) => return Err("benchmark cancelled".into()),
+            reset = engine.reset_cache(&endpoint.client, &endpoint.base, &endpoint.key) => reset?,
+        }
+    }
     emit(
         progress,
         request,
@@ -476,7 +553,7 @@ async fn warm_slots(
     progress: &Progress,
 ) -> Result<(), String> {
     emit(progress, request, "warmup", 0, None, None);
-    let tokens = Arc::new(all_tokens[..all_tokens.len().min(128)].to_vec());
+    let tokens = Arc::new(all_tokens[..all_tokens.len().min(WARMUP_TOKENS)].to_vec());
     let Some(warmup) = batch(endpoint, tokens, 16, slots, cancel, REQUEST_TIMEOUT).await else {
         return Err("benchmark cancelled".into());
     };
@@ -547,10 +624,23 @@ pub async fn run(
         let isolated = isolated_config(&cfg, &request, port, runtime.cache_ram_supported);
         result.context_size = isolated.ctx_size;
         result.parallel = isolated.parallel;
-        result.args = redacted_args(server::build_args_with_gpu(&isolated, "", &gpu));
+        let provider = crate::providers::provider_of(&isolated);
+        if provider != crate::providers::ProviderId::Llama { result.context_size = isolated.ctx_size / isolated.parallel.max(1); }
+        let python_runtime = if provider == crate::providers::ProviderId::Llama { None } else { Some(crate::providers::selected_python_runtime(&isolated)?) };
+        if let Some(probe) = python_runtime.as_ref().and_then(|runtime| runtime.probe.as_ref()) {
+            result.record_runtime(probe);
+        }
+        result.args = match &python_runtime {
+            Some(runtime) => crate::providers::launch::preview(&crate::providers::launch::engine_command(&isolated, runtime, isolated.port, "")?),
+            None => redacted_args(server::build_args_with_gpu(&isolated, "", &gpu)),
+        };
         if let Some(provenance) = &mut result.provenance {
             provenance.execution_config = crate::benchmark::provenance::ExecutionConfig::from_args(&result.args);
         }
+        // Resolved before spawning: a failure after spawn but before the
+        // IsolatedServer guard exists would leave the server running.
+        let engine_info = crate::providers::execution::probed_info(&isolated).await?;
+        if !engine_info.tasks.iter().any(|task| task == "generate") { return Err("Select a generation session for a serving benchmark; transcription and embedding sessions serve different tasks.".into()); }
         let key = format!("bench-{}", uuid::Uuid::new_v4().simple());
         let ring = Arc::new(server::ErrBuf::default());
         drop(reservation);
@@ -560,6 +650,7 @@ pub async fn run(
         let pid = child.id();
         let mut dedicated_state = server::ServerState::default();
         dedicated_state.child = Some(child);
+        dedicated_state.engine = Some(engine_info.clone());
         let shared = Arc::new(Mutex::new(dedicated_state));
         managed = Some(IsolatedServer { state: shared.clone(), key_file, active_process: active_process.clone() });
         *active_process.lock().unwrap_or_else(|e| e.into_inner()) = process_handle;
@@ -571,6 +662,28 @@ pub async fn run(
         let base = url.trim_end_matches("/v1");
         let client = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5))
             .timeout(REQUEST_TIMEOUT).build().map_err(|error| error.to_string())?;
+        let options = crate::providers::launch::provider_options(&isolated, provider);
+        let mut provider_protocol = python_runtime.map(|runtime| providers::ProviderProtocol {
+            provider,
+            // A vLLM session routed to a LoRA adapter is measured through it.
+            model: engine_info.request_lora.clone().unwrap_or_else(|| engine_info.upstream_model.clone()),
+            served: engine_info.upstream_model.clone(),
+            runtime,
+            prompts: std::collections::BTreeMap::new(),
+            stop_tokens: Vec::new(),
+            trust_remote_code: options.get("trust_remote_code").and_then(serde_json::Value::as_bool) == Some(true),
+            thinking_budget: options.get("thinking_budget").and_then(serde_json::Value::as_i64),
+        });
+        let required = request.prompt_lengths.iter().copied().max().unwrap_or(1) + request.generation_length;
+        if let Some(engine) = &provider_protocol {
+            // Context v2 records the per-sequence capacity the engine reports:
+            // vLLM max_model_len, or mlx-vlm's per-request KV allocation.
+            result.context_size = tokio::select! {
+                biased;
+                _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
+                context = engine.verify_settings(&client, base, &key, required) => context?,
+            };
+        } else {
         let props = tokio::select! {
             biased;
             _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
@@ -594,14 +707,25 @@ pub async fn run(
                 result.runtime_version = version.chars().take(256).collect();
             }
         }
+        }
         let max_prompt = request.prompt_lengths.iter().copied().max().unwrap_or(1) as usize;
+        let warmup_tokens = WARMUP_TOKENS.min(max_prompt);
         let mut target_bytes = (max_prompt * 8).max(4096);
         let all_tokens = loop {
             let text = corpus::text(&request.context_profile, target_bytes);
             let tokens = tokio::select! {
                 biased;
                 _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
-                tokens = protocol::tokenize(&client, base, &key, &text) => tokens?,
+                tokens = async {
+                    match provider_protocol.as_mut() {
+                        Some(engine) => {
+                            let mut lengths = request.prompt_lengths.clone(); lengths.push(warmup_tokens as u32);
+                            lengths.sort_unstable(); lengths.dedup();
+                            engine.tokenize(&client, base, &key, &text, lengths, cancel.clone()).await
+                        }
+                        None => protocol::tokenize(&client, base, &key, &text).await,
+                    }
+                } => tokens?,
             };
             if tokens.len() >= max_prompt {
                 if let Some(provenance) = &mut result.provenance {
@@ -612,9 +736,9 @@ pub async fn run(
             target_bytes *= 2;
             if target_bytes > 4 * 1024 * 1024 { return Err("could not construct enough corpus tokens within the text size limit".into()); }
         };
-        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone() };
+        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone(), engine: provider_protocol };
         if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
-        warm_slots(&request, &endpoint, &all_tokens, isolated.parallel, &cancel, &progress).await?;
+        warm_slots(&request, &endpoint, &all_tokens[..warmup_tokens], isolated.parallel, &cancel, &progress).await?;
         // Concurrency is the outer sweep so every input length finishes at one level before the next: 1x runs for all lengths, then 2x, and so on.
         for concurrency in std::iter::once(1).chain(request.batch_sizes.iter().copied()) {
             for &prompt in &request.prompt_lengths {
@@ -678,6 +802,95 @@ mod tests {
             context_profile: "novel_ko".into(),
             warmup: true,
         }
+    }
+
+    #[test]
+    fn metal_runtime_identity_keeps_core_and_plugin_versions_separate() {
+        let cfg = AppConfig {
+            active_provider: "vllm".into(),
+            active_backend: "vulkan".into(),
+            active_build: "stale-llama".into(),
+            ..Default::default()
+        };
+        let mut result = failed(&request(), &cfg, "pending".into());
+        result.record_runtime(&crate::providers::python_env::ProbeRecord {
+            variant: "vllm-metal".into(),
+            version: "0.30.0".into(),
+            metal_version: "0.30.1".into(),
+            accelerator: "metal".into(),
+            ..Default::default()
+        });
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["provider"], "vllm");
+        assert_eq!(value["runtime_version"], "0.30.0");
+        assert_eq!(value["runtime_variant"], "vllm-metal");
+        assert_eq!(value["runtime_plugin_version"], "0.30.1");
+        assert_eq!(value["runtime_accelerator"], "metal");
+        result.runtime_plugin_version = None;
+        result.record_runtime(&crate::providers::python_env::ProbeRecord {
+            variant: "vllm-metal".into(),
+            version: "0.30.0".into(),
+            ..Default::default()
+        });
+        assert!(serde_json::to_value(&result)
+            .unwrap()
+            .get("runtime_plugin_version")
+            .is_none());
+        let mut legacy = failed(&request(), &cfg, "pending".into());
+        legacy.record_runtime(&crate::providers::python_env::ProbeRecord {
+            version: "0.31.0".into(),
+            accelerator: "cuda".into(),
+            ..Default::default()
+        });
+        let value = serde_json::to_value(legacy).unwrap();
+        assert!(value.get("runtime_variant").is_none());
+        assert!(value.get("runtime_plugin_version").is_none());
+    }
+
+    #[test]
+    fn python_benchmarks_keep_the_selected_weight_format() {
+        use crate::providers::artifacts::ArtifactFormat;
+        let root =
+            std::env::temp_dir().join(format!("aiolm-bench-format-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let mut header = b"GGUF".to_vec();
+        header.extend_from_slice(&3u32.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        header.extend_from_slice(&0u64.to_le_bytes());
+        let gguf = root.join("synthetic.gguf");
+        std::fs::write(&gguf, header).unwrap();
+        let cfg = |path: &std::path::Path| AppConfig {
+            active_provider: "vllm".into(),
+            active_model: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert_eq!(
+            failed(&request(), &cfg(&gguf), "pending".into()).model_format,
+            ArtifactFormat::Gguf
+        );
+        let snapshot = root.join("snapshot");
+        std::fs::create_dir(&snapshot).unwrap();
+        std::fs::write(snapshot.join("model.safetensors"), b"synthetic weights").unwrap();
+        std::fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+        std::fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","architectures":["LlamaForCausalLM"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            failed(&request(), &cfg(&snapshot), "pending".into()).model_format,
+            ArtifactFormat::HfSafetensors
+        );
+        std::fs::write(
+            snapshot.join("config.json"),
+            br#"{"model_type":"llama","quantization":{"bits":4,"group_size":64}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            failed(&request(), &cfg(&snapshot), "pending".into()).model_format,
+            ArtifactFormat::Mlx
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -953,6 +1166,7 @@ mod tests {
             }
         });
         let endpoint = protocol::Endpoint {
+            engine: None,
             client: reqwest::Client::builder().no_proxy().build().unwrap(),
             base,
             key: "test".into(),

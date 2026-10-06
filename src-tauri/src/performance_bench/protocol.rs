@@ -123,11 +123,35 @@ impl CompletionStream {
         if let Some(error) = value.get("error") {
             return Err(format!("runtime completion error: {error}"));
         }
-        let stop = value.get("stop").and_then(Value::as_bool).unwrap_or(false);
+        let stop = value.get("stop").and_then(Value::as_bool).unwrap_or(false)
+            || value.get("usage").is_some_and(|usage| {
+                usage
+                    .get("completion_tokens")
+                    .and_then(Value::as_u64)
+                    .is_some()
+            });
+        // vLLM `return_token_ids` chunks carry the step's token IDs even when a
+        // partial UTF-8 sequence leaves their text empty.
         let has_output = value
-            .get("tokens")
+            .pointer("/choices/0/token_ids")
             .and_then(Value::as_array)
-            .is_some_and(|tokens| !tokens.is_empty())
+            .is_some_and(|ids| !ids.is_empty())
+            || value
+                .pointer("/choices/0/text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+            || value
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+            || value
+                .pointer("/choices/0/delta/reasoning")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+            || value
+                .get("tokens")
+                .and_then(Value::as_array)
+                .is_some_and(|tokens| !tokens.is_empty())
             || value
                 .get("content")
                 .and_then(Value::as_str)
@@ -247,6 +271,7 @@ pub(super) struct Endpoint {
     pub client: reqwest::Client,
     pub base: String,
     pub key: String,
+    pub engine: Option<super::providers::ProviderProtocol>,
 }
 
 pub(super) async fn measure(
@@ -257,14 +282,26 @@ pub(super) async fn measure(
     cancel: Arc<AtomicBool>,
     timeout: Duration,
 ) -> Measurement {
-    let Endpoint { client, base, key } = endpoint;
+    let Endpoint {
+        client,
+        base,
+        key,
+        engine,
+    } = endpoint;
     let started = Instant::now();
     let mut stream = CompletionStream::default();
     let work = async {
+        let (path, body) = match &engine {
+            Some(engine) => engine.body(&tokens, generation)?,
+            None => (
+                "/completion".into(),
+                completion_body(&tokens, generation, slot),
+            ),
+        };
         let response = client
-            .post(format!("{base}/completion"))
+            .post(format!("{base}{path}"))
             .bearer_auth(&key)
-            .json(&completion_body(&tokens, generation, slot))
+            .json(&body)
             .send()
             .await
             .map_err(|error| format!("completion request failed: {error}"))?;
@@ -282,6 +319,9 @@ pub(super) async fn measure(
                 break;
             }
         }
+        // A missing cached-token count is never read as zero: vLLM 0.31 reports
+        // it, including 0, whenever --enable-prompt-tokens-details is active,
+        // so its absence means the cold prompt is unproven.
         stream.finish(Instant::now())
     };
     let outcome = tokio::select! {
@@ -374,6 +414,35 @@ mod tests {
         assert!(missing.measurement(now, 10, 3).error.is_some());
     }
 
+    #[test]
+    fn engine_usage_proves_a_cold_prompt_only_when_cached_tokens_are_reported() {
+        let now = Instant::now();
+        // The first step decodes to an incomplete UTF-8 sequence: no text, one token ID.
+        let steps = b"data: {\"choices\":[{\"index\":0,\"text\":\"\",\"token_ids\":[17]}]}\n\ndata: {\"choices\":[{\"index\":0,\"text\":\"ab\",\"token_ids\":[18]}]}\n\n";
+        let mut reported = CompletionStream::default();
+        reported.push(steps, now).unwrap();
+        reported.push(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":0}}}\n\ndata: [DONE]\n\n", now + Duration::from_millis(50)).unwrap();
+        let measured = reported.measurement(now, 10, 2);
+        assert!(measured.error.is_none(), "{:?}", measured.error);
+        assert_eq!(measured.first_token, Some(now));
+        assert_eq!(measured.cached_tokens, 0);
+
+        let mut unreported = CompletionStream::default();
+        unreported.push(steps, now).unwrap();
+        unreported.push(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n", now).unwrap();
+        let measured = unreported.measurement(now, 10, 2);
+        assert!(measured.error.unwrap().contains("cold prompt"));
+
+        let mut reused = CompletionStream::default();
+        reused.push(steps, now).unwrap();
+        reused.push(b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":8}}}\n\n", now).unwrap();
+        assert!(reused
+            .measurement(now, 10, 2)
+            .error
+            .unwrap()
+            .contains("reused 8"));
+    }
+
     #[tokio::test]
     async fn a_stalled_stream_is_cancellable_and_does_not_invent_token_counts() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -399,6 +468,7 @@ mod tests {
             Duration::from_secs(2),
             measure(
                 Endpoint {
+                    engine: None,
                     client,
                     base: format!("http://{address}"),
                     key: "test".into(),
@@ -435,6 +505,7 @@ mod tests {
             Duration::from_secs(2),
             measure(
                 Endpoint {
+                    engine: None,
                     client,
                     base: format!("http://{address}"),
                     key: "test".into(),

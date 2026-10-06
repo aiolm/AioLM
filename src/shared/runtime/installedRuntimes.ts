@@ -43,21 +43,22 @@ function ensureLoaded(): Promise<void> {
   return pending;
 }
 
-export function useInstalledRuntimes(): api.InstalledRuntime[] {
+export function useInstalledRuntimes(enabled = true): api.InstalledRuntime[] {
   const [runtimes, setRuntimes] = useState<api.InstalledRuntime[]>(() => cache ?? []);
   useEffect(() => {
+    if (!enabled) return;
     let live = true;
     const sync = () => { if (live) setRuntimes(cache ?? []); };
     listeners.add(sync);
     void ensureLoaded().then(sync);
     return () => { live = false; listeners.delete(sync); };
-  }, []);
+  }, [enabled]);
   return runtimes;
 }
 
 /**
  * `0.3.0-dev(10638)` when the install recorded what the binary calls itself,
- * `?(10638)` when it did not. Never a version invented from the build number.
+ * `b10638` when it did not. Never a version invented from the build number.
  */
 export function runtimeVersionLabel(
   runtimes: readonly api.InstalledRuntime[],

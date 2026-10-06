@@ -17,12 +17,14 @@ mod inference_args;
 #[cfg(any(target_os = "macos", test))]
 mod launch_path;
 mod mcp;
+pub mod media;
 pub mod models;
 pub mod performance_bench;
 pub mod performance_memory;
 mod personalization;
 mod process_output;
 mod procutil;
+pub mod providers;
 mod resource_estimate;
 pub mod runtime;
 pub mod server;
@@ -35,7 +37,8 @@ pub mod tuning_defaults;
 pub mod verify;
 
 pub use commands::launch::validate_launch_config;
-pub use commands::models::deletable_model_path;
+pub use commands::models::{deletable_model_path, delete_owned_snapshot};
+pub use commands::providers::inspect_catalog as scan_model_catalog;
 pub use config::AppConfig;
 pub use server::ErrBuf;
 
@@ -137,6 +140,20 @@ pub fn run() {
     let app = builder
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
+            commands::providers::provider_catalog,
+            commands::providers::provider_runtimes,
+            commands::providers::provider_runtime_options,
+            commands::providers::provider_register,
+            commands::providers::provider_install,
+            commands::providers::provider_remove,
+            commands::providers::provider_portable_export,
+            commands::providers::provider_portable_import,
+            commands::providers::model_artifact,
+            commands::providers::list_model_artifacts,
+            commands::providers::model_compatibility,
+            commands::providers::provider_import_command,
+            commands::providers::provider_command_preview,
+            commands::providers::provider_option_issues,
             commands::benchmark_explorer::open_aiolm_website,
             commands::benchmark_explorer::open_benchmark_explorer,
             commands::benchmark_explorer::read_public_benchmark,
@@ -166,8 +183,10 @@ pub fn run() {
             commands::discover::hf_model_files,
             commands::discover::hf_open_model_card,
             commands::discover::hf_download_model,
+            commands::discover::hf_download_snapshot,
             commands::discover::hf_cancel_download,
             commands::discover::hf_installed_files,
+            commands::discover::hf_installed_snapshots,
             commands::mcp::mcp_list_servers,
             commands::mcp::mcp_save_server,
             commands::mcp::mcp_remove_server,
@@ -180,6 +199,11 @@ pub fn run() {
             commands::documents::read_document_binding,
             commands::documents::pick_image,
             commands::documents::read_image_data,
+            commands::documents::import_media,
+            commands::documents::resolve_media,
+            commands::documents::transcribe_media,
+            commands::documents::extract_video_frames,
+            commands::documents::cancel_media_operation,
             commands::server::start_server,
             commands::launch::preflight_launch,
             commands::launch::verify_model_deeply,

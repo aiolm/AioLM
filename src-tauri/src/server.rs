@@ -192,6 +192,7 @@ pub struct ServerState {
     pub draft_model: String,
     /// Successful launch settings, independent of values saved for the next run.
     pub execution: Option<AppConfig>,
+    pub engine: Option<crate::providers::protocol::EngineInfo>,
     pub lifecycle: Lifecycle,
     pub last_error: Option<String>,
     pub last_activity_at: Instant,
@@ -220,6 +221,20 @@ fn file_size_mb(path: &str) -> Option<u64> {
 }
 
 pub fn estimate_memory(cfg: &AppConfig, model: &str, mmproj: &str) -> MemoryEstimate {
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        return MemoryEstimate {
+            model_mb: crate::providers::execution::inspect(std::path::Path::new(model))
+                .map(|artifact| artifact.size_bytes)
+                .unwrap_or(0)
+                .div_ceil(1024 * 1024),
+            context_mb: 0,
+            kv_mb: 0,
+            projector_mb: 0,
+            adapters_mb: 0,
+            total_mb: 0,
+            source: "unknown",
+        };
+    }
     let model_mb = file_size_mb(model).unwrap_or(0);
     let projector_mb = file_size_mb(mmproj).unwrap_or(0);
     let adapters_mb = cfg
@@ -272,6 +287,7 @@ impl ServerState {
             mmproj: String::new(),
             draft_model: String::new(),
             execution: None,
+            engine: None,
             lifecycle: Lifecycle::Stopped,
             last_error: None,
             last_activity_at: Instant::now(),
@@ -291,6 +307,7 @@ impl Default for ServerState {
 impl ServerState {
     pub fn begin_launch(&mut self) -> u64 {
         self.execution = None;
+        self.engine = None;
         self.active_requests = 0;
         self.launch_generation = self.launch_generation.wrapping_add(1);
         self.lifecycle = Lifecycle::Starting;
@@ -466,6 +483,9 @@ pub fn strip_ansi(text: &str) -> String {
 /// are ever used; system PATH and WinGet copies are intentionally ignored so
 /// a stale outside binary can never serve a launch.
 pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
+    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
+        return Ok(crate::providers::selected_python_runtime(cfg)?.python);
+    }
     if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
         return Err(
             "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
@@ -773,16 +793,40 @@ pub fn spawn(
     ring: &Arc<ErrBuf>,
     resolved_gpu: &crate::gpu::ResolvedGpu,
 ) -> Result<(Child, String, Option<PathBuf>), String> {
+    let provider = crate::providers::provider_of(cfg);
     let bin = server_bin(cfg)?;
     // Resolve fallible environment setup before creating a credential file.
     // Keep early environment-setup errors outside the credential lifetime.
     // Launch validation guarantees a managed runtime, so the system
     // environment fallback below is unreachable in production.
-    let environment =
-        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?;
-    let api_key_file = create_api_key_file(api_key)?;
+    let engine = if provider == crate::providers::ProviderId::Llama {
+        None
+    } else {
+        Some(crate::providers::launch::engine_command(
+            cfg,
+            &crate::providers::selected_python_runtime(cfg)?,
+            cfg.port,
+            api_key,
+        )?)
+    };
+    let mut environment = if engine.is_some() {
+        crate::providers::python_env::engine_environment()
+    } else {
+        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?
+    };
+    let api_key_file = if engine.is_some() {
+        None
+    } else {
+        create_api_key_file(api_key)?
+    };
     let key_guard = api_key_file.clone().map(ApiKeyFile);
-    let mut args = build_args_with_gpu(cfg, api_key, resolved_gpu);
+    let mut args = match engine {
+        Some(engine) => {
+            environment.extend(engine.env);
+            engine.args
+        }
+        None => build_args_with_gpu(cfg, api_key, resolved_gpu),
+    };
     if let Some(path) = api_key_file.as_ref() {
         args.push("--api-key-file".into());
         args.push(path.to_string_lossy().into_owned());
@@ -808,7 +852,7 @@ pub fn spawn(
         None => {
             terminate(&mut child);
             cleanup_api_key_file(api_key_file.as_deref());
-            return Err("llama-server stderr pipe was not available".to_string());
+            return Err("inference server stderr pipe was not available".to_string());
         }
     };
     child.stderr_reader = Some(
@@ -912,7 +956,7 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     command.args([
         "-nP",
         "-a",
-        "-p",
+        "-g",
         &pid,
         &port_filter,
         "-sTCP:LISTEN",
@@ -957,7 +1001,32 @@ fn listener_owned_by_child(pid: u32, port: u16) -> bool {
     #[cfg(target_os = "linux")]
     {
         proc_tcp_listener_inodes(port)
-            .map(|inodes| process_has_socket_inode(pid, &inodes))
+            .map(|inodes| {
+                if process_has_socket_inode(pid, &inodes) {
+                    return true;
+                }
+                std::fs::read_dir("/proc")
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .any(|entry| {
+                        let Some(child_pid) = entry
+                            .file_name()
+                            .to_str()
+                            .and_then(|name| name.parse::<u32>().ok())
+                        else {
+                            return false;
+                        };
+                        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+                            return false;
+                        };
+                        let group = stat
+                            .rsplit_once(')')
+                            .and_then(|(_, rest)| rest.split_whitespace().nth(2))
+                            .and_then(|value| value.parse::<u32>().ok());
+                        group == Some(pid) && process_has_socket_inode(child_pid, &inodes)
+                    })
+            })
             .unwrap_or_else(|| lsof_listener_owned_by_child(pid, port))
     }
     #[cfg(all(unix, not(target_os = "linux")))]
@@ -991,6 +1060,11 @@ pub async fn wait_ready(
         })?;
     let health = url.replace("/v1", "/health");
     let models = format!("{url}/models");
+    let engine = shared
+        .lock()
+        .map_err(|_| "server state lock was poisoned")?
+        .engine
+        .clone();
     let port = match port_from_url(url) {
         Some(port) => port,
         None => {
@@ -1047,13 +1121,46 @@ pub async fn wait_ready(
         }
 
         let header = auth_header(api_key);
-        let health_ok = client
+        let health_response = client
             .get(&health)
             .header("Authorization", &header)
             .send()
             .await
-            .map(|response| response.status().as_u16() == 200)
-            .unwrap_or(false);
+            .ok();
+        let health_ok = match health_response {
+            Some(response) if response.status().is_success() => {
+                if engine
+                    .as_ref()
+                    .is_some_and(|info| info.provider == crate::providers::ProviderId::MlxVlm)
+                {
+                    response
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .is_some_and(|value| {
+                            engine.as_ref().is_some_and(|info| {
+                                let generation_ready =
+                                    !info.tasks.iter().any(|task| task == "generate")
+                                        || value
+                                            .get("loaded_model")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(info.upstream_model.as_str());
+                                let embeddings_ready =
+                                    info.embedding_model.as_ref().is_none_or(|model| {
+                                        value
+                                            .pointer("/loaded_models/embedding/model")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(model.as_str())
+                                    });
+                                generation_ready && embeddings_ready
+                            })
+                        })
+                } else {
+                    true
+                }
+            }
+            _ => false,
+        };
         if health_ok {
             let models_response = client
                 .get(&models)
@@ -1068,11 +1175,27 @@ pub async fn wait_ready(
                         .as_ref()
                         .and_then(|value| value.get("data"))
                         .and_then(serde_json::Value::as_array)
-                        .and_then(|items| items.first())
+                        .and_then(|items| match engine.as_ref() {
+                            Some(info) if info.provider != crate::providers::ProviderId::Llama => {
+                                items.iter().find(|item| {
+                                    item.get("id").and_then(serde_json::Value::as_str)
+                                        == Some(info.upstream_model.as_str())
+                                })
+                            }
+                            _ => items.first(),
+                        })
                         .and_then(|item| item.get("id"))
                         .and_then(serde_json::Value::as_str)
                         .filter(|id| !id.trim().is_empty())
-                        .map(str::to_owned);
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            engine
+                                .as_ref()
+                                .filter(|info| {
+                                    info.provider == crate::providers::ProviderId::MlxVlm
+                                })
+                                .map(|info| info.upstream_model.clone())
+                        });
                     if let Some(model_id) = model_id {
                         let pid = shared
                             .lock()
@@ -1181,9 +1304,12 @@ pub fn reap_if_exited(state: &mut ServerState, err: &Arc<ErrBuf>) {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "signal".into());
     state.last_error = Some(if tail.trim().is_empty() {
-        format!("llama-server exited unexpectedly ({code})")
+        format!("inference server exited unexpectedly ({code})")
     } else {
-        format!("llama-server exited unexpectedly ({code}). {}", tail.trim())
+        format!(
+            "inference server exited unexpectedly ({code}). {}",
+            tail.trim()
+        )
     });
 }
 
@@ -1593,6 +1719,41 @@ mod tests {
         assert!(estimate.kv_mb > 0);
         assert!(estimate.total_mb > estimate.model_mb);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn python_file_and_snapshot_sizes_do_not_inherit_llama_allocations() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-python-memory-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let gguf = root.join("dense.gguf");
+        std::fs::File::create(&gguf)
+            .unwrap()
+            .set_len(2 * 1024 * 1024)
+            .unwrap();
+        let snapshot = root.join("snapshot");
+        std::fs::create_dir(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), b"{}").unwrap();
+        std::fs::File::create(snapshot.join("model.safetensors"))
+            .unwrap()
+            .set_len(3 * 1024 * 1024)
+            .unwrap();
+        let cfg = AppConfig {
+            active_provider: "vllm".into(),
+            ctx_size: 32768,
+            parallel: 8,
+            ..Default::default()
+        };
+        for (model, size) in [(&gguf, 2), (&snapshot, 4)] {
+            let estimate = estimate_memory(&cfg, &model.to_string_lossy(), "unused-projector.gguf");
+            assert_eq!(estimate.model_mb, size);
+            assert_eq!(
+                (estimate.kv_mb, estimate.projector_mb, estimate.total_mb),
+                (0, 0, 0)
+            );
+            assert_eq!(estimate.source, "unknown");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

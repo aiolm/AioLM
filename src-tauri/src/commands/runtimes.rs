@@ -6,11 +6,11 @@ use std::sync::{
 };
 use tauri::{Emitter, State};
 
-struct RuntimeBusyGuard {
+pub(super) struct RuntimeBusyGuard {
     busy: Arc<AtomicBool>,
 }
 
-fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
+pub(super) fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
     if state
         .server
         .lock()
@@ -35,7 +35,7 @@ fn runtime_resources_in_use(state: &AppState) -> Result<bool, String> {
 }
 
 impl RuntimeBusyGuard {
-    fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, String> {
+    pub(super) fn acquire(busy: &Arc<AtomicBool>) -> Result<Self, String> {
         busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map(|_| Self { busy: busy.clone() })
             .map_err(|_| "another runtime operation is already in progress".to_string())

@@ -102,6 +102,33 @@ impl ModelSource {
         }
         Err(RouteError::Changed)
     }
+
+    /// Attachment preprocessing chooses a session explicitly, so an unloaded
+    /// target never falls back to a different model with the same file name.
+    pub(super) fn acquire_session(&self, session_id: &str) -> Result<Lease, ApiError> {
+        for _ in 0..4 {
+            let catalog = self.snapshot();
+            let target = catalog
+                .ready
+                .iter()
+                .find(|candidate| candidate.session_id == session_id)
+                .ok_or_else(|| {
+                    ApiError::new(
+                        400,
+                        "transcription_session_unavailable",
+                        "the selected transcription session is not running",
+                    )
+                })?;
+            if let Some(lease) = Lease::begin(target) {
+                return Ok(lease);
+            }
+        }
+        Err(ApiError::new(
+            503,
+            "model_changed",
+            "the transcription session changed; retry",
+        ))
+    }
 }
 
 fn lock(target: &Mutex<ServerState>) -> MutexGuard<'_, ServerState> {
@@ -277,6 +304,7 @@ pub(super) struct Lease {
     target: Arc<Mutex<ServerState>>,
     upstream: String,
     key: String,
+    engine: Option<crate::providers::protocol::EngineInfo>,
 }
 
 impl Lease {
@@ -293,6 +321,7 @@ impl Lease {
             target: candidate.target.clone(),
             upstream: candidate.url.clone(),
             key: candidate.key.clone(),
+            engine: state.engine.clone(),
         })
     }
 
@@ -304,6 +333,23 @@ impl Lease {
     /// The private key of this model process. It never leaves the app.
     pub(super) fn upstream_key(&self) -> &str {
         &self.key
+    }
+    pub(super) fn adapt(
+        &self,
+        endpoint: &str,
+        body: &mut serde_json::Value,
+    ) -> Result<(), ApiError> {
+        if let Some(engine) = &self.engine {
+            crate::providers::protocol::adapt_request(engine, endpoint, body)
+                .map_err(|error| ApiError::new(400, error.code, error.message))?;
+        } else if endpoint.starts_with("audio/") {
+            return Err(ApiError::new(
+                400,
+                "unsupported_task",
+                "this session has no verified audio transcription capability",
+            ));
+        }
+        Ok(())
     }
 }
 
