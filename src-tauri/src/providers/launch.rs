@@ -1122,6 +1122,13 @@ pub fn engine_command(
                 );
             }
             args.extend(options::launch_args(provider, &schema_view(&options)));
+            // mlx-vlm 0.7.6 constructs RuntimeConfig while importing the
+            // server package, before its CLI sets MAX_KV_SIZE. Seed the same
+            // validated budget before import so /v1/settings and generation
+            // both honor the selected per-request KV allocation.
+            if let Some(size) = options.get("max_kv_size").and_then(Value::as_u64) {
+                env.push(("MAX_KV_SIZE".into(), size.to_string().into()));
+            }
             if !api_key.is_empty() {
                 env.push(("MLX_VLM_SERVER_API_KEY".into(), api_key.into()));
             }
@@ -1536,6 +1543,22 @@ mod tests {
         );
         assert_eq!(command.upstream_model, "/models/Qwen2.5-VL-7B");
         assert!(command.readiness.health_authenticated);
+    }
+
+    #[test]
+    fn mlx_kv_budget_is_available_during_server_import_and_matches_the_cli() {
+        let cfg = config(ProviderId::MlxVlm, json!({"max_kv_size": 256}));
+        let command = engine_command(&cfg, &runtime(ProviderId::MlxVlm), 41001, "").unwrap();
+        assert!(command
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--max-kv-size", "256"]));
+        assert_eq!(command.env, vec![("MAX_KV_SIZE".into(), "256".into())]);
+
+        let cfg = config(ProviderId::MlxVlm, json!({}));
+        let command = engine_command(&cfg, &runtime(ProviderId::MlxVlm), 41001, "").unwrap();
+        assert!(command.env.is_empty());
+        assert!(!command.args.iter().any(|arg| arg == "--max-kv-size"));
     }
 
     #[test]
