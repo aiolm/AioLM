@@ -1,133 +1,147 @@
 # Mac 기기 검증 결과
 
-[Mac 기기 작업 인계](macos-device-handoff.ko.md)의 M01–M12 후속 기록이다. **전체 기기 검증은 통과하지 않았다.** 공통 자동 검사, 세 엔진의 실제 추론·offline bundle 왕복, arm64 DMG 생성은 통과했다. 엔진 직접 연결의 `file://` 이미지 입력은 upstream 오류로 실패했고, 네이티브 조작과 별도 계정이 필요한 여정 및 일부 취소 단계는 남아 있다.
+[Mac 기기 작업 인계](macos-device-handoff.ko.md)의 M01–M12 후속 기록이다. **전체 기기 검증은 통과하지 않았다.** 공통 자동 검사, 세 엔진의 실제 추론·offline bundle 왕복, 실제 WKWebView 파일 선택·미디어·프로젝트·GUI 프로필 이전, arm64 DMG 생성과 재현 결함 수정은 완료했다. upstream 오류와 아래의 차단·미실행 범위는 남아 있다.
 
-## 1. 소스·환경·증거의 범위
+## 1. 소스·환경·근거
 
-- 실행일: 2026-10-07. 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
-- 브랜치: `codex/macos-device-validation`. 최종 구현·패키지 소스: `f414544`. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
-- 실제 기기: macOS 26.6.2 / native arm64 / Apple M2 / 메모리 16 GB.
+- 실행일: 2026-10-07–08 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
+- 브랜치: `codex/macos-device-validation`. 최종 구현·패키지 소스: `6261d0b`. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
+- 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
-- 도구·캐시·설정은 작업용 경로에 두었다. 기존 시스템 도구와 lockfile을 변경하지 않았다. 자동 검사·CLI·앱은 임시 HOME 및 legacy 경로를 격리했다. 새 OS 계정의 최초 실행을 대신한 검사는 아니다.
-- 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView, 실제 IPC와 W3C WebDriver를 사용했다. 합성 IPC 화면 검사가 아니다. production DMG의 자연스러운 Finder 실행은 별도 `unrun`이다.
-- raw 로그·모델·번들·캡처·검사 도구는 Git 제외 대상 `tmp/macos-acceptance/`에 보관했다. 자체 임시 홈 중 보존 대상으로 반환된 홈은 `retained-homes/`에 복사했다. 네이티브 검사 자체가 정리한 홈·모델은 재보관하지 않았다.
-- 아래 근거 파일은 모두 이 작업 디렉터리 기준이다. `checks.jsonl`에 명령·종료 코드·소요 시간을 기록했고 원본 로그는 `logs/`에 보존했다. 이 문서에는 개인 경로·계정·기기 식별자·생성 런타임 ID·API 키를 포함하지 않는다.
-- hosted runner 전용 스크립트의 실행 조건을 위조하지 않았다. 공개 benchmark 서비스 업로드는 수행하지 않았다.
+- 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
+- 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
+- raw 로그·모델·번들·캡처·검사 도구는 Git 제외 대상 `tmp/macos-acceptance/`에 보관했다. 아래 근거 파일은 이 디렉터리 기준이며 `checks.jsonl`에 명령·종료 코드·소요 시간을 기록했다. 자체 검사에서 반환한 보존 홈은 `retained-homes/`에 복사했다.
+- 이 문서와 패키지에는 개인 경로·계정/기기 식별자·생성 런타임 ID·API 키를 넣지 않았다. hosted runner 조건을 위조하지 않았고 공개 benchmark 서비스 업로드도 수행하지 않았다.
 
 ## 2. 재현 결함과 수정
 
 | 커밋 | 재현과 변경 | 수정 후 근거 |
 | --- | --- | --- |
-| `3523a87` | macOS 전용 버전 감지의 needless return과 프로필 fixture 초기화가 clippy 에 실패했다. snapshot 테스트의 symlink된 임시 조상 경로를 제품과 같은 canonical root로 맞췄다. 링크 보호는 유지한다. | 전체 Rust 검사·clippy 통과. 정상 하위 경로 허용과 symlink 거부를 함께 검사. |
-| `6ef0b8f` | StrictMode effect 정리 후 Discover의 열린 상태가 남아 첫 검색이 pending으로 고정됐다. 정리 시 상태를 초기화했다. 최소 창에서는 고정 실행 영역 때문에 본문이 32 px로 줄었다. 작은 높이의 context 영역에 스크롤과 높이 제한을 적용했다. | StrictMode 재실행·오래된 응답 회귀 검사. 실제 WKWebView 검색→다운로드→실행 및 세 엔진×세 창 크기에서 본문 최소 122 px 확인. |
-| `fbb557d` | acceptance harness 가 동기 CLI 재시작 중 오래된 pooled socket을 사용해 정상 서버에 ECONNRESET을 냈다. 검사 HTTP 요청은 매번 새 socket을 사용한다. 제품 서버 오류가 아니다. | 같은 포트 재시작/SSE/usage 회귀 검사, 합성 28개 검사, 실제 Metal 취소→재시작 통과. 오류 재시도로 숨기지 않는다. |
-| `c2236d0` | mlx-vlm 0.7.6은 CLI 처리 전에 RuntimeConfig를 import 하여 `--max-kv-size`가 있어도 실제 `/v1/settings`의 값이 비었다. 검증한 KV 예산을 launch 환경에도 전달한다. | CLI/env/unset Rust 회귀 검사. 실제 MLX benchmark에서 KV 256·APC=false·reset 확인 후 64-token workload 완료. readiness를 제거하지 않았다. |
-| `f414544` | 실제 mlx-lm의 선언된 root console script `mlx_lm`을 portable export 가 외부 파일로 거부했다. scripts 디렉터리의 선언된 console entry point 만 wheel에서 제외하고 설치 시 재생성한다. | 실제 파일이 있는 합성 metadata/wheel 검사. 임의 prefix·다른 디렉터리·absolute 경로는 계속 거부. 실제 Metal 174-wheel export/import/추론 통과. |
+| `3523a87` | macOS 버전 감지·프로필 fixture의 clippy 오류 수정. snapshot 테스트의 symlink된 임시 조상을 제품과 같은 canonical root로 맞춤. | 전체 Rust/clippy 통과. 하위 경로 허용과 symlink 거부 유지. |
+| `6ef0b8f` | StrictMode 정리 후 Discover 첫 검색이 pending에 고정됨. effect 상태 초기화. 작은 창에서 고정 영역이 본문을 32 px로 축소하여 높이·스크롤 조정. | 회귀 검사 및 실제 검색→다운로드→실행. 3 엔진×3 창 크기에서 본문 최소 122 px. |
+| `fbb557d` | acceptance harness가 CLI 재시작 중 pooled socket을 재사용해 정상 서버에 ECONNRESET을 냄. 요청마다 새 socket 사용. | 같은 포트 재시작/SSE/usage 검사와 실제 Metal 취소·재시작. 제품 서버 결함과 구분. |
+| `c2236d0` | mlx-vlm 0.7.6이 CLI 처리 전에 RuntimeConfig를 import하여 실제 KV 예산이 비었음. 검증한 값을 launch 환경에도 전달. | CLI/env/unset 회귀 검사. 실제 settings/KV/APC/reset과 workload 완료. |
+| `f414544` | 선언된 root console script `mlx_lm`을 portable export가 외부 파일로 거부. 선언된 entry point만 제외·설치 시 재생성. | 임의 prefix/다른 디렉터리/absolute 경로 거부 유지. 실제 174-wheel export/import/추론. |
+| `c21fb34` | WKWebView의 프로젝트 JSON download 링크와 file input이 OS Save/Open 창을 열지 못함. native export/import IPC 추가, 4 MiB 제한·UTF-8/BOM/JSON 검사·atomic write·취소 처리. | UI 2개/Rust 3개 회귀 검사. 실제 OS Save/Open·취소와 프로젝트 왕복. browser fallback 유지. |
+| `94d9d08` | export가 숫자 `max_tokens`를 자격 증명처럼 가려 import 후 실제 HTTP400 발생. 유한한 네 생성 예산 키만 보존. New chat 초기화가 공용 프로젝트 문서를 지우는 문제도 수정. | credential redaction 유지·direct 검사. 빈 draft 재사용/프롬프트/새 thread 회귀 검사. 실제 새 대화 자동 문서 첨부와 ORBIT-73 응답. |
+| `d7290b0` | native deep 취소가 Unsupported로 저장되어 기존 pass를 덮어씀. cleanup 후 cancellation 확인, 취소 결과는 persist하지 않음. | 취소/실제 Unsupported 저장 회귀 검사. 실제 CPU·Metal 비교 자식 각각 취소, 이전 cache 바이트 불변. |
+| `e05d642` | 동일 모델의 두 임베딩 후보 이름이 같아 명시적 대상을 구분할 수 없음. 표시 이름에 세션 ID 추가. | 같은 이름/모델의 두 후보 회귀 검사. 실제 WKWebView에서 지정한 세션의 URL·768차원 벡터 확인. |
+| `6261d0b` | 실행 중 named session이 참조하는 split GGUF의 후속 shard를 삭제할 수 있었음. 저장된 primary/draft/projector와 실행 세션의 각 binding에 전체 shard 보호를 적용. 첫 조각 부재·symlink alias도 처리. | 저장 선택/실행 세션/alias 회귀 검사 3개. 실제 공개 3-shard 모델의 세 번째 조각 삭제 재현·복구 후, 수정된 앱에서 선택 보호 및 별도 세션 보호 거부·원본 해시 불변. |
 
-공개 API와 benchmark 계약을 변경하지 않았다. 기본 엔진 옵션·Windows/Linux 정책을 유지했으며 실패를 skip, 해시 무시, readiness 제거나 근거 없는 timeout 확대로 통과시키지 않았다.
+gateway 공개 API·benchmark 계약·엔진/프로필 정책을 유지했다. 프로젝트 네이티브 파일 IPC 두 개만 재현 결함 해결에 추가했다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
 ## 3. M01–M12 판정
 
-`pass`는 해당 항목의 실행 범위가 통과한 경우, `fail`은 실제 실패가 남은 경우다. `unsupported`는 구체적으로 확인한 미지원 하위 검사에 사용한다. 항목 내 필요한 여정이 미실행이면 `unrun`, 현재 도구로 조작할 수 없는 단계가 있으면 `blocked`다. 하위 성공을 항목 전체의 통과로 확대하지 않는다.
+항목의 하위 성공을 전체 통과로 확대하지 않는다. `unsupported`는 실제 확인한 미지원 하위 검사, `unrun`은 필요한 여정의 미실행, `blocked`는 현재 계정/조작 수단의 차단이다. `fail`에는 미해결 실제 실패가 포함된다.
 
-| ID | 상태 | 실행 근거 및 남은 작업 |
+| ID | 상태 | 실행 근거와 남은 범위 |
 | --- | --- | --- |
-| M01 | pass | 지정 도구와 native arm64 확인. TypeScript·lint·단위·frontend/CLI/native build, Rust 전체 타깃·feature, Python·native CLI·합성 harness 통과. Unix socket/process/symlink 검사를 실제 권한으로 실행. |
-| M02 | pass | 고정 GGUF로 llama.cpp CPU→Metal lifecycle 및 CPU/Metal 소스 빌드 각각 통과. 설치 취소·staging 정리, probe·응답/usage·재시작·중지 확인. source-build 도중 CMake 취소는 M12의 미실행 단계다. |
-| M03 | fail | 관리형 Metal 설치·ABI/import/MetalPlatform·실제 텍스트/이미지·STT·embedding·취소·재시작 통과. 별도 외부 환경 등록/삭제 시 모든 파일 보존. 직접 이미지 `file://` 요청은 upstream HTTP 500. |
-| M04 | fail | 별도 MLX 설치·probe/processor·텍스트/이미지·취소·재시작 및 별도 외부 환경 보존 통과. 직접 이미지 `file://` 요청은 upstream HTTP 500. 다른 native 음성/영상 processor 여정은 unrun. |
-| M05 | unrun | 실제 WKWebView 11개 메뉴×3 엔진, 공용 프로필 3개, 3 창 크기×3 엔진 확인. v12→v13 보존/backup은 자동 회귀 검사 통과. 실제 GUI 이전과 지원 옵션 전체 조합은 미실행. |
-| M06 | unrun | 실제 검색→snapshot 다운로드 취소→재시도→설정→MLX 실행, 고정 GGUF 다운로드·해시 확인. 분할 GGUF/companion의 전체 UI 여정·삭제 보존 및 APFS 조건 전체는 미실행. |
-| M07 | fail | 알려진 이미지 내용, Whisper 전사 내용, 실제 ffmpeg 프레임/미디어 resolve 확인. 직접 엔진 URI 500과 gateway의 안전한 400 거부를 분리했다. OS 첨부 선택→기록/재로드/재시도 전체 여정은 blocked/unrun. |
-| M08 | blocked | gateway 인증·라우팅·멀티 세션·Responses continuation, 프로젝트, 실제 벡터 RAG 및 lexical fallback 통과. MCP schema·실제 승인창·취소/정리 확인. 네이티브 Yes/No·호출/후속 답변과 OS 문서 선택은 조작하지 못했다. |
-| M09 | blocked | 세 엔진의 실제 tokenizer usage·cold-cache·KV·process-group RSS·이력·CSV/XLSX 내용 확인. MLX deep pass, Metal deep partial/unsupported, CPU native 비교 unsupported. OS RSS 대조·native Metal deep는 unrun, 네이티브 저장창은 blocked. |
-| M10 | fail | 세 엔진 offline export/import 후 실제 추론 통과. hash/ABI/arch/OS 오류·pip 취소·기존 출력·별도 외부 환경 보호 확인. MLX 전체 harness 에는 직접 URI 500 이 남는다. native bundle 취소·활성 서버 거부의 실제 단계와 imported STT/embedding은 unrun. |
-| M11 | blocked | arm64 DMG/GUI/CLI·버전·strict ad-hoc 서명·해시·개인 경로/fixture 제외·새 홈 CLI 기본값 확인. 실제 창 hide/두 번째 실행 restore/정상 종료 통과. IME·클립보드·picker·Dock/트레이 조작은 blocked. 별도 계정/Finder/Keychain/실제 업그레이드는 unrun. |
-| M12 | unrun | 정상 앱 종료 시 두 모델·API·대기 승인창/stdio 포함 소유 프로세스 5→0, 포트 4개 닫힘. chat·pip·benchmark·deep·MCP 취소 정리 확인. ffmpeg/CMake 및 모든 교체·로딩·trial 단계 취소 행렬은 미실행. |
+| M01 | pass | 지정 도구/native arm64, TypeScript·linter·단위·frontend/CLI/native build, Rust 전체 타깃/feature, Python·CLI·합성 harness. 실제 Unix socket/process/symlink/권한 검사. |
+| M02 | pass | 고정 GGUF CPU→Metal probe·추론/usage·취소·재시작·중지, CPU/Metal source-build. 실제 CMake 자식 취소와 기존 설치/staging 보호. |
+| M03 | fail | 별도 관리형 Metal 설치·ABI/MetalPlatform/native extension·텍스트/이미지/STT/embedding·취소·재시작·외부 환경 보호. 직접 file URI 이미지 요청은 upstream500. |
+| M04 | fail | 별도 MLX probe·텍스트/이미지/native 영상·취소·재시작·외부 환경 보호. 직접 URI500. Gemma3n 오디오는 고정 upstream snapshot의 누락 shard index 때문에 preflight 실패. |
+| M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
+| M06 | pass | 실제 snapshot 취소/재시도, 고정 GGUF, 공개 3-shard 전체 GUI 다운로드/해시/한 항목/CPU 추론, 두 GGUF와 공유 companion 다운로드/재사용·다른 primary 삭제 후 보존. 활성/선택 draft·LoRA·named split 보호, 외부 파일·case-sensitive APFS·한글/공백·권한·FAT 불완전 상태 확인. |
+| M07 | fail | OS 이미지/WAV/MP4 선택·내용/usage·immutable 기록/재로드·실패 후 Retry·엔진 변경, 명시적 STT/frames·ffmpeg UI Stop, 비-WAV Whisper 전사/번역·ASR 전사. URI500, native SmolVLM 내용 오답, Gemma3n upstream snapshot 실패 유지. ffmpeg 부재의 실제 앱 검사는 blocked. |
+| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. MCP 승인창·Cancel/quit 정리 통과. 별도 osascript Yes/No→실제 tool/후속 답변은 조작 차단. |
+| M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
+| M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
+| M11 | blocked | 최종 arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. IME composition·clipboard Copy·Dock/트레이는 blocked/unrun. 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M12 | blocked | 최신 소스에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. MCP 승인 후 실제 호출 중 취소는 승인창 조작 차단으로 미검증. |
 
 ## 4. 공통 자동 검사
 
-| 명령 | 상태·최종 근거 |
+| 명령 | 최종 근거·상태 |
 | --- | --- |
-| `npm run typecheck`, `npm run lint` | pass — `logs/final-typecheck.log`, `logs/final-lint.log`. |
-| `npm run test:unit` | pass — `logs/final-unit.log`. 계약/direct/script 검사 포함. UI 160개 파일 / 1,550개 테스트; coverage statements 78.88%, branches 73.72%, functions 77.19%, lines 83.02%. |
-| `npm run build`, `npm run build:cli` | pass — 공통 build 및 마지막 `logs/final-cli-portable.log`. 최종 packaging 명령에서도 production frontend·CLI를 다시 빌드. |
-| `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | pass — `logs/final-rustfmt-kv.log`. 이후 Rust 변경 없음. |
-| `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` | pass — `logs/final-clippy-portable.log`. |
-| `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features` | pass — `logs/final-rust-with-portable.log`. lib 921 pass / 4 ignored, CLI 15 및 integration 검사. ignored 검사를 실행한 것으로 계산하지 않는다. |
-| `cargo build --locked --manifest-path src-tauri/Cargo.toml --bins`, `npm run test:native-cli` | pass — native build 및 `logs/native-cli.log`. |
-| `python3 -B -m unittest discover -s src-tauri/src/providers -p '*_tests.py'` | pass — 14개, `logs/final-python-all.log`. |
-| `python3 -B -m unittest discover -s src-tauri/src/providers/tests -p 'test_*.py'` | pass — 3개, `logs/final-python-probe.log`. |
-| `npm run test:provider-runtime` | pass — 28 개와 synthetic loopback self-test, `logs/provider-harness-socket.log`. 실모델 성공 근거는 아니다. |
-| `npm run package:tauri` | pass — `logs/package-arm64.log`. chunk 크기 경고는 남아 있으나 build 실패는 아니다. |
+| `npm run typecheck`, `npm run lint` | pass — `logs/final-target-typecheck.log`, `logs/final-target-lint.log`. |
+| `npm run test:unit` | pass — `logs/final-shard-unit.log`. 계약/direct/script 포함, UI 160 files / 1555 tests. coverage statements79.06% / branches73.84% / functions77.43% / lines83.2%. |
+| `npm run build`, `npm run build:cli` | pass — 최종 packaging에서 production frontend/CLI 재빌드. |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` | pass — `logs/final-shard-fmt-check.log`. |
+| `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` | pass — `logs/final-shard-clippy.log`. |
+| `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features` | pass — `logs/final-shard-rust-all.log`. lib928 pass/4 ignored, CLI15 및 integration. ignored는 실행된 것으로 계산하지 않음. |
+| native build, `npm run test:native-cli` | pass — native 빌드, `logs/final-shard-native-cli.log`. |
+| Python provider unittest discovery | pass — 14개 `logs/final-python-all.log`, 3개 `logs/final-python-probe.log`. |
+| `npm run test:provider-runtime` | pass — 28개와 synthetic loopback self-test, `logs/final-provider-harness.log`. 실모델 근거와 구분. |
+| `npm run package:tauri` | pass — `logs/final-shard-package.log`. chunk 크기 경고는 남음. |
 
-sandbox에서 socket bind/프로세스 검사 권한이 거부된 Rust 실행은 환경 실패로 원본을 남겼다(`logs/final-rust-all.log`). 실제 권한으로 재실행한 전체 검사는 통과했다. 이후 portable 수정까지 포함한 최종 실행도 통과했다. lockfile은 변경하지 않았다.
+초기 sandbox의 socket bind/프로세스 권한 오류와 임시 검사 도구의 reload race·selector/동적 port/별칭·응답 완료 시점 오류도 원본 로그에 보존했다. 같은 검사를 실제 권한과 올바른 실제 상태로 재검증했다. 이를 제품 결함이나 성공으로 세지 않는다. staged diff·개인정보·공백을 확인하고 build/raw/tmp는 커밋하지 않았다.
 
-## 5. 실제 엔진·모델
+## 5. 엔진과 고정 모델
 
 | 엔진 | 실제 설치·probe |
 | --- | --- |
-| llama.cpp | native lifecycle은 공식 b11459 CPU/Metal. 소스 빌드는 `f07be9f37e5dd3e8bec895f6ffd8d86fd1bbc370` CPU/Metal 각각. 이후 앱 설치 시 upstream latest 가 b11460으로 바뀌어 b11459 지정이 정책상 거부됐다. 앱·CPU bundle은 b11460, version 0.6.0 / commit `78651c410`으로 실행했다. |
-| vllm-metal | CPython 3.12.15 arm64, vLLM distribution 0.30.0+cpu / imported 0.30.0, plugin 0.30.0, MLX 0.32.1, nanobind 2.10.2, mlx-vlm 0.6.17, mlx-lm `9e6acca691e64d6d8bb808c328fcdea459099cca`. MetalPlatform·shipped `_paged_ops`·GPU 사용 가능 및 STT loader scan 확인, probe errors 없음. |
-| mlx-vlm | 별도 CPython 3.12.15 arm64 환경, mlx-vlm 0.7.6 / MLX 0.32.3. 실제 server flag·loader/processor를 probe 했으며 errors 없음. Metal 환경에 이 버전을 덮어 설치하지 않았다. |
+| llama.cpp | native lifecycle 공식 b11459 CPU/Metal; source CPU/Metal `f07be9f37e5dd3e8bec895f6ffd8d86fd1bbc370`. 앱 CPU/bundle b11460 0.6.0/commit `78651c410`. 후속 공식 Metal b11461 0.6.0-dev/commit `4d756bc72`. 지정 옛 latest 설치가 정책상 거부된 원본도 보존. |
+| vllm-metal | CPython3.12.15 arm64, distribution0.30.0+cpu/import0.30.0, plugin0.30.0, MLX0.32.1, nanobind2.10.2, mlx-vlm0.6.17, mlx-lm `9e6acca691e64d6d8bb808c328fcdea459099cca`. MetalPlatform·shipped `_paged_ops`·GPU·STT registry 확인, probe errors 없음. |
+| mlx-vlm | 별도 CPython3.12.15 arm64, mlx-vlm0.7.6/MLX0.32.3. 실제 flag/loader/processor probe errors 없음. Metal 환경에 0.7.6을 덮어 설치하지 않음. |
 
-모델은 설치된 loader/processor를 먼저 확인하고 공개 Hub 전체 revision을 다운로드 전에 고정했다. 크기는 실제 선택하여 받은 파일 합계이며 repository의 모든 대체 포맷 합계가 아니다. HF cache `snapshots/<전체 SHA>` 또는 앱의 `.aiolm-snapshot.json`으로 provenance를 확인했다.
+설치된 loader/processor를 먼저 확인한 뒤 공개 repository 전체 revision을 다운로드 전에 고정했다. bytes는 실제 선택하여 받은 파일 합계다. provenance는 고정 Hub snapshot 경로 또는 `.aiolm-snapshot.json`으로 확인했다.
 
-| 용도·공개 출처 | 전체 revision | 받은 bytes |
+| 공개 출처·용도 | 전체 revision | 받은 bytes |
 | --- | --- | ---: |
-| native GGUF: `Qwen/Qwen2.5-0.5B-Instruct-GGUF` | `9217f5db79a29953eb74d5343926648285ec7e67` | 491400032 |
-| Metal/MLX text: `mlx-community/Qwen2.5-0.5B-Instruct-4bit` | `a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3` | 289598797 |
-| vision: `mlx-community/Qwen3-VL-2B-Instruct-4bit` | `9c4f5209e57b31f4b9dfba735de3fb983739c9cc` | 1798021605 |
-| STT: `openai/whisper-tiny` | `169d4a4341b33bc18d8881c4b69c2e104e1cc0af` | 155434424 |
-| embedding: `intfloat/multilingual-e5-base` | `d128750597153bb5987e10b1c3493a34e5a4502a` | 1134355035 |
+| `Qwen/Qwen2.5-0.5B-Instruct-GGUF` native | `9217f5db79a29953eb74d5343926648285ec7e67` | 491400032 |
+| `mlx-community/Qwen2.5-0.5B-Instruct-4bit` text | `a5339a4131f135d0fdc6a5c8b5bbed2753bbe0f3` | 289598797 |
+| `mlx-community/Qwen3-VL-2B-Instruct-4bit` vision/video | `9c4f5209e57b31f4b9dfba735de3fb983739c9cc` | 1798021605 |
+| `openai/whisper-tiny` STT | `169d4a4341b33bc18d8881c4b69c2e104e1cc0af` | 155434424 |
+| `intfloat/multilingual-e5-base` embedding | `d128750597153bb5987e10b1c3493a34e5a4502a` | 1134355035 |
+| `Qwen/Qwen3-ASR-0.6B` STT | `5eb144179a02acc5e5ba31e748d22b0cf3e303b0` | 1880560703 |
+| `ggml-org/SmolVLM-256M-Instruct-GGUF` model/projector | `b9e4379657e1450d04d02eec8e345667265b0a00` | 365086144 |
+| `mlx-community/gemma-3n-E2B-it-4bit` native audio | `66e7276cfc589073b4f92ebed58c05301f990222` | 4502727070 |
+| `Prasad12344321/Qwen2.5-0.5B-bnb-4bit-python` Q8_0/Q4_K_M·동일 repo companion | `eae6acf655ad41fb0583133783328ad7c9c339ca` | 944748678 |
+| `ggml-org/models-moved` TinyStories15M Q8_0 공개 3-shard | `499bc8821c6b12b4e53c5bffcb21ec206f212d81` | 26671680 |
+| `Prasad12344321/Qwen2.5-0.5B-bnb-4bit-python` PEFT LoRA·config·base config | `eae6acf655ad41fb0583133783328ad7c9c339ca` | 35238652 |
 
-GGUF 파일은 `qwen2.5-0.5b-instruct-q4_k_m.gguf`, SHA256은 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`다. 기존 native 검사와 같은 고정 파일을 사용했다.
+고정 Q4_K_M GGUF SHA256은 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`이며 기존 native 검사와 같다. SmolVLM Q8_0 model/projector SHA256은 각각 `2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65`, `0802360aca1748f112ea510b8ff277c65b1361c8ef30ed89b83c9c7a60d08e96`다.
 
-| 실행 | 원본 근거·관찰 |
+| 실제 실행 | 근거와 해석 |
 | --- | --- |
-| native CPU/Metal/source | `logs/runtime-install-live.log`, `logs/native-cpu-live.log`, `logs/native-metal-live.log`, `logs/native-source-cpu.log`, `logs/native-source-metal.log`. Metal은 25/25 layers offload. 실제 응답/usage·재시작·중지, 설치 취소/staging 정리 확인. |
-| Metal text | `metal-text-socket.json`. usage 60+108=168, 응답·mid-body cancel·restart·stop pass. 짧은 최초 응답이 cancel 전에 끝난 실패와 이전 socket harness 실패의 원본을 보존했다. 긴 생성으로 재검증했다. |
-| MLX text/vision | `mlx-text-live.json`, `mlx-vision-live.json`. 응답/usage·cancel·restart·image endpoint 성공. 직접 `file://`는 500, 전체 harness는 fail. text checkpoint의 이미지 HTTP 200을 내용 이해의 근거로 삼지 않는다. |
-| Metal vision | 최초에는 기본 max_model_len 262144의 KV 요구량 약 28 GiB 가 사용 가능 약 8.48 GiB를 넘어 실행 실패. `logs/metal-vision-server.log` 보존. 명시적 4096으로 `metal-vision-4096.json`의 추론/cancel/restart 성공, URI 는500. `metal-vision-content.json`에서 왼쪽 빨간 사각형·오른쪽 파란 원이라는 실제 내용을 확인했다. 기본값을 변경하지 않았다. |
-| Metal STT | `metal-stt-live.json`, `ui-media-results.json`. 별도 STT 세션의 Whisper 가 알려진 합성 WAV를 정확히 전사했다. chat endpoint404는 unsupported이며 chat cancel은 미실행. |
-| Metal embedding | `metal-embedding-live.json`, `ui-rag-results.json`. 768차원 유한값·restart/stop. chat404는 unsupported. |
-| 외부 등록 보호 | `external-protection-vllm.json`, `external-protection-mlx-vlm.json`. 앱 관리 영역 밖에 별도 offline venv를 각각 만들고 실제 CLI register/probe/remove. 모든 일반 파일의 내용 해시가 등록 전후 일치. |
+| CPU/Metal/source lifecycle | `logs/native-cpu-live.log`, `logs/native-metal-live.log`, `logs/native-source-cpu.log`, `logs/native-source-metal.log`. Metal 25/25 layers offload, 실제 응답/usage·재시작/중지. |
+| Metal/MLX text/vision | `metal-text-socket.json`, `mlx-text-live.json`, `mlx-vision-live.json`, `metal-vision-4096.json`, `metal-vision-content.json`. 알려진 이미지의 색/형태/순서 확인. HTTP200만으로 이해 성공을 판정하지 않음. |
+| Metal 메모리 한계 | 기본 max_model_len262144의 KV 약28 GiB가 사용 가능 약8.48 GiB를 넘어 실패. 명시적4096에서 성공. 기본값을 기기 설정으로 바꾸지 않음. |
+| STT/embedding | `metal-stt-live.json`, `qwen-asr-live.json`, `ui-stt-final-results.json`, `metal-embedding-live.json`. AIFF Whisper 전사/영어 번역200, ASR 정확한 전사200/번역 unsupported400. 768차원 유한 벡터·restart/stop. STT/embedding chat404는 unsupported. |
+| 외부 등록 보호 | `external-protection-vllm.json`, `external-protection-mlx-vlm.json`. 별도 offline venv register/probe/remove 전후 모든 일반 파일 해시 일치. |
+| native projector 내용 | `ui-native-projector-results.json`: 실제200/usage153+7=160. “rectangle and blue sphere”로 빨강/좌우/원 검증 실패. 작은 모델 정확성 실패로 기록, loader 성공과 구분. |
+| Gemma3n upstream | `native-audio-pinned-metadata.json`, `gemma-alternative-preflight.json`, `ui-native-gemma-start-results.json`. 공식 index는 없는3개 shard를 가리키고 실제 repo에는 단일 가중치만 존재. 20개 대체 audio-capable E2B4bit 변형도 같은 문제. index를 삭제하거나 readiness를 우회하지 않음. |
 
-직접 URI 500은 엔진 server 측 upstream 제한으로 분류했다. app gateway는 신뢰하지 않는 로컬 경로를 400 `untrusted_media_path`로 거부한다. 이 안전한 거부와 직접 엔진의 실패는 별도 결과다.
+직접 `file://` 이미지500은 upstream server 제한이다. gateway의400 `untrusted_media_path` 거부와 구분한다. Metal native 음성/영상 채팅은 해당 고정 plugin에서 unsupported이며 STT/명시적 preprocessing으로 처리한다.
 
-## 6. 실제 WKWebView·API·종료
+## 6. 실제 WKWebView·파일·미디어·프로젝트
 
-| 근거 | 확인한 동작과 범위 |
+| 원본 근거 | 확인한 여정 |
 | --- | --- |
-| `ui-menu-results.json`, `ui-profile-results.json` | 11개 메뉴×3 엔진, 공용 프로필 3개, 실제 창 1280×800 / 800×600 / 360×520. 최소 viewport 360×488에서 수정 후 본문 122 px 이상. runtime/model 선택은 프로필 밖에 유지. |
-| `ui-discover-results.json`, `logs/ui-discover-cold-fixed.log`, `logs/ui-gguf-download.log` | 첫 검색 고착 수정 후 vision snapshot cancel/retry·완료 manifest·Configure and run·실제 MLX 실행. GGUF 고정 크기/해시 일치. |
-| `logs/ui-chat-flow-fixed.log` | 실제 composer 입력→응답/usage→대화 저장→reload 복원→긴 생성 Stop. 합성 한글 문자열 입력은 IME composition 검증이 아니다. |
-| `ui-gateway-results.json` | 무인증 401, 인증 models/text200과 usage, 없는 alias404. 2 세션의 default/명시 alias200, 모호한 bare alias400. 이미지 내용 확인, URI400. 모든 모델 중지 후 API 유지/503, API stop. |
-| `ui-media-results.json` | 내용이 알려진 합성 이미지·WAV/MP4를 immutable media store 에 배치하고 실제 resolve/무효 reference 거부·ffmpeg 프레임 시각·별도 Metal STT 확인. 전사문은 “The red square is on the left. The blue circle is on the right.”. OS attachment picker를 거치지 않은 processor/IPC 검사이며 첨부→이력→retry 전체 여정은 아니다. |
-| `ui-rag-results.json` | 실제 e5 Metal 세션→app gateway→768차원 유한 벡터 3개. 실제 frontend retrieval 함수로 파란 원의 source/citation 선택, lexical fallback, 별도 namespace 확인. 문서 fixture를 투입했으며 OS 문서 picker/후보 선택 전체는 아니다. |
-| project captures | 실제 Projects 화면에서 합성 프로젝트 생성·저장·적용, 공용 프로필과 active project 확인. native file binding/import/export는 미실행. |
-| `ui-mcp-cancel-results.json` | 합성 stdio JSON-RPC의 실제 schema 열거, 제품 Cocoa 승인창의 가시 상태 확인. 실제 cancel로 창/stdio 자식 정리, tools/call 미전송. Yes/No→실제 호출/후속 답변은 미실행. |
-| `ui-window-results.json` | close_to_tray=true에서 실제 close 가 창을 숨김. 같은 격리 설정의 두 번째 실행이 기존 창을 restore 하고 두 번째 프로세스 종료. false로 복원한 후 일반 close로 종료. tray/Dock의 Show/Quit 조작은 아니다. |
-| `ui-cancel-checks.json` | 실제 benchmark/deep helper 시작 후 실제 cancel. 자식 종료, benchmark cancelled·중단 trial의 완료행 없음. 양쪽 backend/모든 trial 단계 행렬은 미실행. |
-| `ui-final-quit-results.json`, `logs/ui-final-normal-quit.log` | 실제 모델 2개·API·MCP 승인 대기 중 정상 close. Responses continuation 이 이전 turn의 합성 코드 ORBIT을 기억하고 usage60+13=73 반환. 소유 root/자식 5→0, 모델 2/API/WebDriver 의 4 포트 닫힘, tools/call 없음. launcher/Vite 도 정상 종료. |
+| `ui-menu-results.json`, `ui-profile-results.json` | 11 메뉴×3 엔진, 모델 없이 공용 프로필 생성·런타임/모델 선택과 분리, 1280×800/800×600/360×520 실제 창. 최소 본문122 px 이상. |
+| `ui-gui-migration-results.json`, `ui-gui-migration-profiles-results.json`, `ui-gui-migration-second-results.json` | CLI 선행 없는 GUI v12→v13. 세 ID/이름/revision/coverage/prompt/옵션/default/recent/적용 snapshot 보존. native 화면에서 세 엔진의 이전 프로필 표시·복사본 삭제 후 원본 전체 entry 동일. 두 번째8192값 이전에도 최초 backup 바이트 불변. 별도 계정 upgrade의 대체 검사는 아님. |
+| Discover/GGUF/split | `ui-discover-results.json`, `logs/ui-discover-cold-fixed.log`, `logs/ui-gguf-download.log`, `ui-split-actual-results.json`. public snapshot 취소/재시도/실행, 고정 GGUF. 공식 split 도구로 같은 고정 모델을2조각으로 생성하여 한 항목 scan/첫 shard CPU 실제추론·Metal preflight 거부/기존 서버·활성/외부 파일 보호. 생성 split의 검사와 별개로, `public-split-pinned-metadata.json`, `ui-public-split-download-results.json`에서 공식 공개 TinyStories15M의 3조각 전체 network 다운로드→LFS 해시→단일 목록→CPU completion200/usage도 확인. |
+| 실제 파일시스템 | `filesystem-device-results.json`. read-write case-sensitive APFS 이미지에서 다른 case 파일·한글/공백 GGUF 추론·symlink·외부 mount·permission-denied 확인. FAT32 hard-link 오류45와 complete=false manifest. 오류를 완료로 표시하지 않음. 임시 mount는 detach하고 이미지는 보존. 최대 파일명 길이 전체 검사는 아님. |
+| 실제 companion/보호 | `ui-companion-download-results.json`, `ui-metal-companion-completion-results.json`, `ui-auxiliary-protection-results.json`. WKWebView 검색 엔진 변경은 답변 엔진을 유지하며 두 GGUF와 동일 repo config/tokenizer를 다운로드. LFS 해시 일치·완료 파일 재사용. Metal completion200/usage. 다른 primary 삭제 후 나머지 primary/공유 companion 모든 해시 보존. base tokenizer의 chat template 부재로 chat400인 원본도 별도 유지. |
+| 실제 draft/LoRA/MLX embedding | `ui-real-draft-results.json`, `public-lora-input.json`, `ui-auxiliary-protection-results.json`, `ui-mlx-embedding-options-results.json`. 같은 고정 GGUF 복사본 draft 실제 추론/usage·활성/선택 삭제 거부. 공개 PEFT LoRA를 고정 공식 llama.cpp source 변환기로17,619,680-byte GGUF 변환·native 로드/응답9+15=24usage, 활성/선택 adapter 보존. MLX 실제 --embedding-model/--model 없음·768 유한 vectors, 중복 embedding/draft binding 거부 후 기존 PID 유지. |
+| 실제 GUI 복합 옵션 | `ui-actual-native-combination-results.json`, `ui-final-supported-options-results.json`, `ui-real-option-schemas.json`. native OS LoRA picker와 draft 선택→draft-simple→새 공용 프로필→UI Save/start→실제 응답/usage36+20=56. primary model/runtime은 프로필 밖이며 draft/LoRA 보조 binding은 기존 정책상 프로필에 포함 가능. 설치된 Metal의 tensor/pipeline parallel·CPU offload 미노출, MLX embedding-only 및 auxiliary/advanced UI 확인. |
+| 공개 split 삭제 결함 | `ui-named-split-protection-results-before-shard-fix.json`, `ui-named-split-recovery.json`, `ui-named-split-protection-results.json`. 실제 named session의 후속 shard 삭제가 허용된 결함을 재현. 작업용 백업에서 복구·중지 후 수정 빌드에서 선택된 전체 shard 보호와 별도 실행 세션 보호를 각각 검증. 세 번째 shard SHA256 불변. |
+| native image/audio/video | `ui-image-history-record.json`, `ui-audio-history-audio.json`, `ui-video-history-video.json`, `ui-media-native-reloaded.json`. 실제 OS 선택→immutable store→이미지 내용/선택 Whisper 전사/frames 시각→실제 답변→기록/reload. 원본 reference·준비된 전사/프레임·선택 답변 모델 보존. 원본 파일 경로를 image/audio/video history에 저장하지 않음. |
+| 독립 native video | `ui-native-video-clean-history.json`, `ui-native-video-clean.png`. 문서·이전 메시지 없는 Qwen3-VL 새 대화에서 video kind로 native 전달하고 빨간 사각형 왼쪽/파란 원 오른쪽 확인. 초기 문서가 정답을 포함한 결과는 내용 이해 근거에서 제외. 음성 track 이해로 확대하지 않음. |
+| Retry/engine 변경 | `ui-media-engine-change-results.json`, `ui-media-retry-phase-results.json`. MLX→Metal 변경 후 원본/프레임 reference 그대로 실제 내용 확인. 준비된 HTTP 요청 직전 자체 fixture가 앱 소유 model group만 종료: 실제 연결 실패/Retry last message→실제 restart→동일 messages 재전송·내용 성공. 엔진 응답을 합성하지 않음. 역사에 저장된 prepared frames 재사용 범위다. |
+| ffmpeg/미지원 입력 | `ui-ffmpeg-cancel-results.json`, `ui-ffmpeg-stop-real-results.json`. 실제 ffmpeg와 staging 관찰→IPC cancel 및 OS 첨부 long video의 UI Stop→자식 종료/원본 불변/부분 대화 없음. Metal에서 전처리 opt-in 전 영상은 설명 있는 거부, 동의 후 프레임 경로 허용. |
+| 문서/project native | `ui-native-document-history.json`, `ui-project-native-roundtrip-results.json`, `ui-project-autoload-history.json`. OS Markdown 선택→ORBIT-73·source→reload. 프로젝트 생성/문서 binding/Save/Open/각Cancel·JSON 왕복, 숫자 budget 보존, 새 대화 자동 문서 첨부·실제 CPU 응답. |
+| RAG/개인화 | `ui-rag-results.json`, `ui-embedding-target-label-results.json`, `ui-personalization-actual.json`, `ui-personalization-outgoing.json`. 실제768차원 vectors/namespace/keyword와 두 후보의 이름·명시적 URL 선택/답변 모델 보존. 합성 AGENTS2개·내부 symlink skill 내용이 실제 system request에 포함. 폴더 밖 symlink는 거부. 작은 모델이 첫 비유도 응답에서 instruction code를 모두 따르지 않은 결과는 보존. 요청 포함 성공과 모델 순응 정확성을 구분. |
+| gateway/MCP/창 | `ui-gateway-results.json`, `ui-mcp-cancel-results.json`, `ui-window-results.json`, `ui-final-quit-results.json`. 401/인증200/없는alias404/모호alias400·멀티 세션·503/API독립수명·Responses continuation, 실제 MCP schema/승인창/Cancel·tool 미전송, hide/2차실행 restore/normal close. Yes/No·Dock/트레이 조작 성공을 뜻하지 않음. |
 
-CUA app 연결이 `-10005`로 UI 상태를 가져오지 못해 네이티브 selector/IME/clipboard/MCP Yes/No/Dock/트레이 조작은 blocked다. OS 창 관찰은 대상 프로세스에 한정한 읽기 전용 CGWindow probe로 했다. 승인창의 존재 확인을 승인/거부 성공으로 표시하지 않는다.
+CUA의 실제 `.app` 연결을 복구하여 파일/문서/저장창·취소·정상 Quit·한글 paste는 검증했다. 별도 osascript 승인창, TextInputMenuAgent 및 Dock 접근은 CUA 오류/시간 초과로 남았다. IME 전환 시도에는 실제 composition이 발생하지 않았으며 붙여넣기로 대신 통과시키지 않았다. Copy는 기존 pasteboard의 모든 포맷을 보존·복원할 조작 수단을 확보하지 못해 미검증이다. ffmpeg 부재도 최소 PATH로 실행했지만 정상 PATH 복구가 설치된 Homebrew ffmpeg를 찾아 실제 부재 상태를 만들지 못했다. 기존 설치/PATH 복구 정책을 제거하지 않았다.
 
-## 7. benchmark·심층 검증·이력
+## 7. benchmark·심층 검증·취소·내보내기
 
-실제 모델로 warmup=true, code_python, 1 반복, concurrency1/2를 실행했다. 짧은 검증 workload이며 서로 다른 prompt 길이의 결과로 엔진 간 성능 순위를 판단하지 않는다.
+실제 tokenizer와 작은 code_python workload, warmup/concurrency1/2를 사용했다. 서로 다른 prompt 길이로 엔진 성능 순위를 비교하지 않는다.
 
-| 근거 | 실측과 판정 |
+| 근거 | 관찰 |
 | --- | --- |
-| `ui-bench-llama.cpp.json` | b11460 CPU. prompt16/generation8, completion8/16, cached tokens0. peak process-group RSS736067584 / 736182272 bytes. pass. |
-| `ui-bench-vllm.json` | Metal. prompt16/generation8, completion8/16, cache0. max context256·prefix caching 비활성 확인. RSS1419444224 / 1407025152 bytes. pass. |
-| `ui-bench-mlx-vlm-kv-fixed.json`, `ui-bench-mlx-vlm-kv64.json` | 수정 후 KV256/APC=false/reset 확인. prompt16은 chat template 보다 짧아 exact prompt 구성에서 fail, 원본 보존. 별도 prompt64/generation8은 completion8/16·cache0·유한 timing, RSS575127552 / 575242240 bytes로 complete. |
-| `ui-deep-mlx-vlm.json` | 동일 4bit weights의 MLX CPU/Metal full-vocabulary 비교 510 positions. median KL0.00010713571828091517, ratio0.9999340004355735, pass. |
-| `ui-deep-vllm.json` | coverage partial, verdict unsupported. MLX 변환 weights는 비양자화 HF CPU reference 에 대응하지 않는다. full pass 가 아니다. |
-| `ui-deep-llama.cpp.json` | CPU-only 에는 비교 backend 가 없어 unsupported. native Metal 심층 비교는 unrun. |
-| `ui-native-history.json`, `actual-benchmark-content.csv`, `actual-benchmark-content.xlsx` | 실제 native journal 저장. 실제 WKWebView에서 제품 CSV/XLSX 생성 함수로 export 내용 생성, 실패행을 포함한 이력·header/9rows·ZIP CRC 확인. native 저장 picker/별도 Excel viewer는 미검증. |
+| `ui-bench-llama.cpp.json`, `ui-bench-vllm.json`, `ui-bench-mlx-vlm-kv64.json` | 실제 completion count/cached tokens0·KV/APC=false/reset·유한 timing·history. MLX prompt16은 chat template보다 짧아 exact prompt 구성 실패,64-token workload에서 완료. 실패 원본 유지. |
+| OS RSS 대조 | `ui-native-metal-rss-results.json`: 649789440/649920512 bytes 제품/ps 동일. `ui-mlx-vlm-os-rss-results.json`: 578125824/578748416 동일. `ui-vllm-os-rss-results.json`: 제품250052608/241483776, OS247889920/241893376, 차이0.865%/0.170%. vLLM 부모/자식 group 포함. |
+| deep verdict | `ui-deep-mlx-vlm.json`:510 positions full-vocabulary medianKL0.00010713571828091517/ratio0.9999340004355735 pass. `ui-native-metal-deep-results.json`: KL0.001846/ratio1.001106 pass. vllm quantized CPU reference는 partial/unsupported, CPU-only native는 비교 backend 없어 unsupported. |
+| native CSV/XLSX | `ui-native-save-active-results.json`, `device-native.csv`, `device-native.xlsx`. 실제 OS Save/Cancel, CSVUTF-8 BOM·XLSX 내용 bytes/ZIP CRC·9rows·실패행 보존. Finder Quick Look에서 실제 workbook rows 확인. 독립 Excel 앱 검사는 아님. |
+| 9 benchmark cancel | `ui-benchmark-cancel-matrix-results.json`: 3엔진×warmup/single/batch 실제 stage event 이후 cancel. 전부cancelled/소유 자식 종료/중단 trial 완료행 없음. batch 전에 완료된 single행은 보존. |
+| 준비/로딩/deep | `ui-cmake-cancel-results.json`, `ui-replacement-cancel-results.json`, `ui-native-deep-cancel-results.json`. 실제 CMake child/staging 정리. replacement 준비 취소는 기존 서버 보호, 실제 --port loading 취소는 old/new 자식·포트 정리. native host/device deep 각 취소·cache 불변. MLX 초기 child cancel도 별도 확인. |
+| MLX 단계별 취소 | `ui-mlx-traced-phase-results.json`, `mlx-deep-observer-cleanup.json`: CPU/GPU 각각 실제 비교 작업의 log-prob evaluation 진입을 관찰 후 취소. 소유 child/job 디렉터리 제거·기존 cache 바이트 불변. 관리형 환경은 보존하고 별도 같은 기기 복사본을 외부 등록하여 Python entry trace만 추가한 진단 검사다. 대기 삽입/결과 대체 없음. 진단 후 trace·등록 제거. mid-kernel 중단·성능 측정·portable 복사 성공으로 해석하지 않음. |
+| 최종 종료 | `logs/ui-final-all-fixes-normal-quit.log`, `ui-final-quit-results.json`: 모델2/API/MCP 승인 대기 중 소유5→0·4포트 닫힘·tools/call 미전송. 최신 `6261d0b`는 `ui-shard-final-quit-results.json`, `logs/ui-shard-fixed-live.log`, `logs/ui-shard-final-quit-verify.log`: native draft/LoRA·공개 split·MLX embedding 세 실제 세션과 인증 API 응답 후 정상 Quit. 소유 자식 전부 종료·5포트 닫힘·모델/보조/shard 해시 불변·launcher/Vite exit0. |
 
-RSS는 제품의 `pti_resident_size` process-group 측정이다. 독립적인 OS/Activity Monitor 대조는 unrun이며 모든 unified-memory GPU buffer를 포함한다고 해석하지 않는다. 공개 서비스 contract0.8.0/schema v2는 로컬 자동계약 검사만 수행했으며 공개 upload/수락은 미실행.
+RSS는 `pti_resident_size` process-group resident memory다. 모든 unified-memory GPU allocation이나 physical footprint를 포함한다고 해석하지 않는다. 공개 contract0.8.0/schema v2는 로컬 자동 계약 검사만 했으며 서비스 업로드/수락은 제외다.
 
 ## 8. offline bundle·오류·보호
 
@@ -139,28 +153,26 @@ RSS는 제품의 `pti_resident_size` process-group 측정이다. 독립적인 OS
 
 `bundle-negative-results.json`은 실제 archive 복사본에서 wheel SHA256·x86_64 arch·cp311/cp312 ABI·Linux OS 불일치 거부를 확인했다. 실제 pip 자식 실행 중 SIGINT로 비성공 종료·자식/staging 정리·완료 설치 비공개를 확인했다. 기존 archive로 export 거부와 원본 archive의 내용 해시 불변도 확인했다.
 
-`native-bundle-negative-results.json`은 실제 native archive의 LICENSE SHA256·arch·OS 불일치를 publish 전에 거부하고 원본을 보존했다. 외부 환경은 앞서 설명한 별도 venv에서 전체 파일 보호를 확인했다. native bundle 취소/active-server export/import 거부는 실제 실행하지 않았으며 자동회귀 검사의 성공을 실기기 성공으로 대신하지 않는다. import 후 STT/embedding은 미실행.
+`native-bundle-negative-results.json`은 실제 native archive의 LICENSE SHA256·arch·OS 불일치를 publish 전에 거부하고 원본을 보존했다. 외부 환경은 앞서 설명한 별도 venv에서 전체 파일 보호를 확인했다. `native-bundle-cancel-results.json`에서 실제 압축·추출 중 SIGINT, 자식/staging 정리, 원본 archive/runtime 해시 불변을 확인했다. `ui-native-save-active-results.json`에서 native/Python export/import 네 명령이 활성 모델 중에는 picker 전에 거부됐다. `imported-stt.json`, `imported-embedding.json`은 새 offline 환경의 실제 STT/768차원 embedding·재시작·중지 통과다. chat404는 해당 task에서 unsupported이며 chat cancel은 실행한 것으로 계산하지 않는다.
 
-## 9. arm64 DMG
+## 9. 최종 arm64 DMG
 
-기존 `npm run package:tauri`로 source `f414544`에서 production frontend/CLI/app/DMG를 빌드했다. 근거는 `package-results.json`, `logs/package-inspect-native.log`다. DMG를 작업용 mountpoint 에 read-only/nobrowse로 mount 해 확인하고 detach 했다. Finder 설치나 quarantine 해제는 수행하지 않았다.
+기존 `npm run package:tauri`로 `6261d0b`의 production frontend/CLI/app/DMG를 생성했다. `package-results.json`, `logs/final-shard-package.log`, `logs/final-shard-package-inspect.log` 근거다. 작업용 mountpoint에 read-only/nobrowse mount·검사·detach했다.
 
-- `AioLM_0.3.1_aarch64.dmg`: 16747127 bytes, SHA256 `2eefbc835f70da6892b2e3549046f5c6048c1ebe6a9da12805faf4798133fb52`.
-- GUI `aiolm`: arm64, SHA256 `e575f529c10c569ab08da3d319c61c5936dfbc00100bc203481f93a4cd04c79d`.
-- CLI `aiolm-cli`: arm64, SHA256 `c60a5b13d4fde15c85dd9735a824fa0947d6a621c02b7d8c4bd6f47f9c838215`.
-- identifier `com.aiolm.desktop`, version0.3.1. minimum OS13.3은 선언값이며 이 기기에서13.3을 검증한 결과가 아니다.
-- `codesign --verify --deep --strict` 통과. GUI/CLI는 ad-hoc/runtime이며 Developer ID 와공증은 없다.
-- 포함된 일반 파일은 Info.plist, CodeResources, GUI, CLI, icon.icns. fixture·관리형 환경·개인 설정은 없다. 실제 home/repository 문자열의 UTF-8/UTF-16 스캔에 일치 없음.
-- 기존 설정이 없는 새 격리 홈에서 packaged CLI를 실행하여 onboarding=false, model/runtime 미선택, 모델 저장소가 해당 홈 안에 있음을 확인했다.
-- 원본 복사본은 `tmp/macos-acceptance/package/`, build output은 Git 제외 대상 `.codex-target/release/bundle/`. production GUI의 자연스러운 Finder 실행은 unrun.
+- `AioLM_0.3.1_aarch64.dmg`: 16759441 bytes, SHA256 `9c8e69ea87c6afbbdecffdcc7c580748328fba5b22221c1010cdde623dba7851`.
+- GUI `aiolm`: arm64, SHA256 `8f5555a2ff5dda2197be79c46f1e06f58d0982bb8d6facd276dd4cc2d1a67d24`.
+- CLI `aiolm-cli`: arm64, SHA256 `1983d84e9418b1b1d8d102e03ac8e49ed532c7e17a9b7117f36231eaf008b193`.
+- identifier `com.aiolm.desktop`, version0.3.1, minimum OS13.3은 선언값이며13.3 실기기 통과가 아니다.
+- `codesign --verify --deep --strict` pass. GUI/CLI ad-hoc/runtime, Developer ID/공증 없음.
+- 포함 파일은 Info.plist/CodeResources/GUI/CLI/icon.icns. fixture/model/venv/개인 설정 제외. 실제 home/repository 문자열 UTF-8/UTF-16 스캔 일치 없음.
+- 기존 설정 없는 새 홈에서 packaged CLI: onboarding=false, 모델/runtime 미선택, 해당 홈 모델 저장소 기본값.
+- raw 복사본은 `tmp/macos-acceptance/package/`, build output은 Git 제외 `.codex-target/release/bundle/`. Finder 설치·quarantine 해제는 수행하지 않음.
 
-## 10. 남은 검사
+## 10. 남은 검사와 다음 작업
 
-- **별도 OS 계정에서 unrun:** 최초 GUI 실행, Keychain 승인/거부/갱신 재승인, 자연스러운 Finder 설치 실행, 실제 과거 버전 upgrade/legacy 이전. 현재의 격리 HOME 검사는 대체 근거가 아니다.
-- **네이티브 조작 blocked:** MCP Yes/No→실제 tool→답변, IME composition, clipboard, 파일/문서/저장 picker, Dock/트레이 Show/Quit. 실제 WKWebView 문자입력·창 조작과 구분한다.
-- **M05–M08의 unrun:** GUI v12→v13 이전값/backup 전체 확인, 모든 호환 option, 분할 GGUF/companion/외부 삭제/전체 APFS 조건, llama projector vision, MLX 모델별 native audio/video, Whisper 번역/Qwen3-ASR, ffmpeg 부재, 첨부 history/reload/retry/engine 변경, 개인화/skill, 문서 후보 선택·project file binding 전체.
-- **M09–M10의 unrun:** 독립 OS RSS 대조, native Metal 심층 비교, helper 양쪽 backend 전체 단계, native 저장 후 viewer, imported STT/embedding, native bundle 실제 cancel/active-server 거부.
-- **M12의 unrun:** ffmpeg/CMake, install/prepare/warmup/trial/replacement 모든 단계에서 소유 프로세스·port·staging 취소 행렬. 정상 quit 성공만으로 모든 취소 단계를 통과 처리하지 않는다.
-- **실기기 없이 unrun:** Intel과 macOS13.3–15. 현재 결과로 다른 architecture/minimum OS 성공을 추정하지 않는다.
-- **실제 fail 유지:** Metal/MLX 직접 URI 이미지 입력 500. upstream 동작, gateway 거부, 실제 이미지 내용 성공을 구분한다.
-- Force Quit/SIGKILL 복구, 다른 사용자 single-instance 개선, Developer ID/공증, 공개 benchmark upload는 이번에 구현·검증하지 않았다.
+- **별도 OS 계정에서 unrun:** 최초 GUI 실행, Keychain 허용/거부/취소/갱신 재승인, 자연스러운 Finder 설치·첫 실행, 실제 과거 버전 upgrade/legacy 이전. 격리 HOME의 GUI v12 이전과 구분한다.
+- **현재 조작 수단 blocked:** 별도 osascript MCP Yes/No→실제 tool/후속 답변·호출 중 취소, 한글 IME composition 중 Enter, clipboard Copy/모든 포맷 복원, Dock/트레이 Show/Quit. 기존 앱 파일 picker와 paste/normal Quit은 완료했다. CUA 이외의 System Events 대체 조작에 대한 승인은 받지 않아 수행하지 않았다.
+- **실제 ffmpeg 부재 blocked:** 정상 PATH 복구가 기존 설치를 찾음. 설치를 숨기거나 제품 PATH 복구를 끄지 않고 부재 상태를 검증할 별도 환경 필요.
+- **실제 fail 유지:** 직접 Metal/MLX URI 이미지500, SmolVLM native projector의 알려진 시각 내용 오답, 고정 Gemma3n native-audio snapshot의 누락 shard index. upstream/model 수정 후 해당 흐름을 다시 실행해야 한다.
+- **실기기 없이 unrun:** Intel 및 macOS13.3–15. 이 결과로 다른 architecture/minimum OS 성공을 추정하지 않는다.
+- 전체 앱 Force Quit/SIGKILL 복구·다른 사용자 single-instance 개선·Developer ID/공증·공개 benchmark 업로드는 이번에 구현하지 않았다. 미디어 retry의 자체 model-child fault와 전체 앱 강제 종료를 구분한다.
