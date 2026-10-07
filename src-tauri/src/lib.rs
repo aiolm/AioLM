@@ -195,6 +195,8 @@ pub fn run() {
             commands::mcp::mcp_cancel_tool_call,
             commands::documents::pick_attachment,
             commands::documents::pick_document,
+            commands::projects::project_export_json,
+            commands::projects::project_import_json,
             commands::documents::read_document_text,
             commands::documents::read_document_binding,
             commands::documents::pick_image,

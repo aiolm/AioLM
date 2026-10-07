@@ -76,6 +76,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ProjectPreset | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const latestDraft = useRef({ selectedId, configSnapshot, systemPrompt });
   latestDraft.current = { selectedId, configSnapshot, systemPrompt };
 
@@ -269,23 +271,46 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     setNotice(t("ui.deletedProjectNamed", { name: project.name }));
   };
 
-  const exportSelected = (project: ProjectPreset) => {
-    const blob = new Blob([exportProject(project)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName(project);
-    anchor.rel = "noopener";
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+  const exportSelected = async (project: ProjectPreset) => {
+    if (exporting) return;
+    setExporting(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const contents = exportProject(project);
+      if (api.isNativeRuntimeAvailable()) {
+        if (await api.projectExportJson(contents, fileName(project))) setNotice(t("common.saved"));
+        return;
+      }
+      const blob = new Blob([contents], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      try {
+        anchor.href = url;
+        anchor.download = fileName(project);
+        anchor.rel = "noopener";
+        document.body.appendChild(anchor);
+        anchor.click();
+      } finally {
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setExporting(false);
+    }
   };
 
-  const importSelected = async (file: File | undefined) => {
-    if (!file) return;
+  const importSelected = async (file?: File) => {
+    if (importing || (!file && !api.isNativeRuntimeAvailable())) return;
+    setImporting(true);
+    setNotice(null);
+    setError(null);
     try {
-      const project = importProject(await file.text());
+      const contents = file ? await file.text() : await api.projectImportJson();
+      if (contents === null) return;
+      const project = importProject(contents);
       const next = upsertProject(project, projects);
       writeProjects(next);
       setProjects(next);
@@ -294,6 +319,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -372,7 +399,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => loadProject(null)} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
-          <label data-icon="upload" className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
+          {api.isNativeRuntimeAvailable() ? <button type="button" data-icon="upload" onClick={() => void importSelected()} disabled={importing} className="app-button app-button--secondary app-button--sm">{t("panel.importJson")}</button> : <label data-icon="upload" className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
             {t("panel.importJson")}
             <input
               type="file"
@@ -381,7 +408,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
               className="sr-only"
               onChange={(event) => { void importSelected(event.target.files?.[0]); event.currentTarget.value = ""; }}
             />
-          </label>
+          </label>}
         </div>
       </div>
       <PanelFeedback>
@@ -478,7 +505,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <p className="mt-1 text-xs ui-color-muted">{t("ui.projectSaveApplyHint")}</p>
           <div className="mt-2 flex flex-wrap gap-2.5">
             <button type="button" onClick={save} disabled={!name.trim() || !cfg} title={!name.trim() ? t("ui.nameRequired") : undefined} className="app-button app-button--primary app-button--sm"><StableLabel value={selected ? t("panel.updateProject") : t("panel.saveProject")} labels={[t("panel.updateProject"), t("panel.saveProject")]} /></button>
-            {selected && <><button type="button" data-icon="play" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" data-icon="download" onClick={() => exportSelected(selected)} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" data-icon="delete" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
+            {selected && <><button type="button" data-icon="play" onClick={() => void apply(selected)} disabled={serverRunning || store.busy} title={serverRunning ? t("ui.stopBeforeApplyProject") : undefined} className="app-button app-button--secondary app-button--sm">{t("panel.applyRuntime")}</button><button type="button" data-icon="download" onClick={() => void exportSelected(selected)} disabled={exporting} className="app-button app-button--secondary app-button--sm">{t("panel.exportJson")}</button><button type="button" data-icon="delete" onClick={() => remove(selected)} className="app-button app-button--danger app-button--sm">{t("panel.delete")}</button></>}
           </div>
             <p className="mt-2 text-xs ui-color-faint">{t("ui.projectsFooter")}</p>
           </div>

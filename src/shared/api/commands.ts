@@ -13,6 +13,9 @@ import type {
 
 export const getConfig = () => invoke<AppConfig>("get_config");
 export const saveConfig = (cfg: AppConfig) => invoke<AppConfig>("save_config", { cfg });
+export const projectExportJson = (contents: string, fileName?: string) =>
+  invoke<boolean>("project_export_json", { contents, fileName });
+export const projectImportJson = () => invoke<string | null>("project_import_json");
 
 export { listModelArtifacts as listModels } from './providers.ts';
 export const cancelModelScan = (scanId: string) => invoke<void>("cancel_model_scan", { scanId });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
-import { projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
+import { exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
 import * as api from "../../shared/api/index";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
@@ -12,6 +12,8 @@ vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi
 
 vi.mock("../../shared/api/index", () => ({
   pickDocument: vi.fn(async () => null),
+  projectExportJson: vi.fn(async () => true),
+  projectImportJson: vi.fn(async () => null),
   mcpListServers: vi.fn(async () => []),
   mcpListTools: vi.fn(async () => []),
   rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', executable: 'llama-server', state: 'available', version: 'test', flags: [], devices: [], diagnostics: [], server_help: '' })),
@@ -24,6 +26,50 @@ const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 describe("Project configuration snapshots", () => {
   beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); mockedApi.isNativeRuntimeAvailable.mockReturnValue(false); mockedApi.providerRuntimes.mockResolvedValue([]); });
+
+  it('uses the native JSON save dialog and retains the saved project after cancellation or failure', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const project = projectFromConfig('Native workspace', 'Keep citations', store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    mockedApi.projectExportJson.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Export JSON' })).toBeEnabled());
+    expect(mockedApi.projectExportJson).toHaveBeenCalledWith(expect.any(String), 'native-workspace.json');
+    expect(JSON.parse(mockedApi.projectExportJson.mock.calls[0][0]).project).toMatchObject({ name: project.name, systemPrompt: project.systemPrompt });
+    expect(readProjects()).toEqual([project]);
+    mockedApi.projectExportJson.mockRejectedValueOnce(new Error('Destination is not writable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    expect(await screen.findByText('Destination is not writable')).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    mockedApi.projectExportJson.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    expect(await screen.findByText('Saved')).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+  });
+
+  it('imports from the native picker while leaving saved projects intact on cancel or invalid input', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const project = projectFromConfig('Existing workspace', 'Keep citations', store.cfg!);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    mockedApi.projectImportJson.mockResolvedValueOnce(null);
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Import JSON' })).toBeEnabled());
+    expect(readProjects()).toEqual([project]);
+    mockedApi.projectImportJson.mockResolvedValueOnce('{}');
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    expect(await screen.findByText('The selected file is not a valid aiolm project preset.')).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    const imported = projectFromConfig('Imported native workspace', 'Imported prompt', store.cfg!);
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    expect(await screen.findByText('Imported “Imported native workspace”.')).toBeVisible();
+    expect(readProjects()).toHaveLength(2);
+    expect(readProjects().find(item => item.id === project.id)).toEqual(project);
+  });
 
   it('displays the Python runtime and its context instead of stale llama settings', async () => {
     mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
