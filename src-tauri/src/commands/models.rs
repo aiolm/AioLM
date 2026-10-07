@@ -475,8 +475,31 @@ fn session_uses_model_file(server: &server::ServerState, candidate: &Path) -> bo
                     .map(|adapter| &adapter.path)
             }))
             .filter(|path| !path.trim().is_empty())
-            .filter_map(|path| fs::canonicalize(path).ok())
-            .any(|path| path == candidate)
+            .any(|path| model_binding_uses_file(Path::new(path), candidate))
+}
+
+/// A split binding names its entrypoint, but every shard remains in use.
+/// Resolve each declared sibling so file aliases receive the same protection.
+fn model_binding_uses_file(path: &Path, candidate: &Path) -> bool {
+    if fs::canonicalize(path).is_ok_and(|bound| bound == candidate) {
+        return true;
+    }
+    let Some((base, _, total)) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(models::shard_name)
+    else {
+        return false;
+    };
+    let parent = path.parent().unwrap_or(Path::new(""));
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("gguf");
+    (1..=total).any(|index| {
+        fs::canonicalize(parent.join(format!("{base}-{index:05}-of-{total:05}.{extension}")))
+            .is_ok_and(|shard| shard == candidate)
+    })
 }
 
 #[tauri::command]
@@ -532,12 +555,10 @@ fn ensure_deletable_model_path(
         if active.is_empty() {
             continue;
         }
-        if let Ok(active_path) = fs::canonicalize(active) {
-            if active_path == candidate {
-                return Err(
-                    "select another model/projector/draft before deleting the active file".into(),
-                );
-            }
+        if model_binding_uses_file(Path::new(active), &candidate) {
+            return Err(
+                "select another model/projector/draft before deleting the active file".into(),
+            );
         }
     }
     Ok(candidate)
@@ -716,6 +737,82 @@ mod tests {
             &primary.canonicalize().unwrap()
         ));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_shard_of_a_saved_model_binding_is_protected() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-saved-shards-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("model-00001-of-00002.gguf");
+        let second = root.join("model-00002-of-00002.gguf");
+        let unrelated = root.join("other-00002-of-00002.gguf");
+        for path in [&first, &second, &unrelated] {
+            fs::write(path, b"synthetic shard").unwrap();
+        }
+        let binding = first.to_string_lossy();
+        for (primary, projector, draft) in [
+            (binding.as_ref(), "", ""),
+            ("", binding.as_ref(), ""),
+            ("", "", binding.as_ref()),
+        ] {
+            assert!(
+                ensure_deletable_model_path(&root, &second, primary, projector, draft).is_err()
+            );
+            assert!(
+                ensure_deletable_model_path(&root, &unrelated, primary, projector, draft).is_ok()
+            );
+        }
+        fs::remove_file(&first).unwrap();
+        assert!(ensure_deletable_model_path(&root, &second, &binding, "", "").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_running_named_session_protects_later_shards_of_every_model_role() {
+        let root =
+            std::env::temp_dir().join(format!("aiolm-session-shards-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("model-00001-of-00002.gguf");
+        let second = root.join("model-00002-of-00002.gguf");
+        fs::write(&first, b"synthetic first shard").unwrap();
+        fs::write(&second, b"synthetic second shard").unwrap();
+        let candidate = second.canonicalize().unwrap();
+        for role in ["primary", "projector", "draft"] {
+            let mut server = crate::server::ServerState::default();
+            server.lifecycle = crate::server::Lifecycle::Ready;
+            let binding = first.to_string_lossy().into_owned();
+            match role {
+                "primary" => server.model = binding,
+                "projector" => server.mmproj = binding,
+                _ => server.draft_model = binding,
+            }
+            assert!(session_uses_model_file(&server, &candidate), "{role}");
+            server.lifecycle = crate::server::Lifecycle::Stopped;
+            assert!(!session_uses_model_file(&server, &candidate), "{role}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shard_bindings_protect_the_files_reached_through_aliases() {
+        use std::os::unix::fs::symlink;
+        let root =
+            std::env::temp_dir().join(format!("aiolm-shard-aliases-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        let primary = root.join("weights/primary.gguf");
+        let shared = root.join("weights/shared.gguf");
+        fs::write(&primary, b"synthetic first shard").unwrap();
+        fs::write(&shared, b"synthetic second shard").unwrap();
+        let first = root.join("model-00001-of-00002.gguf");
+        symlink(&primary, &first).unwrap();
+        symlink(&shared, root.join("model-00002-of-00002.gguf")).unwrap();
+        assert!(model_binding_uses_file(
+            &first,
+            &shared.canonicalize().unwrap()
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn snapshot_fixture(label: &str) -> (PathBuf, PathBuf) {
