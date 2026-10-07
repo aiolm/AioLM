@@ -29,7 +29,7 @@ import { useChatSkills } from "./useChatSkills";
 import ChatSkillPicker from "./ChatSkillPicker";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
-import { embeddingSessions, selectEmbeddingSession } from './embeddingTarget';
+import { embeddingSessionLabel, embeddingSessions, selectEmbeddingSession } from './embeddingTarget';
 import { embeddingTargetCopy } from './embeddingTargetCopy';
 import { canPrepareAttachment } from './mediaPreprocessing';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
@@ -280,7 +280,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         embedding={selectedStatus.engine || embeddingSessions(embeddingCandidates).length ? {
           label: embeddingCopy.label, hint: embeddingCopy.hint, value: embeddingSelection,
           options: [{ value: 'auto', label: embeddingCopy.auto }, { value: 'lexical', label: embeddingCopy.lexical },
-            ...embeddingSessions(embeddingCandidates).map(session => ({ value: session.id, label: `${session.name || session.id} · ${session.engine!.embedding_model}` })),
+            ...embeddingSessions(embeddingCandidates).map(session => ({ value: session.id, label: embeddingSessionLabel(session) })),
             ...(!['auto', 'lexical'].includes(embeddingSelection) && !embeddingSessions(embeddingCandidates).some(session => session.id === embeddingSelection)
               ? [{ value: embeddingSelection, label: embeddingCopy.lexical }] : [])],
           onChange: value => { if (requireIdle()) setEmbeddingSelection(value); },

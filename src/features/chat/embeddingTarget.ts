@@ -5,6 +5,12 @@ export function embeddingSessions(sessions: SessionStatus[]): SessionStatus[] {
   return sessions.filter(session => isServerRunning(session.state) && session.engine?.embedding_model && session.url);
 }
 
+export function embeddingSessionLabel(session: SessionStatus): string {
+  const name = session.name || session.id;
+  const label = `${name} · ${session.engine?.embedding_model ?? session.model}`;
+  return name === session.id ? label : `${label} · ${session.id}`;
+}
+
 /** Prefer the answering engine; ambiguous other sessions require an explicit selection. */
 export function selectEmbeddingSession(sessions: SessionStatus[], answeringSessionId: string, selection: string): SessionStatus | undefined {
   const candidates = embeddingSessions(sessions);
