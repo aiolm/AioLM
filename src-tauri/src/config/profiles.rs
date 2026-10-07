@@ -1956,8 +1956,10 @@ mod tests {
 
     #[test]
     fn legacy_model_profiles_become_shared_without_changing_engine_values_or_applications() {
-        let mut saved = SettingsProfileLibrary::default();
-        saved.revision = 12;
+        let mut saved = SettingsProfileLibrary {
+            revision: 12,
+            ..SettingsProfileLibrary::default()
+        };
         for provider in crate::providers::ProviderId::ALL {
             let mut profile = provider_default(provider);
             profile.id = format!("saved-{}", provider.as_str());

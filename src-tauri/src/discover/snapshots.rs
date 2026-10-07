@@ -986,7 +986,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn destinations_refuse_linked_directories() {
-        let root = temporary("links");
+        // Production resolves the library root before joining destinations.
+        // macOS temporary directories can have a symlinked ancestor.
+        let root = temporary("links").canonicalize().unwrap();
         let outside = temporary("outside");
         std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
         assert!(destination(&root, "linked/config.json").is_err());

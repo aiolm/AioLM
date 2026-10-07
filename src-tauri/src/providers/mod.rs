@@ -169,7 +169,7 @@ pub fn host_macos_version() -> String {
     #[cfg(target_os = "macos")]
     {
         static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        return VERSION
+        VERSION
             .get_or_init(|| {
                 let mut command = crate::procutil::std_command("/usr/bin/sw_vers");
                 command.arg("-productVersion");
@@ -184,7 +184,7 @@ pub fn host_macos_version() -> String {
                 .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
                 .unwrap_or_default()
             })
-            .clone();
+            .clone()
     }
     #[cfg(not(target_os = "macos"))]
     String::new()
