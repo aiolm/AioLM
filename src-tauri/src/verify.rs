@@ -40,7 +40,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 pub(crate) mod engine;
@@ -905,7 +908,18 @@ pub async fn run_deep(
     };
     let _ = fs::remove_file(&baseline);
     let key = deep_key(cfg, resolved, hardware_fingerprint, runtime_devices);
-    store_deep(&key, outcome.clone());
+    finish_deep(outcome, cancel, |record| store_deep(&key, record))
+}
+
+fn finish_deep(
+    outcome: Record,
+    cancel: Option<&Arc<AtomicBool>>,
+    persist: impl FnOnce(Record),
+) -> Result<Record, String> {
+    if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err("deep verification cancelled".into());
+    }
+    persist(outcome.clone());
     Ok(outcome)
 }
 
@@ -1012,6 +1026,31 @@ async fn calibrate(
 mod tests {
     use super::*;
     use crate::config::SplitMode;
+
+    #[test]
+    fn cancelled_deep_pass_does_not_replace_an_existing_verdict() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let original = record(Verdict::Pass, Some(1.0), "Existing measured result");
+        let mut stored = original.clone();
+        let interrupted = record(Verdict::Unsupported, None, "Host pass interrupted");
+        assert!(
+            finish_deep(interrupted, Some(&cancel), |outcome| stored = outcome)
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        assert_eq!(stored.detail, original.detail);
+        assert!(matches!(stored.verdict, Verdict::Pass));
+        cancel.store(false, Ordering::Release);
+        let measured = record(
+            Verdict::Unsupported,
+            None,
+            "Runtime has no comparison backend",
+        );
+        let completed =
+            finish_deep(measured.clone(), Some(&cancel), |outcome| stored = outcome).unwrap();
+        assert_eq!(completed.detail, measured.detail);
+        assert_eq!(stored.detail, measured.detail);
+    }
 
     fn placement(devices: &str) -> ResolvedGpu {
         ResolvedGpu {
