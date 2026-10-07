@@ -41,6 +41,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const pt = (key: ChatPersonalizationTextKey, vars?: Record<string, string | number>) => chatPersonalizationText(locale, key, vars);
   const [phase, setPhase] = useState<"idle" | "thinking" | "streaming">("idle");
   const [input, setInput] = useState("");
+  const [composerRevision, setComposerRevision] = useState(0);
   const [copiedMessage, showCopied] = useFlashMessage(1800);
   const copied = copiedMessage === null ? null : Number(copiedMessage);
   const [activeProjectName, setActiveProjectName] = useState<string | null>(null);
@@ -113,6 +114,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     clearComposerAttachments();
     skills.clearSelectedSkills();
     resetChatState();
+    setComposerRevision((revision) => revision + 1);
   };
 
   const {
@@ -210,7 +212,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
       cancelled = true;
       window.removeEventListener(PROJECTS_CHANGED_EVENT, applyActiveProjectBinding);
     };
-  }, [phase, setDocuments, setSelectedMcpTools, setWorkspace]);
+  }, [phase, workspace.activeThreadId, composerRevision, setDocuments, setSelectedMcpTools, setWorkspace]);
 
   const incompatibleMedia = attachments.some(attachment => {
     return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);

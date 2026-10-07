@@ -277,6 +277,7 @@ const SENSITIVE_NAME_PARTS = new Set([
   "connection_string", "credential", "credentials", "password", "private-key",
   "private_key", "privatekey", "secret", "secrets", "token", "tokens",
 ]);
+const TOKEN_BUDGET_FIELDS = new Set(['max_tokens', 'max_completion_tokens', 'max_output_tokens', 'min_tokens']);
 
 function sensitiveExportName(name: string): boolean {
   const normalized = name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
@@ -294,6 +295,7 @@ function isFlagLike(value: string): boolean {
 }
 
 function redactExportValue(value: unknown, key = ""): unknown {
+  if (TOKEN_BUDGET_FIELDS.has(key) && typeof value === 'number' && Number.isFinite(value)) return value;
   if (sensitiveExportName(key)) return "[REDACTED]";
   if (Array.isArray(value)) {
     let redactNext = false;

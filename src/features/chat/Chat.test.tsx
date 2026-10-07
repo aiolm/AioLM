@@ -11,6 +11,7 @@ import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { createTestStore } from "../../testing/appStore";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
+import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -159,6 +160,30 @@ describe("ChatPanel unified attachments", () => {
     vi.clearAllMocks();
     vi.mocked(useModelSettings).mockReturnValue(null);
     mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it.each(['', 'Use the project citation'])("reapplies project documents after new chat with prompt %j", async (prompt) => {
+    const project = projectFromConfig('Document workspace', prompt, cfg,
+      [{ name: 'project-notes.txt', path: 'C:/synthetic/project-notes.txt' }]);
+    writeProjects([project]); setActiveProjectId(project.id);
+    mocked.readDocumentBinding.mockResolvedValue('Acceptance code ORBIT-73.');
+    renderPanel();
+    await screen.findByRole('button', { name: 'Remove attachment: project-notes.txt' });
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await screen.findByRole('button', { name: 'Remove attachment: project-notes.txt' });
+    respondWithText('First reply');
+    await sendMessage('First question');
+    await screen.findByText('First reply', { exact: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await screen.findByRole('button', { name: 'Remove attachment: project-notes.txt' });
+    respondWithText('ORBIT-73');
+    await sendMessage('What is the acceptance code?');
+    await screen.findByText('ORBIT-73', { exact: true });
+    const messages = mocked.chatStream.mock.calls.at(-1)![3];
+    if (prompt) expect(JSON.stringify(messages)).toContain(prompt);
+    expect(JSON.stringify(messages)).toContain('Acceptance code ORBIT-73.');
   });
 
   it("sends the original model identifier for a sharded model", async () => {

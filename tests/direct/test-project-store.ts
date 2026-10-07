@@ -93,6 +93,17 @@ const secretExport = exportProject(secretProject);
 assert.match(secretExport, /\[REDACTED\]/);
 assert.doesNotMatch(secretExport, /secret-value|inline-secret/i);
 assert.match(secretExport, /--api-key=\[REDACTED\]/);
+const budgetProject = projectFromConfig('Generation budgets', '', {
+  ...config,
+  chat_options: { max_tokens: 256, max_completion_tokens: 512, max_output_tokens: 128, min_tokens: 8,
+    access_token: 'synthetic-credential', token: 'synthetic-credential' },
+});
+const budgetExport = exportProject(budgetProject);
+assert.deepEqual(importProject(budgetExport).config.chat_options, {
+  max_tokens: 256, max_completion_tokens: 512, max_output_tokens: 128, min_tokens: 8,
+  access_token: '[REDACTED]', token: '[REDACTED]',
+});
+assert.doesNotMatch(budgetExport, /synthetic-credential/);
 const imported = importProject(exported);
 projects = upsertProject(imported, readProjects(storage));
 assert.equal(projects.length, 1);
