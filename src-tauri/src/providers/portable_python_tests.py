@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).parent
@@ -75,6 +76,35 @@ class PortablePythonTests(unittest.TestCase):
             self.assertEqual(namespace["portable_source_commit"](restored), "")
             with self.assertRaisesRegex(RuntimeError, "source revision"):
                 self.execute("portable_git_wheel.py", [COMMIT, str(root)], distribution=lambda _: restored)
+
+    def test_capture_regenerates_only_declared_console_scripts_in_the_scripts_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source, scripts, wheels = [root / name for name in ("source", "bin", "wheels")]
+            source.mkdir(); scripts.mkdir(); wheels.mkdir()
+            for name in ("mlx_lm", "mlx_lm.chat", "mlx_lm.private"):
+                (scripts / name).write_text("Synthetic launcher; never captured\n")
+            (root / "private").mkdir()
+            (root / "private" / "mlx_lm").write_text("Synthetic outside file; never captured\n")
+            dist = self.make_dist(source, "mlx-lm", "0.3.4")
+            info = source / "mlx_lm-0.3.4.dist-info"
+            (info / "WHEEL").write_text("Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+            (info / "direct_url.json").write_text(json.dumps({"vcs_info": {"commit_id": COMMIT}}))
+            (info / "entry_points.txt").write_text("[console_scripts]\nmlx_lm = mlx_lm.cli:main\nmlx_lm.chat = mlx_lm.chat:main\n")
+            files = [path.relative_to(source).as_posix() for path in source.rglob("*") if path.is_file()]
+            record = info / "RECORD"
+            record.write_text("".join(name + ",,\n" for name in files + ["../bin/mlx_lm", "../bin/mlx_lm.chat"]))
+            with patch("sysconfig.get_path", return_value=str(scripts)):
+                self.execute("portable_git_wheel.py", [COMMIT, str(wheels)], distribution=lambda _: dist)
+                with zipfile.ZipFile(next(wheels.glob("*.whl"))) as archive:
+                    self.assertIn(info.name + "/entry_points.txt", archive.namelist())
+                    self.assertFalse(any(".." in name for name in archive.namelist()))
+                # A matching prefix, an undeclared script, or a declared name
+                # in another directory must still fail before reading it.
+                for outside in ("../bin/mlx_lm.private", "../private/mlx_lm", str(scripts / "mlx_lm")):
+                    record.write_text("".join(name + ",,\n" for name in files + [outside]))
+                    with self.assertRaisesRegex(RuntimeError, "outside distribution file"):
+                        self.execute("portable_git_wheel.py", [COMMIT, str(wheels)], distribution=lambda _: metadata.Distribution.at(info))
 
 
 if __name__ == "__main__":
