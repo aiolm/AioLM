@@ -153,6 +153,9 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
 
   useEffect(() => () => {
     searchGeneration.current += 1; inspectGeneration.current += 1; installedGeneration.current += 1;
+    // StrictMode replays mount effects while preserving refs. Retire the
+    // listing marker with its request so the next setup can load the catalog.
+    opened.current = '';
   }, []);
 
   // Sort is part of the request, so changing it re-runs what is on screen.

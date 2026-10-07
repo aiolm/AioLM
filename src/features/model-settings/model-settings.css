@@ -80,8 +80,10 @@
 @media (max-height: 650px) {
   .model-settings-header { padding-block: 8px; }
   .model-settings-header .model-badges { max-height: 60px; overflow: auto; }
-  .model-settings-context { padding-block: 8px; }
-  .model-settings-footer { padding-block: 8px; max-height: 30%; }
+  /* Native title bars reduce the minimum window's usable height. Keep wrapped
+     profile actions and setup notices scrollable without consuming the editor. */
+  .model-settings-context { padding-block: 8px; max-height: 120px; overflow-y: auto; }
+  .model-settings-footer { padding-block: 8px; max-height: 20%; }
 }
 .model-settings-profile-status { display: grid; gap: 0.25rem; margin-block: 0.6rem 1.1rem; font-size: var(--ui-text-support); color: var(--ui-muted); overflow-wrap: anywhere; }
 .model-settings-profile-status p { margin: 0; }

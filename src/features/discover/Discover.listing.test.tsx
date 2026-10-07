@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
@@ -44,6 +45,19 @@ describe("Discover listing and installed files", () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider>);
     expect(await screen.findByRole("button", { name: /owner\/model/ })).toBeVisible();
     expect(api.hfSearchModels).toHaveBeenCalledWith("", 30, "downloads");
+  });
+
+  it("loads a fresh catalog after mount effect replay and ignores the retired request", async () => {
+    let releaseFirst!: (models: api.HfModel[]) => void;
+    vi.mocked(api.hfSearchModels)
+      .mockImplementationOnce(() => new Promise(resolve => { releaseFirst = resolve; }))
+      .mockResolvedValue([listed("owner/current")]);
+    render(<StrictMode><I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore()} /></I18nProvider></StrictMode>);
+    expect(await screen.findByRole("button", { name: /owner\/current/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Search models" })).toBeEnabled();
+    releaseFirst([listed("owner/retired")]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /owner\/retired/ })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /owner\/current/ })).toBeVisible();
   });
 
   it("summarizes Hub tags in the listing and preserves all values in repository details", async () => {
