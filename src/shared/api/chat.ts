@@ -29,6 +29,7 @@ export function buildChatRequestBody(
     const engine = sampling.engine;
     if (!engine) throw new Error('Runtime request capabilities are not ready.');
     if (engine.tasks && !engine.tasks.includes('generate')) throw new Error('Select a generation session for chat; this session serves a different task.');
+    if (engine.chat_supported === false) throw new Error('This model has no chat template. Select an Instruct/chat model or configure --chat-template in its runtime profile. Text completions remain available.');
     if (sampling.tools?.length && engine.tools_auto === false) throw new Error('Enable automatic tool choice and select the model tool parser in the runtime profile.');
     const fields = { ...(sampling.provider_options === undefined ? engine.request_fields : providerRequestFields(engine.provider, sampling.provider_options)) };
     if (typeof fields.max_tokens === 'number' && Number.isFinite(fields.max_tokens)

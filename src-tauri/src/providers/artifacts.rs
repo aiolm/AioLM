@@ -605,7 +605,23 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
     let has_chat_template = has_any(dir, &["chat_template.json", "chat_template.jinja"])
         || read_json(&dir.join("tokenizer_config.json"), MAX_CONFIG_BYTES)
             .and_then(Result::ok)
-            .is_some_and(|value| value.get("chat_template").is_some());
+            .is_some_and(|value| {
+                let Some(template) = value.get("chat_template") else {
+                    return false;
+                };
+                match template {
+                    Value::String(text) => !text.trim().is_empty(),
+                    Value::Array(templates) => templates.iter().any(|item| {
+                        item.get("template")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| !text.trim().is_empty())
+                    }),
+                    Value::Object(templates) => templates
+                        .values()
+                        .any(|item| item.as_str().is_some_and(|text| !text.trim().is_empty())),
+                    _ => false,
+                }
+            });
     let mut modalities = if config.is_null() {
         Modalities::default()
     } else {
@@ -788,6 +804,31 @@ pub fn snapshot_files(dir: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tokenizer_chat_templates_require_nonempty_template_contents() {
+        let dir = temp_dir("chat-template");
+        for (template, expected) in [
+            (json!(null), false),
+            (json!("  "), false),
+            (json!([]), false),
+            (json!({}), false),
+            (json!("{{ messages }}"), true),
+            (
+                json!([{"name":"default", "template":"{{ messages }}"}]),
+                true,
+            ),
+            (json!({"default":"{{ messages }}"}), true),
+        ] {
+            write(
+                &dir,
+                "tokenizer_config.json",
+                json!({"chat_template":template}).to_string().as_bytes(),
+            );
+            assert_eq!(inspect_snapshot(&dir).has_chat_template, expected);
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn metal_gguf_requires_dense_tensor_evidence_and_matching_local_companions() {

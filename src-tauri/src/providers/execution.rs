@@ -3,6 +3,42 @@ use super::{artifacts, compat, launch, protocol::EngineInfo, python_env, Provide
 use crate::config::AppConfig;
 use std::path::Path;
 
+fn vllm_chat_support(
+    model: &Path,
+    options: &serde_json::Map<String, serde_json::Value>,
+    metal: bool,
+    harmony: bool,
+) -> Option<bool> {
+    if harmony
+        || options
+            .get("chat_template")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Some(true);
+    }
+    let tokenizer = if model.is_dir() {
+        model
+    } else if metal {
+        // The Metal GGUF launch uses its adjacent tokenizer, rather than
+        // the tokenizer/chat metadata embedded in the GGUF weights.
+        model.parent()?
+    } else {
+        return None;
+    };
+    if ![
+        "tokenizer_config.json",
+        "chat_template.json",
+        "chat_template.jinja",
+    ]
+    .iter()
+    .any(|name| tokenizer.join(name).is_file())
+    {
+        return None;
+    }
+    Some(artifacts::inspect_snapshot(tokenizer).has_chat_template)
+}
+
 pub fn inspect(path: &Path) -> Result<artifacts::ModelArtifact, String> {
     if path.is_dir() {
         return Ok(artifacts::inspect_snapshot(path));
@@ -177,6 +213,19 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
             vec!["generate".into()]
         },
         request_fields: super::options::request_fields(provider, &schema_options),
+        chat_supported: if provider == ProviderId::Vllm
+            && compatible.tasks.contains(&"generate")
+            && !pooling
+        {
+            vllm_chat_support(
+                Path::new(&cfg.active_model),
+                &options,
+                compat::is_metal(runtime.probe.as_ref()),
+                harmony,
+            )
+        } else {
+            None
+        },
         request_lora: options
             .get(launch::REQUEST_LORA_KEY)
             .and_then(serde_json::Value::as_str)
@@ -191,4 +240,50 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
 pub fn probe_for(provider: ProviderId, id: Option<&str>) -> Option<python_env::ProbeRecord> {
     id.and_then(|id| python_env::read(provider, id).ok())
         .and_then(|runtime| runtime.probe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn vllm_chat_checks_the_selected_tokenizer_and_preserves_unknown_renderers() {
+        let dir =
+            std::env::temp_dir().join(format!("aiolm-chat-template-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = serde_json::Map::new();
+        assert_eq!(vllm_chat_support(&dir, &options, true, false), None);
+        std::fs::write(
+            dir.join("tokenizer_config.json"),
+            br#"{"eos_token":"synthetic"}"#,
+        )
+        .unwrap();
+        assert_eq!(vllm_chat_support(&dir, &options, true, false), Some(false));
+        let gguf = dir.join("weights.gguf");
+        assert_eq!(vllm_chat_support(&gguf, &options, true, false), Some(false));
+        assert_eq!(vllm_chat_support(&gguf, &options, false, false), None);
+        std::fs::write(
+            dir.join("tokenizer_config.json"),
+            br#"{"chat_template":"{{ messages }}"}"#,
+        )
+        .unwrap();
+        assert_eq!(vllm_chat_support(&gguf, &options, true, false), Some(true));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn vllm_explicit_templates_and_harmony_do_not_require_tokenizer_templates() {
+        let absent =
+            std::env::temp_dir().join(format!("aiolm-absent-template-{}", uuid::Uuid::new_v4()));
+        assert_eq!(
+            vllm_chat_support(&absent, &serde_json::Map::new(), true, true),
+            Some(true)
+        );
+        let options = json!({"chat_template":"synthetic.jinja"});
+        assert_eq!(
+            vllm_chat_support(&absent, options.as_object().unwrap(), true, false),
+            Some(true)
+        );
+    }
 }

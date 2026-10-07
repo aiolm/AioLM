@@ -44,6 +44,7 @@ export interface EngineInfo {
   provider: ProviderId; runtime_id: string; upstream_model: string; modalities: Modalities;
   runtime_variant?: string; speech_model_type?: string | null;
   tasks?: string[];
+  chat_supported?: boolean;
   request_fields: Record<string, unknown>; request_lora?: string;
   embedding_model?: string | null; embedding_namespace?: string | null; tools_auto?: boolean; tool_parser?: boolean;
 }

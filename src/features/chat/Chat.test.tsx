@@ -16,6 +16,7 @@ import { projectFromConfig, setActiveProjectId, writeProjects } from "../project
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
 vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return ({
+  isNativeRuntimeAvailable: vi.fn(() => false),
   pickAttachment: vi.fn(),
   readDocumentText: vi.fn(),
   readDocumentBinding: vi.fn(),
@@ -717,5 +718,33 @@ describe("ChatPanel document context warning", () => {
     expect(mocked.chatStream.mock.calls[1][4]).toMatchObject({ temperature: 0.7, options: { max_tokens: 512 } });
     expect(sessionHasActivity("default")).toBe(false);
     expect(mocked.serverActivity).toHaveBeenLastCalledWith("end", "default");
+  });
+});
+
+describe('ChatPanel completion-only models', () => {
+  it('explains missing templates, preserves the input and enables sending after choosing a chat model', async () => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.mcpListServers.mockResolvedValue([]);
+    mocked.mcpListTools.mockResolvedValue([]);
+    const panelStore = createTestStore({ ...cfg, active_provider: 'vllm' });
+    panelStore.status = { ...store.status, engine: { provider: 'vllm', runtime_id: 'synthetic', upstream_model: 'base-model',
+      modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {}, chat_supported: false } };
+    const view = renderPanel(panelStore);
+    const input = screen.getByRole('textbox', { name: 'Chat message' });
+    fireEvent.change(input, { target: { value: 'hello' } });
+    expect(screen.getByText(/This model has no chat template/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(input).toHaveValue('hello');
+    panelStore.status = { ...panelStore.status, engine: { ...panelStore.status.engine!, chat_supported: true } };
+    view.rerender(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ChatPanel, { store: panelStore }) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+    respondWithText('Ready');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await screen.findByText('Ready');
+    expect(mocked.chatStream).toHaveBeenCalledTimes(1);
   });
 });

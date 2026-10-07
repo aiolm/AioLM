@@ -33,6 +33,7 @@ import { embeddingSessionLabel, embeddingSessions, selectEmbeddingSession } from
 import { embeddingTargetCopy } from './embeddingTargetCopy';
 import { canPrepareAttachment } from './mediaPreprocessing';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
+import { chatTemplateCopy } from './chatTemplateCopy';
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -217,7 +218,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const incompatibleMedia = attachments.some(attachment => {
     return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);
   });
-  const canSend = serverOn && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const chatSupported = selectedStatus.engine?.chat_supported !== false;
+  const canSend = serverOn && chatSupported && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
   useEffect(() => {
@@ -353,7 +355,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
           <ChatComposer
             locale={locale}
-            contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null].filter(Boolean).join(' ') || null}
+            contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, serverOn && !chatSupported ? chatTemplateCopy[locale] : null].filter(Boolean).join(' ') || null}
             contextSources={contextSources}
             mcpCatalog={mcpCatalog}
             selectedMcpTools={selectedMcpTools}

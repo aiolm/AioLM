@@ -28,6 +28,10 @@ pub struct EngineInfo {
     /// Inputs usable with the loaded model on this provider.
     pub modalities: Modalities,
     pub tasks: Vec<String>,
+    /// Known chat-template support; omitted when the renderer was not inspected.
+    /// Text completions remain usable when chat is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_supported: Option<bool>,
     /// Validated request fields from the provider's saved options.
     pub request_fields: Map<String, Value>,
     /// vLLM: adapter name requests are routed to, when one is selected.
@@ -51,6 +55,7 @@ impl EngineInfo {
             upstream_model: model.to_owned(),
             modalities,
             tasks: vec!["generate".into(), "embed".into()],
+            chat_supported: None,
             request_fields: Map::new(),
             request_lora: None,
             embedding_model: Some(model.to_owned()),
@@ -743,6 +748,12 @@ pub fn adapt_request(
     if endpoint != "embeddings" && !info.tasks.iter().any(|task| task == "generate") {
         return Err(adapt_error("unsupported_task", task_refusal(info, "chat")));
     }
+    if endpoint == "chat/completions" && info.chat_supported == Some(false) {
+        return Err(adapt_error(
+            "chat_template_required",
+            "This model has no chat template. Select an Instruct/chat model or configure --chat-template in its runtime profile. Text completions remain available.",
+        ));
+    }
     if endpoint == "embeddings" {
         if let Some(input) = body.get("input") {
             let parts: Vec<Value> = match input {
@@ -814,12 +825,30 @@ mod tests {
             upstream_model: "/models/qwen-vl".into(),
             modalities,
             tasks: vec!["generate".into()],
+            chat_supported: None,
             request_fields: json!({"temperature": 0.3}).as_object().unwrap().clone(),
             request_lora: None,
             embedding_model: Some("/models/embedding".into()),
             embedding_namespace: None,
             tools_auto: true,
             tool_parser: true,
+        }
+    }
+
+    #[test]
+    fn completion_only_sessions_refuse_chat_without_blocking_text_completions() {
+        let mut engine = info(ProviderId::Vllm, Modalities::text_only());
+        engine.chat_supported = Some(false);
+        let mut chat = json!({"model":"public", "messages":[{"role":"user","content":"hello"}]});
+        let error = adapt_request(&engine, "chat/completions", &mut chat).unwrap_err();
+        assert_eq!(error.code, "chat_template_required");
+        assert!(error.message.contains("Instruct/chat model"));
+        let mut completion = json!({"model":"public", "prompt":"Once upon a time"});
+        adapt_request(&engine, "completions", &mut completion).unwrap();
+        assert_eq!(completion["model"], engine.upstream_model);
+        for support in [None, Some(true)] {
+            engine.chat_supported = support;
+            adapt_request(&engine, "chat/completions", &mut chat).unwrap();
         }
     }
 
