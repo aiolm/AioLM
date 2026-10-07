@@ -18,6 +18,7 @@ import {
   newChecks,
   parseArgs,
   platformAllowsEngine,
+  readChatStream,
   runCli,
   runLive,
   sanitizeResultForFile,
@@ -25,6 +26,34 @@ import {
   summarize,
   validateProbeRecord,
 } from "./smoke-provider-runtime.mjs";
+
+test("chat acceptance uses fresh connections across same-port server replacement", async () => {
+  const connections = [];
+  const handler = (req, res) => {
+    connections.push(req.headers.connection);
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "OK" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`);
+    });
+  };
+  let server = createServer(handler);
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const url = `http://127.0.0.1:${port}/v1/chat/completions`;
+  try {
+    assert.equal((await readChatStream(url, {}, 5000)).ok, true);
+    await new Promise(resolve => server.close(resolve));
+    server = createServer(handler);
+    await new Promise(resolve => server.listen(port, "127.0.0.1", resolve));
+    const after = await readChatStream(url, {}, 5000);
+    assert.equal(assertStreamEvents(after.events), "OK");
+    assert.equal(after.usage.total_tokens, 2);
+    assert.deepEqual(connections, ["close", "close"]);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test("platform gate never reports a Windows native pass", () => {
   assert.equal(platformAllowsEngine("vllm", "win32", "x64").allowed, false);

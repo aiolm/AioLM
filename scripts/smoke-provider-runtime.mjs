@@ -1,4 +1,4 @@
-/* global process, console, fetch, AbortController, setTimeout, clearTimeout, FormData, Blob, Buffer */
+/* global process, console, Request, Response, AbortController, setTimeout, clearTimeout, FormData, Blob, Buffer */
  // Opt-in actual-engine acceptance harness for Linux vLLM, Apple Silicon
  // vllm-metal (via the vLLM engine) and mlx-vlm.
  //
@@ -48,7 +48,8 @@
  // --keep-home, or when a failed cleanup retains the isolated home).
  import assert from "node:assert/strict";
  import { spawnSync } from "node:child_process";
- import { createServer } from "node:http";
+ import { createServer, request as httpRequest } from "node:http";
+ import { Readable } from "node:stream";
  import {
    existsSync,
    mkdtempSync,
@@ -439,11 +440,38 @@ export function sanitizeResultForFile(result) {
   return copy;
 }
 
+ // CLI lifecycle calls are synchronous and replace the server on the same
+ // port. Node cannot process the old pool's socket-close event while the CLI
+ // runs, so a pooled connection can falsely fail the next restart probe.
+ // Even Connection: close on fetch leaves cancellation's replacement socket
+ // in its pool. agent:false owns exactly one socket, including streaming and
+ // multipart requests. Errors propagate without retry or readiness bypass.
+ async function fetchAcceptance(url, init = {}) {
+   const input = new Request(url, init);
+   const body = input.body ? Buffer.from(await input.arrayBuffer()) : undefined;
+   return new Promise((resolve, reject) => {
+     const request = httpRequest(url, {
+       method: input.method,
+       headers: Object.fromEntries(input.headers),
+       agent: false,
+       signal: input.signal,
+     }, response => {
+       resolve(new Response(Readable.toWeb(response), {
+         status: response.statusCode,
+         statusText: response.statusMessage,
+         headers: Object.fromEntries(Object.entries(response.headers).filter(([, value]) => value !== undefined)),
+       }));
+     });
+     request.on("error", reject);
+     request.end(body);
+   });
+ }
+
  async function fetchJson(url, init = {}, timeoutMs = 60000) {
    const controller = new AbortController();
    const timer = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms: ${url}`)), timeoutMs);
    try {
-     const response = await fetch(url, { ...init, signal: init.signal ?? controller.signal });
+     const response = await fetchAcceptance(url, { ...init, signal: init.signal ?? controller.signal });
      const text = await response.text();
      let body = null;
      try {
@@ -463,7 +491,7 @@ export function sanitizeResultForFile(result) {
    const controller = new AbortController();
    const timer = setTimeout(() => controller.abort(new Error("stream timeout")), timeoutMs);
    try {
-     const response = await fetch(url, {
+     const response = await fetchAcceptance(url, {
        method: "POST",
        headers: { "content-type": "application/json" },
        body: JSON.stringify({ ...payload, stream: true, stream_options: { ...(payload.stream_options ?? {}), include_usage: true } }),
@@ -506,7 +534,7 @@ export function sanitizeResultForFile(result) {
  // when the server rejects chat outright, so non-chat tasks can record unrun
  // instead of inventing a cancel verdict.
  export async function cancelChatStreamAndRecover(url, payload, timeoutMs, cancelAfterMs = 500) {
-   const response = await fetch(url, {
+   const response = await fetchAcceptance(url, {
      method: "POST",
      headers: { "content-type": "application/json" },
      body: JSON.stringify({ ...payload, stream: true, stream_options: { include_usage: true } }),
@@ -581,7 +609,7 @@ export function sanitizeResultForFile(result) {
    const controller = new AbortController();
    const timer = setTimeout(() => controller.abort(new Error("transcription timeout")), timeoutMs);
    try {
-     const response = await fetch(`${base}/v1/audio/transcriptions`, { method: "POST", body: form, signal: controller.signal });
+     const response = await fetchAcceptance(`${base}/v1/audio/transcriptions`, { method: "POST", body: form, signal: controller.signal });
      const text = await response.text();
      let body = null;
      try {
