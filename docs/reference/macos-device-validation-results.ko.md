@@ -617,3 +617,39 @@ Lifetime observer의 listener는 제품이 소유한 port가 아니라 검사 �
 - 원본과 같은 해시의 DMG를 `goal-package-7afc07e/`에 보존했다. 기존 패키지·원본·모델·로그는 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
 
 패키지 생성 후 실제 CUA 앱 상태와 `goal-native-audio-mcp-orbit99-postpackage-7afc07e.json`/PNG, `goal-mcp-orbit99-postpackage-preservation-7afc07e.json`에서 config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage·같은 running 모델 PID·API off·렌더 오류/overlay 0 보존을 재확인했다. 31절의 네이티브 도구 승인 이후 blocked 범위와 기존 실제 실패·upstream 제한·unrun, **전체 M01–M12 미통과**를 유지한다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 33. MCP 도구 검색의 서버 선택·요청 소유권
+
+`d76175b`에서 실제 WKWebView의 합성 A 서버 검색을 대기시킨 뒤 B 서버를 선택했다. A의 성공 응답을 반환하자 B의 이름·명령 아래에 A의 `synthetic_echo_orbit100`/`synthetic_hold_orbit100`과 Prepare call이 표시되는 제품 결함을 재현했다. B의 검색 버튼도 A 요청이 끝날 때까지 Discovering/disabled였다. 등록·검색·선택은 실제 CUA 입력으로 수행했고 합성 서버의 gate는 서버 응답 순서만 제어했다. 가짜 IPC·DOM 상태 변경이나 실제 도구 실행으로 재현하지 않았다.
+
+수정 소스는 `25d71a59c322faf71c88f837c9525fb0e5907669`다. 서버 선택·새 draft·실제 unmount에서 검색 세대를 폐기하고 새 요청마다 세대를 발급한다. 현재 요청만 도구 목록·성공 안내·오류·로딩 상태를 변경한다. 선택을 바꾸면 이전 검색 로딩을 해제해 새 서버를 즉시 검색할 수 있다. backend 검색의 기존 응답/15초 RPC 제한 시간과 stdio process-group 정리는 유지했다. UI가 결과를 폐기하는 것을 네이티브 요청 취소로 설명하지 않는다. 기존 수동 호출·승인·취소, 엔진·공개 API·타입·기본값·Windows/Linux 계약·lockfile은 변경하지 않았다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 수정 전 다른 서버 도구 표시 | fail | `goal-native-audio-mcp-discovery-orbit100-before-stale-20261008.json`/PNG에서 B 이름과 A의 도구 이름/Prepare call을 함께 확인했다. `goal-mcp-discovery-orbit100-before-release-20261008.json`은 서버를 바꾼 뒤에도 대기 중인 A의 소유 peer 2개를 기록한다. |
+| 수정 후 선택 전환·늦은 성공 | pass | 실제 A Discovering→B 선택에서 B의 Discover tools가 즉시 enabled로 바뀌었다. 이후 A 성공 응답에도 B의 빈 도구 영역이 유지됐다. `goal-mcp-discovery-orbit100-after-switch-pending-20261008.json`, `goal-native-audio-mcp-discovery-orbit100-after-stale-success-20261008.json`/PNG. |
+| 이전 서버의 늦은 오류 | pass | 실제 A 검색 대기→B 선택→합성 서버 오류 응답에서 B에 오류/도구/성공 안내가 생기지 않았다. `goal-mcp-discovery-orbit100-v2-error-pending-20261008.json`, `goal-native-audio-mcp-discovery-orbit100-after-stale-error-v2-20261008.json`/PNG와 응답 전 `tools-list-error` marker가 근거다. |
+| 현재 서버 오류·정상 재시도 | pass | 현재 A 검색 실패의 MCP action failed를 확인한 뒤 실제 Discover tools 재시도에서 A의 도구 두 개와 완료 안내를 받았다. `goal-native-audio-mcp-discovery-orbit100-current-{error,retry}-v2-20261008.json`/PNG. selected A와 해당 도구의 실제 rendered 배치도 스크롤 후 확인했다. 도구 조회를 tools/call 성공으로 세지 않는다. |
+| 새 draft·같은 서버 재선택·새 요청 중 이전 finally | pass | `Mcp.discovery.test.tsx`의 합성 회귀 범위다. 새 draft 뒤 늦은 성공/실패 폐기, 같은 ID 재선택 후 옛 요청 폐기, 새 서버 검색 중 옛 요청 종료가 새 로딩을 해제하지 않음을 검사했다. 이 세 경우의 전체 네이티브 여정을 실행한 결과는 아니다. |
+| 소유 프로세스·외부 자원 | pass | `goal-mcp-discovery-orbit100-final-lifetime-source-20261008.json`에서 8개 검색 세션의 parent/descendant 총 16개 연결이 remote-end/close·socketError=false였고 모든 소유 PID 부재를 확인했다. 실제 tools-call-start/result는 0이다. 이 정리는 각 응답 후 기존 backend close_session의 결과이며 선택 시 취소가 아니다. observer listener는 검사 소유 port로 따로 종료했다. |
+| 사용자 데이터·환경 복원 | pass | `goal-mcp-discovery-orbit100-restoration-20261008.json`, `goal-mcp-discovery-orbit100-inventory-audit-20261008.json`, `goal-native-audio-mcp-discovery-orbit100-restored-20261008.json`/PNG. baseline과 config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage·같은 running 모델 PID·API off·렌더 오류/overlay 0이 같았다. 기존 세 서버 정의는 정확히 유지했고 새 합성 서버만 disabled로 UI 저장했다. |
+
+첫 검증 fixture는 오류 marker를 stdout 응답 뒤에 써서, 앱이 응답을 받고 소유 프로세스를 정리할 때 marker가 기록되지 않을 수 있었다. 최초 observer 감사의 2개 오류 marker 수 검사가 실패한 것을 제품 실패나 pass로 바꾸지 않는다. `goal-mcp-discovery-orbit100-first-observer-audit-20261008.json`과 v1 fixture/첫 UI 오류·재시도 캡처를 보존했고, 오류 marker를 응답 전에 기록한 v2에서 늦은 오류·현재 오류·재시도를 다시 실행했다. 최종 side channel에는 성공 marker 4개·v2 오류 marker 2개, 전체 tools/list 8개가 있다. marker가 없던 v1 오류 두 개를 side channel에서 관측한 것으로 세지 않는다.
+
+모든 제품 UI 동작은 CUA로 수행했다. Browser plugin이 제공되지 않아 실제 Tauri WKWebView와 읽기 전용 WebDriver 상태/캡처를 사용했다. `localhost:1420`, native 1280×800·web 1280×768에서 page identity·의미 있는 내용·Vite overlay 부재·수집된 render error 0·실제 interaction·PNG를 확인했다. 이번 수정은 배치 변경이 아니며 다른 viewport/모든 scroll·popover/언어/상태의 레이아웃 통과로 확대하지 않는다. 29절의 최소 창·다크 배치 근거와 한계를 유지한다.
+
+수정 전 새 회귀 6 fail/1 pass, 수정 후 관련 5 files/36 tests 종료 0이다. `logs/goal-mcp-discovery-orbit100-{regression-before,related-after}-20261008.log`에 보존했다. 최종 `logs/goal-mcp-discovery-orbit100-{typecheck,lint,unit,build}-20261008.log`는 모두 종료 0이며 각각 14.49s·8.89s·134.98s·17.85s, 전체 UI 175 files/1748 tests·coverage 80.52/75.28/78.91/84.66%다. 기존 jsdom pseudo-element/canvas 진단과 500kB chunk 경고는 유지한다. `goal-mcp-discovery-orbit100-independent-source-ui-audit-20261008.json`은 실제 전후 상태와 관측 소스 두 파일/수정 커밋의 정확한 바이트 일치를 확인했다.
+
+전체 peer 종료 후 살아 있는 observer process의 명령을 확인해 해당 관측기만 SIGTERM으로 종료했다. runner 종료 -15는 명시적인 검사 정리이며 `goal-mcp-discovery-orbit100-observer-stopped-20261008.json`에서 observer PID/listener 부재를 확인했다. 외부 파일·원래 서버·모델·대화는 삭제하지 않았다. 27–32절의 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**는 유지한다. 개인 엔진의 자유 등록은 미구현 장기 설계다. 공개 업로드·원격 push는 수행하지 않았다.
+
+## 34. MCP 검색 수정 소스 `25d71a5`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `25d71a59c322faf71c88f837c9525fb0e5907669`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-mcp-discovery-package-25d71a5.log`, `logs/goal-native-mcp-discovery-inspect-package-25d71a5.log`, `goal-native-mcp-discovery-package-25d71a5-results.json`이 근거다. 빌드 225.65s·검사 4.35s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16773242 bytes, SHA256 `d9c06a53cc5fc4bb8910c6733e49e92ca6389c7dfc452d2defe7462779b530e2`.
+- GUI `aiolm`: arm64, SHA256 `c718bb39d6733b138d497103561f5d9e23a75cea72d71e678e44274287fc0bc1`.
+- CLI `aiolm-cli`: arm64, SHA256 `794689cd0c1aa78e6b381cf6fb7e25635820b6063bef29e53b31629996020f2c`.
+- GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE의 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다.
+- 원본과 같은 해시의 DMG를 `goal-package-25d71a5/`에 보존했다. 기존 패키지·모델·로그는 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
+
+패키지 생성 후 실제 CUA Chat 화면과 `goal-native-audio-mcp-discovery-orbit100-postpackage-25d71a5.json`/PNG, `goal-mcp-discovery-orbit100-postpackage-preservation-25d71a5.json`에서 config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage·같은 running 모델 PID·API off·idle·빈 composer·렌더 오류/overlay 0 보존을 재확인했다. 33절의 검색 조회 통과를 도구 실행 통과로 확대하지 않는다. 기존 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**는 유지한다. 개인 엔진 manifest/adapter 등록은 장기 설계이며 아직 구현되지 않았다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
