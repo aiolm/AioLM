@@ -8,6 +8,7 @@
 - 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 23절은 MCP 조회·승인 대기 정리와 기술 입력 치환 수정 `bbd2df6`을, 24절은 해당 소스의 DMG를 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
+- 27절은 `a35defd`에서 재현한 실제 두벌식 확정 Enter·미디어 첨부 그룹 결함과 수정 `47580b8`의 재검증이다. 28절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -35,6 +36,7 @@
 | `5fd5e82` | native 알림 요청을 제출할 수 있는 상태를 Allowed로 표시해 macOS의 실제 승인을 확정한 것처럼 안내했다. Ready to send와 첫 알림의 OS 권한 안내, 전달 성공을 단정하지 않는 test 제출 문구로 바꿨다. | 수정 전 실패·수정 후 4 files/36 tests, 공통 UI1697 tests 및 실제 CUA의 Ready/제출 화면·모델/설정 보존. OS test 본문 수신은 여전히 blocked다. 19절 참조. |
 | `b523f79` | 진행 중 응답 때문에 Unload가 거부될 때 모델 파일·경로를 확인하라고 잘못 안내했다. 실제 loading/replacing/unloading의 active-response 보호 오류를 먼저 구분하여 현재 응답을 끝내거나 중지한 뒤 재시도하도록 안내한다. | 수정 전 직접 회귀 실패·수정 후 통과, 기존6종 오류 안내 보존·공통 UI1697 tests·실제 MLX 생성 중 Unload 거부와 수정된 안내 확인. backend 보호·readiness·상태 처리 변경 없음. 21절 참조. |
 | `bbd2df6` | 실제 WKWebView의 MCP 인자·JSON 입력에서 스마트 대시/따옴표가 ASCII 실행 인자와 JSON을 바꿨다. 명령·인자·JSON 세 기술 입력의 자동 교정을 끈다. | 수정 전 회귀3개 실패·수정 후 관련7개 통과, 같은 native 입력의 원문 보존·JSON 검토 카드 확인·공통 UI1700 tests. 사용자 문자의 정규화나 승인 정책·MCP API 변경 없음. 23절 참조. |
+| `47580b8` | 실제 두벌식의 확정 Enter가 채팅까지 전송하고 영상 첨부 그룹이 이미지로 안내됐다. 조합·확정·Enter release 상태를 구분하고 그룹에 미디어 이름을 지정했다. | 실제 첫 Enter 입력 보존·다음 Enter 응답, 포인터 클릭 뒤 단일 Enter 응답, native MP4 선택·그룹명·제거·원래 설정 복원. 합성 IME17개·미디어16개와 공통 UI1733 tests 통과. 27절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -54,7 +56,7 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. CUA의 별도 승인 프로세스 선택 한계로 실제 Yes/No→tool/후속 답변·호출 중 취소는 미검증이다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
-| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. IME composition·Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
 | M12 | blocked | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. MCP 승인 후 실제 호출 중 취소는 승인창 조작 차단으로 미검증. |
 
 ## 4. 초기 기기 검증의 공통 자동 검사 (`6261d0b`)
@@ -490,3 +492,44 @@ invalid WAV의 decode 예외 때 upstream 로그의 in_flight가1→2로 남는 
 `goal-native-shared-profile-restoration-independent-audit-20261008T043432448217Z.json`은 최종 config와 실제 디스크 일치·기존17개 프로필의 정확한 보존·Default의 revision 이외 값 보존·기존28개와 새3개 응답의 SHA256을 독립 확인했다. 기록된 이전 모델 프로세스4개는 부재했고 이전 loopback 포트3개는 모두 ECONNREFUSED였다. 원래 vLLM의 새 프로세스는 존재하며 running·API off·active requests0을 유지했다. 새 A/B/C 응답의 파일은 각 응답 capture부터 최종 capture·현재 디스크까지 같았다.
 
 25·26절은 21절 당시 남은 범위 중 창 숨김/설정 복원과 동일 엔진 두 모델의 공용 프로필 재사용을 보완한다. MCP native Yes/No→실제 호출/후속 응답/호출 중 Stop, 실제 한글 IME composition, 트레이 Show/Quit·Dock 클릭, 추가 대비/VoiceOver·promised/unreadable clipboard는 여전히 미검증이다. M04/M07의 실제 내용 실패·upstream 제약과 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun도 유지한다. **전체 M01–M12는 통과하지 않았다.** 개인 엔진 manifest·registry·adapter는 별도 장기 설계이며 구현 완료로 계산하지 않았다. 제품 코드·Rust/Python·공개 API·lockfile 변경이 없어 기존 공통 검사를 반복 실행하지 않았다. 최신 제품 소스의 공통 검사와 패키지 근거는 23·24절에 유지한다. raw/build·모델·캡처는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 27. 실제 두벌식 확정 Enter와 미디어 첨부 그룹 수정
+
+`a35defd`의 실제 WKWebView에서 재현한 두 결함을 `47580b8d54428bafee589ecccc96c233d37b88f1`에서 수정했다. 원래 Qwen3/vllm-metal 0.30 실행을 유지했으며 엔진·프로필·모델·승인 정책을 바꾸지 않았다. 읽기 전용 TIS 조회에서 검사 전후 모두 두벌식 한글 source/layout과 활성 ABC keyboard가 같았다. 입력 소스를 전환하거나 OS 설정을 수정하지 않았다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 수정 전 확정 Enter의 조기 전송 | fail | 실제 CUA의 물리 키 g/k/s/r/m/f로 한글을 조합한 뒤 첫 Return이 즉시 사용자 메시지·응답을 시작했다. `goal-native-ime-orbit98-{composing,first-enter}-20261008.json`, `goal-native-audio-ime-orbit98-beforefix-response-20261008.json`/PNG. native input→keydown229 뒤 같은 값의 insertReplacementText 확정→Enter13/isComposing=false 순서여서 기존 keydown guard를 통과했다. 붙여넣기나 합성 DOM 이벤트로 재현하지 않았다. |
+| 최종 소스의 확정·전송 구분 | pass | 같은 물리 키와 첫 Return 뒤 composer는 한글이고 generation=false·active requests0·기존 저장 대화 수/해시를 유지했다. 첫 Enter keyup도 관찰됐다. 두 번째 Return에서 새 사용자/assistant 각1개가 저장되고 실제 답변·usage를 받았다. `goal-native-ime-orbit98-{first-enter-final,second-enter-final,listener-final-stop}-20261008.json`, `goal-native-audio-ime-final-{first-enter,response}-20261008.json`/PNG. 중간 구현의 같은 통과 근거는 별도 afterfix 파일로 보존했다. |
+| 포인터 클릭 뒤 일반 전송 | pass | 실제 좌표 클릭의 trusted pointerdown/mousedown 뒤 첫 Return으로 새 사용자/assistant 각1개와 응답을 받았다. `goal-native-ime-orbit98-{pointer-confirmed-native,pointer-first-enter,pointer-listener-stop}-20261008.json`, `goal-native-audio-ime-pointer-response-20261008.json`/PNG. 앞선 AX 입력란 선택만 한 pointer-confirmed 파일에는 포인터 이벤트가 없으므로 해당 조작을 통과 근거로 쓰지 않는다. |
+| 수정 전 영상 그룹명 | fail | native Open 창에서 합성 shapes-video.mp4를 선택한 뒤 video preview가 Pending image attachments 그룹에 있었다. `goal-native-media-group-video-before-20261008.json`, `goal-native-audio-media-video-before-20261008.json`/PNG. |
+| 수정 후 영상 그룹·제거 | pass | 같은 파일을 실제 Open 창에서 다시 선택하여 Pending media attachments 그룹과 video preview·제거 버튼을 확인했다. 실제 제거 뒤 pending 그룹이 사라지고 빈 입력의 Send가 비활성화됐다. `goal-native-media-group-video-after-20261008.json`, `goal-native-audio-media-video-after-20261008.json`/PNG. 명시적 영상 frame 옵션으로 첨부했고 이후 원래 false·접힌 패널로 복원했다. 이번 표기 검사는 영상 전처리·내용 추론 성공을 추가로 주장하지 않는다. |
+
+관찰된 native 입력 이벤트는 trusted였지만 compositionstart/update/end는0이었다. 실제 두벌식 입력·치환·229/Enter 경계로 확인한 범위를 DOM composition 이벤트 발생으로 설명하지 않는다. 표준 composition 이벤트 순서·늦은 final input/end·held Enter 반복·229/isComposing·영어 Enter·Shift+Enter·Enter 전송 해제·마우스/blur/붙여넣기·빈 draft는 합성 회귀로 검사했다. 다른 OS·입력기 전체의 실제 동작으로 확대하지 않는다.
+
+수정은 Composer의 상태 guard와 네 언어의 미디어 그룹명에 한정했다. 확정 전 Enter는 native 기본 확정을 허용하면서 전송만 막고, 확정된 Enter는 newline도 막는다. keyup 뒤 새 Enter는 정상 전달하며 이미 확정한 포인터/blur 등은 guard를 해제한다. 입력 문자열·공개 API·attachment 타입·엔진 ID·모델 호환성·Rust/Python·lockfile을 바꾸지 않았고 시간 휴리스틱을 추가하지 않았다. 미디어 회귀는 legacy image/audio/video/mixed의 그룹명과 별도 문서 그룹·원본 ref/dataUrl/path 제거 인자를 네 언어에서 확인한다.
+
+수정 전 IME13개 중3개 실패·수정 후 순서 보강 전17개 중6개 실패 원본 로그를 보존했다. 최종 관련 IME4 files/27 tests와 미디어4 files/23 tests는 종료0이다. 근거는 `logs/goal-native-ime-regression-before-20261008.log`, `logs/goal-native-ime-ordering-regression-{before,after}-20261008.log`, `logs/goal-native-media-group-unit-{before,after}-20261008.log`다. 미디어 신규16개는 수정 전 모두 실패했다. `logs/goal-native-ime-media-final-{typecheck,lint,unit,build}-20261008.log`는 모두 종료0: 11.76 s·7.21 s·140.25 s·14.58 s. 계약/direct/script 검사와 UI173 files/1733 tests·coverage statements80.35% / branches75.21% / functions78.83% / lines84.46%를 확인했다. 기존500kB chunk 경고는 유지한다.
+
+실제 검사 후 원래 ORBIT-84 화면·같은 실행 모델·API off·active requests0·빈 입력·렌더 오류/overlay0으로 돌아왔다. `goal-native-audio-ime-media-restored-final-20261008.json`/PNG와 읽기 전용 TIS 결과가 근거다. 검사 전31개 대화를 보존하고 조기 전송 재현·중간 수정·최종 수정·포인터 비교의 합성 대화4개를 더해 총35개를 유지했다. main config 전체 SHA256과 원래 입력 소스는 같다. passive 입력 관측기는 제거했다.
+
+`goal-native-ime-media-independent-audit-20261008T050356764040Z.json`은 첫 Enter의 무저장·최종 native Enter down/up·trusted 포인터·각 새 user/assistant 한 쌍, 기존31개와 새4개 대화의 현재 디스크 SHA256, config·preferences·원래 Chat·입력 소스 복원을 독립 확인했다. 감사 대상5개 제품 파일은 수정 커밋과 같은 바이트였다.
+
+추가 포인터 관찰의 첫 inline helper는 문자열 인용 오류로 JavaScript parse에서 실패했다. `logs/goal-native-ime-pointer-passive-extension-20261008.log`를 보존했고 별도 파일 helper의 `passive-extension-fixed` 로그에서 정상 부착·이후 detach를 확인했다. 제품 실패나 UI 입력 결과로 세지 않는다.
+
+M11의 현재 두벌식 범위를 보완했지만 MCP native Yes/No→실제 호출/후속 응답/호출 중 Stop, 트레이 Show/Quit·Dock 클릭, 추가 대비/VoiceOver·promised/unreadable clipboard·알림 수신은 남아 있다. M04/M07 내용 실패·upstream 제약과 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun도 유지하며 **전체 M01–M12는 통과하지 않았다.** 개인 엔진 registry·manifest·adapter는 장기 설계이며 구현 완료로 계산하지 않았다. raw·모델·캡처는 Git 제외 상태이고 공개 업로드·원격 push는 수행하지 않았다.
+
+## 28. 두벌식·미디어 첨부 수정 소스 `47580b8`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `47580b8d54428bafee589ecccc96c233d37b88f1`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-ime-media-package-47580b8.log`, `logs/goal-native-ime-media-inspect-package-47580b8.log`, `goal-native-ime-media-package-47580b8-results.json`이 근거다. 빌드229.57 s·검사4.52 s 모두 종료0이었고 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- DMG `AioLM_0.3.1_aarch64.dmg`: 16773003 bytes, SHA256 `74782223e72dce420f8d7a8362a1a50a10affb6d47c512a0c12a9cf05d83ac02`.
+- GUI `aiolm`: arm64, SHA256 `221d7aeae611e524ef369ba73876e04c505d36e67d66231a121117b8bcb07d28`.
+- CLI `aiolm-cli`: arm64, SHA256 `1c1b742a8d20c7b9123f0e67ac0122a2c8c608a558f0ad92017d7a1177c07084`.
+- GUI·CLI 해시는 빌드 앱과 일치했다. identifier `com.aiolm.desktop`·version0.3.1·minimum OS13.3 선언을 확인했다. Intel·구형 macOS 실제 검증으로 확대하지 않는다.
+- `codesign --verify --deep --strict` pass. GUI·CLI는 ad-hoc/runtime이다. Developer ID 서명·공증은 수행하지 않았으며 자연스러운 Finder 설치·quarantine 동작은 unrun이다.
+- bundle 일반 파일5개·symlink 없음. 실제 home/repository와 음성·PDF·picker·smoke·MCP·IME/media 관측 fixture 표식의 UTF-8·UTF-16LE/BE 일치0을 확인했다. 개인 설정·모델·venv·서버 등록 자료를 넣지 않았다.
+- 기존 파일 없는 새 격리 홈의 packaged CLI에서 onboarding=false·모델/runtime 미선택·격리 모델 저장소 기본값과 종료0을 확인했다.
+- 원본과 해시가 같은 raw DMG는 `goal-package-47580b8/`에 보존했다. 이전 패키지·로그·모델·대화는 유지했다.
+
+빌드 후 실제 CUA로 원래 Chat 화면을 재확인했다. `goal-native-audio-ime-media-after-package-47580b8.json`/PNG와 `goal-native-ime-media-after-package-preservation-47580b8.json`에서 검사 직전35개 대화의 전체 SHA256·config 전체 SHA256/의미·localStorage·같은 실행 프로세스 보존을 대조했다. 원래 ORBIT-84·Qwen3/vllm-metal의 running·API off·active requests0·빈 입력·렌더 오류/overlay0을 유지했다. 개발 앱의 이 확인을 production GUI의 자연스러운 Finder 설치·최초 실행·별도 계정 Keychain·실제 upgrade 결과로 바꾸지 않는다. 27절의 잔여 범위와 **전체 M01–M12 미통과** 상태를 유지한다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
