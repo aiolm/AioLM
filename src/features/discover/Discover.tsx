@@ -412,15 +412,18 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         </div>
       </div>
 
-      <form onSubmit={(event) => { event.preventDefault(); void runSearch(query, sort); }} className="mb-4 flex min-w-0 flex-wrap items-center gap-2.5" aria-busy={searching || loadingFiles || downloading !== null}>
+      <form onSubmit={(event) => { event.preventDefault(); void runSearch(query, sort); }} className="discover-toolbar" aria-busy={searching || loadingFiles || downloading !== null}>
         <EngineSelect value={provider} onChange={setProvider} disabled={downloadBusy} />
-        <label>{providerCopy[locale].formats}<CustomSelect ariaLabel={providerCopy[locale].formats} value={format}
+        <label className="discover-toolbar-field">{providerCopy[locale].formats}<CustomSelect ariaLabel={providerCopy[locale].formats} value={format}
           options={provider === 'llama.cpp' ? [{ value: 'gguf', label: 'GGUF' }] : provider === 'mlx-vlm' ? [{ value: 'mlx', label: 'MLX Safetensors' }] : [{ value: 'safetensors', label: 'HF Safetensors' }, { value: 'gguf', label: 'GGUF' }]}
           disabled={downloadBusy}
           onChange={value => { searchGeneration.current += 1; inspectGeneration.current += 1; setFormat(value as typeof format); setSelected(null); setFiles(null); setLoadingFiles(false); setResults([]); opened.current = ''; }} /></label>
-        <label className="sr-only" htmlFor="discover-search">{t("extra.search")}</label>
-        <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={providerCopy[locale].discoverPlaceholder} className="app-input min-w-48 flex-1" />
-        <CustomSelect ariaLabel={t("ui.discoverSort")} value={sort} size="sm" className="shrink-0" options={SORT_KEYS.map((key) => ({ value: key, label: t(SORT_LABELS[key]) }))} onChange={changeSort} />
+        <label className="discover-toolbar-field discover-toolbar-search" htmlFor="discover-search">{t("extra.search")}
+          <input id="discover-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={providerCopy[locale].discoverPlaceholder} className="app-input" />
+        </label>
+        <label className="discover-toolbar-field">{t("ui.discoverSort")}
+          <CustomSelect ariaLabel={t("ui.discoverSort")} value={sort} options={SORT_KEYS.map((key) => ({ value: key, label: t(SORT_LABELS[key]) }))} onChange={changeSort} />
+        </label>
         <button type="submit" disabled={searching} className="app-button app-button--primary shrink-0 ui-min-width-120px" ><StableLabel value={searching ? t("panel.scanning") : t("panel.searchModels")} labels={[t("panel.scanning"), t("panel.searchModels")]} /></button>
       </form>
 

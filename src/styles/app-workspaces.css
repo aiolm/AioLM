@@ -9,6 +9,10 @@
 .profile-snapshot-hint, .profile-model-name, .profile-snapshot-status { color: var(--ui-muted); font-size: var(--ui-text-support); margin: 4px 0 8px; }
 .profile-snapshot-actions, .profile-name-form { gap: 8px; margin-top: 12px; }
 .model-target-button { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.discover-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; min-width: 0; margin-bottom: 16px; }
+.discover-toolbar-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; font-size: var(--ui-text-support); }
+.discover-toolbar > .engine-select { max-width: 100%; }
+.discover-toolbar-search { flex: 1 1 192px; }
 /* Download actions move to a new line before a narrow card can clip Cancel. */
 .discover-progress-summary, .discover-progress-actions { min-width: 0; flex-wrap: wrap; }
 .discover-progress-bytes, .discover-progress-actions { max-width: 100%; }
