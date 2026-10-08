@@ -21,6 +21,7 @@
 - 51절은 같은 대화를 다시 선택하면 전송하지 않은 입력이 지워지던 결함 수정 `6398348`과 실제 입력·목록·화면 전환의 검증 기록이며 52절은 해당 소스의 DMG다.
 - 53절은 macOS MCP 승인창의 실행 오류를 사용자 거부로 오인하던 수정 `80510a8`, 공용 프로필 검사 동기화 `c5a35fa`와 실제 앱 재시작·도구 조회의 기록이다. 54절은 해당 소스의 DMG다.
 - 55절은 다른 엔진에 남은 llama.cpp backend 진단값과 최소 창의 로그 끝 가림 수정 `e70ec9e`를 실제 앱에서 검증한 기록이며 56절은 해당 소스의 DMG다.
+- 57절은 실행 중인 기본·별도 모델 세션의 보호 조건을 런타임 관리 화면에 반영한 수정 `7ad2605`와 실제 잠금·해제·소유 프로세스 정리·복원 기록이며 58절은 해당 소스의 DMG다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -62,6 +63,7 @@
 | `6398348` | 같은 대화를 다시 선택하는 것만으로 전송하지 않은 입력·첨부가 초기화됐다. 같은 대화는 목록만 닫고, 실제 전환에만 기존 composer 초기화를 적용한다. | 실제 desktop·최소 창의 입력 보존·다른 대화 초기화·화면 왕복, 수정 전 실패/후 통과 첨부 회귀·관련 UI42개·공통 UI1789 tests·16개 검증/보존 조건. 51절 참조. |
 | `80510a8` | macOS 승인 scripting process의 모든 비정상 종료를 사용자 No로 보고했다. 성공 종료와 명시된 답변을 함께 확인하고, 실행 실패·잘못된 답변은 도구를 실행하지 않는 오류로 전달한다. | 수정 전 최소 회귀 실패/후 관련 7개 통과·기존 취소/timeout 정리·전체 Rust/clippy. 실제 앱 재빌드·정상 종료/재시작·Qwen 준비·MCP 조회는 통과했으나 실제 Yes/No는 blocked다. 53절 참조. |
 | `e70ec9e` | vllm-metal 실행의 backend 진단에 저장된 llama.cpp CPU 선택이 들어갔다. 엔진 identity를 우선하고 다른 엔진에서는 해당 필드를 null로 반환한다. 최소 창의 진단 로그가 화면보다 높아 End로 이동한 마지막 줄이 가려지는 문제도 수정했다. | 수정 전 Rust 회귀 실패/후 관련17개·전체 Rust/clippy·공통 UI1789개 통과. 실제 새 native 실행의 null/저장값 보존과 최소·짧은 넓은 창·desktop의 로그 접근, geometry12개·재시작 보존16개 조건. 55절 참조. |
+| `7ad2605` | 모델 실행 중에도 Python 환경 설치·등록·삭제·번들 전송 버튼이 활성화되어 backend 보호 오류를 뒤늦게 표시했다. 공통 세션 poller와 busy lifecycle을 사용해 기본·별도 세션의 잠금·안내를 반영한다. | 수정 전 회귀 실패/후 관련47개·공통 UI1794개 통과. 실제 기본 starting·별도 starting/running의 잠금, 전체 stopped의 해제, 별도 세션 소유 PID·포트 정리와23개 검증/보존 조건. 57절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1053,3 +1055,47 @@ MCP 실제 No/Yes→호출·모델 후속 응답·호출 중 취소, 트레이/D
 패키징 후 CUA로 실제 개발 앱의 Chat·Qwen model loaded를 다시 확인했다. `goal-native-audio-orbit115-postpackage-e70ec9e-20261009.json`/PNG와 `goal-runtime-diagnostics-orbit115-postpackage-preservation-e70ec9e-20261009.json`의11개 조건에서 재시작 뒤 복원 상태와 비교한 config 전체/hash·profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model/execution·수정된 backend 진단·API off·idle/빈 composer·error/overlay0을 확인했다. 재시작 전 revision/PID의 불변이나 새 추론 성공을 의미하지 않는다.
 
 production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 55절의 blocked와 기존 실제 실패/upstream 제한을 유지하며 **전체 목표·M01–M12 통과를 뜻하지 않는다.** 개인 엔진 registry·manifest·adapter 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 57. 모델 세션의 런타임 자원 잠금을 관리 화면에 반영
+
+`a7be918`의 실제 개발 앱에서 Qwen/vllm-metal이 실행 중인데 환경 설치·삭제·Python bundle 전송 버튼이 활성화되어 있었다. CUA로 Export를 누르면 파일 선택 전에 backend의 `stop model sessions before exporting a runtime` 오류가 표시됐다. native 보호 조건은 이미 기본·별도 세션의 Starting/Ready/Stopping을 확인하며, 재현은 보호 실패나 외부 환경 삭제가 아니다. `goal-native-audio-orbit116-runtime-export-before-20261009.json`/PNG와 `runtime-minimum-before`가 근거다. 실제 설치·삭제 버튼으로 환경을 변경하지 않았다.
+
+수정 `7ad2605563de61106e1360bafb985c595164cf89`은 기본 세션의 running뿐 아니라 starting/stopping과 별도 세션의 busy 상태를 기존 공통 session poller로 읽는다. 새 poll timer나 엔진 전용 분기를 추가하지 않고 boolean만 상태로 보관한다. Python 설치·등록·삭제·export/import를 잠그고 이유를 한국어·영어·일본어·중국어로 제공한다. 입력 경로 준비와 진행 중인 작업의 취소는 유지한다. 같은 관리 controller를 쓰는 native 작업과 deep 버튼도 공통 자원 상태를 받는다. backend의 최종 보호 조건·readiness·취소·기본값·공개 API와 dependency/lockfile은 변경하지 않았다.
+
+실제 실행은 기존 vllm-metal0.30.0/vLLM0.30.0+cpu와 Qwen3-VL-2B-Instruct-4bit snapshot revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`, context4096을 사용했다. 새 모델 다운로드나 runtime 설치는 수행하지 않았다.
+
+| 실제 범위 | 상태 | 근거와 결과 |
+| --- | --- | --- |
+| 기본 세션 실행 중 | pass | CUA로 관리 화면을 확인해 Python 작업5종이 비활성화되고 안내가 표시된다. 최소 창에서도 버튼·고정 실행 영역을 확인했다. `goal-native-audio-orbit116-runtime-minimum-locked-20261009.json`/PNG. |
+| 기본 세션 중지 후 | pass | 실제 Stop session 뒤 전체 stopped에서 안내가 사라지고 설치·export·삭제·import/deep 버튼이 활성화된다. 빈 Python 입력의 Register는 기존 조건으로 비활성 상태다. `goal-native-audio-orbit116-runtime-all-stopped-unlocked-20261009.json`/PNG. |
+| 별도 세션 시작·준비 완료 | pass | 격리 홈에 이번 검증용 세션 정의 하나를 만들고 같은 Qwen revision/runtime/options로 로드했다. 기본 모델은 stopped인 상태에서 별도 starting을 확인했고, session poll 후 작업5종과 deep 잠금을 확인했다. 준비 완료 row에는 Qwen 모델명·runtime·running·요청0이 표시된다. `goal-native-audio-orbit116-named-{starting,runtime-observed,runtime-locked,ready}-20261009.json`/PNG, `goal-runtime-lock-orbit116-named-desktop-locked-20261009.json`. |
+| 창·버튼 동작 | pass | CUA disabled Export 클릭 후 새 파일 선택/실패 배너가 나타나지 않았다. native1280×800/WK1280×768와 native360×520/WK360×488에서 안내와 제목 간격12px, 가로 넘침 없음. 작은 창은 본문을 스크롤해 안내 전체와 제목을 확인했다. `goal-runtime-lock-orbit116-named-{desktop,minimum}-locked-20261009.json`, `goal-native-audio-orbit116-named-minimum-locked-20261009.json`/PNG. |
+| 별도 세션 중지·정리·해제 | pass | 실제 Stop session 뒤 소유 process group의3개 PID와 해당 listener가 없어졌다. 전체 stopped의 관리 버튼 해제·빈 입력 Register 조건을 확인한 뒤, 이번에 만든 정의만 UI Remove로 정리했다. 외부 runtime/model은 보존했다. `goal-runtime-lock-orbit116-{named-cleanup,named-stopped-unlocked}-20261009.json`, `goal-native-audio-orbit116-named-stopped{-unlocked,}-20261009.json`/PNG. |
+| 기본 실행·Chat 복원 | pass | 실제 Save profile & start로 기존 Qwen을 다시 로드했다. 기본 starting 상태의 관리 잠금도 별도 캡처했고, running 뒤1280×800 Chat으로 복원했다. `goal-runtime-lock-orbit116-default-starting-locked-20261009.json`, `goal-native-audio-orbit116-{default-starting-locked,restored}-20261009.json`/PNG. 새 추론을 전송한 검사는 아니다. |
+
+UI는 공유 poll 결과를 반영하므로 실제 별도 세션 시작 직후 첫 관리 화면에는 이전 stopped snapshot의 활성 버튼이 잠시 보였다. 다음 poll의 starting snapshot에서 잠금이 표시됐다. 이 관측도 `named-runtime-observed`에 남겼으며 즉시/원자적 UI 잠금이라고 주장하지 않는다. 그 사이와 poll 실패·경쟁 상황의 최종 판정은 기존 backend가 계속 수행한다. 별도 엔진 로그의 AVFoundation 중복 class 경고도 숨기지 않았으며 이번 확인에서는 readiness가 성공했다.
+
+`goal-runtime-lock-orbit116-verification-20261009.json`의16개 보존·7개 통합 조건은 모두 pass다.39개 대화 목록/hash,21개 profile 내용·다른 revision, localStorage, 비-profile 설정과 engine/model/execution을 보존하고 API off·idle/빈 composer·관측 error/overlay0을 확인했다. UI 저장·시작의 기존 동작으로 Default vLLM revision13→14, 해당 적용 revision 하나, library68→72가 바뀌었다. 이번 별도 세션 정의는 원래와 같이0개로 복원되지만 그 실행의 적용 snapshot 하나는 기존 저장 정책대로 남는다. 새 PID와 config hash 불변을 주장하지 않는다.
+
+수정 전 최소 회귀는2.51s/exit1이며5개 filtered 검사를 실행한 것으로 세지 않는다. 구현 도중 첫 관련 run의5 failed/42 passed·5.60s/exit1도 보존했고 통과로 세지 않는다. 완성 후 관련4 files/47 tests는4.45s/exit0이다. `logs/goal-runtime-lock-orbit116-{regression-before,related,related-final}-20261009.log`가 근거다. 실제 안내 간격을 마무리한 최종 소스에서 typecheck10.92s·lint6.35s·공통 unit127.44s·frontend build13.43s/exit0을 확인했다. unit은 계약/direct/script와 UI179 files/1794 tests, coverage80.69/75.59/79.11/84.81%다. `logs/goal-runtime-lock-orbit116-{typecheck-final,lint-final,unit-final,build-final}-20261009.log`에 기존 jsdom 진단·chunk 경고도 남겼다. Rust/Python 소스 변경은 없으며55절의 해당 자동 검사를 새 실행으로 계산하지 않는다.
+
+Browser plugin은 제공되지 않았다. 실제 Tauri UI 조작은 CUA, WebDriver는 읽기 전용 IPC·DOM geometry·캡처에 사용했다. 페이지 identity·의미 있는 화면·framework overlay 부재·이벤트로 관측한 error/rejection·실제 클릭/시작/중지·desktop/최소 창 캡처를 확인했으며 전체 DevTools console을 검증한 것으로 확대하지 않는다. React 검토에서는 공통 poller의 단일 요청·timer·listener 정리, 파생 boolean, 기존 취소와 접근성 안내·typed prop 보존을 확인했다. staged 파일·실제 diff·개인정보·공백 검토 후 제품6파일만 커밋했다.
+
+이번 실제 runtime은 vLLM이다. MLX/llama.cpp 재실행이나 개인 엔진 등록의 검증을 뜻하지 않는다. MCP 실제 No/Yes→호출·모델 후속 응답·호출 중 취소, 트레이/Dock·OS 알림·실제 ffmpeg 부재의 blocked와 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun, 기존 실제 실패/upstream 제한을 유지한다. **전체 목표·M01–M12는 통과하지 않았다.** 개인 엔진 registry·manifest·adapter는 미구현 [장기 설계](pluggable-inference-runtimes.ko.md)이며 공통 기능의 엔진 분리는 계속 목표다. raw·캡처·검증용 snapshot은 ignored tmp에 보관하며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 58. 공통 세션 잠금 수정 소스 `7ad2605`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `7ad2605563de61106e1360bafb985c595164cf89`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-runtime-lock-orbit116-package-7ad2605-20261009.log`, `logs/goal-native-runtime-lock-inspect-package-7ad2605-20261009.log`, `goal-native-runtime-lock-package-7ad2605-results.json`이 근거다. 빌드228.80s·검사4.74s/exit0, 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16798496 bytes, SHA256 `f7f9095ac92c3385e888ebb58a2f1c3d6ffb6c085ec03381a80ae7bed3cdb371`.
+- GUI `aiolm`: arm64, SHA256 `585f1f085df04c7ad48a92d46d10eee0f5da17e0811cd3f844673ce2d881508b`.
+- CLI `aiolm-cli`: arm64, SHA256 `fe0650d752d690d4338c63f63a0d701860f9ab2c84030d9fcba8768684e889d1`.
+- 빌드 앱과 DMG의 GUI·CLI 해시 일치, 일반 파일5개·symlink 없음, version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 경로와 ORBIT-116 등을 포함한 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·exit0을 확인했다. 같은 DMG를 `goal-package-7ad2605/`에 보존했다.
+
+패키징 중 CUA로 관리 화면만 MLX와 llama.cpp로 전환했다. 실행 중인 Qwen/vllm-metal을 유지하며 MLX 작업5종과 native 설치·probe·삭제·PR·bundle 관련12개 control의 자원 잠금을 확인했다. native8개는 HTML disabled, 설치·삭제4개는 기존 aria-disabled와 보호 handler로 표현한다. 최초 읽기 전용 검사에서 HTML disabled만 요구하고 개수도11개로 잘못 가정하여 실패했다. `goal-runtime-lock-orbit116-native-controls-20261009.json`은 그 관측, `native-controls-final`은12개 모두의 disabled/aria-disabled 근거다. 이 검사 오류를 제품 결함이나 통과로 세지 않는다. 실제 설치·삭제를 요청하지 않았으며 MLX/llama.cpp 모델을 새로 실행한 검사가 아니다. `goal-native-audio-orbit116-{mlx,native}-inventory-locked-20261009.json`/PNG, `goal-runtime-lock-orbit116-mlx-inventory-locked-20261009.json`이 근거다.
+
+vLLM 관리 선택과1280×800 Chat을 CUA로 복원했다. `goal-native-audio-orbit116-postpackage-7ad2605-20261009.json`/PNG에서 model loaded와39개 대화·기존 PP/TG 기록·빈 composer를 확인했다. 최초 엄격한 localStorage 전체 비교는 native 목록 자동 조회로 `aiolm.latest-runtimes.v2`가 갱신되어 실패했고 `goal-runtime-lock-orbit116-postpackage-preservation-7ad2605-20261009.json`에 남겼다. 이를 불변/pass로 바꾸지 않는다. 갱신은 기존 metal/cpu 키·errors를 유지하는 latest metadata/build `b11512`와 저장 시각이며 다른 localStorage는 보존됐다.
+
+`goal-runtime-lock-orbit116-postpackage-verification-7ad2605-20261009.json`의14개 조건은 실제 cache 갱신을 분리하고 config 전체/hash·profile library·39개 대화 목록/hash·동일 running PID/engine/model/execution·별도 정의0·API off·idle/빈 composer·관측 error/overlay0·다른 localStorage와 두 관리 화면의 잠금을 확인한다.57절의 UI 저장 전 config hash·revision/PID가 불변이라는 의미는 아니다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다.57절의 blocked와 기존 실제 실패/upstream 제한을 유지하며 **전체 목표·M01–M12 통과를 뜻하지 않는다.** 개인 엔진 registry·manifest·adapter 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
