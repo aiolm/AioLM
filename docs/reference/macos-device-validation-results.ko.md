@@ -17,6 +17,7 @@
 - 44절은 최소 창에서 벤치마크 결과 열에 접근할 수 없던 공통 UI 수정 `142fac3`과 실제 키보드·버튼·창 복원 검증이다. 45절은 해당 소스의 DMG를 기록한다.
 - 46절은 잠금 해제 후 네이티브 검증 재개, 이전 검증 서버 정리, 작업 알림이 본문 버튼을 가리는 결함 수정 `eb2d037`의 실제 재검증이다. 47절은 해당 소스의 DMG를 기록한다.
 - 48절은 같은 제품 소스로 Chat 화면 전환·최소 창의 전역 MCP 승인 대기 취소와 알림 키보드 동작을 추가 검증한 기록이다.
+- 49절은 재개 후 실제 최소 창에서 확인한 전체 모델 정보의 본문 가림과 수정 `6515cde`의 검증 기록이며 50절은 해당 소스의 DMG다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -54,6 +55,7 @@
 | `27bcca1` | 외부 snapshot의 응답·실행 모델명이 revision 해시로만 표시됐다. 로컬 카드의 명시된 제목을 제한적으로 읽고 공통 표시 계층에 적용한다. 모델 경로·provenance·호환성은 바꾸지 않는다. | 실제 MLX 실행·새 부분 응답·다른 엔진 실행 중 기존 기록 재로드, Rust 2개/UI 6개 회귀·공통 UI1779 tests. 42절 참조. |
 | `142fac3` | 최소 WKWebView에서 PP·TG·메모리 열이 가려지고 포커스한 표의 방향키도 가로 위치를 이동하지 않았다. 공통 표의 열 이동 버튼·방향키·Home/End와 넘침 감지를 추가했다. | 실제 세 결과 표의 독립 이동·desktop 복원·28개 보존 조건, 합성9개 회귀·공통 UI1788 tests. 44절 참조. |
 | `eb2d037` | 자동으로 펼쳐진 작업 알림이 MCP 검토 카드의 승인·취소 버튼을 덮어 끝까지 스크롤해도 접근할 수 없었다. 알림이 본문 공간을 확보하고 긴 내용만 별도로 스크롤하도록 수정했다. | 실제 desktop·최소 창의 버튼 접근·접기·긴 알림 스크롤, 17개 보존 조건·관련 UI35개·공통 UI1788 tests. 46절 참조. |
+| `6515cde` | 최소 창에서 전체 모델 정보를 펼치면 헤더와 프로필 영역이 설정 본문을 잘린 부모 밖으로 밀어냈다. 짧은 창의 모델 정보 스크롤과 프로필 높이 제한으로 본문 공간을 확보한다. | 실제 최소·짧은 넓은 창·desktop, 입력 포커스·독립 스크롤·13개 geometry/10개 보존 조건·관련 UI96개·공통 UI1788 tests. 49절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -909,3 +911,36 @@ production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 
 조작은 CUA, WebDriver는 읽기 전용 상태·geometry·캡처 관측이다. 실제 화면의 내용·페이지 identity·프레임워크 overlay 없음·관측 error 0과 상호작용을 확인했으며 전체 DevTools console·VoiceOver 검증으로 확대하지 않는다. 제품 소스가 같아 공통 자동 검사나 패키징을 반복하지 않았다. 새로운 모델·대화·프로필·외부 환경을 만들거나 변경하지 않았다.
 
 실제 네이티브 No/Yes 조작, Yes→tools/call→모델 후속 응답과 실제 호출 중 취소는 여전히 blocked다. 별도 승인 owner를 자동 UI 도구가 선택하지 못하며 46절의 No 사용자 확인도 아직 없다. 트레이/Dock·OS 알림 수신의 blocked와 별도 계정·Finder·Keychain·upgrade·Intel/구형 macOS의 unrun, 기존 모델 내용 실패·upstream 제한을 유지한다. **전체 목표·M01–M12 완료를 증명하지 않는다.** raw·캡처·fixture는 ignored tmp에 보존했고 원격 push는 수행하지 않았다.
+
+## 49. 전체 모델 정보를 펼친 최소 창의 설정 본문 접근 수정
+
+목표 재개 후 `ccd29e1`의 실제 native debug 앱에서 승인창과 무관한 모델 설정 흐름을 추가로 검사했다. 원래 Qwen3-VL 실행을 유지하며 CUA로 모델 설정을 열고 native 360×520 / WKWebView 360×488로 줄였다. 전체 모델 정보 9개를 펼치면 헤더 270px, 본문 부모 56px에 대해 프로필 context가 120px를 차지했다. 본문은 top=449/bottom=481px인데 부모 bottom=385px로 모두 잘린 영역 밖이었다. `goal-model-settings-orbit112-expanded-before-20261009.json`/PNG가 근거다. 모델 정보를 접어 우회하는 것을 성공으로 세지 않았다.
+
+수정 `6515cde9372c514f18eeab07abfb653382943d68`은 공통 모델 설정 CSS만 변경한다. 높이 650px 이하에서 헤더의 정보 부분을 최대 25dvh로 제한해 전체 정보를 독립적으로 스크롤하고, Close 버튼은 정보 영역 밖에 유지한다. 이 경우 metadata 내부의 중복 스크롤을 제거한다. 프로필 context는 최대 min(120px, 40%)로 제한하고 기존 스크롤을 유지해 나머지 본문 공간을 확보한다. 큰 창의 기존 배치, engine·profile·option·readiness·실행 계약과 기본값은 변경하지 않는다.
+
+| 실제 범위 | 상태 | 근거와 결과 |
+| --- | --- | --- |
+| 최소 창의 펼친 정보와 본문 | pass | 같은 입력·정보 펼침 상태에서 헤더 139px, 본문 112.20px/top=272.80/bottom=385px로 부모 안에 있다. CUA 본문 스크롤 후 `--limit-mm-per-prompt` textarea 전체 top=294.80/bottom=374.80px가 본문 안이며 hit=true, 실제 포커스도 textarea다. 값을 입력하거나 저장하지 않았다. `goal-model-settings-orbit112-{expanded-after,body-input-focused}-20261009.json`/PNG. |
+| 전체 metadata·프로필·안내의 독립 접근 | pass | CUA로 헤더 정보 scrollTop=219에 도달해 마지막 video 항목까지 확인했다. 본문 scrollTop=488을 보존하고 Close/Unload hit=true다. context scrollTop=50에서 Save profile/Save as new hit=true, Save profile은 원래 실행 중 프로필 보호에 따라 disabled다. footer summary scrollTop=71에서 Supported inputs: text, image를 확인하고 Unload가 계속 보인다. 다른 영역의 스크롤 값은 보존했다. `goal-model-settings-orbit112-{metadata-bottom,profile-actions,footer-inputs}-20261009.json`/PNG. 이 footer 스크롤은 기존 동작의 검증이다. |
+| 정보 접기와 첫 옵션 입력 | pass | 실제 보이는 summary를 클릭해 접고 본문 scrollTop=62에서 `--max-num-seqs` 전체 입력란과 고정 버튼에 접근했다. CUA 클릭의 포커스는 input, hit=true다. `goal-model-settings-orbit112-collapsed-input-focused-20261009.json`/PNG. 첫 숫자 AX summary 클릭은 접히지 않고 정보 영역을 이동시켰으며 현재 캡처 좌표 클릭으로 접었다. 최초 관측도 `collapse-attempt`로 보존했다. |
+| 짧은 넓은 창·원래 desktop | pass | native 1280×520 / WKWebView 1280×488의 펼친 정보에서 본문 130.81px, 원래 native 1280×800 / WKWebView 1280×768에서 133px이다. 본문은 각각 부모 안에 있고 첫 옵션·Close·Unload hit=true다. `goal-model-settings-orbit112-{short-wide-expanded,desktop-expanded}-20261009.json`/PNG. 스크롤을 유지한 상태이며 모든 옵션이 한 번에 표시된다는 뜻은 아니다. |
+| 원래 상태·자료 보존 | pass | CUA로 대화상자를 닫고 원래 Chat/1280×800 창을 확인했다. `goal-model-settings-orbit112-preservation-20261009.json`의 10개 조건에서 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·같은 running PID/engine/model·세션 실행값·API off·idle·빈 composer·관측 error/overlay0을 보존했다. elapsed idle_seconds 증가만 구분했다. `goal-native-audio-resume-orbit111-audit-20261009.json`과 `goal-native-audio-resume-orbit112-final-20261009.json`/PNG를 대조했다. 기존 응답·PP/TG 재표시이며 새 추론은 아니다. |
+
+`goal-model-settings-orbit112-geometry-verification-20261009.json`의 13개 조건이 통과했다. 조작은 CUA이고 WebDriver는 읽기 전용 DOM·geometry·상태·캡처다. 입력 포커스 뒤 CUA AX가 추가 tab을 selected로 표시했지만 실제 DOM의 aria-selected는 Runtime & GPU 하나였으며 설정·탭 선택 변화로 해석하지 않았다. 실제 화면·페이지 identity·프레임워크 overlay 없음·관측 error 0을 확인했지만 DevTools 전체 console·VoiceOver·Windows/Linux의 실제 화면 검증으로 확대하지 않는다. 이번 실제 흐름은 현재 vLLM 모델이며 세 엔진을 다시 실행한 것으로 설명하지 않는다.
+
+`logs/goal-model-settings-orbit112-{related,typecheck,lint,unit,build}-20261009.log`에서 각각 48.04s·12.40s·7.73s·130.58s·12.82s, 종료 0이다. 관련 UI는 3 files/96 tests, 전체 unit은 계약/direct/script·UI 179 files/1788 tests, coverage80.67/75.56/79.08/84.80%다. 기존 jsdom 진단·frontend chunk 경고는 남아 있다. CSS geometry는 실제 WKWebView에서 재현·검증했고 layout을 구현하지 않는 jsdom에 CSS를 그대로 옮긴 검사는 추가하지 않았다. Rust/Python 제품 소스·dependency·lockfile 변경은 없다. staged 파일·실제 diff·개인정보·공백을 검토했고 `goal-model-settings-orbit112-committed-source-20261009.json`의 파일 hash는 커밋과 같다.
+
+추가 재현 결함을 수정한 근거이며 **전체 목표·M01–M12 완료를 증명하지 않는다.** MCP 실제 No/Yes 이후 호출·모델 후속 응답·호출 중 취소, 트레이/Dock·OS 알림 수신의 blocked와 별도 계정·Finder·Keychain·upgrade·Intel/구형 macOS의 unrun, 기존 모델 내용 실패·upstream 제한을 유지한다. 개인 엔진 registry·manifest·adapter는 [장기 설계](pluggable-inference-runtimes.ko.md)이며 아직 구현되지 않았다. raw·캡처·빌드는 ignored tmp에 보존했고 공개 업로드·원격 push는 수행하지 않았다.
+
+## 50. 모델 정보·설정 본문 배치 수정 소스 `6515cde`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `6515cde9372c514f18eeab07abfb653382943d68`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-model-settings-orbit112-package-6515cde-20261009.log`, `logs/goal-native-model-settings-layout-inspect-package-6515cde-20261009.log`, `goal-native-model-settings-layout-package-6515cde-results.json`이 근거다. 빌드 229.41s·검사 4.35s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16776602 bytes, SHA256 `183d7566e534bff430d8ee8880732c08ada9b94036d3a6476d19fa04c58012a1`.
+- GUI `aiolm`: arm64, SHA256 `960ae11273c6a43e6b32e07c220e93a9b01f598236a4d1348a23446b5310a2c1`.
+- CLI `aiolm-cli`: arm64, SHA256 `584cf75be622be1d70f0176f7dca5778741c56526abd8994a8a31f73631d93c7`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG는 `goal-package-6515cde/`에 보존했다.
+
+패키징 후 실제 CUA native Chat 화면을 다시 확인했다. `goal-native-audio-resume-orbit112-postpackage-6515cde-20261009.json`/PNG와 `goal-model-settings-orbit112-postpackage-preservation-6515cde-20261009.json`의 10개 조건에서 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model·세션 실행값·API off·idle·빈 composer·관측 error/overlay0을 보존했다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 49절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
