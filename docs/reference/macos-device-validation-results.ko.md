@@ -9,6 +9,7 @@
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
 - 27절은 `a35defd`에서 재현한 실제 두벌식 확정 Enter·미디어 첨부 그룹 결함과 수정 `47580b8`의 재검증이다. 28절은 해당 소스의 DMG를 기록한다.
+- 29–30절은 `e594c57`의 Discover 배치와 실제 다크 화면, 31–32절은 `7afc07e`의 수동 MCP 진행·취소, 33–34절은 `25d71a5`의 MCP 검색 선택 소유권, 35–36절은 `91ffd3d`의 서버 정의 변경·승인 폐기와 각 소스의 DMG 후속 기록이다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -37,6 +38,10 @@
 | `b523f79` | 진행 중 응답 때문에 Unload가 거부될 때 모델 파일·경로를 확인하라고 잘못 안내했다. 실제 loading/replacing/unloading의 active-response 보호 오류를 먼저 구분하여 현재 응답을 끝내거나 중지한 뒤 재시도하도록 안내한다. | 수정 전 직접 회귀 실패·수정 후 통과, 기존6종 오류 안내 보존·공통 UI1697 tests·실제 MLX 생성 중 Unload 거부와 수정된 안내 확인. backend 보호·readiness·상태 처리 변경 없음. 21절 참조. |
 | `bbd2df6` | 실제 WKWebView의 MCP 인자·JSON 입력에서 스마트 대시/따옴표가 ASCII 실행 인자와 JSON을 바꿨다. 명령·인자·JSON 세 기술 입력의 자동 교정을 끈다. | 수정 전 회귀3개 실패·수정 후 관련7개 통과, 같은 native 입력의 원문 보존·JSON 검토 카드 확인·공통 UI1700 tests. 사용자 문자의 정규화나 승인 정책·MCP API 변경 없음. 23절 참조. |
 | `47580b8` | 실제 두벌식의 확정 Enter가 채팅까지 전송하고 영상 첨부 그룹이 이미지로 안내됐다. 조합·확정·Enter release 상태를 구분하고 그룹에 미디어 이름을 지정했다. | 실제 첫 Enter 입력 보존·다음 Enter 응답, 포인터 클릭 뒤 단일 Enter 응답, native MP4 선택·그룹명·제거·원래 설정 복원. 합성 IME17개·미디어16개와 공통 UI1733 tests 통과. 27절 참조. |
+| `e594c57` | Discover desktop 검색 control과 라벨의 수직 위치가 어긋났다. toolbar 전용 배치를 정렬했다. | 실제 desktop·최소 창·다크 메뉴 배치/대비 표본과 공통 UI1733 tests. 29절 참조. |
+| `7afc07e` | 수동 MCP 호출이 승인 대기에 들어가면 진행·취소 control이 사라졌다. 호출별 공용 작업·로컬 취소·결과 소유권을 유지한다. | 실제 로컬/공용 취소와 승인 process/소유 peer 정리, 합성8개 회귀·공통 UI1741 tests. 승인 이후 실제 실행은 blocked. 31절 참조. |
+| `25d71a5` | 다른 서버 선택 후 이전 검색의 도구/오류가 새 서버에 표시됐다. 검색 세대로 늦은 응답을 폐기한다. | 실제 선택 전환·이전 성공/오류 폐기·현재 실패/재시도·16개 peer 정리, 합성7개 회귀·공통 UI1748 tests. 33절 참조. |
+| `91ffd3d` | 실행 정의를 바꿔 저장한 뒤 이전 도구·검토·승인이 남았다. 정의 변경의 메타데이터/승인·호출 소유권과 저장 응답 선택을 보호한다. | 실제 변경 저장·재검색·같은 정의 재저장·비활성화·승인 대기 취소/소유 PID 정리, 합성13개 회귀·공통 UI1761 tests. 35절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -653,3 +658,37 @@ Lifetime observer의 listener는 제품이 소유한 port가 아니라 검사 �
 - 원본과 같은 해시의 DMG를 `goal-package-25d71a5/`에 보존했다. 기존 패키지·모델·로그는 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
 
 패키지 생성 후 실제 CUA Chat 화면과 `goal-native-audio-mcp-discovery-orbit100-postpackage-25d71a5.json`/PNG, `goal-mcp-discovery-orbit100-postpackage-preservation-25d71a5.json`에서 config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage·같은 running 모델 PID·API off·idle·빈 composer·렌더 오류/overlay 0 보존을 재확인했다. 33절의 검색 조회 통과를 도구 실행 통과로 확대하지 않는다. 기존 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**는 유지한다. 개인 엔진 manifest/adapter 등록은 장기 설계이며 아직 구현되지 않았다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 35. MCP 서버 정의 변경 후 메타데이터·승인·호출 소유권
+
+`4d741e6`에서 실제 UI로 합성 서버의 alpha 정의를 등록·조회·검토한 뒤 실행 인수를 beta로 바꿔 저장했다. 저장된 command preview/인수는 beta였지만 Tools의 alpha 메타데이터·JSON editor·alpha 승인 검토 카드가 남는 제품 결함을 재현했다. `goal-native-audio-mcp-definition-orbit101-before-{stale,visible}-20261008.json`/PNG가 근거다. visible 캡처는 beta preview와 alpha 도구·승인 카드 상단을 함께 보여 주며 모든 승인 버튼이 한 viewport 안에 보였다는 의미는 아니다. 합성 fixture는 stdio 메타데이터만 제공하며 도구 실행이나 network listener를 만들지 않는다.
+
+수정 소스는 `91ffd3d53f886476454b044fe13cde456b5b9119`다. 실행 파일·인수·enabled 상태를 바꾸는 저장 시작 시 이전 검색 세대·선택 세대·도구·검토·결과·해당 서버의 기억된 승인을 폐기하고 기존 호출의 취소를 요청한다. 저장이 실패해도 폐기한 메타데이터를 되살리지 않으며 실제로 저장된 정의를 다시 조회할 수 있다. 이름만 변경하거나 실행 정의가 같은 재저장은 현재 메타데이터·검토를 유지한다. 다른 서버의 승인 기억은 보존한다. 저장 중 중복 쓰기·검색·도구 준비/검토/승인을 막고, 늦은 저장 성공·실패가 새 선택이나 새 draft의 선택 ID·안내·오류를 덮지 않게 한다. 반환된 inventory는 반영하되 editor의 새 선택은 유지한다. 공통 엔진 분기·native 승인/취소 RPC·timeout·공개 API·타입·기본값·Rust/Python·lockfile은 변경하지 않았다.
+
+| 검증 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 수정 전 저장 후 이전 메타데이터·검토 잔류 | fail | beta 정의 저장 후 alpha 도구와 승인 검토 카드가 남았다. 실제 CUA 등록·검색·검토·수정·저장으로 재현했으며 fake IPC/DOM 변경은 사용하지 않았다. |
+| 수정 후 정의 변경·재조회 | pass | 실제 beta 조회·검토→alpha 인수 저장에서 Tools가 비고 검토/JSON editor가 사라졌다. 재조회는 alpha 메타데이터를 반환했다. `goal-native-audio-mcp-definition-orbit101-after-{before-save,clear}-20261008.json`/PNG와 fixture side channel이 근거다. |
+| 정의가 같은 재저장·비활성화 | pass | 실제 alpha 메타데이터·검토를 가진 같은 정의의 재저장은 상태를 유지했다. enabled=false 저장은 메타데이터·검토를 폐기하고 Discover tools를 disabled로 만들었다. `goal-native-audio-mcp-definition-orbit101-{unchanged,disabled}-20261008.json`/PNG. 이름만 변경하는 경우는 합성 회귀 근거다. |
+| 변경 저장으로 네이티브 승인 대기 취소 | pass | 실제 Approve and run once→네이티브 승인 대기에서 합성 MCP owner와 해당 승인 process 생존을 확인했다. beta 인수 저장 후 Cancelled·빈 Tools와 두 PID 부재를 확인했다. `goal-mcp-definition-orbit101-call-{pending,cancelled}-20261008.json`, `goal-native-audio-mcp-definition-orbit101-call-cancelled-20261008.json`/PNG. call metadata 응답 약 31.15초 후 부재이며 기존 120초 approval deadline 정리가 아니다. native Yes/No 응답이나 tools/call 실행 중 취소 결과는 아니다. |
+| 저장 실패·늦은 응답·승인 기억·중복 저장 | pass | `Mcp.definition.test.tsx`의 합성 13개 회귀 범위다. 명령/인수/enabled 변경, name-only 보존, 실패 후 재검색, pending 검색 결과 폐기, 이전 승인/결과 폐기와 다른 서버 승인 보존, owned call 취소, 늦은 저장 성공/실패·새 draft 보존, 저장 중 준비/검색/승인·중복 쓰기 방지를 검사했다. 이 비동기 순서 전체를 실제 네이티브에서 실행한 것으로 세지 않는다. |
+| 소유 자원·외부 데이터 | pass | `goal-mcp-definition-orbit101-source-ui-audit-20261008.json`은 fixture의 다섯 stdio session process PID 부재와 unexpected method 0을 확인한다. 네 번의 조회와 한 번의 호출 준비용 조회이며 실제 tools/call은 0이다. fixture는 자식·listener를 생성하지 않으므로 이 검사를 새로운 descendant/port 정리 검증으로 확대하지 않는다. |
+| 기존 환경 복원 | pass | `goal-mcp-definition-orbit101-restoration-20261008.json`, `goal-native-audio-mcp-definition-orbit101-restored-20261008.json`/PNG. baseline과 config 전체 SHA256·35개 대화 목록/해시·localStorage·같은 running 모델 PID·API off·idle·빈 composer·render error/overlay 0이 같다. 기존 네 서버는 정확히 유지하고 이번 합성 서버만 disabled로 UI 저장했다. MCP 정의 파일 전체가 변경되지 않은 것으로 설명하지 않는다. |
+
+Browser plugin이 제공되지 않아 실제 Tauri WKWebView `localhost:1420`과 CUA 입력·읽기 전용 WebDriver 상태/PNG를 사용했다. native 1280×800·web 1280×768에서 의미 있는 앱 내용·실제 interaction·수집된 render error/overlay 0을 확인했다. HMR 후 패널 상태가 초기화된 것을 수정 통과로 세지 않고, 저장된 beta 서버를 다시 선택·조회·검토한 뒤 변경 저장을 재실행했다. 이번 변경은 CSS 배치 수정이 아니며 다른 viewport·모든 scroll/popover·언어·VoiceOver의 통과로 확대하지 않는다. 최초 관측 감사 helper가 input의 aria-label을 가정해 실패한 것은 관측기 오류다. 실제 wrapped-label 입력은 그 속성이 없어 고유 합성 인수 값과 도구 설명·검토 카드의 존재를 읽는 감사로 보완했으며 제품 상태나 UI를 변경하지 않았다.
+
+수정 전 최초 10개 회귀는 9 fail/1 pass, 수정 후 관련 MCP/TaskStrip 6 files/46 tests 종료 0이다. 후속 3개 회귀를 추가한 최종 전체 UI는 176 files/1761 tests·coverage 80.59/75.34/78.98/84.72%다. `logs/goal-mcp-definition-orbit101-{regression-before,related-after,typecheck,lint,unit,build}-20261008.log`에 보존했다. typecheck·lint·unit·build는 모두 종료 0이며 각각 15.15s·9.21s·136.97s·18.36s다. 기존 jsdom pseudo-element/canvas 진단과 500kB chunk 경고는 유지한다. `goal-mcp-definition-orbit101-committed-source-20261008.json`은 관측 소스 두 파일과 수정 커밋의 정확한 바이트 일치를 확인한다.
+
+34절까지 남은 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**를 유지한다. 승인 대기 취소 통과를 native Yes/No→실제 도구 호출→모델 후속 응답의 통과로 바꾸지 않는다. 개인 엔진 registry·manifest·adapter는 미구현 장기 설계다. 공개 업로드·원격 push는 수행하지 않았다.
+
+## 36. MCP 정의 변경 수정 소스 `91ffd3d`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `91ffd3d53f886476454b044fe13cde456b5b9119`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-mcp-definition-package-91ffd3d.log`, `logs/goal-native-mcp-definition-inspect-package-91ffd3d.log`, `goal-native-mcp-definition-package-91ffd3d-results.json`이 근거다. 빌드 230.16s·검사 3.28s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16774584 bytes, SHA256 `bfe15b4a02ffda541afffc812e35e9fe912b5d808c6b39035b98f5175a54dd9a`.
+- GUI `aiolm`: arm64, SHA256 `9deaa38aaab0e7f32da06be058593c497d66901e9774668cdd03b00f651a7a3b`.
+- CLI `aiolm-cli`: arm64, SHA256 `e64f24ca44c8108a9612144fe7d09db33b63fef740946dd71b1d160a196fa98d`.
+- GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE의 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다.
+- 원본과 같은 해시의 DMG를 `goal-package-91ffd3d/`에 보존했다. 기존 패키지·모델·로그는 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
+
+패키지 생성 후 실제 CUA Chat 화면과 `goal-native-audio-mcp-definition-orbit101-postpackage-91ffd3d.json`/PNG, `goal-mcp-definition-orbit101-postpackage-preservation-91ffd3d.json`에서 config 전체 SHA256·35개 대화의 목록/해시·localStorage·같은 running 모델 PID·API off·idle·빈 composer·render error/overlay 0과 복원된 MCP inventory 보존을 재확인했다. 이 화면의 모델명·TG와 PP 미제공 표시는 기존 응답의 재표시이며 이번에 새 추론을 실행한 결과가 아니다. 35절의 취소 통과를 승인 이후 도구 실행 통과로 확대하지 않는다. 기존 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**는 유지한다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
