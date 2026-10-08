@@ -5,7 +5,7 @@
 ## 1. 소스·환경·근거
 
 - 실행일: 2026-10-07–08 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
-- 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
+- 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`, 최신 잔여 범위의 기록이며 해당 소스의 DMG는 20절에 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
@@ -31,6 +31,7 @@
 | `0424ab5` | 최종 SSE 측정값과 실행 모델 이름이 누락되고 작은 창에서 답변·첨부가 가려짐. 채팅 지표·모델 식별·스크롤·picker 배치를 수정했다. 프로젝트 저장 실패·문서 읽기, 대화 hydration·첨부 순서, MCP 도구 선택·오류 보존도 수정했다. | 실제 Metal 새 한국어 답변·PP/TG, 33개 WKWebView 화면, 프로젝트 실패/재시도, Provider HMR, MCP 오류 보존과 관련 합성 회귀 검사. 12절 참조. |
 | `533b450` | 대화 삭제 후 마운트된 Chat이 옛 내용을 복원하고 포트 저장 중 Stop이 뒤늦은 재시작에 덮였다. 삭제 barrier·turn 무효화·API action revision을 적용했다. 진단의 실행 runtime, 벤치 이력·Copy, snapshot 이름·재시도 안내, 좁은 창의 실행·취소 버튼과 엔진 입력 표시도 수정했다. | 합성 회귀·UI1688 tests, 실제 Metal 새 답변·재로드 PP/TG, 격리 WKWebView 삭제/Stop, 24개 설정 화면·진행 카드. 14절 참조. |
 | `0709eda` | 실행 영역·provider 목록·진단 로그·llama.cpp export의 이름을 role 없는 요소에 지정하여 유효한 접근성 이름 의미가 없었다. 컨트롤 묶음에 group, 기존 포커스 가능한 진단에 비실시간 region을 지정했다. | 수정 전 실패·수정 후 회귀, UI1690 tests와 실제 WKWebView의 11메뉴·고급 export 재검사. 모델·설정 보존과 현재 light Chat의 gradient 대비를 한정해 확인했다. 17절 참조. |
+| `5fd5e82` | native 알림 요청을 제출할 수 있는 상태를 Allowed로 표시해 macOS의 실제 승인을 확정한 것처럼 안내했다. Ready to send와 첫 알림의 OS 권한 안내, 전달 성공을 단정하지 않는 test 제출 문구로 바꿨다. | 수정 전 실패·수정 후 4 files/36 tests, 공통 UI1697 tests 및 실제 CUA의 Ready/제출 화면·모델/설정 보존. OS test 본문 수신은 여전히 blocked다. 19절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -47,10 +48,10 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
 | M06 | pass | 실제 snapshot 취소/재시도, 고정 GGUF, 공개 3-shard 전체 GUI 다운로드/해시/한 항목/CPU 추론, 두 GGUF와 공유 companion 다운로드/재사용·다른 primary 삭제 후 보존. 활성/선택 draft·LoRA·named split 보호, 외부 파일·case-sensitive APFS·한글/공백·권한·FAT 불완전 상태 확인. |
 | M07 | fail | OS 이미지/WAV/MP4 선택·내용/usage·immutable 기록/재로드·실패 후 Retry·엔진 변경, 명시적 STT/frames·ffmpeg UI Stop, 비-WAV Whisper 전사/번역·ASR 전사. URI500, native SmolVLM 내용 오답, Gemma3n upstream snapshot 실패 유지. ffmpeg 부재의 실제 앱 검사는 blocked. |
-| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. MCP 승인창·Cancel/quit 정리 통과. 별도 osascript Yes/No→실제 tool/후속 답변은 조작 차단. |
+| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리 통과. Yes/No→실제 tool/후속 답변·호출 중 취소는 아직 미검증이다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
-| M11 | blocked | 최종 arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. IME composition·clipboard Copy·Dock/트레이는 blocked/unrun. 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 알림 안내 수정·OS 제출은 통과했으나 이 검증에서 OS 권한을 결정하지 않았고 후속 OS 상태·실제 수신은 미확인/blocked다. IME composition·Dock/트레이·promised/unreadable clipboard 포맷은 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
 | M12 | blocked | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. MCP 승인 후 실제 호출 중 취소는 승인창 조작 차단으로 미검증. |
 
 ## 4. 초기 기기 검증의 공통 자동 검사 (`6261d0b`)
@@ -174,8 +175,10 @@ RSS는 `pti_resident_size` process-group resident memory다. 모든 unified-memo
 
 ## 10. 남은 검사와 다음 작업
 
+다음은 초기 기기 검증 시점의 기록이다. 이후 실제 Copy·PDF/폴더 picker·macOS 확대 버튼의 한정된 통과와 현재 잔여 범위는 19절을 우선한다. 원래 차단 근거는 보존한다.
+
 - **별도 OS 계정에서 unrun:** 최초 GUI 실행, Keychain 허용/거부/취소/갱신 재승인, 자연스러운 Finder 설치·첫 실행, 실제 과거 버전 upgrade/legacy 이전. 격리 HOME의 GUI v12 이전과 구분한다.
-- **현재 조작 수단 blocked:** 별도 osascript MCP Yes/No→실제 tool/후속 답변·호출 중 취소, 한글 IME composition 중 Enter, clipboard Copy/모든 포맷 복원, Dock/트레이 Show/Quit. 기존 앱 파일 picker와 paste/normal Quit은 완료했다. OSAX 직접 조작 probe는 신뢰할 수 있는 실행 근거를 제공하지 않았고 CUA는 해당 별도 osascript 창을 선택하지 못했다. OS 접근성·자동화 권한은 변경하지 않았다.
+- **당시 조작 수단 blocked:** 별도 osascript MCP Yes/No→실제 tool/후속 답변·호출 중 취소, 한글 IME composition 중 Enter, clipboard Copy/모든 포맷 복원, Dock/트레이 Show/Quit. 기존 앱 파일 picker와 paste/normal Quit은 완료했다. OSAX 직접 조작 probe는 신뢰할 수 있는 실행 근거를 제공하지 않았고 CUA는 해당 별도 osascript 창을 선택하지 못했다. OS 접근성·자동화 권한은 변경하지 않았다. 이후 실제 Copy와 당시 원본 snapshot 복원은 19절에서 통과했으며 모든 포맷 복원으로 확대하지 않는다.
 - **실제 ffmpeg 부재 blocked:** 정상 PATH 복구가 기존 설치를 찾음. 설치를 숨기거나 제품 PATH 복구를 끄지 않고 부재 상태를 검증할 별도 환경 필요.
 - **실제 fail 유지:** 직접 Metal/MLX URI 이미지500, SmolVLM native projector의 알려진 시각 내용 오답, 고정 Gemma3n native-audio snapshot의 누락 shard index. upstream/model 수정 후 해당 흐름을 다시 실행해야 한다.
 - **실기기 없이 unrun:** Intel 및 macOS13.3–15. 이 결과로 다른 architecture/minimum OS 성공을 추정하지 않는다.
@@ -252,7 +255,7 @@ RSS는 `pti_resident_size` process-group resident memory다. 모든 unified-memo
 | 작은 창의 실행 버튼 | pass | 390×600 창에서 Unload가 footer의 스크롤 아래로 가려졌다. 요약만 스크롤하고 실행 버튼은 footer에서 항상 보이도록 바꿨다. `goal-model-footer-before.json`의 버튼 하단606/viewport568이 수정 후 `goal-model-footer-after.json`에서551로 들어왔으며 본문 높이114는 유지했다. `goal-model-dialog-final-proof.json`, `logs/goal-next-model-dialog-final-fixed.log`의 8개 편집기 section×1280×800/960×640/390×600, 24개 실제 화면에서 버튼 표시·가로 넘침 없음·overlay/렌더 오류0·실제 모델 프로세스 보존을 확인했다. 모든 옵션의 실행 순열을 뜻하지 않는다. |
 | 엔진별 Supported inputs | pass | artifact의 일반 video 표기가 Metal의 실제 미지원 video까지 노출하던 문제를 수정했다. 선택 provider의 supported/partial compatibility에 선언된 입력만 표시한다. Metal/MLX 두 합성 회귀와 실제 Metal의 text/image 표시를 확인했다. `goal-footer-modalities-before.json`, `logs/goal-next-modalities-repro.log`, `logs/goal-next-modalities-fixed.log`, 최종24화면 JSON이 근거다. |
 | 다운로드 진행 카드 | pass | 390×600에서 bytes·속도·Cancel 영역이 카드 오른쪽을 넘는 결함을 수정했다. 실제 WKWebView에 합성 progress event를 전달해101/120GiB·1.76GiB/s·Cancel의 줄바꿈을 확인했다. `goal-discover-progress-before.json`의 cardOverflow=true가 `goal-discover-progress-after-rate.json`에서 false로 바뀌었으며 body 넘침·렌더 오류도 없었다. `logs/goal-discover-progress-regression.log`의 관련3 files/38 tests가 통과했다. 실제101GiB 다운로드 또는 취소 IPC 실행 근거가 아니다. |
-| 실제 Settings 알림 제출 | pass | `goal-next-notification-proof.json`, `logs/goal-next-native-notification.log`. 현재 개발 앱의 Settings→Notifications에서 native 권한 상태 Allowed와 Send test notification을 확인하고 실제 버튼으로 제출했다. native IPC 성공 안내와 모델/PID 보존·렌더 오류0을 확인했다. 제품 기본 설정은 바꾸지 않았다. 성공은 OS 제출이며 배너 표시·알림 센터 수신을 확인한 결과가 아니다. |
+| 실제 Settings 알림 제출 | pass | `goal-next-notification-proof.json`, `logs/goal-next-native-notification.log`. 당시 개발 앱의 Settings→Notifications에서 앱이 표시한 Allowed와 Send test notification을 확인하고 실제 버튼으로 제출했다. native IPC 성공 안내와 모델/PID 보존·렌더 오류0을 확인했다. 제품 기본 설정은 바꾸지 않았다. 성공은 OS 제출이며 배너 표시·알림 센터 수신을 확인한 결과가 아니다. 19절에서 macOS 권한 미결정 안내와 Allowed 표시의 혼동을 실제 확인했다. |
 | 메뉴 접근성 자동 검사 | pass | 실제1280×800 WKWebView의 11메뉴 기본 화면에서 axe-core WCAG2A/AA·2.1AA·2.2AA 자동 확인 규칙의 violations가0이었다. `goal-native-accessibility-before.json`, `logs/goal-next-accessibility.log`. 설정 편집기·모든 메뉴의 전체 조작 여정·키보드/VoiceOver 검사로 확대하지 않는다. |
 | 접근성 수동 판정 | unrun | 같은 JSON의 aria-prohibited-attr와 color-contrast는 incomplete가 남아 있다. 자동 위반0을 전체 접근성 통과로 해석하지 않으며 해당 노드의 수동 판정·실제 보조기기 검사는 남아 있다. |
 
@@ -262,16 +265,16 @@ RSS는 `pti_resident_size` process-group resident memory다. 모든 unified-memo
 
 ## 15. 원래 기기 검증의 잔여 범위
 
-이번 합성/화면 검사는3절의 전체 항목 판정을 바꾸지 않는다. 완료 근거가 있는 M01·M02·M05·M06·M09·M10은 유지하며, 후속 소스에서 관련 화면·저장·전송을 위 범위로 다시 검사했다. 다른 engine/modality·모든 여정·모든 OS의 전체 반복이 완료됐다는 근거는 없다.
+이 표는 `533b450` 검증 시점의 잔여 기록이다. 이후 실제 Copy·PDF/폴더 picker·macOS 확대 버튼의 한정된 통과와 알림 권한·수신 재관찰은 19절에 연결한다. 완료 근거가 있는 M01·M02·M05·M06·M09·M10은 유지하며, 후속 소스에서 관련 화면·저장·전송을 위 범위로 다시 검사했다. 다른 engine/modality·모든 여정·모든 OS의 전체 반복이 완료됐다는 근거는 없다.
 
-| 관련 ID | 상태 | 필요한 실제 후속 검사 |
+| 관련 ID | 당시 상태 | 당시 잔여 범위와 후속 근거 |
 | --- | --- | --- |
 | M03·M04·M07 | fail | 직접 Metal/MLX file URI 이미지500, SmolVLM native projector의 알려진 이미지 내용 오답, 고정 Gemma3n native-audio snapshot의 누락 shard index는 미해결이다. upstream/model 수정 후 실제 내용·usage·기록/재로드/재시도 흐름을 다시 검사한다. |
 | M07 | blocked | 정상 PATH 복구가 기존 ffmpeg를 찾으므로 실제 ffmpeg 부재의 앱 안내·준비 실패/취소를 검증할 별도 환경이 필요하다. 기존 설치를 숨기거나 PATH 정책을 끄지 않는다. |
 | M08·M12 | blocked | 별도 native osascript MCP Yes/No→실제 tools/call→후속 답변, 승인 후 실제 호출 중 취소·자식/포트 정리. Cancel/승인 대기 취소와 합성 승인/호출 회귀를 실제 승인 성공으로 확대하지 않는다. |
-| M11 | blocked | 한글 IME composition 중 Enter, 실제 Copy와 기존 pasteboard 전체 포맷 보존/복원, Dock/트레이 메뉴를 통한 Show/Quit·재열기. 실제 paste·닫기/hide·두 번째 실행 restore·normal Quit·기존 OS 파일/저장 picker 성공과 구분한다. |
+| M11 | blocked | 당시 한글 IME composition 중 Enter, 실제 Copy와 기존 pasteboard 전체 포맷 보존/복원, Dock/트레이 메뉴를 통한 Show/Quit·재열기가 남았다. 실제 paste·닫기/hide·두 번째 실행 restore·normal Quit·기존 OS 파일/저장 picker 성공과 구분한다. 실제 Copy와 확인된 원본 snapshot 복원은 이후 19절에서 통과했다. IME·Dock/트레이·임의 포맷은 남아 있다. |
 | M11 | unrun | 별도 OS 계정의 최초 실행·Keychain 허용/거부/취소/수정/삭제·업데이트 재승인·실제 과거 버전 upgrade/legacy 이전, 자연스러운 Finder DMG 설치/첫 실행. Finder/launchd PATH의 MCP·CMake 탐색과 실제 다운로드 quarantine/첫 실행 경고·시스템 설정 열기 경로도 필요하다. |
-| M11 | unrun | PDF/폴더 picker·OS 알림 배너 표시·macOS 창 확대 버튼 조작은 이 결과 문서에서 실제 실행 근거가 확인되지 않았다. 이미 검증한 이미지/음성/영상/Markdown/JSON/CSV/XLSX/LoRA picker와 취소, 세 창 크기·resize의 근거와 별도로 남긴다. |
+| M11 | unrun | 당시 PDF/폴더 picker·OS 알림 배너 표시·macOS 창 확대 버튼 조작의 실제 근거가 없었다. 이미 검증한 이미지/음성/영상/Markdown/JSON/CSV/XLSX/LoRA picker와 취소, 세 창 크기·resize와 구분한 기록이다. PDF/폴더와 실제 확대 버튼은 이후 19절에서 통과했다. OS test 알림의 실제 수신·후속 OS 상태 확인은 19절에서도 blocked로 남는다. |
 | M11·기기 범위 | unrun | Intel과 macOS13.3–15 실기기. bundle의 arm64·minimum OS13.3 선언이나 현재 macOS 성공으로 대신하지 않는다. |
 
 Metal PP 시간 미제공, embedding/STT의 chat 미지원과 일부 deep comparison의 partial/unsupported는 기존 의미를 유지한다. 공개 benchmark 업로드는 사용자 범위에서 제외되며 로컬 계약 검사를 서비스 수락으로 간주하지 않는다. Developer ID/공증과 Force Quit/SIGKILL 복구·다른 사용자 single-instance 개선은 인계 문서의 별도 배포 결정/알려진 제한으로 남긴다.
@@ -324,3 +327,52 @@ GGUF는 llama.cpp 전용으로 제한된 포맷이 아니다. 현재 검증한 [
 - raw 복사본은 `goal-package-0709eda/`에 보관했다. 이전 소스의 raw DMG·로그·검사 자료를 보존했다.
 
 이 검사는 Finder 설치·첫 GUI 실행·quarantine·별도 계정 Keychain·실제 upgrade를 대신하지 않는다. 15절의 잔여 범위와 17절의 수동 접근성 범위를 유지한다. 개발 앱과 선택된 Metal 모델은 실행 상태로 유지했다. 코드·검사·문서만 커밋하고 raw 자료와 build output은 Git 제외 상태로 두었으며 원격 push는 수행하지 않았다.
+
+## 19. 실제 macOS 창·picker·Copy·gateway·알림 후속 검증
+
+실제 Tauri WKWebView를 포함한 임시 debug 앱 bundle을 네이티브 CUA로 조작하고 원본 캡처·저장 파일·HTTP 응답을 읽어 확인했다. 창·picker·gateway의 검증 소스는 `0709eda82771043c83de5f3950fd5dc49c6dd2a9`이며, 알림 안내 수정과 이후 실제 화면·clipboard 검증의 소스는 `5fd5e826705dc76beda11674764f5ad586ea20dc`다. production DMG의 Finder 설치나 별도 계정의 최초 실행으로 확대하지 않는다.
+
+| 실제 후속 항목 | 상태 | 확인한 범위와 원본 근거 |
+| --- | --- | --- |
+| 실행 모델·원본 대화 보존 | pass | `goal-native-continuation-restored-proof.json`, `goal-native-picker-validation-results.json`. 기존 native 대화22개 파일의 개별 SHA256과 재실행 직후 전체 digest가 같았고 이후 PDF 합성 대화 한 개만 추가됐다. 같은 vllm-metal·Qwen3-VL 모델의 running 상태와 HTTP readiness를 확인했다. 실제 Save profile & start로 공용 프로필 저장소·한 프로필·한 적용 binding의 revision만 증가했으므로 재실행 전 설정 전체가 동일하다고 주장하지 않는다. 프로필 내용·모델 선택·실행 값은 유지됐다. |
+| macOS 창 확대·복원 | pass | 실제 macOS green-button 확대와 되돌리기 후 WKWebView viewport가1280×768→1920×928→1280×768로 복원됐다. `goal-native-window-before.json`, `goal-native-window-zoomed.json`, `goal-native-window-restored.json` 및 같은 이름의 PNG, picker 검증 JSON에서 같은 실행 모델·프로세스와 overlay/렌더 오류0을 확인했다. WebDriver resize나 fullscreen 검사가 아니다. |
+| PDF OpenPanel 취소·선택·내용 응답 | pass | 실제 OpenPanel Cancel에서 첨부와 입력이 비어 있었고 다시 Go To/Open으로 합성 `synthetic-text-orbit-92.pdf`를 선택해 질문을 입력·전송했다. 응답에 ORBIT-92와 파란 원이 빨간 사각형 왼쪽이라는 내용이 들어갔다. PDF 이름·추출 텍스트·인용·모델·usage가 새 대화에 저장됐고 원본 PDF SHA256은 불변이었다. `goal-native-window-picker-cancel.json`, `goal-native-window-picker-loaded.json`, `goal-native-window-pdf-response.json`, picker 검증 JSON이 근거다. PDF의 텍스트 추출·문서 context 검증이며 그림을 모델이 시각적으로 읽었다는 근거는 아니다. |
+| PDF 답변 재로드·usage | pass | `goal-native-window-pdf-reloaded.json`과 응답 캡처에서 같은 내용·인용·지표를 재확인했다. 실제 PP94 tokens·TG21 tokens, TG0.88 s·22.7 tok/s가 저장·표시됐다. runtime이 제공하지 않은 PP phase 시간·속도는 `—`로 표시했다. first-token 관측 시간을 PP phase로 계산하지 않았다. |
+| 모델 폴더 Browse·취소·복원 | pass | 실제 Browse→Cancel에서 직전 설정이 같았다. 합성 빈 폴더를 Go To/Open으로 선택했을 때 모델 경로 키만 바뀌고 Models0/no models found가 표시됐으며 다시 원래 폴더를 선택한 뒤 Models7과 직전 설정이 복원됐다. `goal-native-window-folder-before.json`, `goal-native-window-folder-cancel.json`, `goal-native-window-folder-empty.json`, `goal-native-window-folder-restored.json` 및 picker 검증 JSON에서 실행 값·모델 프로세스 유지와 overlay/렌더 오류0을 확인했다. 이 설정 일치는 폴더 검사 직전 snapshot 기준이다. |
+| Chat의 초기 Copy·원본 clipboard 복원 | pass | `goal-native-clipboard-chat-results.json`, picker 검증 JSON. 합성 답변의 실제 Copy 버튼을 클릭해 Copied 표시와 복사 텍스트 일치를 확인했다. 원래 clipboard 한 item/한 representation의 전체 snapshot을 복원·재확인했으며 원본 내용은 로그나 파일에 저장하지 않았다. fixture는 두 item/세 representation으로 준비했다. 이 단계는 Copy 근거이며 실제 Cmd+V와 다중 포맷 복원은 다음 후속 검사에서 확인했다. |
+| 실제 Cmd+V·Copy·다중 포맷 복원 | pass | `goal-native-clipboard-multiformat-results.json`, `goal-native-clipboard-paste-ui.json`, `goal-native-clipboard-restored-ui.json`, `logs/goal-native-clipboard-paste-observe-final.log`, `logs/goal-native-clipboard-restored-observe-final.log`. 메모리 안의 중첩 snapshot으로 합성 두 item/세 type·95 bytes(plain text·HTML·custom binary)를 준비했다. 실제 Cmd+V의 입력 일치·미전송과 읽기 전용 snapshot 검사의 stable/matched/clipboard 쓰기 없음을 확인했다. 입력 삭제 뒤 실제 Copy의 Copied 표시와 예상27-byte 텍스트 일치를 확인하고 합성 item/type/data의 순서를 포함해 모두 복원한 뒤 원본 한 item/한 type도 복원·검증했다. 두 helper 종료0·finally 추가 clipboard 쓰기 없음·원본 clipboard 내용 출력/저장 없음이 확인됐다. snapshot 복원은 검사 helper의 보호 절차이며 앱 Copy가 이전 clipboard를 보존하는 제품 기능이라는 의미는 아니다. IME·promised/unreadable 또는 임의 모든 포맷은 unrun이다. |
+| gateway SSE 연결 종료·후속 응답 | pass | `goal-native-gateway-continuation-results-2026-10-08T02-23-06-424Z.json`에서 실제 HTTP200/event-stream·첫 delta 후 client 연결을 종료하고 active requests0→1→0, 같은 모델의 후속 READY 응답 HTTP200과 usage14+2=16을 확인했다. 이 원본 통합 결과는 뒤의 임시 adapter 검사 오류 때문에 fail이며 stream 하위 결과는 pass다. 최신 `goal-native-gateway-continuation-results-2026-10-08T02-28-20-882Z.json`은 원본 SHA256과 동일 앱·모델을 확인하여 이 스트림 근거를 연결했다. 최신 단계에서 스트림을 다시 실행한 것으로 계산하지 않는다. |
+| Responses/Messages 미디어 오류 형식 | pass | 위 최신 gateway JSON에서 Responses input_audio/input_video, Messages audio/video의 네 실제 요청이 HTTP400·JSON으로 거부됐다. Responses는 error.code=invalid_request와 error.type=invalid_request_error, Messages는 top-level type=error와 error.type=invalid_request_error를 확인했다. Messages에 없는 error.code를 요구한 이전 임시 검사 가정을 바로잡았고 원본 fail을 보존했다. 각 요청 후 active requests0, 검사 전후 설정 digest와 실행 모델이 같았다. 미지원 adapter 입력의 오류 계약 검사이며 native audio/video 추론 성공이 아니다. |
+| 수정 전 OS test 알림 제출·권한 안내 | pass | `goal-native-notification-os-before.json`. 실제 Settings의 Send test notification을 눌러 native IPC 성공 안내를 확인했다. macOS는 Allow/Don’t Allow가 있는 권한 미결정 안내를 표시했고 Close만 눌러 창이 닫힌 것을 확인했다. 계정의 알림 권한을 결정하거나 시스템 설정을 바꾸지 않았다. 이때 앱의 Allowed 표시는 실제 macOS 승인을 확정하지 못해 혼동을 주는 제품 결함이었다. |
+| 수정 후 실제 알림 안내·제출 | pass | `goal-native-notification-after-ready.json`, `goal-native-notification-after-submitted.json` 및 같은 이름의 PNG, `logs/goal-native-notification-after-ready.log`, `logs/goal-native-notification-after-submitted.log`. 실제 CUA로 Notifications의 Ready to send와 첫 알림의 OS 권한 안내를 확인하고 Send test notification을 눌러 submitted 성공 피드백을 확인했다. 카테고리 세 toggle off·직전 폴더 검사 기준 설정 일치·같은 모델·API off·overlay/렌더 오류0을 보존했다. 일반 알림의 기본값을 바꾸거나 OS 권한을 승인하지 않았다. |
+| 실제 test 알림 수신 | blocked | 수정 전후 test 제목·본문 수신은 관찰되지 않았다. `goal-native-notification-center-after-observation.json`의 공식 NotificationCenter 재관찰 두 번도 timeoutReached로 끝났다. 이 검증에서 OS 권한을 결정하거나 시스템 설정을 바꾸지 않았으나 후속 OS 권한 상태를 확정하지 못했다. 수정 전 권한 미결정 안내의 근거는 보존하고 실제 배너/알림 센터 수신은 미확인으로 남긴다. Ready to send와 native 제출 성공, OS 권한 안내 표시를 test 본문 전달 성공으로 세지 않는다. |
+| 후속 소스의 원래 Chat·저장 자료 보존 | pass | `goal-native-notification-final-proof.json`, `goal-native-notification-final-chat.png`, `logs/goal-native-notification-final-check.log`. 소스 `5fd5e82`에서 원래 ORBIT-84 대화와 답변·response model·PP/TG 표시·빈 입력을 확인했다. 원본22개 대화 파일의 모든 SHA256이 같고 총23개 중 추가분은 앞서 만든 합성 PDF 대화 한 개뿐이었다. 폴더 검사 직전 설정 일치·같은 실행 모델·running·API off/active requests0·overlay/렌더 오류0을 확인했다. package 빌드 후에도 실제 CUA로 같은 Chat을 다시 확인하고 `goal-native-notification-after-package-proof.json`, `goal-native-notification-after-package-chat.png`, `logs/goal-native-notification-after-package-check.log`에서 설정·실행·원본 해시·대화 수·빈 입력·오류 없음이 보존된 것을 재확인했다. |
+| Gemma4 audio 준비 | pass | `goal-native-audio-gemma4/pinned-metadata.json`, `goal-native-audio-gemma4/processor-preflight.json`, `goal-native-audio-gemma4/snapshot-verification.json`. 공개 `mlx-community/gemma-4-E2B-it-4bit`의 전체 revision `238767527555cb75a05732a84dff5d6ba0dd6809`를 고정했다. 설치된 mlx-vlm0.7.6의 gemma4 loader·Gemma4Processor/Gemma4AudioFeatureExtractor와 합성 음성 preprocessing을 먼저 확인했다. 이 preflight는 sidecar9개를 검사하고 가중치를 다운로드하거나 모델을 생성하지 않았다. 이후 전체 snapshot10개 파일·3,583,088,661 bytes의 해시와 누락 shard 없음이 확인됐다. 기존 Gemma3n 자료는 변경하지 않았다. |
+| Gemma4의 실제 native 음성 추론 | unrun | 전체 snapshot 검증의 model_start는 unrun이다. 아직 실제 모델 시작·음성 내용·usage·기록/재로드·재시도·취소를 검증하지 않았다. 이 준비 성공으로 기존 Gemma3n 누락 shard 실패나 M04/M07을 통과 처리하지 않는다. |
+
+gateway 검사 후 API server는 네이티브 CUA의 Stop으로 off 상태에 복원했고 같은 모델의 실행을 유지했다. 별도 `goal-native-gateway-restored-proof.json`, `logs/goal-native-gateway-restored-final.log`의 종료0에서 API off·소유 gateway 포트 닫힘·active requests0·직전 설정 정확한 복원·모델 실행 보존·실제 stopped 화면을 확인했다. 이 단계는 앞선 gateway JSON의 스트림·adapter 근거에 포함된 것으로 계산하지 않는다. 초기 `logs/goal-native-gateway-restored.log`는 공통 검사 중 Vite reload로 Chat으로 이동해 stopped 문구를 찾지 못한 검사 순서 오류였고 API/설정/모델/포트 검사는 이미 통과했다. 원본 실패 로그를 보존하고 실제 API 화면에서 다시 확인했다.
+
+알림 수정 전 `logs/goal-native-notification-copy-before.log`의 회귀 실패11개와 수정 후 `logs/goal-native-notification-copy-after.log`의 관련4 files/36 tests를 보존했다. 영어·한국어·일본어·중국어에서 제출 가능 상태와 OS 승인/전달의 차이, 카테고리 off 중 test 제출을 확인했다. 최종 `npm run typecheck`, `npm run lint`, `npm run test:unit`, `npm run build`는 모두 종료0이었다. `logs/goal-native-notification-{typecheck,lint,unit,build}-final.log`가 근거이며 계약/direct/script 검사를 포함해 UI171 files/1697 tests·coverage statements80.27% / branches75.12% / functions78.63% / lines84.41%가 통과했다. 변경은 알림 관련 소스·검사5개 파일이며 Rust/Python·lockfile 변경은 없었다. 기존 frontend500kB chunk 경고는 남아 있다.
+
+clipboard의 초기 `logs/goal-native-clipboard-paste-observe.log`는 존재하지 않는 `.chat-composer textarea`를 가정한 임시 관찰 도구 오류였다. 실제 native paste와 읽기 전용 전체 snapshot 비교는 통과한 상태였으며 최종 관찰은 실제 aria-label selector로 확인했다. 원본 오류 로그를 보존하고 제품 실패나 추가 성공으로 계산하지 않는다.
+
+10·15절의 당시 clipboard Copy·PDF/폴더·green-button 미실행 기록은 위 한정된 실제 검증으로 이어진다. 합성 다중 포맷의 복원을 임의 clipboard 포맷 전체로 확대하지 않으며 IME와 다른 OS 여정은 남아 있다. 모든 raw JSON·PNG·합성 PDF·모델·원본 실패 자료는 `tmp/macos-acceptance/`에 보존하고 개인 경로·실행 식별자·포트·설정 값·clipboard 원문은 이 문서에 복사하지 않았다. 공개 업로드나 원격 push는 수행하지 않았다.
+
+현재 계정에서 후속으로 시도할 범위는 MCP Yes/No→실제 tools/call→후속 답변 및 호출 중 취소·소유 자식 정리, 한글 IME composition 중 Enter, Dock/트레이 Show/Quit·재열기, 두 모델을 실제 전환하는 프로필 여정, Gemma4 native 음성 추론이다. 알림은 이 검증에서 OS 권한을 결정하지 않았고 후속 OS 상태·실제 수신을 확인하지 못해 blocked다. 별도 계정의 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치, Intel·구형 macOS는 unrun으로 유지한다. **전체 M01–M12 기기 검증은 통과하지 않았다.**
+
+새 소스 `5fd5e82`의 기존 `npm run package:tauri` 빌드와 DMG 내용·서명·해시·개인정보 검사는 종료0으로 완료했으며 20절에 기록한다. 18절 DMG는 이전 `0709eda`의 산출물로 보존했다.
+
+## 20. 알림 안내 후속 소스 `5fd5e82`의 arm64 DMG
+
+기존 `npm run package:tauri`로 소스 `5fd5e826705dc76beda11674764f5ad586ea20dc`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-notification-package-5fd5e82.log`, `logs/goal-native-notification-package-inspect-5fd5e82.log`, `goal-native-notification-package-5fd5e82-results.json`이 근거다. 빌드236.63 s·검사4.122 s 모두 종료0이었고 검사 전후 소스 HEAD 일치와 새 read-only/nobrowse mount의 detach를 확인했다.
+
+- DMG `AioLM_0.3.1_aarch64.dmg`: 16772410 bytes, SHA256 `4114b003f8f1d63dd3d3b6ae5fc88e0baa513dd095e34a4334178ecc84737642`.
+- GUI `aiolm`: arm64, SHA256 `1da3b2ce4757387f64b12c0c40233320a8996ce6cb98056c5311e669df1516bc`.
+- CLI `aiolm-cli`: arm64, SHA256 `2a21a9d6f7f3830ea1227052d0c6bf48a441c13bd4d846c44005b4671b048e23`.
+- identifier `com.aiolm.desktop`, version0.3.1, minimum OS13.3 선언을 확인했다. Intel·구형 macOS 실기기 결과로 확대하지 않는다.
+- `codesign --verify --deep --strict` pass. GUI·CLI는 ad-hoc/runtime이며 Developer ID 서명·공증은 수행하지 않았다.
+- bundle 일반 파일은 Info.plist·CodeResources·GUI·CLI·icon.icns 5개였다. 모델·venv·smoke fixture·개인 설정이 없고 실제 home/repository·fixture 문자열의 UTF-8·UTF-16LE/BE 스캔 일치0이었다.
+- 기존 파일 없는 별도 새 홈의 packaged CLI에서 onboarding=false·모델/runtime 미선택과 해당 홈의 모델 저장소 기본값을 확인했다. CLI 종료0이었다.
+- raw 복사본은 `goal-package-5fd5e82/`에 보관했다. 이전 소스의 DMG·로그·원본 모델·대화를 보존했다.
+
+빌드 뒤의 실제 개발 앱·원래 대화·실행 모델·설정 보존 재검증은 19절의 after-package 근거에 기록했다. 이는 production GUI의 Finder 설치·첫 실행·quarantine·별도 계정 Keychain·실제 upgrade나 OS test 알림 수신을 대신하지 않는다. 3절의 전체 판정과 19절의 잔여 범위를 유지하며 전체 기기 검증은 통과하지 않았다. raw/build output은 Git 제외 상태로 유지하고 원격 push는 수행하지 않았다.
