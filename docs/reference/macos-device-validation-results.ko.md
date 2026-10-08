@@ -11,6 +11,7 @@
 - 27절은 `a35defd`에서 재현한 실제 두벌식 확정 Enter·미디어 첨부 그룹 결함과 수정 `47580b8`의 재검증이다. 28절은 해당 소스의 DMG를 기록한다.
 - 29–30절은 `e594c57`의 Discover 배치와 실제 다크 화면, 31–32절은 `7afc07e`의 수동 MCP 진행·취소, 33–34절은 `25d71a5`의 MCP 검색 선택 소유권, 35–36절은 `91ffd3d`의 서버 정의 변경·승인 폐기와 각 소스의 DMG 후속 기록이다.
 - 37절은 `7d71937`에서 제품 코드를 변경하지 않고 Gemma4 음성 내용 실패를 실제 앱과 직접 엔진 요청으로 구분한 후속 기록이다. 긴 응답의 종료 이유 표시 결함도 추가로 확인했다.
+- 38절은 종료 이유 보존·출력 한도 안내 수정 `55606fd`와 실제 vLLM 부분 응답·재로드·다음 정상 응답·기존 실행 복원을, 39절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -43,6 +44,7 @@
 | `7afc07e` | 수동 MCP 호출이 승인 대기에 들어가면 진행·취소 control이 사라졌다. 호출별 공용 작업·로컬 취소·결과 소유권을 유지한다. | 실제 로컬/공용 취소와 승인 process/소유 peer 정리, 합성8개 회귀·공통 UI1741 tests. 승인 이후 실제 실행은 blocked. 31절 참조. |
 | `25d71a5` | 다른 서버 선택 후 이전 검색의 도구/오류가 새 서버에 표시됐다. 검색 세대로 늦은 응답을 폐기한다. | 실제 선택 전환·이전 성공/오류 폐기·현재 실패/재시도·16개 peer 정리, 합성7개 회귀·공통 UI1748 tests. 33절 참조. |
 | `91ffd3d` | 실행 정의를 바꿔 저장한 뒤 이전 도구·검토·승인이 남았다. 정의 변경의 메타데이터/승인·호출 소유권과 저장 응답 선택을 보호한다. | 실제 변경 저장·재검색·같은 정의 재저장·비활성화·승인 대기 취소/소유 PID 정리, 합성13개 회귀·공통 UI1761 tests. 35절 참조. |
+| `55606fd` | 토큰 한도로 잘린 응답을 완료로 표시하고 종료 이유를 기록에서 잃었다. 종료 이유를 보존하고 부분 응답 안내·완료 알림 억제·잘린 도구 요청의 승인 방지를 공통 Chat 계층에 적용한다. | 실제 vLLM length→재로드→다음 stop 응답, 합성6개 회귀·공통 UI1767 tests. 38절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -704,9 +706,39 @@ Browser plugin이 제공되지 않아 실제 Tauri WKWebView `localhost:1420`과
 | 긴 첫 음성 질문의 내용 | fail | 이전 실패와 같은 질문을 별도 새 대화에서 전송했다. 실제 audio=1·PP 135·TG 25·finish_reason=stop인데 음성을 제공해 달라는 답이 다시 나왔다. Projects→Chat 재로드 후 첨부·답·지표를 보존했다. `goal-native-audio-audio-followup-orbit102-{long-failure,reloaded}-20261008.json`/PNG. HTTP 성공과 내용 검증 실패를 구분한다. |
 | 앱 밖 직접 요청의 대조 | pass | 같은 실행 process·모델·WAV·temperature·생성 예산에 대한 직접 upstream SSE 7건은 HTTP 200이다. system 메시지 없이 실행한 단일 긴 질문과 원래 두 turn 이력 재구성은 음성 내용을 해석했다. 앱과 같은 `You are a helpful assistant.` system 메시지를 추가한 두 요청은 이전의 음성 요구 응답을 정확히 재현했고 usage도 각각 135/25와 177/29로 일치했다. `goal-native-audio-followup-orbit102-direct[-system]-20261008.json`과 각 request JSON/SSE. 두 turn 요청은 기록으로 재구성한 replay이며 앱 wire를 캡처한 것으로 설명하지 않는다. |
 | 내용 실패의 분류 | fail | 선택한 엔진·모델 조합의 system prompt 유무에 따른 내용 실패가 앱 밖에서도 재현된다. 앱의 첨부 누락으로 단정하지 않는다. 정확한 tokenizer·processor·model·cache 내부 원인은 미확정이다. 설치 코드가 역사적 audio를 모아 마지막 user 메시지에 배치하는 관찰만으로 이 실패의 원인이라고 확정하지 않는다. system prompt를 조용히 제거하거나 임의 template를 기본값으로 넣는 우회는 하지 않았다. |
-| 긴 후속 응답의 종료 이유 안내 | fail | 새 대화의 세 번째 요청은 음성 내용을 설명하다 128 tok·finish_reason=length로 끝났다. 앱은 부분 내용을 보존하지만 `Response complete`로 표시하고 메시지 이력에 length를 보존하지 않는다. `goal-native-audio-audio-followup-orbit102-third-20261008.json`/PNG와 `useChatSend.ts`·`chatHistory.ts` 관찰 근거다. 앞의 음성 내용 실패와 별도의 미수정 제품 결함으로 남긴다. |
+| 긴 후속 응답의 종료 이유 안내 | fail | 당시 새 대화의 세 번째 요청은 음성 내용을 설명하다 128 tok·finish_reason=length로 끝났다. 앱은 부분 내용을 보존하지만 `Response complete`로 표시하고 메시지 이력에 length를 보존하지 않았다. `goal-native-audio-audio-followup-orbit102-third-20261008.json`/PNG와 소스 관찰 근거다. 앞의 음성 내용 실패와 별도의 제품 결함이며, 후속 수정·재검증은 38절에 기록한다. |
 | MLX 종료·기존 vLLM 실행 복원 | pass | 실제 Unload 후 MLX 소유 PID·listener 부재, 같은 Qwen 모델 revision·외부 vllm-metal runtime·Global Default·context=4096을 UI로 다시 선택하고 readiness를 확인했다. 원래 대화·빈 composer·API off·idle·localStorage를 복원했다. 기존 35개 대화 파일은 정확한 해시를 유지하고 새 합성 대화 2개만 추가됐다. profile 내용은 보존했고 Save profile & start에 따른 두 profile revision·library revision·applied/provider_recent은 갱신됐다. config 전체 바이트 일치나 같은 모델 PID 보존으로 설명하지 않는다. |
 
 `goal-native-audio-followup-orbit102-evidence-audit-20261008.json`은 원래 35개 파일의 해시, 두 새 대화의 immutable WAV 참조·실제 media bytes, 재로드된 실패 기록, 원래 model/runtime·non-profile config·localStorage·MCP 정의, profile 내용 보존과 예상 revision 변경, 수집 render error/overlay 0을 검사했다. 종료 근거는 `goal-native-audio-followup-orbit102-{old,mlx}-cleanup-20261008.json`, 최종 화면은 `goal-native-audio-audio-followup-orbit102-final-20261008.json`/PNG다. 최초 cleanup 관측기가 존재하지 않는 status.port를 읽어 실패한 것은 helper 오류이며 status.url에서 포트를 파싱한 실제 socket 검사로 바로잡았다. 파일 경로 입력의 자동화 문제는 실제 Open 선택·Attachment ready를 확인하고 진행했으며 제품 실패로 세지 않는다.
 
 Browser plugin이 제공되지 않아 기존 frontend 검증 skill의 실제 Tauri WKWebView `localhost:1420`·CUA 조작·읽기 전용 WebDriver getter/PNG를 사용했다. native 1280×800·web 1280×768에서 앱 내용·실제 interaction·수집 render error/overlay 0을 확인했다. `logs/goal-native-audio-followup-orbit102-*-20261008.log`와 direct request/SSE 원본은 ignored tmp에 보존했다. 이번 변경은 검증 문서뿐이므로 35절의 전체 자동 검사·36절의 DMG를 새 검사·새 빌드로 재표기하지 않는다. M04/M07 내용 실패와 기존 blocked/unrun, 새 종료 이유 표시 결함, **전체 M01–M12 미통과**를 유지한다. 개인 엔진 등록은 미구현 장기 설계이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 38. 공통 Chat 종료 이유 보존과 출력 한도 안내
+
+수정 소스는 `55606fd9a98121752cfafc313a8fc3b3d3315997`다. 37절의 제품 결함을 공통 스트림 accumulator·대화 저장·화면 표시에서 수정했다. `finish_reason`의 비어 있지 않은 값을 보존하고 뒤따르는 null usage frame은 이전 종료 이유를 지우지 않는다. 다음 요청의 accumulator는 새로 초기화한다. 저장된 assistant 메시지의 선택적 `finishReason`을 browser/native 이력에서 유지하며 기존 기록과 잘못된 선택 필드 때문에 대화를 버리지 않는다. 이유는 요청 메시지로 다시 전송하지 않는다.
+
+`length` 응답은 부분 내용·reasoning·usage·모델명을 유지하고 bubble과 composer에 출력 한도 안내를 표시한다. 정상 완료 알림을 제출하지 않으며, 잘린 tool 이름·인수가 유효한 부분 JSON이어도 실행 승인을 제시하지 않는다. transport 오류나 사용자 Stop으로 바꾸지 않고 자동 재시도·생성 예산 확대도 하지 않는다. 영어·한국어·일본어·중국어 문구를 추가했다. 새 엔진 이름 분기·설정 기본값·dependency·lockfile·native/Python 코드·공개 gateway/benchmark 계약 변경은 없다.
+
+| 검증 범위 | 상태 | 실제 근거와 한계 |
+| --- | --- | --- |
+| 실제 출력 한도·부분 답변 | pass | 기존 native debug 앱의 실제 WKWebView·수정 frontend에서 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`·외부 vllm-metal 0.30.0/vLLM 0.30.0+cpu를 사용했다. UI Save as new로 별도 Global `Native output limit ORBIT-103`의 max_tokens=16을 적용했고 같은 소유 PID에서 추론했다. 첫 영어 장문 요청은 거절 문구·14 tok·stop으로 끝나 한도 검증 성공으로 세지 않았다. 같은 대화의 한국어 장문 요청은 실제 16 tok·length이며 부분 답변과 `Output token limit reached`를 표시했다. PP 42 tok·phase 시간/속도 미제공, TG 16 tok/0.47s/32.0 tok/s·cached 48 tok을 그대로 표시했다. `goal-native-audio-chat-limit-orbit103-native-length-20261008.json`/PNG와 새 대화 원본이 근거다. |
+| 이력·재로드·다음 정상 응답 | pass | 실제 Projects→Chat remount 후 부분 내용·length·안내·usage가 남았다. 기존 Default 설정을 UI로 복원·재실행한 후 같은 대화의 짧은 질문은 `2 + 3은 5입니다.`·10 tok·stop이다. 최신 composer는 `Response complete · 6 messages`, 이전 bubble은 한도 안내를 유지했다. `goal-native-audio-chat-limit-orbit103-native-{reloaded,normal}-20261008.json`/PNG와 저장된 세 assistant의 stop/length/stop이 근거다. |
+| 완료 알림·잘린 도구 요청 | pass | 합성 회귀에서 length의 알림 제출 0·pending approval 없음·activity 해제를 확인했다. 실제 OS 알림 수신이나 실제 MCP tool 호출의 통과를 뜻하지 않는다. 기존 blocked 범위를 유지한다. |
+| 기존 실행·데이터 복원 | pass | 기존 Default 선택 뒤 UI Unload→Save profile & start로 원래 model/runtime·context=4096·request 옵션을 복원했다. 이전 소유 PID 부재와 listener 닫힘을 확인했다. 37개 원래 대화 파일의 목록/해시·non-profile config·localStorage·MCP 정의·기존 19개 profile 내용이 정확히 같다. 합성 대화 1개와 별도 한도 profile 1개를 보존했다. Default vLLM revision 9→10·library 48→52·applied/provider_recent은 저장/재실행으로 갱신됐다. 같은 최종 PID나 config 전체 바이트 일치로 설명하지 않는다. API off·idle·빈 composer·원래 대화·render error/overlay 0을 확인했다. `goal-chat-limit-orbit103-{old-cleanup,evidence-audit}-20261008.json`과 `goal-native-audio-chat-limit-orbit103-native-restored-20261008.json`/PNG. |
+
+수정 전 새 회귀 6개는 모두 fail, 기존 25개는 pass였다. 수정 후 관련 6 files/38 tests·직접 이력 검사는 종료 0이다. 최종 typecheck·lint·unit·build는 모두 종료 0이며 10.48s·6.04s·151.46s·12.73s다. 최종 UI는 177 files/1767 tests, coverage 80.60/75.38/78.98/84.73%다. `logs/goal-chat-limit-orbit103-{regression-before,related-after,history-after,final-typecheck,final-lint,final-unit,final-build}-20261008.log`에 보존했다. 전체 unit 도중 마지막 소스 보완이 있어 최종 소스에 대해 한 차례 다시 실행했다. 기존 jsdom pseudo-element/canvas 진단과 500kB chunk 경고는 유지한다. native 코드는 변경하지 않았으므로 앞 절의 Rust/실제 엔진 전체 검사를 새 실행으로 재표기하지 않는다. 읽기 전용 감사의 79개 조건은 실제 저장 이유·부분 내용·다음 정상 답·복원·커밋된 12개 파일의 정확한 해시를 확인했다.
+
+Browser plugin이 제공되지 않아 CUA 네이티브 조작과 읽기 전용 WebDriver getter/PNG를 사용했다. native 1280×800·web 1280×768에서 의미 있는 앱 내용과 실제 interaction을 확인했다. 초기 소스 변경 후 일시적인 빈 loading 화면을 관측했고 실제 Cmd+R 뒤 정상 화면·오류/overlay 0을 확보했다. 그 초기 화면을 통과로 계산하거나 bootstrap 원인을 수정했다고 주장하지 않는다. 다른 viewport·모든 언어/VoiceOver·production Finder 실행·모든 엔진의 새 실제 length 응답은 검증하지 않았다.
+
+38절은 출력 한도 제품 결함의 수정 근거다. Gemma4 system prompt 조건의 음성 내용 실패와 기존 실제 실패·upstream 제한·blocked/unrun, **전체 M01–M12 미통과**를 유지한다. 개인 엔진 registry·manifest·adapter는 [장기 설계](pluggable-inference-runtimes.ko.md)이며 아직 구현되지 않았다. raw·합성 자료·빌드는 ignored tmp에 보존하고 공개 업로드·원격 push는 수행하지 않았다.
+
+## 39. 출력 한도 수정 소스 `55606fd`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `55606fd9a98121752cfafc313a8fc3b3d3315997`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-native-chat-limit-package-55606fd.log`, `logs/goal-native-chat-limit-inspect-package-55606fd.log`, `goal-native-chat-limit-package-55606fd-results.json`이 근거다. 빌드 229.87s·검사 4.45s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16774717 bytes, SHA256 `a30432e9059fecb215f3fd935cd2485913214d5545a23b5f84d0f2751a7cf311`.
+- GUI `aiolm`: arm64, SHA256 `893ad8a4cdb1fa756f0f5cc5c0103910dd6713f587d1fd431d6a1ce104b91721`.
+- CLI `aiolm-cli`: arm64, SHA256 `e64f24ca44c8108a9612144fe7d09db33b63fef740946dd71b1d160a196fa98d`.
+- GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG를 `goal-package-55606fd/`에 보존했다.
+
+생성 후 실제 CUA Chat 화면과 `goal-native-audio-chat-limit-orbit103-postpackage-55606fd.json`/PNG, `goal-chat-limit-orbit103-postpackage-preservation-55606fd.json`의 9개 조건에서 복원 직후 config 전체 SHA256·38개 대화의 목록/해시·localStorage·같은 running 모델 PID·runtime/model·MCP 정의·API off·idle·빈 composer·render error/overlay 0을 재확인했다. 화면의 기존 응답과 지표는 재표시이며 패키지 생성 후 새 추론으로 설명하지 않는다. production 앱을 실행하지 않았으며 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 실제 결과도 추정하지 않는다. 38절의 수정과 패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계이며 공개 업로드·원격 push는 수행하지 않았다.
