@@ -1,10 +1,11 @@
 import type { ServerState } from "../api/types.ts";
 import type { UnifiedKey } from "../i18n/i18nUnified.ts";
 
-export type LifecycleErrorKind = "timeout" | "port" | "executable" | "model" | "memory" | "unknown";
+export type LifecycleErrorKind = "active-response" | "timeout" | "port" | "executable" | "model" | "memory" | "unknown";
 
 export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (/^finish or stop the active response(?: in session '[^']+')? before (?:loading a model|replacing this model|unloading this model)$/.test(text)) return "active-response";
   if (text.includes("timeout") || text.includes("timed out")) return "timeout";
   if (text.includes("address already in use") || text.includes("port") && (text.includes("use") || text.includes("bind"))) return "port";
   if (text.includes("not found") || text.includes("no such file") || text.includes("executable")) return "executable";
@@ -18,6 +19,7 @@ export function lifecycleErrorMessage(action: "start" | "stop", error: unknown):
   const detail = error instanceof Error ? error.message : String(error);
   const prefix = action === "start" ? "Model load failed" : "Model unload failed";
   const hint = {
+    "active-response": "Finish or stop the active response, then try again.",
     timeout: "The operation timed out. Check runtime diagnostics and try again.",
     port: "The configured port is already in use. Choose another port or stop the conflicting process.",
     executable: "The runtime executable could not be found. Check the selected runtime installation.",

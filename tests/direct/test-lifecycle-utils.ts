@@ -19,6 +19,32 @@ assert.equal(classifyLifecycleError(new Error("address already in use")), "port"
 assert.equal(classifyLifecycleError(new Error("out of memory")), "memory");
 assert.equal(classifyLifecycleError(new Error("startup timeout")), "timeout");
 assert.match(lifecycleErrorMessage("start", new Error("port bind failed")), /port/i);
+for (const [action, detail] of [
+  ["start", "finish or stop the active response in session 'default' before loading a model"],
+  ["start", "finish or stop the active response before replacing this model"],
+  ["stop", "finish or stop the active response before unloading this model"],
+  ["start", "finish or stop the active response in session 'synthetic-timeout-memory-port' before loading a model"],
+] as const) {
+  for (const error of [detail, new Error(detail)]) {
+    assert.equal(classifyLifecycleError(error), "active-response", detail);
+    const message = lifecycleErrorMessage(action, error);
+    assert.ok(message.startsWith(action === "start" ? "Model load failed:" : "Model unload failed:"));
+    assert.ok(message.includes("Finish or stop the active response, then try again."));
+    assert.ok(message.endsWith(` (${detail})`), "the lifecycle guard must retain its original detail");
+    assert.doesNotMatch(message, /model path|file integrity|could not be loaded/i);
+  }
+}
+for (const [detail, kind, hint] of [
+  ["startup timeout", "timeout", "The operation timed out."],
+  ["port bind failed", "port", "The configured port is already in use."],
+  ["runtime executable not found", "executable", "The runtime executable could not be found."],
+  ["invalid model file", "model", "Check the model path and file integrity."],
+  ["out of memory", "memory", "There is not enough available memory or VRAM"],
+  ["server exited before ready (1)", "unknown", "Open diagnostics for the runtime log"],
+] as const) {
+  assert.equal(classifyLifecycleError(detail), kind);
+  assert.ok(lifecycleErrorMessage("start", detail).includes(hint));
+}
 assert.equal(isLifecycleCancellation(new Error("server start cancelled")), true);
 assert.equal(isLifecycleCancellation(new Error("server failed to load")), false);
 assert.equal(nextPollDelay(1000, 0), 1000);
