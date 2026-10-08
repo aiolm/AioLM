@@ -6,6 +6,7 @@ import { I18nProvider } from "../../shared/i18n/i18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { notifySessionStatusChanged } from "../../shared/runtime/sessionUtils";
+import { withSessionTransition } from "../../shared/state/sessionTransitions";
 
 vi.mock("../../shared/api/index", () => ({
   isNativeRuntimeAvailable: () => false,
@@ -111,6 +112,24 @@ async function startPullRequestBuild() {
 }
 
 describe("RuntimesPanel pull-request builds", () => {
+  it('locks runtime changes while a session command is pending before the native status poll catches up', async () => {
+    mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    const selectedStore = { ...store, cfg: { active_provider: 'vllm' } } as unknown as AppStore;
+    render(<I18nProvider initialLocale="en"><RuntimesPanel store={selectedStore} /></I18nProvider>);
+    const install = await screen.findByRole('button', { name: 'Install isolated environment' });
+    expect(install).toBeEnabled();
+    let release!: () => void;
+    let command!: Promise<void>;
+    act(() => { command = withSessionTransition(() => new Promise<void>(resolve => { release = resolve; })); });
+    try {
+      expect(install).toBeDisabled();
+      expect(screen.getByText('Unload all model sessions before changing or transferring runtimes.')).toBeVisible();
+    } finally {
+      await act(async () => { release(); await command; });
+    }
+    await waitFor(() => expect(install).toBeEnabled());
+  });
+
   it.each(['running', 'starting', 'stopping'])('locks Python runtime operations during the default model %s state', async state => {
     mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
     const selectedStore = { ...store, cfg: { active_provider: 'vllm' }, status: { state } } as unknown as AppStore;

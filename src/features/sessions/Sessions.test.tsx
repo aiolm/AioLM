@@ -208,6 +208,29 @@ describe("session model settings", () => {
     expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled');
   });
 
+  it('keeps loading and cancellation labels when status polling has not created the named session yet', async () => {
+    let fail!: (error: Error) => void;
+    mocked.sessionStart.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    mocked.sessionStop.mockResolvedValue(undefined);
+    renderPanel();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    try {
+      await act(async () => { window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT)); });
+      expect(sessionRow().getByText('Starting')).toBeInTheDocument();
+      expect(sessionRow().queryByText('Stopped')).not.toBeInTheDocument();
+      fireEvent.click(sessionRow().getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith('work'));
+      await act(async () => { window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT)); });
+      expect(screen.getByRole('article', { name: 'Work session' }).querySelector('.app-status-badge')).toHaveTextContent('Working');
+      expect(sessionRow().getByRole('button', { name: 'Working' })).toBeDisabled();
+      expect(sessionRow().queryByText('Starting')).not.toBeInTheDocument();
+    } finally {
+      await act(async () => { fail(new Error('Synthetic load cancelled.')); });
+    }
+    await waitFor(() => expect(sessionRow().getByText('Stopped')).toBeInTheDocument());
+  });
+
   it("does not launch after global cancellation fails while profile preparation is pending", async () => {
     const store = renderPanel();
     render(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);

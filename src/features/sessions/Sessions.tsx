@@ -6,13 +6,13 @@ import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import EmptyState from "../../shared/ui/EmptyState";
 import Switch from "../../shared/ui/Switch";
 import "./sessions.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { useI18n } from "../../shared/i18n/i18n";
 import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
-import { finishTask, getTaskSnapshot, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, subscribeTasks, updateTask } from "../../shared/state/taskRegistry";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
@@ -89,6 +89,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const [stopExisting, setStopExisting] = useState(cfg?.stop_existing_sessions_on_load ?? true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const loadCancelling = useSyncExternalStore(subscribeTasks,
+    () => loadingId !== null && getTaskSnapshot().some(task => task.id === `session-load-${loadingId}` && task.state === 'cancelling'),
+    () => false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -438,7 +441,11 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       <div className="app-card app-card--tight sessions-list">
         {visibleDefinitions.map((definition) => {
           const rowStatus = statuses[definition.id] ?? (definition.id === DEFAULT_SESSION_ID ? fallbackDefaultStatus() : undefined);
-          const rowState = rowStatus?.state ?? "stopped";
+          const polledState = rowStatus?.state ?? "stopped";
+          // Preparation can precede creation of a native session. A stopped
+          // poll must not erase the local load/cancellation already in flight.
+          const rowState = loadingId === definition.id && (polledState === 'stopped' || loadCancelling && polledState === 'starting')
+            ? loadCancelling ? 'stopping' : 'starting' : polledState;
           const expanded = detailsOpen && selectedId === definition.id;
           const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
           const rowName = normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));

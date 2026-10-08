@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
 import type { HfInstalledFile, HfSortKey } from "./models.ts";
+import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
   DownloadedModel, DownloadProgress, HfFile, HfModel, InstalledRuntime,
@@ -108,9 +109,12 @@ export const benchCancel = () => invoke<void>("bench_cancel");
 /** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
 export const sessionList = () => invoke<SessionStatus[] | SessionListResult>("session_list");
 export const sessionSummaryList = () => invoke<SessionSummary[]>("session_summary_list");
-export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting });
-export const sessionStop = (sessionId: string) => invoke<void>("session_stop", { sessionId });
-export const sessionUnload = (sessionId: string) => invoke<void>("session_unload", { sessionId });
+export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) =>
+  withSessionTransition(() => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting }));
+export const sessionStop = (sessionId: string) =>
+  withSessionTransition(() => invoke<void>("session_stop", { sessionId }));
+export const sessionUnload = (sessionId: string) =>
+  withSessionTransition(() => invoke<void>("session_unload", { sessionId }));
 
 export function normalizeSessionList(value: SessionStatus[] | SessionListResult): SessionStatus[] {
   return Array.isArray(value) ? value : Array.isArray(value.sessions) ? value.sessions : [];

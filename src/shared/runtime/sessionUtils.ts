@@ -3,11 +3,7 @@ import { executionSettings, sessionExecutionSettings } from "../config/execution
 import { loadedModelPath } from './loadedModel';
 
 export const DEFAULT_SESSION_ID = "default";
-export const SESSION_STATUS_CHANGED_EVENT = "aiolm:session-status-changed";
-
-export function notifySessionStatusChanged(): void {
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
-}
+export { SESSION_STATUS_CHANGED_EVENT, notifySessionStatusChanged } from './sessionEvents.ts';
 
 export function emptyGpuPlacement(): GpuPlacement {
   return { gpu_ids: [], main_gpu: null, split_mode: "none", tensor_split: [], draft_gpu_id: null };
