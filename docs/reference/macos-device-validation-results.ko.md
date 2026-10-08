@@ -5,7 +5,7 @@
 ## 1. 소스·환경·근거
 
 - 실행일: 2026-10-07–08 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
-- 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 잔여 범위는 15절, 새 DMG는 16절에 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
+- 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
@@ -30,6 +30,7 @@
 | `2e63118` | vllm-metal에서 템플릿 없는 base GGUF가 로드되지만 채팅 HTTP400이 발생. completion과 chat 기능을 구분하는 선택적 `EngineInfo.chat_supported` 추가, composer 안내·입력 보존·전송 차단 및 gateway 오류 코드 제공. | 합성 회귀 검사 7개, 실제 GGUF completion200/chat 거부와 같은 Metal 런타임의 Instruct UI 답변·gateway200/usage. 11절 참조. |
 | `0424ab5` | 최종 SSE 측정값과 실행 모델 이름이 누락되고 작은 창에서 답변·첨부가 가려짐. 채팅 지표·모델 식별·스크롤·picker 배치를 수정했다. 프로젝트 저장 실패·문서 읽기, 대화 hydration·첨부 순서, MCP 도구 선택·오류 보존도 수정했다. | 실제 Metal 새 한국어 답변·PP/TG, 33개 WKWebView 화면, 프로젝트 실패/재시도, Provider HMR, MCP 오류 보존과 관련 합성 회귀 검사. 12절 참조. |
 | `533b450` | 대화 삭제 후 마운트된 Chat이 옛 내용을 복원하고 포트 저장 중 Stop이 뒤늦은 재시작에 덮였다. 삭제 barrier·turn 무효화·API action revision을 적용했다. 진단의 실행 runtime, 벤치 이력·Copy, snapshot 이름·재시도 안내, 좁은 창의 실행·취소 버튼과 엔진 입력 표시도 수정했다. | 합성 회귀·UI1688 tests, 실제 Metal 새 답변·재로드 PP/TG, 격리 WKWebView 삭제/Stop, 24개 설정 화면·진행 카드. 14절 참조. |
+| `0709eda` | 실행 영역·provider 목록·진단 로그·llama.cpp export의 이름을 role 없는 요소에 지정하여 유효한 접근성 이름 의미가 없었다. 컨트롤 묶음에 group, 기존 포커스 가능한 진단에 비실시간 region을 지정했다. | 수정 전 실패·수정 후 회귀, UI1690 tests와 실제 WKWebView의 11메뉴·고급 export 재검사. 모델·설정 보존과 현재 light Chat의 gradient 대비를 한정해 확인했다. 17절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -289,3 +290,37 @@ Metal PP 시간 미제공, embedding/STT의 chat 미지원과 일부 deep compar
 - 최초 검사 호출의 시스템 Python은 `hashlib.file_digest`가 없어 mount 전에 종료했다. 준비된 CPython3.12로 같은 해시·서명·파일 보호 검사를 실행해 통과했으며 원래 실패 로그를 도구 오류로 보존했다. 검증 항목을 생략하지 않았다.
 
 이 패키지 검사는 Finder 설치·최초 GUI 실행·quarantine·별도 계정 Keychain·실제 upgrade를 대체하지 않는다. 개발 앱과 선택된 Metal 모델은 실행 상태로 유지했고 마지막 실제 한국어 답변·PP/TG를 재로드하여 확인했다. 코드·문서만 커밋하며 raw 자료와 build output은 Git 제외 상태로 유지하고 원격 push는 수행하지 않았다.
+
+## 17. 접근성 의미와 gradient 판정 후속 검증
+
+후속 소스는 `0709eda82771043c83de5f3950fd5dc49c6dd2a9`이다. 14절의 `aria-prohibited-attr` incomplete를 실제 WKWebView의 개별 노드까지 조사해 제품의 ARIA 의미 결함을 수정했다. 화면 디자인·runtime 정책·사용자 설정을 바꾸지 않고 기존 이름이 전달될 수 있는 role을 부여했다. 이 기록은 관련 UI 하위 검사의 근거이며 전체 접근성 또는 M01–M12 통과를 뜻하지 않는다. 3·10·15절의 fail/blocked/unrun을 유지한다.
+
+| 후속 항목 | 상태 | 수정과 실제 근거 |
+| --- | --- | --- |
+| 기본 실행 컨트롤의 이름 | pass | role 없는 `div`의 aria-label에 유효한 접근성 이름 의미가 없었다. 상단 실행 컨트롤에 `role=group`을 지정하고 실행 중 모델 선택·설정 버튼을 같은 그룹에서 찾도록 검사했다. `goal-a11y-incomplete-full.json`의 `.aiolm-runtime-context` incomplete1개가 `goal-a11y-chat-full-after.json`에서 사라졌다. `logs/goal-a11y-runtime-group-before.log`의 수정 전 회귀 실패와 `logs/goal-a11y-runtime-group-after.log`의 관련2 files/27 tests를 보존했다. |
+| provider 설치 목록의 이름 | pass | 같은 문제가 있던 provider runtime 목록에 `role=group`을 지정했다. `goal-a11y-runtime-full-before.json`의 `.provider-runtime-list` incomplete1개가 `goal-a11y-runtime-full-after.json`에서 사라졌다. `logs/goal-a11y-provider-group-before.log`의 수정 전 실패와 `logs/goal-a11y-provider-group-after.log`의 관련4 files/41 tests에서 이름으로 목록을 찾고 기존 export IPC 대상도 유지했다. |
+| native runtime export 컨트롤의 이름 | pass | 실제 llama.cpp→Advanced의 Export runtime 컨트롤에도 role 없는 이름 wrapper가 있었다. `role=group`을 지정했다. `goal-a11y-llama-full-before.json`의 해당 aria-prohibited-attr incomplete1개가 `goal-a11y-llama-full-after.json`에서 사라졌고 선택 WCAG 자동 검사에서24규칙 pass·violations0을 확인했다. gradient contrast incomplete24개는 유지했다. 실행 중 모델이 있으므로 CPU/Metal export 버튼은 모두 비활성 상태를 보존했으며, 원래 vLLM 화면·저장된 설정 바이트·실제 모델/PID/running 상태를 유지했다. `logs/goal-a11y-llama-export-before.log`의 수정 전2조건 실패와 `logs/goal-a11y-llama-export-after.log`의 관련3 files/37 tests가 근거다. 실제 bundle export/import·추론을 다시 실행한 검사는 아니다. |
+| 진단 영역의 이름·포커스 | pass | 이름을 붙인 `pre`에 유효한 role이 없었다. `role=region`을 지정하고 기존 `tabIndex=0`을 유지했다. 로그를 live region으로 바꾸지 않았다. `goal-a11y-diagnostics-full-before.json`의 `pre` incomplete1개가 `goal-a11y-diagnostics-full-after.json`에서 사라졌다. `logs/goal-a11y-diagnostics-region-before.log`의 수정 전 실패와 `logs/goal-a11y-diagnostics-region-after.log`의 관련4 files/54 tests가 근거다. `goal-a11y-native-final-proof.json`, `logs/goal-a11y-native-final.log`에서 실제 region 이름·내용·포커스 수용·aria-live 부재를 확인했다. 프로그램으로 포커스를 준 결과이며 전체 Tab 순서나 VoiceOver 검사를 대신하지 않는다. |
+| 11메뉴 자동 재검사 | pass | `goal-native-accessibility-after.json`, `logs/goal-a11y-native-menus-final.log`. 실제1280×800 WKWebView의11메뉴 기본 화면을 다시 검사했다. 모든 메뉴에서 violations0이며 aria-prohibited-attr incomplete는 없었다. color-contrast incomplete는 남겼다. Chat/Projects/Run a model/Discover/Loaded sessions/Manage runtimes/Benchmark/API server/MCP servers/Diagnostics/Settings의 해당 node 수는 각각26/29/45/20/25/27/42/23/30/21/24다. 숨긴 노드나 모든 상호작용의 전체 접근성 검사로 확대하지 않는다. |
+| 실행 모델·화면 보존 | pass | 같은 최종 native proof에서 실제 Metal runtime을 보존했고 Chat 상단의 `Qwen3-VL-2B-Instruct-4bit`와 Default execution 그룹을 확인했다. Chat·Diagnostics 모두 overlay·렌더 오류0이었다. 실제 화면 캡처는 `goal-a11y-chat-final.png`, `goal-a11y-diagnostics-final.png`다. |
+| 현재 light Chat의 gradient 대비 | pass | `goal-a11y-incomplete-full.json`의 대비 incomplete26개는 모두 gradient 배경을 자동 판정하지 못한 경우였다. `goal-a11y-styles-full.json`에서 현재 light Chat26개 노드의 실제 computed text/gradient 색과 조상 opacity1·filter 없음·normal blending을 확인했다. `goal-a11y-gradient-facts.json`에서 gradient stop 및 구간별1001개 sRGB 표본의 상대 휘도 대비를 계산했다. 표본상 최소5.389:1로26개 모두 일반 텍스트 기준4.5:1 이상이었다. 오른쪽 예약 padding의 SVG 편집 glyph는 텍스트 배경 계산에서 제외했다. 이는 현재 light Chat의 조사 노드만 확인한 결과다. |
+| placeholder·다른 테마·보조기기 | unrun | WebKit의 `getComputedStyle(::placeholder)`는 일반 foreground를 반환하여 실제 placeholder pseudo-element 색을 직접 확인하지 못했다. 활성 light palette의 `--ui-faint`와 소스 규칙으로 계산한 두 placeholder stop 대비5.470:1 이상은 보조 근거로만 남긴다. 다른 테마·메뉴·상태의 gradient 대비, 전체 키보드/VoiceOver·OS 접근성 여정은 이 계산으로 통과 처리하지 않는다. axe의 contrast incomplete 원본도 그대로 유지한다. |
+
+최종8개 파일을 포함한 `npm run typecheck`, `npm run lint`, `npm run test:unit`, `npm run build`는 모두 종료0이었다. `logs/goal-a11y-combined-{typecheck,lint,unit,build}-final.log`, `checks.jsonl`이 근거다. 계약/direct/script 검사를 포함해 UI171 files/1690 tests가 통과했고 coverage statements80.27% / branches75.12% / functions78.63% / lines84.41%다. 네 번째 컨트롤 수정 전6개 파일의171 files/1689 tests 검사도 `logs/goal-a11y-unit-final.log`에 따로 보존했다. Rust/Python·lockfile 변경은 없으며 기존 frontend500kB chunk 경고는 유지된다. 실제 모델·대화 원본을 변경하거나 OS 권한을 조정하지 않았다. 소스 커밋 뒤 같은 native 검사를 `goal-a11y-native-0709eda-proof.json`, `logs/goal-a11y-native-0709eda.log`에 재기록했고 실행 상태·Chat 모델명·진단 포커스 수용·overlay/렌더 오류0을 다시 확인했다. 해당 캡처는 `goal-a11y-chat-0709eda.png`, `goal-a11y-diagnostics-0709eda.png`다. 새 패키지 검사는18절에 기록하며16절 DMG는 이전 소스 `533b450`의 산출물이다.
+
+GGUF는 llama.cpp 전용으로 제한된 포맷이 아니다. 현재 검증한 [vllm-metal0.30.0 공식 GGUF 문서](https://github.com/vllm-project/vllm-metal/blob/v0.30.0/docs/gguf.md)도 MLX를 통한 dense GGUF와 별도 matching config/tokenizer 지원을 명시한다. 지원 모델·양자화·분할 여부에는 제한이 있다. 11절의 원본 근거를 다시 대조했으며 `user-400-before.json`의 실제 engine은 vllm-metal이었다. `ui-user-400-before.json`의 HTTP400은 채팅 템플릿 부재였고, `chat-template-base-proof.json`은 같은 Metal에서 completion200/8+16=24 tokens와 chat400/`chat_template_required`를 확인한다. 파일 형식의 로딩 실패와 채팅 템플릿 문제를 구분한다. 이는 기존 근거의 재대조이며 이번 접근성 수정에서 GGUF 추론을 새로 반복한 결과가 아니다.
+
+## 18. 접근성 후속 소스 `0709eda`의 arm64 DMG
+
+기존 `npm run package:tauri`로 소스 `0709eda82771043c83de5f3950fd5dc49c6dd2a9`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-a11y-package-final.log`, `logs/goal-a11y-package-inspect-final.log`, `goal-a11y-package-0709eda-results.json`이 근거이며 두 명령 모두 종료0이었다. 준비된 CPython3.12로 새 read-only/nobrowse mount에서 검사하고 detach했다.
+
+- DMG `AioLM_0.3.1_aarch64.dmg`: 16769931 bytes, SHA256 `85aa20e45231bd54baca19e535876e51b47c3ce824b5e2a89caeca8efc58f1cd`.
+- GUI `aiolm`: arm64, SHA256 `590d5f9d0a0b70c64f53d863021f04c0f8ce589f660400cc5b6a2c1ffc48e43b`.
+- CLI `aiolm-cli`: arm64, SHA256 `1c1b742a8d20c7b9123f0e67ac0122a2c8c608a558f0ad92017d7a1177c07084`.
+- identifier `com.aiolm.desktop`, version0.3.1, minimum OS13.3 선언을 확인했다. Intel·구형 OS 실기기 성공으로 해석하지 않는다.
+- `codesign --verify --deep --strict` pass. GUI·CLI는 ad-hoc/runtime이며 Developer ID 서명·공증은 수행하지 않았다.
+- bundle 일반 파일은 Info.plist·CodeResources·GUI·CLI·icon.icns 5개였다. 모델·venv·smoke fixture·개인 설정이 포함되지 않았으며 실제 home/repository 문자열의 UTF-8·UTF-16 스캔 일치0이었다.
+- 기존 파일 없는 별도 새 홈의 packaged CLI에서 onboarding=false, 모델·runtime 미선택, 해당 홈의 모델 저장소 기본값을 확인했다.
+- raw 복사본은 `goal-package-0709eda/`에 보관했다. 이전 소스의 raw DMG·로그·검사 자료를 보존했다.
+
+이 검사는 Finder 설치·첫 GUI 실행·quarantine·별도 계정 Keychain·실제 upgrade를 대신하지 않는다. 15절의 잔여 범위와 17절의 수동 접근성 범위를 유지한다. 개발 앱과 선택된 Metal 모델은 실행 상태로 유지했다. 코드·검사·문서만 커밋하고 raw 자료와 build output은 Git 제외 상태로 두었으며 원격 push는 수행하지 않았다.
