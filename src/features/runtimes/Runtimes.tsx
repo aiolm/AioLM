@@ -74,7 +74,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       </aside>
 
       <div className="runtimes-main">
-      <div hidden={llama}><ProviderEnvironments active={active && !llama} provider={llama ? undefined : provider} revision={providerRevision} onBusyChange={setProviderBusy} /></div>
+      <div hidden={llama}><ProviderEnvironments active={active && !llama} provider={llama ? undefined : provider} revision={providerRevision} resourcesInUse={rt.serverRunning} onBusyChange={setProviderBusy} /></div>
       {provider === providerOf(store.cfg ?? {}) && <section className="app-card mb-4">
         <h2 className="app-section-title">{t('ui.deepVerify')}</h2>
         <p><RuntimeSelectionLabel config={store.cfg} /></p>

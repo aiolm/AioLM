@@ -5,7 +5,8 @@ import { defaultPrBackendForDevice, formatRuntimeVersion } from "../../shared/ru
 import { publishInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
-import { isServerRunning } from "../../shared/lib/serverLifecycle";
+import { isServerBusy } from "../../shared/lib/serverLifecycle";
+import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import { updateTask } from "../../shared/state/taskRegistry";
 import { BACKENDS, initialRows, mergeBackendRows, readLatestCache, readShowAll, writeLatestCache, writeShowAll, type BackendRow } from "./runtimesHelpers";
@@ -52,7 +53,11 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
   const probeGeneration = useRef(0);
   const prBackendTouched = useRef(false);
   const prInstallInFlight = useRef(false);
-  const serverRunning = isServerRunning(store.status.state);
+  const [sessionsInUse, setSessionsInUse] = useState(false);
+  useSessionPolling({ active, onData: sessions => setSessionsInUse(sessions.some(session => isServerBusy(session.state))) });
+  // Runtime mutations share the native lock across the default model and
+  // named sessions, including their starting/stopping transitions.
+  const serverRunning = isServerBusy(store.status.state) || sessionsInUse;
   const runtimeBusy = bundleBusy || prBusy || rows.some((row) => row.busy);
 
   // A probe names the build it describes, so a later one always wins and a

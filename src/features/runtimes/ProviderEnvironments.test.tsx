@@ -37,10 +37,10 @@ const runtime = (overrides = {}) => ({
   ...overrides,
 });
 
-function renderPanel() {
+function renderPanel(resourcesInUse = false) {
   return render(createElement(I18nProvider, {
     initialLocale: 'en',
-    children: createElement(ProviderEnvironments, { active: true }),
+    children: createElement(ProviderEnvironments, { active: true, resourcesInUse }),
   }));
 }
 
@@ -61,6 +61,22 @@ const importButton = () => screen.findByRole('button', { name: 'Import Python ru
 const importButtonNow = () => screen.getByRole('button', { name: 'Import Python runtime bundle' });
 
 describe('provider portable import/export', () => {
+  it('explains the model-session lock before submitting runtime changes or transfers', async () => {
+    renderPanel(true);
+    await screen.findByText('0.31.0');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Python executable path' }), { target: { value: '/synthetic/python' } });
+    const actions = ['Install isolated environment 0.31.0', 'Register existing Python environment', 'Remove', 'Export Python runtime bundle', 'Import Python runtime bundle'];
+    for (const name of actions) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(screen.getByText('Unload all model sessions before changing or transferring runtimes.')).toBeVisible();
+    for (const command of ['providerInstall', 'providerRegister', 'providerRemove', 'providerPortableExport', 'providerPortableImport']) {
+      expect(mocked[command]).not.toHaveBeenCalled();
+    }
+  });
+
   it('exports through IPC and reports the archive path and digest', async () => {
     mocked.providerPortableExport.mockResolvedValue({
       path: '/synthetic/aiolm-vllm-portable.zip', provider: 'vllm',

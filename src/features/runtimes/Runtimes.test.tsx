@@ -5,11 +5,14 @@ import RuntimesPanel from "./Runtimes";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
+import { notifySessionStatusChanged } from "../../shared/runtime/sessionUtils";
 
 vi.mock("../../shared/api/index", () => ({
   isNativeRuntimeAvailable: () => false,
   providerCatalog: vi.fn(async () => []),
   providerRuntimes: vi.fn(async () => []),
+  sessionSummaryList: vi.fn(async () => []),
+  normalizeSessionList: (value: unknown) => value,
   rtList: vi.fn(),
   rtLatest: vi.fn(),
   rtInstall: vi.fn(),
@@ -108,6 +111,27 @@ async function startPullRequestBuild() {
 }
 
 describe("RuntimesPanel pull-request builds", () => {
+  it.each(['running', 'starting', 'stopping'])('locks Python runtime operations during the default model %s state', async state => {
+    mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    const selectedStore = { ...store, cfg: { active_provider: 'vllm' }, status: { state } } as unknown as AppStore;
+    render(<I18nProvider initialLocale="en"><RuntimesPanel store={selectedStore} /></I18nProvider>);
+    expect(await screen.findByRole('button', { name: 'Install isolated environment' })).toBeDisabled();
+    expect(screen.getByText('Unload all model sessions before changing or transferring runtimes.')).toBeVisible();
+  });
+
+  it('keeps runtime changes locked for a named session when the default model is stopped, then unlocks after it stops', async () => {
+    mocked.sessionSummaryList.mockResolvedValue([{ id: 'synthetic-named-session', state: 'stopping' }]);
+    mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    const selectedStore = { ...store, cfg: { active_provider: 'vllm' } } as unknown as AppStore;
+    render(<I18nProvider initialLocale="en"><RuntimesPanel store={selectedStore} /></I18nProvider>);
+    const install = await screen.findByRole('button', { name: 'Install isolated environment' });
+    await waitFor(() => expect(install).toBeDisabled());
+    mocked.sessionSummaryList.mockResolvedValue([{ id: 'synthetic-named-session', state: 'stopped' }]);
+    notifySessionStatusChanged();
+    await waitFor(() => expect(install).toBeEnabled());
+    expect(screen.queryByText('Unload all model sessions before changing or transferring runtimes.')).not.toBeInTheDocument();
+  });
+
   it('follows a model editor engine request independently of the saved execution engine', async () => {
     mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
     try {
@@ -163,6 +187,7 @@ describe("RuntimesPanel pull-request builds", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    mocked.sessionSummaryList.mockResolvedValue([]);
     installedNewestCuda();
     mocked.deviceProfile.mockResolvedValue(NVIDIA_REPORT);
     mocked.onRuntimeProgress.mockResolvedValue(() => undefined);

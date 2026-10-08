@@ -373,6 +373,7 @@ const en = {
   enterProfileName: "Enter a profile name first.",
   stopBeforeProfile: "Unload the model before applying a loading profile.",
   stopBeforeRuntime: "Unload the model before changing runtimes.",
+  stopSessionsBeforeRuntime: "Unload all model sessions before changing or transferring runtimes.",
   stopBeforeSelect: "Unload the model before selecting a different runtime.",
   stopBeforeRemoveRuntime: "Unload the model before removing runtimes.",
   savedProfileNamed: "Saved loading profile “{name}”.",
@@ -1030,6 +1031,7 @@ none: "없음", active: "활성", serverRunningHint: "먼저 모델을 언로드
   enterProfileName: "먼저 프로필 이름을 입력하세요.",
   stopBeforeProfile: "로딩 프로필을 적용하기 전에 모델을 언로드하세요.",
   stopBeforeRuntime: "런타임을 변경하기 전에 모델을 언로드하세요.",
+  stopSessionsBeforeRuntime: "런타임을 변경하거나 전송하기 전에 모든 모델 세션을 언로드하세요.",
   stopBeforeSelect: "다른 런타임을 선택하기 전에 모델을 언로드하세요.",
   stopBeforeRemoveRuntime: "런타임을 제거하기 전에 모델을 언로드하세요.",
   savedProfileNamed: "로딩 프로필 “{name}”을(를) 저장했습니다.",
@@ -1216,6 +1218,7 @@ none: "없음", active: "활성", serverRunningHint: "먼저 모델을 언로드
 
 const ja: UiCatalog = {
   ...en,
+  stopSessionsBeforeRuntime: "ランタイムを変更・転送する前に、すべてのモデルセッションをアンロードしてください。",
   runtimesIntro: "推論エンジンごとに分離された環境を管理します。モデルのランタイムは実行プロファイルで選択します。",
   sessionsIntro: "推論エンジン、プロファイルとGPU割り当てを持つ独立したモデルセッションを管理します。",
   modelsEmptyBody: "{dir}にモデルがありません。別のフォルダーを選ぶか、モデルファイルまたは完全なスナップショットを追加して再検索してください。",
@@ -1337,6 +1340,7 @@ running: "実行中", stopped: "停止中", enabled: "有効", disabled: "無効
 
 const zh: UiCatalog = {
   ...en,
+  stopSessionsBeforeRuntime: "更改或传输运行时之前，请卸载所有模型会话。",
   runtimesIntro: "分别管理各推理引擎的隔离环境。在模型的运行配置中选择运行时。",
   sessionsIntro: "管理具有独立推理引擎、配置和GPU分配的模型会话。",
   modelsEmptyBody: "{dir}中没有模型。请选择其他目录，或添加模型文件或完整快照后重新扫描。",
