@@ -7,6 +7,7 @@
 - 실행일: 2026-10-07–08 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
 - 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 23절은 MCP 조회·승인 대기 정리와 기술 입력 치환 수정 `bbd2df6`을, 24절은 해당 소스의 DMG를 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
+- 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -47,13 +48,13 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M02 | pass | 고정 GGUF CPU→Metal probe·추론/usage·취소·재시작·중지, CPU/Metal source-build. 실제 CMake 자식 취소와 기존 설치/staging 보호. |
 | M03 | fail | 별도 관리형 Metal 설치·ABI/MetalPlatform/native extension·텍스트/이미지/STT/embedding·취소·재시작·외부 환경 보호. 직접 file URI 이미지 요청은 upstream500. |
 | M04 | fail | 별도 MLX probe·텍스트/이미지/native 영상·취소·재시작·외부 환경 보호. 21절의 Gemma4 native 음성 첫 내용 응답·usage·기록/재로드·실제 취소는 통과했지만 일부 긴/후속 질문은 음성 내용 응답에 실패했다. 직접 URI500와 Gemma3n 누락 shard index의 preflight 실패도 유지한다. |
-| M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
+| M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 26절에서 서로 다른 Qwen3/Gemma4를 같은 MLX 공용 프로필로 순차 실행·실제 응답·이력 보존·원래 vLLM 복원도 확인했다. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
 | M06 | pass | 실제 snapshot 취소/재시도, 고정 GGUF, 공개 3-shard 전체 GUI 다운로드/해시/한 항목/CPU 추론, 두 GGUF와 공유 companion 다운로드/재사용·다른 primary 삭제 후 보존. 활성/선택 draft·LoRA·named split 보호, 외부 파일·case-sensitive APFS·한글/공백·권한·FAT 불완전 상태 확인. |
 | M07 | fail | OS 이미지/WAV/MP4 선택·내용/usage·immutable 기록/재로드·실패 후 Retry·엔진 변경, 명시적 STT/frames·ffmpeg UI Stop, 비-WAV Whisper 전사/번역·ASR 전사. 21절의 Gemma4 실제 native 음성·취소와 잘못된 WAV의 동일 입력 Retry를 추가 확인했다. 긴/후속 음성 질문의 내용 실패·URI500·native SmolVLM 내용 오답·Gemma3n snapshot 실패 유지. ffmpeg 부재의 실제 앱 검사는 blocked. |
 | M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. CUA의 별도 승인 프로세스 선택 한계로 실제 Yes/No→tool/후속 답변·호출 중 취소는 미검증이다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
-| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 알림 안내 수정·OS 제출은 통과했으나 이 검증에서 OS 권한을 결정하지 않았고 후속 OS 상태·실제 수신은 미확인/blocked다. IME composition·Dock/트레이·promised/unreadable clipboard 포맷은 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. IME composition·Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
 | M12 | blocked | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. MCP 승인 후 실제 호출 중 취소는 승인창 조작 차단으로 미검증. |
 
 ## 4. 초기 기기 검증의 공통 자동 검사 (`6261d0b`)
@@ -455,3 +456,37 @@ invalid WAV의 decode 예외 때 upstream 로그의 in_flight가1→2로 남는 
 - 원본과 해시가 같은 raw DMG 복사본은 `goal-package-bbd2df6/`에 보존했다. 이전 소스별 DMG·로그·원본 모델·대화는 유지했다.
 
 빌드 후 실제 CUA의 원래 Chat을 확인했다. `goal-native-audio-mcp-after-package-bbd2df6.json`/PNG와 `logs/goal-native-mcp-literal-after-package-bbd2df6.log`에서 같은 Qwen3/vllm-metal의 running·API off·active requests0·ORBIT-84·빈 입력·overlay/렌더 오류0과 원본23개 대화 SHA256 보존·총28개를 확인했다. `goal-native-mcp-literal-after-package-preservation-bbd2df6.json`에서 검사 직전28개 대화와 main config의 정확한 보존 및 별도 MCP 서버 파일의 disabled 캡처 일치도 대조했다. 이 개발 앱 검사를 production GUI의 자연스러운 Finder 설치·첫 실행·quarantine·별도 계정 Keychain·실제 upgrade로 확대하지 않는다. 21·23절의 실패·blocked·잔여 범위를 유지하며 **전체 M01–M12는 통과하지 않았다.** raw/build 산출물은 Git 제외 상태이며 원격 push는 수행하지 않았다.
+
+## 25. 실제 Close to tray 설정·숨김·복원
+
+`c8fae57`에서 23절의 수정된 frontend와 기존 native debug 앱을 사용했다. 제품 코드·의존성·기본값은 바꾸지 않았다. 실제 CUA Settings→Server에서 Close to system tray를 off→on으로 저장한 뒤 native 창 닫기 버튼을 눌렀다. UI 조작은 CUA로 수행했고, native window 조회·앱 상태·저장 파일은 읽기 전용으로 관찰했다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 설정 저장·실제 창 숨김 | pass | `goal-native-tray-window-visible-before-order-fixed-20261008.json`은 baseline과 다른 설정이 close_to_tray 하나임을 확인한다. 실제 닫기 직후 `goal-native-tray-window-hidden-20261008.json`의 is_visible/is_focused=false, 같은 모델 프로세스 running·API off를 확인했다. |
+| CUA 재활성화·원래 설정 복원 | pass | `goal-native-tray-window-{reactivated,restored}-20261008.json`에서 같은 앱의 visible/focused=true와 실제 UI off 복원을 확인했다. `goal-native-audio-tray-{baseline,final}-20261008.json`/PNG에서 config 의미·전체 SHA256, 검사 전28개 대화의 모든 SHA256, 실행 모델·프로세스·API off·active requests0이 보존됐다. |
+| 트레이 Show/좌클릭/Quit·Dock 클릭 | blocked | SystemUIServer와 Dock의 CUA target 선택이 각각 -10005 timeoutReached로 끝났다. `goal-native-tray-cua-limits-20261008.json`은 해당 도구 응답과 미실행 조작을 기록한다. CUA의 앱 재활성화를 이 네 클릭의 통과로 계산하지 않는다. |
+
+첫 `visible-before-20261008` 관찰 helper는 JSON 문자열의 객체 키 순서를 비교하여 gpu/settings_profiles도 변경으로 잘못 표시했다. 원본 로그·JSON을 보존했고, 객체 의미를 비교하는 별도 order-fixed 결과에서 close_to_tray만 다른 것을 확인했다. 제품 설정 변형이나 제품 수정으로 세지 않는다. CUA AX의 모든 tab 선택 표기도 실제 DOM의 aria-selected와 다르므로 그 표기만으로 앱의 탭 선택 결함을 단정하지 않았다.
+
+## 26. 동일 MLX 공용 프로필의 두 모델·원래 실행 복원
+
+같은 소스에서 기존 외부 MLX 0.7.6 등록을 사용했다. 등록의 소유권은 external이며 Python이 별도 관리형 환경의 실제 venv를 참조한다는 사실과 구분한다. Qwen3와 Gemma4의 loader/processor 모듈 및 실제 서로 다른 model_type를 먼저 확인했다. 새 모델을 다운로드하거나 기존 모델·외부 환경을 변경하지 않았다.
+
+- 모델 A: `mlx-community/Qwen3-VL-2B-Instruct-4bit`, revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`.
+- 모델 B: `mlx-community/gemma-4-E2B-it-4bit`, revision `238767527555cb75a05732a84dff5d6ba0dd6809`. 출처·파일 검증은 21절의 고정 자료를 사용했다.
+- 실제 UI Save as new로 global 프로필 `Native shared models ORBIT-97`을 만들었다. 기존 음성 검증 프로필과 동일한 enable_thinking=false·max_kv_size4096·max_num_seqs1·max_tokens128·temperature0, 빈 system prompt를 사용했다. runtime/model/credential을 프로필 설정에 넣지 않았다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 모델 A의 공용 프로필 실행·응답 | pass | 실제 MLX/runtime/프로필 선택→Save profile & start→새 Chat 질문에서 9+8=17의 한국어 응답을 받았다. `goal-native-audio-shared-qwen-mlx-{ready,response}-20261008.json`/PNG, PP53·TG11·PP0.14 s/367.1 tok/s·TG0.17 s/64.4 tok/s. 표시 모델명과 저장 execution이 선택한 Qwen3에 해당했다. |
+| 모델 B에 같은 프로필 적용·응답 | pass | A의 실제 Unload 뒤 B 경로를 Load into editor했다. B의 기존 저장 프로필이 먼저 복원되는 것을 확인하고 ORBIT-97을 명시적으로 선택했다. Save profile & start→새 Chat에서 9+8=17의 한국어 응답을 받았다. `goal-native-audio-shared-gemma-{selected,ready,response}-20261008.json`/PNG, PP53·TG27·PP0.16 s/330.3 tok/s·TG0.57 s/47.7 tok/s. |
+| 프로필·응답 이력 보존 | pass | `goal-native-shared-profile-independent-audit-20261008T042822640954Z.json`에서 같은 profile ID·global scope·설정·prompt를 확인했다. 정상 저장에 따라 A의 applied revision은2, B는3이며 둘의 설정 내용은 같다. A/B의 MLX 실행 단계에서 이전18개 프로필·기존28개 대화는 그대로였다. `goal-native-audio-shared-qwen-history-20261008.json`/PNG에서 B 실행 중 A의 저장 모델명·응답·PP/TG를 다시 열어 확인했다. |
+| catalog 밖 snapshot의 친숙한 이름 자동 해석 | unsupported | B 경로는 UI와 저장 응답의 표시 이름이 revision 해시였다. 기존 displayPaths의 임의 snapshot fallback과 일치한다. config/processor/tokenizer JSON에는 repository 이름이 없고 README 제목을 표시 이름으로 읽는 기능은 구현하지 않았다. 경로의 상위 폴더명이나 base_model로 변환 모델명을 추정하거나 이 검증용 파일에 provenance를 덧붙이지 않았다. 추론·프로필 성공과 이 표시 한계를 구분한다. |
+| 원래 vLLM 모델 복원·실제 응답 | pass | B의 실제 Unload 뒤 원래 Qwen3/vllm-metal 0.30/Default·4096 설정을 UI에서 선택·저장/시작했다. `goal-native-audio-shared-{restore-ready,restored-response,final}-20261008.json`/PNG에서 ORBIT-97C의 2+3=5 응답·PP54/TG12·TG0.76 s/14.5 tok/s와 원래 ORBIT-84 화면·빈 입력·API off·active requests0·렌더 오류/overlay0을 확인했다. PP 시간·rate는 미제공이므로 —를 유지했다. |
+
+기존28개 대화는 보존하고 새 합성 A/B/복원 대화3개를 더해 총31개다. 새 공용 프로필·두 MLX binding은 검증 자료로 보존했다. 원래 vLLM 복원의 정상 저장으로 기존 Default 프로필과 해당 binding revision은7→8로 증가했고 설정 내용은 같다. settings_profiles 이외 config 값은 검사 직전과 동일하다. 정상 저장에 따른 프로필·binding revision 증가를 원본 파일 전체 불변으로 설명하지 않는다. 이 순차 실행 검사는 두 모델의 동시 실행이나 두 엔진의 모든 기능 동등성을 증명하지 않는다.
+
+`goal-native-shared-profile-restoration-independent-audit-20261008T043432448217Z.json`은 최종 config와 실제 디스크 일치·기존17개 프로필의 정확한 보존·Default의 revision 이외 값 보존·기존28개와 새3개 응답의 SHA256을 독립 확인했다. 기록된 이전 모델 프로세스4개는 부재했고 이전 loopback 포트3개는 모두 ECONNREFUSED였다. 원래 vLLM의 새 프로세스는 존재하며 running·API off·active requests0을 유지했다. 새 A/B/C 응답의 파일은 각 응답 capture부터 최종 capture·현재 디스크까지 같았다.
+
+25·26절은 21절 당시 남은 범위 중 창 숨김/설정 복원과 동일 엔진 두 모델의 공용 프로필 재사용을 보완한다. MCP native Yes/No→실제 호출/후속 응답/호출 중 Stop, 실제 한글 IME composition, 트레이 Show/Quit·Dock 클릭, 추가 대비/VoiceOver·promised/unreadable clipboard는 여전히 미검증이다. M04/M07의 실제 내용 실패·upstream 제약과 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun도 유지한다. **전체 M01–M12는 통과하지 않았다.** 개인 엔진 manifest·registry·adapter는 별도 장기 설계이며 구현 완료로 계산하지 않았다. 제품 코드·Rust/Python·공개 API·lockfile 변경이 없어 기존 공통 검사를 반복 실행하지 않았다. 최신 제품 소스의 공통 검사와 패키지 근거는 23·24절에 유지한다. raw/build·모델·캡처는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
