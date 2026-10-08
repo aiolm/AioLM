@@ -12,6 +12,7 @@
 - 29–30절은 `e594c57`의 Discover 배치와 실제 다크 화면, 31–32절은 `7afc07e`의 수동 MCP 진행·취소, 33–34절은 `25d71a5`의 MCP 검색 선택 소유권, 35–36절은 `91ffd3d`의 서버 정의 변경·승인 폐기와 각 소스의 DMG 후속 기록이다.
 - 37절은 `7d71937`에서 제품 코드를 변경하지 않고 Gemma4 음성 내용 실패를 실제 앱과 직접 엔진 요청으로 구분한 후속 기록이다. 긴 응답의 종료 이유 표시 결함도 추가로 확인했다.
 - 38절은 종료 이유 보존·출력 한도 안내 수정 `55606fd`와 실제 vLLM 부분 응답·재로드·다음 정상 응답·기존 실행 복원을, 39절은 해당 소스의 DMG를 기록한다.
+- 40절은 런타임 옵션 확인 중 프로필·저장값 보호 수정 `a294062`와 요청 전용 프로필의 재시작 없는 왕복 검증이다. 41절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -45,6 +46,7 @@
 | `25d71a5` | 다른 서버 선택 후 이전 검색의 도구/오류가 새 서버에 표시됐다. 검색 세대로 늦은 응답을 폐기한다. | 실제 선택 전환·이전 성공/오류 폐기·현재 실패/재시도·16개 peer 정리, 합성7개 회귀·공통 UI1748 tests. 33절 참조. |
 | `91ffd3d` | 실행 정의를 바꿔 저장한 뒤 이전 도구·검토·승인이 남았다. 정의 변경의 메타데이터/승인·호출 소유권과 저장 응답 선택을 보호한다. | 실제 변경 저장·재검색·같은 정의 재저장·비활성화·승인 대기 취소/소유 PID 정리, 합성13개 회귀·공통 UI1761 tests. 35절 참조. |
 | `55606fd` | 토큰 한도로 잘린 응답을 완료로 표시하고 종료 이유를 기록에서 잃었다. 종료 이유를 보존하고 부분 응답 안내·완료 알림 억제·잘린 도구 요청의 승인 방지를 공통 Chat 계층에 적용한다. | 실제 vLLM length→재로드→다음 stop 응답, 합성6개 회귀·공통 UI1767 tests. 38절 참조. |
+| `a294062` | 옵션 확인 대기를 잘못된 값·미저장 편집으로 취급하고 아직 조회하지 못한 옵션의 삭제를 제안했다. 확인 중 상태와 오류를 분리하고 schema 실패를 값 재검증으로 지우지 않는다. | 실제 native pending·잘못된 입력·복원, 합성6개 회귀·공통 UI1773 tests. 40절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -742,3 +744,33 @@ Browser plugin이 제공되지 않아 CUA 네이티브 조작과 읽기 전용 W
 - GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG를 `goal-package-55606fd/`에 보존했다.
 
 생성 후 실제 CUA Chat 화면과 `goal-native-audio-chat-limit-orbit103-postpackage-55606fd.json`/PNG, `goal-chat-limit-orbit103-postpackage-preservation-55606fd.json`의 9개 조건에서 복원 직후 config 전체 SHA256·38개 대화의 목록/해시·localStorage·같은 running 모델 PID·runtime/model·MCP 정의·API off·idle·빈 composer·render error/overlay 0을 재확인했다. 화면의 기존 응답과 지표는 재표시이며 패키지 생성 후 새 추론으로 설명하지 않는다. production 앱을 실행하지 않았으며 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 실제 결과도 추정하지 않는다. 38절의 수정과 패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 40. 런타임 옵션 확인 중 프로필·저장값 보호
+
+수정 소스는 `a294062deebd63827ec59708b5af3c3ef41c2de3`다. 설정을 열었을 뿐인데 schema/값 확인 대기를 invalid로 처리해 `Editing`·`unsaved changes`·Revert를 표시하는 제품 결함을 수정했다. 아직 schema를 받지 못한 저장 옵션을 unsupported로 판단하고 `Clear value`를 제안하는 문제도 수정했다. 확인 중에는 저장·프로필 적용·시작을 막고 확인 상태를 표시하되 편집으로 취급하지 않는다. Close·실행 중 모델 Unload는 사용할 수 있다. 실제 잘못된 값과 성공적인 schema 조회에서 확인된 미지원 옵션은 계속 오류로 처리한다.
+
+schema 조회 오류를 값 검증·import·preview 오류와 분리했다. 다른 값을 편집하여 값 검증에 성공해도 schema 조회 실패는 해제하지 않는다. schema를 다시 성공적으로 조회해야 적용할 수 있다. 공통 옵션 editor와 프로필 흐름을 수정했으며 새 engine 이름 분기·설정 기본값·native/Python 코드·dependency·lockfile·공개 API/benchmark 계약은 변경하지 않았다. 영어·한국어·일본어·중국어 확인 중 문구를 추가했다.
+
+| 검증 범위 | 상태 | 실제 근거와 한계 |
+| --- | --- | --- |
+| 실제 확인 대기와 정상 설정 | pass | 최종 frontend의 native WKWebView를 CUA로 열고 읽기 전용 getter로 20초 관측했다. `goal-option-check-orbit104-native-frames-finalsource-20261008.json`/최종 PNG의 401 frames 중 실제 pending 3 frames가 있다. invalid/unsaved changes·render error/overlay는 0이다. pending에서 profile 선택·Save profile·Save as new는 disabled, Close는 enabled, unchecked Clear value는 없다. 검증 속도를 인위적으로 늦추거나 UI/IPC를 조작해 상태를 만들지 않았다. |
+| 실제 잘못된 입력·취소 복원 | pass | CUA로 Generation의 max_tokens에 잘못된 문자열을 입력했을 때 field 오류·provider:max_tokens 안내·저장 차단이 남았다. 값을 지운 뒤 깨끗한 Default 상태로 돌아와 Close를 실행했다. `goal-native-audio-option-check-orbit104-native-invalid-20261008.json`/PNG와 최종 `goal-native-audio-option-check-orbit104-restored-finalsource-20261008.json`/PNG. 미저장 invalid draft는 config를 쓰지 않았다. 최종 schema 오류 분리 보완은 별도 합성 회귀로 검사했으며 실제 엔진의 schema 장애를 유발한 검증은 아니다. |
+| 요청 전용 프로필의 즉시 적용·왕복 | pass | 같은 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`·외부 vllm-metal 0.30.0 실행에서 기존 max_tokens=16 프로필을 UI 선택하고 Default로 돌아왔다. engine request_fields가 max_tokens=16→빈 값으로 즉시 바뀌고 동일한 running PID를 유지했다. `goal-native-audio-profile-roundtrip-orbit104-{baseline,limited,restored}-20261008.json`/PNG. 38절의 Unload/Start는 당시 수행한 복원 절차이며 요청 옵션 변경 자체에 필요한 절차는 아니다. 이번에는 새 추론을 실행하지 않았다. |
+| 기존 설정·데이터 보존 | pass | `goal-option-check-orbit104-evidence-audit-20261008.json`의 36개 조건은 기존 38개 대화의 전체 목록/해시와 20개 프로필 entry의 정확한 내용·revision 보존, 같은 PID·원래 engine/model·API off·idle·빈 composer·localStorage·MCP 정의를 확인한다. 프로필 왕복에 따라 library 52→54·applied/provider_recent이 갱신됐으며 한도 선택 중 provider_options에 max_tokens=16만 추가됐다. 원래 프로필 복원 이후 invalid 입력·최종 확인/Close 동안 config 전체 SHA256은 같다. 전체 왕복 동안 config가 불변이었다고 설명하지 않는다. |
+
+수정 전 선택한 새 회귀 5개는 4 fail/1 pass였다. 후속 schema 오류 보존 회귀를 추가하여 총 6개를 검증했다. 최종 ProviderControls 검사 16 tests·전체 unit 177 files/1773 tests와 typecheck·lint·build는 모두 종료 0이다. 최종 소스 검사는 `logs/goal-option-check-orbit104-settled-{typecheck,lint,unit,build}-20261008.log`에 보존했으며 각각 10.20s·5.83s·130.46s·13.42s, coverage 80.63/75.51/79.01/84.75%다. 보완 전 전체 unit이 실행 중이었으므로 그 실행을 끝낸 뒤 확정 소스에 대해 다시 검사했다. 기존 jsdom pseudo-element/canvas 진단과 500kB chunk 경고는 유지한다. `goal-option-check-orbit104-committed-source-20261008.json`은 관측한 5개 소스 파일과 수정 커밋의 정확한 해시 일치를 확인한다.
+
+최초 읽기 전용 감사가 한도 프로필 선택 중에도 non-profile config 전체 불변을 요구해 실패한 것은 감사 조건 오류다. 실제 의도한 max_tokens=16 변경만 허용하고, 복원 이후 전체 config 불변을 검사하는 v2 감사로 바로잡았다. 첫 실패 로그도 보존했다. Browser plugin이 없어 실제 Tauri WKWebView `localhost:1420`·CUA와 읽기 전용 WebDriver getter/PNG를 사용했다. native 1280×800·web 1280×768 범위이며 다른 viewport·모든 언어/VoiceOver·production Finder 실행을 새로 검증한 것은 아니다.
+
+이 수정은 공통 기능을 유지하고 런타임만 교체하는 [장기 설계](pluggable-inference-runtimes.ko.md)에 맞춘 기존 옵션 검증 결함 수정이다. 개인 엔진 registry·versioned manifest·adapter 등록은 아직 구현되지 않았다. Gemma4 음성 내용 실패와 기존 upstream 오류·blocked/unrun, **전체 M01–M12 미통과**를 유지한다. raw·합성 자료·빌드는 ignored tmp에 보존했으며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 41. 런타임 옵션 보호 수정 소스 `a294062`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `a294062deebd63827ec59708b5af3c3ef41c2de3`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-native-option-check-package-a294062.log`, `logs/goal-native-option-check-inspect-package-a294062.log`, `goal-native-option-check-package-a294062-results.json`이 근거다. 빌드 230.86s·검사 3.78s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16775070 bytes, SHA256 `e30d2597419c1f734c63fc5e6de5db46b719c27dba0a6a73494a0d3d5f33cc2e`.
+- GUI `aiolm`: arm64, SHA256 `76799d497d36e8049554582cca836e56eb4bd44985795fd5a82463a120eb81c0`.
+- CLI `aiolm-cli`: arm64, SHA256 `70c9749e17b84361fbe58679d4c7d330338e770c022fd93da939a6a20b1ad112`.
+- GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG를 `goal-package-a294062/`에 보존했다.
+
+생성 후 실제 CUA Chat 화면과 `goal-native-audio-option-check-orbit104-postpackage-a294062.json`/PNG, `goal-option-check-orbit104-postpackage-preservation-a294062.json`의 8개 조건에서 복원 이후 config 전체 SHA256·38개 대화 목록/해시·localStorage·같은 running 모델 PID/engine/model·MCP 정의·API off·idle·빈 composer·render error/overlay 0을 재확인했다. 화면의 기존 답변·모델명·지표는 재표시이며 새 추론 결과로 설명하지 않는다. production GUI를 실행하지 않았으며 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 실제 결과도 추정하지 않는다. 40절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
