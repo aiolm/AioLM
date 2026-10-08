@@ -1,3 +1,4 @@
+import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
@@ -29,7 +30,7 @@ import ConfirmDialog from "../../shared/ui/ConfirmDialog";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerBusy } from "../../shared/lib/serverLifecycle";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import * as api from "../../shared/api/index";
 import { useDraftGuard } from '../../shared/state/draftGuard';
 import { useModelSettings } from '../model-settings/ModelSettingsProvider';
@@ -471,7 +472,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); }} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); }} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{<ModelName model={project.config.active_model} empty={t("ui.noModelShort")} />}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 app-card" >
@@ -494,7 +495,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
               <button type="button" data-icon="edit" onClick={openProjectEditor} disabled={modelSettings ? !cfg : !onOpenTuning} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
             </div>
             <dl className="mt-2 space-y-1 text-xs">
-              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{modelDisplayName(displayConfig?.active_model ?? '') || t("load.noModel")}<ModelBadges mode="compact" model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
+              <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldModelPath")}</dt><dd className="min-w-0 flex-1 truncate ui-color-ink" title={normalizeDisplayPath(displayConfig?.active_model ?? '')}><ModelIcon model={displayConfig?.active_model ?? ''} />{<ModelName model={displayConfig?.active_model} empty={t("load.noModel")} />}<ModelBadges mode="compact" model={displayConfig?.active_model ?? ''} localPath={displayConfig?.active_model ?? ''} /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldBackend")}</dt><dd className="ui-color-ink"><RuntimeSelectionLabel config={displayConfig} separator=" · " /></dd></div>
               <div className="flex gap-2"><dt className="w-20 shrink-0 ui-color-muted">{t("ui.fieldContext")}</dt><dd className="ui-color-ink">{providerOf(displayConfig ?? {}) !== 'llama.cpp'
                 ? providerOf(displayConfig ?? {}) === 'vllm' && typeof displayConfig?.provider_options?.vllm?.max_model_len === 'number'

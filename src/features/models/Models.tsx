@@ -1,3 +1,4 @@
+import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import ModelIcon from '../../shared/ui/ModelIcon';
@@ -16,7 +17,7 @@ import Badge from "../../shared/ui/Badge";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import { useI18n } from "../../shared/i18n/i18n";
 import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../shared/lib/serverLifecycle";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
@@ -362,7 +363,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
           <div className="min-w-0 flex-1">
             <div className="app-eyebrow">{isServerRunning(store.status.state) ? copy.running : store.status.state === 'starting' ? copy.starting : copy.stopping}</div>
             <TuningOptionMetadata fieldKey="raw-server:--model" />
-            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{modelDisplayName(models?.find((model) => model.path === liveModel)?.name ?? liveModel)}</div>}
+            {liveModel && <div className="app-text-wrap text-base font-semibold ui-color-ink" title={normalizeDisplayPath(liveModel)}>{<ModelName model={models?.find((model) => model.path === liveModel)?.name ?? liveModel} />}</div>}
             {/* Memory and slot status of the running model is what this card is for, so it starts expanded. */}
             <details className="models-runtime-details mt-1" open>
             <summary>{t("section.diagnostics")}</summary>

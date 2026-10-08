@@ -1,3 +1,4 @@
+import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -325,7 +326,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     onCancel={event => { event.preventDefault(); if (!disabled) { if (confirmSave) setConfirmSave(false); else if (pending) setPending(null); else guarded(onClose); } }}>
     <OverlayContainerContext.Provider value={overlay}>
       <div className="model-settings-shell">
-        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{cfg.active_model ? modelDisplayName(cfg.active_model) : copy.model}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></div>
+        <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{<ModelName model={cfg.active_model} empty={copy.model} />}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></div>
           <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></header>
         <div className="model-settings-layout" inert={!!pending || confirmSave || disabled}>
           <TabNav items={sections.map(value => ({ id: value, label: copy[value] }))} active={section as (typeof sections)[number]} onSelect={showSection} label={copy.title}

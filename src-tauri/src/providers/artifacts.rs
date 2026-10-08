@@ -490,6 +490,77 @@ fn hf_cache_revision(dir: &Path) -> Option<(String, String)> {
     Some((revision.to_owned(), repository))
 }
 
+/// A card title is a display label only. It never grants repository provenance,
+/// ownership, revision, loader support or readiness to a local snapshot.
+fn declared_snapshot_name(dir: &Path) -> Option<String> {
+    use std::io::Read;
+    const LIMIT: u64 = 64 * 1024;
+    let file = fs::File::open(dir.join("README.md")).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > LIMIT {
+        return None;
+    }
+    let text = std::str::from_utf8(&bytes)
+        .ok()?
+        .trim_start_matches('\u{feff}');
+    let mut frontmatter = false;
+    let mut fence: Option<(u8, usize)> = None;
+    for (index, line) in text.lines().enumerate() {
+        // Indented code examples cannot declare the model card's heading.
+        if line.starts_with("    ") || line.starts_with('\t') {
+            continue;
+        }
+        let line = line.trim();
+        if index == 0 && line == "---" {
+            frontmatter = true;
+            continue;
+        }
+        if frontmatter {
+            if line == "---" || line == "..." {
+                frontmatter = false;
+            }
+            continue;
+        }
+        let delimiter = line
+            .as_bytes()
+            .first()
+            .copied()
+            .filter(|byte| matches!(byte, b'`' | b'~'));
+        let count = delimiter.map_or(0, |byte| {
+            line.bytes().take_while(|next| *next == byte).count()
+        });
+        if let Some((byte, length)) = fence {
+            if delimiter == Some(byte) && count >= length && line[count..].trim().is_empty() {
+                fence = None;
+            }
+            continue;
+        }
+        if count >= 3 {
+            fence = Some((delimiter?, count));
+            continue;
+        }
+        let Some(title) = line.strip_prefix("# ") else {
+            continue;
+        };
+        let (publisher, model) = title.trim().split_once('/')?;
+        let component = |part: &str| {
+            !part.is_empty()
+                && part.len() <= 128
+                && part.starts_with(|first: char| first.is_ascii_alphanumeric())
+                && !part.contains("..")
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || "._-".contains(ch))
+        };
+        return (component(publisher) && component(model)).then(|| model.to_owned());
+    }
+    None
+}
+
 /// Inspect a snapshot directory. Never fails: unreadable parts become notes
 /// and missing files, so an unknown artifact stays visible in the library.
 pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
@@ -696,6 +767,20 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
         }
         None => {}
     }
+    // Preserve user-chosen folder names and established repository naming. Only
+    // an otherwise opaque revision label may use an explicitly declared title.
+    let name = if repository.is_none()
+        && name.len() == 40
+        && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && dir
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|part| part == "snapshots")
+    {
+        declared_snapshot_name(dir).unwrap_or(name)
+    } else {
+        name
+    };
     missing.sort();
     missing.dedup();
     if format == ArtifactFormat::HfSafetensors && architectures.is_empty() && model_type.is_none() {
@@ -917,6 +1002,57 @@ mod tests {
 
     fn write(dir: &Path, name: &str, contents: &[u8]) {
         fs::write(dir.join(name), contents).unwrap();
+    }
+
+    #[test]
+    fn external_revision_uses_its_declared_card_name_without_repository_provenance() {
+        let root = temp_dir("declared-card-name");
+        let dir = root.join("snapshots").join("a".repeat(40));
+        fs::create_dir_all(&dir).unwrap();
+        write(&dir, "config.json", br#"{"model_type":"synthetic"}"#);
+        write(&dir, "model.safetensors", b"synthetic");
+        write(&dir, "tokenizer.json", b"{}");
+        let before = inspect_snapshot(&dir);
+        write(&dir, "README.md", b"---\nbase_model: original/base-model\n---\n\n# example/converted-model-4bit\n\nModel card.\n");
+        let after = inspect_snapshot(&dir);
+        assert_eq!(after.name, "converted-model-4bit");
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.repository, None);
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.ownership, "external");
+        assert_eq!(after.format, before.format);
+        assert_eq!(after.modalities, before.modalities);
+        assert_eq!(after.missing, before.missing);
+        assert_eq!(after.incomplete, before.incomplete);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn card_examples_and_invalid_titles_do_not_rename_local_snapshots() {
+        let root = temp_dir("card-name-fallback");
+        let dir = root.join("snapshots").join("b".repeat(40));
+        fs::create_dir_all(&dir).unwrap();
+        for text in [
+            "---\nbase_model: original/base-model\n---\nNo declared title.",
+            "```markdown\n# example/from-code\n```\nNo declared title.",
+            "# Model card\n# example/a-later-section",
+            "    # example/from-indented-code",
+            "````markdown\n```\n# example/from-nested-fence\n```\n````",
+            "---\n# example/unclosed-frontmatter",
+            "# <script>example/model</script>",
+            "# example/../other",
+            "# example/model extra text",
+        ] {
+            write(&dir, "README.md", text.as_bytes());
+            assert_eq!(inspect_snapshot(&dir).name, "b".repeat(40));
+        }
+        write(&dir, "README.md", &vec![b'x'; 64 * 1024 + 1]);
+        assert_eq!(inspect_snapshot(&dir).name, "b".repeat(40));
+        write(&dir, "README.md", b"# example/a-valid-title\n");
+        let ordinary = root.join("user-selected-name");
+        fs::rename(&dir, &ordinary).unwrap();
+        assert_eq!(inspect_snapshot(&ordinary).name, "user-selected-name");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1,8 +1,9 @@
+import ModelName from '../../shared/ui/ModelName';
 import { useEffect, useRef } from "react";
 import type { ChatThread } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { CustomSelect } from "../../shared/ui/CustomSelect";
-import { modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
+import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import type { AppConfig } from '../../shared/api/types';
@@ -84,7 +85,7 @@ export default function ChatConversationHeader({
           <div>
             <label className="block text-xs font-medium ui-color-ink" htmlFor="chat-session-target">{sessionLabel}</label>
             <CustomSelect id="chat-session-target" className="chat-session-picker mt-1.5" value={selectedSessionId} disabled={phase !== "idle" || targetBusy} onChange={onSelectSession} options={sessionOptions.map(option => ({ value: option.id, label: option.label, disabled: option.disabled }))} />
-            {model && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted" title={normalizeDisplayPath(model)}><ModelIcon model={model} />{modelDisplayName(model)}</p>}
+            {model && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted" title={normalizeDisplayPath(model)}><ModelIcon model={model} />{<ModelName model={model} />}</p>}
             {runtimeConfig && <p className="mt-1.5 text-xs app-text-wrap ui-color-muted"><RuntimeSelectionLabel config={runtimeConfig} /></p>}
           </div>
           {embedding && <div>

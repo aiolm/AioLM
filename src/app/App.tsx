@@ -1,3 +1,4 @@
+import { useModelName } from '../shared/ui/ModelName';
 import ModelIcon from '../shared/ui/ModelIcon';
 import StableLabel from "../shared/ui/StableLabel";
 import StatusBadge from "../shared/ui/StatusBadge";
@@ -28,7 +29,7 @@ import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
 import { PROVIDERS, providerDisplayName, providerOf, type ProviderId } from '../shared/api/providers';
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { applyTypography } from "../shared/config/typography";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
+import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
 import { DraftGuardProvider } from '../shared/state/draftGuard';
 import { useExecutionStore } from '../features/models/useExecutionStore';
 import { executionText } from '../shared/i18n/executionI18n';
@@ -73,11 +74,6 @@ function TaskActivity({ hasActivity, title, indicator, children }: { hasActivity
     <summary><span>{title}</span><span className="app-activity-count" aria-live="polite">{tasks.filter(task => task.state === "running" || task.state === "cancelling").length}</span>{indicator}</summary>
     <div className="app-activity-content">{children}</div>
   </PanelFeedbackActivity>;
-}
-
-function shortModel(path: string | undefined, emptyLabel: string): string {
-  if (!path) return emptyLabel;
-  return modelDisplayName(path);
 }
 
 export default function App() {
@@ -275,6 +271,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "diagnostics";
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
+  const liveModelName = useModelName(liveModel);
   const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
   const backendLabel = providerDisplayName(providerOf(runtimeConfig ?? {}));
 
@@ -307,7 +304,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     <div className="app-main-column">
       <header className="aiolm-header">
         <div className="aiolm-heading"><button ref={menuButton} type="button" className="app-icon-button aiolm-menu-trigger" aria-label={copy.openMenu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><h1>{title}</h1></div>
-        <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${shortModel(liveModel, '')}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{shortModel(liveModel, modelCopy.choose)}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
+        <div className="aiolm-runtime-context" role="group" aria-label={modelCopy.defaultScope}><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-model" aria-label={liveModel ? `${modelCopy.choose}: ${liveModelName}` : modelCopy.choose} title={liveModel ? normalizeDisplayPath(liveModel) : modelCopy.choose} onClick={openModels}>{liveModel ? <ModelIcon model={liveModel} /> : <span className="aiolm-context-dot" aria-hidden="true" />}<span className="aiolm-context-label">{liveModelName || modelCopy.choose}</span></button><button type="button" className="app-button app-button--ghost app-button--sm aiolm-context-runtime" aria-label={modelCopy.settings} title={liveModel ? backendLabel : modelCopy.settings} onClick={() => modelSettings.open({ target: { kind: 'default' }, section: 'runtime' })}><span className="aiolm-context-label"><RuntimeSelectionLabel config={runtimeConfig} separator=" · " /></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></button></div>
         <div className="aiolm-server"><StatusBadge className="aiolm-status" role="status" label={t(modelStatusKey(serverState))} tone={serverState === 'running' ? 'success' : serverState === 'failed' || serverState === 'crashed' ? 'danger' : serverState === 'starting' || serverState === 'stopping' ? 'warning' : 'neutral'} />{(serverState === 'running' || serverState === 'starting' || serverBusy) && <button type="button" className="app-button app-button--secondary" disabled={!store.cfg || (serverBusy && serverState !== "starting")} onClick={() => void stopDefaultSession()}><StableLabel value={serverState === "running" || serverState === "starting" ? t("action.stop") : t("status.working")} labels={[t("action.stop"), t("status.working")]} /></button>}</div>
       </header>
       <div className="app-main-area">

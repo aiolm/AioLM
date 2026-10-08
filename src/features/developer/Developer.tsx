@@ -1,3 +1,4 @@
+import ModelName from '../../shared/ui/ModelName';
 import { useContext, useEffect, useRef, useState } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
@@ -5,7 +6,7 @@ import type { ViewId } from '../../shared/types/navigation';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { useI18n } from '../../shared/i18n/i18n';
 import { modelStatusKey } from '../../shared/lib/serverLifecycle';
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { normalizeDisplayPath, normalizeDisplayText } from '../../shared/lib/displayPaths';
 import PanelFeedback, { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -42,7 +43,7 @@ function ModelDiagnostics({ store }: { store: AppStore }) {
       <section className="developer-section--diagnostics api-section">
         <h3>{t('ui.diagnosticsTitle')}</h3>
         <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
-          {model && <> · <span title={normalizeDisplayPath(model)}>{modelDisplayName(model)}</span></>}
+          {model && <> · <span title={normalizeDisplayPath(model)}>{<ModelName model={model} />}</span></>}
         </p>
         <p className="api-hint"><RuntimeSelectionLabel config={runtime} /></p>
         <pre tabIndex={0} role="region" aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>

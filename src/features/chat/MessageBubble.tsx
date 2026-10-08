@@ -1,9 +1,10 @@
+import ModelName from '../../shared/ui/ModelName';
 import MediaPreview from './MediaPreview';
 import { memo } from "react";
 import type { ChatHistoryMessage } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
-import { modelDisplayName, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
 import Badge from "../../shared/ui/Badge";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
@@ -76,7 +77,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
           {message.model && <ModelIcon model={message.model} />}
           <span className="min-w-0 [overflow-wrap:anywhere]">
             <span className="sr-only">{translate(locale, "ui.responseModel")}: </span>
-            {message.model ? modelDisplayName(message.model) : translate(locale, "ui.responseModelUnknown")}
+            {message.model ? <ModelName model={message.model} /> : translate(locale, "ui.responseModelUnknown")}
           </span>
         </div>}
         {/* One closing row for the answer: measurements along the left, the copy
