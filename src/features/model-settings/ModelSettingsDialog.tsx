@@ -92,6 +92,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   // waits: overwriting a profile is not undoable from here.
   const [confirmSave, setConfirmSave] = useState(false);
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
+  const [providerOptionsPending, setProviderOptionsPending] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [editorRevision, setEditorRevision] = useState(0);
   const [tuningRevision, setTuningRevision] = useState(0);
@@ -206,7 +207,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     return changed;
   };
   const commitProfile = async (prepare: () => ReturnType<typeof profiles.prepareApply>, preserveDraft = false) => {
-    if (disabled || applyLock.current) return;
+    if (disabled || applyLock.current || providerOptionsPending) return;
     applyLock.current = true; setApplying(true); setError('');
     try {
       const next = prepare();
@@ -230,7 +231,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     finally { applyLock.current = false; setApplying(false); }
   };
   const apply = async (intent: 'save' | 'start') => {
-    if (disabled || applyLock.current || invalid.size || profileDirty || pathPending || intent === 'start' && !cfg.active_model.trim()) return;
+    if (disabled || applyLock.current || providerOptionsPending || invalid.size || profileDirty || pathPending || intent === 'start' && !cfg.active_model.trim()) return;
     if (intent === 'save') {
       await commitProfile(() => ({ config: structuredClone(latest.current), edit: profiles.result(), applyTarget: true })).catch(() => undefined);
       return;
@@ -340,11 +341,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <SettingsProfileControl bannerTarget={profileBannerTarget} items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
               defaultProfileId={defaultSettingsProfileEntry(profiles.library, provider).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
               modelPath={cfg.active_model} currentSettings={settings} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={section === 'profiles'}
-              disabled={disabled} blocked={invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
+              disabled={disabled} blocked={providerOptionsPending || invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
               onApply={id => commitProfile(() => { const profile = profiles.available.find(item => item.id === id); if (!profile) throw new Error('This profile is no longer available.'); return profiles.prepareApply(profile); })}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
-              saveAction={<><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
+              saveAction={<><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
             {running && !liveMatches && <p className="model-settings-profile-status">{serverChanged ? profileCopy.next : profileCopy.request}</p>}
             {benchmark && <FeedbackBanner tone="info" className="model-settings-scope">{copy.benchmarkControlled}</FeedbackBanner>}
             <div hidden={section !== 'model'} className="model-settings-fields">
@@ -388,13 +389,14 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 onResetDrafts={() => { setTuningRevision(value => value + 1); setInvalid(previous => new Set([...previous].filter(key => key.startsWith('gpu_')))); }} />
             </div>
             <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
-            {!llama && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(section) && <ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} />}
+            {!llama && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(section) && <ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </SettingsProfileControl>
             </div>
           </div>
         </div>
         <footer className="model-settings-footer">
           <div className="model-settings-footer-summary" tabIndex={0}>
+            {providerOptionsPending && <p className="app-section-hint" role="status">{copy.checkingOptions}</p>}
             <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
               {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || compatibility?.status}</FeedbackBanner>}
               {!benchmark && mode !== 'project' && !live && setupGaps.length > 0 && <FeedbackBanner tone="warning" title={executionCopy.blockedTitle}><ul className="model-settings-blocked" aria-label={executionCopy.blockedTitle}>
@@ -411,7 +413,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           <div className="model-settings-actions">
             {!benchmark && mode !== 'project' && (live
               ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
-              : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
+              : <button type="button" className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
             {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" onClick={onCancelStart}>{copy.cancel}</button>}
           </div>
         </footer>

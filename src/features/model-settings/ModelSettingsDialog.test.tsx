@@ -52,6 +52,27 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it.each(['vllm', 'mlx-vlm'] as const)('keeps an unedited %s profile clean and blocks saving while its option check is pending', async provider => {
+    let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
+    vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+    const { onClose, onProfileCommit, onApply } = mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic', provider_options: {} }, initialSection: 'sampling' });
+    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalled());
+    expect(screen.getByText('Checking runtime options…')).toBeVisible();
+    expect(screen.queryByText(/Correct invalid fields/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unsaved changes/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Revert' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save as new' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
+    await act(async () => { finish([]); });
+  });
   it('applies a common profile from the fixed selector before selecting a primary model', async () => {
     const initialConfig = { ...cfg, active_model: '', settings_profiles: undefined };
     const first = { ...captureProfile(initialConfig, 'Initial setup', 'global', ''), id: 'initial-setup' };

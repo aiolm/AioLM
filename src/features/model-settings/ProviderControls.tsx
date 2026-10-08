@@ -42,14 +42,17 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   </div>;
 }
 
-export function ProviderOptions({ cfg, disabled, onChange, onInvalid, section }: {
+export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section }: {
   cfg: api.AppConfig; disabled: boolean; onChange: (patch: Partial<api.AppConfig>) => void; onInvalid: (key: string, invalid: boolean) => void;
+  onChecking?: (checking: boolean) => void;
   section?: string;
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const provider = api.providerOf(cfg);
   const [schema, setSchema] = useState<api.ProviderOption[]>([]);
   const [loadingSchema, setLoadingSchema] = useState(true);
+  const [schemaKnown, setSchemaKnown] = useState(false);
+  const [schemaError, setSchemaError] = useState('');
   const [runtimeFlags, setRuntimeFlags] = useState<string[] | undefined>();
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [validating, setValidating] = useState(true);
@@ -64,24 +67,33 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, section }:
     return () => { active = false; clearTimeout(timer); };
   }, [cfg]);
   useEffect(() => {
-    let active = true; setSchema([]); setRuntimeFlags(undefined); setLoadingSchema(true);
+    let active = true; setSchema([]); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError('');
     void Promise.all([api.providerCatalog(), api.providerRuntimes(), cfg.active_runtime ? api.providerRuntimeOptions(provider, cfg.active_runtime) : Promise.resolve(undefined)]).then(([catalog, runtimes, runtimeOptions]) => {
       if (active) {
         setSchema(runtimeOptions ?? catalog.find(item => item.id === provider)?.options ?? []);
         setRuntimeFlags(runtimes.find(item => item.provider === provider && item.id === cfg.active_runtime)?.server_flags);
+        setSchemaKnown(true);
         setLoadingSchema(false);
       }
-    }).catch(cause => { if (active) { setError(String(cause)); setLoadingSchema(false); } });
+    }).catch(cause => { if (active) { setSchemaError(String(cause)); setLoadingSchema(false); } });
     return () => { active = false; };
   }, [provider, cfg.active_runtime]);
-  const unknown = Object.keys(values).filter(key => !schema.some(option => option.key === key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model'].includes(key)
-    && !(key === 'trust_remote_code' && values[key] === false));
+  // Until the schema answers, absence from this list is not evidence that a
+  // saved option is unsupported. Do not offer destructive resets while probing.
+  const unknown = schemaKnown ? Object.keys(values).filter(key => !schema.some(option => option.key === key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model'].includes(key)
+    && !(key === 'trust_remote_code' && values[key] === false)) : [];
   const supports = (...flags: string[]) => !runtimeFlags || flags.every(flag => runtimeFlags.includes(flag));
   const showLora = supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined;
   const bindingKey = provider === 'vllm' ? 'request_lora' : 'draft_model';
   const showBinding = (provider === 'vllm' ? supports('--enable-lora', '--lora-modules') : supports('--draft-model')) || values[bindingKey] !== undefined;
   const unknownCount = unknown.length;
-  useEffect(() => { onInvalid('provider-options', validating || loadingSchema || issues.length > 0 || unknownCount > 0 || !!error); return () => onInvalid('provider-options', false); }, [unknownCount, issues, validating, loadingSchema, error, onInvalid]);
+  const checking = validating || loadingSchema;
+  useEffect(() => {
+    onChecking?.(checking);
+    // Callers without a separate pending state retain their existing save gate.
+    onInvalid('provider-options', (!onChecking && checking) || issues.length > 0 || unknownCount > 0 || !!error || !!schemaError);
+    return () => { onChecking?.(false); onInvalid('provider-options', false); };
+  }, [unknownCount, issues, checking, error, schemaError, onInvalid, onChecking]);
   const update = (key: string, value: unknown) => {
     const next = { ...values }; if (value === undefined) delete next[key]; else next[key] = value;
     onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
@@ -111,7 +123,8 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, section }:
     <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => void api.providerCommandPreview(cfg).then(args => { setError(''); setPreview(args.map(arg => JSON.stringify(arg)).join(' ')); }).catch(cause => setError(String(cause)))}>{copy.preview}</button>
     {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
     </>}
-    {!validating && !loadingSchema && !error && !advanced && !visible.length && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
+    {!validating && !loadingSchema && !error && !schemaError && !advanced && !visible.length && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
+    {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </div>;
 }

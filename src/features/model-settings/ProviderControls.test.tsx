@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
 import * as api from '../../shared/api';
@@ -12,6 +12,56 @@ vi.mock('../../shared/api', async importOriginal => ({
 }));
 
 describe('runtime-specific option controls', () => {
+  it('keeps saved options intact while their runtime schema is being checked', async () => {
+    let resolveSchema!: (options: api.ProviderOption[]) => void;
+    vi.mocked(api.providerRuntimeOptions).mockReturnValueOnce(new Promise(resolve => { resolveSchema = resolve; }));
+    const onInvalid = vi.fn(); const onChecking = vi.fn(); const onChange = vi.fn();
+    const view = render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: 'vllm', active_runtime: 'synthetic', provider_options: { vllm: { max_model_len: 8192 } } }} disabled={false} onChange={onChange} onInvalid={onInvalid} onChecking={onChecking} /></I18nProvider>);
+    expect(onChecking).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole('button', { name: 'Clear value' })).not.toBeInTheDocument();
+    expect(onInvalid).not.toHaveBeenCalledWith('provider-options', true);
+    await act(async () => { resolveSchema([{ key: 'max_model_len', flag: '--max-model-len', target: 'launch', group: 'context', kind: { type: 'integer' } }]); });
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    expect(screen.getByLabelText(/^--max-model-len/)).toHaveValue('8192');
+    expect(onChange).not.toHaveBeenCalled();
+    view.unmount();
+    expect(onChecking).toHaveBeenLastCalledWith(false);
+  });
+
+  it('blocks a failed runtime schema check without offering to reset unchecked options', async () => {
+    vi.mocked(api.providerRuntimeOptions).mockRejectedValueOnce(new Error('Synthetic schema probe failed'));
+    const onInvalid = vi.fn(); const onChecking = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: 'vllm', active_runtime: 'synthetic', provider_options: { vllm: { max_model_len: 8192 } } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={onChecking} /></I18nProvider>);
+    expect(await screen.findByText(/Synthetic schema probe failed/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Clear value' })).not.toBeInTheDocument();
+    await waitFor(() => expect(onInvalid).toHaveBeenCalledWith('provider-options', true));
+  });
+
+  it('still reports an option absent from a successfully loaded runtime schema', async () => {
+    const onInvalid = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: 'vllm', active_runtime: 'synthetic', provider_options: { vllm: { unsupported_option: 3 } } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={vi.fn()} /></I18nProvider>);
+    expect(await screen.findByText('unsupported_option')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Clear value' })).toBeEnabled();
+    await waitFor(() => expect(onInvalid).toHaveBeenCalledWith('provider-options', true));
+  });
+
+  it('keeps a failed schema check blocked when an option value triggers validation again', async () => {
+    vi.mocked(api.providerRuntimeOptions).mockRejectedValueOnce(new Error('Synthetic schema probe failed'));
+    const onInvalid = vi.fn(); const onChecking = vi.fn();
+    const config = { ...testConfig, active_provider: 'vllm' as const, active_runtime: 'synthetic', provider_options: { vllm: { max_model_len: 8192 } } };
+    const view = (cfg: api.AppConfig) => <I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={onChecking} /></I18nProvider>;
+    const rendered = render(view(config));
+    expect(await screen.findByText(/Synthetic schema probe failed/)).toBeVisible();
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    const calls = vi.mocked(api.providerOptionIssues).mock.calls.length;
+    rendered.rerender(view({ ...config, provider_options: { vllm: { max_model_len: 4096 } } }));
+    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledTimes(calls + 1));
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    expect(screen.getByText(/Synthetic schema probe failed/)).toBeVisible();
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true);
+    expect(screen.queryByRole('button', { name: 'Clear value' })).not.toBeInTheDocument();
+  });
+
   it('shows category-specific engine options and preserves values in other categories', async () => {
     vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'vllm', availability: { supported: true, detail: '' }, options: [
       { key: 'max_model_len', flag: '--max-model-len', target: 'launch', group: 'context', kind: { type: 'integer' } },
