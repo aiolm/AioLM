@@ -4,7 +4,7 @@
 
 ## 1. 소스·환경·근거
 
-- 실행일: 2026-10-07–08 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
+- 실행일: 2026-10-07–09 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
 - 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 23절은 MCP 조회·승인 대기 정리와 기술 입력 치환 수정 `bbd2df6`을, 24절은 해당 소스의 DMG를 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
@@ -15,6 +15,7 @@
 - 40절은 런타임 옵션 확인 중 프로필·저장값 보호 수정 `a294062`와 요청 전용 프로필의 재시작 없는 왕복 검증이다. 41절은 해당 소스의 DMG를 기록한다.
 - 42절은 외부 snapshot의 명시된 모델 카드 제목을 공통 표시 이름으로 사용하는 수정 `27bcca1`과 실제 MLX 실행·기록 재로드·vLLM 복원 검증이다. 43절은 해당 소스의 DMG를 기록한다.
 - 44절은 최소 창에서 벤치마크 결과 열에 접근할 수 없던 공통 UI 수정 `142fac3`과 실제 키보드·버튼·창 복원 검증이다. 45절은 해당 소스의 DMG를 기록한다.
+- 46절은 잠금 해제 후 네이티브 검증 재개, 이전 검증 서버 정리, 작업 알림이 본문 버튼을 가리는 결함 수정 `eb2d037`의 실제 재검증이다. 47절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -51,6 +52,7 @@
 | `a294062` | 옵션 확인 대기를 잘못된 값·미저장 편집으로 취급하고 아직 조회하지 못한 옵션의 삭제를 제안했다. 확인 중 상태와 오류를 분리하고 schema 실패를 값 재검증으로 지우지 않는다. | 실제 native pending·잘못된 입력·복원, 합성6개 회귀·공통 UI1773 tests. 40절 참조. |
 | `27bcca1` | 외부 snapshot의 응답·실행 모델명이 revision 해시로만 표시됐다. 로컬 카드의 명시된 제목을 제한적으로 읽고 공통 표시 계층에 적용한다. 모델 경로·provenance·호환성은 바꾸지 않는다. | 실제 MLX 실행·새 부분 응답·다른 엔진 실행 중 기존 기록 재로드, Rust 2개/UI 6개 회귀·공통 UI1779 tests. 42절 참조. |
 | `142fac3` | 최소 WKWebView에서 PP·TG·메모리 열이 가려지고 포커스한 표의 방향키도 가로 위치를 이동하지 않았다. 공통 표의 열 이동 버튼·방향키·Home/End와 넘침 감지를 추가했다. | 실제 세 결과 표의 독립 이동·desktop 복원·28개 보존 조건, 합성9개 회귀·공통 UI1788 tests. 44절 참조. |
+| `eb2d037` | 자동으로 펼쳐진 작업 알림이 MCP 검토 카드의 승인·취소 버튼을 덮어 끝까지 스크롤해도 접근할 수 없었다. 알림이 본문 공간을 확보하고 긴 내용만 별도로 스크롤하도록 수정했다. | 실제 desktop·최소 창의 버튼 접근·접기·긴 알림 스크롤, 17개 보존 조건·관련 UI35개·공통 UI1788 tests. 46절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -846,6 +848,43 @@ Frontend HMR가 연결된 기존 실제 Tauri WKWebView에서 검사했다. UI �
 - CLI `aiolm-cli`: arm64, SHA256 `77bcee63a720b0d1e82d0a403ba7b0c0441685ce5650c6a623b5389e3a8a62b1`.
 - GUI·CLI와 빌드 앱의 해시 일치, 일반 파일5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료0을 확인했다. 같은 해시의 DMG는 `goal-package-142fac3/`에 보존했다.
 
-생성 후 `goal-native-audio-layout-orbit106-postpackage-142fac3-20261008.json`/PNG와 `goal-layout-orbit106-postpackage-preservation-142fac3-20261008.json`의 읽기 전용 앱 관측 8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model/execution·API off·idle·빈 composer·관측 render error/overlay0을 확인했다. 기존 응답·지표이며 새 추론은 아니다. **패키징 이후의 마지막 CUA 네이티브 화면 재확인은 Mac 잠금으로 blocked**다. CUA가 수동 잠금 해제를 요구했고 사용자에게 요청했다. 내부 getter·WKWebView 캡처를 네이티브 화면 재확인 성공으로 계산하지 않는다. 44절의 잠금 전 실제 CUA 검증은 별도 근거다.
+생성 후 `goal-native-audio-layout-orbit106-postpackage-142fac3-20261008.json`/PNG와 `goal-layout-orbit106-postpackage-preservation-142fac3-20261008.json`의 읽기 전용 앱 관측 8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model/execution·API off·idle·빈 composer·관측 render error/overlay0을 확인했다. 기존 응답·지표이며 새 추론은 아니다. **당시 패키징 이후의 마지막 CUA 네이티브 화면 재확인은 Mac 잠금으로 blocked**였다. CUA가 수동 잠금 해제를 요구했고 사용자에게 요청했다. 내부 getter·WKWebView 캡처를 네이티브 화면 재확인 성공으로 계산하지 않는다. 44절의 잠금 전 실제 CUA 검증과 46절의 잠금 해제 후 재개는 별도 근거다.
 
 production GUI는 실행하지 않았고 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 결과도 추정하지 않는다. 이번 수정·패키지 통과를 전체 M01–M12 통과로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 46. 잠금 해제 후 작업 알림과 본문 버튼 접근 수정
+
+2026-10-09 (Asia/Seoul)에 잠금 해제된 실제 native debug 앱에서 CUA 검증을 재개했다. 원래 ORBIT-84 Chat·실행 모델 이름·39개 대화와 기존 PP/TG 기록을 확인했다. `goal-native-audio-resume-orbit109-baseline-20261009.json`/PNG가 근거다. 45절의 당시 잠금 차단 기록을 소급하여 pass로 바꾸지 않으며 production DMG GUI 실행이나 새 추론 성공으로 설명하지 않는다.
+
+이전 HTTP400 검증의 base GGUF 서버가 현재 앱 세션에 연결되지 않은 별도 process group·listener로 남아 있었다. 과거 실행 기록, 시작 시각·argv fingerprint·소유 자식 3개·group·listener를 다시 확인한 뒤 해당 group에만 SIGTERM을 보냈다. 3.59s 후 모두 부재·포트 닫힘이며 현재 실행은 유지됐다. `goal-resume-orbit109-old-runtime-cleanup-20261009.json`과 같은 이름의 로그가 근거다. 기존 조사 helper는 process 이름이 변경된 EngineCore를 누락하여 신호 전 조건 검사에서 중단했고, 완전한 inventory로 다시 확인했다. 개발 앱 교체의 잔여 프로세스인지 정상 종료 결함인지는 확정하지 않았다. 제품 수정이나 새 normal Quit 검증으로 계산하지 않는다.
+
+실제 MCP 도구 검색이 성공하며 작업 알림이 자동으로 펼쳐졌을 때, 검토 카드의 승인·취소 버튼이 알림 뒤에 가려졌다. 페이지는 scrollTop=812, scrollHeight=1500, clientHeight=688로 이미 끝이었으며 승인 버튼 top=654.05px의 hit 대상은 알림이었다. `goal-native-mcp-orbit109-review-geometry-before-20261009.json`/PNG가 재현 근거다.
+
+수정 `eb2d03770c860fe1c998187b6725d4098f2c9db7`은 공통 shell CSS만 변경한다. 펼친 activity가 정상 흐름에서 본문 공간을 확보하며 알림 내용은 최대 min(40vh, 320px)에서 별도로 스크롤한다. summary는 아래에 남고 닫히면 32px로 돌아간다. 알림 자동 펼침·native details 토글·작업 취소·승인 정책·엔진·요청·사용자 데이터 계약은 유지한다.
+
+| 실행 범위 | 상태 | 근거와 결과 |
+| --- | --- | --- |
+| Desktop 승인·취소 버튼 접근 | pass | 실제 native 1280×800 / WKWebView 1280×768에서 page bottom과 activity top은 652px, 승인 버튼 top=571.05px이며 hit가 버튼이다. CUA 스크롤 후 두 버튼과 알림이 동시에 보인다. `goal-native-mcp-orbit109-review-geometry-after-20261009.json`/PNG. |
+| 최소 창의 버튼·본문 | pass | 실제 CUA drag로 native 360×520 / WKWebView 360×488. 본문 높이 253px, 승인·취소 버튼 bottom=305.38px, activity top=354px이며 두 버튼 모두 hit=true. `goal-native-mcp-orbit109-review-minimum-20261009.json`/PNG. |
+| 접기·긴 알림의 독립 스크롤 | pass | CUA로 접으면 activity 높이 32px이며 본문/알림 경계736px에서 두 버튼이 접근 가능하다. 최소 창의 긴 작업 결과와 저장 알림은 activity 195.19px·내용 client 161/scroll 232px로 제한된다. 내부를 CUA 스크롤하면 scrollTop=71px·닫기 hit=true이며 본문 scrollTop=0을 보존한다. `goal-native-mcp-orbit109-activity-{closed,bounded-before,bounded-after}-20261009.json`/PNG. |
+| 실제 네이티브 승인 거부 결과 | blocked | UI에서 합성 echo 호출 검토 후 승인 대기를 시작했다. 별도 승인 owner 1개·도구 조회를 확인했고, 이후 UI는 `MCP tool call rejected by the user`·owner 부재·tools/call 0을 기록했다. 실제 No 버튼 조작은 자동 도구가 선택하지 못하는 범위이며 사용자 확인도 아직 없으므로 No 통과로 세지 않는다. `goal-native-mcp-orbit109-native-{pending,rejected}-20261009.json`. Yes 이후 실제 호출·모델 후속 응답·실제 호출 중 취소도 여전히 blocked다. |
+| 설정·실행·자료 복원 | pass | CUA로 이번 합성 서버를 비활성화·저장하고 작업 알림을 닫은 뒤 원래 Chat과 1280×800 창으로 돌아왔다. 최종 감사 17/17에서 config hash/값·21개 profile 전체 library·39개 대화 목록/hash·localStorage·같은 running PID/engine/model·세션 실행값·API off·idle·빈 composer·error/overlay0·기존 MCP 5개 정의와 enable 상태가 같다. 새 정의 1개만 disabled로 보존하고 합성 root/child 4개가 부재·tools/call 0이다. `goal-resume-orbit109-preservation-v3-20261009.json` 및 `goal-native-audio-resume-orbit109-final-20261009.json`/PNG. 세션의 elapsed idle_seconds만 증가했다. |
+
+검증 조작은 CUA이고 WebDriver는 읽기 전용 상태·DOM·geometry·캡처 관측이다. Browser plugin은 없으며 실제 Tauri를 일반 브라우저로 대체하지 않았다. 의미 있는 화면·페이지 identity·프레임워크 overlay 없음·관측 error 0·캡처·상호작용을 확인했지만 DevTools 전체 console·VoiceOver·Windows/Linux의 실제 화면 검증으로 확대하지 않는다. 감사 helper 초기 버전의 object identity 비교·잘못된 profile 필드/형식과 증가하는 idle_seconds 비교를 구조화된 값·settings_profiles.entries·실행값 검사로 바로잡았다. 초기 기록도 보존했다. 승인 관측의 초기 출력 helper는 event 대신 kind를 읽었으므로 실제 tools/call 0의 근거는 원본 event 배열과 최종 감사다.
+
+`logs/goal-layout-orbit109-{typecheck,lint,unit,build}-20261009.log`에서 각각 10.03s·5.76s·131.40s·12.92s, 종료 0이다. 전체 unit은 계약/direct/script·UI 179 files/1788 tests, coverage80.68/75.57/79.08/84.80%이며 관련 3 files/35 tests도 통과했다. 기존 jsdom 진단·frontend chunk 경고는 남아 있다. CSS의 실제 geometry 회귀를 검사했으며 이를 그대로 옮긴 별도 jsdom layout 검사는 추가하지 않았다. Rust/Python 제품 소스·lockfile은 변경하지 않았다. 커밋 전 staged file/diff·개인정보·공백을 검토했고 `goal-layout-orbit109-committed-source-20261009.json`의 수정 파일 hash는 커밋과 같다.
+
+이 수정은 엔진과 무관한 공통 UI 경계를 유지한다. [개인 엔진 설계](pluggable-inference-runtimes.ko.md)의 registry·manifest·adapter 등록은 여전히 미구현이다. M03/M04/M07 실제 내용 실패·upstream 제한, MCP Yes 이후 호출·트레이/Dock·OS 알림 수신 차단, 별도 계정·Finder·Keychain·upgrade·Intel/구형 macOS의 unrun을 유지하며 **전체 M01–M12는 통과하지 않았다.** raw·캡처·fixture·빌드는 ignored tmp에 보존했고 공개 업로드·원격 push는 수행하지 않았다.
+
+## 47. 작업 알림 배치 수정 소스 `eb2d037`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `eb2d03770c860fe1c998187b6725d4098f2c9db7`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-layout-orbit109-package-eb2d037-20261009.log`, `logs/goal-native-activity-layout-inspect-package-eb2d037-20261009.log`, `goal-native-activity-layout-package-eb2d037-results.json`이 근거다. 빌드 235.04s·검사 4.92s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16776745 bytes, SHA256 `b21dc60c689a9600d922c95ce63f8170c00c82c04082227451111c4b0081efb7`.
+- GUI `aiolm`: arm64, SHA256 `cd34581f51d75aabd2d97ee35729d63d366a4f3aeee68915e05ee0fa7c5e4aef`.
+- CLI `aiolm-cli`: arm64, SHA256 `77bcee63a720b0d1e82d0a403ba7b0c0441685ce5650c6a623b5389e3a8a62b1`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG는 `goal-package-eb2d037/`에 보존했다.
+
+패키징 후 실제 CUA native Chat 화면을 다시 확인했다. `goal-native-audio-resume-orbit109-postpackage-eb2d037-20261009.json`/PNG와 `goal-layout-orbit109-postpackage-preservation-eb2d037-20261009.json`의 9개 조건에서 config 전체 hash/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model·세션 실행값·MCP 정의·API off·idle·빈 composer·관측 error/overlay0과 잠금 해제된 실제 화면을 확인했다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 46절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
