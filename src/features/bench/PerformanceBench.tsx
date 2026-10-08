@@ -1,3 +1,4 @@
+import BenchmarkTableScroll from './BenchmarkTableScroll';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -95,7 +96,7 @@ function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; c
   if (!rows.length) return null;
   return <section className="app-card app-card--flush performance-card performance-results" aria-labelledby={batch ? "perf-batch-title" : "perf-single-title"}>
     <div className="performance-card-heading"><h3 id={batch ? "perf-batch-title" : "perf-single-title"}>{batch ? copy.batch : copy.single}</h3><Badge>{rows.length}</Badge></div>
-    <div className="performance-table-scroll" role="region" aria-label={batch ? copy.batch : copy.single} tabIndex={0}>
+    <BenchmarkTableScroll label={batch ? copy.batch : copy.single} copy={copy}>
       <table>
         <caption className="sr-only">{batch ? copy.batch : copy.single}</caption>
         <thead><tr>
@@ -113,7 +114,7 @@ function ResultTable({ rows, batch, copy }: { rows: Summary[]; batch: boolean; c
           <td>{row.error ? copy.unavailable : numberLabel(row.e2e_ms / 1000, copy, 2)}</td><td>{numberLabel(row.total_tps, copy)}</td><td>{row.peak_memory_bytes == null ? copy.unavailable : formatBytes(row.peak_memory_bytes)}</td>
         </tr>)}</tbody>
       </table>
-    </div>
+    </BenchmarkTableScroll>
   </section>;
 }
 

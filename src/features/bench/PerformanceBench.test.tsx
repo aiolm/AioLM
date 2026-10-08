@@ -61,6 +61,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("Performance benchmark workflow", () => {
+
+  it('lets a narrow result table reveal its hidden phase columns with the keyboard', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run benchmark' }));
+    const table = (await screen.findByRole('table', { name: 'Single requests' })).parentElement!;
+    Object.defineProperties(table, { clientWidth: { configurable: true, value: 320 }, scrollWidth: { configurable: true, value: 960 } });
+    fireEvent(window, new Event('resize'));
+    table.focus();
+    fireEvent.keyDown(table, { key: 'ArrowRight' });
+    expect(table.scrollLeft).toBeGreaterThan(0);
+    expect(within(table).getAllByText('100.0')).toHaveLength(2);
+    expect(within(table).getByText('40960.0')).toBeVisible();
+    fireEvent.keyDown(table, { key: 'End' });
+    expect(table.scrollLeft).toBe(640);
+    fireEvent.keyDown(table, { key: 'Home' });
+    expect(table.scrollLeft).toBe(0);
+  });
+
   const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null };
 
   it('confirms deletion, selects a remaining result and clears the last result from storage and the screen', async () => {
