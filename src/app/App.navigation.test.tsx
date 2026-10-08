@@ -190,6 +190,19 @@ describe("Workspace navigation", () => {
     expect(store.updateConfig).not.toHaveBeenCalled();
   });
 
+  it('names the default execution controls and opens runtime settings within that group', async () => {
+    store = createTestStore({ active_model: 'models/next.gguf' });
+    store.status = { state: 'running', model: 'models/loaded.gguf' };
+    mount();
+    const execution = screen.getByRole('group', { name: 'Default execution' });
+    expect(within(execution).getByRole('button', { name: 'Choose model: loaded.gguf' })).toBeEnabled();
+    fireEvent.click(within(execution).getByRole('button', { name: 'Model settings' }));
+    const settings = await screen.findByRole('dialog', { name: 'Model settings editor' });
+    expect(settings).toHaveTextContent('runtime');
+    expect(store.start).not.toHaveBeenCalled();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
   it('opens the last saved model settings when stopped without starting the model', async () => {
     store.status = { state: 'stopped', model: 'model.gguf' };
     mount();

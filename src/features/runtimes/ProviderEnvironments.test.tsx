@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { createElement } from 'react';
 import ProviderEnvironments from './ProviderEnvironments';
 import { I18nProvider } from '../../shared/i18n/i18n';
@@ -68,7 +68,9 @@ describe('provider portable import/export', () => {
       archive_sha256: 'synthetic-digest', bytes: 128, wheels: 6,
     });
     renderPanel();
-    fireEvent.click(await exportButton());
+    const providerRuntimes = await screen.findByRole('group', { name: 'vLLM · Runtime' });
+    expect(within(providerRuntimes).getByText('0.31.0')).toBeVisible();
+    fireEvent.click(within(providerRuntimes).getByRole('button', { name: 'Export Python runtime bundle' }));
     await waitFor(() => expect(mocked.providerPortableExport).toHaveBeenCalledWith('vllm', 'portable-0-31-0-synthetic'));
     await screen.findByTestId('portable-result');
     expect(screen.getByTestId('portable-result').textContent).toContain('/synthetic/aiolm-vllm-portable.zip');

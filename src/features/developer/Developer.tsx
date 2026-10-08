@@ -45,7 +45,7 @@ function ModelDiagnostics({ store }: { store: AppStore }) {
           {model && <> · <span title={normalizeDisplayPath(model)}>{modelDisplayName(model)}</span></>}
         </p>
         <p className="api-hint"><RuntimeSelectionLabel config={runtime} /></p>
-        <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
+        <pre tabIndex={0} role="region" aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
       </section>
     </div>
   </div>;

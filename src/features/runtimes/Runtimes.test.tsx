@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import { createElement } from "react";
 import RuntimesPanel from "./Runtimes";
 import { I18nProvider } from "../../shared/i18n/i18n";
@@ -290,9 +290,26 @@ describe("RuntimesPanel pull-request builds", () => {
 
   it("offers export for each installed runtime", async () => {
     renderPanel();
-    const exportButton = await screen.findByRole("button", { name: "Export runtime: cuda b10638" });
+    const advanced = (await screen.findByText("Advanced")).closest("details")!;
+    fireEvent.click(advanced.querySelector("summary")!);
+    const exports = await screen.findByRole('group', { name: 'Export runtime' });
+    const exportButton = within(exports).getByRole("button", { name: "Export runtime: cuda b10638" });
+    expect(exportButton).toBeEnabled();
     fireEvent.click(exportButton);
     await waitFor(() => expect(mocked.rtExport).toHaveBeenCalledWith("cuda", "b10638"));
+  });
+
+  it('keeps installed runtime export controls named and disabled while a model is running', async () => {
+    const runningStore = { ...store, status: { state: 'running' } } as AppStore;
+    render(<I18nProvider initialLocale="en"><RuntimesPanel store={runningStore} /></I18nProvider>);
+    const advanced = (await screen.findByText("Advanced")).closest("details")!;
+    fireEvent.click(advanced.querySelector("summary")!);
+    const exports = await screen.findByRole('group', { name: 'Export runtime' });
+    const exportButton = within(exports).getByRole('button', { name: 'Export runtime: cuda b10638' });
+    expect(exportButton).toBeDisabled();
+    expect(exportButton).toHaveAttribute('title', 'Unload the model before changing runtimes.');
+    fireEvent.click(exportButton);
+    expect(mocked.rtExport).not.toHaveBeenCalled();
   });
 
   it("shows who wrote the code and where it comes from before building it", async () => {
