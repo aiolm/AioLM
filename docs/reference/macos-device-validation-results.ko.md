@@ -13,6 +13,7 @@
 - 37절은 `7d71937`에서 제품 코드를 변경하지 않고 Gemma4 음성 내용 실패를 실제 앱과 직접 엔진 요청으로 구분한 후속 기록이다. 긴 응답의 종료 이유 표시 결함도 추가로 확인했다.
 - 38절은 종료 이유 보존·출력 한도 안내 수정 `55606fd`와 실제 vLLM 부분 응답·재로드·다음 정상 응답·기존 실행 복원을, 39절은 해당 소스의 DMG를 기록한다.
 - 40절은 런타임 옵션 확인 중 프로필·저장값 보호 수정 `a294062`와 요청 전용 프로필의 재시작 없는 왕복 검증이다. 41절은 해당 소스의 DMG를 기록한다.
+- 42절은 외부 snapshot의 명시된 모델 카드 제목을 공통 표시 이름으로 사용하는 수정 `27bcca1`과 실제 MLX 실행·기록 재로드·vLLM 복원 검증이다. 43절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -47,6 +48,7 @@
 | `91ffd3d` | 실행 정의를 바꿔 저장한 뒤 이전 도구·검토·승인이 남았다. 정의 변경의 메타데이터/승인·호출 소유권과 저장 응답 선택을 보호한다. | 실제 변경 저장·재검색·같은 정의 재저장·비활성화·승인 대기 취소/소유 PID 정리, 합성13개 회귀·공통 UI1761 tests. 35절 참조. |
 | `55606fd` | 토큰 한도로 잘린 응답을 완료로 표시하고 종료 이유를 기록에서 잃었다. 종료 이유를 보존하고 부분 응답 안내·완료 알림 억제·잘린 도구 요청의 승인 방지를 공통 Chat 계층에 적용한다. | 실제 vLLM length→재로드→다음 stop 응답, 합성6개 회귀·공통 UI1767 tests. 38절 참조. |
 | `a294062` | 옵션 확인 대기를 잘못된 값·미저장 편집으로 취급하고 아직 조회하지 못한 옵션의 삭제를 제안했다. 확인 중 상태와 오류를 분리하고 schema 실패를 값 재검증으로 지우지 않는다. | 실제 native pending·잘못된 입력·복원, 합성6개 회귀·공통 UI1773 tests. 40절 참조. |
+| `27bcca1` | 외부 snapshot의 응답·실행 모델명이 revision 해시로만 표시됐다. 로컬 카드의 명시된 제목을 제한적으로 읽고 공통 표시 계층에 적용한다. 모델 경로·provenance·호환성은 바꾸지 않는다. | 실제 MLX 실행·새 부분 응답·다른 엔진 실행 중 기존 기록 재로드, Rust 2개/UI 6개 회귀·공통 UI1779 tests. 42절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -494,7 +496,7 @@ invalid WAV의 decode 예외 때 upstream 로그의 in_flight가1→2로 남는 
 | 모델 A의 공용 프로필 실행·응답 | pass | 실제 MLX/runtime/프로필 선택→Save profile & start→새 Chat 질문에서 9+8=17의 한국어 응답을 받았다. `goal-native-audio-shared-qwen-mlx-{ready,response}-20261008.json`/PNG, PP53·TG11·PP0.14 s/367.1 tok/s·TG0.17 s/64.4 tok/s. 표시 모델명과 저장 execution이 선택한 Qwen3에 해당했다. |
 | 모델 B에 같은 프로필 적용·응답 | pass | A의 실제 Unload 뒤 B 경로를 Load into editor했다. B의 기존 저장 프로필이 먼저 복원되는 것을 확인하고 ORBIT-97을 명시적으로 선택했다. Save profile & start→새 Chat에서 9+8=17의 한국어 응답을 받았다. `goal-native-audio-shared-gemma-{selected,ready,response}-20261008.json`/PNG, PP53·TG27·PP0.16 s/330.3 tok/s·TG0.57 s/47.7 tok/s. |
 | 프로필·응답 이력 보존 | pass | `goal-native-shared-profile-independent-audit-20261008T042822640954Z.json`에서 같은 profile ID·global scope·설정·prompt를 확인했다. 정상 저장에 따라 A의 applied revision은2, B는3이며 둘의 설정 내용은 같다. A/B의 MLX 실행 단계에서 이전18개 프로필·기존28개 대화는 그대로였다. `goal-native-audio-shared-qwen-history-20261008.json`/PNG에서 B 실행 중 A의 저장 모델명·응답·PP/TG를 다시 열어 확인했다. |
-| catalog 밖 snapshot의 친숙한 이름 자동 해석 | unsupported | B 경로는 UI와 저장 응답의 표시 이름이 revision 해시였다. 기존 displayPaths의 임의 snapshot fallback과 일치한다. config/processor/tokenizer JSON에는 repository 이름이 없고 README 제목을 표시 이름으로 읽는 기능은 구현하지 않았다. 경로의 상위 폴더명이나 base_model로 변환 모델명을 추정하거나 이 검증용 파일에 provenance를 덧붙이지 않았다. 추론·프로필 성공과 이 표시 한계를 구분한다. |
+| catalog 밖 snapshot의 친숙한 이름 자동 해석 | unsupported | B 경로는 UI와 저장 응답의 표시 이름이 revision 해시였다. 기존 displayPaths의 임의 snapshot fallback과 일치한다. config/processor/tokenizer JSON에는 repository 이름이 없고 README 제목을 표시 이름으로 읽는 기능은 구현하지 않았다. 경로의 상위 폴더명이나 base_model로 변환 모델명을 추정하거나 이 검증용 파일에 provenance를 덧붙이지 않았다. 추론·프로필 성공과 이 표시 한계를 구분한다. 당시 결과이며, 명시된 카드 제목의 제한적 표시 지원은 42절에서 후속 수정·검증했다. |
 | 원래 vLLM 모델 복원·실제 응답 | pass | B의 실제 Unload 뒤 원래 Qwen3/vllm-metal 0.30/Default·4096 설정을 UI에서 선택·저장/시작했다. `goal-native-audio-shared-{restore-ready,restored-response,final}-20261008.json`/PNG에서 ORBIT-97C의 2+3=5 응답·PP54/TG12·TG0.76 s/14.5 tok/s와 원래 ORBIT-84 화면·빈 입력·API off·active requests0·렌더 오류/overlay0을 확인했다. PP 시간·rate는 미제공이므로 —를 유지했다. |
 
 기존28개 대화는 보존하고 새 합성 A/B/복원 대화3개를 더해 총31개다. 새 공용 프로필·두 MLX binding은 검증 자료로 보존했다. 원래 vLLM 복원의 정상 저장으로 기존 Default 프로필과 해당 binding revision은7→8로 증가했고 설정 내용은 같다. settings_profiles 이외 config 값은 검사 직전과 동일하다. 정상 저장에 따른 프로필·binding revision 증가를 원본 파일 전체 불변으로 설명하지 않는다. 이 순차 실행 검사는 두 모델의 동시 실행이나 두 엔진의 모든 기능 동등성을 증명하지 않는다.
@@ -774,3 +776,41 @@ schema 조회 오류를 값 검증·import·preview 오류와 분리했다. 다�
 - GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG를 `goal-package-a294062/`에 보존했다.
 
 생성 후 실제 CUA Chat 화면과 `goal-native-audio-option-check-orbit104-postpackage-a294062.json`/PNG, `goal-option-check-orbit104-postpackage-preservation-a294062.json`의 8개 조건에서 복원 이후 config 전체 SHA256·38개 대화 목록/해시·localStorage·같은 running 모델 PID/engine/model·MCP 정의·API off·idle·빈 composer·render error/overlay 0을 재확인했다. 화면의 기존 답변·모델명·지표는 재표시이며 새 추론 결과로 설명하지 않는다. production GUI를 실행하지 않았으며 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 실제 결과도 추정하지 않는다. 40절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 42. 외부 snapshot 모델명과 실행·기록 identity 보존
+
+수정 소스는 `27bcca13b4df5a35e424b528983a73cad2306e08`다. catalog 밖의 `snapshots/<40hex>` 모델은 실행과 응답이 가능해도 이름을 revision으로만 표시했다. 실제 기존 Gemma 기록의 세 응답에서 재현했고, 같은 경로에 이미 있는 README의 첫 실제 H1 제목을 표시 이름으로 사용할 수 있게 수정했다. 이전 native backend와 수정 frontend로 캡처한 재현 근거는 `goal-native-audio-model-card-orbit105-history-oldbackend-20261008.json`/PNG다. 전체 frontend가 이전 소스였다는 의미는 아니다.
+
+이름은 엔진 공통 artifact 검사와 `ModelName` 표시 계층에서 처리한다. 알려진 repository 이름과 사용자 폴더명은 유지하며 repository를 알 수 없는 40hex snapshot만 카드 읽기 대상이다. README는 일반 파일·UTF-8·64 KiB 이하이며 frontmatter와 fenced/indented code를 제외한 첫 H1이 단일 `namespace/model` 토큰이어야 한다. 일반 제목·HTML·경로 이동·추가 텍스트·지나치게 큰 카드·읽기 실패는 기존 표시로 돌아간다. YAML `base_model`이나 상위 폴더 이름으로 변환 모델명을 추정하지 않는다.
+
+표시 이름을 모델 경로·저장 identity로 대체하지 않는다. repository/revision provenance·소유권·loader/task/modality·readiness는 이름으로 부여하지 않는다. 카드 없는 임의 snapshot 전체, icon/family 자동 해석, benchmark 이름 형식 변경까지 구현한 것은 아니다. 상단 실행 영역, 응답과 대화 설정, 모델 설정·실행 패널, 프로젝트·세션의 모델 표시, 진단에 공통 renderer를 연결했다. 동시 읽기는 합치되 결과 cache를 남기지 않고 이전 모델의 늦은 응답은 폐기한다. 새 dependency·lockfile·engine ID 분기·IPC 타입·공개 gateway/benchmark 계약 변경은 없다.
+
+| 검증 범위 | 상태 | 실행 근거와 한계 |
+| --- | --- | --- |
+| 실제 카드·외부 소유권 | pass | `goal-model-card-orbit105-artifact-20261008.json`에서 이름 `gemma-4-e2b-it-4bit`와 카드 SHA256을 확인했다. ownership은 external, repository/revision 속성은 미제공 상태다. 21절의 고정 공개 모델 revision `238767527555cb75a05732a84dff5d6ba0dd6809`를 사용했으며 카드 이름을 다운로드 출처 증명으로 계산하지 않았다. |
+| 미실행 모델의 기존 기록 표시 | pass | 수정 native debug 앱의 `goal-native-audio-model-card-orbit105-history-newbackend-20261008.json`/PNG에서 모델 stopped 상태에도 기존 세 응답 이름이 카드의 이름으로 표시됐다. 저장된 경로·내용·PP/TG는 그대로다. |
+| 실제 MLX 실행·새 응답 표시 | pass | CUA로 새 합성 global 프로필을 만들고 외부 등록 MLX 0.7.6·Metal을 실제 실행했다. `goal-native-audio-model-card-orbit105-{loaded,response}-20261008.json`/PNG에서 loaded 상단 이름, 기록된 응답 이름·PP40/TG128·양수 phase 시간이 확인된다. readiness·loader·processor·설정 검사를 완화하지 않았다. |
+| 새 응답의 완전한 종료·한 문장 지시 | fail | 2+3=5의 한국어 내용을 받았지만 부연하며 max_tokens=128에 도달했다. 기록의 finishReason=length와 부분 응답·출력 한도 안내를 보존했다. 완전한 답변 성공이나 한 문장 지시 준수로 세지 않고 생성 예산을 임의로 확대하지 않았다. 이번 표시 수정의 실패로 재분류하지 않는다. |
+| 엔진 교체 후 기록 재로드 | pass | 원래 Qwen3-VL-2B-Instruct-4bit/vllm-metal 0.30.0 실행을 복원한 뒤 새 Gemma 기록과 기존 음성 기록을 실제로 다시 열었다. `goal-native-audio-model-card-orbit105-{different-live-model,history-qwen-running}-20261008.json`/PNG에서 상단 Qwen과 응답 Gemma의 identity가 구분된다. 기존 세 Gemma 응답은 현재 runtime 이름으로 바뀌지 않았다. |
+| 데이터·선택 복원·cleanup | pass | `goal-model-card-orbit105-audit-final-20261008.json`의 35개 조건에서 기존 38개 대화 목록/해시, 원래 20개 profile 내용, non-profile config와 execution·localStorage·MCP 정의, 원래 ORBIT-84·running Qwen·API off·idle·빈 composer·render error/overlay 0을 확인했다. 새 합성 profile 1개·대화 1개만 더했다. 19개 기존 profile entry는 정확히 같고 Default vLLM revision만 정상 저장으로 10→11, library는 54→64다. applied snapshot도 정상 적용에 따라 갱신됐으므로 config 전체 불변으로 설명하지 않는다. 이전 Qwen과 MLX 각각의 소유 process group 구성원·listener 정리를 확인한 뒤 새 Qwen PID로 복원했다. |
+
+최종 typecheck·lint·unit·build는 각각 11.45s·8.78s·133.81s·21.79s, 모두 종료 0이다. `logs/goal-model-card-orbit105-final-{typecheck,lint,unit,build}-20261008.log`가 근거이며 계약/direct/script와 UI178 files/1779 tests·coverage statements80.64 / branches75.52 / functions79.03 / lines84.75%를 확인했다. 관련 UI4 files/77 tests와 Rust artifact13 tests, Rust `--locked --all-targets --all-features`(lib939 pass/4 기존 ignored), clippy `-D warnings`, fmt check가 통과했다. Rust 전체 검사48.04s·clippy5.02s·fmt0.97s, debug 빌드17.47s다. 기존 live/CPU/Metal/source/download fixture의 ignored 상태를 새 실제 실행 통과로 계산하지 않았다. 기존 jsdom 진단·frontend chunk 경고는 유지한다.
+
+수정 전 Rust 최소 재현은 기대한 선언 이름 대신 revision을 반환해 종료101이었다. 초기 typecheck의 미사용 import와 UI 동시 consumer fixture가 adjacent text로 합쳐지는 단일 assertion 실패를 바로잡고 최종 검사를 실행했다. 원본 `regression-before`, `typecheck`, `ui-related-after` 로그를 보존했다. 최초 감사33/35는 old cleanup의 portOpen=false를 잘못 pass 판정한 조건과 UI 프로필 선택 중 실제 모델별 cache 변경을 함께 드러냈다. 원래 Qwen MLX·Gemma 프로필 연결과 vLLM Default를 CUA로 되돌려 localStorage를 정확히 복원하고 cleanup 조건을 바로잡았다. 이 복원 동안 현재 Qwen PID는 같았다. 초기 감사 파일도 보존했다.
+
+`goal-model-card-orbit105-native-source-20261008.json`과 `goal-model-card-orbit105-committed-source-20261008.json`에서 native build에 사용한 11개 소스와 커밋의 SHA256 일치를 확인했다. native 1280×800·WKWebView 1280×768에서 실제 상단·응답·설정 이름을 확인했으며 모든 연결 화면·다른 viewport·VoiceOver의 실제 검증으로 확대하지 않는다. 기존 모델 가중치를 재다운로드하거나 변경하지 않았고 카드 SHA256은 보존됐다.
+
+이번 수정은 [교체 가능한 런타임 설계](pluggable-inference-runtimes.ko.md)의 공통 기능 경계를 유지하는 표시 결함 수정이다. 개인 엔진 registry·versioned manifest·out-of-process adapter와 앱 재빌드 없는 등록은 아직 구현되지 않았다. Gemma4 음성 내용 실패와 기존 upstream 오류·MCP 실제 승인 후 호출·트레이/Dock·OS 알림 수신의 blocked, 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun을 유지한다. **전체 M01–M12는 통과하지 않았다.** raw·모델·캡처·합성 profile/대화와 빌드는 ignored tmp에 보존했으며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 43. 외부 snapshot 이름 수정 소스 `27bcca1`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `27bcca13b4df5a35e424b528983a73cad2306e08`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-model-card-orbit105-package-27bcca1-20261008.log`, `logs/goal-native-model-card-inspect-package-27bcca1-20261008.log`, `goal-native-model-card-package-27bcca1-results.json`이 근거다. 빌드230.31s·검사5.23s 모두 종료0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16775732 bytes, SHA256 `cd1698bc7b2a85166f63d148ea962fb437f03bf0b66b3b855dad263d7eb1d67e`.
+- GUI `aiolm`: arm64, SHA256 `48ad86021cdcadbaa849ebb6b5996f6b8e487db3874f7e95a8ae6b2a97c990c0`.
+- CLI `aiolm-cli`: arm64, SHA256 `f5d6e8c67f54257620c17e48254bdb89ccd271877bb5b1647ebe5fd32e5955b9`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료0을 확인했다. 같은 해시의 DMG는 `goal-package-27bcca1/`에 보존했다.
+
+생성 후 실제 CUA Chat 화면과 `goal-native-audio-model-card-orbit105-postpackage-27bcca1-20261008.json`/PNG, `goal-model-card-orbit105-postpackage-preservation-27bcca1-20261008.json`의 8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/해시·localStorage·동일한 running Qwen PID/engine/model/execution·MCP 정의·API off·idle·빈 composer·render error/overlay0을 재확인했다. 기존 답변과 지표의 재표시이며 새 추론 결과는 아니다.
+
+production GUI는 실행하지 않았고 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 결과도 추정하지 않는다. 42절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
