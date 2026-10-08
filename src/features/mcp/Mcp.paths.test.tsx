@@ -12,6 +12,33 @@ vi.mock("../../shared/api/index", () => ({
 describe("MCP path presentation", () => {
   beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
 
+  it.each([
+    ["Executable / command", "/synthetic/tools/mcp--fixture"],
+    ["Arguments, one per line", '--run\norbit96-synthetic\n--text\nstraight "double" and \'single\' quotes'],
+    ["JSON arguments", '{"text":"ASCII -- flags and \\"double\\" quotes stay exact"}'],
+  ])("disables automatic text correction for %s and retains literal input", async (label, literal) => {
+    const server = { id: "literal", name: "Synthetic literal tools", command: "node", args: [], enabled: true };
+    const tool = { name: "echo", input_schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } };
+    vi.mocked(api.mcpListServers).mockResolvedValue([server]);
+    vi.mocked(api.mcpListTools).mockResolvedValue([tool]);
+    render(<I18nProvider initialLocale="en"><McpPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.click((await screen.findByText(server.name)).closest("button")!);
+    if (label === "JSON arguments") {
+      fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Prepare call: echo" }));
+    }
+    const input = screen.getByLabelText(label);
+    expect(input).toHaveAttribute("spellcheck", "false");
+    expect(input).toHaveAttribute("autocorrect", "off");
+    expect(input).toHaveAttribute("autocapitalize", "off");
+    fireEvent.change(input, { target: { value: literal } });
+    expect(input).toHaveValue(literal);
+    if (label === "JSON arguments") {
+      fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
+      expect(screen.getByRole("button", { name: "Approve and run once" })).toBeInTheDocument();
+    }
+  });
+
   it("cleans restored commands, metadata, schemas, approvals and results without changing server or tool arguments", async () => {
     const raw = String.raw`\\?\C:\tools\server.exe`;
     const rawDocument = String.raw`\\?\UNC\server\share\notes.md`;
