@@ -50,7 +50,6 @@
 | `55606fd` | 토큰 한도로 잘린 응답을 완료로 표시하고 종료 이유를 기록에서 잃었다. 종료 이유를 보존하고 부분 응답 안내·완료 알림 억제·잘린 도구 요청의 승인 방지를 공통 Chat 계층에 적용한다. | 실제 vLLM length→재로드→다음 stop 응답, 합성6개 회귀·공통 UI1767 tests. 38절 참조. |
 | `a294062` | 옵션 확인 대기를 잘못된 값·미저장 편집으로 취급하고 아직 조회하지 못한 옵션의 삭제를 제안했다. 확인 중 상태와 오류를 분리하고 schema 실패를 값 재검증으로 지우지 않는다. | 실제 native pending·잘못된 입력·복원, 합성6개 회귀·공통 UI1773 tests. 40절 참조. |
 | `27bcca1` | 외부 snapshot의 응답·실행 모델명이 revision 해시로만 표시됐다. 로컬 카드의 명시된 제목을 제한적으로 읽고 공통 표시 계층에 적용한다. 모델 경로·provenance·호환성은 바꾸지 않는다. | 실제 MLX 실행·새 부분 응답·다른 엔진 실행 중 기존 기록 재로드, Rust 2개/UI 6개 회귀·공통 UI1779 tests. 42절 참조. |
-
 | `142fac3` | 최소 WKWebView에서 PP·TG·메모리 열이 가려지고 포커스한 표의 방향키도 가로 위치를 이동하지 않았다. 공통 표의 열 이동 버튼·방향키·Home/End와 넘침 감지를 추가했다. | 실제 세 결과 표의 독립 이동·desktop 복원·28개 보존 조건, 합성9개 회귀·공통 UI1788 tests. 44절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
@@ -847,6 +846,6 @@ Frontend HMR가 연결된 기존 실제 Tauri WKWebView에서 검사했다. UI �
 - CLI `aiolm-cli`: arm64, SHA256 `77bcee63a720b0d1e82d0a403ba7b0c0441685ce5650c6a623b5389e3a8a62b1`.
 - GUI·CLI와 빌드 앱의 해시 일치, 일반 파일5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료0을 확인했다. 같은 해시의 DMG는 `goal-package-142fac3/`에 보존했다.
 
-생성 후 `goal-native-audio-layout-orbit106-postpackage-142fac3-20261008.json`/PNG와 `goal-layout-orbit106-postpackage-preservation-142fac3-20261008.json`의 읽기 전용 앱 관측8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model/execution·API off·idle·빈 composer·관측 render error/overlay0을 확인했다. 기존 응답·지표이며 새 추론은 아니다. **패키징 이후의 마지막 CUA 네이티브 화면 재확인은 Mac 잠금으로 blocked**다. CUA가 수동 잠금 해제를 요구했고 사용자에게 요청했다. 내부 getter·WKWebView 캡처를 네이티브 화면 재확인 성공으로 계산하지 않는다. 44절의 잠금 전 실제 CUA 검증은 별도 근거다.
+생성 후 `goal-native-audio-layout-orbit106-postpackage-142fac3-20261008.json`/PNG와 `goal-layout-orbit106-postpackage-preservation-142fac3-20261008.json`의 읽기 전용 앱 관측 8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model/execution·API off·idle·빈 composer·관측 render error/overlay0을 확인했다. 기존 응답·지표이며 새 추론은 아니다. **패키징 이후의 마지막 CUA 네이티브 화면 재확인은 Mac 잠금으로 blocked**다. CUA가 수동 잠금 해제를 요구했고 사용자에게 요청했다. 내부 getter·WKWebView 캡처를 네이티브 화면 재확인 성공으로 계산하지 않는다. 44절의 잠금 전 실제 CUA 검증은 별도 근거다.
 
 production GUI는 실행하지 않았고 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 결과도 추정하지 않는다. 이번 수정·패키지 통과를 전체 M01–M12 통과로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
