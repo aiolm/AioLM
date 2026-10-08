@@ -83,7 +83,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('option', { name: 'Global · Selected setup' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalled());
     expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ active_model: '', temperature: 0.3 }), expect.anything(), true);
-    expect(screen.getByRole('combobox', { name: 'Settings profiles' })).toHaveTextContent('Selected setup');
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings profiles' })).toHaveTextContent('Selected setup'));
   });
 
   it('offers GGUF language models as llama draft companions and excludes snapshot directories', async () => {
