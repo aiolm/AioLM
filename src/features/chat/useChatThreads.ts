@@ -174,8 +174,11 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   const keeping = (keepId: string) => (item: ChatThread) => item.id === keepId || item.id === msgsThreadId || !unused(item);
 
   const selectThread = (thread: ChatThread) => {
-    setWorkspace((current) => ({ activeThreadId: thread.id, threads: current.threads.filter(keeping(thread.id)) }));
     setThreadPanelOpen(false);
+    // Reselecting the reader's conversation must keep its unsent composer and
+    // the current reply owner intact; only a different conversation switches.
+    if (thread.id === workspace.activeThreadId) return;
+    setWorkspace((current) => ({ activeThreadId: thread.id, threads: current.threads.filter(keeping(thread.id)) }));
     if (turnInProgress()) return;
     setMsgsThreadId(thread.id);
     setMsgs(thread.messages);

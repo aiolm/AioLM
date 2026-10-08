@@ -12,6 +12,7 @@ import { createTestStore } from "../../testing/appStore";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
+import { createChatThread, saveChatWorkspace } from "./chatHistory";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -162,6 +163,32 @@ describe("ChatPanel unified attachments", () => {
     vi.clearAllMocks();
     vi.mocked(useModelSettings).mockReturnValue(null);
     mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it("preserves an unsent message and document when reselecting the current conversation", async () => {
+    const first = { ...createChatThread(1, "draft-first"), title: "First stored conversation",
+      messages: [{ role: "user" as const, content: "Earlier first question" }] };
+    const second = { ...createChatThread(2, "draft-second"), title: "Second stored conversation",
+      messages: [{ role: "user" as const, content: "Earlier second question" }] };
+    saveChatWorkspace({ activeThreadId: first.id, threads: [first, second] });
+    renderPanel();
+    await screen.findByRole("heading", { name: first.title });
+    await attachDocument("draft-notes.txt", "Synthetic draft document.");
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Unsent follow-up" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: first.title }));
+    expect(screen.getByLabelText("Chat message")).toHaveValue("Unsent follow-up");
+    expect(screen.getByRole("button", { name: "Remove attachment: draft-notes.txt" })).toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+
+    // A different conversation still starts with its own clean composer.
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    fireEvent.click(screen.getByRole("button", { name: second.title }));
+    expect(screen.getByRole("heading", { name: second.title })).toBeInTheDocument();
+    expect(screen.getByLabelText("Chat message")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "Remove attachment: draft-notes.txt" })).not.toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
   });
 
   it.each(['', 'Use the project citation'])("reapplies project documents after new chat with prompt %j", async (prompt) => {
