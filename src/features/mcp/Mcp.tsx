@@ -70,6 +70,7 @@ export default function McpPanel(_props: { store: AppStore }) {
   const approvalBusyRef = useRef(false);
   const activeCallRef = useRef<ToolCall | null>(null);
   const selectionGeneration = useRef(0);
+  const discoveryGeneration = useRef(0);
   const [result, setResult] = useState<unknown>(null);
   const [pendingDelete, setPendingDelete] = useState<api.McpServer | null>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
@@ -87,6 +88,7 @@ export default function McpPanel(_props: { store: AppStore }) {
   };
 
   useEffect(() => () => {
+    discoveryGeneration.current += 1;
     const call = activeCallRef.current;
     activeCallRef.current = null;
     if (call) void requestCallCancellation(call).catch(() => undefined);
@@ -133,6 +135,8 @@ export default function McpPanel(_props: { store: AppStore }) {
   const resetDraft = () => {
     void cancelActiveCall();
     selectionGeneration.current += 1;
+    discoveryGeneration.current += 1;
+    setToolLoading(false);
     setSelectedId(null);
     setName("");
     setCommand("");
@@ -151,6 +155,8 @@ export default function McpPanel(_props: { store: AppStore }) {
   const selectServer = (server: api.McpServer) => {
     void cancelActiveCall();
     selectionGeneration.current += 1;
+    discoveryGeneration.current += 1;
+    setToolLoading(false);
     setSelectedId(server.id);
     setName(server.name);
     setCommand(server.command);
@@ -161,6 +167,7 @@ export default function McpPanel(_props: { store: AppStore }) {
     setApproval(null);
     setResult(null);
     setError(null);
+    setNotice(null);
   };
 
   const save = async () => {
@@ -195,16 +202,20 @@ export default function McpPanel(_props: { store: AppStore }) {
 
   const discoverTools = async () => {
     if (!selectedId) return;
+    const generation = ++discoveryGeneration.current;
     setToolLoading(true);
     setError(null);
     setNotice(null);
     try {
-      setTools(await api.mcpListTools(selectedId));
+      const discovered = await api.mcpListTools(selectedId);
+      if (generation !== discoveryGeneration.current) return;
+      setTools(discovered);
       setNotice(t("ui.mcpToolsLoaded"));
     } catch (caught) {
+      if (generation !== discoveryGeneration.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setToolLoading(false);
+      if (generation === discoveryGeneration.current) setToolLoading(false);
     }
   };
 
