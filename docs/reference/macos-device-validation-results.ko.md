@@ -18,6 +18,7 @@
 - 46절은 잠금 해제 후 네이티브 검증 재개, 이전 검증 서버 정리, 작업 알림이 본문 버튼을 가리는 결함 수정 `eb2d037`의 실제 재검증이다. 47절은 해당 소스의 DMG를 기록한다.
 - 48절은 같은 제품 소스로 Chat 화면 전환·최소 창의 전역 MCP 승인 대기 취소와 알림 키보드 동작을 추가 검증한 기록이다.
 - 49절은 재개 후 실제 최소 창에서 확인한 전체 모델 정보의 본문 가림과 수정 `6515cde`의 검증 기록이며 50절은 해당 소스의 DMG다.
+- 51절은 같은 대화를 다시 선택하면 전송하지 않은 입력이 지워지던 결함 수정 `6398348`과 실제 입력·목록·화면 전환의 검증 기록이며 52절은 해당 소스의 DMG다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -56,6 +57,7 @@
 | `142fac3` | 최소 WKWebView에서 PP·TG·메모리 열이 가려지고 포커스한 표의 방향키도 가로 위치를 이동하지 않았다. 공통 표의 열 이동 버튼·방향키·Home/End와 넘침 감지를 추가했다. | 실제 세 결과 표의 독립 이동·desktop 복원·28개 보존 조건, 합성9개 회귀·공통 UI1788 tests. 44절 참조. |
 | `eb2d037` | 자동으로 펼쳐진 작업 알림이 MCP 검토 카드의 승인·취소 버튼을 덮어 끝까지 스크롤해도 접근할 수 없었다. 알림이 본문 공간을 확보하고 긴 내용만 별도로 스크롤하도록 수정했다. | 실제 desktop·최소 창의 버튼 접근·접기·긴 알림 스크롤, 17개 보존 조건·관련 UI35개·공통 UI1788 tests. 46절 참조. |
 | `6515cde` | 최소 창에서 전체 모델 정보를 펼치면 헤더와 프로필 영역이 설정 본문을 잘린 부모 밖으로 밀어냈다. 짧은 창의 모델 정보 스크롤과 프로필 높이 제한으로 본문 공간을 확보한다. | 실제 최소·짧은 넓은 창·desktop, 입력 포커스·독립 스크롤·13개 geometry/10개 보존 조건·관련 UI96개·공통 UI1788 tests. 49절 참조. |
+| `6398348` | 같은 대화를 다시 선택하는 것만으로 전송하지 않은 입력·첨부가 초기화됐다. 같은 대화는 목록만 닫고, 실제 전환에만 기존 composer 초기화를 적용한다. | 실제 desktop·최소 창의 입력 보존·다른 대화 초기화·화면 왕복, 수정 전 실패/후 통과 첨부 회귀·관련 UI42개·공통 UI1789 tests·16개 검증/보존 조건. 51절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -944,3 +946,36 @@ production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 
 패키징 후 실제 CUA native Chat 화면을 다시 확인했다. `goal-native-audio-resume-orbit112-postpackage-6515cde-20261009.json`/PNG와 `goal-model-settings-orbit112-postpackage-preservation-6515cde-20261009.json`의 10개 조건에서 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model·세션 실행값·API off·idle·빈 composer·관측 error/overlay0을 보존했다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
 
 production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 49절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 51. 같은 대화 재선택의 미전송 입력·첨부 보존 수정
+
+`82e0c94`의 실제 native debug 앱에서 현재 대화에 합성 미전송 입력을 넣고, 대화 검색으로 같은 대화를 찾은 뒤 현재 선택된 행을 다시 클릭했다. 대화·응답·모델·지표는 그대로인데 입력이 비고 Send가 disabled가 됐다. `goal-native-audio-orbit113-reselect-{before,after-beforefix}-20261009.json`/PNG가 근거다. 입력을 전송하거나 새 대화를 생성하지 않았다.
+
+원인은 `selectThread`가 같은 activeThreadId에도 전환용 `onSwitchThread`를 호출하는 것이었다. 이 callback은 입력·첨부·선택한 skill·Chat 로컬 상태를 초기화한다. 수정 `63983487e4b62d72a6f2efac0b96e9dee990ed06`은 목록 닫기를 유지하고 같은 ID에는 전환 처리를 하지 않는다. 다른 ID 선택의 기존 buffer·진행 중 응답 소유권·composer 초기화, New chat·삭제·history hydration·엔진/프로필/API/benchmark 계약과 기본값은 변경하지 않는다.
+
+| 실제 범위 | 상태 | 근거와 결과 |
+| --- | --- | --- |
+| Desktop 동일 대화 재선택 | pass | 같은 합성 입력과 현재 대화 행을 실제 CUA로 다시 선택해 입력 보존·Send enabled를 확인했다. `goal-native-audio-orbit113-reselect-afterfix-20261009.json`/PNG. 기존 응답·PP/TG이며 새 추론은 아니다. |
+| 다른 기존 대화 선택 | pass | 검색 후 다른 기존 대화를 CUA로 선택하면 composer가 비고 해당 저장 응답·Gemma 모델 이름·PP/TG·출력 한도 안내가 표시된다. 고정 실행 영역은 실행 중 Qwen을 유지한다. `goal-native-audio-orbit113-different-thread-20261009.json`/PNG. 기존 부분 응답 재표시이며 새 모델 실행·전체 응답 성공으로 설명하지 않는다. |
+| 최소 창 목록 닫힘·입력 보존 | pass | 원래 대화로 돌아와 같은 합성 입력을 넣고 native 360×520 / WKWebView 360×488에서 Conversations→현재 대화 선택을 실행했다. 목록은 실제로 닫히고 aria-expanded=false, 입력은 동일하며 Send enabled다. `goal-native-audio-orbit113-minimum-reselect-afterfix-20261009.json`/PNG와 `goal-chat-draft-orbit113-minimum-controls-20261009.json`. |
+| 화면 왕복 | pass | 1280×800으로 복원 후 합성 입력을 둔 채 CUA로 Chat→Projects→Chat 왕복. 현재 대화·검색·입력이 유지됐다. project를 수정·저장·Apply하지 않았다. `goal-native-audio-orbit113-navigation-return-20261009.json`/PNG. 기존 화면 상태 보존 검증이며 이 왕복 동작을 새로 구현한 것은 아니다. |
+| 원래 상태·자료 보존 | pass | CUA로 자신의 합성 입력과 검색만 비워 원래 Chat/1280×800으로 복원했다. `goal-chat-draft-orbit113-verification-preservation-20261009.json`의 16개 조건에서 위 재현/수정과 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·같은 running PID/engine/model·세션 실행값·API off·idle·빈 composer/검색·관측 error/overlay0을 확인했다. 세션 idle_seconds 증가만 구분했다. `goal-native-audio-resume-orbit113-{baseline,final}-20261009.json`/PNG를 대조했다. |
+
+합성 ChatPanel 회귀는 서로 다른 저장 대화 2개와 문서를 사용해 미전송 입력·첨부 문서가 같은 대화 선택에서 보존되고, 다른 대화 선택에서는 기존대로 초기화되며 요청이 발생하지 않는 것을 검사한다. 수정 전 `logs/goal-chat-draft-orbit113-regression-before-20261009.log`는 기대 입력이 빈 값이어서 실패했고, 수정 후 관련 검사에서 통과했다. 최초 실행은 해당 새 검사만 선택한 run이며 나머지 32개를 실행한 것으로 계산하지 않는다. 실제 파일 선택·skill 선택·승인 이후 호출을 이번에 추가 검증한 것으로 확대하지 않는다.
+
+`logs/goal-chat-draft-orbit113-{related,typecheck,lint,unit,build}-20261009.log`는 각각 7.88s·12.12s·7.54s·131.38s·12.28s, 종료 0이다. 관련 UI는 3 files/42 tests, 전체 unit은 계약/direct/script·UI 179 files/1789 tests, coverage80.68/75.56/79.08/84.80%다. 기존 jsdom 진단·frontend chunk 경고는 남아 있다. Rust/Python 제품 소스·dependency·lockfile·공개 타입 변경은 없다. staged 파일·실제 diff·개인정보·공백을 검토했고 `goal-chat-draft-orbit113-committed-source-20261009.json`의 두 파일 hash는 커밋과 같다.
+
+UI 조작은 CUA이며 WebDriver는 읽기 전용 상태·DOM·캡처다. 실제 화면·페이지 identity·프레임워크 overlay 없음·관측 error 0을 확인했지만 전체 DevTools console·VoiceOver·Windows/Linux의 실제 화면 검증으로 확대하지 않는다. 이번 실제 흐름은 현재 vLLM 실행이며 MLX 기록 재표시를 MLX 재실행으로 계산하지 않는다. MCP 실제 No/Yes 이후 호출·모델 후속 응답·호출 중 취소와 트레이/Dock·OS 알림 수신의 blocked, 별도 계정·Finder·Keychain·upgrade·Intel/구형 macOS의 unrun, 기존 모델 내용 실패·upstream 제한을 유지한다. **전체 목표·M01–M12 완료는 증명하지 않는다.** 개인 엔진 registry·manifest·adapter는 미구현 장기 설계다. raw·합성 자료·빌드는 ignored tmp에 보존했고 공개 업로드·원격 push는 수행하지 않았다.
+
+## 52. 미전송 채팅 보존 수정 소스 `6398348`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `63983487e4b62d72a6f2efac0b96e9dee990ed06`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-chat-draft-orbit113-package-6398348-20261009.log`, `logs/goal-native-chat-draft-inspect-package-6398348-20261009.log`, `goal-native-chat-draft-package-6398348-results.json`이 근거다. 빌드 229.77s·검사 6.07s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16777213 bytes, SHA256 `1bdb34e6396ef99d19b5bddaaafb34a8f38122073b3d6f17b85b323d99bbb959`.
+- GUI `aiolm`: arm64, SHA256 `26f1ac8aaa24218e4546b9a7073338987ebbf4305a4394da28a3a7fb60cccc2a`.
+- CLI `aiolm-cli`: arm64, SHA256 `584cf75be622be1d70f0176f7dca5778741c56526abd8994a8a31f73631d93c7`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다. 같은 해시의 DMG는 `goal-package-6398348/`에 보존했다.
+
+패키징 후 실제 CUA native Chat 화면을 다시 확인했다. `goal-native-audio-resume-orbit113-postpackage-6398348-20261009.json`/PNG와 `goal-chat-draft-orbit113-postpackage-preservation-6398348-20261009.json`의 11개 조건에서 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model·세션 실행값·API off·idle·빈 composer/검색·관측 error/overlay0을 보존했다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 51절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
