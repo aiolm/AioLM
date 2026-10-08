@@ -10,6 +10,7 @@
 - 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
 - 27절은 `a35defd`에서 재현한 실제 두벌식 확정 Enter·미디어 첨부 그룹 결함과 수정 `47580b8`의 재검증이다. 28절은 해당 소스의 DMG를 기록한다.
 - 29–30절은 `e594c57`의 Discover 배치와 실제 다크 화면, 31–32절은 `7afc07e`의 수동 MCP 진행·취소, 33–34절은 `25d71a5`의 MCP 검색 선택 소유권, 35–36절은 `91ffd3d`의 서버 정의 변경·승인 폐기와 각 소스의 DMG 후속 기록이다.
+- 37절은 `7d71937`에서 제품 코드를 변경하지 않고 Gemma4 음성 내용 실패를 실제 앱과 직접 엔진 요청으로 구분한 후속 기록이다. 긴 응답의 종료 이유 표시 결함도 추가로 확인했다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -692,3 +693,20 @@ Browser plugin이 제공되지 않아 실제 Tauri WKWebView `localhost:1420`과
 - 원본과 같은 해시의 DMG를 `goal-package-91ffd3d/`에 보존했다. 기존 패키지·모델·로그는 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
 
 패키지 생성 후 실제 CUA Chat 화면과 `goal-native-audio-mcp-definition-orbit101-postpackage-91ffd3d.json`/PNG, `goal-mcp-definition-orbit101-postpackage-preservation-91ffd3d.json`에서 config 전체 SHA256·35개 대화의 목록/해시·localStorage·같은 running 모델 PID·API off·idle·빈 composer·render error/overlay 0과 복원된 MCP inventory 보존을 재확인했다. 이 화면의 모델명·TG와 PP 미제공 표시는 기존 응답의 재표시이며 이번에 새 추론을 실행한 결과가 아니다. 35절의 취소 통과를 승인 이후 도구 실행 통과로 확대하지 않는다. 기존 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**는 유지한다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 37. Gemma4 음성 내용 실패의 system prompt 대조와 기존 실행 복원
+
+`7d71937`의 native debug 앱에서 21절과 같은 MLX 0.7.6·Gemma4 revision `238767527555cb75a05732a84dff5d6ba0dd6809`·합성 WAV를 재검증했다. WAV는 98524 bytes, SHA256 `12835978d06f128b0e9086c5bd1c2d2eee5bce05dcb186b11c8d1fd26a37476c`다. 기존 음성 프로필의 temperature=0·max_tokens=128·max_kv_size=4096을 사용했으며 readiness·template·dependency·기본 system prompt를 변경하지 않았다. 원래 vLLM 모델을 UI에서 종료하고 소유 PID·포트 부재를 확인한 뒤 MLX를 실행했다.
+
+| 검증 범위 | 상태 | 실제 근거와 한계 |
+| --- | --- | --- |
+| 새 대화의 첫 음성 질문·짧은 후속 전사 | pass | CUA New chat→실제 Open 창에서 speech.wav 첨부→내용 질문→새 첨부 없는 전사 질문. 왼쪽 빨간 사각형·오른쪽 파란 원을 정확히 응답했다. 첫 응답 PP 129 tok/0.56s/231.4 tok/s·TG 18 tok/0.40s/44.8 tok/s, 후속 PP 167 tok/0.30s/559.5 tok/s·TG 17 tok/0.40s/42.9 tok/s. 엔진 log에 각 요청 audio=1과 실제 phase 측정이 있다. `goal-native-audio-audio-followup-orbit102-{first,second}-20261008.json`/PNG. 모든 음성 질문의 내용 정확성을 뜻하지 않는다. |
+| 긴 첫 음성 질문의 내용 | fail | 이전 실패와 같은 질문을 별도 새 대화에서 전송했다. 실제 audio=1·PP 135·TG 25·finish_reason=stop인데 음성을 제공해 달라는 답이 다시 나왔다. Projects→Chat 재로드 후 첨부·답·지표를 보존했다. `goal-native-audio-audio-followup-orbit102-{long-failure,reloaded}-20261008.json`/PNG. HTTP 성공과 내용 검증 실패를 구분한다. |
+| 앱 밖 직접 요청의 대조 | pass | 같은 실행 process·모델·WAV·temperature·생성 예산에 대한 직접 upstream SSE 7건은 HTTP 200이다. system 메시지 없이 실행한 단일 긴 질문과 원래 두 turn 이력 재구성은 음성 내용을 해석했다. 앱과 같은 `You are a helpful assistant.` system 메시지를 추가한 두 요청은 이전의 음성 요구 응답을 정확히 재현했고 usage도 각각 135/25와 177/29로 일치했다. `goal-native-audio-followup-orbit102-direct[-system]-20261008.json`과 각 request JSON/SSE. 두 turn 요청은 기록으로 재구성한 replay이며 앱 wire를 캡처한 것으로 설명하지 않는다. |
+| 내용 실패의 분류 | fail | 선택한 엔진·모델 조합의 system prompt 유무에 따른 내용 실패가 앱 밖에서도 재현된다. 앱의 첨부 누락으로 단정하지 않는다. 정확한 tokenizer·processor·model·cache 내부 원인은 미확정이다. 설치 코드가 역사적 audio를 모아 마지막 user 메시지에 배치하는 관찰만으로 이 실패의 원인이라고 확정하지 않는다. system prompt를 조용히 제거하거나 임의 template를 기본값으로 넣는 우회는 하지 않았다. |
+| 긴 후속 응답의 종료 이유 안내 | fail | 새 대화의 세 번째 요청은 음성 내용을 설명하다 128 tok·finish_reason=length로 끝났다. 앱은 부분 내용을 보존하지만 `Response complete`로 표시하고 메시지 이력에 length를 보존하지 않는다. `goal-native-audio-audio-followup-orbit102-third-20261008.json`/PNG와 `useChatSend.ts`·`chatHistory.ts` 관찰 근거다. 앞의 음성 내용 실패와 별도의 미수정 제품 결함으로 남긴다. |
+| MLX 종료·기존 vLLM 실행 복원 | pass | 실제 Unload 후 MLX 소유 PID·listener 부재, 같은 Qwen 모델 revision·외부 vllm-metal runtime·Global Default·context=4096을 UI로 다시 선택하고 readiness를 확인했다. 원래 대화·빈 composer·API off·idle·localStorage를 복원했다. 기존 35개 대화 파일은 정확한 해시를 유지하고 새 합성 대화 2개만 추가됐다. profile 내용은 보존했고 Save profile & start에 따른 두 profile revision·library revision·applied/provider_recent은 갱신됐다. config 전체 바이트 일치나 같은 모델 PID 보존으로 설명하지 않는다. |
+
+`goal-native-audio-followup-orbit102-evidence-audit-20261008.json`은 원래 35개 파일의 해시, 두 새 대화의 immutable WAV 참조·실제 media bytes, 재로드된 실패 기록, 원래 model/runtime·non-profile config·localStorage·MCP 정의, profile 내용 보존과 예상 revision 변경, 수집 render error/overlay 0을 검사했다. 종료 근거는 `goal-native-audio-followup-orbit102-{old,mlx}-cleanup-20261008.json`, 최종 화면은 `goal-native-audio-audio-followup-orbit102-final-20261008.json`/PNG다. 최초 cleanup 관측기가 존재하지 않는 status.port를 읽어 실패한 것은 helper 오류이며 status.url에서 포트를 파싱한 실제 socket 검사로 바로잡았다. 파일 경로 입력의 자동화 문제는 실제 Open 선택·Attachment ready를 확인하고 진행했으며 제품 실패로 세지 않는다.
+
+Browser plugin이 제공되지 않아 기존 frontend 검증 skill의 실제 Tauri WKWebView `localhost:1420`·CUA 조작·읽기 전용 WebDriver getter/PNG를 사용했다. native 1280×800·web 1280×768에서 앱 내용·실제 interaction·수집 render error/overlay 0을 확인했다. `logs/goal-native-audio-followup-orbit102-*-20261008.log`와 direct request/SSE 원본은 ignored tmp에 보존했다. 이번 변경은 검증 문서뿐이므로 35절의 전체 자동 검사·36절의 DMG를 새 검사·새 빌드로 재표기하지 않는다. M04/M07 내용 실패와 기존 blocked/unrun, 새 종료 이유 표시 결함, **전체 M01–M12 미통과**를 유지한다. 개인 엔진 등록은 미구현 장기 설계이며 공개 업로드·원격 push는 수행하지 않았다.
