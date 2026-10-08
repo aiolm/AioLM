@@ -13,6 +13,7 @@ function hasPanelCancellation(task: AppTask): boolean {
   return (task.kind === "runtime" && task.id === "runtime-operation")
     || (task.kind === "benchmark" && task.id === "performance-benchmark-active")
     || (task.kind === "other" && /^session-load-.+/.test(task.id))
+    || (task.kind === "other" && /^mcp-tool-call-.+/.test(task.id))
     || (task.kind === "model-download" && task.id === "model-download");
 }
 

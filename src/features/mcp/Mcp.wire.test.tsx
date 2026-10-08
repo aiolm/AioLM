@@ -24,6 +24,7 @@ describe("MCP native tool payloads", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "mcp_list_servers") return [server];
       if (command === "mcp_list_tools") return [{ name: "echo", description: null, inputSchema: schema }];

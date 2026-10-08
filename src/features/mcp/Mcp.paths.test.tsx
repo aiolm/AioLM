@@ -10,7 +10,7 @@ vi.mock("../../shared/api/index", () => ({
 }));
 
 describe("MCP path presentation", () => {
-  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); });
+  beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); Element.prototype.scrollIntoView = vi.fn(); });
 
   it.each([
     ["Executable / command", "/synthetic/tools/mcp--fixture"],
@@ -67,7 +67,7 @@ describe("MCP path presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Approve and run once" }));
-    await waitFor(() => expect(api.mcpCallTool).toHaveBeenCalledWith("files", "read", { path: rawDocument }));
+    await waitFor(() => expect(api.mcpCallTool).toHaveBeenCalledWith("files", "read", { path: rawDocument }, expect.any(String)));
     const result = await screen.findByLabelText("Tool result");
     expect(JSON.parse(result.textContent!)).toEqual({ path: displayDocument, detail: `Read ${displayDocument}` });
     expect(server.command).toBe(raw);
