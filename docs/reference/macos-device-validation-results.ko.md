@@ -20,6 +20,7 @@
 - 49절은 재개 후 실제 최소 창에서 확인한 전체 모델 정보의 본문 가림과 수정 `6515cde`의 검증 기록이며 50절은 해당 소스의 DMG다.
 - 51절은 같은 대화를 다시 선택하면 전송하지 않은 입력이 지워지던 결함 수정 `6398348`과 실제 입력·목록·화면 전환의 검증 기록이며 52절은 해당 소스의 DMG다.
 - 53절은 macOS MCP 승인창의 실행 오류를 사용자 거부로 오인하던 수정 `80510a8`, 공용 프로필 검사 동기화 `c5a35fa`와 실제 앱 재시작·도구 조회의 기록이다. 54절은 해당 소스의 DMG다.
+- 55절은 다른 엔진에 남은 llama.cpp backend 진단값과 최소 창의 로그 끝 가림 수정 `e70ec9e`를 실제 앱에서 검증한 기록이며 56절은 해당 소스의 DMG다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -60,6 +61,7 @@
 | `6515cde` | 최소 창에서 전체 모델 정보를 펼치면 헤더와 프로필 영역이 설정 본문을 잘린 부모 밖으로 밀어냈다. 짧은 창의 모델 정보 스크롤과 프로필 높이 제한으로 본문 공간을 확보한다. | 실제 최소·짧은 넓은 창·desktop, 입력 포커스·독립 스크롤·13개 geometry/10개 보존 조건·관련 UI96개·공통 UI1788 tests. 49절 참조. |
 | `6398348` | 같은 대화를 다시 선택하는 것만으로 전송하지 않은 입력·첨부가 초기화됐다. 같은 대화는 목록만 닫고, 실제 전환에만 기존 composer 초기화를 적용한다. | 실제 desktop·최소 창의 입력 보존·다른 대화 초기화·화면 왕복, 수정 전 실패/후 통과 첨부 회귀·관련 UI42개·공통 UI1789 tests·16개 검증/보존 조건. 51절 참조. |
 | `80510a8` | macOS 승인 scripting process의 모든 비정상 종료를 사용자 No로 보고했다. 성공 종료와 명시된 답변을 함께 확인하고, 실행 실패·잘못된 답변은 도구를 실행하지 않는 오류로 전달한다. | 수정 전 최소 회귀 실패/후 관련 7개 통과·기존 취소/timeout 정리·전체 Rust/clippy. 실제 앱 재빌드·정상 종료/재시작·Qwen 준비·MCP 조회는 통과했으나 실제 Yes/No는 blocked다. 53절 참조. |
+| `e70ec9e` | vllm-metal 실행의 backend 진단에 저장된 llama.cpp CPU 선택이 들어갔다. 엔진 identity를 우선하고 다른 엔진에서는 해당 필드를 null로 반환한다. 최소 창의 진단 로그가 화면보다 높아 End로 이동한 마지막 줄이 가려지는 문제도 수정했다. | 수정 전 Rust 회귀 실패/후 관련17개·전체 Rust/clippy·공통 UI1789개 통과. 실제 새 native 실행의 null/저장값 보존과 최소·짧은 넓은 창·desktop의 로그 접근, geometry12개·재시작 보존16개 조건. 55절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1016,3 +1018,38 @@ production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 
 패키징 후 CUA로 실제 개발 앱의 원래 Chat·실행 중 Qwen을 다시 확인했다. `goal-native-audio-resume-orbit114-postpackage-80510a8-20261009.json`/PNG, `goal-mcp-approval-orbit114-postpackage-preservation-80510a8-20261009.json`의 11개 조건은 53절의 재시작/저장 뒤 복원 상태와 비교한 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model·execution·세션 실행값·API off·idle/빈 composer·관측 error/overlay0의 보존이다. 이전 재시작 전 revision이나 PID가 불변이었다는 뜻이 아니다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
 
 production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 53절의 blocked와 기존 실제 실패·upstream 제한을 유지하며 **전체 목표·M01–M12 통과를 뜻하지 않는다.** 개인 엔진 registry·manifest·adapter 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 55. 엔진별 backend 진단과 짧은 창의 로그 끝 접근 수정
+
+`40a8197`의 실제 native debug 앱에서 vllm-metal/Qwen3-VL이 실행 중인데 `server_status.lifecycle.effective_backend`는 저장된 llama.cpp 선택인 `cpu`였다. 고정 실행 영역과 RuntimeSelectionLabel은 이미 Metal을 정확히 표시했으므로 화면 runtime label이 CPU였다고 해석하지 않는다. `goal-runtime-diagnostics-orbit115-backend-before-20261009.json`과 `goal-native-audio-resume-orbit115-baseline-20261009.json`이 근거다.
+
+수정 `e70ec9eacf6e3d61d289091c830bfd07cac069c7`은 실제 engine identity를 먼저 확인하고 llama.cpp에서만 해당 backend 값을 제공한다. vLLM·MLX에서는 null이며 runtime identity는 기존 `engine` payload가 제공한다. `LifecycleDiagnostics` 타입에도 이미 가능한 null을 반영했다. 저장된 backend/build·실행 옵션·공용 프로필·기본값은 보존하며 임의로 Metal 문자열을 넣지 않는다. 합성 회귀는 vLLM/MLX의 저장 CPU, native CPU/Metal/빈 값과 실행 identity가 저장 provider보다 우선하는 전체 상태 응답 경로를 검사한다. 수정 전 검사는 cpu/null 불일치로 exit101, 수정 후 관련17개는 pass다. `logs/goal-runtime-diagnostics-orbit115-{regression-before,related}-20261009.log`가 근거이며 첫 run의 filtered 검사들을 실행한 것으로 세지 않는다.
+
+실제 최소 창의 로그에서도 결함을 재현했다. native360×520 / WKWebView360×488에서 포커스한 로그에 End를 누르면 scrollTop1852+clientHeight400=scrollHeight2252로 끝에 도달하지만 영역 bottom709.375px가 viewport488px 밖이었다. 짧은 창의 Diagnostics에만 남은 본문 높이를 사용하는 flex 배치를 적용했다. 로그 내용·기존 스크롤·키보드 동작을 보존하며 API 예제나 큰 창의 스타일 범위를 넓히지 않는다.
+
+| 실제 범위 | 상태 | 근거와 결과 |
+| --- | --- | --- |
+| 최소 창 Home/End | pass | 같은 전체 로그에서 높이145.625px/bottom455px, End scrollTop2106으로 마지막 `Application startup complete.`가 화면 안에 보인다. Home은 scrollTop0이며 포커스·hit=true, 모델/runtime/Unload도 접근 가능하다. 외부 본문 scrollHeight387=clientHeight387, 가로 넘침 없음. `goal-runtime-diagnostics-orbit115-{minimum-keyboard-log,minimum-keyboard-log-after,minimum-home}-20261009.json`과 `goal-native-audio-orbit115-diagnostics-keyboard-{before,after}-20261009.json`/PNG. |
+| 짧은 넓은 창·desktop | pass | WK1280×488에서 로그217.625px/bottom455px와 End 끝 위치, WK1280×768에서 기존 높이400px/bottom637.375px를 확인했다. header control 접근·가로 넘침 없음. `goal-runtime-diagnostics-orbit115-{short-wide-end,desktop}-20261009.json`. `geometry-verification`의12개 조건이 통과했다. 실제 API stopped 화면도 CUA로 확인했으나 API 요청이나 모든 예제를 새로 검증한 것은 아니다. |
+| 정상 종료·새 native 실행 | pass | CUA Cmd+Q 후 기존 앱/engine 소유4개 PID와 engine/Vite/driver 포트 종료, launcher exit0을 확인했다. 종료 뒤 AX 조회가 이전 bundle을 다시 열어 새 첫 launcher가 단일 인스턴스로 exit0했다. 이를 성공으로 세지 않고 다시 열린 앱을 정상 종료한 뒤 별도 retry 로그로 새 bundle을 실행했다. `goal-runtime-diagnostics-orbit115-{normal-quit-cleanup,launch-race}-20261009.json`과 `logs/goal-runtime-diagnostics-orbit115-{launch,retry-launch}-20261009.log`. 이전 dead driver 조회 실패도 남겼다. |
+| 새 바이너리의 실제 진단 | pass | 동일 격리 홈에서 UI Save profile & start로 같은 Qwen revision/context/runtime를 복원했다. 실제 running 응답의 provider=vllm/variant=vllm-metal, effective_backend=null이며 저장 config와 execution의 backend=cpu는 보존된다. `goal-runtime-diagnostics-orbit115-backend-after-20261009.json`, `goal-native-audio-orbit115-qwen-ready-check-20261009.json`/PNG. 최소 창 End를 다시 실행해 bottom455px/마지막 줄을 확인했다. `goal-native-audio-orbit115-native-rebuilt-minimum-end-20261009.json`/PNG. 새 추론 성공으로 계산하지 않는다. |
+| 원래 화면·내용 보존 | pass | Chat/1280×800으로 복원했다. 재시작 전 레이아웃 검사 동안 config 전체/hash·같은 PID와 대화/localStorage 등10개 보존 조건이 통과했다. 재시작 뒤16개 조건은39개 대화 목록/hash·21개 profile 내용·localStorage·비-profile 설정·같은 engine/model/execution·API off·idle/빈 composer·error/overlay0과 진단 수정을 확인한다. Save profile & start의 기존 동작으로 Default vLLM revision12→13, 해당 application revision 하나, library66→68만 증가하고 PID는 바뀌었다. `goal-runtime-diagnostics-orbit115-{before-restart-preservation,restored-preservation}-20261009.json`, `goal-native-audio-orbit115-{before-restart-restored,restored}-20261009.json`/PNG. config hash 불변이라고 주장하지 않는다. |
+
+`logs/goal-runtime-diagnostics-orbit115-{frontend-related,typecheck,lint,unit,build,fmt-check,clippy,rust-all,python-probe,python-portable,native-build}-20261009.log`는 각각2.83s·10.04s·5.67s·129.63s·14.61s·0.76s·5.24s·43.53s·0.78s·0.14s·15.84s/exit0이다. 관련 UI3 files/26 tests, 공통 unit의 계약/direct/script와 UI179 files/1789 tests, coverage80.68/75.56/79.08/84.80%를 확인했다. Rust library946 passed/4 ignored와 CLI15·합성 integration, Python14+3도 통과했다. 명시 실행을 요구하는 기존 live/hosted 검사의 ignored를 pass로 계산하지 않는다. 기존 jsdom 진단과 frontend chunk 경고는 남겼다. CSS 배치는 실제 WKWebView에서 검증했으며 jsdom에 배치를 흉내 낸 검사는 추가하지 않았다.
+
+`goal-runtime-diagnostics-orbit115-native-source-20261009.json`과 `committed-source`에서 native 빌드의 제품3파일 hash와 커밋 일치, ad-hoc 서명 전후 Mach-O compiled text hash 일치·strict 서명을 확인했다. 서명으로 전체 binary hash는 달라진다. staged 파일·실제 diff·개인정보·공백을 검토했고 dependency·lockfile 변경은 없다. UI 조작은 CUA이며 WebDriver는 읽기 전용 상태·geometry·캡처다. 이번 실제 엔진은 vLLM이며 MLX/llama.cpp를 다시 실행한 근거로 확대하지 않는다.
+
+MCP 실제 No/Yes→호출·모델 후속 응답·호출 중 취소, 트레이/Dock·OS 알림의 blocked와 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun, 기존 내용 실패/upstream 제한을 유지한다. **전체 목표·M01–M12는 통과하지 않았다.** 개인 엔진 registry·manifest·adapter는 미구현 [장기 설계](pluggable-inference-runtimes.ko.md)다. raw·캡처·빌드는 ignored tmp에 보존했으며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 56. 진단 metadata·로그 배치 수정 소스 `e70ec9e`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `e70ec9eacf6e3d61d289091c830bfd07cac069c7`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-runtime-diagnostics-orbit115-package-e70ec9e-20261009.log`, `logs/goal-native-runtime-diagnostics-inspect-package-e70ec9e-20261009.log`, `goal-native-runtime-diagnostics-package-e70ec9e-results.json`이 근거다. 빌드232.55s·검사5.00s/exit0, 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16799110 bytes, SHA256 `1236c025b5ed86da021fccf600204c0416f84ba960287e9cbf3912cd7b8890ae`.
+- GUI `aiolm`: arm64, SHA256 `d6ddf948ceebc3eac8fd01c135a824534517970a68c0e218a02e19c730f49ec8`.
+- CLI `aiolm-cli`: arm64, SHA256 `af6ff9df14a35834c9a232fab34f714d1e2bf6e18034f480e0e038c7394ce898`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일5개·symlink 없음, version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 경로와 ORBIT-115 등을 포함한 검증 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·exit0을 확인했다. 같은 DMG는 `goal-package-e70ec9e/`에 보존했다.
+
+패키징 후 CUA로 실제 개발 앱의 Chat·Qwen model loaded를 다시 확인했다. `goal-native-audio-orbit115-postpackage-e70ec9e-20261009.json`/PNG와 `goal-runtime-diagnostics-orbit115-postpackage-preservation-e70ec9e-20261009.json`의11개 조건에서 재시작 뒤 복원 상태와 비교한 config 전체/hash·profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model/execution·수정된 backend 진단·API off·idle/빈 composer·error/overlay0을 확인했다. 재시작 전 revision/PID의 불변이나 새 추론 성공을 의미하지 않는다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 55절의 blocked와 기존 실제 실패/upstream 제한을 유지하며 **전체 목표·M01–M12 통과를 뜻하지 않는다.** 개인 엔진 registry·manifest·adapter 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
