@@ -559,6 +559,10 @@ pub(crate) async fn idle_watchdog(app: tauri::AppHandle) {
 
 #[tauri::command]
 pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    server_status_response(&state)
+}
+
+fn server_status_response(state: &AppState) -> Result<serde_json::Value, String> {
     let mut server = state
         .server
         .lock()
@@ -611,6 +615,14 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
         .clone()
         .or_else(|| config::load_result().ok())
     {
+        // The backend/build selection belongs to llama.cpp. Other engines
+        // retain those settings for a future switch; they are not evidence
+        // of the running engine's accelerator. Its identity is in `engine`.
+        let provider = server
+            .engine
+            .as_ref()
+            .map(|engine| engine.provider)
+            .unwrap_or_else(|| crate::providers::provider_of(&cfg));
         response.insert(
             "memory".into(),
             if tuning_defaults::inherited(&cfg, "ctx_size")
@@ -632,7 +644,7 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
                 "idle_seconds": server.idle_seconds(),
                 "auto_unload_due": server.auto_unload_due(tuning_defaults::app_idle_timeout(&cfg)),
                 "effective_model": if server.model.is_empty() { serde_json::Value::Null } else { server.model.clone().into() },
-                "effective_backend": if cfg.active_backend.is_empty() { serde_json::Value::Null } else { cfg.active_backend.into() },
+                "effective_backend": if provider == crate::providers::ProviderId::Llama && !cfg.active_backend.is_empty() { cfg.active_backend.into() } else { serde_json::Value::Null },
             }),
         );
     }
@@ -642,6 +654,71 @@ pub(crate) fn server_status(state: State<'_, AppState>) -> Result<serde_json::Va
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_runtime_status_does_not_report_the_saved_llama_backend() {
+        for provider in ["vllm", "mlx-vlm"] {
+            let state = AppState::default();
+            state.server.lock().unwrap().execution = Some(config::AppConfig {
+                active_provider: provider.into(),
+                active_backend: "cpu".into(),
+                ..Default::default()
+            });
+            let status = server_status_response(&state).unwrap();
+            assert_eq!(
+                status["lifecycle"]["effective_backend"],
+                serde_json::Value::Null
+            );
+            assert_eq!(status["execution"]["active_provider"], provider);
+            assert_eq!(status["execution"]["active_backend"], "cpu");
+        }
+    }
+
+    #[test]
+    fn native_runtime_status_retains_its_backend_or_reports_it_unavailable() {
+        for backend in ["cpu", "metal", ""] {
+            let state = AppState::default();
+            state.server.lock().unwrap().execution = Some(config::AppConfig {
+                active_backend: backend.into(),
+                ..Default::default()
+            });
+            let status = server_status_response(&state).unwrap();
+            let expected = if backend.is_empty() {
+                serde_json::Value::Null
+            } else {
+                backend.into()
+            };
+            assert_eq!(status["lifecycle"]["effective_backend"], expected);
+        }
+    }
+
+    #[test]
+    fn runtime_status_uses_the_engine_identity_before_the_saved_provider() {
+        let state = AppState::default();
+        let mut engine = crate::providers::protocol::EngineInfo::llama(
+            "synthetic-model",
+            crate::providers::artifacts::Modalities::text_only(),
+        );
+        engine.provider = crate::providers::ProviderId::Vllm;
+        engine.runtime_id = "synthetic-metal-runtime".into();
+        engine.runtime_variant = "vllm-metal".into();
+        {
+            let mut server = state.server.lock().unwrap();
+            server.execution = Some(config::AppConfig {
+                active_backend: "cpu".into(),
+                ..Default::default()
+            });
+            server.engine = Some(engine);
+        }
+        let status = server_status_response(&state).unwrap();
+        assert_eq!(
+            status["lifecycle"]["effective_backend"],
+            serde_json::Value::Null
+        );
+        assert_eq!(status["engine"]["provider"], "vllm");
+        assert_eq!(status["engine"]["runtime_variant"], "vllm-metal");
+        assert_eq!(status["engine"]["runtime_id"], "synthetic-metal-runtime");
+    }
 
     #[tokio::test]
     async fn a_launch_retaining_a_forgotten_entry_cannot_revive_that_model() {

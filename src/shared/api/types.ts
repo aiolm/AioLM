@@ -597,7 +597,8 @@ export interface LifecycleDiagnostics {
   active_requests?: number;
   auto_unload_due?: boolean;
   effective_model?: string;
-  effective_backend?: string;
+  /** llama.cpp backend; null when unavailable or when a different engine owns the runtime. */
+  effective_backend?: string | null;
   last_ready_at?: string;
 }
 
