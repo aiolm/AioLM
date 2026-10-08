@@ -533,3 +533,54 @@ M11의 현재 두벌식 범위를 보완했지만 MCP native Yes/No→실제 호
 - 원본과 해시가 같은 raw DMG는 `goal-package-47580b8/`에 보존했다. 이전 패키지·로그·모델·대화는 유지했다.
 
 빌드 후 실제 CUA로 원래 Chat 화면을 재확인했다. `goal-native-audio-ime-media-after-package-47580b8.json`/PNG와 `goal-native-ime-media-after-package-preservation-47580b8.json`에서 검사 직전35개 대화의 전체 SHA256·config 전체 SHA256/의미·localStorage·같은 실행 프로세스 보존을 대조했다. 원래 ORBIT-84·Qwen3/vllm-metal의 running·API off·active requests0·빈 입력·렌더 오류/overlay0을 유지했다. 개발 앱의 이 확인을 production GUI의 자연스러운 Finder 설치·최초 실행·별도 계정 Keychain·실제 upgrade 결과로 바꾸지 않는다. 27절의 잔여 범위와 **전체 M01–M12 미통과** 상태를 유지한다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 29. 다크 화면 대비 표본과 Discover 검색 컨트롤 정렬
+
+`04e8442`에서 실제 Settings의 Theme를 Dark로 선택하고 CUA로 각 화면을 열었다. 원래 Qwen3/vllm-metal 0.30 실행·API off·active requests0을 유지했다. 모든 표본은 실제 Tauri WKWebView이며 외부 브라우저나 viewport emulation을 사용하지 않았다. 데스크톱 native 창은1280×800, web content는1280×768, DPR1이었다. 최소 크기는 실제 창 모서리 drag로360×520/web content360×488을 확인했다.
+
+Discover에서 엔진 선택기의 라벨은 위에, 형식 라벨은 옆에 있고 나머지 컨트롤은 중앙 정렬돼 있었다. 수정 전 엔진·형식·검색·정렬의 web y는194·182·181.75·182.5였다. `e594c57ac6dbba8ec2e08dcdfbaa52dbcbe1d841`은 Discover에 한정하여 라벨을 위로 배치하고 동일한 control size·6px label gap·10px field gap·하단 정렬·줄바꿈을 적용한다. 네 컨트롤의 수정 후 하단은 모두227.5였으며 높이는33/33.5px이었다. 전역 EngineSelect, 엔진·형식 지원 목록, 검색/정렬 callback·submit·busy 의미와 공개 API는 바꾸지 않았다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 수정 전 desktop toolbar 정렬 | fail | `goal-native-dark-discover-desktop-20261008.json`/PNG에서 라벨과 control y 불일치를 재현했다. |
+| 수정 후 desktop toolbar | pass | `goal-native-dark-discover-toolbar-desktop-after-20261008.json`/PNG에서 네 컨트롤 하단 일치와 라벨 배치를 확인했다. 측정 시 HEAD는 수정 직전 커밋이며 해당 working source 두 파일의 SHA256을 독립 감사 파일에 남겼다. 이 바이트가 수정 커밋과 일치한다. |
+| 최소 창 Discover | pass | `goal-native-dark-discover-toolbar-narrow-{top,menu}-20261008.json`/PNG. 실제 scroll로 검색 입력·정렬·Search models 버튼에 접근했고 정렬 메뉴의 네 항목·Escape 닫힘을 확인했다. document/body scrollWidth360으로 페이지 가로 넘침이 없었다. 새 검색·다운로드를 실행한 검사는 아니다. |
+| 최소 창 Settings·Chat | pass | `goal-native-dark-{settings,chat}-narrow-20261008.json`/PNG. 실제 navigation 열기→Chat 이동, 현재 모델명·빈 composer·disabled Send·응답 영역 scroll을 확인했다. 짧은 Chat 창은 응답/지표 영역을 스크롤해야 하며 모든 값이 동시에 보이는 것으로 설명하지 않는다. 데스크톱 복원 후 실제 응답 모델명·PP50/TG12·TG0.47s/23.4tok/s를 재확인했다. PP 시간/rate는 미제공으로 —를 유지했다. |
+| 설정·기록·실행 복원 | pass | `goal-native-dark-restored-final-20261008.json`/PNG와 `goal-native-discover-dark-layout-independent-audit-20261008.json`. System 테마·원래1280×800 창·ORBIT-84 Chat으로 UI 복원했다. config 전체 SHA256·35개 대화의 정확한 목록/전체 SHA256·localStorage 전체가 검사 전과 같고 같은 프로세스의 running·API off·idle·렌더 오류/overlay0을 확인했다. 독립 감사15개 조건은 모두 true다. |
+
+대비 검사는 [WCAG 2.2 Contrast Minimum](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)의 일반 텍스트4.5:1/큰 텍스트3:1 기준을 사용했다. axe-core4.13.0의 color-contrast 결과와 실제 computed foreground/background·ancestor opacity/filter/blending을 별도로 기록했다. 숨김 `.sr-only`, 닫힌 details, 화면 밖/ancestor clipping 텍스트를 시각 표본에서 제외하고 disabled 텍스트는 inactive로 분리했다. 불투명 RGB linear gradient는 segment별101개 색 표본을 측정했으며 모든 기록 표본의 최저 비율은4.850676 이상이었다. 이 샘플링을 모든 gradient 지점이나 전체 접근성의 증명으로 사용하지 않는다.
+
+| 실제 화면·raw phase | 기준 이상 시각 텍스트 표본 | inactive | axe 위반 / incomplete |
+| --- | ---: | ---: | ---: |
+| Chat `chat-desktop-refined-20261008` | 78 | 0 | 0 / 26 |
+| Projects `projects-desktop-20261008` | 76 | 0 | 0 / 34 |
+| Run a model `models-desktop-20261008` | 78 | 4 | 0 / 54 |
+| Discover 수정 전 `discover-desktop-20261008` | 72 | 0 | 0 / 48 |
+| Discover 수정 후 `discover-toolbar-desktop-after-20261008` | 74 | 0 | 미실행 |
+| Manage runtimes `runtimes-desktop-20261008` | 56 | 1 | 0 / 28 |
+| Loaded sessions `sessions-desktop-20261008` | 35 | 0 | 0 / 25 |
+| Benchmark `benchmark-desktop-20261008` | 78 | 1 | 0 / 42 |
+| API server `api-desktop-20261008` | 44 | 0 | 0 / 23 |
+| MCP servers `mcp-desktop-20261008` | 48 | 0 | 0 / 31 |
+| Diagnostics `diagnostics-desktop-20261008` | 34 | 0 | 0 / 21 |
+| Settings Appearance `appearance-final-20261008` | 47 | 0 | 0 / 25 |
+| 최소 Settings `settings-narrow-20261008` | 14 | 0 | 0 / 2 |
+| 최소 Chat `chat-narrow-20261008` | 12 | 0 | 0 / 6 |
+
+각 phase의 `goal-native-dark-*.json`/PNG, `goal-native-dark-contrast-*.json`, `goal-native-dark-measure-*.json`과 별도 runner 로그를 보존했다. Chat axe 결과는 visibility collector 보정 전 `chat-desktop-20261008`의 실제 audit다. 초기 수동 Chat118표본에는 숨김 텍스트가 포함돼 있어 최종78표본으로 대체했고 원본을 남겼다. initial Appearance의 null heading/sourceCommit도 원본 관측기의 한계이며 final capture에 보완했다. placeholder·pseudo content 전체, 모든 scroll 위치·popover·언어·상태·VoiceOver는 검증하지 않았다. **대비 표본은 pass지만 전체 대비/접근성 검증은 unrun 잔여 범위가 있고 axe incomplete를 pass로 바꾸지 않는다.**
+
+관련 Discover/CustomSelect2 files/45 tests와 `logs/goal-discover-toolbar-{typecheck,lint,unit,build}-20261008.log` 모두 종료0이다. 공통 검사 시간은9.97s·7.33s·134.98s·15.50s, UI173 files/1733 tests, coverage80.35/75.21/78.83/84.46%였다. 기존 jsdom pseudo-element/canvas 진단과500kB chunk 경고는 유지한다. 순수 배치 변경은 기존 의미 회귀와 실제 rendered geometry로 확인했으며 CSS class/값만 복제하는 신규 테스트를 추가하지 않았다. Rust/Python·lockfile은 변경하지 않았다.
+
+27절의 실제 실패·upstream 제한·blocked/unrun 항목과 **전체 M01–M12 미통과** 상태는 유지한다. 개인 엔진의 자유로운 교체는 [장기 설계](pluggable-inference-runtimes.ko.md)의 registry·versioned manifest/protocol adapter·model-resolved capability로 구현해야 하며 이번 배치 수정은 해당 기능의 구현이 아니다. raw·모델·캡처는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 30. Discover 수정 소스 `e594c57`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `e594c57ac6dbba8ec2e08dcdfbaa52dbcbe1d841`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-discover-package-e594c57.log`, `logs/goal-native-discover-inspect-package-e594c57.log`, `goal-native-discover-package-e594c57-results.json`이 근거다. 빌드229.95s·검사4.75s 모두 종료0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16772268 bytes, SHA256 `9d844186e078c8ff846e78f64407c9379dec383cf440c23473cb35ae161ceb44`.
+- GUI `aiolm`: arm64, SHA256 `728c4cd6ab8d75521fc9510d0fbf25afd0452b77af21c31d71cd4585b4836235`.
+- CLI `aiolm-cli`: arm64, SHA256 `794689cd0c1aa78e6b381cf6fb7e25635820b6063bef29e53b31629996020f2c`.
+- GUI·CLI 해시와 빌드 앱 일치, 일반 파일5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE의 개인 home/repository 경로와 검증 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료0을 확인했다.
+- 원본과 같은 해시의 DMG를 `goal-package-e594c57/`에 보존했다. 이전 패키지·로그·모델은 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
+
+빌드 후 실제 CUA 화면과 `goal-native-dark-postpackage-e594c57.json`/PNG, `goal-native-discover-postpackage-preservation-e594c57.json`에서 원래 System 테마/Chat/창 크기·config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage 전체·같은 모델 프로세스의 running/API off/idle·렌더 오류0을 재확인했다. `goal-native-discover-dark-layout-committed-source-20261008.json`은 실제 배치 관측 파일의 source SHA256과 수정 커밋 두 파일의 정확한 일치를 확인한다. 29절의 남은 범위와 **전체 M01–M12 미통과** 상태를 유지한다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
