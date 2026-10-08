@@ -19,6 +19,7 @@
 - 48절은 같은 제품 소스로 Chat 화면 전환·최소 창의 전역 MCP 승인 대기 취소와 알림 키보드 동작을 추가 검증한 기록이다.
 - 49절은 재개 후 실제 최소 창에서 확인한 전체 모델 정보의 본문 가림과 수정 `6515cde`의 검증 기록이며 50절은 해당 소스의 DMG다.
 - 51절은 같은 대화를 다시 선택하면 전송하지 않은 입력이 지워지던 결함 수정 `6398348`과 실제 입력·목록·화면 전환의 검증 기록이며 52절은 해당 소스의 DMG다.
+- 53절은 macOS MCP 승인창의 실행 오류를 사용자 거부로 오인하던 수정 `80510a8`, 공용 프로필 검사 동기화 `c5a35fa`와 실제 앱 재시작·도구 조회의 기록이다. 54절은 해당 소스의 DMG다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -58,6 +59,7 @@
 | `eb2d037` | 자동으로 펼쳐진 작업 알림이 MCP 검토 카드의 승인·취소 버튼을 덮어 끝까지 스크롤해도 접근할 수 없었다. 알림이 본문 공간을 확보하고 긴 내용만 별도로 스크롤하도록 수정했다. | 실제 desktop·최소 창의 버튼 접근·접기·긴 알림 스크롤, 17개 보존 조건·관련 UI35개·공통 UI1788 tests. 46절 참조. |
 | `6515cde` | 최소 창에서 전체 모델 정보를 펼치면 헤더와 프로필 영역이 설정 본문을 잘린 부모 밖으로 밀어냈다. 짧은 창의 모델 정보 스크롤과 프로필 높이 제한으로 본문 공간을 확보한다. | 실제 최소·짧은 넓은 창·desktop, 입력 포커스·독립 스크롤·13개 geometry/10개 보존 조건·관련 UI96개·공통 UI1788 tests. 49절 참조. |
 | `6398348` | 같은 대화를 다시 선택하는 것만으로 전송하지 않은 입력·첨부가 초기화됐다. 같은 대화는 목록만 닫고, 실제 전환에만 기존 composer 초기화를 적용한다. | 실제 desktop·최소 창의 입력 보존·다른 대화 초기화·화면 왕복, 수정 전 실패/후 통과 첨부 회귀·관련 UI42개·공통 UI1789 tests·16개 검증/보존 조건. 51절 참조. |
+| `80510a8` | macOS 승인 scripting process의 모든 비정상 종료를 사용자 No로 보고했다. 성공 종료와 명시된 답변을 함께 확인하고, 실행 실패·잘못된 답변은 도구를 실행하지 않는 오류로 전달한다. | 수정 전 최소 회귀 실패/후 관련 7개 통과·기존 취소/timeout 정리·전체 Rust/clippy. 실제 앱 재빌드·정상 종료/재시작·Qwen 준비·MCP 조회는 통과했으나 실제 Yes/No는 blocked다. 53절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -979,3 +981,38 @@ UI 조작은 CUA이며 WebDriver는 읽기 전용 상태·DOM·캡처다. 실제
 패키징 후 실제 CUA native Chat 화면을 다시 확인했다. `goal-native-audio-resume-orbit113-postpackage-6398348-20261009.json`/PNG와 `goal-chat-draft-orbit113-postpackage-preservation-6398348-20261009.json`의 11개 조건에서 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model·세션 실행값·API off·idle·빈 composer/검색·관측 error/overlay0을 보존했다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
 
 production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 51절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+
+## 53. macOS 승인 오류와 실제 사용자 거부의 구분
+
+`625cb62`에서 macOS 승인 처리는 scripting process가 비정상 종료하면 원인과 관계없이 `Ok(false)`를 반환했고 공통 MCP 호출이 이를 사용자 거부로 표시했다. 실제 No 클릭 없이 종료 코드 1·5를 반환하는 최소 합성 회귀가 `Ok(false)` 때문에 실패했다. `logs/goal-mcp-approval-orbit114-regression-before-20261009.log`가 근거다. 46절의 실제 거부 표시가 이 오류에서 비롯됐다고 확정하지 않는다. 당시 No 조작·실행 오류의 원인은 여전히 미확인이다.
+
+수정 `80510a86526779bcb72a892fd7badca39541c702`은 macOS 승인 응답만 변경한다. Cocoa No/Yes는 각각 명시된 `rejected`/`approved` 답변을 반환하며 성공 종료와 정확한 답변을 함께 확인한다. 비정상 종료·빈 값·추가 내용·예상 밖 응답·과도한 출력은 오류이며 도구를 실행하지 않는다. 응답을 32 bytes로 제한하고 큰 출력도 pipe가 찰 때까지 기다리지 않고 소유 프로세스를 정리한다. 기존 `Result<bool, String>` 계약·공통 승인 정책·120초 deadline·소유 process group·취소·Windows/Linux 처리를 보존한다. 오류를 숨기거나 임의 성공 응답을 승인으로 인정하지 않는다.
+
+`logs/goal-mcp-approval-orbit114-related-final-20261009.log`는 7 passed/1 ignored다. 명시된 승인/거부, 실패와 잘못된 성공 응답, 큰 출력, 취소/deadline의 lifetime socket 종료, 도구 설명의 argv 보존을 검사했다. 실제 시스템 JavaScript의 문자열 직렬화도 UI를 열거나 조작하지 않고 확인했다. hosted-runner 전용 실제 Cocoa 취소 검사는 조건을 위조하지 않아 ignored이며 통과로 계산하지 않는다. 합성 답변은 실제 사람이 No/Yes를 클릭한 근거가 아니다.
+
+| 실제 앱 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 정상 종료·새 native 빌드 | pass | CUA의 Quit AioLM으로 기존 앱과 Qwen 소유 process group의 4개 PID·engine/Vite/driver listener가 종료됐다. `goal-mcp-approval-orbit114-normal-quit-cleanup-20261009.json`. 새 debug 빌드·기존 격리 홈으로 다시 실행했다. ad-hoc bundle 서명으로 전체 binary hash는 달라지며 Mach-O compiled text hash 일치와 strict 서명을 별도로 확인했다. `goal-mcp-approval-orbit114-native-{source,codesign-source}-20261009.json`. |
+| 저장된 모델 복원·MCP 조회 | pass | 실제 UI의 Save profile & start로 같은 vllm-metal/Qwen3-VL revision·context·실행 옵션을 복원해 model loaded를 확인했다. CUA로 기존 합성 서버를 선택·Discover tools를 실행해 metadata 완료, tools/list·소유 PID 종료·tools/call 0을 확인했다. `goal-native-audio-orbit114-{qwen-ready-check,mcp-discovery}-20261009.json`/PNG, `goal-mcp-approval-orbit114-discovery-cleanup-20261009.json`. 새 추론·승인 후 도구 실행의 성공으로 계산하지 않는다. |
+| 원래 화면·내용 보존 | pass | 조회 알림을 닫고 원래 Chat/1280×800으로 복원했다. `goal-mcp-approval-orbit114-restored-preservation-20261009-v2.json`의 16개 조건은 39개 대화 목록/hash·localStorage·21개 profile 내용·application 내용·비-profile 설정·같은 engine/model/execution·API off·idle/빈 composer·관측 error/overlay0·기존 프로세스 정리를 확인한다. 앱 재시작으로 PID가 바뀌었으며 저장/시작의 기존 동작으로 Default vLLM profile revision 11→12, 해당 application revision, library revision64→66만 증가했다. config hash 불변이라고 주장하지 않는다. 첫 전체 동등성 검사의 실패 기록과 실제 revision delta도 보존했다. `goal-native-audio-resume-orbit114-{baseline,restored}-20261009.json`/PNG. |
+
+공통 UI 첫 run은 프로필 저장 콜백 호출 직후 화면까지 갱신됐다고 가정하여 1개가 실패했다. `c5a35fa`는 실제 선택기 갱신을 기존 waitFor로 기다리는 검사 수정이며 제품 동작·기대값·시간 제한을 바꾸지 않는다. 해당 파일 63개가 통과했다. 다음 전체 run은 App navigation 1개와 Tuning options 2개가 실패했다. 그 두 파일은 같은 소스로 따로 실행하면 42개가 통과했고, 이후 별도 빌드·모델 startup을 겹치지 않은 원래 `npm run test:unit` 전체 run에서 179 files/1789 tests가 통과했다. 부하가 실패 원인이라고 확정하지 않으며 두 초기 실패 로그를 유지한다. `logs/goal-mcp-approval-orbit114-{unit,unit-final,profile-related,navigation-tuning-triage,unit-steady}-20261009.log`; 마지막 전체 run은 128.17s/exit0, coverage80.68/75.56/79.08/84.80%다. 기존 jsdom 진단·frontend chunk 경고는 유지한다.
+
+`logs/goal-mcp-approval-orbit114-{typecheck,lint,build,fmt-check,clippy,rust-all,python-probe,python-portable,native-build}-20261009.log`는 각각 29.41s·11.49s·25.08s·0.75s·16.02s·53.92s·1.90s·0.12s·18.10s/exit0이다. Rust 전체 타깃·feature의 library943 passed/4 ignored와 CLI15·합성 integration 검사, Python14+3을 확인했다. 명시 실행을 요구하는 기존 live/hosted 검사는 이번에 재실행한 것으로 계산하지 않는다. dependency·lockfile·공개 타입 변경은 없으며 staged 파일·실제 diff·개인정보·공백을 검토했다. `goal-mcp-approval-orbit114-committed-source-20261009.json`의 승인 소스 hash는 실제 native 빌드와 같다.
+
+실제 새 Cocoa No/Yes, Yes 이후 tools/call·모델 후속 응답·실제 호출 중 취소는 별도 창을 CUA가 선택하지 못해 여전히 blocked다. 이 한계를 성공으로 바꾸거나 승인 정책을 우회하지 않았다. 트레이/Dock·OS 알림의 blocked, 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 unrun과 기존 모델 내용 실패·upstream 제한을 유지한다. **전체 목표·M01–M12는 통과하지 않았다.** MCP 승인은 엔진과 무관한 host 기능이며 개인 엔진 registry·manifest·adapter는 [장기 설계](pluggable-inference-runtimes.ko.md)로 아직 미구현이다. raw·fixture·빌드는 ignored tmp에 보존했고 공개 업로드·원격 push는 수행하지 않았다.
+
+
+## 54. 승인 오류 구분 수정 소스 `80510a8`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `80510a86526779bcb72a892fd7badca39541c702`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-mcp-approval-orbit114-package-80510a8-20261009.log`, `logs/goal-native-mcp-approval-inspect-package-80510a8-20261009.log`, `goal-native-mcp-approval-package-80510a8-results.json`이 근거다. 빌드227.87s·검사2.18s 모두 exit0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16798967 bytes, SHA256 `e1c9b9b5847cf1ac68af1e3a30fd324d1cf4d74e2ea7020a36c03cc9943aefbc`.
+- GUI `aiolm`: arm64, SHA256 `ed29d7f4eaaab63532c253570895e3c36c39145daae3ed0e5b9bd3d16a9a5b4f`.
+- CLI `aiolm-cli`: arm64, SHA256 `cf4cb7820ccfc69dbe8cd7449e3e78330ee7e9d326c5c124c19fbfece5a33f43`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일5개·symlink 없음, version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 경로와 추가 ORBIT-109·110·112–114 검증 표식을 포함한 fixture 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·exit0을 확인했다. 같은 DMG는 `goal-package-80510a8/`에 보존했다.
+
+패키징 후 CUA로 실제 개발 앱의 원래 Chat·실행 중 Qwen을 다시 확인했다. `goal-native-audio-resume-orbit114-postpackage-80510a8-20261009.json`/PNG, `goal-mcp-approval-orbit114-postpackage-preservation-80510a8-20261009.json`의 11개 조건은 53절의 재시작/저장 뒤 복원 상태와 비교한 config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·동일 running PID/engine/model·execution·세션 실행값·API off·idle/빈 composer·관측 error/overlay0의 보존이다. 이전 재시작 전 revision이나 PID가 불변이었다는 뜻이 아니다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 53절의 blocked와 기존 실제 실패·upstream 제한을 유지하며 **전체 목표·M01–M12 통과를 뜻하지 않는다.** 개인 엔진 registry·manifest·adapter 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
