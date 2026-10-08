@@ -78,10 +78,17 @@ export const providerImportCommand = (providerId: ProviderId, command: string) =
 export async function listModelArtifacts(modelsDir: string, scanId?: string, selection?: { provider: ProviderId; runtime: string }) {
   const catalog = await invoke<{ models: CatalogModel[]; truncated: boolean }>('list_model_artifacts', { modelsDir, scanId: scanId ?? null,
     providerId: selection?.provider ?? null, runtimeId: selection?.runtime ?? null });
-  const models: GgufModel[] = catalog.models.map(({ artifact, compatibility, shards }) => ({
-    name: artifact.name, path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
-    is_vision: artifact.role === 'projector', artifact, compatibility, ...(shards ? { shards } : {}),
-  }));
+  const models: GgufModel[] = catalog.models.map(({ artifact, compatibility, shards }) => {
+    // Snapshot basenames can be revisions. The native inspector separately
+    // records repository identity from its manifest or the HF cache layout.
+    const repositoryName = artifact.format !== 'gguf'
+      ? /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$/.exec(artifact.repository ?? '')?.[1]
+      : undefined;
+    return {
+      name: repositoryName ?? artifact.name, path: artifact.path, size_mb: artifact.size_bytes / 1024 / 1024,
+      is_vision: artifact.role === 'projector', artifact, compatibility, ...(shards ? { shards } : {}),
+    };
+  });
   return { models, truncated: catalog.truncated };
 }
 export function modelLoadable(model: GgufModel, provider: ProviderId, task?: 'generate' | 'embed'): boolean {

@@ -159,6 +159,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const [error, setError] = useState<string | null>(null);
   const [storageError, setStorageError] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [device, setDevice] = useState<api.DeviceReport | null>(null);
   const [runTarget, setRunTarget] = useState<ReturnType<typeof benchmarkTarget> | null>(null);
   const rowsRef = useRef<api.PerformanceBenchmarkRow[]>([]);
@@ -166,6 +167,10 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const cancelRequestedRef = useRef(false);
   const historyRevisionRef = useRef(0);
   const deleteInFlight = useRef(false);
+  const copyRequestRef = useRef(0);
+  const copyPendingRef = useRef(false);
+  const copyMountedRef = useRef(false);
+  const resetCopied = () => { copyRequestRef.current += 1; setCopied(false); };
   const tasks = useTasks();
   const busy = phase !== "idle";
   const otherBenchmark = tasks.some((task) => task.kind === "benchmark" && task.id !== TASK_ID && (task.state === "running" || task.state === "cancelling"));
@@ -193,6 +198,8 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const canRun = !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptLengths.length * (batchSizes.length + 1) * (validRepetitions ? repetitionsNumber : 0);
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
+  const copyTargetRef = useRef({ record: selectedRecord, locale });
+  copyTargetRef.current = { record: selectedRecord, locale };
   const previousRecords = history.filter(item => item.id !== record?.id);
   const exportAllDiffers = history.length > 0 && (history.length > 1 || history[0].id !== selectedRecord?.id);
   const visibleRows = selectedHistory && selectedRecord ? selectedRecord.result.rows : rows;
@@ -204,6 +211,11 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const summary = useMemo(() => summarizePerformanceRows(visibleRows), [visibleRows]);
   const singleRows = summary.filter((row) => row.concurrency === 1);
   const batchRows = summary.filter((row) => row.concurrency > 1);
+
+  useEffect(() => {
+    copyMountedRef.current = true;
+    return () => { copyMountedRef.current = false; copyRequestRef.current += 1; };
+  }, []);
 
   useEffect(() => {
     if (!targetApplication && store.cfg) setTargetApplication(benchmarkTarget(store.cfg).application);
@@ -282,7 +294,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     activeRef.current = true;
     cancelRequestedRef.current = false;
     rowsRef.current = [];
-    setPhase("running"); setProgress(null); setRows([]); setResult(null); setRecord(null); setSelectedHistory(""); setError(null); setCopied(false); setStorageError(false); setExportNotice(null); setHistoryNotice(null);
+    setPhase("running"); setProgress(null); setRows([]); setResult(null); setRecord(null); setSelectedHistory(""); setError(null); resetCopied(); setStorageError(false); setExportNotice(null); setHistoryNotice(null);
     registerTask({ id: TASK_ID, kind: "benchmark", label: copy.title, phase: copy.starting, received: 0, total, interruptible: true, cancel });
     let unlisten: (() => void) | undefined;
     let finalResult: api.PerformanceBenchmarkResult;
@@ -331,9 +343,18 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const statusLabel = visibleResult ? ({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed }[visibleResult.status]) : null;
   const progressMessage = phase === "cancelling" ? copy.cancelling : progressLabel(progress?.phase, copy);
   const copyResults = async () => {
-    if (!selectedRecord) return;
-    try { await navigator.clipboard.writeText(performanceMarkdown(selectedRecord, locale)); setCopied(true); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); }
+    if (!selectedRecord || copyPendingRef.current) return;
+    const selected = selectedRecord;
+    const request = ++copyRequestRef.current;
+    const current = () => copyMountedRef.current && request === copyRequestRef.current
+      && copyTargetRef.current.record === selected && copyTargetRef.current.locale === locale;
+    copyPendingRef.current = true;
+    setCopying(true);
+    try {
+      await navigator.clipboard.writeText(performanceMarkdown(selected, locale));
+      if (current()) setCopied(true);
+    } catch (caught) { if (current()) setError(caught instanceof Error ? caught.message : String(caught)); }
+    finally { copyPendingRef.current = false; if (copyMountedRef.current) setCopying(false); }
   };
   const exportResults = async (all: boolean) => {
     if (exporting || busy || deleteInFlight.current) return;
@@ -370,7 +391,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
         rowsRef.current = [];
         setStorageError(false);
       }
-      setCopied(false); setError(null); setExportNotice(null);
+      resetCopied(); setError(null); setExportNotice(null);
       setPendingDelete(null); setHistoryNotice(copy.deleteSuccess);
       try {
         const page = await loadBenchmarkHistoryPage();
@@ -441,13 +462,13 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {(history.length > 0 || record) && <p className="performance-hint">{copy.localHistoryHint}</p>}
     {(history.length > 0 || rows.length > 0 || record) && <div className="performance-history-bar">
       {previousRecords.length > 0 ? <label><span>{copy.history}</span><CustomSelect ariaLabel={copy.history} value={selectedHistory} disabled={busy || exporting || deleting}
-        onChange={value => { setSelectedHistory(value); setCopied(false); setError(null); setExportNotice(null); setHistoryNotice(null); }}
+        onChange={value => { setSelectedHistory(value); resetCopied(); setError(null); setExportNotice(null); setHistoryNotice(null); }}
         options={[{ value: '', label: copy.current }, ...previousRecords.map(item => ({ value: item.id,
           label: `${new Date(item.createdAt).toLocaleString()} · ${modelDisplayName(item.model)} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
           icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
-        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting} data-icon="copy" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
+        <button type="button" className="app-button app-button--secondary app-button--sm" disabled={deleting || copying} aria-busy={copying} data-icon="copy" onClick={() => void copyResults()}>{copied ? copy.copied : copy.copy}</button>
       </>}<CustomSelect className="performance-export-format" ariaLabel={copy.exportFormat} value={exportFormat} disabled={busy || exporting || deleting}
         onChange={value => { setExportFormat(value); setExportNotice(null); }} options={[{ value: 'xlsx', label: 'Excel (.xlsx)' }, { value: 'csv', label: 'CSV (.csv)' }]} />
       {selectedRecord && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || exporting || deleting} data-icon="download" onClick={() => void exportResults(false)}>{copy.exportFile}</button>}

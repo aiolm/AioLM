@@ -288,6 +288,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const models = catalog.models.filter(model => api.modelLoadable(model, provider) && `${model.name} ${normalizeDisplayPath(model.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const selected = catalog.models.find(model => model.path === cfg.active_model);
   const compatibility = selected?.compatibility?.find(item => item.provider === provider);
+  const supportedInputs = compatibility && ['supported', 'partial'].includes(compatibility.status)
+    ? Object.entries(compatibility.modalities).filter(([, supported]) => supported).map(([name]) => name).join(', ') || '—' : '—';
   const incompatible = !!compatibility && !api.modelLoadable(selected!, provider);
   const compatibilityBlocked = incompatible || !!compatibility?.readiness.length;
   const incomplete = !!selected?.shards?.missing.length || !!selected?.artifact?.incomplete || !!selected?.artifact?.missing.length;
@@ -392,7 +394,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           </div>
         </div>
         <footer className="model-settings-footer">
-          <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
+          <div className="model-settings-footer-summary" tabIndex={0}>
+            <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
               {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || compatibility?.status}</FeedbackBanner>}
               {!benchmark && mode !== 'project' && !live && setupGaps.length > 0 && <FeedbackBanner tone="warning" title={executionCopy.blockedTitle}><ul className="model-settings-blocked" aria-label={executionCopy.blockedTitle}>
                 {setupGaps.map(gap => <li key={gap}><span>{runSetupGapMessage(gap, locale)}</span>
@@ -401,14 +404,15 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                   {gap === 'runtimeMissing' && onManageRuntimes && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="settings" onClick={() => onManageRuntimes(structuredClone(cfg))}>{executionCopy.manageRuntime}</button>}
                 </li>)}
               </ul></FeedbackBanner>}</div>
-          <div className="model-settings-footer-bar">
-            {llama ? <ResourceEstimatePanel cfg={cfg} options={runtime.options} verified={runtime.verified} runtimeDevices={runtime.capabilities?.devices} open={open} invalid={invalid.size > 0 || pathPending} benchmark={benchmark} /> : <span>{providerCopy[locale].modalities}: {selected?.artifact ? Object.entries(selected.artifact.modalities).filter(([, supported]) => supported).map(([name]) => name).join(', ') : '—'}</span>}
-              <div className="model-settings-actions">
-                {!benchmark && mode !== 'project' && (live
-                  ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
-                  : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
-                {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" onClick={onCancelStart}>{copy.cancel}</button>}
-              </div>
+            <div className="model-settings-footer-bar">
+              {llama ? <ResourceEstimatePanel cfg={cfg} options={runtime.options} verified={runtime.verified} runtimeDevices={runtime.capabilities?.devices} open={open} invalid={invalid.size > 0 || pathPending} benchmark={benchmark} /> : <span>{providerCopy[locale].modalities}: {supportedInputs}</span>}
+            </div>
+          </div>
+          <div className="model-settings-actions">
+            {!benchmark && mode !== 'project' && (live
+              ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
+              : <button type="button" className="app-button app-button--primary" disabled={disabled || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
+            {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" onClick={onCancelStart}>{copy.cancel}</button>}
           </div>
         </footer>
       </div>

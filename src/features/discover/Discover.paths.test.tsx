@@ -221,6 +221,30 @@ describe('Discover runtime journeys', () => {
     await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledTimes(2));
   });
 
+  it.each(['network failed', 'model download cancelled'])('clears a prior snapshot success notice before a retry ends with %s', async failure => {
+    let rejectRetry!: (error: Error) => void;
+    vi.mocked(api.hfDownloadSnapshot).mockResolvedValueOnce(snapshot)
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRetry = reject; }));
+    const store = createTestStore({ active_provider: 'vllm' });
+    render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
+    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
+    expect(await screen.findByText('Download complete')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Configure and run' })).toBeVisible();
+
+    await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
+    await waitFor(() => expect(api.hfDownloadSnapshot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Configure and run' })).not.toBeInTheDocument();
+    await act(async () => rejectRetry(new Error(failure)));
+    expect(getTaskSnapshot().find(task => task.id === 'model-download')?.state).toBe(failure === 'model download cancelled' ? 'cancelled' : 'failed');
+    expect(screen.queryByText('Download complete')).not.toBeInTheDocument();
+    if (failure !== 'model download cancelled') expect(screen.getByText(failure)).toBeVisible();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
   it('marks complete snapshots and exposes interrupted snapshots for retry', async () => {
     vi.mocked(api.hfInstalledSnapshots).mockResolvedValue([snapshot, { ...snapshot, path: 'models/interrupted', incomplete: true, missing: ['weights.safetensors'] }]);
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore({ active_provider: 'vllm' })} /></I18nProvider>);

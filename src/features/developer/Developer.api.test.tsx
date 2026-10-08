@@ -473,6 +473,32 @@ describe("API key and connection details", () => {
 });
 
 describe("API port", () => {
+  it('preserves a later Stop API action when saving the port finishes afterward', async () => {
+    vi.mocked(api.apiServerStatus).mockResolvedValue(runningApi);
+    const saved = deferred<void>();
+    const store = storeWith();
+    vi.mocked(store.updateConfig).mockImplementationOnce(async patch => {
+      await saved.promise;
+      return Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch);
+    });
+    render(page(store));
+    openDisclosure('Server settings');
+    const port = await screen.findByRole('spinbutton', { name: 'API port' });
+    await waitFor(() => expect(port).toBeEnabled());
+    fireEvent.change(port, { target: { value: '9090' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and restart API' }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: 'Stop API' }));
+    await screen.findByRole('button', { name: 'Start API' });
+    await act(async () => { saved.resolve(); await saved.promise; });
+    await waitFor(() => expect(port).toBeEnabled());
+    expect(store.cfg?.port).toBe(9090);
+    expect(api.stopApiServer).toHaveBeenCalledOnce();
+    expect(api.startApiServer).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Start API' })).toBeEnabled();
+    modelLifecycleCommands().forEach(command => expect(command).not.toHaveBeenCalled());
+  });
+
   it("saves the port for the next API start without restarting anything", async () => {
     const store = storeWith();
     render(page(store));

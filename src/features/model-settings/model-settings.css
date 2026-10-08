@@ -49,15 +49,16 @@
 .model-settings-option > .app-section-hint { margin: 8px 0 0; }
 .model-settings-option-format, .model-settings-option-default { display: block; margin-top: 4px; }
 .model-settings-option > details:not([open]) + p .model-settings-option-format { display: none; }
-.model-settings-footer { flex-shrink: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow-y: auto; }
+.model-settings-footer { display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow: hidden; }
+/* Notices and estimates may scroll; the target's launch/cancel action stays visible. */
+.model-settings-footer-summary { min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .model-settings-notices { display: grid; gap: 8px; font-size: var(--ui-text-support); color: var(--ui-muted); margin-bottom: 12px; line-height: 1.5; }
 .model-settings-notices:empty { display: none; }
 .model-settings-blocked { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .model-settings-blocked li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-/* The resource summary shares the launch row; top alignment keeps the action in place while its details are open. */
 .model-settings-footer-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 20px; }
 .model-settings-footer-bar > .resource-estimate { flex: 1 1 360px; }
-.model-settings-actions { display: flex; gap: 9px; justify-content: flex-end; flex-wrap: wrap; margin-inline-start: auto; }
+.model-settings-actions { display: flex; flex-shrink: 0; gap: 9px; justify-content: flex-end; flex-wrap: wrap; margin-top: 10px; margin-inline-start: auto; }
 .model-settings-actions:empty { display: none; }
 .model-settings-overlays { position: static; }
 @media (max-width: 720px) {
@@ -74,7 +75,7 @@
   .model-settings-grid, .model-settings-gpus { grid-template-columns: minmax(0, 1fr); }
   .model-settings-lora { grid-template-columns: minmax(0, 1fr) 80px; }
   .model-settings-footer { padding: 12px 16px; }
-  .model-settings-actions { flex: 1 1 100%; }
+  .model-settings-actions { align-self: stretch; margin-inline-start: 0; }
   .model-settings-actions > button { flex: 1 1 120px; }
 }
 @media (max-height: 650px) {

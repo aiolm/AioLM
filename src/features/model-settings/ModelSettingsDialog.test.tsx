@@ -123,6 +123,21 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved vLLM prompt'));
   });
 
+  it.each(['vllm', 'mlx-vlm'] as const)('reports only the selected %s runtime inputs for a multimodal snapshot', async provider => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic-server', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic-runtime', provider, engine: provider, server: 'synthetic-server', accelerator: 'synthetic', installation: 'external', location: 'synthetic-runtime', available: true, problems: [] }]);
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [{
+      name: 'Multimodal snapshot', path: 'models/snapshot', size_mb: 1, is_vision: false,
+      artifact: { name: 'Multimodal snapshot', path: 'models/snapshot', format: 'mlx', role: 'model', size_bytes: 1024, file_count: 2,
+        architectures: ['SyntheticVisionModel'], modalities: { text: true, image: true, audio: true, video: true }, missing: [], incomplete: false, ownership: 'external', notes: [] },
+      compatibility: [{ provider, status: 'partial', tasks: ['generate'], modalities: { text: true, image: true, audio: false, video: false },
+        limitations: ['Native audio and video are unavailable.'], readiness: [], reasons: [], evidence: 'synthetic-runtime-probe' }],
+    }], truncated: false });
+    mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic-runtime', active_model: 'models/snapshot' } });
+    await waitFor(() => expect(screen.getByText('Supported inputs: text, image')).toBeVisible());
+    expect(document.querySelector('.model-settings-footer-bar')).not.toHaveTextContent(/audio|video/);
+  });
+
   it('keeps the selected model summary compact and exposes all metadata without changing settings', async () => {
     vi.mocked(api.modelMetadata).mockResolvedValueOnce({ architecture: 'future-architecture', author: 'Synthetic Author',
       context_length: 32768, tags: ['reasoning', 'base_model:original/long-model-name', 'license:apache-2.0'] });

@@ -61,6 +61,25 @@ export interface ChatStorage {
 
 export type ChatPersistenceResult = "native" | "indexeddb" | "local" | "unavailable";
 
+/** Every mounted conversation participates in deleting the shared workspace. */
+export const CHAT_WORKSPACE_CLEAR_EVENT = "aiolm:chat-workspace-clear";
+export type ChatWorkspaceClearDetail = { state: "clearing" | "failed" } | { state: "cleared"; workspace: ChatWorkspace };
+let clearingWorkspace = false;
+let clearOperation: Promise<ChatWorkspace> | null = null;
+const historyOperations = new Set<Promise<unknown>>();
+
+export function isChatWorkspaceClearing(): boolean { return clearingWorkspace; }
+
+function notifyWorkspaceClear(detail: ChatWorkspaceClearDetail): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(CHAT_WORKSPACE_CLEAR_EVENT, { detail }));
+}
+
+function trackHistoryOperation<T>(operation: Promise<T>): Promise<T> {
+  historyOperations.add(operation);
+  void operation.then(() => historyOperations.delete(operation), () => historyOperations.delete(operation));
+  return operation;
+}
+
 function sameWorkspace(left: ChatWorkspace, right: ChatWorkspace): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -344,16 +363,37 @@ export function dropLegacyChatWorkspace(storage: ChatStorage | null = browserSto
  * already removes it from storage; this is the "leave nothing behind" path
  * exposed in Settings.
  */
-export async function clearChatWorkspace(): Promise<ChatWorkspace> {
-  const fresh = defaultChatWorkspace();
-  await clearBrowserConversations();
-  if (isNativeRuntimeAvailable()) {
-    await inNativeQueue(async () => {
-      await invoke("conversations_clear");
-      nativeWritten = new Map();
-    });
-  }
-  return fresh;
+export function clearChatWorkspace(clearRelatedData?: () => Promise<void>): Promise<ChatWorkspace> {
+  if (clearOperation) return clearOperation;
+  clearingWorkspace = true;
+  notifyWorkspaceClear({ state: "clearing" });
+  const operation = (async () => {
+    try {
+      // Reads can migrate browser data and saves may already be queued. They
+      // must settle before deletion, so none can restore an older copy later.
+      await Promise.allSettled([...historyOperations]);
+      await clearBrowserConversations();
+      if (isNativeRuntimeAvailable()) {
+        await inNativeQueue(async () => {
+          await invoke("conversations_clear");
+          nativeWritten = new Map();
+        });
+      }
+      await clearRelatedData?.();
+      const fresh = defaultChatWorkspace();
+      clearingWorkspace = false;
+      notifyWorkspaceClear({ state: "cleared", workspace: fresh });
+      return fresh;
+    } catch (error) {
+      clearingWorkspace = false;
+      notifyWorkspaceClear({ state: "failed" });
+      throw error;
+    } finally {
+      clearOperation = null;
+    }
+  })();
+  clearOperation = operation;
+  return operation;
 }
 
 async function clearBrowserConversations(): Promise<void> {
@@ -377,7 +417,7 @@ async function clearBrowserConversations(): Promise<void> {
 }
 
 export function loadChatWorkspace(storage: ChatStorage | null = browserStorage()): ChatWorkspace {
-  if (!storage) return defaultChatWorkspace();
+  if (clearingWorkspace || !storage) return defaultChatWorkspace();
   try {
     return persistedWorkspace(parseWorkspace(storage.getItem(CHAT_WORKSPACE_KEY))
       ?? parseWorkspace(storage.getItem(LEGACY_CHAT_WORKSPACE_KEY))
@@ -391,7 +431,7 @@ export function saveChatWorkspace(
   workspace: ChatWorkspace,
   storage: ChatStorage | null = browserStorage(),
 ): void {
-  if (!storage) return;
+  if (clearingWorkspace || !storage) return;
   try {
     storage.setItem(CHAT_WORKSPACE_KEY, JSON.stringify(persistedWorkspace(workspace)));
   } catch {
@@ -400,14 +440,17 @@ export function saveChatWorkspace(
 }
 
 /** Never rejects: a store that cannot be read yields what the browser holds. */
-export async function loadChatWorkspaceAsync(): Promise<ChatWorkspace> {
-  if (!isNativeRuntimeAvailable()) return loadBrowserWorkspace();
-  try {
-    return await loadNativeWorkspace();
-  } catch (error) {
-    console.error("Conversations could not be read from the data folder.", error);
-    return loadBrowserWorkspace();
-  }
+export function loadChatWorkspaceAsync(): Promise<ChatWorkspace> {
+  if (clearingWorkspace) return Promise.resolve(defaultChatWorkspace());
+  return trackHistoryOperation((async () => {
+    if (!isNativeRuntimeAvailable()) return loadBrowserWorkspace();
+    try {
+      return await loadNativeWorkspace();
+    } catch (error) {
+      console.error("Conversations could not be read from the data folder.", error);
+      return loadBrowserWorkspace();
+    }
+  })());
 }
 
 async function loadBrowserWorkspace(): Promise<ChatWorkspace> {
@@ -436,21 +479,24 @@ async function loadBrowserWorkspace(): Promise<ChatWorkspace> {
   return loadChatWorkspace();
 }
 
-export async function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
-  if (isNativeRuntimeAvailable()) return saveNativeWorkspace(workspace);
-  const safe = persistedWorkspace(workspace);
-  saveChatWorkspace(safe);
-  try {
-    await storageAdapter.set(CHAT_WORKSPACE_KEY, safe);
-    return "indexeddb";
-  } catch {
+export function saveChatWorkspaceAsync(workspace: ChatWorkspace): Promise<ChatPersistenceResult> {
+  if (clearingWorkspace) return Promise.resolve("unavailable");
+  return trackHistoryOperation((async () => {
+    if (isNativeRuntimeAvailable()) return saveNativeWorkspace(workspace);
+    const safe = persistedWorkspace(workspace);
+    saveChatWorkspace(safe);
     try {
-      await writeIndexedWorkspace(safe);
+      await storageAdapter.set(CHAT_WORKSPACE_KEY, safe);
       return "indexeddb";
     } catch {
-      return browserStorage() ? "local" : "unavailable";
+      try {
+        await writeIndexedWorkspace(safe);
+        return "indexeddb";
+      } catch {
+        return browserStorage() ? "local" : "unavailable";
+      }
     }
-  }
+  })());
 }
 
 interface StoredConversations {

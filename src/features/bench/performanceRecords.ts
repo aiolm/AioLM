@@ -94,11 +94,16 @@ export function readPerformanceHistory(): PerformanceBenchmarkRecord[] {
   return visibleBenchmarkRecords(inspectLegacyPerformanceHistory().records);
 }
 
-/** Throws on unavailable/full storage so the UI can keep the result and offer export. */
+/** Preserve unreadable entries like deletion and migration do; a failed save leaves the result exportable. */
 export function savePerformanceRecord(record: PerformanceBenchmarkRecord): PerformanceBenchmarkRecord[] {
-  const next = [...visibleBenchmarkRecords([record]), ...readPerformanceHistory().filter((item) => item.id !== record.id)];
+  const stored = localStorage.getItem(PERFORMANCE_HISTORY_KEY);
+  const entries: unknown = stored === null ? [] : JSON.parse(stored);
+  if (!Array.isArray(entries)) throw new Error('Benchmark history is not readable.');
+  const incoming = visibleBenchmarkRecords([record]);
+  if (!incoming.length) return visibleBenchmarkRecords(entries.filter(isPerformanceRecord));
+  const next = [...incoming, ...entries.filter(entry => !isPerformanceRecord(entry) || entry.id !== record.id)];
   localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify(next));
-  return next;
+  return visibleBenchmarkRecords(next.filter(isPerformanceRecord));
 }
 
 /** Delete only the selected valid record, preserving unrelated or unreadable entries. */

@@ -351,7 +351,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const destination = store.cfg.models_dir;
     const execution = { provider, runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '' };
     setDownloadedChoice(null);
-    setDownloading(repo); setError(null);
+    setDownloading(repo); setError(null); setNotice(null);
     registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: repo, phase: 'starting',
       received: 0, total: 0, interruptible: true, cancel: () => api.hfCancelDownload() });
     try {
@@ -437,7 +437,13 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
             <span className="shrink-0 tabular-nums font-semibold ui-color-accent" >{progressPercent}%</span>
           </div>
           <ProgressBar label={t("ui.downloadProgress")} value={progress.total > 0 ? progressPercent : undefined} className="mt-2.5" />
-          <div className="mt-2.5 flex items-center justify-between gap-3"><span className="whitespace-nowrap text-xs tabular-nums ui-color-muted" >{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span><span className="flex shrink-0 items-center gap-2.5"><span className="whitespace-nowrap text-right text-sm font-semibold tabular-nums ui-color-accent ui-min-width-120px" >{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span><LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</LocalTaskCancelButton></span></div>
+          <div className="discover-progress-summary mt-2.5 flex items-center justify-between gap-3">
+            <span className="discover-progress-bytes text-xs tabular-nums ui-color-muted">{t("ui.bytesOfTotal", { received: formatBytes(progress.received), total: formatBytes(progress.total) })}</span>
+            <span className="discover-progress-actions flex items-center justify-end gap-2.5">
+              <span className="discover-progress-rate text-right text-sm font-semibold tabular-nums ui-color-accent">{speedBps !== null ? formatSpeedBps(speedBps) : "—"}</span>
+              <LocalTaskCancelButton taskId={MODEL_DOWNLOAD_TASK_ID} onClick={() => void cancel()} className="app-button app-button--ghost app-button--sm">{t("panel.cancel")}</LocalTaskCancelButton>
+            </span>
+          </div>
         </div>
       )}
 

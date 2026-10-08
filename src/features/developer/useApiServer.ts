@@ -99,6 +99,7 @@ export function useApiServer(fallbackPort: number, active = true) {
   }), [run]);
 
   const clearError = useCallback(() => setError(null), []);
+  const getActionRevision = useCallback(() => generation.current, []);
 
-  return { status, checked, pending, error, refresh, start, stop, restart, clearError };
+  return { status, checked, pending, error, refresh, start, stop, restart, clearError, getActionRevision };
 }

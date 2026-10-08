@@ -146,11 +146,11 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
 
   const wipeConversationData = async () => {
     setWiping(true);
+    setWipeNotice(null);
     try {
       // Both stores hold readable content: the workspace keeps message text,
       // the index keeps the extracted document chunks it embedded.
-      await clearChatWorkspace();
-      await clearDocumentIndex();
+      await clearChatWorkspace(clearDocumentIndex);
       setWipeNotice(t("ui.wipeDataDone"));
       setIoError(null);
     } catch (error) {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createChatThread, loadChatWorkspace, loadChatWorkspaceAsync, mergeHydratedWorkspace, saveChatWorkspaceAsync, threadMatchesQuery, titleFromMessage, type ChatHistoryMessage, type ChatThread, type ChatWorkspace } from "./chatHistory";
+import { CHAT_WORKSPACE_CLEAR_EVENT, createChatThread, isChatWorkspaceClearing, loadChatWorkspace, loadChatWorkspaceAsync, mergeHydratedWorkspace, saveChatWorkspaceAsync, threadMatchesQuery, titleFromMessage, type ChatHistoryMessage, type ChatThread, type ChatWorkspace, type ChatWorkspaceClearDetail } from "./chatHistory";
 import { removeDocumentVectorsForPaths } from "./documentIndex";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { trackInitialRead } from "../../shared/ui/initialLayout";
@@ -47,6 +47,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   const [threadQuery, setThreadQuery] = useState("");
   const [threadPanelOpen, setThreadPanelOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ChatThread | null>(null);
+  const [clearingWorkspace, setClearingWorkspace] = useState(isChatWorkspaceClearing);
   const hydratedRef = useRef(false);
   const initialWorkspaceRef = useRef(workspace);
   const initialMsgsRef = useRef(msgs);
@@ -66,44 +67,77 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
 
   useEffect(() => {
     let cancelled = false;
-    void trackInitialRead(loadChatWorkspaceAsync).then((persisted) => {
-      if (cancelled) return;
-      const current = workspaceRef.current;
-      let merged = mergeHydratedWorkspace(persisted, current, initialWorkspaceRef.current);
-      const localMessagesChanged = JSON.stringify(msgsRef.current) !== JSON.stringify(initialMsgsRef.current);
-      const preserveBuffer = localMessagesChanged || bufferRef.current.phase !== 'idle' || pendingTurnRef.current?.() === true;
-      const owner = preserveBuffer ? current.threads.find(thread => thread.id === bufferRef.current.threadId) : undefined;
-      if (owner) {
-        const messages = msgsRef.current;
-        const firstUser = messages.find(message => message.role === 'user');
-        const bufferedOwner = { ...owner, messages,
-          title: owner.title === 'New conversation' && firstUser ? titleFromMessage(firstUser.content) : owner.title,
-          updatedAt: owner.messages === messages ? owner.updatedAt : Date.now() };
-        // Disk hydration must not move a reply into the reader's conversation,
-        // or discard an initial conversation still preparing its first request.
-        merged = { ...merged,
-          activeThreadId: current.activeThreadId === owner.id ? owner.id : merged.activeThreadId,
-          threads: merged.threads.some(thread => thread.id === owner.id)
-            ? merged.threads.map(thread => thread.id === owner.id ? bufferedOwner : thread)
-            : [...merged.threads, bufferedOwner] };
+    let hydrationRevision = 0;
+    const hydrate = () => {
+      const revision = ++hydrationRevision;
+      void trackInitialRead(loadChatWorkspaceAsync).then((persisted) => {
+        if (cancelled || revision !== hydrationRevision || isChatWorkspaceClearing()) return;
+        const current = workspaceRef.current;
+        let merged = mergeHydratedWorkspace(persisted, current, initialWorkspaceRef.current);
+        const localMessagesChanged = JSON.stringify(msgsRef.current) !== JSON.stringify(initialMsgsRef.current);
+        const preserveBuffer = localMessagesChanged || bufferRef.current.phase !== 'idle' || pendingTurnRef.current?.() === true;
+        const owner = preserveBuffer ? current.threads.find(thread => thread.id === bufferRef.current.threadId) : undefined;
+        if (owner) {
+          const messages = msgsRef.current;
+          const firstUser = messages.find(message => message.role === 'user');
+          const bufferedOwner = { ...owner, messages,
+            title: owner.title === 'New conversation' && firstUser ? titleFromMessage(firstUser.content) : owner.title,
+            updatedAt: owner.messages === messages ? owner.updatedAt : Date.now() };
+          // Disk hydration must not move a reply into the reader's conversation,
+          // or discard an initial conversation still preparing its first request.
+          merged = { ...merged,
+            activeThreadId: current.activeThreadId === owner.id ? owner.id : merged.activeThreadId,
+            threads: merged.threads.some(thread => thread.id === owner.id)
+              ? merged.threads.map(thread => thread.id === owner.id ? bufferedOwner : thread)
+              : [...merged.threads, bufferedOwner] };
+        }
+        const nextActive = merged.threads.find((thread) => thread.id === merged.activeThreadId) ?? merged.threads[0];
+        hydratedRef.current = true;
+        setWorkspace(merged);
+        if (!owner) {
+          setMsgsThreadId(nextActive?.id ?? "");
+          if (!localMessagesChanged) setMsgs(nextActive?.messages ?? []);
+        }
+      });
+    };
+    const onClear = (event: Event) => {
+      const detail = (event as CustomEvent<ChatWorkspaceClearDetail>).detail;
+      if (detail.state === "clearing") {
+        hydrationRevision += 1;
+        hydratedRef.current = false;
+        setClearingWorkspace(true);
+        switchRef.current();
+      } else if (detail.state === "cleared") {
+        const fresh = detail.workspace;
+        const thread = fresh.threads[0];
+        workspaceRef.current = fresh;
+        msgsRef.current = thread.messages;
+        initialWorkspaceRef.current = fresh;
+        initialMsgsRef.current = thread.messages;
+        bufferRef.current = { threadId: thread.id, phase: "idle" };
+        hydratedRef.current = true;
+        setWorkspace(fresh);
+        setMsgsThreadId(thread.id);
+        setMsgs(thread.messages);
+        setPendingDelete(null);
+        setClearingWorkspace(false);
+      } else {
+        setClearingWorkspace(false);
+        // A failed erase keeps any recoverable data visible and resumes reads.
+        hydrate();
       }
-      const nextActive = merged.threads.find((thread) => thread.id === merged.activeThreadId) ?? merged.threads[0];
-      hydratedRef.current = true;
-      setWorkspace(merged);
-      if (!owner) {
-        setMsgsThreadId(nextActive?.id ?? "");
-        if (!localMessagesChanged) setMsgs(nextActive?.messages ?? []);
-      }
-    });
-    return () => { cancelled = true; };
+    };
+    window.addEventListener(CHAT_WORKSPACE_CLEAR_EVENT, onClear);
+    if (!isChatWorkspaceClearing()) hydrate();
+    return () => { cancelled = true; window.removeEventListener(CHAT_WORKSPACE_CLEAR_EVENT, onClear); };
   }, []);
 
   useEffect(() => {
-    if (hydratedRef.current) void saveChatWorkspaceAsync(workspace);
+    if (hydratedRef.current && !isChatWorkspaceClearing()) void saveChatWorkspaceAsync(workspace);
   }, [workspace]);
 
   useEffect(() => {
-    if (phase !== "idle") return;
+    if (phase !== "idle" || clearingWorkspace) return;
     setWorkspace((current) => {
       const thread = current.threads.find((item) => item.id === msgsThreadId);
       if (!thread || thread.messages === msgs) return current;
@@ -116,18 +150,18 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
           : item),
       };
     });
-  }, [msgs, msgsThreadId, phase]);
+  }, [msgs, msgsThreadId, phase, clearingWorkspace]);
 
   // The turn is over and the reader is somewhere else: the buffer follows them,
   // now that the reply it was holding has been written back above.
   // Approval can end without changing the idle phase or messages, so its
   // callback also participates in handing the buffer to the reader.
   useEffect(() => {
-    if (phase !== 'idle' || pendingTurnRef.current?.() || !activeThread || msgsThreadId === activeThread.id) return;
+    if (clearingWorkspace || phase !== 'idle' || pendingTurnRef.current?.() || !activeThread || msgsThreadId === activeThread.id) return;
     setMsgsThreadId(activeThread.id);
     setMsgs(activeThread.messages);
     switchRef.current();
-  }, [phase, msgsThreadId, activeThread, hasPendingTurn]);
+  }, [phase, msgsThreadId, activeThread, hasPendingTurn, clearingWorkspace]);
 
   // A search scans every message and attached document, so it must not rerun on
   // each composer keystroke or streaming tick, which leave the threads unchanged.
@@ -208,7 +242,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   const viewMessages = viewingLiveThread ? msgs : activeThread?.messages ?? [];
 
   return {
-    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread,
+    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,

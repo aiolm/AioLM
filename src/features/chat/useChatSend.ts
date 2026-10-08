@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, estimateMessageTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
-import type { ChatHistoryMessage, ChatThread } from "./chatHistory";
+import { CHAT_WORKSPACE_CLEAR_EVENT, isChatWorkspaceClearing, type ChatHistoryMessage, type ChatThread, type ChatWorkspaceClearDetail } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
 import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
@@ -74,6 +74,7 @@ export function useChatSend({
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
   const [streamingDraft, setStreamingDraft] = useState<StreamingDraft | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
+  const turnGeneration = useRef(0);
   const failedRef = useRef<FailedRequest | null>(null);
   const renderFrameRef = useRef<number | null>(null);
   const streamRef = useRef<{ assistant: string; reasoning: string; toolCalls: api.ChatToolCall[] }>({ assistant: "", reasoning: "", toolCalls: [] });
@@ -110,6 +111,7 @@ export function useChatSend({
   const documentTruncationRef = useRef(false);
 
   useEffect(() => () => {
+    turnGeneration.current += 1;
     ctrlRef.current?.abort();
     if (renderFrameRef.current !== null) window.cancelAnimationFrame(renderFrameRef.current);
     const activity = activityRef.current;
@@ -160,8 +162,45 @@ export function useChatSend({
     setContextSources([]);
   };
 
+  useEffect(() => {
+    const onClear = (event: Event) => {
+      if ((event as CustomEvent<ChatWorkspaceClearDetail>).detail.state !== "clearing") return;
+      // Delete invalidates the whole turn, including approval and late async
+      // completions. Ordinary Stop still preserves its partial answer.
+      turnGeneration.current += 1;
+      ctrlRef.current?.abort();
+      ctrlRef.current = null;
+      if (renderFrameRef.current !== null) window.cancelAnimationFrame(renderFrameRef.current);
+      renderFrameRef.current = null;
+      const activity = activityRef.current;
+      activityRef.current = null;
+      if (activity) {
+        setSessionActivity(activity.sessionId, false);
+        if (activity.started) void api.serverActivity("end", activity.sessionId).catch(() => undefined);
+      }
+      turnRef.current = null;
+      failedRef.current = null;
+      streamRef.current = { assistant: "", reasoning: "", toolCalls: [] };
+      metricsRef.current = { preparationStartedAt: 0 };
+      toolRoundsRef.current = 0;
+      skillReadsRef.current = 0;
+      documentTruncationRef.current = false;
+      setPendingToolCall(null);
+      setStreamingDraft(null);
+      setAborting(false);
+      setError(null);
+      setContextWarning(null);
+      setContextSources([]);
+      setPhase("idle");
+    };
+    window.addEventListener(CHAT_WORKSPACE_CLEAR_EVENT, onClear);
+    return () => window.removeEventListener(CHAT_WORKSPACE_CLEAR_EVENT, onClear);
+  }, [setPhase]);
+
   const send = async (retry = false, historyOverride?: api.ChatMessage[], canSend = true) => {
-    if (ctrlRef.current || (!historyOverride && (!baseUrl || pendingToolCall))) return;
+    if (isChatWorkspaceClearing() || ctrlRef.current || (!historyOverride && (!baseUrl || pendingToolCall))) return;
+    const generation = turnGeneration.current;
+    const isCurrent = () => generation === turnGeneration.current;
     const toolFollowup = !!historyOverride;
     const failed = failedRef.current;
     const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
@@ -280,6 +319,7 @@ export function useChatSend({
       if (!retry && !toolFollowup) setDocuments([]);
       atBottomRef.current = true;
       setMsgs((current) => {
+        if (!isCurrent()) return current;
         const last = current[current.length - 1];
         const replaceAssistant = (retry || toolFollowup) && last?.role === "assistant";
         const withoutDanglingAssistant = replaceAssistant ? current.slice(0, -1) : current;
@@ -305,10 +345,12 @@ export function useChatSend({
       };
       const streamResponses = preferences?.chat.streamResponses ?? true;
       streamResponsesRef.current = streamResponses;
-      const onDelta = createStreamDeltaHandler({ streamRef, metricsRef, streamResponses, setPhase: () => setPhase("streaming"), scheduleAssistantRender });
+      const handleDelta = createStreamDeltaHandler({ streamRef, metricsRef, streamResponses, setPhase: () => setPhase("streaming"), scheduleAssistantRender });
+      const onDelta = (delta: api.ChatDelta) => { if (isCurrent()) handleDelta(delta); };
       metricsRef.current.requestStartedAt = performance.now();
       setStreamingDraft({ content: "", reasoning: "", metrics: snapshotMetrics(metricsRef.current.requestStartedAt) });
       const full = await api.chatStream(turn.baseUrl, turn.apiKey, turn.model, bounded.messages, sampling, onDelta, controller.signal);
+      if (!isCurrent()) return;
       const responseMetrics = snapshotMetrics();
 
       const toolCall = streamRef.current.toolCalls[0];
@@ -316,6 +358,7 @@ export function useChatSend({
         const { assistant: toolCallAssistant, reasoning: toolCallReasoning } = streamRef.current;
         cancelScheduledRender();
         setMsgs((current) => {
+          if (!isCurrent()) return current;
           if (current[current.length - 1]?.role !== "assistant") return current;
           const next = current.slice();
           next[next.length - 1] = { ...next[next.length - 1], content: toolCallAssistant, reasoning: toolCallReasoning, metrics: responseMetrics };
@@ -350,6 +393,7 @@ export function useChatSend({
 
       cancelScheduledRender();
       setMsgs((current) => {
+        if (!isCurrent()) return current;
         if (current[current.length - 1]?.role !== "assistant") return current;
         const next = current.slice();
         next[next.length - 1] = {
@@ -370,6 +414,7 @@ export function useChatSend({
       // never for a tool request, an error, a stop or an unmount.
       if (!controller.signal.aborted) void notifyCompletion("chat");
     } catch (caught) {
+      if (!isCurrent()) return;
       const isAbort = controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError");
       cancelScheduledRender();
       const responseMetrics = snapshotMetrics();
@@ -379,6 +424,7 @@ export function useChatSend({
         if (partialAssistant || partialReasoning) {
           failedRef.current = { ...(failedRef.current ?? { text, images, documents: pendingDocuments, history: [] }), partialAssistant, partialReasoning };
           setMsgs((current) => {
+            if (!isCurrent()) return current;
             if (current[current.length - 1]?.role !== "assistant") return current;
             const next = current.slice();
             next[next.length - 1] = { ...next[next.length - 1], content: partialAssistant, reasoning: partialReasoning, interrupted: isAbort, failed: !isAbort, metrics: responseMetrics };
@@ -386,7 +432,7 @@ export function useChatSend({
           });
           setStreamingDraft(null);
         } else {
-          setMsgs((current) => (current[current.length - 1]?.role === "assistant" ? current.slice(0, -1) : current));
+          setMsgs((current) => isCurrent() && current[current.length - 1]?.role === "assistant" ? current.slice(0, -1) : current);
           setStreamingDraft(null);
         }
       }
@@ -400,15 +446,17 @@ export function useChatSend({
         setPhase("idle");
       }
     } finally {
-      if (!awaitingTool) {
-        releaseActivity();
-        turnRef.current = null;
+      if (isCurrent()) {
+        if (!awaitingTool) {
+          releaseActivity();
+          turnRef.current = null;
+        }
+        ctrlRef.current = null;
+        setAborting(false);
+        void store.refreshStatus();
+        // The read skill joins this turn's history and generation continues on the same snapshot.
+        if (skillFollowup) await send(false, skillFollowup);
       }
-      ctrlRef.current = null;
-      setAborting(false);
-      void store.refreshStatus();
-      // The read skill joins this turn's history and generation continues on the same snapshot.
-      if (skillFollowup) await send(false, skillFollowup);
     }
   };
 
@@ -416,6 +464,7 @@ export function useChatSend({
     const pending = pendingToolCall;
     const failed = failedRef.current;
     if (!pending || !failed || phase !== "idle" || ctrlRef.current) return;
+    const generation = turnGeneration.current;
     setPendingToolCall(null);
     setError(null);
     setPhase("thinking");
@@ -434,6 +483,7 @@ export function useChatSend({
         controller.signal.removeEventListener("abort", cancelCall);
       }
       controller.signal.throwIfAborted();
+      if (generation !== turnGeneration.current) return;
       const serializedResult = JSON.stringify(result);
       if (serializedResult.length > 256_000) throw new Error("MCP tool result exceeds the 256 KiB chat safety limit.");
       const followupHistory: api.ChatMessage[] = [
@@ -444,6 +494,7 @@ export function useChatSend({
       ctrlRef.current = null;
       await send(false, followupHistory);
     } catch (caught) {
+      if (generation !== turnGeneration.current) return;
       releaseActivity();
       turnRef.current = null;
       ctrlRef.current = null;

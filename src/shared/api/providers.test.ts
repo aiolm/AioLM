@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
+import { listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
 import { invoke } from './transport.ts';
 import type { GgufModel } from './types';
 
@@ -19,6 +19,26 @@ const compatibility = (tasks: string[], status: ModelCompatibility['status'] = '
 const model = (result: ModelCompatibility): GgufModel => ({ name: 'Synthetic model', path: '/synthetic/models/model', size_mb: 1, is_vision: false, compatibility: [result] });
 
 describe('runtime model selection', () => {
+  it('names catalog snapshots from proven repositories while preserving external folders and GGUF filenames', async () => {
+    const revision = '0123456789abcdef0123456789abcdef01234567';
+    const artifact: ModelArtifact = { path: `/synthetic/models/${revision}`, name: revision, format: 'hf-safetensors',
+      role: 'model', size_bytes: 1024, file_count: 3, architectures: ['LlamaForCausalLM'],
+      modalities: { text: true, image: false, audio: false, video: false }, missing: [], incomplete: false,
+      ownership: 'external', notes: [] };
+    const artifacts = [
+      { ...artifact, repository: 'org/synthetic-model', ownership: 'app' },
+      { ...artifact, format: 'mlx', repository: 'org/synthetic-mlx', ownership: 'hf-cache' },
+      artifact,
+      { ...artifact, name: 'custom-folder', path: '/synthetic/models/custom-folder' },
+      { ...artifact, name: 'weights.Q4_K_M.gguf', format: 'gguf', repository: 'org/repository-name' },
+      { ...artifact, repository: 'invalid/repository/extra' },
+    ];
+    vi.mocked(invoke).mockResolvedValue({ models: artifacts.map(value => ({ artifact: value, compatibility: [] })), truncated: false });
+    const result = await listModelArtifacts('/synthetic/models');
+    expect(result.models.map(value => value.name)).toEqual(['synthetic-model', 'synthetic-mlx', revision, 'custom-folder', 'weights.Q4_K_M.gguf', revision]);
+    expect(result.models.map(value => value.path)).toEqual(artifacts.map(value => value.path));
+    expect(result.models.map(value => value.artifact)).toEqual(artifacts);
+  });
   it('labels the vllm-metal plugin and core versions while retaining the existing provider', () => {
     const runtime: RuntimeInstance = { provider: 'vllm', id: 'synthetic-metal', engine: 'vllm', server: 'vllm',
       version: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal',

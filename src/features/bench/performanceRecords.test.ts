@@ -100,6 +100,31 @@ describe('performance history and export', () => {
     expect(readPerformanceHistory()).toEqual([failed]);
   });
 
+  it.each(['{unreadable-history', '{"futureFormat":"retained"}'])('preserves unreadable browser history on save and permits saving after recovery: %s', original => {
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, original);
+    expect(() => savePerformanceRecord(record())).toThrow();
+    expect(localStorage.getItem(PERFORMANCE_HISTORY_KEY)).toBe(original);
+    expect(readPerformanceHistory()).toEqual([]);
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, '[]');
+    expect(savePerformanceRecord(record())).toEqual([record()]);
+    expect(readPerformanceHistory()).toEqual([record()]);
+  });
+
+  it('updates only a matching valid run and preserves rejected and future-schema entries on subsequent saves', () => {
+    const future = { schemaVersion: 99, id: 'perf-1', recovery: { original: 'retained' } };
+    const damaged = { schemaVersion: 1, id: 'damaged', result: { rows: 'unreadable' } };
+    const cancelled = record({ id: 'cancelled', request: { ...record().request, run_id: 'cancelled' },
+      result: { ...record().result, run_id: 'cancelled', status: 'cancelled', rows: [] } });
+    localStorage.setItem(PERFORMANCE_HISTORY_KEY, JSON.stringify([record(), future, damaged, cancelled]));
+    const updated = record({ model: 'models/updated.gguf' });
+    expect(savePerformanceRecord(updated)).toEqual([updated]);
+    expect(JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY)!)).toEqual([updated, future, damaged, cancelled]);
+    const newer = record({ id: 'newer', request: { ...record().request, run_id: 'newer' }, result: { ...record().result, run_id: 'newer' } });
+    savePerformanceRecord(newer);
+    expect(readPerformanceHistory()).toEqual([newer, updated]);
+    expect(JSON.parse(localStorage.getItem(PERFORMANCE_HISTORY_KEY)!)).toEqual([newer, updated, future, damaged, cancelled]);
+  });
+
   it('exports failure status but omits empty cancellations without leaking paths or logs', () => {
     const failed = record();
     failed.result = { ...failed.result, status: 'failed', rows: [], message: 'cannot load C:/private/models/test.gguf' };

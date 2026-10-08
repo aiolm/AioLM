@@ -34,6 +34,8 @@ export default function DeveloperPanel({ store, section = 'api', onNavigate }: P
 function ModelDiagnostics({ store }: { store: AppStore }) {
   const { t } = useI18n();
   const model = loadedModelPath(store.status);
+  const execution = store.status.execution ? { ...store.cfg, ...store.status.execution } : store.cfg;
+  const runtime = store.status.engine ? { ...execution, active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : execution;
   return <div className="app-page-scroll developer-panel api-server-page" data-developer-section="diagnostics">
     <div className="api-server-content">
       <header className="api-page-heading"><h2>{t('section.diagnostics')}</h2><p>{t('ui.diagnosticsDescription')}</p></header>
@@ -42,7 +44,7 @@ function ModelDiagnostics({ store }: { store: AppStore }) {
         <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
           {model && <> · <span title={normalizeDisplayPath(model)}>{modelDisplayName(model)}</span></>}
         </p>
-        <p className="api-hint"><RuntimeSelectionLabel config={store.status.engine ? { ...store.cfg, active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : store.cfg} /></p>
+        <p className="api-hint"><RuntimeSelectionLabel config={runtime} /></p>
         <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>
       </section>
     </div>
@@ -108,9 +110,11 @@ function ApiServerPanel({ store, onNavigate }: Omit<Props, 'section'>) {
 
   const applyPort = async (port: number): Promise<boolean> => {
     setError(null);
+    const actionRevision = apiServer.getActionRevision();
     try { await store.updateConfig({ port }); }
     catch (caught) { setError(errorMessage(caught)); return false; }
-    if (apiRunning) await apiServer.restart();
+    // A later listener action, such as Stop, supersedes this save's restart.
+    if (apiRunning && apiServer.getActionRevision() === actionRevision) await apiServer.restart();
     return true;
   };
 

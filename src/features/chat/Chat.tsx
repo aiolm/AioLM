@@ -122,7 +122,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   };
 
   const {
-    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread,
+    workspace, setWorkspace, activeThread, msgs, setMsgs, viewMessages, viewingLiveThread, clearingWorkspace,
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
@@ -198,7 +198,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);
   });
   const chatSupported = selectedStatus.engine?.chat_supported !== false;
-  const canSend = serverOn && chatSupported && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const canSend = serverOn && chatSupported && !clearingWorkspace && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
 
   useEffect(() => {
