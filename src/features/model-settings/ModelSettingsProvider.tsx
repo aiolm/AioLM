@@ -1,6 +1,6 @@
 import { providerOf } from '../../shared/api/providers';
 import { mergeProviderRequestSettings } from '../../shared/config/providerRequestSettings';
-import { createContext, lazy, Suspense, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import { executionChanges, executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, settingsForSession, ExecutionConflictError } from '../../shared/config/executionSettings';
@@ -15,28 +15,13 @@ import { applyProfile } from './profileWorkspaceState';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
+import { modelSettingsContext as Context, MANAGE_MODEL_RUNTIMES, type ModelSettingsRequest } from './modelSettingsContext';
+
+export { MANAGE_MODEL_RUNTIMES, useModelSettings } from './modelSettingsContext';
+export type { ExecutionTarget, ModelSettingsRequest, ModelSettingsContext } from './modelSettingsContext';
 
 const ModelSettingsDialog = lazy(() => import('./ModelSettingsDialog'));
-export const MANAGE_MODEL_RUNTIMES = 'aiolm:manage-model-runtimes';
-export type ExecutionTarget = { kind: 'default' } | { kind: 'session'; sessionId: string } | { kind: 'benchmark' | 'project'; id: string };
-export interface ModelSettingsRequest {
-  target: ExecutionTarget;
-  config?: api.AppConfig;
-  definition?: api.SessionDefinition;
-  section?: string;
-  systemPrompt?: string;
-  application?: ProfileApplication;
-  onApply?: (cfg: api.AppConfig, application?: ProfileApplication) => Promise<void> | void;
-}
-export interface ModelSettingsContext {
-  open: (request: ModelSettingsRequest) => void;
-  suspended: boolean;
-  resume: () => void;
-  getRequestConfig: (sessionId: string, fallback: api.AppConfig, status?: api.ServerStatus | api.SessionStatus) => api.AppConfig;
-  getRequestProfile: (sessionId: string, cfg: api.AppConfig) => ModelProfile | null;
-}
-const Context = createContext<ModelSettingsContext | null>(null);
-export const useModelSettings = () => useContext(Context);
 
 function assignedTarget(config: api.AppConfig, application?: ProfileApplication, sessionId = 'default'): ProfileCommitResult {
   const library = application?.profile_id && config.settings_profiles ? ensureProfileLibrary(config.settings_profiles) : profileLibrary(config);
@@ -83,8 +68,9 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     if (request.target.kind === 'session' && !definition) { setError(copy.missing); return; }
     let base = definition ? sessionConfig(cfg, definition) : request.target.kind === 'default' ? cfg : request.config ? executionConfig(cfg, executionSettings(request.config)) : cfg;
     const status = latest.current.status;
-    let initial = request.config ? executionConfig(cfg, executionSettings(request.config)) : (target.kind === 'default' && status.state === 'running' && status.model !== cfg.active_model
-      ? { ...executionConfig(cfg, status.execution ?? {}), active_model: status.model ?? '' }
+    const loadedModel = loadedModelPath(status);
+    let initial = request.config ? executionConfig(cfg, executionSettings(request.config)) : (target.kind === 'default' && status.state === 'running' && loadedModel !== cfg.active_model
+      ? { ...executionConfig(cfg, status.execution ?? {}), active_model: loadedModel }
       : base);
     const id = target.kind === 'session' ? target.sessionId : 'default';
     const external = target.kind === 'project' || target.kind === 'benchmark';
@@ -110,7 +96,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     if (cached && status?.pid !== undefined && cached.pid !== status.pid) liveProfiles.current.delete(id);
     const live = status?.execution;
     const cfg = executionConfig(fallback, live ?? {});
-    if (status?.model) cfg.active_model = status.model;
+    cfg.active_model = loadedModelPath(status, cfg.active_model);
     if (status?.mmproj !== undefined) cfg.mmproj = status.mmproj;
     const replacement = requestFallback(id, cfg.active_model);
     if (replacement && (replacement.provider ?? 'llama.cpp') === providerOf(cfg)) {
@@ -324,8 +310,9 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const liveStatus = target?.kind === 'session' ? sessions.find(item => item.id === id) : target?.kind === 'default' ? store.status : undefined;
   const liveState = liveStatus?.state ?? (target?.kind === 'session' ? 'stopped' : undefined);
   const cachedApplication = liveProfiles.current.get(id);
-  const liveApplication = cachedApplication && cachedApplication.pid === liveStatus?.pid && cachedApplication.model === liveStatus?.model
-    ? cachedApplication.application : store.cfg && liveStatus?.model ? appliedProfile({ ...store.cfg, active_model: liveStatus.model }, id) : undefined;
+  const liveModel = loadedModelPath(liveStatus);
+  const liveApplication = cachedApplication && cachedApplication.pid === liveStatus?.pid && cachedApplication.model === liveModel
+    ? cachedApplication.application : store.cfg && liveModel ? appliedProfile({ ...store.cfg, active_model: liveModel }, id) : undefined;
   const stopsOtherSessions = (target?.kind === 'session' || target?.kind === 'default') && store.cfg?.stop_existing_sessions_on_load !== false
     && (sessions.some(session => session.id !== id && ['running', 'starting', 'stopping'].includes(session.state))
       || (target.kind === 'session' && ['running', 'starting', 'stopping'].includes(store.status.state)));

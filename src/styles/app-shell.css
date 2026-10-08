@@ -41,22 +41,23 @@
 .aiolm-sidebar-footer span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .app-main-column, .app-main-area { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .app-main-area { flex: 1; position: relative; background: var(--ui-bg); }
-.aiolm-header { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,max-content) max-content; align-items: center; gap: 12px; min-height: 48px; padding: 0 12px 0 20px; min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
-.aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.aiolm-header { display: flex; align-items: center; gap: 12px; min-height: 48px; padding-inline: var(--ui-canvas-padding); min-width: 0; flex-shrink: 0; border-bottom: 1px solid var(--ui-border); background: var(--ui-surface); }
+.aiolm-heading { display: flex; align-items: center; gap: 8px; min-width: 80px; flex: 1 1 auto; }
 .aiolm-heading h1 { min-width: 0; font-size: var(--ui-text); font-weight: 600; line-height: 20px; letter-spacing: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* The model context is a compact filled pill, not a form field: it takes its
    content's width up to a cap and truncates the name; the full path stays in
    its title. */
-.aiolm-runtime-context { display: flex; align-items: center; min-width: 0; max-width: 380px; min-height: var(--ui-control); gap: 0; padding: 0 2px; border: 1px solid transparent; border-radius: var(--ui-radius-control); background: var(--ui-field-fill); }
+.aiolm-runtime-context { display: flex; align-items: center; min-width: 0; flex: 0 1 560px; max-width: 560px; min-height: var(--ui-control); gap: 0; padding: 0 2px; border: 1px solid transparent; border-radius: var(--ui-radius-control); background: var(--ui-field-fill); }
 .aiolm-runtime-context:hover { background: var(--ui-field-fill-hover); }
 .aiolm-runtime-context:focus-within { outline: 2px solid var(--ui-focus); outline-offset: 0; }
 .aiolm-runtime-context button { min-width: 0; min-height: calc(var(--ui-control) - 6px); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); text-align: left; color: var(--ui-ink); font-size: var(--ui-text); font-weight: 500; }
-.aiolm-context-model { flex: 1 1 auto; justify-content: flex-start; gap: 6px; }
+.aiolm-context-model { flex: 1 1 60%; justify-content: flex-start; gap: 6px; overflow: hidden; }
 .aiolm-context-model .model-family-icon { margin-inline-end: 0; }
 .aiolm-context-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .aiolm-context-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ui-border-strongest); }
-.aiolm-context-runtime { flex: 0 0 auto; gap: 6px; border-inline-start: 1px solid var(--ui-border) !important; border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0 !important; color: var(--ui-muted) !important; font-size: var(--ui-text-support) !important; font-variant-numeric: tabular-nums; }
-.aiolm-server { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.aiolm-context-runtime { flex: 1 1 40%; gap: 6px; overflow: hidden; border-inline-start: 1px solid var(--ui-border) !important; border-radius: 0 var(--ui-radius-control) var(--ui-radius-control) 0 !important; color: var(--ui-muted) !important; font-size: var(--ui-text-support) !important; font-variant-numeric: tabular-nums; }
+.aiolm-context-runtime svg { flex-shrink: 0; }
+.aiolm-server { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; min-width: 0; }
 .aiolm-server > button { min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); }
 .aiolm-status { justify-self: start; border: 0; background: transparent; padding: 0 4px; color: var(--ui-muted); font-size: var(--ui-text-support); font-weight: 500; }
 .aiolm-status.app-badge--success .app-status-badge__dot { background: var(--ui-status-success-dot); }

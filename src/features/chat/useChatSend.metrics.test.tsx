@@ -133,6 +133,44 @@ describe("request-scoped response metrics", () => {
     expect(result.current.msgs.at(-1)).toMatchObject({ content: "Buffered answer", metrics: { tg: { tokens: 4 } } });
   });
 
+  it("retains vLLM's final telemetry frame after the finish reason and persists decode metrics", async () => {
+    const stream = controlledStream();
+    const { result } = setup();
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    now = 1300;
+    stream.emit({ content: "Answer" });
+    now = 1400;
+    stream.emit({ finish_reason: "stop" });
+    stream.emit({
+      usage: { prompt_tokens: 100, completion_tokens: 6, prompt_tokens_details: { cached_tokens: 20 } },
+      metrics: { generation_time_ms: 100, time_to_first_token_ms: 250, tokens_per_second: 17.14 },
+    });
+    await stream.finish("Answer");
+    expect(result.current.msgs.at(-1)?.metrics).toEqual({
+      pp: { tokens: 80 }, tg: { tokens: 6, durationMs: 100, tokensPerSecond: 50 },
+      cachedTokens: 20, firstTokenMs: 300, preparationMs: 0, requestMs: 400,
+    });
+  });
+
+  it("accepts backend telemetry when text rendering is buffered", async () => {
+    const preferences = defaultPreferences();
+    preferences.chat.streamResponses = false;
+    const stream = controlledStream();
+    const { result } = setup({ preferences });
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    now = 1200;
+    stream.emit({ content: "Buffered answer", usage: { completion_tokens: 3 } });
+    now = 1300;
+    stream.emit({ metrics: { generation_time_ms: 100 } });
+    expect(result.current.streamingDraft).toMatchObject({
+      content: "", metrics: { tg: { tokens: 3, durationMs: 100, tokensPerSecond: 20 } },
+    });
+    await stream.finish("Buffered answer");
+    expect(result.current.msgs.at(-1)?.metrics?.tg).toEqual({ tokens: 3, durationMs: 100, tokensPerSecond: 20 });
+  });
+
   it.each(["abort", "error"] as const)("saves partial %s metrics and starts a retry without stale statistics", async (ending) => {
     const stream = controlledStream();
     const { result } = setup();

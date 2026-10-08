@@ -8,6 +8,8 @@ type Msg = ChatHistoryMessage;
 
 interface UseChatThreadsOptions {
   phase: "idle" | "thinking" | "streaming";
+  /** Read after rendering: MCP approval keeps a turn alive while its stream is idle. */
+  hasPendingTurn?: () => boolean;
   /** True (and proceeds) only when the panel is idle; otherwise surfaces an error and blocks the action. */
   requireIdle: () => boolean;
   /** Resets composer-local state (input, attachments, context warnings) after a thread switch. */
@@ -33,7 +35,7 @@ function orphanedDocumentPaths(removed: ChatThread, remaining: ChatThread[]): st
   return [...pathsOf([removed])].filter((path) => !kept.has(path));
 }
 
-export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatThreadsOptions) {
+export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThread }: UseChatThreadsOptions) {
   const [workspace, setWorkspace] = useState<ChatWorkspace>(() => loadChatWorkspace());
   const activeThread = workspace.threads.find((thread) => thread.id === workspace.activeThreadId) ?? workspace.threads[0];
   const [msgs, setMsgs] = useState<Msg[]>(() => activeThread?.messages ?? []);
@@ -50,27 +52,48 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
   const initialMsgsRef = useRef(msgs);
   const workspaceRef = useRef(workspace);
   const msgsRef = useRef(msgs);
+  const bufferRef = useRef({ threadId: msgsThreadId, phase });
   // Held in a ref so the effect that re-points the buffer does not re-run on
   // every render just because the caller passes a fresh closure.
   const switchRef = useRef(onSwitchThread);
+  const pendingTurnRef = useRef(hasPendingTurn);
   workspaceRef.current = workspace;
   msgsRef.current = msgs;
+  bufferRef.current = { threadId: msgsThreadId, phase };
   switchRef.current = onSwitchThread;
+  pendingTurnRef.current = hasPendingTurn;
+  const turnInProgress = () => phase !== 'idle' || pendingTurnRef.current?.() === true;
 
   useEffect(() => {
     let cancelled = false;
     void trackInitialRead(loadChatWorkspaceAsync).then((persisted) => {
       if (cancelled) return;
-      const merged = mergeHydratedWorkspace(persisted, workspaceRef.current, initialWorkspaceRef.current);
+      const current = workspaceRef.current;
+      let merged = mergeHydratedWorkspace(persisted, current, initialWorkspaceRef.current);
       const localMessagesChanged = JSON.stringify(msgsRef.current) !== JSON.stringify(initialMsgsRef.current);
+      const preserveBuffer = localMessagesChanged || bufferRef.current.phase !== 'idle' || pendingTurnRef.current?.() === true;
+      const owner = preserveBuffer ? current.threads.find(thread => thread.id === bufferRef.current.threadId) : undefined;
+      if (owner) {
+        const messages = msgsRef.current;
+        const firstUser = messages.find(message => message.role === 'user');
+        const bufferedOwner = { ...owner, messages,
+          title: owner.title === 'New conversation' && firstUser ? titleFromMessage(firstUser.content) : owner.title,
+          updatedAt: owner.messages === messages ? owner.updatedAt : Date.now() };
+        // Disk hydration must not move a reply into the reader's conversation,
+        // or discard an initial conversation still preparing its first request.
+        merged = { ...merged,
+          activeThreadId: current.activeThreadId === owner.id ? owner.id : merged.activeThreadId,
+          threads: merged.threads.some(thread => thread.id === owner.id)
+            ? merged.threads.map(thread => thread.id === owner.id ? bufferedOwner : thread)
+            : [...merged.threads, bufferedOwner] };
+      }
       const nextActive = merged.threads.find((thread) => thread.id === merged.activeThreadId) ?? merged.threads[0];
       hydratedRef.current = true;
       setWorkspace(merged);
-      // The buffer belongs to whichever conversation is active after the merge —
-      // which may carry a different id — whether or not the messages it is
-      // holding came from disk or from a turn the reader already started.
-      setMsgsThreadId(nextActive?.id ?? "");
-      if (!localMessagesChanged) setMsgs(nextActive?.messages ?? []);
+      if (!owner) {
+        setMsgsThreadId(nextActive?.id ?? "");
+        if (!localMessagesChanged) setMsgs(nextActive?.messages ?? []);
+      }
     });
     return () => { cancelled = true; };
   }, []);
@@ -97,12 +120,14 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
 
   // The turn is over and the reader is somewhere else: the buffer follows them,
   // now that the reply it was holding has been written back above.
+  // Approval can end without changing the idle phase or messages, so its
+  // callback also participates in handing the buffer to the reader.
   useEffect(() => {
-    if (phase !== "idle" || !activeThread || msgsThreadId === activeThread.id) return;
+    if (phase !== 'idle' || pendingTurnRef.current?.() || !activeThread || msgsThreadId === activeThread.id) return;
     setMsgsThreadId(activeThread.id);
     setMsgs(activeThread.messages);
     switchRef.current();
-  }, [phase, msgsThreadId, activeThread]);
+  }, [phase, msgsThreadId, activeThread, hasPendingTurn]);
 
   // A search scans every message and attached document, so it must not rerun on
   // each composer keystroke or streaming tick, which leave the threads unchanged.
@@ -117,7 +142,7 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
   const selectThread = (thread: ChatThread) => {
     setWorkspace((current) => ({ activeThreadId: thread.id, threads: current.threads.filter(keeping(thread.id)) }));
     setThreadPanelOpen(false);
-    if (phase !== "idle") return;
+    if (turnInProgress()) return;
     setMsgsThreadId(thread.id);
     setMsgs(thread.messages);
     onSwitchThread();
@@ -126,7 +151,7 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
   const newThread = () => {
     // An untouched conversation already is a new one; opening it again beats
     // creating a second copy that is indistinguishable from it.
-    const reusable = workspace.threads.find((item) => unused(item) && (phase === "idle" || item.id !== msgsThreadId));
+    const reusable = workspace.threads.find((item) => unused(item) && (!turnInProgress() || item.id !== msgsThreadId));
     const now = Date.now();
     let id = `thread-${now}`;
     let suffix = 1;
@@ -137,7 +162,7 @@ export function useChatThreads({ phase, requireIdle, onSwitchThread }: UseChatTh
       return { activeThreadId: thread.id, threads: reusable ? kept : [thread, ...kept] };
     });
     setThreadPanelOpen(false);
-    if (phase !== "idle") return;
+    if (turnInProgress()) return;
     setMsgsThreadId(thread.id);
     setMsgs(thread.messages);
     onSwitchThread();

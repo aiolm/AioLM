@@ -4,6 +4,7 @@ import { chatText } from "../../shared/i18n/chatI18n";
 import type { ResponseMetrics as ResponseMetricsData } from "../../shared/lib/metrics";
 import MessageBubble from "./MessageBubble";
 import ResponseMetrics from "./ResponseMetrics";
+import { responseMetricUnavailableCopy } from "./responseMetricCopy";
 
 const metrics: ResponseMetricsData = {
   pp: { tokens: 1536, durationMs: 800, tokensPerSecond: 1920 },
@@ -39,6 +40,16 @@ describe("response metrics", () => {
       expect(screen.getAllByText(value).length).toBeGreaterThan(0);
     }
     expect(screen.queryByText(/NaN|Infinity/)).not.toBeInTheDocument();
+    expect(screen.getByText(responseMetricUnavailableCopy.en)).toBeVisible();
+  });
+
+  it.each(["en", "ko", "ja", "zh"] as const)("explains unavailable phase telemetry in %s without inventing values", locale => {
+    const { rerender } = render(<ResponseMetrics metrics={{ pp: { tokens: 80 }, tg: { tokens: 6, durationMs: 100, tokensPerSecond: 50 } }} locale={locale} />);
+    expect(screen.getByText(responseMetricUnavailableCopy[locale])).toBeVisible();
+    expect(screen.getByText("80 tok")).toBeVisible();
+    expect(screen.getByText("50.0 tok/s")).toBeVisible();
+    rerender(<ResponseMetrics metrics={metrics} locale={locale} />);
+    expect(screen.queryByText(responseMetricUnavailableCopy[locale])).not.toBeInTheDocument();
   });
 
   it("shows first-token, preparation, request and cache measurements without anything to open", () => {

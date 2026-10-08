@@ -14,6 +14,14 @@ it('displays the recorded model and icon with a readable filename', () => {
   expect(container.querySelector('.model-family-icon')).toHaveAttribute('src', '/model-icons/qwen.svg');
 });
 
+it('displays the recorded snapshot model instead of its immutable revision directory', () => {
+  const revision = 'a'.repeat(40);
+  const { container } = render(bubble({ role: 'assistant', content: 'Answer', model: '/synthetic/cache/models--community--Qwen-model/snapshots/' + revision }));
+  expect(screen.getByText('Qwen-model')).toBeVisible();
+  expect(container.textContent).not.toContain(revision);
+  expect(container.querySelector('.model-family-icon')).toHaveAttribute('src', '/model-icons/qwen.svg');
+});
+
 it('labels legacy answers without attributing them to the currently selected model', () => {
   const { rerender } = render(bubble({ role: 'assistant', content: 'Old answer' }));
   expect(screen.getByText('모델 기록 없음')).toBeVisible();

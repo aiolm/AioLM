@@ -134,7 +134,7 @@ export function useChatSend({
       preparationMs: current.requestStartedAt - current.preparationStartedAt,
       firstTokenMs: current.firstTokenAt === undefined ? undefined : current.firstTokenAt - current.requestStartedAt,
       requestMs: now - current.requestStartedAt,
-    });
+    }, current.serverMetrics);
   };
 
   const scheduleAssistantRender = () => {
@@ -153,6 +153,7 @@ export function useChatSend({
   const resetChatState = () => {
     cancelScheduledRender();
     setStreamingDraft(null);
+    failedRef.current = null;
     setError(null);
     documentTruncationRef.current = false;
     setContextWarning(null);
@@ -237,7 +238,7 @@ export function useChatSend({
       const target = turn.embeddingTarget ?? (turn.engine?.provider && turn.engine.provider !== 'llama.cpp'
         ? { model: turn.engine.embedding_model ?? '', baseUrl: turn.baseUrl, apiKey: turn.apiKey, namespace: turn.engine.embedding_namespace ?? '' }
         : { model: turn.model, baseUrl: turn.baseUrl, apiKey: turn.apiKey, namespace: `llama.cpp:${turn.model}` });
-      const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, target.model, target.apiKey, target.baseUrl, target.namespace);
+      const { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated } = await retrieveDocumentContext(pendingDocuments, text, target.model, target.apiKey, target.baseUrl, target.namespace, controller.signal);
       controller.signal.throwIfAborted();
       if (documentChunksTruncated) documentTruncationRef.current = true;
       setContextSources(retrievalSources);

@@ -14,10 +14,24 @@ export function modelPathIdentity(value: string): string {
   return path.startsWith('/') && !path.startsWith('//') ? path : path.replace(/\\/g, '/').toLowerCase();
 }
 
-/** A model label groups GGUF shards; file access and API requests must use the original value. */
+/** Immutable snapshot paths retain their repository name separately from the revision. */
+export function snapshotModelName(value: string): string | undefined {
+  const parts = normalizeDisplayPath(value).replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.at(-2) !== 'snapshots' || !/^[a-f0-9]{40}$/i.test(parts.at(-1) ?? '')) return undefined;
+  const repository = parts.at(-3) ?? '';
+  if (repository.startsWith('models--')) {
+    const encoded = repository.slice('models--'.length);
+    const ownerEnd = encoded.indexOf('--');
+    return ownerEnd > 0 && ownerEnd + 2 < encoded.length ? encoded.slice(ownerEnd + 2) : undefined;
+  }
+  // App downloads use hf/<publisher>/<model>/snapshots/<revision>.
+  return parts.at(-5) === 'hf' && parts.at(-4) && repository ? repository : undefined;
+}
+
+/** Model labels group GGUF shards and name snapshots; access and requests keep the original value. */
 export function modelDisplayName(value: string): string {
   const path = normalizeDisplayPath(value);
-  const name = path.split(/[\\/]/).pop() || path;
+  const name = snapshotModelName(path) ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path;
   const shard = /^(.+)-(\d{5})-of-(\d{5})(\.gguf)?$/i.exec(name);
   if (!shard) return name;
   const index = Number(shard[2]);

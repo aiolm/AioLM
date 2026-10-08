@@ -5,6 +5,7 @@ import { useI18n } from '../i18n/i18n';
 import { useVisibleModelMetadata } from './useVisibleModelMetadata';
 import ModelPublisher, { modelPublishers, modelPublisherLabels } from './ModelPublisher';
 import Badge from './Badge';
+import { modelDisplayName } from '../lib/displayPaths';
 
 export interface ModelBadge {
   kind: 'family' | 'architecture' | 'parameters' | 'quantization' | 'context' | 'projector' | 'tag';
@@ -21,7 +22,7 @@ const badgeLabels = {
 
 /** Names provide hints only; a GGUF architecture takes precedence over family hints. */
 export function modelBadges(model: string, metadata?: ModelMetadata, tags: string[] = []): ModelBadge[] {
-  const name = model.replace(/\\/g, '/').split('/').at(-1) ?? '';
+  const name = modelDisplayName(model);
   if (!name.trim()) return [];
   const badges: ModelBadge[] = [];
   const family = name.match(/(?:^|[^a-z])(qwen\d*(?:[.]\d+)?|(?:embedding)?gemma(?:[-_.]?\d+)?|deepseek(?:[-_.]r\d+)?|llama(?:[-_.]?\d+(?:[.]\d+)?)?|mistral|mixtral|ministral|magistral|devstral|codestral|(?:chat)?glm(?:[-_.]?\d+(?:[.]\d+)?)?)(?=[^a-z0-9]|$)/i)?.[1];

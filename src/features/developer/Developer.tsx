@@ -19,6 +19,7 @@ import { apiServerCopy } from './apiServerCopy';
 import { useApiServer } from './useApiServer';
 import './api-server.css';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
 type Props = { store: AppStore; section?: 'api' | 'diagnostics'; onNavigate?: (view: ViewId) => void };
 
@@ -32,13 +33,14 @@ export default function DeveloperPanel({ store, section = 'api', onNavigate }: P
 
 function ModelDiagnostics({ store }: { store: AppStore }) {
   const { t } = useI18n();
+  const model = loadedModelPath(store.status);
   return <div className="app-page-scroll developer-panel api-server-page" data-developer-section="diagnostics">
     <div className="api-server-content">
       <header className="api-page-heading"><h2>{t('section.diagnostics')}</h2><p>{t('ui.diagnosticsDescription')}</p></header>
       <section className="developer-section--diagnostics api-section">
         <h3>{t('ui.diagnosticsTitle')}</h3>
         <p className="api-hint">{t('ui.modelState')}: {t(modelStatusKey(store.status.state))}
-          {store.status.model && <> · <span title={normalizeDisplayPath(store.status.model)}>{modelDisplayName(store.status.model)}</span></>}
+          {model && <> · <span title={normalizeDisplayPath(model)}>{modelDisplayName(model)}</span></>}
         </p>
         <p className="api-hint"><RuntimeSelectionLabel config={store.status.engine ? { ...store.cfg, active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : store.cfg} /></p>
         <pre tabIndex={0} aria-label={t('ui.diagnosticsTitle')} data-empty={!store.status.log_tail && !store.status.error} data-error={Boolean(store.status.error)} className="api-code">{normalizeDisplayText(store.status.log_tail || store.status.error || t('ui.noDiagnostics'))}</pre>

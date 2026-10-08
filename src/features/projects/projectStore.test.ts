@@ -1,10 +1,74 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EXECUTION_KEYS, executionSettings } from '../../shared/config/executionSettings';
 import { testConfig } from '../../testing/appStore';
-import { exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, writeProjects } from './projectStore';
+import { ACTIVE_PROJECT_KEY, PROJECTS_CHANGED_EVENT, PROJECTS_KEY, activeProjectId, exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from './projectStore';
 import { materializeProfileApplication, captureProfile } from '../../shared/config/settingsProfiles';
 
 describe('project settings snapshots', () => {
+  function memoryStorage() {
+    const values = new Map<string, string>();
+    const store = { getItem: (key: string) => values.get(key) ?? null,
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+      removeItem: vi.fn((key: string) => { values.delete(key); }),
+    } as unknown as Storage;
+    return { values, store };
+  }
+
+  it('reports quota failure without changing saved projects, the active pointer, or listeners', () => {
+    const { store } = memoryStorage();
+    const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
+    writeProjects([original], store, original.id);
+    const changed = { ...original, name: 'Edited' };
+    const listener = vi.fn();
+    window.addEventListener(PROJECTS_CHANGED_EVENT, listener);
+    try {
+      vi.mocked(store.setItem).mockImplementationOnce(() => { throw new DOMException('Synthetic project quota exceeded', 'QuotaExceededError'); });
+      expect(() => writeProjects([changed], store, changed.id)).toThrow('Synthetic project quota exceeded');
+      expect(readProjects(store)).toEqual([original]);
+      expect(activeProjectId(store)).toBe(original.id);
+      expect(listener).not.toHaveBeenCalled();
+      writeProjects([changed], store, changed.id);
+      expect(readProjects(store)).toEqual([changed]);
+      expect(listener).toHaveBeenCalledOnce();
+    } finally { window.removeEventListener(PROJECTS_CHANGED_EVENT, listener); }
+  });
+
+  it('restores the previous project list if its active pointer cannot be saved', () => {
+    const { store, values } = memoryStorage();
+    const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
+    const replacement = projectFromConfig('Replacement', '', testConfig, [], [], '', 200);
+    writeProjects([original], store, original.id);
+    const raw = values.get(PROJECTS_KEY);
+    vi.mocked(store.setItem).mockImplementation((key, value) => {
+      if (key === ACTIVE_PROJECT_KEY) throw new Error('Synthetic active-project write failure');
+      values.set(key, value);
+    });
+    expect(() => writeProjects([replacement], store, replacement.id)).toThrow('Synthetic active-project write failure');
+    expect(values.get(PROJECTS_KEY)).toBe(raw);
+    expect(readProjects(store)).toEqual([original]);
+    expect(activeProjectId(store)).toBe(original.id);
+    expect(() => setActiveProjectId(replacement.id, store)).toThrow('Synthetic active-project write failure');
+  });
+
+  it('keeps the project being removed if clearing the active pointer fails', () => {
+    const { store } = memoryStorage();
+    const original = projectFromConfig('Original', '', testConfig, [], [], '', 100);
+    writeProjects([original], store, original.id);
+    vi.mocked(store.removeItem).mockImplementationOnce(() => { throw new Error('Synthetic active-project removal failure'); });
+    expect(() => writeProjects([], store, null)).toThrow('Synthetic active-project removal failure');
+    expect(readProjects(store)).toEqual([original]);
+    expect(activeProjectId(store)).toBe(original.id);
+  });
+
+  it('keeps reading resilient while making unavailable project writes explicit', () => {
+    const blocked = { getItem: () => { throw new Error('Synthetic read restriction'); } } as unknown as Storage;
+    expect(readProjects(blocked)).toEqual([]);
+    expect(activeProjectId(blocked)).toBeNull();
+    expect(readProjects(null)).toEqual([]);
+    expect(activeProjectId(null)).toBeNull();
+    expect(() => writeProjects([], null)).toThrow('Project storage is unavailable');
+    expect(() => setActiveProjectId(null, null)).toThrow('Project storage is unavailable');
+  });
   it('round-trips every execution setting without copying app-level configuration', () => {
     const cfg = {
       ...structuredClone(testConfig), runtime_defaults: ['temperature'],

@@ -5,6 +5,7 @@ import { providerCopy } from '../../shared/i18n/providerCopy';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import EngineSelect from '../../shared/ui/EngineSelect';
+import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -96,7 +97,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, section }:
     {loadingSchema && <p role="status">{copy.loading}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
-    {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
+    {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
@@ -115,7 +116,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, section }:
   </div>;
 }
 
-function OptionField({ option, value, disabled, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
+function OptionField({ option, value, disabled, automaticTelemetry = false, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; automaticTelemetry?: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const text = value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
   const [draft, setDraft] = useState(text);
@@ -138,8 +139,9 @@ function OptionField({ option, value, disabled, onChange, onInvalid }: { option:
     } catch { setInvalid(true); onInvalid(`provider:${option.key}`, true); }
   };
   return <label>{option.flag ?? option.key} <small>{option.target === 'launch' ? copy.launch : copy.request} · {copy.inherit}: {option.runtime_default ?? copy.modelDefault}</small>
+    {automaticTelemetry && <small>{providerTelemetryCopy[locale].hint}</small>}
     {['flag', 'toggle', 'choice'].includes(option.kind.type) ? <CustomSelect ariaLabel={option.flag ?? option.key} disabled={disabled} value={text} onChange={value => onChange(value === '' ? undefined : ['flag', 'toggle'].includes(option.kind.type) ? value === 'true' : value)}
-      options={[{ value: '', label: copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value, label: value }))]} /> : option.kind.type === 'json' ? <textarea className="app-textarea" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
+      options={[{ value: '', label: automaticTelemetry ? providerTelemetryCopy[locale].automatic : copy.inherit }, ...(option.kind.choices ?? ['true', 'false']).map(value => ({ value, label: value }))]} /> : option.kind.type === 'json' ? <textarea className="app-textarea" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={event => edit(event.target.value)} />
       : <input className="app-input" disabled={disabled} value={draft} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} inputMode={['integer', 'number'].includes(option.kind.type) ? 'decimal' : 'text'} onChange={event => edit(event.target.value)} />}
     {invalid && <span id={errorId} role="alert">{copy.invalid}</span>}
   </label>;

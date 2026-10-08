@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import * as api from "../../shared/api/index";
 import { buildMcpFunctionNames } from "../mcp/mcpUtils";
 
@@ -8,18 +8,25 @@ export interface ChatMcpTool {
   tool: api.McpTool;
 }
 
-interface UseChatMcpToolsOptions {
-  /** Mirrors the panel's shared error banner: pass a message to show it, `null` to clear it. */
-  setError: (message: string | null) => void;
-}
-
-export function useChatMcpTools({ setError }: UseChatMcpToolsOptions) {
+export function useChatMcpTools() {
   const [mcpCatalog, setMcpCatalog] = useState<ChatMcpTool[]>([]);
-  const [selectedMcpTools, setSelectedMcpTools] = useState<string[]>([]);
+  const [selectedMcpTools, writeSelection] = useState<string[]>([]);
   const [loadingMcpTools, setLoadingMcpTools] = useState(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
+  const catalogLoaded = useRef(false);
+  const selectionExplicit = useRef(false);
+  const pendingRefresh = useRef(false);
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current += 1; pendingRefresh.current = false; }, []);
+  const setSelectedMcpTools = useCallback<Dispatch<SetStateAction<string[]>>>(next => {
+    selectionExplicit.current = true;
+    writeSelection(next);
+  }, []);
 
   const refreshMcpTools = async () => {
-    if (loadingMcpTools) return;
+    if (pendingRefresh.current) return;
+    pendingRefresh.current = true;
+    const ownGeneration = generation.current;
     setLoadingMcpTools(true);
     try {
       const servers = await api.mcpListServers();
@@ -28,13 +35,22 @@ export function useChatMcpTools({ setError }: UseChatMcpToolsOptions) {
         const tools = await api.mcpListTools(server.id);
         entries.push(...tools.map((tool) => ({ serverId: server.id, serverName: server.name, tool })));
       }
+      if (generation.current !== ownGeneration) return;
       setMcpCatalog(entries);
-      setSelectedMcpTools(entries.map((entry) => `${entry.serverId}:${entry.tool.name}`));
-      setError(null);
+      const keys = entries.map((entry) => `${entry.serverId}:${entry.tool.name}`);
+      const firstCatalog = !catalogLoaded.current;
+      // Loading a catalog must not broaden a project's or the user's tool selection.
+      writeSelection(current => firstCatalog && !selectionExplicit.current ? keys : current.filter(key => keys.includes(key)));
+      catalogLoaded.current = true;
+      setMcpError(null);
     } catch (caught) {
-      setError(`MCP tool discovery failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+      if (generation.current !== ownGeneration) return;
+      setMcpError(`MCP tool discovery failed: ${caught instanceof Error ? caught.message : String(caught)}`);
     } finally {
-      setLoadingMcpTools(false);
+      if (generation.current === ownGeneration) {
+        pendingRefresh.current = false;
+        setLoadingMcpTools(false);
+      }
     }
   };
 
@@ -57,7 +73,7 @@ export function useChatMcpTools({ setError }: UseChatMcpToolsOptions) {
   }));
 
   return {
-    mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools,
+    mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, mcpError,
     refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions,
   };
 }

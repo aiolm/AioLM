@@ -99,7 +99,7 @@ describe("document retrieval", () => {
     vi.mocked(embedText).mockResolvedValue([[0, 1]]);
 
     const result = await retrieveDocumentContext([document], "question", "model", "test-key", "http://127.0.0.1:8080");
-    expect(embedText).toHaveBeenCalledWith("http://127.0.0.1:8080", "test-key", "model", ["question"]);
+    expect(embedText).toHaveBeenCalledWith("http://127.0.0.1:8080", "test-key", "model", ["question"], undefined);
     expect(saveDocumentVectors).not.toHaveBeenCalled();
     expect(lexicalContext).not.toHaveBeenCalled();
     expect(result.retrievalSources[0]).toBe("notes.md @ 1800 (1.00)");
@@ -117,5 +117,33 @@ describe("document retrieval", () => {
       retrievalCitations: [{ name: "notes.md", path: "/documents/notes.md", offset: 0 }],
       documentChunksTruncated: false,
     });
+  });
+
+  it.each([false, true])("cancels an in-flight embedding request with cached vectors=%s without lexical fallback", async cached => {
+    const document = { name: 'notes.md', path: '/documents/notes.md', text: 'Document content' };
+    const controller = new AbortController();
+    if (cached) vi.mocked(loadDocumentVectors).mockResolvedValue([[1, 0]]);
+    vi.mocked(embedText).mockImplementation((_url, _key, _model, _input, signal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError')), { once: true });
+    }));
+    const pending = retrieveDocumentContext([document], 'question', 'model', 'test-key', 'http://127.0.0.1:8080', 'synthetic', controller.signal);
+    await Promise.resolve();
+    expect(embedText).toHaveBeenCalledOnce();
+    expect(vi.mocked(embedText).mock.calls[0][4]).toBe(controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(saveDocumentVectors).not.toHaveBeenCalled();
+  });
+
+  it("does not start embeddings when document cache loading outlives cancellation", async () => {
+    const document = { name: 'notes.md', path: '/documents/notes.md', text: 'Document content' };
+    const controller = new AbortController();
+    let loaded!: (value: null) => void;
+    vi.mocked(loadDocumentVectors).mockImplementation(() => new Promise(resolve => { loaded = resolve; }));
+    const pending = retrieveDocumentContext([document], 'question', 'model', 'test-key', 'http://127.0.0.1:8080', 'synthetic', controller.signal);
+    controller.abort();
+    loaded(null);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(embedText).not.toHaveBeenCalled();
   });
 });

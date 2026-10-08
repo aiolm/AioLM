@@ -44,6 +44,7 @@ import { providerCopy } from '../../shared/i18n/providerCopy';
 import { SERVER_OPTIONS } from '../../shared/config/serverOptions';
 import { settingDefaultInfo } from '../../shared/config/defaultValueDisplay';
 import DefaultValue from '../../shared/ui/DefaultValue';
+import { executionText } from '../../shared/i18n/executionI18n';
 
 
 function fileName(project: ProjectPreset): string {
@@ -55,6 +56,11 @@ function currentProjectSetup(store: AppStore) {
   if (!current) return null;
   const resolved = resolveProfileForExecution(current, profileLibrary(current));
   return { config: { ...structuredClone(current), ...profileApplicationConfig(resolved.application) }, application: resolved.application };
+}
+
+function projectDraftSignature(name: string, description: string, systemPrompt: string, config: AppConfig | null,
+  application: ProfileApplication | undefined, tools: string[], documents: ProjectDocument[]): string {
+  return JSON.stringify([name, description, systemPrompt, config ? executionSettings(config) : null, application, tools, documents]);
 }
 
 export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore; onOpenTuning?: () => void }) {
@@ -78,8 +84,10 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   const [pendingDelete, setPendingDelete] = useState<ProjectPreset | null>(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
-  const latestDraft = useRef({ selectedId, configSnapshot, systemPrompt });
-  latestDraft.current = { selectedId, configSnapshot, systemPrompt };
+  const [savedDraft, setSavedDraft] = useState('');
+  const [pendingSwitch, setPendingSwitch] = useState<(() => void) | null>(null);
+  const latestDraft = useRef({ selectedId, name, description, configSnapshot, systemPrompt, selectedTools, documents });
+  latestDraft.current = { selectedId, name, description, configSnapshot, systemPrompt, selectedTools, documents };
 
   const cfg = store.cfg;
   // Unlike other panels' "server running" guards, Projects also blocks applying a
@@ -87,6 +95,9 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   // config, and that must wait until the server is fully stopped, not just idle.
   const serverRunning = isServerBusy(store.status.state);
   const selected = useMemo(() => projects.find((project) => project.id === selectedId) ?? null, [projects, selectedId]);
+  const draftDirty = savedDraft !== '' && savedDraft !== projectDraftSignature(name, description, systemPrompt, configSnapshot, profileApplication, selectedTools, documents);
+  const draftDirtyRef = useRef(draftDirty);
+  draftDirtyRef.current = draftDirty;
 
   const loadProject = (project: ProjectPreset | null) => {
     if (!project) {
@@ -99,6 +110,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       setProfileApplication(setup?.application);
       setSelectedTools([]);
       setDocuments([]);
+      setSavedDraft(projectDraftSignature('', '', setup?.application.system_prompt ?? '', setup?.config ?? null, setup?.application, [], []));
       return;
     }
     setSelectedId(project.id);
@@ -109,6 +121,18 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     setProfileApplication(project.profileApplication ? structuredClone(project.profileApplication) : undefined);
     setSelectedTools([...project.toolIds]);
     setDocuments(project.documentBindings.map((document) => ({ ...document })));
+    setSavedDraft(projectDraftSignature(project.name, project.description, project.systemPrompt,
+      cfg ? { ...cfg, ...project.config } : null, project.profileApplication, project.toolIds, project.documentBindings));
+  };
+
+  const switchEditor = (action: () => void) => {
+    if (pendingSwitch) return;
+    const perform = () => {
+      try { action(); }
+      catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setNotice(null); }
+    };
+    if (draftDirtyRef.current) setPendingSwitch(() => perform);
+    else perform();
   };
 
   useEffect(() => {
@@ -125,6 +149,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     setSystemPrompt(setup?.application.system_prompt ?? '');
     setConfigSnapshot(setup?.config ?? null);
     setProfileApplication(setup?.application);
+    setSavedDraft(projectDraftSignature('', '', setup?.application.system_prompt ?? '', setup?.config ?? null, setup?.application, [], []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg, selectedId, configSnapshot]);
 
@@ -186,12 +211,12 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       const existing = selectedId ? projects.find((item) => item.id === selectedId) : null;
       const saved = existing ? { ...project, id: existing.id, createdAt: existing.createdAt } : project;
       const next = upsertProject(saved, projects);
-      writeProjects(next);
+      writeProjects(next, undefined, saved.id);
       setProjects(next);
       setSelectedId(saved.id);
-      setActiveProjectId(saved.id);
       setConfigSnapshot(structuredClone(savedConfig)); setSystemPrompt(savedPrompt);
       if (resolved) setProfileApplication(resolved.application);
+      setSavedDraft(projectDraftSignature(name, description, savedPrompt, savedConfig, resolved?.application ?? incomingApplication, selectedTools, documents));
       setNotice(t(incomingApplication?.profile_id && !project.profileApplication ? "ui.projectProfileUnlinked" : "ui.savedProjectNamed", { name: saved.name }));
       setError(null);
     } catch (cause) {
@@ -223,6 +248,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         savedApplication = appliedProfile(saved);
       });
       if (!applied) return;
+      let projectStateWritten = false;
       if (savedApplication) {
         const application = savedApplication;
         const profileSettings = executionSettings(profileApplicationConfig(application));
@@ -234,7 +260,8 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             ...item, profileApplication: application,
             config: { ...item.config, ...profileSettings }, systemPrompt: application.system_prompt,
           } : item);
-          writeProjects(next); setProjects(next);
+          writeProjects(next, undefined, project.id); setProjects(next);
+          projectStateWritten = true;
         }
         const draft = latestDraft.current;
         if (draft.selectedId === project.id && draft.configSnapshot?.active_model === project.config.active_model
@@ -242,13 +269,16 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           setProfileApplication(structuredClone(application));
           setConfigSnapshot(previous => previous ? { ...previous, ...profileSettings } : previous);
           setSystemPrompt(application.system_prompt);
+          if (!draftDirtyRef.current) setSavedDraft(projectDraftSignature(draft.name, draft.description, application.system_prompt,
+            { ...draft.configSnapshot, ...profileSettings }, application, draft.selectedTools, draft.documents));
         }
       }
-      setActiveProjectId(project.id);
+      if (!projectStateWritten) setActiveProjectId(project.id);
       setNotice(t("ui.appliedProjectNamed", { name: project.name }));
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      setNotice(null);
     }
   };
 
@@ -258,17 +288,19 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   };
 
   const confirmRemove = (project: ProjectPreset) => {
-    const next = deleteProject(project.id, projects);
-    writeProjects(next);
-    setProjects(next);
-    if (activeProjectId() === project.id) {
-      setActiveProjectId(next[0]?.id ?? null);
+    try {
+      const next = deleteProject(project.id, projects);
+      writeProjects(next, undefined, activeProjectId() === project.id ? next[0]?.id ?? null : undefined);
+      setProjects(next);
+      if (selectedId === project.id) setSelectedId(next[0]?.id ?? null);
+      setPendingDelete(null);
+      setError(null);
+      setNotice(t("ui.deletedProjectNamed", { name: project.name }));
+    } catch (cause) {
+      setPendingDelete(null);
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setNotice(null);
     }
-    if (selectedId === project.id) {
-      setSelectedId(next[0]?.id ?? null);
-    }
-    setPendingDelete(null);
-    setNotice(t("ui.deletedProjectNamed", { name: project.name }));
   };
 
   const exportSelected = async (project: ProjectPreset) => {
@@ -311,12 +343,14 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
       const contents = file ? await file.text() : await api.projectImportJson();
       if (contents === null) return;
       const project = importProject(contents);
-      const next = upsertProject(project, projects);
-      writeProjects(next);
-      setProjects(next);
-      setSelectedId(project.id);
-      setNotice(t("ui.importedProjectNamed", { name: project.name }));
-      setError(null);
+      switchEditor(() => {
+        const next = upsertProject(project, readProjects());
+        writeProjects(next);
+        setProjects(next);
+        loadProject(project);
+        setNotice(t("ui.importedProjectNamed", { name: project.name }));
+        setError(null);
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -398,7 +432,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <p className="mt-1 max-w-3xl text-xs leading-relaxed ui-color-faint" >{t("ui.projectWorkflow")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => loadProject(null)} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
+          <button type="button" onClick={() => switchEditor(() => loadProject(null))} className="app-button app-button--primary app-button--sm">{t("panel.newProject")}</button>
           {api.isNativeRuntimeAvailable() ? <button type="button" data-icon="upload" onClick={() => void importSelected()} disabled={importing} className="app-button app-button--secondary app-button--sm">{t("panel.importJson")}</button> : <label data-icon="upload" className="app-button app-button--secondary app-button--sm cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
             {t("panel.importJson")}
             <input
@@ -416,6 +450,15 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         {notice && <FeedbackBanner tone="success" title={t("panel.done")} onDismiss={() => setNotice(null)}>{notice}</FeedbackBanner>}
       </PanelFeedback>
       <ConfirmDialog
+        open={pendingSwitch !== null}
+        title={executionText[locale].unsavedTitle}
+        description={executionText[locale].unsavedBody}
+        confirmLabel={modelSettingsCopy[locale].discard}
+        cancelLabel={modelSettingsCopy[locale].keep}
+        onConfirm={() => { const action = pendingSwitch; setPendingSwitch(null); action?.(); }}
+        onCancel={() => setPendingSwitch(null)}
+      />
+      <ConfirmDialog
         open={pendingDelete !== null}
         title={t("ui.deleteProjectTitle")}
         description={pendingDelete ? t("ui.deleteProjectBody", { name: pendingDelete.name }) : ""}
@@ -428,7 +471,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(project.id)} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); }} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{modelDisplayName(project.config.active_model) || t("ui.noModelShort")}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 app-card" >

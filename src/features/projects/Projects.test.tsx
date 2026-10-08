@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { createTestStore } from "../../testing/appStore";
-import { exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
+import { ACTIVE_PROJECT_KEY, PROJECTS_KEY, activeProjectId, exportProject, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from "./projectStore";
 import ProjectsPanel from "./Projects";
 import * as api from "../../shared/api/index";
 import { useModelSettings, type ModelSettingsContext } from "../model-settings/ModelSettingsProvider";
@@ -26,6 +26,188 @@ const mockedApi = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 describe("Project configuration snapshots", () => {
   beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); vi.mocked(useModelSettings).mockReturnValue(null); mockedApi.isNativeRuntimeAvailable.mockReturnValue(false); mockedApi.providerRuntimes.mockResolvedValue([]); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const failWrites = (failedKey = PROJECTS_KEY) => {
+    const original = Storage.prototype.setItem;
+    return vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === failedKey) throw new DOMException('Synthetic project storage failure', 'QuotaExceededError');
+      original.call(this, key, value);
+    });
+  };
+
+  it.each([PROJECTS_KEY, ACTIVE_PROJECT_KEY])('keeps the edited project and reports failed persistence of %s before a successful retry', key => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Keep citations', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited project' } });
+    const failure = failWrites(key);
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    expect(activeProjectId()).toBe(project.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Edited project');
+    expect(screen.queryByText('Saved project “Edited project”.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    failure.mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    expect(readProjects()[0].name).toBe('Edited project');
+    expect(screen.queryByText(/Synthetic project storage failure/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a project visible and active when its deletion cannot be persisted', () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', '', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    failWrites();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    expect(activeProjectId()).toBe(project.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Research');
+    expect(screen.queryByText('Deleted “Research”.')).not.toBeInTheDocument();
+  });
+
+  it('handles import storage failure after discard confirmation without losing the current draft', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const project = projectFromConfig('Research', '', store.cfg!, [], [], '', 100);
+    const imported = projectFromConfig('Imported', '', store.cfg!, [], [], '', 200);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Unsaved draft' } });
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    failWrites();
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await screen.findByRole('dialog', { name: 'Unsaved settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    expect(activeProjectId()).toBe(project.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved draft');
+    expect(screen.queryByText(/Imported “/)).not.toBeInTheDocument();
+  });
+
+  it('reports project state failure after runtime configuration is applied without claiming the project was applied', async () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Project prompt', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    failWrites();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    expect(await screen.findByText(/Synthetic project storage failure/)).toBeVisible();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(readProjects()).toEqual([project]);
+    expect(screen.queryByText(/^Applied “Research”\./)).not.toBeInTheDocument();
+  });
+
+  it.each(['name', 'description', 'documents', 'tools', 'model settings'] as const)('keeps unsaved %s edits when creating another project is cancelled', async field => {
+    const settings: ModelSettingsContext = { open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, cfg) => cfg, getRequestProfile: () => null };
+    vi.mocked(useModelSettings).mockReturnValue(settings);
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Cite the source', store.cfg!, [{ name: 'notes.md', path: '/synthetic/notes.md' }], ['synthetic:search'], 'Original description', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    if (field === 'name') fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited name' } });
+    if (field === 'description') fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Edited description' } });
+    if (field === 'documents') fireEvent.click(screen.getByRole('button', { name: 'Remove notes.md' }));
+    if (field === 'tools') fireEvent.click(screen.getByRole('checkbox', { name: 'synthetic:search · Unavailable' }));
+    if (field === 'model settings') {
+      fireEvent.click(screen.getByRole('button', { name: 'Edit prompt in model settings' }));
+      await act(async () => { await vi.mocked(settings.open).mock.calls[0][0].onApply?.({ ...store.cfg!, ctx_size: 8192 }); });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    expect(readProjects()).toEqual([project]);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue(field === 'name' ? 'Edited name' : 'Research');
+    if (field === 'description') expect(screen.getByLabelText('Description')).toHaveValue('Edited description');
+    if (field === 'documents') expect(screen.getByText('No documents yet.')).toBeVisible();
+    if (field === 'tools') expect(screen.queryByRole('checkbox', { name: 'synthetic:search · Unavailable' })).not.toBeInTheDocument();
+    if (field === 'model settings') expect(screen.getByText('8,192')).toBeVisible();
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('switches presets only after discarding edits, and does not interrupt selection after saving', () => {
+    const store = createTestStore();
+    const first = projectFromConfig('First project', 'First prompt', store.cfg!, [], [], 'First description', 100);
+    const second = projectFromConfig('Second project', 'Second prompt', store.cfg!, [], [], 'Second description', 200);
+    writeProjects([first, second]); setActiveProjectId(first.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Unsaved name' } });
+    fireEvent.click(screen.getByRole('button', { name: /First project.*model\.gguf/ }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved name');
+    fireEvent.click(screen.getByRole('button', { name: /Second project.*model\.gguf/ }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved name');
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Second project');
+    expect(readProjects()).toEqual([first, second]);
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Saved description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update project' }));
+    fireEvent.click(screen.getByRole('button', { name: /First project.*model\.gguf/ }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue('First project');
+    expect(readProjects().find(project => project.id === second.id)?.description).toBe('Saved description');
+  });
+
+  it('protects a new draft and accepts import only after its edits are explicitly discarded', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const imported = projectFromConfig('Imported project', 'Imported prompt', store.cfg!, [], [], '', 100);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Unsaved draft' } });
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    expect(await screen.findByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    expect(readProjects()).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Unsaved draft');
+    expect(readProjects()).toEqual([]);
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(imported));
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await screen.findByRole('dialog', { name: 'Unsaved settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByLabelText('Project name')).toHaveValue('Imported project');
+    expect(readProjects()).toHaveLength(1);
+    expect(readProjects()[0]).toMatchObject({ name: imported.name, systemPrompt: imported.systemPrompt, config: imported.config });
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('checks the latest edits when an asynchronous import finishes', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const imported = projectFromConfig('Imported project', 'Imported prompt', store.cfg!, [], [], '', 100);
+    let finish!: (value: string) => void;
+    mockedApi.projectImportJson.mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve; }));
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Edited during import' } });
+    await act(async () => { finish(exportProject(imported)); });
+    expect(screen.getByRole('dialog', { name: 'Unsaved settings' })).toBeVisible();
+    expect(screen.getByLabelText('Project name')).toHaveValue('Edited during import');
+    expect(readProjects()).toEqual([]);
+  });
+
+  it('does not mark a successful runtime assignment as an unsaved user edit', async () => {
+    const store = createTestStore();
+    const project = projectFromConfig('Research', 'Project prompt', store.cfg!, [], [], '', 100);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    await waitFor(() => expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Project name')).toHaveValue('');
+  });
 
   it('uses the native JSON save dialog and retains the saved project after cancellation or failure', async () => {
     mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);

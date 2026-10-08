@@ -36,6 +36,7 @@ import type { ExecutionSection } from '../features/models/ModelWorkspace';
 import { ModelSettingsProvider, useModelSettings, MANAGE_MODEL_RUNTIMES } from '../features/model-settings/ModelSettingsProvider';
 import { modelActions } from '../shared/i18n/modelActions';
 import AppUpdateNotice from '../features/updates/AppUpdateNotice';
+import { loadedModelPath } from '../shared/runtime/loadedModel';
 
 const ChatPanel = lazy(() => import("../features/chat/Chat"));
 const DiscoverPanel = lazy(() => import("../features/discover/Discover"));
@@ -273,7 +274,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "diagnostics";
-  const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? store.status.model : undefined;
+  const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
   const runtimeConfig = liveModel ? { ...store.cfg, ...store.status.execution, ...(store.status.engine ? { active_provider: store.status.engine.provider, active_runtime: store.status.engine.runtime_id } : {}) } : store.cfg;
   const backendLabel = providerDisplayName(providerOf(runtimeConfig ?? {}));
 

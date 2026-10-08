@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 
@@ -19,16 +19,43 @@ interface UseChatAttachmentsOptions {
   videoPreprocessAvailable?: boolean;
 }
 
+type AttachmentApplication = { generation: number } & (
+  | { kind: 'document'; value: DocumentAttachment }
+  | { kind: 'media'; value: ImageAttachment }
+);
+
 export function useChatAttachments({ visionReady, modalities, setError, audioPreprocessAvailable = false, videoPreprocessAvailable = false }: UseChatAttachmentsOptions) {
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
   const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState<"idle" | "reading" | "ready" | "failed">("idle");
+  const [application, setApplication] = useState<AttachmentApplication | null>(null);
+  const generation = useRef(0);
+  const pendingImport = useRef<number | null>(null);
+  useEffect(() => () => { generation.current += 1; pendingImport.current = null; }, []);
+
+  useEffect(() => {
+    if (!application || generation.current !== application.generation) return;
+    const accepted = application.kind === 'document'
+      ? documents.some(document => document.path === application.value.path)
+      : attachments.includes(application.value);
+    // Project bindings may occupy a slot before the queued append commits.
+    // Confirm the result after rendering without side effects inside its updater.
+    setAttachmentStatus(accepted ? 'ready' : 'failed');
+    setError(accepted ? null : `File attachment failed: You can attach up to 4 ${application.kind === 'document' ? 'documents' : 'media files'} per message.`);
+    if (pendingImport.current === application.generation) pendingImport.current = null;
+    setApplication(null);
+  }, [application, documents, attachments, setError]);
 
   const addAttachment = async () => {
-    if (attachmentStatus === "reading") return;
+    if (pendingImport.current !== null) return;
+    const ownGeneration = generation.current;
+    pendingImport.current = ownGeneration;
+    const current = () => generation.current === ownGeneration && pendingImport.current === ownGeneration;
     setAttachmentStatus("reading");
+    let queued = false;
     try {
       const path = await api.pickAttachment();
+      if (!current()) return;
       if (!path) { setAttachmentStatus(attachmentStatus); return; }
       const name = path.split(/[\\/]/).pop() ?? "file";
       if (/\.(png|jpe?g|webp|wav|mp3|flac|mp4|webm)$/i.test(path)) {
@@ -47,7 +74,11 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
         }
         if (attachments.length >= 4) throw new Error("You can attach up to 4 media files per message.");
         const attachment = await api.importMedia(path);
-        setAttachments((current) => current.length >= 4 ? current : [...current, { ...attachment, name }]);
+        if (!current()) return;
+        const value = { ...attachment, name };
+        setAttachments((items) => generation.current !== ownGeneration || items.length >= 4 ? items : [...items, value]);
+        setApplication({ generation: ownGeneration, kind: 'media', value });
+        queued = true;
       } else {
         if (documents.some((document) => document.path === path)) {
           setAttachmentStatus("ready");
@@ -56,15 +87,20 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
         }
         if (documents.length >= 4) throw new Error("You can attach up to 4 documents per message.");
         const text = await api.readDocumentText(path);
-        setDocuments((current) => current.some((document) => document.path === path) || current.length >= 4
-          ? current
-          : [...current, { name, path, text }]);
+        if (!current()) return;
+        const value = { name, path, text };
+        setDocuments((items) => generation.current !== ownGeneration || items.some((document) => document.path === path) || items.length >= 4
+          ? items
+          : [...items, value]);
+        setApplication({ generation: ownGeneration, kind: 'document', value });
+        queued = true;
       }
-      setAttachmentStatus("ready");
-      setError(null);
     } catch (caught) {
+      if (!current()) return;
       setAttachmentStatus("failed");
       setError(`File attachment failed: ${caught instanceof Error ? caught.message : String(caught)}`);
+    } finally {
+      if (!queued && pendingImport.current === ownGeneration) pendingImport.current = null;
     }
   };
 
@@ -78,8 +114,12 @@ export function useChatAttachments({ visionReady, modalities, setError, audioPre
 
   /** Clears the composer's pending attachments — used after sending and when switching threads. */
   const clearComposerAttachments = () => {
+    // A picker/import may finish after its conversation has been left behind.
+    generation.current += 1;
+    pendingImport.current = null;
     setAttachments([]);
     setDocuments([]);
+    setApplication(null);
     setAttachmentStatus("idle");
   };
 

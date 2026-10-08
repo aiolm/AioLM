@@ -28,6 +28,7 @@ import { formatMebibytes } from '../../shared/lib/units';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
 import { providerCopy } from '../../shared/i18n/providerCopy';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
 
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
@@ -62,6 +63,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
   useSessionPolling({
     active: active && focus === 'library' && api.isNativeRuntimeAvailable(),
+    details: true,
     onData: setSessions,
   });
 
@@ -146,14 +148,14 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
-  const liveModel = store.status.model ?? "";
+  const liveModel = loadedModelPath(store.status);
   const serverRunning = isServerBusy(store.status.state);
   // Starting a row applies its own model, so the only setup a row can be
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
   const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeProvider: cfg.active_provider, activeRuntime: cfg.active_runtime, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
-  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => session.model));
-  if (isServerRunning(store.status.state) && store.status.model) loadedModels.add(store.status.model);
+  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => loadedModelPath(session)));
+  if (isServerRunning(store.status.state) && liveModel) loadedModels.add(liveModel);
 
   const refreshServerAdapters = useCallback(async () => {
     if (!isServerRunning(store.status.state) || !store.status.url || !store.status.api_key) {

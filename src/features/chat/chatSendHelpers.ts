@@ -60,7 +60,8 @@ export interface RetrievalResult {
 }
 
 /** Vector-ranks attached documents against `text`, falling back to lexical order when embeddings are unavailable. */
-export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string, namespace = baseUrl): Promise<RetrievalResult> {
+export async function retrieveDocumentContext(pendingDocuments: DocumentAttachment[], text: string, model: string, apiKey: string, baseUrl: string, namespace = baseUrl, signal?: AbortSignal): Promise<RetrievalResult> {
+  signal?.throwIfAborted();
   let documentContext: string | null = null;
   let retrievalSources = pendingDocuments.map((document) => `${document.name} (lexical fallback)`);
   let retrievalCitations: ChatCitation[] = pendingDocuments.map((document) => ({ name: document.name, path: document.path, offset: 0 }));
@@ -70,13 +71,15 @@ export async function retrieveDocumentContext(pendingDocuments: DocumentAttachme
       documentChunksTruncated = documentChunksExceedSearchLimit(pendingDocuments);
       const chunks = splitDocumentChunks(pendingDocuments, undefined, MAX_SEARCHABLE_DOCUMENT_CHUNKS);
       const cachedVectors = await loadDocumentVectors(model, chunks, namespace);
+      signal?.throwIfAborted();
       let chunkVectors: number[][];
       let queryVector: number[] | undefined;
       if (cachedVectors) {
         chunkVectors = cachedVectors;
-        [queryVector] = await api.embedText(baseUrl, apiKey, model, [text]);
+        [queryVector] = await api.embedText(baseUrl, apiKey, model, [text], signal);
       } else {
-        const vectors = await api.embedText(baseUrl, apiKey, model, [...chunks.map((chunk) => chunk.text), text]);
+        const vectors = await api.embedText(baseUrl, apiKey, model, [...chunks.map((chunk) => chunk.text), text], signal);
+        signal?.throwIfAborted();
         chunkVectors = vectors.slice(0, chunks.length);
         queryVector = vectors[chunks.length];
         void saveDocumentVectors(model, chunks, chunkVectors, namespace).catch(() => undefined);
@@ -88,12 +91,15 @@ export async function retrieveDocumentContext(pendingDocuments: DocumentAttachme
         retrievalSources = retrieval.retrievalSources;
         retrievalCitations = retrieval.retrievalCitations;
       }
-    } catch {
+    } catch (cause) {
+      signal?.throwIfAborted();
+      if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
       // Older llama.cpp builds may not expose embeddings; lexical retrieval remains the safe fallback.
     }
   }
   // Lexical ranking scans the complete attachments, so only pay for it when
   // vector retrieval cannot provide context.
+  signal?.throwIfAborted();
   documentContext ??= buildDocumentContext(pendingDocuments, 12_000, text);
   return { documentContext, retrievalSources, retrievalCitations, documentChunksTruncated };
 }
@@ -118,6 +124,7 @@ export function createStreamDeltaHandler(options: {
     if (generated && metricsRef.current.firstTokenAt === undefined) metricsRef.current.firstTokenAt = performance.now();
     if (delta.usage) metricsRef.current.usage = { ...metricsRef.current.usage, ...delta.usage };
     if (delta.timings) metricsRef.current.timings = { ...metricsRef.current.timings, ...delta.timings };
+    if (delta.metrics) metricsRef.current.serverMetrics = { ...metricsRef.current.serverMetrics, ...delta.metrics };
     if (delta.reasoning) streamRef.current.reasoning += delta.reasoning;
     if (delta.content) {
       if (streamResponses) setPhase("streaming");
@@ -134,7 +141,7 @@ export function createStreamDeltaHandler(options: {
       if (toolDelta.arguments) current.function.arguments += toolDelta.arguments;
       streamRef.current.toolCalls[toolDelta.index] = current;
     }
-    if (streamResponses || delta.usage || delta.timings) scheduleAssistantRender();
+    if (streamResponses || delta.usage || delta.timings || delta.metrics) scheduleAssistantRender();
   };
 }
 

@@ -19,6 +19,7 @@ import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import {
   DEFAULT_SESSION_ID,
@@ -96,7 +97,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const saving = useRef(false);
   const legacyState = store.status.state;
   const legacyUrl = store.status.url;
-  const legacyModel = store.status.model;
+  const legacyModel = loadedModelPath(store.status);
   const legacyMmproj = store.status.mmproj;
   const legacyPid = store.status.pid;
   const legacyActiveRequests = store.status.active_requests;
@@ -121,7 +122,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       .map((status): api.SessionDefinition => cfg ? sessionDefinitionFromStatus(status, cfg) : ({
         id: status.id,
         name: status.name || status.id,
-        models: { primary_model: status.model ?? "", mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
+        models: { primary_model: loadedModelPath(status), mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
         gpu: cloneGpuPlacement(status.gpu),
         enabled: true,
       }));
@@ -385,7 +386,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     ? cfg ? sessionDefinitionFromStatus(statuses[editing.id], cfg) : {
         id: statuses[editing.id].id,
         name: statuses[editing.id].name || statuses[editing.id].id,
-        models: { primary_model: statuses[editing.id].model ?? "", mmproj: statuses[editing.id].mmproj ?? "", draft_model: statuses[editing.id].draft_model ?? "" },
+        models: { primary_model: loadedModelPath(statuses[editing.id]), mmproj: statuses[editing.id].mmproj ?? "", draft_model: statuses[editing.id].draft_model ?? "" },
         gpu: cloneGpuPlacement(statuses[editing.id].gpu),
         enabled: true,
       }
@@ -441,7 +442,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           const rowDefinition = selectedId === definition.id && currentDefinition ? currentDefinition : definition;
           const rowName = normalizeDisplayText(definition.name || (definitionsById.has(definition.id) ? definition.id : t("ui.newSession")));
           const live = rowState === "running" || rowState === "starting" || rowState === "stopping";
-          const model = live ? rowStatus?.model || rowDefinition.models.primary_model : rowDefinition.models.primary_model;
+          const model = live ? loadedModelPath(rowStatus, rowDefinition.models.primary_model) : rowDefinition.models.primary_model;
           const runtime = live ? rowStatus?.execution ?? rowDefinition.execution : rowDefinition.execution;
           const runtimeConfig = { ...cfg, ...runtime, ...(live && rowStatus?.engine
             ? { active_provider: rowStatus.engine.provider, active_runtime: rowStatus.engine.runtime_id } : {}) };

@@ -4,6 +4,11 @@ import ModelBadges, { fittingModelBadgeCount, modelBadges, summaryModelBadges } 
 import { I18nProvider } from '../i18n/i18n';
 
 describe('model metadata badges', () => {
+  it('reads name hints from immutable repository snapshots while preserving declared metadata', () => {
+    const path = '/synthetic/cache/models--community--Qwen3-8B/snapshots/' + 'a'.repeat(40);
+    expect(modelBadges(path).map(badge => badge.value)).toEqual(['Qwen3', '8B']);
+    expect(modelBadges(path, { architecture: 'declared-architecture' })[0]).toEqual({ kind: 'architecture', value: 'declared-architecture', source: 'metadata' });
+  });
   it('displays declared architectures and arbitrary tags without a family allowlist or four-tag limit', () => {
     const badges = modelBadges('Qwen3.8-Flash-Next-8B-Q8_0.gguf', {
       architecture: 'qwen4exp', size_label: '30B-A3B', quantization: 'Q4_K_M',

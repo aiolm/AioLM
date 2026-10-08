@@ -3,8 +3,10 @@
 //! A schema is the single description of what an engine accepts: the UI
 //! renders it, saved values are validated against it, launch arguments and
 //! request fields are generated from it, and a pasted command line is imported
-//! through it. An option that is absent inherits the engine's own documented
-//! default, so nothing here injects a value the engine would not choose itself.
+//! through it. Absent options normally inherit the engine's own documented
+//! default. The launcher enables supported vLLM tokenizer/cache details and
+//! per-request timing for chat when they are absent; explicit false still opts
+//! out. That application policy requires the selected installation's probe.
 //!
 //! Flags and request fields were checked against upstream source:
 //! vLLM v0.31.0 (`vllm/engine/arg_utils.py`, `vllm/entrypoints/launchers/cli_args.py`,
@@ -27,7 +29,8 @@ pub enum OptionKind {
         min: f64,
         max: f64,
     },
-    /// A store-true style flag; `false` is the same as absent.
+    /// A store-true style flag; `false` emits no argument. The launcher can
+    /// distinguish an explicit opt-out from an absent application default.
     Flag,
     /// A `--name/--no-name` boolean, where both values are meaningful.
     Toggle,

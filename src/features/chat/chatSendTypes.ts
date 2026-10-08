@@ -1,6 +1,6 @@
 import type * as api from "../../shared/api/types";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
-import type { StreamTimings, StreamUsage } from "../../shared/api/sse";
+import type { StreamMetrics, StreamTimings, StreamUsage } from "../../shared/api/sse";
 import type { ResponseMetrics } from "../../shared/lib/metrics";
 import type { TurnPersonalization } from "./chatPersonalization";
 
@@ -21,6 +21,7 @@ export interface RequestMetricsAccumulator {
   firstTokenAt?: number;
   usage?: StreamUsage;
   timings?: StreamTimings;
+  serverMetrics?: StreamMetrics;
 }
 
 export interface StreamingDraft {

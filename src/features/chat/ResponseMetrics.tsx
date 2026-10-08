@@ -2,6 +2,7 @@ import { intlLocales, type Locale } from "../../shared/i18n/i18nCatalog";
 import { translate } from "../../shared/i18n/i18nUnified";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
 import type { ResponseMetrics as ResponseMetricsData } from "../../shared/lib/metrics";
+import { responseMetricUnavailableCopy } from "./responseMetricCopy";
 
 interface ResponseMetricsProps {
   metrics: ResponseMetricsData;
@@ -24,6 +25,8 @@ function formatMetric(value: number | undefined, locale: Locale, decimals: numbe
 export default function ResponseMetrics({ metrics, locale }: ResponseMetricsProps) {
   const text = (key: ChatTextKey) => translate(locale, `chat.${key}`);
   const seconds = (durationMs?: number) => formatMetric(durationMs === undefined ? undefined : durationMs / 1000, locale, 2);
+  const hasMissingPhaseMeasurement = [metrics.pp, metrics.tg].some(values =>
+    values.tokens === undefined || values.durationMs === undefined || values.tokensPerSecond === undefined);
   return (
     <div className="chat-response-metrics" role="group" aria-label={text("metricsLabel")}>
       <dl className="chat-response-metrics-stages">
@@ -42,6 +45,7 @@ export default function ResponseMetrics({ metrics, locale }: ResponseMetricsProp
           );
         })}
       </dl>
+      {hasMissingPhaseMeasurement && <div className="chat-response-metrics-unavailable">{responseMetricUnavailableCopy[locale]}</div>}
       {/* Shown outright rather than behind a disclosure: laid out in one strip
           these four numbers cost a single line, which is less than the control
           that used to hide them, and they are what a run is judged on. */}

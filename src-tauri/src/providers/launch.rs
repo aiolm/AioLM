@@ -411,6 +411,46 @@ fn probed_flags(runtime: &PythonRuntimeManifest) -> Option<&[String]> {
         .filter(|flags| !flags.is_empty())
 }
 
+fn vllm_has_raw_flag(options: &Map<String, Value>, flag: &str) -> bool {
+    options
+        .get(options::EXTRA_ARGS_KEY)
+        .and_then(Value::as_array)
+        .is_some_and(|arguments| {
+            arguments
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|argument| options::canonical_flag(ProviderId::Vllm, argument) == flag)
+        })
+}
+
+/// Chat needs tokenizer/cache counts and decode timings during ordinary use.
+/// Enable only flags the selected installation reported, without modifying
+/// profiles or overriding explicit choices. Unknown/older runtimes keep their
+/// own defaults, and disabled engine statistics preclude per-request timing.
+fn enable_supported_vllm_telemetry(
+    runtime: &PythonRuntimeManifest,
+    launch_options: &mut Map<String, Value>,
+) {
+    let Some(flags) = probed_flags(runtime) else {
+        return;
+    };
+    for (key, flag) in [
+        (
+            "enable_prompt_tokens_details",
+            "--enable-prompt-tokens-details",
+        ),
+        ("enable_per_request_metrics", "--enable-per-request-metrics"),
+    ] {
+        if !launch_options.contains_key(key)
+            && flags.iter().any(|supported| supported == flag)
+            && (key != "enable_per_request_metrics"
+                || !vllm_has_raw_flag(launch_options, "--disable-log-stats"))
+        {
+            launch_options.insert(key.into(), Value::Bool(true));
+        }
+    }
+}
+
 const METAL_UNSUPPORTED_KEYS: &[&str] = &[
     "cpu_offload_gb",
     "tensor_parallel_size",
@@ -838,6 +878,19 @@ pub fn runtime_option_issues(
     options: &Map<String, Value>,
 ) -> Vec<OptionIssue> {
     let mut issues = option_issues(runtime.provider, options);
+    // Accepted raw arguments follow typed options, so vLLM's
+    // BooleanOptionalAction applies an explicit raw opt-out last.
+    if runtime.provider == ProviderId::Vllm
+        && options.get("enable_per_request_metrics") == Some(&Value::Bool(true))
+        && vllm_has_raw_flag(options, "--disable-log-stats")
+        && !vllm_has_raw_flag(options, "--no-enable-per-request-metrics")
+    {
+        issues.push(OptionIssue {
+            key: "enable_per_request_metrics".into(),
+            code: "dependency",
+            message: "Per-request metrics require engine statistics; remove --disable-log-stats or set enable_per_request_metrics to false".into(),
+        });
+    }
     if runtime.provider == ProviderId::Vllm && compat::is_metal(runtime.probe.as_ref()) {
         issues.extend(metal_option_issues(options));
     }
@@ -1020,6 +1073,7 @@ pub fn engine_command(
                 );
             }
             let mut launch_options = schema_view(&options);
+            enable_supported_vllm_telemetry(runtime, &mut launch_options);
             if metal {
                 env.extend([
                     // vLLM applies this allowlist to platform plugins too;
@@ -1611,6 +1665,214 @@ mod tests {
         runtime.probe.as_mut().unwrap().server_flags =
             flags.iter().map(|flag| flag.to_string()).collect();
         runtime
+    }
+
+    #[test]
+    fn vllm_enables_probed_telemetry_without_persisting_defaults_across_platforms() {
+        let cfg = config(ProviderId::Vllm, json!({}));
+        let saved_options = cfg.provider_options.clone();
+        let mut runtime = with_flags(
+            ProviderId::Vllm,
+            &[
+                "--host",
+                "--port",
+                "--served-model-name",
+                "--enable-prompt-tokens-details",
+                "--enable-per-request-metrics",
+            ],
+        );
+        for platform in ["Darwin", "Linux", "Windows"] {
+            runtime.probe.as_mut().unwrap().platform_system = platform.into();
+            let command = engine_command(&cfg, &runtime, 1, "").unwrap();
+            for flag in [
+                "--enable-prompt-tokens-details",
+                "--enable-per-request-metrics",
+            ] {
+                assert_eq!(command.args.iter().filter(|arg| *arg == flag).count(), 1);
+            }
+            assert_eq!(cfg.provider_options, saved_options);
+        }
+    }
+
+    #[test]
+    fn telemetry_defaults_follow_partial_and_missing_probe_capabilities() {
+        let cfg = config(ProviderId::Vllm, json!({}));
+        let base = ["--host", "--port", "--served-model-name"];
+        let older = with_flags(ProviderId::Vllm, &base);
+        let mut partial_flags = base.to_vec();
+        partial_flags.push("--enable-prompt-tokens-details");
+        let partial = with_flags(ProviderId::Vllm, &partial_flags);
+        let partial_command = engine_command(&cfg, &partial, 1, "").unwrap();
+        assert!(partial_command
+            .args
+            .contains(&"--enable-prompt-tokens-details".into()));
+        assert!(!partial_command
+            .args
+            .contains(&"--enable-per-request-metrics".into()));
+        let mut no_probe = runtime(ProviderId::Vllm);
+        no_probe.probe = None;
+        for unknown in [older, runtime(ProviderId::Vllm), no_probe] {
+            let command = engine_command(&cfg, &unknown, 1, "").unwrap();
+            assert!(!command
+                .args
+                .iter()
+                .any(|arg| arg.starts_with("--enable-prompt-tokens-details")
+                    || arg.starts_with("--enable-per-request-metrics")));
+        }
+    }
+
+    #[test]
+    fn vllm_telemetry_respects_explicit_opt_outs_and_stats_dependencies() {
+        let runtime = with_flags(
+            ProviderId::Vllm,
+            &[
+                "--host",
+                "--port",
+                "--served-model-name",
+                "--disable-log-stats",
+                "--enable-prompt-tokens-details",
+                "--enable-per-request-metrics",
+            ],
+        );
+        for options in [
+            json!({"enable_prompt_tokens_details":false,"enable_per_request_metrics":false}),
+            json!({"enable_prompt_tokens_details":false,"extra_args":["--disable_log_stats"]}),
+        ] {
+            let command =
+                engine_command(&config(ProviderId::Vllm, options), &runtime, 1, "").unwrap();
+            assert!(!command
+                .args
+                .contains(&"--enable-prompt-tokens-details".into()));
+            assert!(!command
+                .args
+                .contains(&"--enable-per-request-metrics".into()));
+        }
+        let cfg = config(
+            ProviderId::Vllm,
+            json!({"extra_args":["--disable-log-stats"]}),
+        );
+        let command = engine_command(&cfg, &runtime, 1, "").unwrap();
+        assert!(command
+            .args
+            .contains(&"--enable-prompt-tokens-details".into()));
+        assert!(!command
+            .args
+            .contains(&"--enable-per-request-metrics".into()));
+        let cfg = config(
+            ProviderId::Vllm,
+            json!({"enable_per_request_metrics":true,"extra_args":["--disable_log_stats"]}),
+        );
+        assert!(
+            runtime_option_issues(&runtime, &provider_options(&cfg, ProviderId::Vllm))
+                .iter()
+                .any(
+                    |issue| issue.key == "enable_per_request_metrics" && issue.code == "dependency"
+                )
+        );
+        assert!(engine_command(&cfg, &runtime, 1, "")
+            .unwrap_err()
+            .contains("remove --disable-log-stats"));
+    }
+
+    #[test]
+    fn standard_vllm_raw_telemetry_opt_out_overrides_typed_enable_before_dependency_validation() {
+        let runtime = with_flags(
+            ProviderId::Vllm,
+            &[
+                "--host",
+                "--port",
+                "--served-model-name",
+                "--disable-log-stats",
+                "--enable-prompt-tokens-details",
+                "--enable-per-request-metrics",
+                "--no-enable-per-request-metrics",
+            ],
+        );
+        for raw in [
+            "--no-enable-per-request-metrics",
+            "--no_enable_per_request_metrics",
+        ] {
+            let cfg = config(
+                ProviderId::Vllm,
+                json!({
+                    "enable_per_request_metrics": true,
+                    "extra_args": ["--disable_log_stats", raw],
+                }),
+            );
+            let saved_options = cfg.provider_options.clone();
+            let options = provider_options(&cfg, ProviderId::Vllm);
+            assert!(runtime_option_issues(&runtime, &options).is_empty());
+            let command = engine_command(&cfg, &runtime, 1, "").unwrap();
+            let enable = command
+                .args
+                .iter()
+                .position(|arg| arg == "--enable-per-request-metrics")
+                .unwrap();
+            let disable = command.args.iter().position(|arg| arg == raw).unwrap();
+            assert!(enable < disable);
+            assert_eq!(cfg.provider_options, saved_options);
+
+            let mut unsupported = runtime.clone();
+            unsupported
+                .probe
+                .as_mut()
+                .unwrap()
+                .server_flags
+                .retain(|flag| flag != "--no-enable-per-request-metrics");
+            assert!(runtime_option_issues(&unsupported, &options)
+                .iter()
+                .any(|issue| issue.key == options::EXTRA_ARGS_KEY && issue.code == "version"));
+
+            let mut metal = metal_runtime();
+            metal.probe.as_mut().unwrap().server_flags =
+                runtime.probe.as_ref().unwrap().server_flags.clone();
+            assert!(runtime_option_issues(&metal, &options)
+                .iter()
+                .any(|issue| issue.key == options::EXTRA_ARGS_KEY && issue.code == "variant"));
+        }
+    }
+
+    #[test]
+    fn metal_telemetry_defaults_use_the_selected_probe_and_leave_other_engines_unchanged() {
+        let dir = temp_dir("metal-telemetry");
+        metal_snapshot(&dir, "qwen3", "Qwen3ForCausalLM", json!({}));
+        let mut runtime = metal_runtime();
+        runtime.probe.as_mut().unwrap().server_flags = [
+            "--host",
+            "--port",
+            "--served-model-name",
+            "--enable-prompt-tokens-details",
+            "--enable-per-request-metrics",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let mut cfg = config(ProviderId::Vllm, json!({}));
+        cfg.active_model = dir.to_string_lossy().into_owned();
+        let command = engine_command(&cfg, &runtime, 1, "").unwrap();
+        assert!(command
+            .args
+            .contains(&"--enable-prompt-tokens-details".into()));
+        assert!(command
+            .args
+            .contains(&"--enable-per-request-metrics".into()));
+        let mlx = with_flags(
+            ProviderId::MlxVlm,
+            &[
+                "--host",
+                "--port",
+                "--model",
+                "--enable-prompt-tokens-details",
+                "--enable-per-request-metrics",
+            ],
+        );
+        let command = engine_command(&config(ProviderId::MlxVlm, json!({})), &mlx, 1, "").unwrap();
+        assert!(!command
+            .args
+            .iter()
+            .any(|arg| arg.starts_with("--enable-prompt-tokens-details")
+                || arg.starts_with("--enable-per-request-metrics")));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

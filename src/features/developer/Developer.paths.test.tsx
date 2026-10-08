@@ -28,6 +28,13 @@ beforeEach(() => {
 });
 
 describe("developer page path presentation", () => {
+  it('names the loaded snapshot in diagnostics while keeping its served model ID intact', () => {
+    const snapshot = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
+    const store = { ...runningStore, status: { ...runningStore.status, model: 'served-alias', execution: { active_model: snapshot } } };
+    render(<I18nProvider initialLocale="en"><DeveloperPanel store={store} section="diagnostics" /></I18nProvider>);
+    expect(screen.getByTitle(snapshot)).toHaveTextContent('Qwen-model');
+    expect(store.status.model).toBe('served-alias');
+  });
   it("shows model IDs without the verbatim prefix but copies the exact ID the API reports", async () => {
     const models = [{ id: path, object: "model", owned_by: "llama.cpp" }];
     const writeText = vi.fn(async () => undefined);

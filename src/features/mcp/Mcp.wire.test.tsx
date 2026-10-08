@@ -45,12 +45,11 @@ describe("MCP native tool payloads", () => {
   });
 
   it("preserves discovered properties and required arguments in chat function definitions", async () => {
-    const setError = vi.fn();
-    const { result } = renderHook(() => useChatMcpTools({ setError }));
+    const { result } = renderHook(() => useChatMcpTools());
     await act(() => result.current.refreshMcpTools());
     expect(result.current.mcpDefinitions).toHaveLength(1);
     expect(result.current.mcpDefinitions[0].function.parameters).toEqual(schema);
-    expect(setError).toHaveBeenLastCalledWith(null);
+    expect(result.current.mcpError).toBeNull();
   });
 
   it("normalizes missing schemas and accepts the existing internal spelling", async () => {

@@ -363,6 +363,16 @@ describe("Workspace navigation", () => {
     expect(store.start).not.toHaveBeenCalled();
   });
 
+  it('names the loaded snapshot in the header even when the public model ID and next selected model differ', () => {
+    const path = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
+    store = createTestStore({ active_model: '/synthetic/next-model' });
+    store.status = { state: 'running', model: 'served-alias', execution: { active_model: path } };
+    mount();
+    expect(screen.getByRole('button', { name: 'Choose model: Qwen-model' })).toHaveAttribute('title', path);
+    expect(document.querySelector('.aiolm-context-model')).toHaveTextContent('Qwen-model');
+    expect(store.status.model).toBe('served-alias');
+  });
+
   it("keeps benchmark state when changing tuning sections", async () => {
     mount();
     fireEvent.click(mainTab("Run a model"));

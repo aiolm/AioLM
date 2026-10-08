@@ -31,6 +31,42 @@ describe("response metrics", () => {
       pp: {}, tg: { tokens: 10 }, firstTokenMs: 100, requestMs: 200,
     });
     expect(buildResponseMetrics({ prompt_tokens: 2, prompt_tokens_details: { cached_tokens: 4 } }, undefined)).toEqual({ pp: {}, tg: {}, cachedTokens: 4 });
+    expect(buildResponseMetrics({ prompt_tokens: 100, completion_tokens: 10, prompt_tokens_details: null }, undefined))
+      .toEqual({ pp: {}, tg: { tokens: 10 } });
+  });
+
+  it("uses vLLM's decode interval without presenting overall throughput or TTFT as a phase measurement", () => {
+    expect(buildResponseMetrics(
+      { prompt_tokens: 100, completion_tokens: 11, prompt_tokens_details: { cached_tokens: 20 } },
+      undefined,
+      { firstTokenMs: 850, requestMs: 1100 },
+      { generation_time_ms: 200, time_to_first_token_ms: 800, queue_time_ms: 40, tokens_per_second: 11, mean_itl_ms: 20 },
+    )).toEqual({
+      pp: { tokens: 80 }, tg: { tokens: 11, durationMs: 200, tokensPerSecond: 50 },
+      cachedTokens: 20, firstTokenMs: 850, requestMs: 1100,
+    });
+  });
+
+  it("keeps native phase timings authoritative when per-request telemetry is also present", () => {
+    expect(buildResponseMetrics(
+      { completion_tokens: 11 },
+      { predicted_n: 10, predicted_ms: 100, predicted_per_second: 99 },
+      {},
+      { generation_time_ms: 200, tokens_per_second: 1 },
+    ).tg).toEqual({ tokens: 10, durationMs: 100, tokensPerSecond: 99 });
+  });
+
+  it("does not invent decode speed from absent, invalid or zero vLLM intervals", () => {
+    expect(buildResponseMetrics({ completion_tokens: 1 }, undefined, {}, { generation_time_ms: 0, tokens_per_second: 100 }).tg)
+      .toEqual({ tokens: 1, durationMs: 0 });
+    expect(buildResponseMetrics({ completion_tokens: 1 }, undefined, {}, { generation_time_ms: 20 }).tg)
+      .toEqual({ tokens: 1, durationMs: 20, tokensPerSecond: 0 });
+    expect(buildResponseMetrics(undefined, undefined, {}, { generation_time_ms: 20 }).tg)
+      .toEqual({ durationMs: 20 });
+    expect(buildResponseMetrics({ completion_tokens: 2 }, undefined, {}, { generation_time_ms: null, tokens_per_second: 100 }).tg)
+      .toEqual({ tokens: 2 });
+    expect(buildResponseMetrics({ completion_tokens: 2 }, undefined, {}, { generation_time_ms: -1 }).tg)
+      .toEqual({ tokens: 2 });
   });
 
   it("preserves zero counts and durations without dividing by zero", () => {

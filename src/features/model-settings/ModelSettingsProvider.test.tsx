@@ -83,6 +83,21 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); });
 
 describe('model settings target application', () => {
+  it('opens and saves a loaded snapshot without replacing its path with the public engine alias', async () => {
+    const path = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
+    const store = createTestStore({ active_model: path, active_provider: 'vllm', active_runtime: 'synthetic-runtime' });
+    const library = store.cfg!.settings_profiles!;
+    library.applied = Object.fromEntries(Object.values(library.applied).map(application => [profileTargetKey(application.model, 'default', 'vllm'), application]));
+    store.status = { ...running(store.cfg!), model: 'served-alias' };
+    mocks.serverStatus.mockResolvedValue(store.status);
+    const dialog = await open(store, { target: { kind: 'default' } });
+    expect(dialog.initialConfig.active_model).toBe(path);
+    expect(context.getRequestConfig('default', { ...store.cfg!, active_model: '/synthetic/next-model' }, store.status).active_model).toBe(path);
+    await act(async () => { await apply(dialog, { ...dialog.initialConfig, temperature: 0.2 }, 'save'); });
+    expect(store.cfg?.active_model).toBe(path);
+    expect(mocks.preflightLaunch).not.toHaveBeenCalled();
+    expect(store.status.model).toBe('served-alias');
+  });
   it('opens runtime management for the edited engine without persisting the draft', async () => {
     const store = createTestStore();
     const dialog = await open(store, { target: { kind: 'default' } });

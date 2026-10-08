@@ -1,5 +1,6 @@
 import type { AppConfig, GpuPlacement, GpuDevice, SessionDefinition, SessionStatus } from "../api/types";
 import { executionSettings, sessionExecutionSettings } from "../config/executionSettings";
+import { loadedModelPath } from './loadedModel';
 
 export const DEFAULT_SESSION_ID = "default";
 export const SESSION_STATUS_CHANGED_EVENT = "aiolm:session-status-changed";
@@ -116,7 +117,7 @@ export function sessionDefinitionFromStatus(status: SessionStatus, cfg: AppConfi
   return {
     id: status.id,
     name: status.name || status.id,
-    models: { primary_model: status.model ?? "", mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
+    models: { primary_model: loadedModelPath(status), mmproj: status.mmproj ?? "", draft_model: status.draft_model ?? "" },
     gpu: cloneGpuPlacement(status.gpu ?? status.execution?.gpu),
     enabled: true,
     ...(status.execution ? { execution: sessionExecutionSettings({ ...cfg, ...executionSettings(status.execution) }) } : {}),

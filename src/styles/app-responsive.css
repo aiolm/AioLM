@@ -1,12 +1,13 @@
 @media (max-width: 1199px) {
- .aiolm-runtime-context { max-width: 300px; }
+ .aiolm-runtime-context { flex-basis: 440px; max-width: 440px; }
 }
 @media (max-width: 959px) {
  .app-shell { grid-template-columns: minmax(0,1fr); }
  .aiolm-sidebar { display: none; }
  .aiolm-menu-trigger { display: inline-flex; }
- .aiolm-header { padding: 0 8px; gap: 8px; }
- .aiolm-runtime-context { max-width: 260px; }
+ .aiolm-header { padding-inline: var(--ui-canvas-padding); gap: 8px; }
+ .aiolm-runtime-context { flex-basis: 260px; max-width: 260px; }
+ .aiolm-context-runtime { flex: 0 0 auto; }
  .aiolm-context-runtime .aiolm-context-label { display: none; }
  .app-feedback-layer, .app-task-strip { margin-inline: 16px; }
 }
@@ -17,7 +18,7 @@
  .tuning-redesign__header { padding: 16px; flex-wrap: wrap; }
  /* Phone width: location and server state on the first line, the model pill
     gets the full second line so its name stays readable. */
- .aiolm-header { grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: 48px auto; height: auto; padding-bottom: 8px; }
+ .aiolm-header { display: grid; grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: 48px auto; height: auto; padding-bottom: 8px; }
  .aiolm-runtime-context { grid-column: 1 / -1; grid-row: 2; max-width: none; width: 100%; }
  .aiolm-server { grid-column: 2; grid-row: 1; }
  .app-feedback { flex-wrap: wrap; }

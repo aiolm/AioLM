@@ -124,6 +124,7 @@ async function attachDocument(name: string, text: string) {
   mocked.readDocumentText.mockResolvedValue(text);
   fireEvent.click(await screen.findByRole("button", { name: "Attach file" }));
   await screen.findByText(name);
+  await screen.findByText("Attachment ready");
 }
 
 function respondWithText(text: string) {
@@ -281,6 +282,7 @@ describe("ChatPanel unified attachments", () => {
       mocked.readImageData.mockResolvedValue(`data:image/png;base64,${btoa(`photo-${index}`)}`);
       fireEvent.click(attachButton);
       await screen.findByRole("img", { name: `photo-${index}.png` });
+      await screen.findByText("Attachment ready");
     }
     expect(attachButton).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Remove attachment: notes-0.txt" }));

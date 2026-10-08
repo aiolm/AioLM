@@ -14,6 +14,7 @@ vi.mock('../../shared/api/index', async importOriginal => ({
   listModels: vi.fn(),
   cancelModelScan: vi.fn(async () => undefined),
   sessionSummaryList: vi.fn(),
+  sessionList: vi.fn(),
   isNativeRuntimeAvailable: vi.fn(() => false),
 }));
 const models: api.GgufModel[] = [
@@ -34,6 +35,7 @@ describe('model management and settings', () => {
     vi.mocked(useModelSettings).mockReturnValue(settings);
     vi.mocked(api.listModels).mockResolvedValue({ models, truncated: false });
     vi.mocked(api.sessionSummaryList).mockResolvedValue([]);
+    vi.mocked(api.sessionList).mockResolvedValue([]);
     vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(false);
   });
   it('treats all unloaded models equally even when a previous model remains saved', async () => {
@@ -48,18 +50,26 @@ describe('model management and settings', () => {
   it('marks models loaded by named sessions and clears the mark after unloading', async () => {
     vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
     const live: api.SessionStatus = { id: 'work', name: 'Work', state: 'running', model: 'b.gguf' };
-    vi.mocked(api.sessionSummaryList).mockResolvedValue([live]);
+    vi.mocked(api.sessionList).mockResolvedValue([live]);
     mount();
     const first = (await findModelButton('a.gguf')).closest('[role="listitem"]') as HTMLElement;
     const second = (await findModelButton('b.gguf')).closest('[role="listitem"]') as HTMLElement;
     expect(within(first).queryByText('Running')).not.toBeInTheDocument();
     expect(await within(second).findByText('Running')).toBeVisible();
     expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeDisabled();
-    vi.mocked(api.sessionSummaryList).mockResolvedValue([{ ...live, state: 'stopped' }]);
+    vi.mocked(api.sessionList).mockResolvedValue([{ ...live, state: 'stopped' }]);
     act(() => notifySessionStatusChanged());
     await waitFor(() => expect(within(second).queryByText('Running')).not.toBeInTheDocument());
     expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeEnabled();
     expect(second).toHaveAttribute('class', first.className);
+  });
+  it('marks the actual loaded artifact when a named session serves an alias and its saved model changed', async () => {
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+    vi.mocked(api.sessionList).mockResolvedValue([{ id: 'work', name: 'Work', state: 'running', model: 'served-alias', execution: { active_model: 'b.gguf' } }]);
+    mount();
+    const second = (await findModelButton('b.gguf')).closest('[role="listitem"]') as HTMLElement;
+    expect(await within(second).findByText('Running')).toBeVisible();
+    expect(within(second).getByRole('button', { name: 'Delete: b.gguf' })).toBeDisabled();
   });
   it.each(['starting', 'stopping', 'stopped'] as const)('does not mark a %s default model as loaded', async state => {
     const base = createTestStore({ active_model: 'b.gguf' }); base.status = { state, model: 'a.gguf' };

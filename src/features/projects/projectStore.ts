@@ -208,31 +208,46 @@ export function readProjects(store: Storage | null = storage()): ProjectPreset[]
   return projects;
 }
 
-export function writeProjects(projects: ProjectPreset[], store: Storage | null = storage()): void {
-  if (!store) return;
+/** Publish only persisted state; an active-project change belongs to the same user operation. */
+export function writeProjects(projects: ProjectPreset[], store: Storage | null = storage(), activeId?: string | null): void {
+  if (!store) throw new Error('Project storage is unavailable.');
+  const contents = JSON.stringify(projects.slice(0, MAX_PROJECTS));
+  const previous = activeId === undefined ? undefined : store.getItem(PROJECTS_KEY);
+  let written = false;
   try {
-    store.setItem(PROJECTS_KEY, JSON.stringify(projects.slice(0, MAX_PROJECTS)));
-    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
-  } catch {
-    // Storage quota or restricted WebView must not break the chat client.
+    store.setItem(PROJECTS_KEY, contents);
+    written = true;
+    if (activeId !== undefined) {
+      if (activeId) store.setItem(ACTIVE_PROJECT_KEY, activeId);
+      else store.removeItem(ACTIVE_PROJECT_KEY);
+    }
+  } catch (cause) {
+    if (written && previous !== undefined) {
+      try {
+        if (previous === null) store.removeItem(PROJECTS_KEY);
+        else store.setItem(PROJECTS_KEY, previous);
+      } catch {
+        throw new Error(`${cause instanceof Error ? cause.message : String(cause)} The previous project list could not be restored.`);
+      }
+    }
+    throw cause;
   }
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
 }
 
 export function activeProjectId(store: Storage | null = storage()): string | null {
   if (!store) return null;
-  const value = store.getItem(ACTIVE_PROJECT_KEY);
-  return value?.trim() || null;
+  try {
+    const value = store.getItem(ACTIVE_PROJECT_KEY);
+    return value?.trim() || null;
+  } catch { return null; }
 }
 
 export function setActiveProjectId(id: string | null, store: Storage | null = storage()): void {
-  if (!store) return;
-  try {
-    if (id) store.setItem(ACTIVE_PROJECT_KEY, id);
-    else store.removeItem(ACTIVE_PROJECT_KEY);
-    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
-  } catch {
-    // best effort only
-  }
+  if (!store) throw new Error('Project storage is unavailable.');
+  if (id) store.setItem(ACTIVE_PROJECT_KEY, id);
+  else store.removeItem(ACTIVE_PROJECT_KEY);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(PROJECTS_CHANGED_EVENT));
 }
 
 export function projectFromConfig(

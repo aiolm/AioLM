@@ -5,6 +5,17 @@ const qwen = "Qwen3.8-Flash-Next-AD-4.27bpw-Q4_K_M-M64";
 
 describe("modelDisplayName", () => {
   it.each([
+    ['/synthetic/cache/models--example--Qwen-model/snapshots/' + 'a'.repeat(40), 'Qwen-model'],
+    ['C:\\cache\\models--example--model--variant\\snapshots\\' + 'b'.repeat(40) + '\\', 'model--variant'],
+    ['/synthetic/library/hf/example/gemma-model/snapshots/' + 'c'.repeat(40), 'gemma-model'],
+    ['/synthetic/models--example--Qwen-model/snapshots/not-a-revision', 'not-a-revision'],
+    ['/synthetic/ordinary/snapshots/' + 'a'.repeat(40), 'a'.repeat(40)],
+    ['/synthetic/cache/models--example--Qwen-model/snapshots/' + 'a'.repeat(40) + '/unknown.gguf', 'unknown.gguf'],
+    ['/synthetic/models/plain-model/', 'plain-model'],
+  ])('names immutable snapshots without mistaking local files or arbitrary directories for repositories: %s', (value, expected) => {
+    expect(modelDisplayName(value)).toBe(expected);
+  });
+  it.each([
     [`${qwen}-00001-of-00033`, qwen],
     [`C:\\models\\${qwen}-00001-of-00033.gguf`, `${qwen}.gguf`],
     [`/models/${qwen}-00033-of-00033.gguf`, `${qwen}.gguf`],

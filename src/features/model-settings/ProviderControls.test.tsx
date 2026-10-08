@@ -4,6 +4,7 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
 import * as api from '../../shared/api';
 import { ProviderOptions } from './ProviderControls';
+import { providerTelemetryCopy } from './providerTelemetry';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -86,5 +87,62 @@ describe('runtime-specific option controls', () => {
     expect(screen.queryByLabelText(/^--max-model-len/)).not.toBeInTheDocument();
     expect(screen.getByText('max_model_len')).toBeVisible();
     expect(api.providerRuntimeOptions).toHaveBeenCalledWith('vllm', 'synthetic');
+  });
+
+  function telemetryControls(flags = ['--enable-prompt-tokens-details', '--enable-per-request-metrics'], accelerator = 'metal') {
+    vi.mocked(api.providerRuntimes).mockResolvedValue([{ provider: 'vllm', id: 'synthetic', engine: 'vllm', server: 'vllm',
+      accelerator, ...(accelerator === 'metal' ? { variant: 'vllm-metal' } : {}), installation: 'external', location: 'runtime', available: true,
+      problems: [], server_flags: flags }]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([
+      { key: 'enable_prompt_tokens_details', flag: '--enable-prompt-tokens-details', target: 'launch', group: 'metrics', kind: { type: 'flag' }, runtime_default: 'false' },
+      { key: 'enable_per_request_metrics', flag: '--enable-per-request-metrics', target: 'launch', group: 'metrics', kind: { type: 'flag' }, runtime_default: 'false' },
+    ]);
+  }
+
+  it('shows automatic supported telemetry without saving implicit values and allows an explicit opt-out', async () => {
+    telemetryControls();
+    const { onChange } = mount({ temperature: 0.2 });
+    const details = await screen.findByLabelText('--enable-prompt-tokens-details');
+    expect(screen.getAllByText(providerTelemetryCopy.en.hint)).toHaveLength(2);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(details);
+    expect(screen.getByRole('option', { name: providerTelemetryCopy.en.automatic })).toBeVisible();
+    fireEvent.click(screen.getByRole('option', { name: 'false' }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { vllm: { temperature: 0.2, enable_prompt_tokens_details: false } } });
+  });
+
+  it('keeps per-request telemetry at the runtime default when engine stats are explicitly disabled', async () => {
+    telemetryControls();
+    mount({ extra_args: ['--disable_log_stats'] });
+    const metrics = await screen.findByLabelText('--enable-per-request-metrics');
+    expect(screen.getAllByText(providerTelemetryCopy.en.hint)).toHaveLength(1);
+    fireEvent.click(metrics);
+    expect(screen.getByRole('option', { name: 'Runtime default' })).toBeVisible();
+    expect(screen.queryByRole('option', { name: providerTelemetryCopy.en.automatic })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['--enable-per-request-metrics', '--no-enable-per-request-metrics'],
+    ['--enable-per-request-metrics', '--no_enable_per_request_metrics'],
+    ['--enable-prompt-tokens-details', '--no-enable-prompt-tokens-details'],
+    ['--enable-prompt-tokens-details', '--no_enable_prompt_tokens_details'],
+  ])('keeps %s truthful when a standard runtime opts out with raw %s', async (flag, raw) => {
+    telemetryControls(['--enable-prompt-tokens-details', '--enable-per-request-metrics', raw.replace(/_/g, '-')], 'cuda');
+    const { onChange } = mount({ extra_args: [raw] });
+    const metrics = await screen.findByLabelText(flag);
+    expect(screen.getAllByText(providerTelemetryCopy.en.hint)).toHaveLength(1);
+    fireEvent.click(metrics);
+    expect(screen.getByRole('option', { name: 'Runtime default' })).toBeVisible();
+    expect(screen.queryByRole('option', { name: providerTelemetryCopy.en.automatic })).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not promise automatic telemetry when the selected runtime has not reported the flags', async () => {
+    telemetryControls([]);
+    mount({ enable_per_request_metrics: false });
+    const metrics = await screen.findByLabelText('--enable-per-request-metrics');
+    expect(screen.queryByText(providerTelemetryCopy.en.hint)).not.toBeInTheDocument();
+    fireEvent.click(metrics);
+    expect(screen.getByRole('option', { name: 'Runtime default' })).toBeVisible();
   });
 });

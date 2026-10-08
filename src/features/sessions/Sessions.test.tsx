@@ -57,6 +57,15 @@ describe("session model settings", () => {
     setSessionActivity("work", false);
     setSessionActivity("default", false);
   });
+  it('names the loaded snapshot from execution rather than the served alias or saved next model', async () => {
+    mocked.isNativeRuntimeAvailable.mockReturnValue(true);
+    const path = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
+    mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'Work session', state: 'running', model: 'served-alias', execution: { active_model: path } }]);
+    renderPanel();
+    expect(await sessionRow().findByText('Qwen-model')).toBeVisible();
+    expect(sessionRow().queryByText('served-alias')).not.toBeInTheDocument();
+    expect(sessionRow().queryByText('work.gguf')).not.toBeInTheDocument();
+  });
   it('names the running Python engine even when the saved session had a llama build', async () => {
     mocked.isNativeRuntimeAvailable.mockReturnValue(true);
     mocked.providerRuntimes.mockResolvedValue([{ provider: 'vllm', id: 'synthetic-metal', version: '0.30.0+cpu', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal', installation: 'managed' }]);

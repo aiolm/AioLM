@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
-import { activeProjectId, PROJECTS_CHANGED_EVENT, readProjects } from "../projects/projectStore";
-import type { DocumentAttachment } from "./chatUtils";
 import type { AppPreferences } from "../../shared/config/preferences";
 import { useI18n } from "../../shared/i18n/i18n";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
@@ -34,6 +32,11 @@ import { embeddingTargetCopy } from './embeddingTargetCopy';
 import { canPrepareAttachment } from './mediaPreprocessing';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
 import { chatTemplateCopy } from './chatTemplateCopy';
+import { loadedModelPath } from '../../shared/runtime/loadedModel';
+import { useProjectChatBinding } from './useProjectChatBinding';
+import { projectChatBindingCopy } from './projectChatBindingCopy';
+import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import PanelFeedback from '../../shared/ui/PanelFeedback';
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -45,7 +48,6 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const [composerRevision, setComposerRevision] = useState(0);
   const [copiedMessage, showCopied] = useFlashMessage(1800);
   const copied = copiedMessage === null ? null : Number(copiedMessage);
-  const [activeProjectName, setActiveProjectName] = useState<string | null>(null);
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState("default");
@@ -55,6 +57,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const [startingSession, setStartingSession] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
+  const scrollViewportRef = useRef<{ width: number; height: number } | null>(null);
 
   // The shared poller also refreshes on session status changes, and serves an
   // open model settings dialog from the same session_list request.
@@ -100,7 +103,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, modalities,
     audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: videoFrames && visionReady,
     setError: (message) => setError(message) });
-  const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools({ setError: (message) => setError(message) });
+  const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools();
 
   const skills = useChatSkills();
 
@@ -123,13 +126,13 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
-  } = useChatThreads({ phase, requireIdle, onSwitchThread: resetComposer });
+  } = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null, requireIdle, onSwitchThread: resetComposer });
 
   const baseUrl = serverOn && selectedStatus.url ? selectedStatus.url : null;
   const apiKey = serverOn ? selectedStatus.api_key ?? "" : "";
   const targetConfig = store.cfg && selectedDefinition ? sessionConfig(store.cfg, selectedDefinition) : store.cfg;
   const configuredModel = selectedDefinition?.models.primary_model ?? (selectedSessionId === "default" ? store.cfg?.active_model ?? "" : selectedStatus.model ?? "");
-  const model = serverOn ? selectedStatus.model || configuredModel : selectedSessionId === 'default' ? '' : configuredModel;
+  const model = serverOn ? loadedModelPath(selectedStatus, configuredModel) : selectedSessionId === 'default' ? '' : configuredModel;
   const effectiveConfig = targetConfig
     ? modelSettings?.getRequestConfig(selectedSessionId, targetConfig, selectedStatus)
       ?? { ...targetConfig, ...(serverOn ? selectedStatus.execution : {}), active_model: model }
@@ -183,44 +186,34 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const applyActiveProjectBinding = () => {
-      const id = activeProjectId();
-      const project = id ? readProjects().find((item) => item.id === id) : null;
-      setActiveProjectName(project?.name ?? null);
-      if (!project || phase !== "idle") return;
-      setWorkspace((current) => ({
-        ...current,
-        threads: current.threads.map((thread) => thread.id === current.activeThreadId
-          ? { ...thread, systemPrompt: project.systemPrompt, updatedAt: Date.now() }
-          : thread),
-      }));
-      setSelectedMcpTools(project.toolIds);
-      void Promise.all(project.documentBindings.slice(0, 4).map(async (binding) => {
-        try {
-          return { name: binding.name, path: binding.path, text: await api.readDocumentBinding(binding.path) };
-        } catch {
-          return null;
-        }
-      })).then((loaded) => {
-        if (!cancelled) setDocuments(loaded.filter((document): document is DocumentAttachment => document !== null));
-      });
-    };
-    applyActiveProjectBinding();
-    window.addEventListener(PROJECTS_CHANGED_EVENT, applyActiveProjectBinding);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(PROJECTS_CHANGED_EVENT, applyActiveProjectBinding);
-    };
-  }, [phase, workspace.activeThreadId, composerRevision, setDocuments, setSelectedMcpTools, setWorkspace]);
+  const {
+    projectName: activeProjectName, documentsLoading: projectDocumentsLoading,
+    documentsError: projectDocumentsError, retryDocuments: retryProjectDocuments,
+  } = useProjectChatBinding({ workspace, setWorkspace, documents, setDocuments,
+    setSelectedTools: setSelectedMcpTools, composerRevision, phase,
+    hasPendingTurn: pendingToolCall !== null, locale });
+  const projectCopy = projectChatBindingCopy[locale];
 
   const incompatibleMedia = attachments.some(attachment => {
     return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);
   });
   const chatSupported = selectedStatus.engine?.chat_supported !== false;
-  const canSend = serverOn && chatSupported && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const canSend = serverOn && chatSupported && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    scrollViewportRef.current = { width: element.clientWidth, height: element.clientHeight };
+    // Keep the latest reply in view when a window or composer changes size.
+    // A reader who scrolled into history retains their place.
+    const observer = new ResizeObserver(() => {
+      scrollViewportRef.current = { width: element.clientWidth, height: element.clientHeight };
+      if (atBottomRef.current) element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -330,7 +323,12 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         <div className="chat-conversation">
           <ChatMessageLog
             scrollRef={scrollRef}
-            onScrollAtBottomChange={(atBottom) => { atBottomRef.current = atBottom; }}
+            onScrollAtBottomChange={(atBottom) => {
+              const element = scrollRef.current;
+              const viewport = scrollViewportRef.current;
+              // Resizing can emit scroll before ResizeObserver restores the bottom.
+              if (!element || !viewport || (element.clientWidth === viewport.width && element.clientHeight === viewport.height)) atBottomRef.current = atBottom;
+            }}
             disabled={disabled}
             status={selectedStatus}
             model={model}
@@ -353,6 +351,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             starting={store.busy || startingSession}
           />
 
+          <PanelFeedback>
+            {mcpError && <FeedbackBanner tone="error">{mcpError}</FeedbackBanner>}
+            {projectDocumentsLoading && <FeedbackBanner tone="info">{projectCopy.loading}</FeedbackBanner>}
+            {projectDocumentsError && <FeedbackBanner tone="error" action={{ label: projectCopy.retry, onClick: retryProjectDocuments }}>{projectDocumentsError}</FeedbackBanner>}
+          </PanelFeedback>
           <ChatComposer
             locale={locale}
             contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, serverOn && !chatSupported ? chatTemplateCopy[locale] : null].filter(Boolean).join(' ') || null}
