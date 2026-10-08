@@ -16,6 +16,7 @@
 - 42절은 외부 snapshot의 명시된 모델 카드 제목을 공통 표시 이름으로 사용하는 수정 `27bcca1`과 실제 MLX 실행·기록 재로드·vLLM 복원 검증이다. 43절은 해당 소스의 DMG를 기록한다.
 - 44절은 최소 창에서 벤치마크 결과 열에 접근할 수 없던 공통 UI 수정 `142fac3`과 실제 키보드·버튼·창 복원 검증이다. 45절은 해당 소스의 DMG를 기록한다.
 - 46절은 잠금 해제 후 네이티브 검증 재개, 이전 검증 서버 정리, 작업 알림이 본문 버튼을 가리는 결함 수정 `eb2d037`의 실제 재검증이다. 47절은 해당 소스의 DMG를 기록한다.
+- 48절은 같은 제품 소스로 Chat 화면 전환·최소 창의 전역 MCP 승인 대기 취소와 알림 키보드 동작을 추가 검증한 기록이다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -888,3 +889,23 @@ production GUI는 실행하지 않았고 Developer ID·공증·자연스러운 F
 패키징 후 실제 CUA native Chat 화면을 다시 확인했다. `goal-native-audio-resume-orbit109-postpackage-eb2d037-20261009.json`/PNG와 `goal-layout-orbit109-postpackage-preservation-eb2d037-20261009.json`의 9개 조건에서 config 전체 hash/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model·세션 실행값·MCP 정의·API off·idle·빈 composer·관측 error/overlay0과 잠금 해제된 실제 화면을 확인했다. 기존 응답·PP/TG 재표시이며 새 추론 성공으로 설명하지 않는다.
 
 production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다. 46절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 48. Chat 최소 창의 전역 MCP 취소와 알림 키보드 동작
+
+`fb90764`에서 제품 코드 변경 없이 `eb2d037`의 공통 activity 배치를 실제 native debug 앱에서 추가 검증했다. 새 dependency·lockfile·기본값·프로필·engine/API/benchmark 계약 변경은 없다. 47절의 패키지 제품 소스와 같다. 최신 네이티브 상태를 먼저 확보하지 않은 첫 CUA 호출은 중단됐다. 현재 상태를 얻고 계속했다.
+
+합성 서버는 46절에서 보존한 disabled 정의를 UI로 선택·활성화·저장하여 사용했다. 조회 후 hold 도구의 합성 인자를 검토하고 앱의 승인 버튼으로 실제 시스템 승인 대기에 진입했다. `goal-native-mcp-orbit110-pending-before-navigation-20261009.json`에서 별도 승인 owner 1개와 실제 initialize/tools/list, tools/call 0을 확인했다. No/Yes를 조작하지 않았으며 이후 취소 결과를 실제 호출 중 취소로 계산하지 않는다.
+
+| 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 화면 전환과 전역 취소 | pass | 시스템 승인 대기 중 CUA로 MCP→Chat 이동. 실제 desktop에서 전역 Cancel과 원래 ORBIT-84 내용·실행 모델·입력 영역이 보였다. 최소 native 360×520 / WKWebView 360×488에서도 전역 Cancel은 hit=true, top=390px/bottom=422px로 접근 가능했고 승인 owner도 여전히 1개였다. `goal-native-mcp-orbit110-chat-minimum-before-scroll-20261009.json`/PNG. |
+| 최소 Chat 본문의 입력 접근 | pass | 본문 client 225/scroll 394px에서 CUA로 스크롤했다. scrollTop=169px에 도달하여 textarea·Attach file·Send message·전역 Cancel 모두 hit=true였다. 입력은 enabled이며 전송은 빈 composer에 따라 disabled인 정상 상태다. 새로운 입력 전송·추론 성공을 검증한 것은 아니다. `goal-native-mcp-orbit110-chat-minimum-after-scroll-20261009.json`/PNG. |
+| 승인 대기 중 Chat 전역 취소·cleanup | pass | CUA로 Chat의 전역 Cancel을 클릭해 즉시 Cancelled 표시를 확인했다. 이후 승인 owner가 부재하고, 이번 조회와 호출 대기가 각각 만든 root/child의 소유 PID 총 4개가 모두 부재·tools/call 0이었다. MCP로 돌아오면 보존된 `Done / Cancelled` 알림이 표시됐다. `goal-native-mcp-orbit110-cancelled-20261009-v3.json`과 `goal-native-mcp-orbit110-cancelled-return-mcp-20261009.png`. |
+| 알림의 실제 키보드·본문 공간 | pass | summary를 포커스하고 Space로 열었다. 본문 bottom과 activity top은 652px, focusedSummary=true/open=true였다. Escape로 접으면 높이 32px·경계 736px·focusedSummary=true/open=false였다. `goal-native-activity-orbit110-{space-open,escape-closed}-20261009.json`. |
+| 원래 상태·데이터 복원 | pass | 합성 서버를 UI로 다시 disabled 저장·알림 닫기·원래 Chat/1280×800 창 복원 후 `goal-layout-orbit110-preservation-20261009.json`의 14개 조건이 모두 통과했다. config 전체 hash/값·21개 profile library·39개 대화 목록/hash·localStorage·같은 running PID/engine/model·세션 실행값·기존 6개 MCP 정의가 동일하며 API off·idle·빈 composer·error/overlay0·activity hidden이다. 세션의 idle_seconds 증가만 구분했다. `goal-native-audio-resume-orbit110-{baseline,final}-20261009.json`/PNG. |
+
+취소 직후 실제 CUA 상태는 Cancelled였지만 읽기 전용 첫 후속 helper가 돌아올 때는 기존 6초 자동 정리 규칙에 따라 완료 작업 행이 사라졌다. 첫 두 helper의 cancelled=false를 제품 실패로 세지 않았다. 실제 CUA 취소 결과·반환된 MCP 취소 알림·프로세스 부재로 최종 근거를 보완했고 원본 helper 기록도 유지했다. 이 규칙·시간 제한을 변경하거나 실제 tools/call을 가짜로 생성하지 않았다.
+
+조작은 CUA, WebDriver는 읽기 전용 상태·geometry·캡처 관측이다. 실제 화면의 내용·페이지 identity·프레임워크 overlay 없음·관측 error 0과 상호작용을 확인했으며 전체 DevTools console·VoiceOver 검증으로 확대하지 않는다. 제품 소스가 같아 공통 자동 검사나 패키징을 반복하지 않았다. 새로운 모델·대화·프로필·외부 환경을 만들거나 변경하지 않았다.
+
+실제 네이티브 No/Yes 조작, Yes→tools/call→모델 후속 응답과 실제 호출 중 취소는 여전히 blocked다. 별도 승인 owner를 자동 UI 도구가 선택하지 못하며 46절의 No 사용자 확인도 아직 없다. 트레이/Dock·OS 알림 수신의 blocked와 별도 계정·Finder·Keychain·upgrade·Intel/구형 macOS의 unrun, 기존 모델 내용 실패·upstream 제한을 유지한다. **전체 목표·M01–M12 완료를 증명하지 않는다.** raw·캡처·fixture는 ignored tmp에 보존했고 원격 push는 수행하지 않았다.
