@@ -14,6 +14,7 @@
 - 38절은 종료 이유 보존·출력 한도 안내 수정 `55606fd`와 실제 vLLM 부분 응답·재로드·다음 정상 응답·기존 실행 복원을, 39절은 해당 소스의 DMG를 기록한다.
 - 40절은 런타임 옵션 확인 중 프로필·저장값 보호 수정 `a294062`와 요청 전용 프로필의 재시작 없는 왕복 검증이다. 41절은 해당 소스의 DMG를 기록한다.
 - 42절은 외부 snapshot의 명시된 모델 카드 제목을 공통 표시 이름으로 사용하는 수정 `27bcca1`과 실제 MLX 실행·기록 재로드·vLLM 복원 검증이다. 43절은 해당 소스의 DMG를 기록한다.
+- 44절은 최소 창에서 벤치마크 결과 열에 접근할 수 없던 공통 UI 수정 `142fac3`과 실제 키보드·버튼·창 복원 검증이다. 45절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -49,6 +50,8 @@
 | `55606fd` | 토큰 한도로 잘린 응답을 완료로 표시하고 종료 이유를 기록에서 잃었다. 종료 이유를 보존하고 부분 응답 안내·완료 알림 억제·잘린 도구 요청의 승인 방지를 공통 Chat 계층에 적용한다. | 실제 vLLM length→재로드→다음 stop 응답, 합성6개 회귀·공통 UI1767 tests. 38절 참조. |
 | `a294062` | 옵션 확인 대기를 잘못된 값·미저장 편집으로 취급하고 아직 조회하지 못한 옵션의 삭제를 제안했다. 확인 중 상태와 오류를 분리하고 schema 실패를 값 재검증으로 지우지 않는다. | 실제 native pending·잘못된 입력·복원, 합성6개 회귀·공통 UI1773 tests. 40절 참조. |
 | `27bcca1` | 외부 snapshot의 응답·실행 모델명이 revision 해시로만 표시됐다. 로컬 카드의 명시된 제목을 제한적으로 읽고 공통 표시 계층에 적용한다. 모델 경로·provenance·호환성은 바꾸지 않는다. | 실제 MLX 실행·새 부분 응답·다른 엔진 실행 중 기존 기록 재로드, Rust 2개/UI 6개 회귀·공통 UI1779 tests. 42절 참조. |
+
+| `142fac3` | 최소 WKWebView에서 PP·TG·메모리 열이 가려지고 포커스한 표의 방향키도 가로 위치를 이동하지 않았다. 공통 표의 열 이동 버튼·방향키·Home/End와 넘침 감지를 추가했다. | 실제 세 결과 표의 독립 이동·desktop 복원·28개 보존 조건, 합성9개 회귀·공통 UI1788 tests. 44절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -814,3 +817,36 @@ schema 조회 오류를 값 검증·import·preview 오류와 분리했다. 다�
 생성 후 실제 CUA Chat 화면과 `goal-native-audio-model-card-orbit105-postpackage-27bcca1-20261008.json`/PNG, `goal-model-card-orbit105-postpackage-preservation-27bcca1-20261008.json`의 8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/해시·localStorage·동일한 running Qwen PID/engine/model/execution·MCP 정의·API off·idle·빈 composer·render error/overlay0을 재확인했다. 기존 답변과 지표의 재표시이며 새 추론 결과는 아니다.
 
 production GUI는 실행하지 않았고 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 결과도 추정하지 않는다. 42절의 수정·패키지 통과를 **전체 M01–M12 통과**로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 44. 좁은 창의 벤치마크 결과 열 접근과 공통 UI 수정
+
+`5c528b2`의 실제 native debug 앱에서 기존 vllm-metal 0.30.0·Qwen2.5-0.5B-Instruct-4bit 벤치마크 이력을 열고 native 360×520 / WKWebView 360×488로 줄였다. 현재 실행 중인 Qwen3 모델과 이력의 Qwen2.5 모델은 구분했다. 단일 표는 326px 안에 955px, 동시 표는 1174px의 열을 담고 있었고 PP·TG·RAM이 오른쪽에 가려졌다. 표를 클릭해 포커스한 뒤 Right를 눌러도 scrollLeft=0이었다. 데이터 누락·계산 실패와 구분한 제품 UI 결함이다. 수정 전 캡처 `goal-native-audio-layout-orbit106-table-before-20261008.json`/PNG와 기대한 가로 이동이 0으로 실패한 `logs/goal-layout-orbit106-keyboard-regression-before-fixed-20261008.log`를 보존했다.
+
+`142fac3`은 엔진과 무관한 `BenchmarkTableScroll`을 단일·동시·공개 미리보기 표에 적용한다. 실제 넘침이 있을 때만 이전/다음 열 버튼과 키보드 설명을 제공하며 끝에서 버튼을 비활성화한다. 해당 영역의 Left/Right·Home/End만 처리하고 셀 내부 control·modifier shortcut·세로 방향키는 보존한다. container/table ResizeObserver와 창 resize·내용 변경을 다시 측정하고 listener를 정리한다. 네 언어의 접근성 이름·설명을 제공한다. 결과 행·PP 추정 방법·TG·usage·공개 schema·이력·프로필·runtime lifecycle·request/IPC 계약은 바꾸지 않았다.
+
+| 실행 범위 | 상태 | 근거와 결과 |
+| --- | --- | --- |
+| 단일 표의 키보드·버튼 | pass | CUA native click/Right로 0→244px, End로 629px, Home으로 0px를 확인했다. 다음 버튼 두 번은 488px, 끝은 629px, 이전 버튼은 384px로 돌아왔다. 마지막 메모리 238.5 MiB가 보이며 끝에서 다음 버튼이 비활성화된다. `goal-layout-orbit106-{arrow-right,end,home,next-buttons,previous-button}-20261008.json`과 대응 PNG가 근거다. |
+| 동시 표의 독립 이동 | pass | 단일 표의 384px·미리보기의 0px를 유지하며 동시 표만 다음 버튼으로 244px, End로 848px까지 이동했다. 마지막 230.3 MiB와 비활성화된 다음 버튼을 확인했다. `goal-layout-orbit106-{batch-next,batch-end}-20261008.json`/PNG가 근거다. |
+| 공개 미리보기 열 접근 | pass | CUA End로 595px, 이전 버튼으로 377px로 이동했다. 실제 화면에서 기존 PP 추정 1051.2/1430.0과 TG108.7/181.6·처리량98.9/163.1을 확인했다. `goal-layout-orbit106-{preview-end,preview-visible,preview-previous}-20261008.json`/PNG가 근거다. Publish는 누르지 않았으며 업로드하지 않았다. |
+| 넓은 창·페이지 가로 넘침 | pass | native 1280×800 / WKWebView 1280×768로 CUA drag 복원했다. 단일 표 1006px와 미리보기 970px는 전부 맞아 이동 버튼이 사라지고, 1006px를 넘는 동시 표만 버튼을 유지했다. 최소 창의 document 폭은 360px, desktop은 1280px다. `goal-layout-orbit106-desktop-20261008.json`/PNG가 근거다. |
+| 실행·설정·이력 보존 | pass | 기존 Chat ORBIT-84로 돌아왔다. `goal-layout-orbit106-preservation-audit-20261008.json`의 28개 조건에서 config 전체 hash/값·39개 대화 파일 목록/hash·21개 profile·localStorage·동일 running PID/engine/model/execution·API off·idle·빈 composer·render error/overlay0을 확인했다. 모든 관측의 세 표 결과 문자열도 같다. 새 추론·프로필·대화를 만들지 않았다. |
+
+Frontend HMR가 연결된 기존 실제 Tauri WKWebView에서 검사했다. UI 조작은 CUA이고 WebDriver는 읽기 전용 DOM·상태·geometry·캡처 관측이다. Browser plugin은 없으며 일반 브라우저로 Tauri를 대체하지 않았다. 페이지 identity·유의미한 내용·overlay 없음·관측 error0·캡처·상호작용을 확인했지만 DevTools 전체 console이나 VoiceOver의 별도 검증으로 확대하지 않는다. `goal-layout-orbit106-committed-source-20261008.json`의 수정 7개 파일 hash는 커밋과 일치한다.
+
+타입·lint·전체 unit·frontend build는 각각 12.34s·7.80s·129.65s·13.46s, 종료0이다. `logs/goal-layout-orbit106-{typecheck,lint,unit,build}-20261008.log`에 계약/direct/script·UI179 files/1788 tests·coverage statements80.67 / branches75.56 / functions79.08 / lines84.80%를 기록했다. 관련 4 files/54 tests와 추가된 9개 회귀가 통과했다. 최초 회귀의 중복 region selector와 수정 후 fixture에서 TTFT/TG 값이 같은 중복 text assertion을 좁혀 최종 검사했다. 실패 로그를 덮어쓰지 않았다. 보존 감사의 최초 helper는 첫 geometry 관측에 수집하지 않은 title을 읽다 중단했으며, 수집된 10개 page identity와 11개 geometry 관측을 구분해 최종 감사했다. jsdom의 기존 미구현 진단과 frontend chunk 경고는 유지한다. Rust/Python 제품 소스는 이번에 변경하지 않았다.
+
+이 수정은 [교체 가능한 런타임 설계](pluggable-inference-runtimes.ko.md)의 공통 UI 경계를 따른다. 개인 엔진 registry·manifest·adapter 등록은 아직 구현되지 않았다. 원래 M03/M04/M07 실제 실패·upstream 오류, MCP 실제 승인 후 호출·트레이/Dock·OS 알림 수신의 blocked, 별도 계정·Finder·Keychain·upgrade·Intel/구형 macOS의 unrun은 유지한다. 전체 M01–M12가 통과한 것으로 표시하지 않는다. raw·캡처·관측 도구는 ignored tmp에 보존했고 원격 push는 수행하지 않았다.
+
+## 45. 벤치마크 열 접근 수정 소스 `142fac3`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `142fac30e2d87d9d316c8641b1ae4baee28e02a1`의 CLI·frontend·GUI·DMG를 생성했다. `logs/goal-layout-orbit106-package-142fac3-20261008.log`, `logs/goal-native-table-scroll-inspect-package-142fac3-20261008.log`, `goal-native-table-scroll-package-142fac3-results.json`이 근거다. 빌드220.11s·검사5.67s 모두 종료0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16776734 bytes, SHA256 `56c83ea82a3911aa5c711f0b88396b220cc7d76e2bc2cd379435ed1e56f8e52f`.
+- GUI `aiolm`: arm64, SHA256 `6f0e084a090d80d46746f214545467f0c31f318d484606c16b5c4ef54f02d765`.
+- CLI `aiolm-cli`: arm64, SHA256 `77bcee63a720b0d1e82d0a403ba7b0c0441685ce5650c6a623b5389e3a8a62b1`.
+- GUI·CLI와 빌드 앱의 해시 일치, 일반 파일5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE 개인 home/repository 경로와 검증 fixture 표식 일치0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료0을 확인했다. 같은 해시의 DMG는 `goal-package-142fac3/`에 보존했다.
+
+생성 후 `goal-native-audio-layout-orbit106-postpackage-142fac3-20261008.json`/PNG와 `goal-layout-orbit106-postpackage-preservation-142fac3-20261008.json`의 읽기 전용 앱 관측8개 조건에서 최종 복원 이후 config 전체 SHA256/값·39개 대화 목록/hash·localStorage·동일 running Qwen PID/engine/model/execution·API off·idle·빈 composer·관측 render error/overlay0을 확인했다. 기존 응답·지표이며 새 추론은 아니다. **패키징 이후의 마지막 CUA 네이티브 화면 재확인은 Mac 잠금으로 blocked**다. CUA가 수동 잠금 해제를 요구했고 사용자에게 요청했다. 내부 getter·WKWebView 캡처를 네이티브 화면 재확인 성공으로 계산하지 않는다. 44절의 잠금 전 실제 CUA 검증은 별도 근거다.
+
+production GUI는 실행하지 않았고 Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이다. Intel/구형 macOS 결과도 추정하지 않는다. 이번 수정·패키지 통과를 전체 M01–M12 통과로 확대하지 않는다. 개인 엔진 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
