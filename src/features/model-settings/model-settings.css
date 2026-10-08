@@ -80,10 +80,14 @@
 }
 @media (max-height: 650px) {
   .model-settings-header { padding-block: 8px; }
+  /* Expanded metadata must not displace the editor below its clipped parent.
+     Scroll the information independently while keeping Close in reach. */
+  .model-settings-header > div { max-height: 25dvh; overflow-y: auto; overscroll-behavior: contain; }
+  .model-settings-header .model-metadata-fields { max-block-size: none; overflow: visible; }
   .model-settings-header .model-badges { max-height: 60px; overflow: auto; }
   /* Native title bars reduce the minimum window's usable height. Keep wrapped
      profile actions and setup notices scrollable without consuming the editor. */
-  .model-settings-context { padding-block: 8px; max-height: 120px; overflow-y: auto; }
+  .model-settings-context { padding-block: 8px; max-height: min(120px, 40%); overflow-y: auto; }
   .model-settings-footer { padding-block: 8px; max-height: 20%; }
 }
 .model-settings-profile-status { display: grid; gap: 0.25rem; margin-block: 0.6rem 1.1rem; font-size: var(--ui-text-support); color: var(--ui-muted); overflow-wrap: anywhere; }
