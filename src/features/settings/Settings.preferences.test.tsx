@@ -12,7 +12,7 @@ vi.mock("../../shared/lib/notifications", () => ({
   sendTestNotification: vi.fn(),
 }));
 
-const mount = (preferences: AppPreferences = defaultPreferences(), locale: "en" | "ko" = "en") => {
+const mount = (preferences: AppPreferences = defaultPreferences(), locale: AppPreferences["locale"] = "en") => {
   const update = vi.fn();
   render(<I18nProvider initialLocale={locale}><SettingsPanel preferences={preferences} update={update} reset={vi.fn()} /></I18nProvider>);
   return update;
@@ -70,7 +70,7 @@ describe("notification preferences", () => {
   });
   afterEach(() => vi.clearAllMocks());
 
-  it("reads permission without prompting and asks only from the Allow button", async () => {
+  it("reads notification access and requests it explicitly from the Allow button", async () => {
     mount();
     expect(notifications.getNotificationPermission).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("tab", { name: "Notifications" }));
@@ -79,13 +79,36 @@ describe("notification preferences", () => {
     expect(screen.getByRole("button", { name: "Send test notification" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Allow notifications" }));
-    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(await screen.findByText("Ready to send")).toBeInTheDocument();
     expect(notifications.requestNotificationPermission).toHaveBeenCalledTimes(1);
-    // Desktop permission cannot see OS-level muting, so the hint stays visible.
-    expect(screen.getByText(/managed in your system notification settings/)).toBeInTheDocument();
+    // Submission readiness cannot confirm system approval or alert display.
+    expect(screen.getByText(/Your system may ask for permission on the first notification, including a test/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Send test notification" }));
-    expect(await screen.findByText(/Test notification sent/)).toBeInTheDocument();
+    expect(await screen.findByText(/Test notification submitted to the system/)).toBeInTheDocument();
+  });
+
+  it.each([
+    { locale: "en", tab: "Notifications", ready: "Ready to send", oldGranted: "Allowed", firstPrompt: "Your system may ask for permission on the first notification, including a test", send: "Send test notification", submitted: "Test notification submitted to the system." },
+    { locale: "ko", tab: "알림", ready: "전송 가능", oldGranted: "허용됨", firstPrompt: "시스템이 테스트를 포함한 첫 알림에서 권한을 물을 수 있으며", send: "테스트 알림 보내기", submitted: "시스템에 테스트 알림 전송을 요청했습니다." },
+    { locale: "ja", tab: "通知", ready: "送信可能", oldGranted: "許可済み", firstPrompt: "テストを含む最初の通知でシステムが許可を求める場合があり", send: "テスト通知を送信", submitted: "システムにテスト通知の送信を依頼しました。" },
+    { locale: "zh", tab: "通知", ready: "可发送", oldGranted: "已允许", firstPrompt: "系统可能在首次通知（包括测试通知）时请求权限", send: "发送测试通知", submitted: "已向系统提交测试通知。" },
+  ] as const)("describes available notification submission without claiming system approval in $locale", async (copy) => {
+    vi.mocked(notifications.getNotificationPermission).mockResolvedValue("granted");
+    const update = mount(defaultPreferences(), copy.locale);
+    fireEvent.click(screen.getByRole("tab", { name: copy.tab }));
+    expect(await screen.findByText(copy.ready)).toBeInTheDocument();
+    expect(screen.queryByText(copy.oldGranted)).not.toBeInTheDocument();
+    expect(screen.getByText((text) => text.includes(copy.firstPrompt))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow notifications" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: copy.send }));
+    expect(await screen.findByText((text) => text.startsWith(copy.submitted))).toBeInTheDocument();
+    expect(notifications.sendTestNotification).toHaveBeenCalledTimes(1);
+    expect(notifications.requestNotificationPermission).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("switch")).toHaveLength(3);
+    for (const category of screen.getAllByRole("switch")) expect(category).toHaveAttribute("aria-checked", "false");
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("reports test failures without raw error details", async () => {
@@ -100,7 +123,7 @@ describe("notification preferences", () => {
 
     vi.mocked(notifications.sendTestNotification).mockResolvedValueOnce(false);
     fireEvent.click(screen.getByRole("button", { name: "Send test notification" }));
-    expect(await screen.findByText("Notifications are not allowed, so nothing was sent.")).toBeInTheDocument();
+    expect(await screen.findByText("No test notification was submitted. Check your system notification settings and try again.")).toBeInTheDocument();
   });
 
   it("explains blocked notifications and offers a recheck instead of a prompt", async () => {
@@ -111,7 +134,7 @@ describe("notification preferences", () => {
     expect(screen.queryByRole("button", { name: "Allow notifications" })).not.toBeInTheDocument();
     vi.mocked(notifications.getNotificationPermission).mockResolvedValue("granted");
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
-    expect(await screen.findByText("Allowed")).toBeInTheDocument();
+    expect(await screen.findByText("Ready to send")).toBeInTheDocument();
     expect(notifications.requestNotificationPermission).not.toHaveBeenCalled();
   });
 

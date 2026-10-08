@@ -52,10 +52,10 @@ type NotificationFeedback = { tone: "success" | "warning" | "error"; message: st
 const permissionTone = { granted: "success", denied: "danger", default: "neutral", unavailable: "neutral" } as const;
 
 /**
- * Permission is only read here; the operating system is asked solely from the
- * Allow button, never on startup or in the background. Categories stay
- * editable even where notifications are unavailable, so the choice is kept
- * for the desktop app.
+ * Reading notification access does not submit an alert. The operating system
+ * may also ask for permission when a test or an enabled category submits one.
+ * Categories stay editable even where notifications are unavailable, so the
+ * choice is kept for the desktop app.
  */
 function NotificationSettings({ preferences, patch }: { preferences: AppPreferences; patch: (next: Partial<AppPreferences>) => void }) {
   const { locale } = useI18n();

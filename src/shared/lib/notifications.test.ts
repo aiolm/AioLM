@@ -86,11 +86,16 @@ describe("notification permission", () => {
 });
 
 describe("sendTestNotification", () => {
-  it("submits a localized sample even with every category off", async () => {
-    savePrefs({}, "ko");
+  it.each([
+    { locale: "en", title: "AioLM test notification", body: "This is a test notification from AioLM." },
+    { locale: "ko", title: "AioLM 테스트 알림", body: "AioLM에서 보낸 테스트 알림입니다." },
+    { locale: "ja", title: "AioLMのテスト通知", body: "AioLMからのテスト通知です。" },
+    { locale: "zh", title: "AioLM 测试通知", body: "这是来自 AioLM 的测试通知。" },
+  ] as const)("submits a sample without claiming future alerts while every category is off in $locale", async (copy) => {
+    savePrefs({}, copy.locale);
     const sent = plugin(true);
     await expect(sendTestNotification()).resolves.toBe(true);
-    expect(sent).toEqual([{ title: "알림이 켜져 있습니다", body: "작업이 끝나면 AioLM이 여기에서 알려 드립니다." }]);
+    expect(sent).toEqual([{ title: copy.title, body: copy.body }]);
   });
 
   it("returns false without sending when permission is not granted", async () => {
