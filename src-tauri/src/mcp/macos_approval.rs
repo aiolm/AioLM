@@ -6,6 +6,7 @@
 
 use crate::procutil::TransientChild;
 use std::process::Stdio;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 const SCRIPT: &str = r#"ObjC.import('AppKit');
@@ -19,8 +20,12 @@ function run(args) {
     alert.addButtonWithTitle('No');
     alert.addButtonWithTitle('Yes');
     app.activateIgnoringOtherApps(true);
-    if (alert.runModal !== $.NSAlertSecondButtonReturn) {
-        throw new Error('MCP approval rejected');
+    const response = alert.runModal;
+    if (response === $.NSAlertFirstButtonReturn) {
+        return 'rejected';
+    }
+    if (response !== $.NSAlertSecondButtonReturn) {
+        throw new Error('Unexpected MCP approval response');
     }
     return 'approved';
 }"#;
@@ -40,13 +45,37 @@ pub(super) async fn confirm(title: &str, description: &str) -> Result<bool, Stri
 }
 
 async fn answer(mut command: Command) -> Result<bool, String> {
+    command.stdout(Stdio::piped());
     let mut child = TransientChild::spawn(&mut command)
         .map_err(|error| format!("cannot open MCP tool approval: {error}"))?;
-    let status = child
-        .wait()
-        .await
+    // Only the dialog's explicit answer can approve or reject. A scripting
+    // failure must reach the caller as an error, not as a user's No choice.
+    // Bound the reply while retaining the cancellable process-tree owner.
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("captured approval reply")
+        .take(32);
+    let mut reply = Vec::new();
+    let read_reply = async {
+        stdout.read_to_end(&mut reply).await?;
+        if reply.len() == 32 {
+            return Err(std::io::Error::other("approval reply exceeded its limit"));
+        }
+        Ok(())
+    };
+    let (status, ()) = tokio::try_join!(child.wait(), read_reply)
         .map_err(|error| format!("cannot read MCP tool approval: {error}"))?;
-    Ok(status.success())
+    if !status.success() {
+        return Err(format!(
+            "MCP tool approval failed ({status}); tool was not run"
+        ));
+    }
+    match reply.as_slice() {
+        b"approved\n" => Ok(true),
+        b"rejected\n" => Ok(false),
+        _ => Err("MCP tool approval returned an invalid answer; tool was not run".into()),
+    }
 }
 
 #[cfg(test)]
@@ -70,11 +99,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn only_an_explicit_success_approves() {
-        for (code, approved) in [(0, true), (1, false), (5, false)] {
+    async fn only_an_explicit_dialog_answer_approves_or_rejects() {
+        for (reply, approved) in [("approved", true), ("rejected", false)] {
             let mut command = crate::procutil::tokio_command("/bin/sh");
-            command.args(["-c", &format!("exit {code}")]);
+            command.args(["-c", &format!("printf '{reply}\\n'")]);
             assert_eq!(answer(command).await.unwrap(), approved);
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_exit_without_an_exact_answer_does_not_approve() {
+        for script in [
+            "exit 0",
+            "printf 'approved'",
+            "printf 'approved\\nextra'",
+            "printf 'unexpected\\n'",
+            "printf '%100s' 'approved'",
+        ] {
+            let mut command = crate::procutil::tokio_command("/bin/sh");
+            command.args(["-c", script]);
+            assert!(answer(command)
+                .await
+                .unwrap_err()
+                .contains("MCP tool approval"));
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_reply_does_not_wait_for_a_full_output_pipe() {
+        let mut command = crate::procutil::tokio_command("/bin/sh");
+        command.args(["-c", "while :; do printf 'unexpected answer\\n'; done"]);
+        let error = timeout(Duration::from_secs(5), answer(command))
+            .await
+            .expect("invalid output must end approval before its external deadline")
+            .unwrap_err();
+        assert!(error.contains("approval reply exceeded its limit"));
+    }
+
+    #[tokio::test]
+    async fn system_javascript_returns_the_expected_answer_protocol() {
+        // Exercise osascript's serialization without opening or operating UI.
+        for (reply, approved) in [("approved", true), ("rejected", false)] {
+            let mut command = crate::procutil::tokio_command("/usr/bin/osascript");
+            command.args([
+                "-l",
+                "JavaScript",
+                "-e",
+                "function run(args) { return args[0]; }",
+                "--",
+                reply,
+            ]);
+            assert_eq!(answer(command).await.unwrap(), approved);
+        }
+    }
+
+    #[tokio::test]
+    async fn dialog_failure_is_not_reported_as_user_rejection() {
+        for script in ["exit 1", "exit 5", "printf 'approved\\n'; exit 1"] {
+            let mut command = crate::procutil::tokio_command("/bin/sh");
+            command.args(["-c", script]);
+            let error = answer(command).await.unwrap_err();
+            assert!(error.contains("MCP tool approval"));
+            assert!(!error.contains("rejected by the user"));
         }
     }
 
