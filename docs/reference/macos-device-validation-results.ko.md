@@ -584,3 +584,36 @@ Discover에서 엔진 선택기의 라벨은 위에, 형식 라벨은 옆에 있
 - 원본과 같은 해시의 DMG를 `goal-package-e594c57/`에 보존했다. 이전 패키지·로그·모델은 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
 
 빌드 후 실제 CUA 화면과 `goal-native-dark-postpackage-e594c57.json`/PNG, `goal-native-discover-postpackage-preservation-e594c57.json`에서 원래 System 테마/Chat/창 크기·config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage 전체·같은 모델 프로세스의 running/API off/idle·렌더 오류0을 재확인했다. `goal-native-discover-dark-layout-committed-source-20261008.json`은 실제 배치 관측 파일의 source SHA256과 수정 커밋 두 파일의 정확한 일치를 확인한다. 29절의 남은 범위와 **전체 M01–M12 미통과** 상태를 유지한다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 31. 수동 MCP 호출의 진행·취소·결과 소유권
+
+수정 전 실제 WKWebView에서 `Approve and run once`를 누르면 검토 카드가 사라지고 대기 중 진행 표시·취소 버튼이 남지 않는 제품 결함을 재현했다. 합성 MCP 서버와 자식 프로세스는 Chat 이동 후에도 살아 있었고 기존 120초 네이티브 승인 제한 시간이 끝난 뒤 종료됐다. 앱은 탭 이동 때 패널을 숨겨 유지하므로 이 관측을 실제 component unmount나 성공한 취소로 기록하지 않는다. `goal-native-audio-mcp-orbit99-before-call-20261008.json`/PNG, `goal-native-mcp-orbit99-before-unmount-lifetime-20261008.json`, `goal-native-mcp-orbit99-before-deadline-cleanup-20261008.json`에 원본을 보존했다. 두 번째 대기 관측도 승인 제한 시간 종료로 끝났으며 취소 근거에서 제외한다.
+
+수정은 기존 `mcp_cancel_tool_call`과 선택적 call ID 계약을 사용한다. 호출별 UUID와 공통 task를 등록하고 MCP 화면에는 진행·로컬 취소, 숨겨진 다른 화면에는 공용 취소를 제공한다. 서버 선택/새 draft/실제 unmount는 해당 호출을 취소하며 이전 결과가 새 선택에 표시되지 않게 한다. 취소 전송 실패는 원래 대기가 끝나지 않았다면 재시도할 수 있고, 취소한 호출은 session approval로 기억하지 않는다. 승인 정책·native timeout·도구 RPC 계약·엔진 API는 변경하지 않았다. 개인 엔진 교체 방향에 맞춰 이 동작은 엔진 ID 분기 없이 공통 작업 계층에 남는다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 수정 전 취소·진행 UI | fail | 실제 승인 대기에서 control 부재와 소유 peer 생존을 재현했다. 기존 제한 시간의 정리를 취소 성공으로 바꾸지 않았다. |
+| 다른 화면의 공용 취소 | pass | 실제 MCP 승인 대기→Chat 이동→공용 Cancel→Cancelled. `goal-native-audio-mcp-orbit99-global-pending-20261008.json`/PNG와 `goal-mcp-orbit99-global-{pending,cancelled}-lifetime-20261008.json`. 취소 전 소유 peer 2개와 승인 프로세스 1개, 취소 후 peer EOF/close·각 PID/승인 PID 부재를 확인했다. 호출 준비 시작 약 37초 이내 정리이며 120초 deadline 정리가 아니다. |
+| 화면의 로컬 취소 | pass | 최종 위치의 진행 카드·Cancel이 실제 1280×800 화면 안에 표시됐다. `goal-native-audio-mcp-orbit99-local-visible-20261008.json`/PNG와 `goal-mcp-orbit99-local-visible{,-cancelled}-lifetime-20261008.json`. 실제 Cancel로 호출 준비 시작 약 30초 이내 소유 peer·승인 PID 부재와 Cancelled를 확인했다. 최초 위치의 footer 가림 관측도 남겼으며 최종 배치는 도구 목록 위에서 초점을 받는다. |
+| 서버 변경·실제 unmount·늦은 결과·취소 실패 재시도 | pass | 합성 component 회귀 검사 범위다. actual unmount를 단순한 탭 이동과 구분한다. 네이티브 서버 변경 여정 전체를 실행한 결과는 아니다. |
+| 승인 Yes/No 이후 실제 tools/call·모델 후속 응답 | blocked | 이 검사의 native approval owner를 CUA로 제어하지 못했다. fixture의 tools/call 시작/결과는 모두 0이다. 승인 대기 취소를 실제 tool 실행 중 취소·정상 결과·모델 후속 응답의 통과로 계산하지 않는다. |
+| 사용자 데이터·환경 복원 | pass | `goal-mcp-orbit99-restoration-20261008.json`, `goal-mcp-orbit99-existing-servers-verified-20261008.json`, `goal-native-audio-mcp-orbit99-restored-20261008.json`/PNG. 이번 검사 전과 같은 config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage·같은 running 모델 PID·API off·렌더 오류/overlay 0을 확인했다. 기존 두 서버 정의는 정확히 유지하고 추가한 합성 서버만 UI로 disabled 저장했다. |
+
+Lifetime observer의 listener는 제품이 소유한 port가 아니라 검사 관측용이다. 전체 14개 peer connection의 remote-end/closed·socketError=false를 먼저 확인한 뒤 관측기만 SIGTERM으로 종료했다. observer runner의 종료 -15는 이 명시적 검사 정리이며, `goal-mcp-orbit99-observer-stopped-20261008.json`에서 listener·PID 부재를 별도로 확인했다. 관측기 종료를 제품 정리 근거로 사용하지 않았다.
+
+`Mcp.calls.test.tsx`의 8개 회귀는 call ID/작업 소유권, 취소 결과 폐기, 숨겨진 패널의 공용 취소, 서버 선택, 실제 unmount, 전송 실패 재시도, 정상 결과와 취소한 session approval, 종료 후 늦은 취소 전송 실패를 검사한다. 마지막 경우는 최초 구현에서 종료된 task가 running으로 되살아나는 합성 실패를 재현해 settled guard로 수정했다. 관련 MCP/TaskStrip 4 files/29 tests는 종료 0이며 기존 경로·native payload 검사를 유지했다. 수정 전 최초 6개 회귀 실패 로그와 수정 후 로그, `goal-mcp-orbit99-late-cancel-response-before-20261008.log`의 1 fail/7 pass와 `goal-mcp-orbit99-late-response-related-final-20261008.log`를 모두 보존했다. 실제 승인 대기 취소 관측은 이 마지막 오류 응답 guard 추가 전이며, guard가 다루는 지연 실패 순서는 합성 검사 근거다. `TaskCancellation.test.tsx`라는 독립 파일은 존재하지 않아 command 인자 자체를 추가 검사 실행으로 계산하지 않는다.
+
+수정 소스는 `7afc07e5893020baa808fa2032001d63a35edf4a`다. `goal-mcp-orbit99-source-delta-20261008.json`과 `goal-mcp-orbit99-committed-source-20261008.json`에서 실제 관측 당시 소스와 마지막 합성 guard 차이, 최종 5개 파일과 커밋 바이트의 정확한 일치를 확인했다. `logs/goal-mcp-orbit99-settled-{typecheck,lint,unit,build}-20261008.log` 모두 종료 0이며 각각 14.30s·8.66s·134.61s·17.75s다. 전체 UI 174 files/1741 tests, coverage 80.41/75.26/78.89/84.52%다. jsdom pseudo-element/canvas 진단과 500kB chunk 경고는 유지한다. Rust/Python·lockfile은 변경하지 않았다. 마지막 guard 후 실제 앱 상태도 `goal-native-audio-mcp-orbit99-settled-restored-20261008.json`/PNG에서 config·35개 대화·localStorage·같은 running 모델과 API off·오류/overlay 0 보존을 재확인했다. 패키지 검사 결과는 다음 절에 기록한다. 27–30절의 실제 실패·upstream 제한·blocked/unrun과 **전체 M01–M12 미통과**는 유지한다. 개인 엔진 자유 등록은 [장기 런타임 설계](pluggable-inference-runtimes.ko.md)의 미구현 목표이며 이번 MCP 수정으로 구현된 기능은 아니다. 공개 업로드·원격 push는 수행하지 않았다.
+
+## 32. MCP 수정 소스 `7afc07e`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `7afc07e5893020baa808fa2032001d63a35edf4a`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-mcp-package-7afc07e.log`, `logs/goal-native-mcp-inspect-package-7afc07e.log`, `goal-native-mcp-package-7afc07e-results.json`이 근거다. 빌드 232.49s·검사 5.38s 모두 종료 0이며 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- `AioLM_0.3.1_aarch64.dmg`: 16773114 bytes, SHA256 `1bdf5557dcf445a9dad462a194efb93c3067ae532cc80dd264442eb2fcdedc05`.
+- GUI `aiolm`: arm64, SHA256 `d3e6a72c46de26388d315d86c8593e77751fc1b659a7348621b870a3de00b867`.
+- CLI `aiolm-cli`: arm64, SHA256 `bbd5bca532e19f1073d21dd40efefd82e9ac1eff25bd47d77f61a6882145a310`.
+- GUI·CLI 해시와 빌드 앱 일치, 일반 파일 5개·symlink 없음, identifier/version/minimum OS 선언·strict ad-hoc/runtime 서명 검사 pass. UTF-8·UTF-16LE/BE의 개인 home/repository 경로와 검증 fixture 표식 일치 0, 새 격리 홈 packaged CLI의 onboarding=false·모델/runtime 미선택·격리 모델 경로·종료 0을 확인했다.
+- 원본과 같은 해시의 DMG를 `goal-package-7afc07e/`에 보존했다. 기존 패키지·원본·모델·로그는 유지했다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade는 unrun이며 Intel/구형 macOS 실제 결과도 추정하지 않는다.
+
+패키지 생성 후 실제 CUA 앱 상태와 `goal-native-audio-mcp-orbit99-postpackage-7afc07e.json`/PNG, `goal-mcp-orbit99-postpackage-preservation-7afc07e.json`에서 config 전체 SHA256·35개 대화의 전체 목록/해시·localStorage·같은 running 모델 PID·API off·렌더 오류/overlay 0 보존을 재확인했다. 31절의 네이티브 도구 승인 이후 blocked 범위와 기존 실제 실패·upstream 제한·unrun, **전체 M01–M12 미통과**를 유지한다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
