@@ -5,7 +5,7 @@
 ## 1. 소스·환경·근거
 
 - 실행일: 2026-10-07–08 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
-- 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
+- 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 23절은 MCP 조회·승인 대기 정리와 기술 입력 치환 수정 `bbd2df6`을, 24절은 해당 소스의 DMG를 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
@@ -33,6 +33,7 @@
 | `0709eda` | 실행 영역·provider 목록·진단 로그·llama.cpp export의 이름을 role 없는 요소에 지정하여 유효한 접근성 이름 의미가 없었다. 컨트롤 묶음에 group, 기존 포커스 가능한 진단에 비실시간 region을 지정했다. | 수정 전 실패·수정 후 회귀, UI1690 tests와 실제 WKWebView의 11메뉴·고급 export 재검사. 모델·설정 보존과 현재 light Chat의 gradient 대비를 한정해 확인했다. 17절 참조. |
 | `5fd5e82` | native 알림 요청을 제출할 수 있는 상태를 Allowed로 표시해 macOS의 실제 승인을 확정한 것처럼 안내했다. Ready to send와 첫 알림의 OS 권한 안내, 전달 성공을 단정하지 않는 test 제출 문구로 바꿨다. | 수정 전 실패·수정 후 4 files/36 tests, 공통 UI1697 tests 및 실제 CUA의 Ready/제출 화면·모델/설정 보존. OS test 본문 수신은 여전히 blocked다. 19절 참조. |
 | `b523f79` | 진행 중 응답 때문에 Unload가 거부될 때 모델 파일·경로를 확인하라고 잘못 안내했다. 실제 loading/replacing/unloading의 active-response 보호 오류를 먼저 구분하여 현재 응답을 끝내거나 중지한 뒤 재시도하도록 안내한다. | 수정 전 직접 회귀 실패·수정 후 통과, 기존6종 오류 안내 보존·공통 UI1697 tests·실제 MLX 생성 중 Unload 거부와 수정된 안내 확인. backend 보호·readiness·상태 처리 변경 없음. 21절 참조. |
+| `bbd2df6` | 실제 WKWebView의 MCP 인자·JSON 입력에서 스마트 대시/따옴표가 ASCII 실행 인자와 JSON을 바꿨다. 명령·인자·JSON 세 기술 입력의 자동 교정을 끈다. | 수정 전 회귀3개 실패·수정 후 관련7개 통과, 같은 native 입력의 원문 보존·JSON 검토 카드 확인·공통 UI1700 tests. 사용자 문자의 정규화나 승인 정책·MCP API 변경 없음. 23절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -49,7 +50,7 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
 | M06 | pass | 실제 snapshot 취소/재시도, 고정 GGUF, 공개 3-shard 전체 GUI 다운로드/해시/한 항목/CPU 추론, 두 GGUF와 공유 companion 다운로드/재사용·다른 primary 삭제 후 보존. 활성/선택 draft·LoRA·named split 보호, 외부 파일·case-sensitive APFS·한글/공백·권한·FAT 불완전 상태 확인. |
 | M07 | fail | OS 이미지/WAV/MP4 선택·내용/usage·immutable 기록/재로드·실패 후 Retry·엔진 변경, 명시적 STT/frames·ffmpeg UI Stop, 비-WAV Whisper 전사/번역·ASR 전사. 21절의 Gemma4 실제 native 음성·취소와 잘못된 WAV의 동일 입력 Retry를 추가 확인했다. 긴/후속 음성 질문의 내용 실패·URI500·native SmolVLM 내용 오답·Gemma3n snapshot 실패 유지. ffmpeg 부재의 실제 앱 검사는 blocked. |
-| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리 통과. Yes/No→실제 tool/후속 답변·호출 중 취소는 아직 미검증이다. |
+| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. CUA의 별도 승인 프로세스 선택 한계로 실제 Yes/No→tool/후속 답변·호출 중 취소는 미검증이다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
 | M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 알림 안내 수정·OS 제출은 통과했으나 이 검증에서 OS 권한을 결정하지 않았고 후속 OS 상태·실제 수신은 미확인/blocked다. IME composition·Dock/트레이·promised/unreadable clipboard 포맷은 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
@@ -418,3 +419,39 @@ invalid WAV의 decode 예외 때 upstream 로그의 in_flight가1→2로 남는 
 - 원본과 해시가 같은 raw DMG 복사본은 `goal-package-b523f79/`에 보존했다. 이전 패키지·로그·검증 모델·원본 대화는 유지했다.
 
 빌드 후 실제 CUA로 원래 ORBIT-84 대화를 선택했다. `goal-native-audio-after-package-b523f79.json`/PNG와 `logs/goal-native-audio-after-package-b523f79.log`에서 같은 Qwen3/vllm-metal의 running·API off·active requests0·빈 입력·overlay/렌더 오류0, 원본23개 대화 SHA256 보존과 총28개를 재확인했다. 이 개발 앱 검사는 production GUI의 자연스러운 Finder 설치·최초 실행·quarantine·별도 계정 Keychain·실제 upgrade를 대신하지 않는다. 21절의 실패·잔여 범위를 유지하며 **전체 M01–M12 검증은 통과하지 않았다.** raw/build 산출물은 Git 제외 상태로 유지하고 원격 push는 수행하지 않았다.
+
+## 23. 실제 MCP 조회·승인 대기 정리와 기술 입력 치환 수정
+
+새 합성 서버 `Synthetic signalled tools ORBIT-96`를 실제 MCP 화면에서 등록했다. 기존 서버·원본 로그를 재사용하지 않았으며 별도의 fixture events와 lifetime 관측기를 사용했다. 합성 `synthetic_echo_orbit96`은 텍스트 receipt를 반환하고 `synthetic_hold_orbit96`은 호출 시작 신호 뒤 반환하지 않도록 준비했다. 준비와 실제 실행을 구분한다. 기존 Qwen3 모델·runtime 설정·승인 정책은 바꾸지 않았고 tool-enabled 프로필을 시작하지 않았다.
+
+| 실제 범위 | 상태 | 근거와 한계 |
+| --- | --- | --- |
+| 새 서버 저장·도구 조회 | pass | 실제 Save server→Discover tools에서 두 도구의 이름·설명을 받았다. `goal-native-audio-mcp-orbit96-discovered.json`/PNG, `goal-native-mcp-orbit96-lifetime/fixture-events.jsonl`·`observer-events.jsonl`·`observer-state.json`. 조회 세션의 부모·자식 두 lifetime 연결이 모두 remoteEnded/closed=true·socketError=false로 종료됐다. 도구 호출 성공으로 세지 않는다. |
+| 앱 검토→별도 native 승인 | blocked | 실제 JSON 입력→Review tool call→Approve and run once로 native 승인 대기에 들어갔다. `goal-native-audio-mcp-orbit96-review-no.json`/PNG와 `goal-native-mcp-orbit96-cua-owner-limit.json`. CUA의 실행 앱 목록에서 별도 승인 owner를 찾지 못했고 실제 실행 파일 target 선택도 Invalid app이었다. AioLM의 AX/캡처에는 해당 owner의 Yes/No 컨트롤이 포함되지 않았다. `review-no`는 거부를 준비한 입력의 이름이며 실제 No 클릭 근거가 아니다. 전체 데스크톱의 창 유무나 계정 승인 여부를 이 관찰로 확정하지 않는다. |
+| 미응답 승인 deadline·소유 자식 정리 | pass | 기존120 s deadline 뒤 실제 MCP tool approval timed out 안내를 확인했다. `goal-native-audio-mcp-orbit96-timeout.json`/PNG. 해당 승인 대기 세션의 부모·자식 두 peer EOF와 해당 합성 서버의 소유 프로세스 부재, tools-call-start/result0은 `goal-native-mcp-orbit96-lifetime/after-calls-before-observer-stop.json` 및 events/state에서 확인했다. 이후 관측기만 SIGTERM으로 종료했고 `observer-stopped.json`에서 관측기·자체 listener 종료를 확인했다. 관측기의 종료 코드는 의도한 harness 정리이며 제품 실패가 아니다. 관측기 listener 종료를 앱의 도구 listener 종료로 바꾸어 기록하지 않는다. 실제 거부·승인·실행 중 Stop 근거도 아니다. |
+| 수정 전 인자·JSON 입력 치환 | fail | 같은 CUA native setValue에서 `--events`·`--run`이 em dash로 바뀌었고 JSON의 닫는 ASCII 따옴표가 curly quote로 바뀌었다. 실제 Review는 JSON Parse error: Unterminated string으로 끝났다. `goal-native-audio-mcp-orbit96-{draft,json-before,json-error-before}.json`/PNG. 수정 전 소스는 `100ed8b`이며 붙여넣기로 정확한 argv를 입력한 도구 조회와 이 CUA native 입력 경로를 구분한다. |
+| 수정 후 같은 native 입력·검토 | pass | `bbd2df6`에서 명령·인자·JSON에 spellCheck=false·autoCorrect=off·autoCapitalize=off를 설정했다. 동일 native 입력에서 ASCII 대시·따옴표가 보존되고 JSON 검토 카드가 올바른 값으로 표시됐다. 실제 Cancel로 검토만 닫았다. `goal-native-audio-mcp-orbit96-{json-after,verbatim-after}.json`/PNG와 `goal-native-mcp-orbit96-attributes-label-fixed.json`/로그에서 세 실제 WKWebView DOM 속성과 복원된 원문값을 확인했다. 합성 명령 경로 검사는 저장·실행하지 않았다. 문자열을 ASCII로 정규화하거나 사용자가 명시한 Unicode를 바꾸는 코드는 추가하지 않았다. |
+| 원래 앱 상태·저장 자료 보존 | pass | 실제 원래 명령 복원→새 합성 서버 Disabled로 저장→원래 ORBIT-84 Chat으로 돌아왔다. `goal-native-audio-mcp-orbit96-{disabled,restored}.json`/PNG와 `goal-native-mcp-orbit96-servers-after.json`. main config의 전체 SHA256과 검사 전28개 대화의 모든 SHA256이 같고 원래23개도 보존됐다. 별도 MCP 서버 파일에는 새 disabled 등록이 추가됐으므로 이 파일까지 불변이라고 주장하지 않는다. 기존 합성 서버는 enabled로 유지됐다. 같은 Qwen3의 running·API off·active requests0·빈 입력·overlay/렌더 오류0을 확인했다. |
+
+`logs/goal-native-mcp-literal-input-regression-before-20261008.log`는 기존1개 pass·새3개 fail/종료1, 수정 후 `logs/goal-native-mcp-literal-input-regression-after-20261008.log`는 관련2 files/7 tests·종료0이다. 최종 `logs/goal-native-mcp-literal-{typecheck,lint,unit,build}-final.log`는 모두 종료0: typecheck10.14 s·lint5.89 s·unit126.83 s·build12.01 s. 계약/direct/script 검사를 포함해 UI171 files/1700 tests·coverage statements80.27% / branches75.11% / functions78.68% / lines84.41%를 확인했다. 기존500kB chunk 경고는 유지한다. 소스·검사 두 파일만 바꾸었고 Rust/Python·lockfile·공개 API·승인 정책·argv 전달·경로 처리 코드는 유지했다.
+
+첫 DOM 속성 관찰 helper는 label.textContent에 textarea의 내용까지 포함된다는 점을 놓쳐1개 필드만 찾고 실패했다. `logs/goal-native-mcp-orbit96-attributes-after.log`와 원본 helper를 보존했다. 별도의 label-fixed helper는 label의 첫 텍스트 노드를 사용하여 실제 세 필드를 읽기 전용으로 확인했고 종료0이었다. UI 입력·검토 전후 근거와 별개이며 DOM 이벤트나 값을 쓰지 않았다.
+
+수정 방향은 공식 WebKit의 [spellcheck 비활성 처리](https://github.com/WebKit/WebKit/blob/459880fdd40351501295040dd219ef965256dea9/Source/WebCore/editing/Editor.cpp#L2993)와 [비-iOS Quote/Dash 처리](https://github.com/WebKit/WebKit/blob/459880fdd40351501295040dd219ef965256dea9/Source/WebCore/editing/Editor.cpp#L4246)에서도 확인했다. 이 upstream SHA가 설치된 OS의 WebKit 빌드와 같다는 의미는 아니다. 실제 효과는 위 현재 WKWebView의 같은 native 입력 전후 결과로 검증했다. [autocapitalize의 물리 키보드 제한](https://html.spec.whatwg.org/multipage/interaction.html#attr-autocapitalize)도 있으므로 이 속성 하나가 대시 치환을 막았다고 설명하지 않는다.
+
+실제 Yes/No·tools/call·모델 후속 답변·도구 실행 중 Stop은 미검증으로 유지한다. 준비한 hold fixture의 선언을 실제 취소 성공으로 세지 않는다. 그 밖의 21절 미완료 범위와 M04/M07 내용 실패도 유지하며 **전체 M01–M12 검증은 통과하지 않았다.** 공개 업로드·원격 push는 수행하지 않았다.
+
+## 24. MCP 기술 입력 수정 소스 `bbd2df6`의 arm64 DMG
+
+기존 `npm run package:tauri`로 `bbd2df6fbb1b6cb7a992534a523e5b2f1d4203e5`의 CLI·frontend·GUI·DMG를 빌드했다. `logs/goal-native-mcp-literal-package-bbd2df6.log`, `logs/goal-native-mcp-literal-inspect-package-bbd2df6.log`, `goal-native-mcp-literal-package-bbd2df6-results.json`이 근거다. 빌드225.51 s·검사4.114 s 모두 종료0이었고 검사 전후 HEAD 일치와 read-only/nobrowse mount detach를 확인했다.
+
+- DMG `AioLM_0.3.1_aarch64.dmg`: 16772424 bytes, SHA256 `46da00fe45af1d351d67ad2d60147e5f2c286ce75fcff350ad830322ef9191d2`.
+- GUI `aiolm`: arm64, SHA256 `b48f76e3648797ae8c57c90caf301a857552896033752af25c01277907b4aadd`.
+- CLI `aiolm-cli`: arm64, SHA256 `70c9749e17b84361fbe58679d4c7d330338e770c022fd93da939a6a20b1ad112`.
+- GUI·CLI 해시는 빌드 앱의 바이너리와 일치했다. identifier `com.aiolm.desktop`·version0.3.1·minimum OS13.3 선언을 확인했다. Intel·구형 macOS 실기기 결과로 확대하지 않는다.
+- `codesign --verify --deep --strict` pass. GUI·CLI는 ad-hoc/runtime이며 Developer ID 서명·공증은 수행하지 않았다.
+- bundle의 일반 파일5개·symlink 없음, 실제 home/repository·음성/PDF/picker/smoke/MCP fixture 문자열의 UTF-8·UTF-16LE/BE 스캔 일치0을 확인했다. 모델·venv·개인 설정·MCP 서버 등록 자료는 포함하지 않았다.
+- 기존 파일 없는 별도 새 홈의 packaged CLI에서 onboarding=false·모델/runtime 미선택·격리된 모델 저장소 기본값과 종료0을 확인했다.
+- 원본과 해시가 같은 raw DMG 복사본은 `goal-package-bbd2df6/`에 보존했다. 이전 소스별 DMG·로그·원본 모델·대화는 유지했다.
+
+빌드 후 실제 CUA의 원래 Chat을 확인했다. `goal-native-audio-mcp-after-package-bbd2df6.json`/PNG와 `logs/goal-native-mcp-literal-after-package-bbd2df6.log`에서 같은 Qwen3/vllm-metal의 running·API off·active requests0·ORBIT-84·빈 입력·overlay/렌더 오류0과 원본23개 대화 SHA256 보존·총28개를 확인했다. `goal-native-mcp-literal-after-package-preservation-bbd2df6.json`에서 검사 직전28개 대화와 main config의 정확한 보존 및 별도 MCP 서버 파일의 disabled 캡처 일치도 대조했다. 이 개발 앱 검사를 production GUI의 자연스러운 Finder 설치·첫 실행·quarantine·별도 계정 Keychain·실제 upgrade로 확대하지 않는다. 21·23절의 실패·blocked·잔여 범위를 유지하며 **전체 M01–M12는 통과하지 않았다.** raw/build 산출물은 Git 제외 상태이며 원격 push는 수행하지 않았다.
