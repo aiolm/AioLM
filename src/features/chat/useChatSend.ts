@@ -11,7 +11,7 @@ import type { AppPreferences } from "../../shared/config/preferences";
 import { buildResponseMetrics } from "../../shared/lib/metrics";
 import type { ChatMcpTool } from "./useChatMcpTools";
 import type { FailedRequest, PendingToolCall, RequestMetricsAccumulator, StreamingDraft } from "./chatSendTypes";
-import { createStreamDeltaHandler, resolveDetectedToolCall, retrieveDocumentContext, sameDocuments, sameImages, toChatMessage } from "./chatSendHelpers";
+import { createStreamDeltaHandler, resolveDetectedToolCall, retrieveDocumentContext, sameDocuments, sameImages, toChatMessage, type StreamAccumulator } from "./chatSendHelpers";
 import { setSessionActivity } from "../../shared/state/sessionActivity";
 import { notifyCompletion } from "../../shared/lib/notifications";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
@@ -77,7 +77,7 @@ export function useChatSend({
   const turnGeneration = useRef(0);
   const failedRef = useRef<FailedRequest | null>(null);
   const renderFrameRef = useRef<number | null>(null);
-  const streamRef = useRef<{ assistant: string; reasoning: string; toolCalls: api.ChatToolCall[] }>({ assistant: "", reasoning: "", toolCalls: [] });
+  const streamRef = useRef<StreamAccumulator>({ assistant: "", reasoning: "", toolCalls: [] });
   const metricsRef = useRef<RequestMetricsAccumulator>({ preparationStartedAt: 0 });
   const streamResponsesRef = useRef(true);
   const toolRoundsRef = useRef(0);
@@ -354,14 +354,16 @@ export function useChatSend({
       const responseMetrics = snapshotMetrics();
 
       const toolCall = streamRef.current.toolCalls[0];
-      if (toolCall) {
+      // A token limit may cut off a tool name or arguments even when the
+      // partial JSON parses. Keep that response instead of offering execution.
+      if (toolCall && streamRef.current.finishReason !== 'length') {
         const { assistant: toolCallAssistant, reasoning: toolCallReasoning } = streamRef.current;
         cancelScheduledRender();
         setMsgs((current) => {
           if (!isCurrent()) return current;
           if (current[current.length - 1]?.role !== "assistant") return current;
           const next = current.slice();
-          next[next.length - 1] = { ...next[next.length - 1], content: toolCallAssistant, reasoning: toolCallReasoning, metrics: responseMetrics };
+          next[next.length - 1] = { ...next[next.length - 1], content: toolCallAssistant, reasoning: toolCallReasoning, metrics: responseMetrics, finishReason: streamRef.current.finishReason };
           return next;
         });
         setStreamingDraft(null);
@@ -402,6 +404,7 @@ export function useChatSend({
           reasoning: streamRef.current.reasoning,
           citations: retrievalCitations.length ? retrievalCitations : undefined,
           metrics: responseMetrics,
+          finishReason: streamRef.current.finishReason,
         };
         return next;
       });
@@ -411,8 +414,8 @@ export function useChatSend({
       skillReadsRef.current = 0;
       setPhase("idle");
       // Only the turn's final answer is announced - after any MCP follow-up,
-      // never for a tool request, an error, a stop or an unmount.
-      if (!controller.signal.aborted) void notifyCompletion("chat");
+      // never for a tool request, a token limit, an error, a stop or an unmount.
+      if (!controller.signal.aborted && streamRef.current.finishReason !== 'length') void notifyCompletion("chat");
     } catch (caught) {
       if (!isCurrent()) return;
       const isAbort = controller.signal.aborted || (caught instanceof DOMException && caught.name === "AbortError");

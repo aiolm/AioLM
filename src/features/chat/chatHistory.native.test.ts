@@ -71,6 +71,17 @@ beforeEach(() => {
 });
 
 describe("conversations in the data folder", () => {
+  it('preserves runtime finish reasons through native saving and a fresh history load', async () => {
+    const conversation = thread('limits', 'Question');
+    conversation.messages.push({ role: 'assistant', content: 'Partial answer', finishReason: 'length', model: 'synthetic-model' });
+    const history = await freshHistory();
+    await history.loadChatWorkspaceAsync();
+    await history.saveChatWorkspaceAsync({ activeThreadId: conversation.id, threads: [conversation] });
+    expect((native.files.get(conversation.id) as ChatThread).messages.at(-1)).toMatchObject({ finishReason: 'length' });
+    const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
+    expect(loaded.threads.find(item => item.id === conversation.id)?.messages.at(-1)).toEqual(conversation.messages.at(-1));
+  });
+
   it('keeps the original audio/video and exact prepared content across native save and reload', async () => {
     const audio = { name: 'speech.wav', kind: 'audio' as const, ref: `${'a'.repeat(64)}.wav`, dataUrl: '',
       preparation: { kind: 'transcription' as const, text: 'Keep this transcript.', sessionId: 'speech', model: 'whisper-small' } };

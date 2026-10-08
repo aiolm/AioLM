@@ -106,6 +106,15 @@ const legacyStore = storage();
 legacyStore.setItem("aiolm.chat-workspace.v1", JSON.stringify(legacyWorkspace));
 assert.deepEqual(loadChatWorkspace(legacyStore), legacyWorkspace);
 
+for (const finishReason of ['length', 'stop', 'tool_calls', 'future_runtime_reason']) {
+  const limited = { ...legacyWorkspace, threads: [{ ...legacyWorkspace.threads[0], messages: [{ role: 'assistant' as const, content: 'Retain this answer', finishReason }] }] };
+  saveChatWorkspace(limited, store);
+  assert.deepEqual(loadChatWorkspace(store), limited);
+}
+const invalidEnding = { ...legacyWorkspace, threads: [{ ...legacyWorkspace.threads[0], messages: [{ role: 'assistant' as const, content: 'Keep this answer', finishReason: 42 }] }] };
+store.setItem(CHAT_WORKSPACE_KEY, JSON.stringify(invalidEnding));
+assert.deepEqual(loadChatWorkspace(store).threads[0].messages, [{ role: 'assistant', content: 'Keep this answer' }]);
+
 assert.equal(threadMatchesQuery({ ...saved.threads[0], messages: [{ role: "user", content: "find this phrase" }] }, "phrase"), true);
 assert.equal(threadMatchesQuery({ ...saved.threads[0], messages: [{ role: "user", content: "find this phrase" }] }, "missing"), false);
 

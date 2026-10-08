@@ -108,6 +108,7 @@ export interface StreamAccumulator {
   assistant: string;
   reasoning: string;
   toolCalls: api.ChatToolCall[];
+  finishReason?: string;
 }
 
 /** Builds the `chatStream` delta callback: accumulates content/reasoning/tool-call deltas into `streamRef` and throttles bubble repaint via `scheduleAssistantRender`. */
@@ -125,6 +126,7 @@ export function createStreamDeltaHandler(options: {
     if (delta.usage) metricsRef.current.usage = { ...metricsRef.current.usage, ...delta.usage };
     if (delta.timings) metricsRef.current.timings = { ...metricsRef.current.timings, ...delta.timings };
     if (delta.metrics) metricsRef.current.serverMetrics = { ...metricsRef.current.serverMetrics, ...delta.metrics };
+    if (typeof delta.finish_reason === 'string' && delta.finish_reason) streamRef.current.finishReason = delta.finish_reason;
     if (delta.reasoning) streamRef.current.reasoning += delta.reasoning;
     if (delta.content) {
       if (streamResponses) setPhase("streaming");

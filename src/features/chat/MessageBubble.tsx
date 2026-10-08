@@ -70,6 +70,7 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
           : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinkingNow")}</span> : "")}</div>}
         {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{text("interrupted")}</div>}
         {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{text("partialFailed")}</div>}
+        {!isUser && message.finishReason === 'length' && !message.interrupted && !message.failed && <div className="mt-2 text-xs ui-color-warning" role="status">{text("outputLimitReached")}</div>}
         </div>
         {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">
           {message.model && <ModelIcon model={message.model} />}

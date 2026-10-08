@@ -42,6 +42,7 @@ interface ChatComposerProps {
   onSend: () => void;
   canSend: boolean;
   msgsLength: number;
+  responseFinishReason?: string;
   ct: (key: ChatTextKey) => string;
   skillPicker?: ReactNode;
   selectedSkills?: ChatSkill[];
@@ -55,7 +56,7 @@ export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
-  aborting, onSend, canSend, msgsLength, ct, locale = 'en',
+  aborting, onSend, canSend, msgsLength, responseFinishReason, ct, locale = 'en',
   skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
 }: ChatComposerProps) {
   const toolStripRef = useRef<HTMLDivElement>(null);
@@ -76,7 +77,7 @@ export default function ChatComposer({
     return () => strip.removeEventListener('toggle', closeOtherPickers, true);
   }, []);
   const controlsLocked = phase !== 'idle' || pendingToolCall !== null;
-  const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken") : msgsLength === 0 ? ct("emptyConversation") : `${ct("responseReady")} · ${msgsLength} ${ct("messages")}`;
+  const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken") : msgsLength === 0 ? ct("emptyConversation") : `${ct(responseFinishReason === 'length' ? "responseLimited" : "responseReady")} · ${msgsLength} ${ct("messages")}`;
   return (
     <>
       <div className="chat-tool-strip" ref={toolStripRef}>

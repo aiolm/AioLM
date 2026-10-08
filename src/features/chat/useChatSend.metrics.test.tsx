@@ -64,6 +64,40 @@ function controlledStream() {
 }
 
 describe("request-scoped response metrics", () => {
+  it("preserves the output limit reason across trailing usage frames and resets it for the next answer", async () => {
+    const stream = controlledStream();
+    const { result } = setup({ input: "Question" });
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    stream.emit({ content: "Partial answer", finish_reason: "length" });
+    stream.emit({ finish_reason: null, usage: { completion_tokens: 128 } });
+    await stream.finish("Partial answer");
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Partial answer", finishReason: "length", metrics: { tg: { tokens: 128 } } });
+    expect(result.current.error).toBeNull();
+    expect(result.current.pendingToolCall).toBeNull();
+    const next = controlledStream();
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledTimes(2));
+    next.emit({ content: "Complete answer", finish_reason: "stop" });
+    await next.finish("Complete answer");
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Complete answer", finishReason: "stop" });
+    expect(sessionHasActivity("metrics-session")).toBe(false);
+  });
+
+  it("does not request approval for a tool response cut off by the output limit", async () => {
+    const stream = controlledStream();
+    const { result } = setup({ mcpEntryByFunctionName: new Map([['lookup', {
+      serverId: 'synthetic', serverName: 'Synthetic', tool: { name: 'lookup', input_schema: {} },
+    }]]) });
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    stream.emit({ content: "Partial tool request", tool_calls: [{ index: 0, id: 'call-limit', name: 'lookup', arguments: '{}' }], finish_reason: "length" });
+    await stream.finish("Partial tool request");
+    expect(result.current.pendingToolCall).toBeNull();
+    expect(result.current.msgs.at(-1)).toMatchObject({ content: "Partial tool request", finishReason: "length" });
+    expect(sessionHasActivity("metrics-session")).toBe(false);
+  });
+
   it("retains the request model when the selected model changes during generation", async () => {
     const stream = controlledStream();
     const options = { model: "Qwen-example.gguf" };

@@ -34,6 +34,8 @@ export interface ChatHistoryMessage {
   reasoning?: string;
   interrupted?: boolean;
   failed?: boolean;
+  /** Runtime-reported termination; absent in older conversations. */
+  finishReason?: string;
   citations?: ChatCitation[];
   metrics?: ResponseMetrics;
 }
@@ -186,6 +188,9 @@ function safeThread(thread: ChatThread): ChatThread {
       if (message.reasoning !== undefined) safeMessage.reasoning = message.reasoning.slice(0, PERSISTED_REASONING_LIMIT);
       if (message.interrupted) safeMessage.interrupted = true;
       if (message.failed) safeMessage.failed = true;
+      if (message.role === 'assistant' && typeof message.finishReason === 'string' && message.finishReason) {
+        safeMessage.finishReason = message.finishReason.slice(0, 128);
+      }
       if (message.images !== undefined) {
         safeMessage.images = message.images.slice(0, 4).map((image) => ({
           name: image.name,
