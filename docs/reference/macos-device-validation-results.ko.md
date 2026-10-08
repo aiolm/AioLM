@@ -22,6 +22,7 @@
 - 53절은 macOS MCP 승인창의 실행 오류를 사용자 거부로 오인하던 수정 `80510a8`, 공용 프로필 검사 동기화 `c5a35fa`와 실제 앱 재시작·도구 조회의 기록이다. 54절은 해당 소스의 DMG다.
 - 55절은 다른 엔진에 남은 llama.cpp backend 진단값과 최소 창의 로그 끝 가림 수정 `e70ec9e`를 실제 앱에서 검증한 기록이며 56절은 해당 소스의 DMG다.
 - 57절은 실행 중인 기본·별도 모델 세션의 보호 조건을 런타임 관리 화면에 반영한 수정 `7ad2605`와 실제 잠금·해제·소유 프로세스 정리·복원 기록이며 58절은 해당 소스의 DMG다.
+- 59절은 세션 명령 대기 중 런타임 관리 잠금과 준비·취소 상태 표시 수정 `930350e`의 실제 검증·보존 기록이다. 60절은 해당 소스의 DMG를 기록한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. production DMG의 자연스러운 Finder 설치 실행은 unrun이다.
@@ -64,6 +65,7 @@
 | `80510a8` | macOS 승인 scripting process의 모든 비정상 종료를 사용자 No로 보고했다. 성공 종료와 명시된 답변을 함께 확인하고, 실행 실패·잘못된 답변은 도구를 실행하지 않는 오류로 전달한다. | 수정 전 최소 회귀 실패/후 관련 7개 통과·기존 취소/timeout 정리·전체 Rust/clippy. 실제 앱 재빌드·정상 종료/재시작·Qwen 준비·MCP 조회는 통과했으나 실제 Yes/No는 blocked다. 53절 참조. |
 | `e70ec9e` | vllm-metal 실행의 backend 진단에 저장된 llama.cpp CPU 선택이 들어갔다. 엔진 identity를 우선하고 다른 엔진에서는 해당 필드를 null로 반환한다. 최소 창의 진단 로그가 화면보다 높아 End로 이동한 마지막 줄이 가려지는 문제도 수정했다. | 수정 전 Rust 회귀 실패/후 관련17개·전체 Rust/clippy·공통 UI1789개 통과. 실제 새 native 실행의 null/저장값 보존과 최소·짧은 넓은 창·desktop의 로그 접근, geometry12개·재시작 보존16개 조건. 55절 참조. |
 | `7ad2605` | 모델 실행 중에도 Python 환경 설치·등록·삭제·번들 전송 버튼이 활성화되어 backend 보호 오류를 뒤늦게 표시했다. 공통 세션 poller와 busy lifecycle을 사용해 기본·별도 세션의 잠금·안내를 반영한다. | 수정 전 회귀 실패/후 관련47개·공통 UI1794개 통과. 실제 기본 starting·별도 starting/running의 잠금, 전체 stopped의 해제, 별도 세션 소유 PID·포트 정리와23개 검증/보존 조건. 57절 참조. |
+| `930350e` | 별도 세션 준비 명령이 진행돼도 아직 stopped인 poll 때문에 런타임 관리 버튼이 잠시 활성화되고 세션 행은 Stopped와 Cancel을 함께 표시했다. 공통 명령 activity로 잠금을 보완하고 준비·취소 상태를 유지한다. | 수정 전 두 회귀 실패/후 관련134개·직접 검사·공통 UI1801개 통과. 실제 native 별도 entry 생성 전 잠금, Starting/Cancelled/Stopped와 해제, 정상 load/stop·기본 실행 복원 및27개 검증/보존 조건. 59절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1099,3 +1101,68 @@ vLLM 관리 선택과1280×800 Chat을 CUA로 복원했다. `goal-native-audio-o
 `goal-runtime-lock-orbit116-postpackage-verification-7ad2605-20261009.json`의14개 조건은 실제 cache 갱신을 분리하고 config 전체/hash·profile library·39개 대화 목록/hash·동일 running PID/engine/model/execution·별도 정의0·API off·idle/빈 composer·관측 error/overlay0·다른 localStorage와 두 관리 화면의 잠금을 확인한다.57절의 UI 저장 전 config hash·revision/PID가 불변이라는 의미는 아니다.
 
 production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치/실행·quarantine·별도 계정 Keychain·실제 upgrade와 Intel/구형 macOS는 unrun이다.57절의 blocked와 기존 실제 실패/upstream 제한을 유지하며 **전체 목표·M01–M12 통과를 뜻하지 않는다.** 개인 엔진 registry·manifest·adapter 등록은 미구현 장기 설계다. raw/build는 Git 제외 상태이며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 59. 세션 준비 명령 대기 중 보호와 상태 표시
+
+후속 제품 소스는 `930350ec320d71eb159f2c24c495c9246494f0d3`이다. 기준은 `bf16825`이며 57절에 남긴 별도 세션 preflight 동안의 poll 지연을 실제 앱에서 검증했다. native debug 앱은 55절의 Rust 소스, frontend는 이번 소스를 HMR로 사용했다. Rust/Python·설치 엔진·모델·공개 IPC·기본값·lockfile은 변경하지 않았다. 임의 개인 엔진 registry·manifest·adapter 등록도 아직 구현하지 않았다.
+
+### 재현과 수정 범위
+
+기본 서버가 stopped이고 별도 세션을 시작한 직후, native 목록은 아직 기본 stopped 항목만 반환할 수 있다. 기존 UI는 그 목록만으로 런타임 관리 작업을 허용했다. 실제 첫 관리 화면의 여섯 작업은 이번 수정 후 이미 잠겼으며 별도 native entry/PID는 아직 목록에 없었다. 이는 명령 대기 activity의 근거이며 모델 readiness의 근거가 아니다.
+
+공통 `session_start/stop/unload` facade의 대기 중 명령을 추적한다. 중지 요청이 먼저 끝나도 원래 시작 명령이 정리되지 않았으면 잠금을 유지하고, 성공·실패에 관계없이 명령 완료 시 해제·상태 갱신을 요청한다. 기존 공용 poller와 backend의 최종 자원 보호는 유지하며 추가 timer·엔진별 분기·가짜 Ready를 만들지 않는다. 다른 클라이언트에서 시작한 세션은 여전히 native 상태 조회에 의존한다. 모든 lifecycle hand-off의 시간 차이가 사라졌다고 단정하지 않는다.
+
+실제 첫 세션 행에서는 준비 중 Stopped와 Cancel이 함께 표시됐다. 새 회귀 검사로 같은 stopped poll을 재현한 뒤 로컬 준비·취소가 진행되는 동안 Starting/Working을 유지하도록 수정했다. 실제 native running·failed·crashed 상태가 우선하며 모델이 준비됐다는 의미로 승격하지 않는다. 공통 task registry의 취소 여부만 구독하고 기존 취소·readiness·오류 계약을 유지한다.
+
+전체 직접 검사에서 Node ESM이 새 모듈의 extension 없는 import를 해석하지 못했다. 명시한 `.ts` 경로와 의존성이 없는 `sessionEvents` 모듈로 정리했다. 기존 `sessionUtils` export와 이벤트 이름은 보존해 브라우저·native UI·Node 직접 검사 경로에서 같은 계약을 사용한다.
+
+### 자동 검사
+
+근거는 `logs/goal-session-transition-orbit117-*`와 `checks.jsonl`이다. 작업용 도구 버전은 1절과 같다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 잠금 수정 전 최소 회귀 | fail — 2.42초, 명령이 pending인데 설치 버튼 enabled. 이름 필터로 선택하지 않은35개는 실행하지 않은 상태다. |
+| 상태 표시 수정 전 최소 회귀 | fail — 3.03초, Starting 대신 Stopped. 이름 필터로 선택하지 않은36개는 실행하지 않았다. |
+| 관련6 files | pass — 별도 관련 실행4.86초/134개. 이후 이벤트 모듈 정리는 최종 공통 검사에 포함했다. 이전133개 실행과 Working badge/button을 구분하지 못한 임시 테스트 query 실패4.88초도 보존했다. 후자는 제품 동작 실패로 세지 않는다. |
+| 최종 직접 검사 | pass — 7.66초. 초기 전체 검사17.59초의 import 실패를 수정하고 모든 직접 suite를 재실행했다. |
+| 최종 typecheck / lint | pass — 12.06초 / 6.73초. |
+| 최종 공통 `test:unit` | pass — 133.42초. contracts·provider 옵션·스크립트·직접 검사와 UI180 files/1801개 포함. coverage statements80.73%, branches75.62%, functions79.20%, lines84.83%. |
+| 최종 build | pass — 18.08초. 기존 chunk 크기 경고는 남는다. |
+
+`sessionTransitions.test.ts`는 세 facade의 인자·결과·대기 중 잠금, 겹친 시작/취소의 완료 순서, 동기 실패의 해제·native 상태 갱신 이벤트를 확인한다. Runtimes/Sessions 회귀는 native entry가 아직 없는 poll의 UI 보호와 준비/취소 상태를 검사한다. Rust/Python 제품 수정이 없어 해당 전체 suite를 이번 절에서 다시 실행했다고 표기하지 않는다.
+
+### 실제 앱의 실행·취소·보존
+
+실제 UI 조작은 CUA, 관찰은 WKWebView·읽기 전용 IPC/DOM·프로세스 조회다. 새 모델·환경 다운로드나 공개 서비스 업로드는 수행하지 않았다. vllm-metal0.30.0/vLLM0.30.0+cpu와 기존 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`, context4096을 사용했다.
+
+- 기본 실행을 정상 중지하고 기존 소유 process group의 세 PID와 listener 종료를 확인했다. stopped 화면에서는 빈 Python 경로의 등록 버튼만 기존 조건대로 disabled였다.
+- 이번 작업에서 만든 합성 별도 세션의 첫 시작은 native entry가 생기기 전 여섯 관리 작업이 disabled이고 안내/제목 간격12px·가로 넘침/관측 오류 없음이었다. 이후 실제 Ready/Running으로 전환됐다. 정상 중지 후 세 소유 PID와 listener 종료를 확인했다.
+- 두 번째 시작은 수정된 Starting 표시 후 Running이 됐다. 취소를 누르기 전에 준비가 끝났으므로 이 실행을 취소 통과로 세지 않는다. 정상 중지 뒤 세 소유 PID 종료만 확인했다. 준비 상태의 URL을 따로 저장하지 않아 이 실행의 listener 재검사는 unrun이다.
+- 세 번째 시작은 CUA의 Starting/Cancel 관찰 직후 Cancel을 눌렀다. Cancelled/Stopped, Tasks0, Load session 재활성화와 관리 작업 해제를 확인했다. native 목록의 기본·별도 항목 모두 stopped/PID없음이었다. preflight 임시 child 전체를 지속 추적한 근거는 아니며 실제 Working 상태가 길게 남는 장면은 합성 회귀와 구분한다.
+- 합성 별도 정의만 UI에서 제거하고 기존 기본 Qwen 프로필을 저장/시작했다. 실제 기본 Running·로드 모델명과 채팅 화면을 복원했다. 최종 공통 이벤트 모듈에서도 기본 Running의 여섯 관리 작업 잠금·12px 간격·가로 넘침/관측 오류 없음이 유지됐다. 이번 절은 새 추론 요청의 내용/usage를 재검증한 근거가 아니다.
+
+raw 근거는 `goal-native-audio-resume-orbit117-baseline-20261009.json/png`, `goal-native-audio-orbit117-*.json/png`, `goal-session-transition-orbit117-{named-first-management-locked,named-preparation-cancelled,cancellation-management-unlocked,final-default-management-locked}-20261009.json`, cleanup 기록이다. 보조 cleanup 도구의 잘못된 basename 입력 실패도 보존했으며 second named cleanup은 실제 수집한 PID와 listener 미검증을 분리해 기록했다.
+
+`goal-session-transition-orbit117-preservation-20261009.json`의16개 조건과 `goal-session-transition-orbit117-integration-20261009.json`의11개 조건이 통과했다. 39개 대화 파일 목록/hash,21개 profile ID/값과 다른 profile revision, 다른 config 전체·localStorage·engine/model/execution, API off·idle/빈 composer를 보존했다. UI 저장/실행에 따라 기본 vLLM profile14→15, library72→78과 기본 applied revision이 갱신되고 이번 합성 named applied snapshot 한 개가 기존 보존 정책에 따라 추가됐다. 별도 정의는0이다. 시작 PID/config hash/revision까지 불변이라는 의미는 아니다.
+
+M08/M12의 실제 MCP Yes/No 뒤 tool 실행·모델 후속 응답/실제 call 취소, M11의 트레이/Dock/OS 알림 수신은 blocked다. 별도 계정·Finder 설치 실행·Keychain·실제 upgrade·Intel/구형 macOS는 unrun이다. 실제 미디어 내용 실패/upstream 제한을 유지하며 전체 M01–M12 통과를 뜻하지 않는다.
+
+
+## 60. 세션 명령 보호 수정 소스 `930350e`의 arm64 DMG
+
+제품 소스 `930350ec320d71eb159f2c24c495c9246494f0d3`에서 기존 `npm run package:tauri`를 실행했다. 생성225.13초, 준비된 native arm64 CPython3.12의 검사3.39초 모두 exit0이다. 근거는 `logs/goal-session-transition-orbit117-package-930350e-20261009.log`, `logs/goal-session-transition-orbit117-inspection-930350e-20261009.log`, `goal-native-runtime-lock-package-930350e-results.json`이다. 검사 전·후 HEAD가 해당 제품 커밋이고 DMG 해시가 불변이었다.
+
+| 산출물 | 보존 위치·검사 |
+| --- | --- |
+| DMG | `goal-package-930350e/AioLM_0.3.1_aarch64.dmg`, 16799470 bytes, SHA-256 `5527e5066bdc0588404d9e017f313a97009d3a1f60561886864363dd282705b4` |
+| GUI | arm64, SHA-256 `c4d3edbd33e35b9789b9c48cf969580f722b278b7e1c1ea681672bc5ed24b1ce` |
+| CLI | arm64, SHA-256 `af6ff9df14a35834c9a232fab34f714d1e2bf6e18034f480e0e038c7394ce898` |
+
+DMG를 read-only/nobrowse로 연결해 버전0.3.1·bundle identity·최소 macOS13.3, 정확한 기존5개 파일·symlink 없음·두 실행 파일과 빌드 원본의 해시 일치를 검사했다. GUI/CLI·sealed app의 ad-hoc 서명과 deep/strict 검사를 통과했다. UTF-8/UTF-16 LE/BE의 현재 source/home 경로와 기존·이번 검증 fixture scan은 모두0이었다. 새 격리 홈의 패키지 CLI는 exit0이고 onboarding 미완료·active model/runtime 없음·격리 홈 안의 models directory를 확인했다. 생성 DMG를 raw 폴더에 해시 일치 복사하고 mount 해제를 확인했다. source/raw/build를 배포물에 넣지 않았다.
+
+패키지 생성 전 CUA로 기본 Qwen·1280×800 Chat을 복원했다. 생성 후 실제 화면 재캡처는 Mac 잠금으로 blocked였고 사용자에게 수동 잠금 해제를 요청했다. `goal-native-session-transition-orbit117-postpackage-cua-lock.json`에 도구가 반환한 차단 근거를 보관했다. 잠금 해제나 실제 native 캡처 성공을 추정하지 않는다.
+
+읽기 전용 WebDriver/IPC 관찰은 계속 가능했다. `goal-native-audio-orbit117-postpackage-930350e-20261009.json/png`와 `goal-session-transition-orbit117-postpackage-verification-930350e-20261009.json`의10개 조건은 패키지 직전 config 전체/hash·39개 대화 목록/hash·localStorage·동일 running PID/engine/model/execution·별도 정의0·API off·idle/빈 composer·관측 error/overlay0의 보존을 확인했다. 이 PNG는 잠금 해제된 native 화면 캡처를 대체하는 근거가 아니다.
+
+production GUI는 실행하지 않았다. Developer ID·공증·자연스러운 Finder 설치 실행·quarantine·별도 계정 Keychain·실제 upgrade·Intel/구형 macOS는 unrun이다. 기존 미디어 실패와 MCP·트레이/Dock/OS 알림의 blocked를 유지하며 전체 목표나 M01–M12 통과를 뜻하지 않는다. 개인 엔진 registry·manifest·adapter 등록은 [미구현 장기 설계](pluggable-inference-runtimes.ko.md)로 남는다. 공개 업로드·원격 push는 수행하지 않았다.
