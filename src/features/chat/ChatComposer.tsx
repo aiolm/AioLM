@@ -35,6 +35,7 @@ interface ChatComposerProps {
   setInput: (value: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   disabled: boolean;
+  loadingModel?: boolean;
   phase: "idle" | "thinking" | "streaming";
   onAddAttachment: () => void;
   onStop: () => void;
@@ -56,7 +57,7 @@ export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
-  aborting, onSend, canSend, msgsLength, responseFinishReason, ct, locale = 'en',
+  aborting, onSend, canSend, msgsLength, responseFinishReason, ct, locale = 'en', loadingModel = false,
   skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
 }: ChatComposerProps) {
   const toolStripRef = useRef<HTMLDivElement>(null);
@@ -131,7 +132,7 @@ export default function ChatComposer({
             if (decision.preventDefault) event.preventDefault();
             if (!decision.skipSend) onKeyDown(event);
           }}
-          disabled={disabled || controlsLocked} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct("offline") : ct("placeholder")} className="app-textarea min-w-0 flex-1" />
+          disabled={disabled || controlsLocked} rows={2} aria-label={ct("chatMessage")} placeholder={disabled ? ct(loadingModel ? "startingServer" : "offline") : ct("placeholder")} className="app-textarea min-w-0 flex-1" />
         <button type="button" data-icon="add" onClick={onAddAttachment} disabled={disabled || controlsLocked || attachmentStatus === "reading" || (documents.length >= 4 && attachments.length >= 4)} title={ct("attachFile")} className="app-button app-button--secondary app-button--sm shrink-0" aria-label={ct("attachFile")}>{ct("attachFile")}</button>
         <span className="chat-composer-status text-xs tabular-nums ui-color-faint" role="status" aria-live="polite">{conversationStatus}</span>
         <button type="button" onClick={phase !== "idle" ? onStop : onSend} disabled={phase !== "idle" ? aborting : !canSend || pendingToolCall !== null || attachmentStatus === 'reading'} className={"app-button app-button--sm shrink-0 " + (phase !== "idle" ? "app-button--danger" : "app-button--primary")} aria-label={phase !== "idle" ? ct("stop") : ct("send")}><StableLabel value={phase !== "idle" ? aborting ? ct("stopping") : ct("stop") : ct("send")} labels={[ct("send"), ct("stop"), ct("stopping")]} /></button>

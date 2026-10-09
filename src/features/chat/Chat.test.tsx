@@ -368,16 +368,48 @@ describe("ChatPanel document context warning", () => {
     expect(sessionHasActivity("work")).toBe(false);
   });
 
-  it('opens the model picker when the default session is stopped despite a saved model', async () => {
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('opens common model settings for a stopped %s session despite a saved model', async provider => {
     const open = vi.fn();
     const start = vi.fn();
     vi.mocked(useModelSettings).mockReturnValue({ open, suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
-    renderPanel({ ...store, status: { state: 'stopped', model: cfg.active_model }, start });
+    const selected = { ...cfg, active_provider: provider, active_model: provider === 'llama.cpp' ? 'models/synthetic.gguf' : 'models/snapshots/synthetic-instruct' };
+    renderPanel({ ...store, cfg: selected, status: { state: 'stopped', model: selected.active_model }, start });
+    expect(screen.getByText('Open Model & settings to load a model before sending a message.')).toBeInTheDocument();
     expect(screen.queryByText('Model ready')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Model & settings' }));
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'default' } }));
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { state: 'starting' as const, busy: false },
+    { state: 'stopped' as const, busy: true },
+  ])('waits for the selected runtime during $state with busy=$busy without claiming a model is missing', ({ state, busy }) => {
+    vi.mocked(useModelSettings).mockReturnValue({ open: vi.fn(), suspended: false, resume: vi.fn(), getRequestConfig: (_id, value) => value, getRequestProfile: () => null });
+    const selected = { ...cfg, active_provider: 'vllm' as const, active_model: 'models/snapshots/synthetic-instruct' };
+    renderPanel({ ...store, cfg: selected, status: { state, model: selected.active_model }, busy });
+    expect(screen.getByRole('heading', { name: 'Loading model' })).toBeInTheDocument();
+    expect(screen.getByText('Wait for the model to finish loading, then try again.')).toBeInTheDocument();
+    expect(screen.queryByText('Open Model & settings to load a model before sending a message.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Model & settings' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'Loading model');
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  });
+
+  it.each(['failed', 'crashed'] as const)('keeps %s diagnostics ahead of a pending model command', state => {
+    const diagnostics = vi.fn();
+    render(createElement(I18nProvider, { initialLocale: 'en', children: createElement(ChatPanel, {
+      store: { ...store, status: { state, model: cfg.active_model }, busy: true }, onOpenDiagnostics: diagnostics,
+    }) }));
+    expect(screen.getByRole('heading', { name: 'Request failed' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Loading model' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveAttribute('placeholder', 'No model loaded — select a model and load it');
+    fireEvent.click(screen.getByRole('button', { name: 'Open diagnostics' }));
+    expect(diagnostics).toHaveBeenCalledOnce();
   });
 
   it("keeps a conversation and offers no settings action of its own once its server stops", async () => {

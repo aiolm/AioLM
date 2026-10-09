@@ -200,6 +200,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const chatSupported = selectedStatus.engine?.chat_supported !== false;
   const canSend = serverOn && chatSupported && !clearingWorkspace && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
+  const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -379,6 +380,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             onKeyDown={onKeyDown}
             disabled={disabled}
             phase={phase}
+            loadingModel={loadingModel}
             onAddAttachment={() => void addAttachment()}
             onStop={stop}
             aborting={aborting}

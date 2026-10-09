@@ -41,6 +41,7 @@ export default function ChatMessageLog({
   onOpenModels, modelSettingsLabel, onOpenDiagnostics, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
+  const isStarting = !serverOn && (starting || status.state === "starting");
   return (
     <div
       ref={scrollRef}
@@ -61,12 +62,12 @@ export default function ChatMessageLog({
             ) : (
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M10 3.5 11.8 8.2H16.5L12.6 10.9 13.9 15.5 10 12.8 6.1 15.5 7.4 10.9 3.5 8.2H8.2L10 3.5Z" /></svg>
             )}
-            title={isFailed ? ct("requestFailed") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
-            description={isFailed ? ct("blockedFailedDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
+            title={isFailed ? ct("requestFailed") : isStarting ? ct("startingServer") : !model ? modelSettingsLabel ?? ct("openModels") : serverOn ? ct("startingServer") : ct("modelReady")}
+            description={isFailed ? ct("blockedFailedDescription") : isStarting ? ct("blockedStartingDescription") : !model ? ct("blockedNoModelDescription") : serverOn ? ct("blockedStartingDescription") : ct("blockedStoppedDescription")}
           >
           <div className="app-empty-actions">
-            {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting}>{modelSettingsLabel ?? ct("openModels")}</button>}
-            {model && !serverOn && !isFailed && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={starting || status.state === "starting" ? ct("startingServer") : ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
+            {onOpenModels && <button type="button" className="app-button app-button--secondary" data-icon="settings" onClick={onOpenModels} disabled={starting || isStarting}>{modelSettingsLabel ?? ct("openModels")}</button>}
+            {model && !serverOn && !isFailed && !isStarting && <button type="button" className="app-button app-button--primary" onClick={onStart} disabled={starting}><StableLabel value={ct("startServer")} labels={[ct("startingServer"), ct("startServer")]} /></button>}
             {isFailed && onOpenDiagnostics && <button type="button" className="app-button app-button--secondary" data-icon="probe" onClick={onOpenDiagnostics}>{ct("openDiagnostics")}</button>}
           </div>
           </EmptyState>
