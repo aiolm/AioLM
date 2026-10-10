@@ -28,6 +28,7 @@
 - 64절은 `e394447`의 arm64 DMG·서명·해시·개인 경로/fixture 검사와 복원 환경 보존 기록이다. 새 제목 수정의 native 화면·해당 production GUI는 재잠금으로 blocked/unrun이다.
 - 65절은 `6a374ce`의 stdout/stderr 진단 보존 수정·실제 합성 프로세스 회귀·공통 검사, 새 debug 앱과 원래 데이터 보존 기록이다. 66절은 해당 소스의 DMG다. 실제 엔진·진단 화면 재검증은 Mac 잠금으로 blocked다.
 - 67절은 잠금 해제 뒤 `6a374ce` debug 앱의 실제 Qwen 시작·출처별 진단·한국어 제목·새 응답·이력 재로드·정상 종료와 개발 환경 복원을 기록한다. 65·66절의 당시 blocked/unrun을 보존하며 해당 production GUI를 검증한 것으로 대체하지 않는다.
+- 68절은 `6a374ce` production GUI의 실제 초기 설정·Ready·응답, 설치 목록 조회 중 잘못된 미설치 안내 수정 `3564440`과 공통 검사·개발 환경 보존을 기록한다. 69절은 새 수정 소스의 DMG다. 수정 후 native 화면은 재잠금으로 blocked이며 이전 소스의 production 실행과 구분한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61절에서는 검증한 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -74,6 +75,7 @@
 | `d614063` | vLLM snapshot이 저장돼 있는데 공통 채팅이 GGUF 미선택으로 안내하고 실제 로딩 중에도 같은 안내를 표시. stopped 안내를 형식 중립적으로 수정하고 준비 상태의 제목·입력 placeholder를 우선 표시. 실패 진단·전송 readiness 유지. | 수정 전 최소 회귀 fail, 관련62개·공통 UI1807개/typecheck/lint/build pass. 63절에서 native stopped/loading/Ready·새 전송·정상 debug 종료와 해당 production GUI의 실제 Ready·산술 응답·지표를 확인했다. 한국어 응답 지시는 fail이며 production 재로드/정상 종료는 재잠금으로 blocked다. |
 | `e394447` | 한국어 fresh UI의 기본 대화 제목이 영어로 표시됐다. 생성 제목·검색·삭제 안내를 현재 UI 언어로 표시하고 저장 제목·자동 이름 지정·사용자 제목을 보존한다. | 수정 전3개 회귀 fail, 관련58개·공통 UI1810개/typecheck/lint/build pass. 67절에서 한국어 생성 제목·검색·삭제 접근성 이름과 첫 전송의 자동 이름 지정을 native 앱에서 확인했다. 63·64절의 잠금 당시 기록은 보존한다. |
 | `6a374ce` | 공통 spawn이 stdout을 버려 핵심 엔진 오류가 진단에서 사라졌다. 두 출력을 각각4KiB로 보존하고 종료 시 파이프에 남은 출력도 회수한다. | 수정 전 합성 실제 프로세스 회귀 fail/후 pass, 관련 Rust46개·전체 Rust/clippy·순차 공통 UI1810개 통과. 67절에서 실제 vLLM stdout/stderr 표시·로그 끝 접근·Ready·응답·정상 종료를 확인했다. 실제 실패/취소 시 진단은 이번 native 범위에서 실행하지 않았다. 65·66절 참조. |
+| `3564440` | 설치 목록 조회 중 실제 설치된 런타임을 미설치로 표시했다. 대기·조회 실패·확인된 미설치를 구분하고 Start는 확인 전 차단한다. 새로고침 시 이전 readiness를 철회하고 저장값을 유지한다. | production native 재현·세 엔진의 수정 전 회귀3개 fail, 수정 후 관련85개·공통 UI1816개/typecheck/lint pass. 성공한 빈 목록은 미설치로 유지하며 조회 실패가 미설치나 영구 로딩으로 표시되지 않는 것을 검사했다. 수정 후 native 재검증은 Mac 재잠금으로 blocked. 68절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1390,3 +1392,50 @@ raw는 `goal-native-audio-orbit128-{baseline,starting,loading,diagnostics,ready-
 최종 데이터 audit는 기존41개 대화/hash·21개 프로필 ID/내용·프로필 영역 밖 config 불변을 확인했다. 합성 대화1개를 추가했고 localStorage 변경은 그 대화의 active selection뿐이다. 두 번의 실제 Save profile & start로 vLLM Default revision16→18과 적용 snapshot/library revision만 바뀌었으며 설정 내용은 같았다. 초기 audit가 저장 모델 경로와 서버 alias를 직접 비교해 실패한 것은 helper의 잘못된 가정이었다. 저장 모델은 execution.active_model, 서버 alias는 engine.upstream_model과 각각 일치하는 것을 확인했다. URL의 `/v1` suffix를 정수 port로 읽던 초기 helper 오류도 URL parser로 수정하고 기록했다.
 
 이번 제품 코드·추가 자동 검사·패키지 변경은 없다. 전체 자동 검사와 DMG는 65·66절의 동일 제품 소스 근거를 따른다. 이 production GUI 실행·실제 실패/취소 시 새 진단 수집, 미디어 내용 실패·URI upstream 제한·실제 ffmpeg 부재, MCP Yes/No 뒤 도구/모델 응답·호출 중 취소, 트레이/Dock/OS 알림 수신은 여전히 남아 있다. 별도 계정·Keychain·upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 unrun이다. 개인 엔진 registry/manifest 등록은 미구현이며 전체 목표나 M01–M12 완료를 표시하지 않는다. 원격 push는 수행하지 않았다.
+
+## 68. 실제 production 응답과 설치 목록 조회 상태 수정
+
+잠금 해제 상태에서 66절의 `6a374ce` DMG와 바이트가 같은 GUI/CLI를 별도 임시 홈에 복사해 실행했다. strict 서명·해시·CoreFoundation 홈 격리·fresh CLI의 미완료 onboarding/빈 모델·런타임·격리된 모델 기본 경로를 확인했다. 같은 OS 계정의 임시 홈이며 별도 계정 최초 실행·Keychain 검증으로 계산하지 않는다. 실제 화면 조작은 CUA로 수행했고 release 앱에는 개발 서버·WebDriver를 사용하지 않았다.
+
+| 실제 여정 | 결과·근거 |
+| --- | --- |
+| 기존 개발 앱 정상 종료 | pass — 실제 Cmd+Q 뒤 기록한 앱·엔진의4 PIDs, 모델·driver·IPv4/IPv6 Vite listener 종료와 launcher exit0을 확인했다. 닫힌 앱을 다시 getApp/getAXState로 관찰하지 않고 inventory만 조회했다. 같은 debug bundle의 중복 실행 없음·config/hash·42개 대화/hash 불변. 이 근거를 production 정상 종료로 사용하지 않는다. |
+| 격리 production 초기 설정 | pass — 한국어·시스템 테마·명시적인 모델 폴더로 onboarding 완료. 새 대화의 제목·목록·삭제 접근성 이름이 한국어로 표시됐다. 기존 설정을 factory default로 복사하지 않았다. |
+| 기존 엔진 등록·실행 | pass — 현재 inventory의 사용 가능한4 runtime을 확인하고 기존 vllm-metal0.30.0/vLLM0.30.0+cpu 환경을 fixture 홈에 외부 등록했다. 모델은 기존 Qwen3-VL-2B-Instruct-4bit, revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`. 새 설치·다운로드 없음. GUI의 Recovered profile에서 실제 context 입력이 비어 있음을 확인하고 첫 Start 전에 `max_model_len=4096`을 명시적으로 입력·저장했다. fixture 준비의 평면 설정 값이 프로필 편집값에 이미 적용됐다고 가정하지 않는다. 실제 Loading→Ready와 모델명 확인. |
+| 새 요청·내용 | 산술 pass / 한국어 지시 fail — 9+6을 한국어 한 문장으로 설명하라는 합성 요청에 `9加上6等于15。`, finish reason stop을 반환했다. 실제 native 화면과 저장 응답에서 확인했다. 원인을 확정하거나 강제 언어·seed·template 변경으로 통과시키지 않았다. |
+| PP·TG | pass(제공된 지표 범위) — PP48 tokens/cache0, TG8 tokens/339.8409ms/20.5979tok/s, TTFT4960ms·준비26ms·요청4985ms. 런타임이 제공하지 않은 PP 시간·속도를 만들어 넣지 않았다. 모델명·응답·지표의 native 표시와 저장 값을 확인했다. |
+| production 재로드·정상 종료 | blocked — 응답 뒤 native screenshot 관찰 시 Mac이 다시 잠겼다. 이번 production PNG는 수집하지 못했으며 이력 재로드·정상 GUI 종료도 실행하지 못했다. native AX 관찰과 저장 thread/config·프로세스 근거를 보관했다. |
+| production 소유 자원 정리 | pass(강제 정리 범위) — 기록 PID·프로그램·process group·listener 소유권과 원래 데이터 hash를 확인한 뒤 해당 fixture의 엔진·앱 그룹만 SIGTERM.4 PIDs 종료·모델 listener 닫힘·원래 config와42개 대화/hash 불변·자체 short TMP 제거 확인. app exit−15/runner exit1은 강제 종료 결과이며 crash 또는 정상 종료 pass로 바꾸지 않는다. |
+
+실제 Runtime 설정 화면에서 설치 목록을 읽는 중 미설치 경고가 먼저 나타났고, 설치된 Metal descriptor가 도착하면 사라지는 제품 결함을 재현했다. `3564440f1722b66f418c4da71e672b1938698456`은 공통 설정 editor에서 조회 대기·실패·확정 결과를 구분한다. 대기/실패는 선택이 없다는 근거가 아니며, 성공한 빈 목록은 실제 미설치로 안내한다. Start는 현재 선택을 확인할 때까지 차단하고 새로고침은 이전 readiness를 철회한다. private frontend callback의 nullable 상태만 추가했으며 IPC·공개 API·저장 schema·프로필·엔진 기능 계약을 바꾸지 않았다.
+
+| 자동 검사 | 결과·시간 |
+| --- | --- |
+| 수정 전 세 엔진의 지연 inventory 회귀 | fail — llama.cpp/vLLM/MLX 모두 잘못된 미설치 안내,3개 실패·2.95s. 필터로 제외된 기존 검사63개는 실패 skip 처리나 통과 근거가 아니다. |
+| 최종 관련 UI 검사 | pass — 2 files/85 tests·43.64s. 성공한 빈 Python inventory·refresh 대기·실패 시 readiness 철회·저장값 불변 포함. 총6개 회귀를 추가했다. |
+| TypeScript / lint | pass — 9.50s / 5.57s. |
+| 전체 `npm run test:unit` | pass — 114.59s. contracts·provider options·scripts·direct 검사와 UI180 files/1816 tests 통과. coverage statements80.8%/branches75.75%/functions79.37%/lines84.9%. |
+
+추가 회귀의 최초 실행은84 pass/1 fail이었다. 제품이 반환한 `Error:` prefix까지 포함된 문자열에 테스트가 exact text를 요구한 문제였으며, 핵심 오류 문자열을 검사하도록 수정한 뒤 같은85개가 통과했다. 실패 로그도 보존한다. readiness 제거·해시 무시·timeout 확대·실패 skip은 하지 않았다. React 효과의 취소 guard·독립 조회의 병렬 실행·렌더 시 파생 상태·접근성 status/error를 검토했고 새 dependency는 없다. frontend만 변경했으므로 Rust/Python 전체 검사를 이번에 재실행한 것으로 표시하지 않는다. 동일 Rust 소스의 근거는65절, 새 전체 패키지 build는69절이다.
+
+원래 임시 홈의 서명된 `6a374ce` debug core와 수정 frontend/Vite를 재실행했다. 최종 읽기 전용 관찰·audit에서도 config 전체/hash·42개 대화/hash·localStorage 불변, 추가 세션 정의 없음, API off·모델 stopped·생성 중 아님·UI 오류/overlay 없음을 확인했다. session_list에는 정상적인 stopped 기본 행이 있으므로 전체 목록이 비어야 한다고 요구한 초기 audit 가정을 고치고 config.sessions의 추가 정의 부재를 별도로 검사했다. 수정 후 native 화면과 Qwen 재시작은 CUA 재확인에서도 재잠금으로 blocked다. 이 개발 환경을 Ready로 표시하지 않는다.
+
+raw는 `goal-production-orbit129-{source-inventory,prepared,debug-owned-before-quit,debug-normal-quit,retry-launch,native-response-and-lock,owned-before-forced-cleanup,forced-cleanup,retry-exit,short-temp-cleanup}.json`, `goal-native-audio-orbit129-{before-production,restored,final}-20261010.json/png`, `goal-runtime-inventory-orbit129-{restored,final}-preservation.json`과 대응 로그다. before-production/restored/final PNG는 보조 debug WKWebView 캡처이며 production native 캡처로 부르지 않는다. 검사 로그 prefix는 `logs/goal-runtime-inventory-orbit129-`이며 before·related·final-related·verified-related·typecheck·lint·unit·final-observe·final-audit 결과를 모두 남겼다.
+
+미디어 내용 실패·upstream URI 제한·실제 ffmpeg 부재 검사, MCP Yes/No 뒤 실제 도구/모델 응답·호출 중 취소, 트레이/Dock/OS 알림 전달은 남아 있다. 별도 계정·Keychain·upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 unrun이다. 개인 엔진 registry/manifest 등록은 미구현이고 전체 M01–M12/목표 완료를 선언하지 않는다. 원격 push는 수행하지 않았다.
+
+## 69. 설치 목록 상태 수정 소스의 arm64 DMG
+
+제품 소스 `3564440f1722b66f418c4da71e672b1938698456`에서 기존 `npm run package:tauri`를 실행해 CLI·frontend·release GUI와 arm64 DMG를 생성했다. exit0·201.46s이며 chunk 크기 경고는 남아 있다. 공증 자격 증명이 없는 ad-hoc 패키지이므로 공증 완료로 표시하지 않는다.
+
+| 산출물 | SHA-256 |
+| --- | --- |
+| `goal-package-3564440/AioLM_0.3.1_aarch64.dmg` — 16,813,203 bytes | `62815d7867511b72f1d29514bc018baabd2a3151f93709f64d72a44585489253` |
+| GUI `aiolm` | `382909211c95e843b1f7242f33ba66178e39cc8878a18a73e011cd46d411fd93` |
+| CLI `aiolm-cli` | `30e3119a878102c934aff49d431995dd95f88a7e973bd5dc3d1461671614aa46` |
+
+`goal-native-runtime-lock-package-3564440-results.json`과 `logs/goal-runtime-inventory-orbit129-package{-inspect,}-20261010.log`가 근거다. native arm64 CPython3.12에서 read-only/nobrowse mount로 검사했고 exit0·7.35s였다. source HEAD 전후 일치·version0.3.1·최소 macOS13.3·GUI/CLI arm64·정확한5개 bundle 파일·strict deep ad-hoc 서명·build app과 이미지 내부 binary hash 일치가 pass다. UTF-8/UTF-16 두 byte order의 개인 홈/checkout 경로·기존 fixture·새 ORBIT-129 fixture 검사에서 일치0건이었다.
+
+새 격리 홈에서 packaged CLI config get exit0, 미완료 onboarding·빈 모델/런타임·격리 홈 내부 모델 경로를 확인했다. 원본 이미지 hash 불변·보존 복사 hash 일치·mount 해제도 확인했다. 임시 설정·원본 모델·실행 로그·캡처는 배포 bundle에 들어 있지 않으며 Git 제외 대상 tmp에만 보관했다.
+
+이 새 production GUI는 unrun이다. 68절의 실제 production 실행은 `6a374ce`의 근거이며 새 설치 목록 수정의 native 검증을 대신하지 않는다. Mac 잠금으로 수정 후 debug 화면·실제 Qwen 재시작도 blocked다. Developer ID·공증·자연스러운 Finder 설치 실행·quarantine·별도 계정/Keychain/upgrade·Intel/구형 macOS 및 미디어/MCP/OS 통합의 남은 판정을 유지한다. 임의 개인 엔진 등록이나 전체 M01–M12 완료를 선언하지 않으며 원격 push는 수행하지 않았다.
