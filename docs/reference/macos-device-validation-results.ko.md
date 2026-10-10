@@ -4,7 +4,7 @@
 
 ## 1. 소스·환경·근거
 
-- 실행일: 2026-10-07–09 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
+- 실행일: 2026-10-07–10 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
 - 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 23절은 MCP 조회·승인 대기 정리와 기술 입력 치환 수정 `bbd2df6`을, 24절은 해당 소스의 DMG를 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
@@ -24,6 +24,8 @@
 - 57절은 실행 중인 기본·별도 모델 세션의 보호 조건을 런타임 관리 화면에 반영한 수정 `7ad2605`와 실제 잠금·해제·소유 프로세스 정리·복원 기록이며 58절은 해당 소스의 DMG다.
 - 59절은 세션 명령 대기 중 런타임 관리 잠금과 준비·취소 상태 표시 수정 `930350e`의 실제 검증·보존 기록이다. 60절은 해당 소스의 DMG를 기록한다.
 - 61절은 `930350e` production GUI의 격리 실행·실제 응답과 공통 채팅 안내 수정 `d614063`을 기록한다. 수정 후 native 화면과 기존 모델 재시작은 재잠금으로 blocked다. 62절은 새 수정 소스의 DMG를 기록한다.
+- 63절은 잠금 해제 후 `d614063`의 실제 stopped/loading/Ready 안내·새 응답·정상 debug 종료, 해당 production GUI의 한국어 설정·실제 응답, 기본 대화 제목 수정 `e394447`과 재잠금 뒤 정리·복원을 기록한다. 61·62절의 과거 blocked/unrun을 당시 결과로 보존하며 새로운 근거와 구분한다.
+- 64절은 `e394447`의 arm64 DMG·서명·해시·개인 경로/fixture 검사와 복원 환경 보존 기록이다. 새 제목 수정의 native 화면·해당 production GUI는 재잠금으로 blocked/unrun이다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61절에서는 검증한 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -67,7 +69,8 @@
 | `e70ec9e` | vllm-metal 실행의 backend 진단에 저장된 llama.cpp CPU 선택이 들어갔다. 엔진 identity를 우선하고 다른 엔진에서는 해당 필드를 null로 반환한다. 최소 창의 진단 로그가 화면보다 높아 End로 이동한 마지막 줄이 가려지는 문제도 수정했다. | 수정 전 Rust 회귀 실패/후 관련17개·전체 Rust/clippy·공통 UI1789개 통과. 실제 새 native 실행의 null/저장값 보존과 최소·짧은 넓은 창·desktop의 로그 접근, geometry12개·재시작 보존16개 조건. 55절 참조. |
 | `7ad2605` | 모델 실행 중에도 Python 환경 설치·등록·삭제·번들 전송 버튼이 활성화되어 backend 보호 오류를 뒤늦게 표시했다. 공통 세션 poller와 busy lifecycle을 사용해 기본·별도 세션의 잠금·안내를 반영한다. | 수정 전 회귀 실패/후 관련47개·공통 UI1794개 통과. 실제 기본 starting·별도 starting/running의 잠금, 전체 stopped의 해제, 별도 세션 소유 PID·포트 정리와23개 검증/보존 조건. 57절 참조. |
 | `930350e` | 별도 세션 준비 명령이 진행돼도 아직 stopped인 poll 때문에 런타임 관리 버튼이 잠시 활성화되고 세션 행은 Stopped와 Cancel을 함께 표시했다. 공통 명령 activity로 잠금을 보완하고 준비·취소 상태를 유지한다. | 수정 전 두 회귀 실패/후 관련134개·직접 검사·공통 UI1801개 통과. 실제 native 별도 entry 생성 전 잠금, Starting/Cancelled/Stopped와 해제, 정상 load/stop·기본 실행 복원 및27개 검증/보존 조건. 59절 참조. |
-| `d614063` | vLLM snapshot이 저장돼 있는데 공통 채팅이 GGUF 미선택으로 안내하고 실제 로딩 중에도 같은 안내를 표시. stopped 안내를 형식 중립적으로 수정하고 준비 상태의 제목·입력 placeholder를 우선 표시. 실패 진단·전송 readiness 유지. | 수정 전 최소 회귀 fail, 관련62개·공통 UI1807개/typecheck/lint/build pass. 수정 후 native 화면은 잠금으로 blocked이며 production 실제 추론은 수정 전 `930350e` 소스다. |
+| `d614063` | vLLM snapshot이 저장돼 있는데 공통 채팅이 GGUF 미선택으로 안내하고 실제 로딩 중에도 같은 안내를 표시. stopped 안내를 형식 중립적으로 수정하고 준비 상태의 제목·입력 placeholder를 우선 표시. 실패 진단·전송 readiness 유지. | 수정 전 최소 회귀 fail, 관련62개·공통 UI1807개/typecheck/lint/build pass. 63절에서 native stopped/loading/Ready·새 전송·정상 debug 종료와 해당 production GUI의 실제 Ready·산술 응답·지표를 확인했다. 한국어 응답 지시는 fail이며 production 재로드/정상 종료는 재잠금으로 blocked다. |
+| `e394447` | 한국어 fresh UI의 기본 대화 제목이 영어로 표시됐다. 생성 제목·검색·삭제 안내를 현재 UI 언어로 표시하고 저장 제목·자동 이름 지정·사용자 제목을 보존한다. | 수정 전3개 회귀 fail, 관련58개·공통 UI1810개/typecheck/lint/build pass. native 수정 후 화면은 재잠금으로 blocked. 63·64절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1233,3 +1236,79 @@ read-only/nobrowse mount에서 버전0.3.1·최소 macOS13.3·정확한 기존5�
 새 패키지 GUI는 Mac 잠금 때문에 실행하지 않았다. 61절의 실제 production Ready·추론은 이전 `930350e`의 근거이며 새 수정의 native 화면 검증을 대신하지 않는다. 복원한 개발 앱도 아직 모델 stopped다. 새 소스의 실제 stopped/loading/Ready·전송·정상 종료·기록 재로드와 기본 Qwen 실행 복원은 잠금 해제 후 남은 작업이다.
 
 Developer ID·공증·자연스러운 Finder 설치 실행·quarantine·별도 계정 Keychain·실제 upgrade·Intel/구형 macOS는 unrun이다. 미디어 내용 실패·MCP/트레이/Dock/OS 알림 blocked 및 개인 엔진 registry의 미구현 범위를 유지한다. 원격 push는 수행하지 않았다.
+
+
+## 63. 실제 채팅 안내·production 응답과 기본 대화 제목 수정
+
+2026-10-10 잠금 해제 상태에서 기존 debug 앱과 `d614063` frontend의 실제 CUA 검증을 재개했다. 시작 화면에 있던 과거 저장 응답을 새 실행의 응답으로 세지 않았다. 기존 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`, vllm-metal0.30.0/vLLM0.30.0+cpu와 외부 등록 환경을 사용했다. 새 다운로드·공개 업로드·원격 push는 수행하지 않았다.
+
+### 기존 개발 앱의 실제 흐름
+
+| 검증 | 결과·근거 |
+| --- | --- |
+| stopped·loading 공통 안내 | pass — 빈 새 대화에서 특정 파일 형식을 가정하지 않는 모델 설정 안내를 확인했다. 실제 Save profile and start 뒤 Chat의 Loading model·대기 안내, 비활성 모델 설정·composer·Send와 중복 Load 부재를 확인했다. `goal-native-orbit123-stopped`와 `-editor-starting` native PNG/AX, `goal-native-audio-orbit123-chat-loading-20261010.json`이 근거다. 파일명 editor-starting의 실제 캡처는 Chat loading 화면이다. |
+| Ready·모델 identity·새 전송 | pass — 실제 Ready와 Qwen 표시 이름, 활성 composer에서 합성 요청을 전송했다. `goal-native-orbit123-ready`와 `-response` native 캡처, 저장 대화가 근거다. 실제 argv의 provider context는4096이었다. |
+| 최소 창 접근 | pass(스크롤 접근 범위) — 실제360×520 창/WK360×488에서 응답·모델과 지표에 순서대로 접근했다. DOM width/clientWidth 모두360, log height76/scrollHeight377이다. 첫 지표 캡처의 PP 상단은 조금 잘려 있으며 모든 정보가 동시에 보인다고 계산하지 않는다. `goal-native-orbit123-minimum-{response,metrics}.png`, `-minimum-geometry.json` 보관.1280×800으로 복원했다. |
+| 정상 debug 종료 | pass — 실제 Cmd+Q, launcher exit0. 기록한 app·엔진·tracker·EngineCore·Vite의5개 PID, 모델 listener·embedded driver·IPv6 Vite listener 정리를 확인했다. `goal-production-orbit123-debug-{owned-before-quit,normal-quit-cleanup}.json`이 근거다. |
+
+첫 요청은 한국어 한 문장으로3+4를 설명하도록 했다. 응답 `3加上4等于7。`, finish stop, PP48/TG7/cache0, TTFT11188ms·전체11195ms·준비40ms, TG231.93ms/25.87tok/s를 저장했다. **산술은 pass, 한국어 지시는 fail**이다.
+
+동일 모델 프로세스에 현재 프로필·저장된 일반 요청을 이용해 공통 `buildChatRequestBody`로 재구성한 직접 호출은 HTTP200/3888ms, `3과 4를 더하면 7입니다.`, PP48/TG12/cache32·finish stop이었다. native 요청 자체를 캡처한 것이 아니며 재구성한 비교임을 명시한다. 실제 두 번째 새 대화에 동일 입력을 보내자 `3에 4를 더하면 7이 답입니다.`, uncached PP16/cache32/전체 prompt48, TG14·finish stop이 표시됐다. prompt·sampling·출력 한도를 의도적으로 바꾸지 않았다. 첫 실패를 유지하며, 기본 sampling과 cache 상태가 다른 세 응답으로 원인을 단정하지 않는다. 모델 응답 언어를 강제하는 설정이나 우회 수정을 추가하지 않았다. 직접 request/SSE/result와 두 native 응답을 `goal-native-orbit123-direct-language-20261010-*`, `-thread.json`, `-repeated-response`에 보관했다.
+
+### 소스 `d614063` production GUI
+
+62절 DMG의 GUI/CLI를 byte-identical하게 작업용 app으로 복사하고 strict 서명을 확인했다. 별도 HOME·legacy·앱 경로·CoreFoundation home과 짧은 작업 전용 TMPDIR를 사용했다. 개발 서버·WebDriver·바이너리/Info.plist 수정 없이 직접 실행했다. 같은 OS 계정의 격리이며 자연스러운 Finder 설치 실행이나 별도 계정 최초 실행의 근거는 아니다. 새 CLI 기본값을 확인하고 기존 외부 환경·모델만 명시적으로 선택한 뒤 실제 onboarding에서 한국어를 선택했다.
+
+첫 시작은 Ready 전에 실패했다. fixture 준비가 모델/runtime 선택으로 생성한 Recovered profile 뒤에 provider 옵션을 설정해서, 선택된 프로필에는 context 옵션이 비어 있었다. 실제 모델 설정의 provider context 필드도 runtime-default/빈 값이었다. 초기 CLI의 provider_options만으로 실제 launch context가4096이었다고 판단하지 않는다. 실제 UI에서4096을 입력하고 Save profile and start를 실행한 재시도는 Ready와 모델 표시·활성 composer에 도달했다. 실제 argv와 저장 옵션의4096을 확인했다. 이것은 fixture 준비 순서와 프로필 선택의 차이며, **첫 엔진 초기화 실패의 핵심 원인은 확인하지 못했다.** context 부족·OOM·upstream 결함으로 확정하지 않는다.
+
+진단 끝에는 Engine core initialization failed와 “See root cause above”를 가리키는 API wrapper traceback만 남았다. 공통 spawn은 stdout을 버리고 stderr 마지막4KiB만 보존한다. stdout의 핵심 오류나 긴 stderr 앞부분을 잃을 수 있는 진단 개선 과제를 추가로 확인했으며 아직 수정하지 않았다. 중복 AVFoundation 클래스 경고도 원인으로 확정하지 않고 기존 외부 라이브러리를 변경하지 않았다. `goal-production-orbit123-loading-ko` 캡처는 이름과 달리 **실패 화면**이며 한국어 Loading 통과 근거로 쓰지 않는다. `-failure-log-end`가 실제 retained tail의 근거다.
+
+| 검증 | 결과·근거 |
+| --- | --- |
+| 한국어 stopped 안내·실패 우선순위 | pass — 실제 onboarding 뒤 모델 형식을 가정하지 않는 안내, 실패 뒤 진단 우선 표시. `goal-production-orbit123-stopped-ko`와 `-loading-ko` native 캡처. |
+| Ready·모델·실제 요청·응답 지표 | pass(산술 범위) — `-ready-ko`, `-response-ko.png/-ax.txt`, `-actual-threads.json`, `-integration.json`. 응답 `3加上4等于7。`, finish stop, PP48/TG7/cache0, TTFT8285ms/준비31ms/전체8300ms, TG206.55ms/29.05tok/s. PP 시간/속도 미측정은 —와 안내로 표시했다. |
+| 한국어 응답 지시 | fail — production의 첫 응답도 중국어였다. 직접 비교의 성공을 production 응답 성공으로 대체하지 않는다. 원인은 미분류다. |
+| 응답 재로드·정상 production GUI 종료 | blocked — 완료 응답은 실제 native 화면으로 확인했으나 이어진 관찰에서 Mac이 잠겼다. 잠금 해제를 요청한 뒤에도 조작할 수 없었다. `-response-cua-lock.json` 보관. |
+| 소유 fixture 강제 정리 | pass(강제 정리 범위) — 기록한 engine/app group에만 SIGTERM, 전체 기록 PID·모델 포트 종료·소유 짧은 TMPDIR 제거·외부 Python 보존 확인. app exit-15/launcher exit1을 유지하며 정상 종료 pass로 세지 않는다. `-retry-owned-running`, `-retry-forced-cleanup`, `-retry-exit`과 run log가 근거다. |
+
+준비·source inventory·registration·fresh defaults·실제 config/threads·native PNG/AX·실행 로그는 `goal-production-orbit123-*`에 보관했다. 강제 정리 helper의 초기 pair-list 접근 오류, 정상 종료를 요구해 실패한 production launcher도 보존했다. 검사 helper 실패를 제품 실패와 섞지 않는다.
+
+### 공통 기본 제목 수정과 검사
+
+한국어 fresh production UI에서 기본 제목·목록·삭제 접근성 이름이 `New conversation`으로 남는 제품 결함을 재현했다. 수정 `e3944470a4315c0a699ebf0e458ff76d4b5c2c3a`는 기존 생성 제목을 화면의 현재 언어로 표시하고 같은 표시 제목으로 검색할 수 있게 한다. 제목 입력에는 번역된 placeholder를 사용하며, 삭제 안내에도 같은 이름을 적용한다. 저장된 생성 제목·history schema·첫 메시지의 자동 이름 지정·빈 draft 재사용과 사용자 지정 제목은 보존한다. 엔진 분기·공개 IPC·프로필·benchmark 계약·제품 초기값을 변경하지 않았다.
+
+| 자동 검사 | 결과 |
+| --- | --- |
+| 수정 전 최소 회귀 | fail —6.54초, 한국어·일본어·중국어3개 모두 생성 제목에서 실패. 필터 제외39개는 실행하지 않았다. |
+| 최종 관련3 files | pass —4.81초/58개. 번역 제목·tooltip·검색·삭제 안내·취소·저장 제목 보존·사용자 제목으로 첫 전송, thread/hydration/history 검사 포함. 중간4.50초 실행은 존재하지 않는 fireEvent.cancel 사용 때문에3개 실패/55개 통과였고 검사 코드를 수정했다. |
+| typecheck / lint / build | pass —9.58초 /5.56초 /10.91초. 기존 chunk 크기 경고 유지. |
+| 공통 test:unit | pass —123.07초. contracts·provider 옵션·scripts·직접 검사·UI180 files/1810개. coverage80.78/75.72/79.34/84.89%. |
+
+React 구성·hooks 의존성·접근성 이름과 데이터 보존을 검토했다. Rust/Python 제품 변경은 없으며 해당 전체 suite를 이 절에서 다시 실행했다고 표기하지 않는다. 새 제목 수정의 native 화면 재검증은 Mac 잠금으로 blocked다. 기존 `d614063` production의 실제 응답을 새 수정의 GUI 검증으로 대체하지 않는다.
+
+### 개발 환경 복원과 남은 작업
+
+강제 정리 뒤 원래 임시 홈으로 개발 서버와 기존 debug app을 복원했다. 읽기 전용 WebDriver/IPC의 `goal-production-orbit123-restored-data-preservation-final.json`은 production 직전 config 전체/hash·41개 대화 목록/hash·localStorage 보존, 별도 session 정의0·API off·model stopped의7개 조건을 확인했다. 첫 helper는 기본 session이 status 목록에 포함되는 것을 잘못 거부했으며 실패 파일을 보존하고 정의와 기본 status를 구분해 수정했다. 관측 errors/overlay0은 전체 console 검증을 뜻하지 않으며 잠금 상태의 WebDriver PNG는 native 화면 검증을 대신하지 않는다.
+
+시작 시점과의 `goal-native-orbit123-original-data-audit.json`은 기존39개 대화와21개 프로필 identity·내용 보존을 확인했다. 실제 Save profile and start로 vLLM Default revision15→16과 적용 snapshot·library revision만 바뀌었고 합성 요청의 대화2개를 추가했다. 다른 config 값은 동일하다. 복원한 모델은 stopped이며 잠금 해제 뒤 기본 Qwen 재시작·새 제목 native 표시·production 재로드/정상 종료가 남아 있다.
+
+미디어 내용 실패·URI upstream 제한·실제 ffmpeg 부재 검증, M08/M12의 MCP Yes/No 뒤 도구/모델 후속 응답과 호출 취소, M11의 트레이/Dock/실제 OS 알림 수신은 남아 있다. 별도 계정·Keychain·upgrade·Finder 설치 실행·Intel/구형 macOS는 unrun이다. stdout/stderr 핵심 오류 보존 개선과 응답 언어 실패 분류도 남긴다. 개인 엔진 registry·manifest·adapter 등록은 [장기 설계](pluggable-inference-runtimes.ko.md)의 **미구현** 범위다. 전체 목표나 M01–M12 통과를 표시하지 않는다.
+
+
+## 64. 기본 대화 제목 수정 소스 `e394447`의 arm64 DMG
+
+제품 소스 `e3944470a4315c0a699ebf0e458ff76d4b5c2c3a`에서 기존 `npm run package:tauri`를 실행했다. 생성197.10초, 준비된 native arm64 CPython3.12 검사4.67초 모두 exit0이다. `logs/goal-production-orbit123-title-package-20261010.log`, `logs/goal-production-orbit123-title-inspection-20261010.log`, `goal-native-runtime-lock-package-e394447-results.json`을 보관했다. 검사 전·후 HEAD와 이미지 hash는 불변이다.
+
+| 산출물 | 보존 위치·검사 |
+| --- | --- |
+| DMG | `goal-package-e394447/AioLM_0.3.1_aarch64.dmg`,16799817 bytes, SHA-256 `28861364cccd0406f93856f72bfd15ea15444d9b733d20a4fba7df4e2a5826ad` |
+| GUI | arm64, SHA-256 `8d6cbaeb48d339582f06d90192937733fda3021eb75c5fe9a1a0be33bef8b27f` |
+| CLI | arm64, SHA-256 `e762e4b60979b19d0c80b0b72a22c04ac7a97f27d06e1e92411699b54ed0c218` |
+
+read-only/nobrowse mount에서 버전0.3.1·최소 macOS13.3·기존5개 파일·symlink 없음, 두 실행 파일과 빌드 원본 hash 일치를 확인했다. GUI/CLI·sealed app의 ad-hoc 서명과 deep/strict 검사는 통과했다. source/home 경로의 UTF-8/UTF-16 LE/BE scan과 기존·이번 fixture scan은 모두0이었다. 새 격리 홈의 패키지 CLI는 exit0, onboarding 미완료·모델/runtime 없음·홈 안 models directory를 확인했다. 생성 DMG를 raw 폴더에 해시 일치 복사하고 mount 해제를 확인했다.
+
+`goal-production-orbit123-postpackage-preservation.json`은 config/hash·41개 대화·localStorage 불변, 동일 복원 debug 앱·별도 정의0·API off/model stopped의7개 조건을 확인했다. 이는 읽기 전용 WebDriver/IPC 근거다. 개발 서버·embedded driver는 유지 중이며 실제 native 화면 확인과 Qwen 시작은 재잠금으로 blocked다.
+
+패키지 검사 뒤 복원된 debug app을 CUA로 다시 선택했으나 Mac 잠금 차단이 반환됐다. `goal-native-orbit123-postpackage-cua-lock.json`에 해당 근거를 보관했으며 수정 후 제목 화면이나 모델 시작이 성공했다고 추정하지 않는다.
+
+이 패키지 GUI는 실행하지 않았다. 63절의 실제 production Ready·응답은 이전 `d614063`의 결과이며 새 제목 수정의 실제 화면을 대신하지 않는다. 새 제목 native 검증·production 기록 재로드/정상 종료, 기존 미디어 내용 실패·MCP·트레이/Dock/OS 알림과 진단 개선·언어 실패 분류는 남아 있다. Developer ID·공증·Finder 설치 실행·quarantine·별도 계정 Keychain·upgrade·Intel/구형 macOS는 unrun이다. 개인 엔진 registry·manifest 등록도 미구현이며 전체 목표나 M01–M12를 통과로 표시하지 않는다. 원격 push는 수행하지 않았다.
