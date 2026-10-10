@@ -26,6 +26,7 @@
 - 61절은 `930350e` production GUI의 격리 실행·실제 응답과 공통 채팅 안내 수정 `d614063`을 기록한다. 수정 후 native 화면과 기존 모델 재시작은 재잠금으로 blocked다. 62절은 새 수정 소스의 DMG를 기록한다.
 - 63절은 잠금 해제 후 `d614063`의 실제 stopped/loading/Ready 안내·새 응답·정상 debug 종료, 해당 production GUI의 한국어 설정·실제 응답, 기본 대화 제목 수정 `e394447`과 재잠금 뒤 정리·복원을 기록한다. 61·62절의 과거 blocked/unrun을 당시 결과로 보존하며 새로운 근거와 구분한다.
 - 64절은 `e394447`의 arm64 DMG·서명·해시·개인 경로/fixture 검사와 복원 환경 보존 기록이다. 새 제목 수정의 native 화면·해당 production GUI는 재잠금으로 blocked/unrun이다.
+- 65절은 `6a374ce`의 stdout/stderr 진단 보존 수정·실제 합성 프로세스 회귀·공통 검사, 새 debug 앱과 원래 데이터 보존 기록이다. 66절은 해당 소스의 DMG다. 실제 엔진·진단 화면 재검증은 Mac 잠금으로 blocked다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61절에서는 검증한 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -71,6 +72,7 @@
 | `930350e` | 별도 세션 준비 명령이 진행돼도 아직 stopped인 poll 때문에 런타임 관리 버튼이 잠시 활성화되고 세션 행은 Stopped와 Cancel을 함께 표시했다. 공통 명령 activity로 잠금을 보완하고 준비·취소 상태를 유지한다. | 수정 전 두 회귀 실패/후 관련134개·직접 검사·공통 UI1801개 통과. 실제 native 별도 entry 생성 전 잠금, Starting/Cancelled/Stopped와 해제, 정상 load/stop·기본 실행 복원 및27개 검증/보존 조건. 59절 참조. |
 | `d614063` | vLLM snapshot이 저장돼 있는데 공통 채팅이 GGUF 미선택으로 안내하고 실제 로딩 중에도 같은 안내를 표시. stopped 안내를 형식 중립적으로 수정하고 준비 상태의 제목·입력 placeholder를 우선 표시. 실패 진단·전송 readiness 유지. | 수정 전 최소 회귀 fail, 관련62개·공통 UI1807개/typecheck/lint/build pass. 63절에서 native stopped/loading/Ready·새 전송·정상 debug 종료와 해당 production GUI의 실제 Ready·산술 응답·지표를 확인했다. 한국어 응답 지시는 fail이며 production 재로드/정상 종료는 재잠금으로 blocked다. |
 | `e394447` | 한국어 fresh UI의 기본 대화 제목이 영어로 표시됐다. 생성 제목·검색·삭제 안내를 현재 UI 언어로 표시하고 저장 제목·자동 이름 지정·사용자 제목을 보존한다. | 수정 전3개 회귀 fail, 관련58개·공통 UI1810개/typecheck/lint/build pass. native 수정 후 화면은 재잠금으로 blocked. 63·64절 참조. |
+| `6a374ce` | 공통 spawn이 stdout을 버려 핵심 엔진 오류가 진단에서 사라졌다. 두 출력을 각각4KiB로 보존하고 종료 시 파이프에 남은 출력도 회수한다. | 수정 전 합성 실제 프로세스 회귀 fail/후 pass, 관련 Rust46개·전체 Rust/clippy·순차 공통 UI1810개 통과. 실제 엔진·진단 화면은 잠금으로 blocked. 65·66절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1312,3 +1314,53 @@ read-only/nobrowse mount에서 버전0.3.1·최소 macOS13.3·기존5개 파일�
 패키지 검사 뒤 복원된 debug app을 CUA로 다시 선택했으나 Mac 잠금 차단이 반환됐다. `goal-native-orbit123-postpackage-cua-lock.json`에 해당 근거를 보관했으며 수정 후 제목 화면이나 모델 시작이 성공했다고 추정하지 않는다.
 
 이 패키지 GUI는 실행하지 않았다. 63절의 실제 production Ready·응답은 이전 `d614063`의 결과이며 새 제목 수정의 실제 화면을 대신하지 않는다. 새 제목 native 검증·production 기록 재로드/정상 종료, 기존 미디어 내용 실패·MCP·트레이/Dock/OS 알림과 진단 개선·언어 실패 분류는 남아 있다. Developer ID·공증·Finder 설치 실행·quarantine·별도 계정 Keychain·upgrade·Intel/구형 macOS는 unrun이다. 개인 엔진 registry·manifest 등록도 미구현이며 전체 목표나 M01–M12를 통과로 표시하지 않는다. 원격 push는 수행하지 않았다.
+
+
+## 65. 엔진 stdout 진단 보존과 개발 앱 갱신
+
+63절에서 실제 엔진 초기화 실패의 진단에 wrapper만 남았고, 공통 spawn은 stdout을 버리는 것으로 확인했다. `6a374ce63a8d5f8fa078fe4defb5fc6b1b06c3bc`는 desktop·benchmark의 공통 실행에서 stdout/stderr를 모두 읽고 각4KiB의 독립 tail에 보관한다. 긴 stderr가 stdout의 핵심 오류를 밀어내지 않는다. stdout이 있으면 출처별 label을 사용하며 시간순 정렬을 의미하지 않는다. 기존 stderr-only 문자열은 그대로 유지한다. 두 출력 모두 기존 credential 비식별화·ANSI 제거를 거친다.
+
+프로세스 소유자가 output reader 두 개도 소유하며, 종료 때 현재 파이프의 unread bytes를 조회해 그 snapshot만 회수한다. writer를 상속한 live 자식 때문에 EOF를 무한히 기다리거나 이후 출력을 계속 소비하지 않는다. Unix nonblocking/FIONREAD와 Windows PeekNamedPipe를 사용한다. readiness600초·해시 검사·엔진별 옵션·모델/profile/benchmark 계약·공개 IPC·기본값을 변경하지 않았다. 독립 headless CLI collector도 유지한다. 제한된 tail이므로 같은 stream의 앞부분은 계속 잘릴 수 있으며 전체 로그 영구 저장 기능을 구현한 것은 아니다. **이전에 버려진 실제 로그를 복구하거나 당시 Qwen 시작 실패의 원인을 확정하지 않는다.**
+
+### 최소 재현과 공통 검사
+
+기존 managed fake server의 성공적인 health/stream 흐름 뒤에 실패 흐름을 추가했다. 실제 프로세스가 stdout64KiB 뒤 핵심 오류·Unicode·합성 credential, stderr64KiB 뒤 API wrapper 오류를 쓰고 exit7한다. 동일 격리 runtime/홈에서 실행해 환경 override의 병렬 충돌을 피한다. readiness 실패에 두 오류가 모두 포함되는지, 출력 제한·비식별화·소유 child 회수·임시 credential 제거를 확인한다. 실모델 검증으로 계산하지 않는다.
+
+| 명령·검증 | 결과·근거 |
+| --- | --- |
+| 수정 전 `--test smoke_fake` | fail —21.43초/exit101. readiness는 exit7을 보고했으나 핵심 stdout 오류가 없어 회귀 assertion에서 실패했다. `logs/goal-runtime-log-orbit124-before-20261010.log`. |
+| 수정 후 동일 integration | pass —20.40초/1개. healthy health/SSE와 실패·정리 모두 실행. `logs/goal-runtime-log-orbit124-related-20261010.log`. |
+| `--lib server::tests` | pass —20.93초/46개,906개 filtered. Unicode/chunk·redaction·긴 wrapper·clear/다음 실행, live writer 두 reader의 빠른 종료, 기존 readiness/상태/옵션 보호 포함. |
+| Rust 전체 타깃·feature | pass —62.66초. lib948 pass/4 ignored, CLI15 pass, headless log·provider result contract·smoke_fake integration 통과. 실모델·실다운로드 등 gated ignored는 이번에 실행한 것으로 세지 않는다. |
+| clippy 전체 타깃·feature / rustfmt check | pass —10.66초 /0.78초. 경고를 실패로 검사했다. |
+| typecheck / lint | pass —8.99초 /5.04초. |
+| 공통 `test:unit` 첫 실행 | fail —130.32초. contracts/direct/scripts 통과, UI179 files/1809개 pass, 기존 sampling raw override reset1개가5000ms timeout으로 실패했다. |
+| 해당 UI file 재확인 | pass —2.86초/19개. source/test/timeout을 바꾸지 않았다. |
+| 같은 공통 명령 순차 재실행 | pass —113.39초, UI180 files/1810개. coverage80.78/75.72/79.34/84.89%. 첫 실패를 보존하며 병렬 Rust 실행과의 경합이 원인이라고 확정하지 않는다. |
+
+각 raw log는 `logs/goal-runtime-log-orbit124-{server-tests,rust-all,clippy,fmt-check,typecheck,lint,unit,ui-timeout-recheck,unit-sequential}-20261010.log`에 보관했다. 검사 skip·retry 설정·시간 제한 확대 없이 재확인했다. Python 제품 변경은 없다. 이번 Rust/macOS 검사를 Windows/Linux 실기기 검증으로 표시하지 않는다.
+
+### 새 debug 앱과 데이터 보존
+
+같은 source의 `cargo build --locked --manifest-path src-tauri/Cargo.toml --bin aiolm --all-features`는0.47초/exit0이었다. 기존 임시 debug bundle의 메타데이터/아이콘을 복사하고 새 executable을 넣어 ad-hoc으로 서명했다. 서명 전 빌드 원본과 복사본 hash 일치, 서명 후 hash와 deep/strict 검사를 기록했다. **서명이 바이너리를 변경하므로 서명된 app이 미서명 빌드와 byte-identical하다고 표시하지 않는다.** 작업용 debug bundle이며 배포물에 포함하지 않는다.
+
+CUA는 기존 앱의 정상 종료 전에 다시 Mac 잠금 차단을 반환했다. 모델 stopped·API off·별도 정의0·생성 중 아님을 읽기 전용 관찰로 확인하고, 기록한 기존 fixture app group만 SIGTERM으로 종료했다. 기존 launcher가 Vite group을 회수했으며 app·driver·IPv4/IPv6 Vite listener 종료와 config/41개 대화 hash 보존을 확인했다. app exit-15/launcher exit1을 기록하고 정상 종료 pass로 세지 않는다. 원래 launcher 로그는 그대로 보존했다.
+
+새 bundle로 개발 서버와 앱을 원래 임시 홈에서 실행했다. `goal-runtime-log-orbit124-restored-preservation.json`의8개 조건은 config 전체/hash·41개 대화 목록/hash·localStorage 불변, 별도 정의0·API off/model stopped, 서명된 executable의 hash 일치와 새 bundle에서 실제 실행 중인 프로세스를 확인한다. 관측 errors/overlay0은 전체 console 검증을 뜻하지 않는다. raw는 `goal-runtime-log-orbit124-debug-{prepared,owned-before-replacement,replacement-cleanup}.json`, `goal-native-audio-orbit124-{before-build,restored-6a374ce}-20261010.json/png`, 빌드·교체·복원 로그다.
+
+새 앱을 CUA로 선택할 때도 Mac 잠금 차단이 반환됐다. `goal-runtime-log-orbit124-native-lock.json`에 보관했다. 모델은 stopped이고 실제 Qwen 재시작·새 title/진단 화면·실제 엔진 실패/취소 뒤 출력 회수는 blocked다. 이전 native 증거와 이번 실제 합성 프로세스 검사를 새 소스의 실모델/GUI 통과로 대체하지 않는다. 미디어 내용 실패·upstream URI 제한·MCP Yes/No와 실제 call 취소·트레이/Dock/OS 알림, 별도 계정/Keychain/upgrade/Finder·Intel/구형 macOS의 남은 상태를 유지한다. 응답 언어 실패는 미분류이며 개인 엔진 등록은 [설계](pluggable-inference-runtimes.ko.md)의 미구현 범위다. 전체 목표를 완료로 표시하지 않았다. 원격 push는 수행하지 않았다.
+
+
+## 66. 진단 보존 소스 `6a374ce`의 arm64 DMG
+
+기존 `npm run package:tauri`로 제품 source `6a374ce63a8d5f8fa078fe4defb5fc6b1b06c3bc`를 패키징했다. 생성197.54초, native arm64 CPython3.12 검사5.95초 모두 exit0이다. `logs/goal-runtime-log-orbit124-{package,inspection}-20261010.log`, `goal-native-runtime-lock-package-6a374ce-results.json`에 근거를 보관했다. 검사 전·후 HEAD와 DMG hash는 불변이다.
+
+| 산출물 | 보존 위치·검사 |
+| --- | --- |
+| DMG | `goal-package-6a374ce/AioLM_0.3.1_aarch64.dmg`,16813297 bytes, SHA-256 `84a3b4c64bdfb7c8b2d2d9da1dbba793d46e6daa89a80d3bce1adf529df83a2a` |
+| GUI | arm64, SHA-256 `7dbd4837bc05d4979bc7090433ba630adfa7b820d9d2d4e135f40a078c9d74f2` |
+| CLI | arm64, SHA-256 `c42bf48d8c5b94df1fb63eee48f181d3e9bc98451490820463f478ef2b5e3843` |
+
+read-only/nobrowse mount에서 버전0.3.1·최소 macOS13.3·정확한 기존5개 파일·symlink 없음·실행 파일과 빌드 원본 hash 일치를 확인했다. GUI/CLI·sealed app의 ad-hoc 서명/deep/strict 검사는 통과했다. source/home 경로·기존/이번 fixture·새 합성 실패 flag와 오류 문구의 UTF-8/UTF-16 LE/BE scan은 모두0이었다. 새 격리 홈의 패키지 CLI exit0·onboarding 미완료·모델/runtime 없음·홈 안 models directory, 이미지의 해시 일치 보존 복사와 mount 해제를 확인했다.
+
+이 production GUI는 실행하지 않았다. Mac 잠금으로 새 debug native 진단과 실제 엔진 재검증도 blocked다. Developer ID·공증·자연스러운 Finder 설치 실행·quarantine·별도 계정 Keychain·upgrade·Intel/구형 macOS는 unrun이며 미디어/MCP/OS 통합의 잔여 상태를 유지한다. 전체 M01–M12 통과나 임의 개인 엔진 등록 완료를 뜻하지 않는다. 원격 push는 수행하지 않았다.
