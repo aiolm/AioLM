@@ -415,6 +415,47 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
   });
 
+  it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('waits for the %s inventory before reporting a selected runtime as missing', async provider => {
+    let finish!: () => void;
+    if (provider === 'llama.cpp') {
+      vi.mocked(api.rtList).mockReturnValueOnce(new Promise(resolve => {
+        finish = () => resolve([{ backend: 'cpu', build: 'b123', dir: 'runtime', size_mb: 30 }]);
+      }));
+    } else {
+      vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+      vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+      vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+      vi.spyOn(api, 'providerRuntimes').mockReturnValue(new Promise(resolve => {
+        finish = () => resolve([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+      }));
+    }
+    const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: {
+      ...cfg, active_provider: provider, active_runtime: provider === 'llama.cpp' ? '' : 'synthetic',
+    } });
+    await waitFor(() => expect(api.deviceProfile).toHaveBeenCalled());
+    expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This runtime is not installed. Install it or select another runtime.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+    expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
+  });
+
+  it.each(['vllm', 'mlx-vlm'] as const)('reports a missing %s runtime after its inventory successfully loads empty', async provider => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([]);
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+    const { onApply } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
+    expect(await screen.findByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).toBeVisible();
+    expect(screen.getByText('This runtime is not installed. Install it or select another runtime.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
   it('keeps numeric edits out of persistence until apply, and discards them on cancel', async () => {
     const writes = vi.spyOn(Storage.prototype, 'setItem');
     const { onApply, onClose } = mount({ initialSection: 'tuning' });

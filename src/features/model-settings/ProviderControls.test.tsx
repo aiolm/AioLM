@@ -3,13 +3,35 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
 import * as api from '../../shared/api';
-import { ProviderOptions } from './ProviderControls';
+import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerTelemetryCopy } from './providerTelemetry';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
   providerCatalog: vi.fn(), providerRuntimes: vi.fn(), providerOptionIssues: vi.fn(), providerRuntimeOptions: vi.fn(),
 }));
+
+describe('runtime inventory readiness', () => {
+  it('withdraws cached readiness while refreshing and keeps a failed inventory unconfirmed', async () => {
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([{ id: 'synthetic', provider: 'vllm', engine: 'vllm', server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+    const onReady = vi.fn(); const onChange = vi.fn();
+    const view = (revision: number) => <I18nProvider initialLocale="en"><ProviderRuntimeControl cfg={{ ...testConfig, active_provider: 'vllm', active_runtime: 'synthetic' }} disabled={false} onProvider={vi.fn()} onChange={onChange} onReady={onReady} revision={revision} /></I18nProvider>;
+    const rendered = render(view(0));
+    expect(onReady).toHaveBeenLastCalledWith(null);
+    await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(true));
+    let fail!: (cause: Error) => void;
+    vi.mocked(api.providerRuntimes).mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }));
+    rendered.rerender(view(1));
+    await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(null));
+    expect(screen.getByRole('status')).toBeVisible();
+    await act(async () => { fail(new Error('Synthetic inventory read failed')); });
+    expect(await screen.findByText(/Synthetic inventory read failed/)).toBeVisible();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(onReady).toHaveBeenLastCalledWith(null);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
 
 describe('runtime-specific option controls', () => {
   it('keeps saved options intact while their runtime schema is being checked', async () => {

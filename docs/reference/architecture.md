@@ -90,6 +90,11 @@ processes. Their ports are selected at launch, and their live URLs are used by
 internal chat. The configured `port` belongs to the external API; private ports
 are never written back to saved configuration or execution profiles.
 
+Model setup keeps runtime discovery separate from installation status. Pending
+or failed inventory reads do not establish that a saved runtime is missing;
+successful empty inventories do. Start remains blocked until the selection is
+confirmed, and refresh withdraws cached readiness without changing saved values.
+
 The app-owned API listener starts without a loaded model, routes each inference
 request to a ready session, and authenticates clients with an app-lifetime key
 independent of the per-process credentials. Model reload, unload, idle expiry,

@@ -9,7 +9,7 @@ import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTel
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
-  onChange: (patch: Partial<api.AppConfig>) => void; onReady: (ready: boolean) => void; revision?: number;
+  onChange: (patch: Partial<api.AppConfig>) => void; onReady: (ready: boolean | null) => void; revision?: number;
   compact?: boolean;
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
@@ -17,17 +17,20 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   const [descriptions, setDescriptions] = useState<api.ProviderDescription[]>([]);
   const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>([]);
   const [error, setError] = useState('');
+  const [inventoryState, setInventoryState] = useState<'loading' | 'ready' | 'error'>('loading');
   useEffect(() => {
     let active = true;
+    setInventoryState('loading'); setError('');
     void Promise.all([api.providerCatalog(), api.providerRuntimes()]).then(([catalog, runtimes]) => {
-      if (active) { setDescriptions(catalog); setRuntimes(runtimes); setError(''); }
-    }).catch(cause => { if (active) setError(String(cause)); });
+      if (active) { setDescriptions(catalog); setRuntimes(runtimes); setInventoryState('ready'); }
+    }).catch(cause => { if (active) { setError(String(cause)); setInventoryState('error'); } });
     return () => { active = false; };
   }, [revision]);
   const selected = provider === 'llama.cpp' ? cfg.active_build && cfg.active_backend ? `${cfg.active_build}-${cfg.active_backend}` : '' : cfg.active_runtime ?? '';
   const description = descriptions.find(item => item.id === provider);
   const entries = runtimes.filter(item => item.provider === provider);
-  const ready = description?.availability.supported === true && entries.some(item => item.id === selected && item.available);
+  // A pending or failed inventory cannot establish that the selected runtime is absent.
+  const ready = inventoryState === 'ready' ? description?.availability.supported === true && entries.some(item => item.id === selected && item.available) : null;
   useEffect(() => onReady(ready), [ready, onReady]);
   return <div className="model-settings-fields">
     <EngineSelect value={provider} disabled={disabled} onChange={onProvider} size={compact ? 'sm' : 'md'} />
@@ -37,7 +40,7 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
       onChange={value => { const item = entries.find(item => item.id === value); onChange(provider === 'llama.cpp'
         ? { active_backend: item?.backend ?? '', active_build: item?.build ?? '' } : { active_runtime: value }); }} /></label>
     {description?.availability.supported === false && <FeedbackBanner tone="warning">{copy.unsupported} {description.availability.detail}</FeedbackBanner>}
-    {provider !== 'llama.cpp' && !description && <p role="status">{copy.loading}</p>}
+    {inventoryState === 'loading' && <p role="status">{copy.loading}</p>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </div>;
 }

@@ -74,7 +74,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const provider = api.providerOf(cfg);
   const llama = provider === 'llama.cpp';
   const providerDrafts = useRef<Partial<Record<api.ProviderId, { settings: ExecutionSettings; prompt: string }>>>({});
-  const [providerReady, setProviderReady] = useState(false);
+  const [providerReady, setProviderReady] = useState<boolean | null>(null);
   const [profileBannerTarget, setProfileBannerTarget] = useState<HTMLDivElement | null>(null);
   const latest = useRef(cfg); latest.current = cfg;
   const [section, setSection] = useState(normalizeSection(initialSection));
@@ -98,7 +98,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [editorRevision, setEditorRevision] = useState(0);
   const [tuningRevision, setTuningRevision] = useState(0);
   const [resources, setResources] = useState<{ runtimes: api.InstalledRuntime[]; device: api.DeviceReport | null }>({ runtimes: [], device: null });
-  // Whether the installed-runtime list has answered at least once. An empty
+  // Whether the current installed-runtime query has answered. An empty
   // list is a real answer — no runtime installed — and must report the selected
   // runtime as missing; only a list that has not loaded yet stays unchecked.
   const [resourcesLoaded, setResourcesLoaded] = useState(false);
@@ -146,6 +146,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     if (!open) return;
     let active = true;
     setResourceError('');
+    setResourcesLoaded(false);
     void Promise.all([llama ? api.rtList() : Promise.resolve([]), api.deviceProfile()]).then(([runtimes, device]) => { if (active) { setResources({ runtimes, device }); setResourcesLoaded(true); } })
       .catch(cause => { if (active) setResourceError(String(cause)); });
     return () => { active = false; };
@@ -249,7 +250,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     }
     finally { applyLock.current = false; setApplying(false); }
   };
-  const runtimeMissing = llama ? !!cfg.active_backend && !resources.runtimes.some(item => item.backend === cfg.active_backend && item.build === cfg.active_build) : !providerReady;
+  const runtimeKnown = llama ? resourcesLoaded : providerReady !== null;
+  const runtimeMissing = llama ? !!cfg.active_backend && !resources.runtimes.some(item => item.backend === cfg.active_backend && item.build === cfg.active_build) : providerReady === false;
   const runtimeSelected = llama ? !!cfg.active_backend && !!cfg.active_build : !!cfg.active_runtime;
   const chooseProvider = (nextProvider: api.ProviderId) => {
     if (nextProvider === provider) return;
@@ -304,7 +306,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     activeBackend: llama ? cfg.active_backend : cfg.active_runtime ?? '',
     activeBuild: llama ? cfg.active_build : cfg.active_runtime ?? '',
     modelIncomplete: incomplete,
-    ...(resourcesLoaded ? { runtimeInstalled: !runtimeMissing } : {}),
+    ...(runtimeKnown ? { runtimeInstalled: !runtimeMissing } : {}),
   });
   const editorKey = `${cfg.active_model}:${editorRevision}`;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
@@ -371,7 +373,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <div hidden={section !== 'runtime'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}</div>
 
-              {runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
+              {runtimeKnown && runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
               {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} onInvalid={setFieldInvalid} />}
             </div>
@@ -414,7 +416,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           <div className="model-settings-actions">
             {!benchmark && mode !== 'project' && (live
               ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
-              : <button type="button" className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
+              : <button type="button" className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || !runtimeKnown || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
             {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" onClick={onCancelStart}>{copy.cancel}</button>}
           </div>
         </footer>
