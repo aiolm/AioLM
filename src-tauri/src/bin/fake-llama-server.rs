@@ -101,6 +101,34 @@ fn main() {
         println!("llama-server test fixture b1\n--model --port --api-key --api-key-file --ctx-size --threads --temp --top-p --top-k");
         return;
     }
+    if std::env::args().any(|arg| arg == "--fake-startup-failure") {
+        let args = std::env::args().collect::<Vec<_>>();
+        let key = args
+            .iter()
+            .position(|arg| arg == "--api-key-file")
+            .and_then(|index| args.get(index + 1))
+            .map(|path| std::fs::read_to_string(path).expect("read fixture credential"))
+            .unwrap_or_default();
+        let mut output = std::io::stdout().lock();
+        output.write_all(&vec![b'x'; 65536]).unwrap();
+        writeln!(
+            output,
+            "\nengine core: synthetic allocation failed 🙂; credential={}",
+            key.trim()
+        )
+        .unwrap();
+        output.flush().unwrap();
+        drop(output);
+        let mut errors = std::io::stderr().lock();
+        errors.write_all(&vec![b'y'; 65536]).unwrap();
+        writeln!(
+            errors,
+            "\nAPI wrapper: engine initialization failed; see engine core output above."
+        )
+        .unwrap();
+        errors.flush().unwrap();
+        std::process::exit(7);
+    }
     let port = port_arg();
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind fake llama-server port");
     for incoming in listener.incoming() {

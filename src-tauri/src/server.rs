@@ -11,12 +11,12 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// A model process owns its temporary credential and stderr reader. Teardown
+/// A model process owns its temporary credential and output readers. Teardown
 /// also runs when a launch fails before attaching to a session.
 pub struct Child {
     process: Option<crate::procutil::OwnedChild>,
     key_file: Option<ApiKeyFile>,
-    stderr_reader: Option<StderrReader>,
+    output_readers: Vec<OutputReader>,
 }
 
 impl From<std::process::Child> for Child {
@@ -24,7 +24,7 @@ impl From<std::process::Child> for Child {
         Self {
             process: Some(child.into()),
             key_file: None,
-            stderr_reader: None,
+            output_readers: Vec::new(),
         }
     }
 }
@@ -52,7 +52,7 @@ impl Drop for Child {
         if let Some(process) = self.process.as_mut() {
             process.terminate();
         }
-        self.stderr_reader.take();
+        self.output_readers.clear();
         self.key_file.take();
     }
 }
@@ -64,11 +64,81 @@ impl Drop for ApiKeyFile {
     }
 }
 
-struct StderrReader {
+enum OutputPipe {
+    Stdout(std::process::ChildStdout),
+    Stderr(std::process::ChildStderr),
+}
+
+impl From<std::process::ChildStdout> for OutputPipe {
+    fn from(pipe: std::process::ChildStdout) -> Self {
+        Self::Stdout(pipe)
+    }
+}
+impl From<std::process::ChildStderr> for OutputPipe {
+    fn from(pipe: std::process::ChildStderr) -> Self {
+        Self::Stderr(pipe)
+    }
+}
+impl Read for OutputPipe {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Stdout(pipe) => pipe.read(buffer),
+            Self::Stderr(pipe) => pipe.read(buffer),
+        }
+    }
+}
+impl OutputPipe {
+    #[cfg(unix)]
+    fn fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        match self {
+            Self::Stdout(pipe) => pipe.as_raw_fd(),
+            Self::Stderr(pipe) => pipe.as_raw_fd(),
+        }
+    }
+
+    // Snapshot the unread pipe contents when stopping. A live descendant may
+    // retain the writer, so teardown must not wait for EOF or drain new output.
+    fn available(&self) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        {
+            let mut available: libc::c_int = 0;
+            if unsafe { libc::ioctl(self.fd(), libc::FIONREAD, &mut available) } == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(available.max(0) as usize)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            let handle = match self {
+                Self::Stdout(pipe) => pipe.as_raw_handle(),
+                Self::Stderr(pipe) => pipe.as_raw_handle(),
+            };
+            let mut available = 0;
+            if unsafe {
+                windows_sys::Win32::System::Pipes::PeekNamedPipe(
+                    handle,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(available as usize)
+        }
+    }
+}
+
+struct OutputReader {
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
-impl Drop for StderrReader {
+impl Drop for OutputReader {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Release);
         if let Some(thread) = self.thread.take() {
@@ -77,12 +147,13 @@ impl Drop for StderrReader {
     }
 }
 
-impl StderrReader {
-    fn attach(mut stderr: std::process::ChildStderr, ring: Arc<ErrBuf>) -> std::io::Result<Self> {
+impl OutputReader {
+    fn attach(pipe: impl Into<OutputPipe>, ring: Arc<ErrBuf>) -> std::io::Result<Self> {
+        let mut pipe = pipe.into();
+        let stdout = matches!(&pipe, OutputPipe::Stdout(_));
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd;
-            let fd = stderr.as_raw_fd();
+            let fd = pipe.fd();
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags == -1
                 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
@@ -93,44 +164,56 @@ impl StderrReader {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::Builder::new()
-            .name("model-stderr".into())
+            .name(
+                if stdout {
+                    "model-stdout"
+                } else {
+                    "model-stderr"
+                }
+                .into(),
+            )
             .spawn(move || {
                 let mut buffer = [0_u8; 8192];
+                let mut drain_remaining = None;
                 loop {
+                    if stopping.load(std::sync::atomic::Ordering::Acquire)
+                        && drain_remaining.is_none()
+                    {
+                        drain_remaining = Some(pipe.available().unwrap_or(0));
+                    }
+                    if drain_remaining == Some(0) {
+                        break;
+                    }
                     #[cfg(windows)]
-                    let limit = {
-                        use std::os::windows::io::AsRawHandle;
-                        let mut available = 0;
-                        if unsafe {
-                            windows_sys::Win32::System::Pipes::PeekNamedPipe(
-                                stderr.as_raw_handle(),
-                                std::ptr::null_mut(),
-                                0,
-                                std::ptr::null_mut(),
-                                &mut available,
-                                std::ptr::null_mut(),
-                            )
-                        } == 0
-                        {
-                            break;
-                        }
-                        (available as usize).min(buffer.len())
+                    let limit = match pipe.available() {
+                        Ok(available) => available.min(buffer.len()),
+                        Err(_) => break,
                     };
                     #[cfg(not(windows))]
                     let limit = buffer.len();
+                    let limit = limit.min(drain_remaining.unwrap_or(usize::MAX));
                     let read = if limit == 0 {
                         Err(std::io::ErrorKind::WouldBlock.into())
                     } else {
-                        stderr.read(&mut buffer[..limit])
+                        pipe.read(&mut buffer[..limit])
                     };
                     let pending = read_is_pending(&read);
                     match read {
                         Ok(0) => break,
-                        Ok(size) => ring.push(&buffer[..size]),
+                        Ok(size) => {
+                            if stdout {
+                                ring.push_stdout(&buffer[..size]);
+                            } else {
+                                ring.push(&buffer[..size]);
+                            }
+                            if let Some(remaining) = drain_remaining.as_mut() {
+                                *remaining = remaining.saturating_sub(size);
+                            }
+                        }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                         Err(_) => break,
                     }
-                    if stopping.load(std::sync::atomic::Ordering::Acquire) {
+                    if pending && drain_remaining.is_some() {
                         break;
                     }
                     if limit == 0 || pending {
@@ -369,9 +452,11 @@ impl ServerState {
     }
 }
 
-/// Thread-safe, bounded stderr ring — keeps the last ~4 KB so a failed start can surface why.
+/// Independent bounded output tails: a wrapper traceback on stderr must not
+/// erase a core error on stdout. Each stream retains at most 4 KiB.
 pub struct ErrBuf {
     inner: Mutex<OutputBuffer>,
+    stdout: Mutex<OutputBuffer>,
     secret: Mutex<String>,
 }
 
@@ -381,6 +466,7 @@ impl Default for ErrBuf {
     fn default() -> Self {
         Self {
             inner: Mutex::new(OutputBuffer::new(CAP, Retain::Tail)),
+            stdout: Mutex::new(OutputBuffer::new(CAP, Retain::Tail)),
             secret: Mutex::new(String::new()),
         }
     }
@@ -412,7 +498,23 @@ impl ErrBuf {
             .lock()
             .map(|guard| guard.snapshot())
             .unwrap_or_default();
-        let text = String::from_utf8_lossy(&bytes);
+        let stdout = self
+            .stdout
+            .lock()
+            .map(|guard| guard.snapshot())
+            .unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&bytes);
+        let text = if stdout.is_empty() {
+            stderr.into_owned()
+        } else if bytes.is_empty() {
+            format!("[stdout]\n{}", String::from_utf8_lossy(&stdout))
+        } else {
+            // Stream labels describe provenance, not chronological ordering.
+            format!(
+                "[stdout]\n{}\n[stderr]\n{stderr}",
+                String::from_utf8_lossy(&stdout)
+            )
+        };
         let secret = self
             .secret
             .lock()
@@ -424,6 +526,15 @@ impl ErrBuf {
     pub fn clear(&self) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.clear();
+        }
+        if let Ok(mut guard) = self.stdout.lock() {
+            guard.clear();
+        }
+    }
+
+    fn push_stdout(&self, chunk: &[u8]) {
+        if let Ok(mut guard) = self.stdout.lock() {
+            guard.push(chunk);
         }
     }
 }
@@ -786,7 +897,7 @@ pub fn cleanup_api_key_file(path: Option<&Path>) {
     }
 }
 
-/// Spawn the server, drain stderr into the shared ring so the pipe never fills, and return it.
+/// Spawn the server and drain both output pipes into independent bounded tails.
 pub fn spawn(
     cfg: &AppConfig,
     api_key: &str,
@@ -837,7 +948,7 @@ pub fn spawn(
     // consistent with probes and benchmarks, and never hand it inherited
     // credentials or unrelated application state.
     command.env_clear().envs(environment).args(&args);
-    command.stdout(Stdio::null()).stderr(Stdio::piped());
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let process = crate::procutil::OwnedChild::spawn(&mut command).map_err(|e| {
         cleanup_api_key_file(api_key_file.as_deref());
         crate::procutil::spawn_error(Path::new(&bin), &e)
@@ -845,7 +956,7 @@ pub fn spawn(
     let mut child = Child {
         process: Some(process),
         key_file: key_guard,
-        stderr_reader: None,
+        output_readers: Vec::new(),
     };
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
@@ -855,9 +966,17 @@ pub fn spawn(
             return Err("inference server stderr pipe was not available".to_string());
         }
     };
-    child.stderr_reader = Some(
-        StderrReader::attach(stderr, ring.clone())
+    child.output_readers.push(
+        OutputReader::attach(stderr, ring.clone())
             .map_err(|error| format!("failed to start server stderr reader: {error}"))?,
+    );
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "inference server stdout pipe was not available".to_string())?;
+    child.output_readers.push(
+        OutputReader::attach(stdout, ring.clone())
+            .map_err(|error| format!("failed to start server stdout reader: {error}"))?,
     );
     Ok((
         child,
@@ -1665,6 +1784,59 @@ mod tests {
     }
 
     #[test]
+    fn core_output_survives_wrapper_overflow_and_clears_for_the_next_launch() {
+        let ring = ErrBuf::default();
+        ring.set_secret("synthetic-session-key");
+        let core = "\x1b[31mcore failure 🙂 synthetic-session-key\x1b[0m";
+        for chunk in core.as_bytes().chunks(3) {
+            ring.push_stdout(chunk);
+        }
+        ring.push(&vec![b'x'; CAP * 16]);
+        ring.push(b"\nwrapper failure synthetic-session-key");
+        let log = ring.tail();
+        assert!(log.contains("[stdout]\ncore failure 🙂 [REDACTED]"));
+        assert!(log.contains("[stderr]\n"));
+        assert!(log.contains("wrapper failure [REDACTED]"));
+        assert!(!log.contains("synthetic-session-key"));
+        assert!(!log.contains('\x1b'));
+        assert!(log.len() < CAP * 3);
+        ring.clear();
+        assert!(ring.tail().is_empty());
+        ring.push_stdout(b"new launch synthetic-session-key");
+        assert_eq!(ring.tail(), "[stdout]\nnew launch [REDACTED]");
+    }
+
+    #[test]
+    fn dropping_output_readers_does_not_wait_for_a_live_writer() {
+        let mut command = if cfg!(windows) {
+            let mut command = crate::procutil::std_command("cmd");
+            command.args(["/c", "ping -n 60 127.0.0.1 > nul"]);
+            command
+        } else {
+            let mut command = crate::procutil::std_command("sh");
+            command.args(["-c", "sleep 60"]);
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut process = crate::procutil::OwnedChild::spawn(&mut command).unwrap();
+        let ring = Arc::new(ErrBuf::default());
+        let stdout = OutputReader::attach(process.stdout.take().unwrap(), ring.clone()).unwrap();
+        let stderr = OutputReader::attach(process.stderr.take().unwrap(), ring).unwrap();
+        let started = Instant::now();
+        drop((stdout, stderr));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "reader teardown must not await pipe EOF"
+        );
+        assert!(process.try_wait().unwrap().is_none());
+        process.terminate();
+        assert!(process.try_wait().unwrap().is_some());
+    }
+
+    #[test]
     fn lifecycle_activity_blocks_unload_while_a_request_is_active() {
         let mut state = ServerState::new();
         state.last_activity_at = std::time::Instant::now() - Duration::from_secs(20);
@@ -2050,12 +2222,12 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let reader =
-                StderrReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
+                OutputReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
                     .unwrap();
             let owner = Child {
                 process: Some(process),
                 key_file: Some(ApiKeyFile(path.clone())),
-                stderr_reader: Some(reader),
+                output_readers: vec![reader],
             };
             let started = Instant::now();
             drop(owner);
@@ -2079,7 +2251,7 @@ mod tests {
             .spawn()
             .unwrap();
         let reader =
-            StderrReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
+            OutputReader::attach(process.stderr.take().unwrap(), Arc::new(ErrBuf::default()))
                 .unwrap();
         let started = Instant::now();
         drop(reader);

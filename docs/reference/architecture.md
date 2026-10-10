@@ -158,6 +158,12 @@ validation functions used by the CLI and integration tests.
   buffers discard old bytes without shifting the retained log on each read.
   Readers continue draining a child's pipes after the retention limit is reached;
   output limits must not block the child or discard diagnostics on cancellation.
+  Desktop and benchmark server diagnostics retain independent 4 KiB tails for
+  stdout and stderr, so an API wrapper traceback cannot erase a core error from
+  the other stream. Stream labels identify provenance rather than chronology;
+  both tails share credential redaction and ANSI cleanup. On teardown, readers
+  drain a snapshot of buffered pipe bytes without waiting for a live inherited
+  writer to close or consuming output written after that snapshot.
 - Document retrieval splits only the searchable prefix for vector requests and
   shares one ranking between prompt context, source labels and citations. Cache
   lookup hashes each document once per request and indexes its stored offsets.

@@ -74,8 +74,8 @@ mod tempfile_dir {
 
 #[test]
 fn smoke_fake_server_spawn_health_and_chat_stream() {
-    // Serializes with any other test in this binary that also mutates
-    // process-wide environment. There is currently only this one test here.
+    // Both successful and failed launches share one isolated runtime in this
+    // test so no other test races the process-wide data-root override.
     let _dir = stage_fake_managed_runtime();
 
     let cfg = AppConfig {
@@ -150,4 +150,56 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         &mut shared.lock().expect("server state lock").child,
         Some(ring.clone()),
     );
+
+    // Engines may write their core error to stdout and a much longer API
+    // wrapper traceback to stderr. The wrapper must not erase that root error.
+    let failing_cfg = AppConfig {
+        server_args: vec!["--fake-startup-failure".into()],
+        ..cfg
+    };
+    let (child, url, key_file) = server::spawn(
+        &failing_cfg,
+        api_key,
+        &ring,
+        &aiolm_lib::gpu::ResolvedGpu::default(),
+    )
+    .expect("spawn failing engine fixture");
+    shared.lock().unwrap().attach_starting(
+        child,
+        url.clone(),
+        api_key.into(),
+        failing_cfg.active_model,
+        String::new(),
+        String::new(),
+    );
+    let failure = rt
+        .block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                server::wait_ready(shared.clone(), &url, api_key, 20, &ring),
+            )
+            .await
+        })
+        .expect("a failed engine must report promptly")
+        .expect_err("the engine must not become ready");
+    assert!(
+        failure.contains("server exited before ready (7)"),
+        "{failure}"
+    );
+    assert!(
+        failure.contains("engine core: synthetic allocation failed 🙂"),
+        "missing core error: {failure}"
+    );
+    assert!(
+        failure.contains("API wrapper: engine initialization failed"),
+        "missing wrapper error: {failure}"
+    );
+    assert!(failure.contains("[REDACTED]"));
+    assert!(!failure.contains(api_key));
+    assert!(
+        failure.len() < 16384,
+        "large process output must stay bounded"
+    );
+    assert!(shared.lock().unwrap().child.is_none());
+    assert!(key_file.as_ref().is_none_or(|path| !path.exists()));
 }
