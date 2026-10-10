@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { createElement } from "react";
 import ChatPanel from "./Chat";
 import { I18nProvider } from "../../shared/i18n/i18n";
+import { chatText } from "../../shared/i18n/chatI18n";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { SESSION_STATUS_CHANGED_EVENT, sessionConfig } from "../../shared/runtime/sessionUtils";
@@ -12,7 +13,7 @@ import { createTestStore } from "../../testing/appStore";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
-import { createChatThread, saveChatWorkspace } from "./chatHistory";
+import { createChatThread, loadChatWorkspace, saveChatWorkspace } from "./chatHistory";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -163,6 +164,43 @@ describe("ChatPanel unified attachments", () => {
     vi.clearAllMocks();
     vi.mocked(useModelSettings).mockReturnValue(null);
     mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it.each([
+    ['ko', '새 대화'], ['ja', '新しい会話'], ['zh', '新对话'],
+  ] as const)("localizes the generated conversation title in %s without changing saved titles", async (locale, title) => {
+    const thread = { ...createChatThread(1, 'localized-draft'), systemPrompt: 'Synthetic conversation instructions.' };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    const copy = chatText[locale];
+    render(createElement(I18nProvider, { initialLocale: locale, children: createElement(ChatPanel, { store }) }));
+    const heading = await screen.findByRole('heading', { name: title });
+    expect(heading).toHaveAttribute('title', title);
+    expect(loadChatWorkspace().threads[0].title).toBe('New conversation');
+
+    fireEvent.click(screen.getByText(copy.conversationSettings));
+    const titleInput = screen.getByLabelText(copy.title);
+    expect(titleInput).toHaveValue('');
+    expect(titleInput).toHaveAttribute('placeholder', title);
+    fireEvent.click(screen.getByRole('button', { name: copy.conversations }));
+    const search = screen.getByLabelText(copy.search);
+    fireEvent.change(search, { target: { value: ` ${title} ` } });
+    expect(screen.getByRole('button', { name: title })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: `${copy.delete}: ${title}` }));
+    const dialog = await screen.findByRole('dialog', { name: copy.deleteTitle });
+    expect(dialog).toHaveTextContent(title);
+    expect(dialog).not.toHaveTextContent('New conversation');
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+    expect(loadChatWorkspace().threads[0].title).toBe('New conversation');
+
+    fireEvent.change(search, { target: { value: '' } });
+    fireEvent.change(titleInput, { target: { value: 'Synthetic custom title' } });
+    await screen.findByRole('heading', { name: 'Synthetic custom title' });
+    respondWithText('Synthetic reply');
+    fireEvent.change(screen.getByLabelText(copy.chatMessage), { target: { value: 'Synthetic first question' } });
+    fireEvent.click(screen.getByRole('button', { name: copy.send }));
+    await screen.findByText('Synthetic reply', { exact: true });
+    expect(screen.getByRole('heading', { name: 'Synthetic custom title' })).toBeInTheDocument();
+    await waitFor(() => expect(loadChatWorkspace().threads[0].title).toBe('Synthetic custom title'));
   });
 
   it("preserves an unsent message and document when reselecting the current conversation", async () => {

@@ -3,10 +3,12 @@ import { CHAT_WORKSPACE_CLEAR_EVENT, createChatThread, isChatWorkspaceClearing, 
 import { removeDocumentVectorsForPaths } from "./documentIndex";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { trackInitialRead } from "../../shared/ui/initialLayout";
+import { displayChatTitle } from './chatThreadTitle';
 
 type Msg = ChatHistoryMessage;
 
 interface UseChatThreadsOptions {
+  defaultThreadTitle?: string;
   phase: "idle" | "thinking" | "streaming";
   /** Read after rendering: MCP approval keeps a turn alive while its stream is idle. */
   hasPendingTurn?: () => boolean;
@@ -35,7 +37,7 @@ function orphanedDocumentPaths(removed: ChatThread, remaining: ChatThread[]): st
   return [...pathsOf([removed])].filter((path) => !kept.has(path));
 }
 
-export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThread }: UseChatThreadsOptions) {
+export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThread, defaultThreadTitle = 'New conversation' }: UseChatThreadsOptions) {
   const [workspace, setWorkspace] = useState<ChatWorkspace>(() => loadChatWorkspace());
   const activeThread = workspace.threads.find((thread) => thread.id === workspace.activeThreadId) ?? workspace.threads[0];
   const [msgs, setMsgs] = useState<Msg[]>(() => activeThread?.messages ?? []);
@@ -166,8 +168,9 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
   // A search scans every message and attached document, so it must not rerun on
   // each composer keystroke or streaming tick, which leave the threads unchanged.
   const visibleThreads = useMemo(() => workspace.threads
-    .filter((thread) => threadMatchesQuery(thread, threadQuery))
-    .sort((left, right) => right.updatedAt - left.updatedAt), [workspace.threads, threadQuery]);
+    .filter((thread) => threadMatchesQuery(thread, threadQuery)
+      || displayChatTitle(thread.title, defaultThreadTitle).toLowerCase().includes(threadQuery.trim().toLowerCase()))
+    .sort((left, right) => right.updatedAt - left.updatedAt), [workspace.threads, threadQuery, defaultThreadTitle]);
 
   // Reading another conversation is always allowed. Only the buffer stays put
   // while a reply is arriving; the view is free to move.

@@ -7,6 +7,7 @@ import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import type { AppConfig } from '../../shared/api/types';
+import { displayChatTitle, isGeneratedChatTitle } from './chatThreadTitle';
 
 interface ChatConversationHeaderProps {
   threadPanelOpen: boolean;
@@ -32,6 +33,7 @@ export default function ChatConversationHeader({
 }: ChatConversationHeaderProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
+  const title = displayChatTitle(activeThread?.title, ct('newConversation'));
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -58,7 +60,7 @@ export default function ChatConversationHeader({
         </button>
         {/* Keep long conversation titles to one line so the controls stay visible. */}
         <div className="chat-conversation-title">
-          <h2 title={activeThread?.title ?? ct("newConversation")} className="text-sm font-semibold ui-color-ink" >{activeThread?.title ?? ct("newConversation")}{activeProjectName ? ` · ${activeProjectName}` : ""}</h2>
+          <h2 title={title} className="text-sm font-semibold ui-color-ink" >{title}{activeProjectName ? ` · ${activeProjectName}` : ""}</h2>
         </div>
       </div>
       {/* No model-settings action here: the app header opens the same editor, and
@@ -97,7 +99,8 @@ export default function ChatConversationHeader({
             <label className="block text-xs font-medium ui-color-ink"  htmlFor="chat-thread-title">{ct("title")}</label>
             <input
               id="chat-thread-title"
-              value={activeThread?.title ?? ""}
+              value={isGeneratedChatTitle(activeThread?.title) ? '' : activeThread?.title ?? ''}
+              placeholder={ct('newConversation')}
               onChange={(event) => onUpdateThread({ title: event.target.value })}
               disabled={phase !== "idle"}
               className="app-input mt-1.5"

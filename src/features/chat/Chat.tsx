@@ -37,6 +37,7 @@ import { useProjectChatBinding } from './useProjectChatBinding';
 import { projectChatBindingCopy } from './projectChatBindingCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import PanelFeedback from '../../shared/ui/PanelFeedback';
+import { displayChatTitle } from './chatThreadTitle';
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -126,7 +127,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     threadQuery, setThreadQuery, threadPanelOpen, setThreadPanelOpen,
     pendingDelete, setPendingDelete, visibleThreads,
     selectThread, newThread, deleteThread, performDeleteThread, updateActiveThread,
-  } = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null, requireIdle, onSwitchThread: resetComposer });
+  } = useChatThreads({ phase, hasPendingTurn: () => pendingToolCall !== null, requireIdle, onSwitchThread: resetComposer, defaultThreadTitle: ct('newConversation') });
 
   const baseUrl = serverOn && selectedStatus.url ? selectedStatus.url : null;
   const apiKey = serverOn ? selectedStatus.api_key ?? "" : "";
@@ -402,7 +403,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
       <ConfirmDialog
         open={pendingDelete !== null}
         title={t("chat.deleteTitle")}
-        description={t("chat.deleteBody", { title: pendingDelete?.title || t("chat.newConversation") })}
+        description={t("chat.deleteBody", { title: displayChatTitle(pendingDelete?.title, ct('newConversation')) })}
         confirmLabel={t("chat.deleteConfirm")}
         onConfirm={() => { if (pendingDelete) performDeleteThread(pendingDelete); }}
         onCancel={() => setPendingDelete(null)}
