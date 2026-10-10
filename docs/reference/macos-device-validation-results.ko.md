@@ -27,6 +27,7 @@
 - 63절은 잠금 해제 후 `d614063`의 실제 stopped/loading/Ready 안내·새 응답·정상 debug 종료, 해당 production GUI의 한국어 설정·실제 응답, 기본 대화 제목 수정 `e394447`과 재잠금 뒤 정리·복원을 기록한다. 61·62절의 과거 blocked/unrun을 당시 결과로 보존하며 새로운 근거와 구분한다.
 - 64절은 `e394447`의 arm64 DMG·서명·해시·개인 경로/fixture 검사와 복원 환경 보존 기록이다. 새 제목 수정의 native 화면·해당 production GUI는 재잠금으로 blocked/unrun이다.
 - 65절은 `6a374ce`의 stdout/stderr 진단 보존 수정·실제 합성 프로세스 회귀·공통 검사, 새 debug 앱과 원래 데이터 보존 기록이다. 66절은 해당 소스의 DMG다. 실제 엔진·진단 화면 재검증은 Mac 잠금으로 blocked다.
+- 67절은 잠금 해제 뒤 `6a374ce` debug 앱의 실제 Qwen 시작·출처별 진단·한국어 제목·새 응답·이력 재로드·정상 종료와 개발 환경 복원을 기록한다. 65·66절의 당시 blocked/unrun을 보존하며 해당 production GUI를 검증한 것으로 대체하지 않는다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61절에서는 검증한 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -71,8 +72,8 @@
 | `7ad2605` | 모델 실행 중에도 Python 환경 설치·등록·삭제·번들 전송 버튼이 활성화되어 backend 보호 오류를 뒤늦게 표시했다. 공통 세션 poller와 busy lifecycle을 사용해 기본·별도 세션의 잠금·안내를 반영한다. | 수정 전 회귀 실패/후 관련47개·공통 UI1794개 통과. 실제 기본 starting·별도 starting/running의 잠금, 전체 stopped의 해제, 별도 세션 소유 PID·포트 정리와23개 검증/보존 조건. 57절 참조. |
 | `930350e` | 별도 세션 준비 명령이 진행돼도 아직 stopped인 poll 때문에 런타임 관리 버튼이 잠시 활성화되고 세션 행은 Stopped와 Cancel을 함께 표시했다. 공통 명령 activity로 잠금을 보완하고 준비·취소 상태를 유지한다. | 수정 전 두 회귀 실패/후 관련134개·직접 검사·공통 UI1801개 통과. 실제 native 별도 entry 생성 전 잠금, Starting/Cancelled/Stopped와 해제, 정상 load/stop·기본 실행 복원 및27개 검증/보존 조건. 59절 참조. |
 | `d614063` | vLLM snapshot이 저장돼 있는데 공통 채팅이 GGUF 미선택으로 안내하고 실제 로딩 중에도 같은 안내를 표시. stopped 안내를 형식 중립적으로 수정하고 준비 상태의 제목·입력 placeholder를 우선 표시. 실패 진단·전송 readiness 유지. | 수정 전 최소 회귀 fail, 관련62개·공통 UI1807개/typecheck/lint/build pass. 63절에서 native stopped/loading/Ready·새 전송·정상 debug 종료와 해당 production GUI의 실제 Ready·산술 응답·지표를 확인했다. 한국어 응답 지시는 fail이며 production 재로드/정상 종료는 재잠금으로 blocked다. |
-| `e394447` | 한국어 fresh UI의 기본 대화 제목이 영어로 표시됐다. 생성 제목·검색·삭제 안내를 현재 UI 언어로 표시하고 저장 제목·자동 이름 지정·사용자 제목을 보존한다. | 수정 전3개 회귀 fail, 관련58개·공통 UI1810개/typecheck/lint/build pass. native 수정 후 화면은 재잠금으로 blocked. 63·64절 참조. |
-| `6a374ce` | 공통 spawn이 stdout을 버려 핵심 엔진 오류가 진단에서 사라졌다. 두 출력을 각각4KiB로 보존하고 종료 시 파이프에 남은 출력도 회수한다. | 수정 전 합성 실제 프로세스 회귀 fail/후 pass, 관련 Rust46개·전체 Rust/clippy·순차 공통 UI1810개 통과. 실제 엔진·진단 화면은 잠금으로 blocked. 65·66절 참조. |
+| `e394447` | 한국어 fresh UI의 기본 대화 제목이 영어로 표시됐다. 생성 제목·검색·삭제 안내를 현재 UI 언어로 표시하고 저장 제목·자동 이름 지정·사용자 제목을 보존한다. | 수정 전3개 회귀 fail, 관련58개·공통 UI1810개/typecheck/lint/build pass. 67절에서 한국어 생성 제목·검색·삭제 접근성 이름과 첫 전송의 자동 이름 지정을 native 앱에서 확인했다. 63·64절의 잠금 당시 기록은 보존한다. |
+| `6a374ce` | 공통 spawn이 stdout을 버려 핵심 엔진 오류가 진단에서 사라졌다. 두 출력을 각각4KiB로 보존하고 종료 시 파이프에 남은 출력도 회수한다. | 수정 전 합성 실제 프로세스 회귀 fail/후 pass, 관련 Rust46개·전체 Rust/clippy·순차 공통 UI1810개 통과. 67절에서 실제 vLLM stdout/stderr 표시·로그 끝 접근·Ready·응답·정상 종료를 확인했다. 실제 실패/취소 시 진단은 이번 native 범위에서 실행하지 않았다. 65·66절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1364,3 +1365,28 @@ CUA는 기존 앱의 정상 종료 전에 다시 Mac 잠금 차단을 반환했�
 read-only/nobrowse mount에서 버전0.3.1·최소 macOS13.3·정확한 기존5개 파일·symlink 없음·실행 파일과 빌드 원본 hash 일치를 확인했다. GUI/CLI·sealed app의 ad-hoc 서명/deep/strict 검사는 통과했다. source/home 경로·기존/이번 fixture·새 합성 실패 flag와 오류 문구의 UTF-8/UTF-16 LE/BE scan은 모두0이었다. 새 격리 홈의 패키지 CLI exit0·onboarding 미완료·모델/runtime 없음·홈 안 models directory, 이미지의 해시 일치 보존 복사와 mount 해제를 확인했다.
 
 이 production GUI는 실행하지 않았다. Mac 잠금으로 새 debug native 진단과 실제 엔진 재검증도 blocked다. Developer ID·공증·자연스러운 Finder 설치 실행·quarantine·별도 계정 Keychain·upgrade·Intel/구형 macOS는 unrun이며 미디어/MCP/OS 통합의 잔여 상태를 유지한다. 전체 M01–M12 통과나 임의 개인 엔진 등록 완료를 뜻하지 않는다. 원격 push는 수행하지 않았다.
+
+
+## 67. 잠금 해제 후 현재 debug 소스의 실제 응답·진단·종료
+
+`612016d` checkout에서 제품 코드 변경 없이 `6a374ce63a8d5f8fa078fe4defb5fc6b1b06c3bc`의 서명된 debug bundle과 현재 frontend를 검증했다. 현재 실행 파일 hash가 65절의 서명 후 hash와 일치한다. CUA의 실제 AX·화면·입력으로 검증하고, 읽기 전용 WebDriver/IPC·파일 hash·OS 프로세스 근거를 함께 보관했다. 이 절의 PNG는 보조 WKWebView 캡처이며 native 조작 근거를 대신하지 않는다.
+
+| 실제 여정 | 결과·근거 |
+| --- | --- |
+| 저장 프로필로 시작 | pass — vLLM Default의 저장된 `--max-model-len=4096`을 확인하고 Save profile & start. 값·기본값을 바꾸지 않았다. 실제 로딩 중 Chat 입력·첨부·전송 비활성화와 Loading model 안내, 이후 Ready·모델명·입력 활성화 확인. |
+| 엔진·모델 | 별도 등록된 vllm-metal0.30.0/vLLM0.30.0+cpu, 기존 Qwen3-VL-2B-Instruct-4bit의 고정 revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`. 설치·다운로드·외부 환경 변경 없음. |
+| 출처별 실제 진단 | pass — stdout의 EngineCore 초기화·Metal warmup·API readiness, stderr의 upstream 경고가 각각 label과 함께 표시됐다. 실제 native 스크롤로 로그 끝과 stderr에 접근했다. 각4KiB tail·동일 stream의 앞부분 잘림은 유지한다. upstream 중복 AVFoundation class 경고가 사라졌거나 이전 시작 실패 원인이 해결됐다고 주장하지 않는다. |
+| 한국어 기본 제목 | pass — Settings에서 한국어로 전환한 새 빈 대화의 제목·목록·삭제 접근성 이름이 새 대화로 표시됐다. 같은 표시 제목으로 검색해 해당 빈 대화만 남는 것을 확인했다. 첫 요청 후 자동 이름 지정도 유지됐다. title 편집 placeholder·삭제 확인창은 이번 실제 여정에 포함하지 않았다. CUA typeText가 검색 원문을 넣지 못한 첫 시도는 paste로 재확인했으며 제품 입력 실패로 분류하지 않는다. |
+| 실제 새 요청 | pass(이번 내용 범위) — 합성 질문 8+5에 한국어 한 문장 `8과 5를 더하면 13이 됩니다.`를 반환했다. 이전 63절의 중국어 첫 응답 실패를 성공으로 바꾸거나 그 원인을 확정하지 않는다. |
+| 모델·PP·TG | pass — 고정 실행 영역과 응답의 Qwen 모델명, PP48 tokens/cache0, TG15 tokens/459.1557ms/30.4907tok/s. TTFT11505ms·준비27ms·요청11512ms. 런타임이 제공하지 않은 PP 시간·속도는 `—`와 이유로 표시되며 저장 데이터에도 해당 값이 없다. PP 시간을 TTFT로 대신하지 않았다. |
+| 대화 재로드 | pass — 다른 대화→이번 대화 재선택, 앱 재실행 뒤 자동 복원에서 내용·모델명·PP/TG·cache·시간 유지. 모델 stopped에서도 저장된 응답 지표를 표시한다. |
+| 정상 종료 | pass(기록한 실행 범위) — 실제 Cmd+Q 뒤 앱·vLLM 부모/core/자원 tracker의 기록4 PIDs와 모델·driver·IPv4/IPv6 Vite listener가 종료됐다. original launcher는 app exit0/전체 exit0. config/hash·42개 대화/hash 불변. `goal-native-orbit128-normal-quit-cleanup.json`과 원래 restore 로그가 근거다. |
+| 최종 개발 환경 | pass — 원래 임시 홈의 동일 debug bundle/Vite 재실행, 저장 이력 복원·같은 기본 Qwen 재시작·Ready. 최종 API off·생성 중 아님·원래 English/밀도 유지. 준비 완료를 실제 native 화면과 IPC로 확인했다. |
+
+raw는 `goal-native-audio-orbit128-{baseline,starting,loading,diagnostics,ready-diagnostics,localized-title,first-response,reloaded,before-quit,restored-repaired,final-ready}-20261010.json/png`와 대응 `logs/goal-native-orbit128-*-20261010.log`, `goal-native-orbit128-{owned-before-quit,normal-quit-cleanup,original-data-and-response-audit}.json`이다. 첫 starting 캡처는 profile 저장 대기 중 stopped였으며 실제 loading 캡처와 구분한다.
+
+정상 종료 직후 CUA 관찰에서 별도의 같은-bundle 프로세스가 나타났다. 관찰에 의한 재실행은 시점으로부터의 추론이며 제품 crash로 분류하지 않는다. 최초 복원 launcher의 exit0은 기존 인스턴스 전달이므로 복원 성공으로 세지 않았다. 기록한 해당 debug process group만 SIGTERM으로 정리했으며 자식은 없었다. 이어진 복원 helper는 이미 이동된 stale session 파일을 다시 rename하다 실패했고, 그 뒤 관찰도 닫힌 driver에서 ECONNREFUSED로 실패했다. optional 파일의 존재를 확인하도록 helper를 수정한 뒤 새 로그·driver·실제 앱 PID·hash·native 화면으로 복원을 확인했다. 이 실패와 강제 정리도 원본 로그 및 `goal-native-orbit128-observer-relaunch-cleanup.json`에 남겼으며 기존 실행의 정상 종료 근거와 섞지 않는다.
+
+최종 데이터 audit는 기존41개 대화/hash·21개 프로필 ID/내용·프로필 영역 밖 config 불변을 확인했다. 합성 대화1개를 추가했고 localStorage 변경은 그 대화의 active selection뿐이다. 두 번의 실제 Save profile & start로 vLLM Default revision16→18과 적용 snapshot/library revision만 바뀌었으며 설정 내용은 같았다. 초기 audit가 저장 모델 경로와 서버 alias를 직접 비교해 실패한 것은 helper의 잘못된 가정이었다. 저장 모델은 execution.active_model, 서버 alias는 engine.upstream_model과 각각 일치하는 것을 확인했다. URL의 `/v1` suffix를 정수 port로 읽던 초기 helper 오류도 URL parser로 수정하고 기록했다.
+
+이번 제품 코드·추가 자동 검사·패키지 변경은 없다. 전체 자동 검사와 DMG는 65·66절의 동일 제품 소스 근거를 따른다. 이 production GUI 실행·실제 실패/취소 시 새 진단 수집, 미디어 내용 실패·URI upstream 제한·실제 ffmpeg 부재, MCP Yes/No 뒤 도구/모델 응답·호출 중 취소, 트레이/Dock/OS 알림 수신은 여전히 남아 있다. 별도 계정·Keychain·upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 unrun이다. 개인 엔진 registry/manifest 등록은 미구현이며 전체 목표나 M01–M12 완료를 표시하지 않는다. 원격 push는 수행하지 않았다.
