@@ -54,6 +54,8 @@ it.each(['success', 'failure'] as const)('retains a request error when an earlie
   fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
   const log = within(screen.getByRole('log', { name: 'Conversation' }));
   await log.findByText(requestError);
+  expect(document.querySelector('.chat-composer-status')).toHaveTextContent('Request failed');
+  expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('Response complete');
   await act(async () => {
     if (outcome === 'success') complete(tools);
     else fail(new Error('Synthetic discovery unavailable'));

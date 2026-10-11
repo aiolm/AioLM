@@ -27,7 +27,7 @@ it('shows the latest response limit in the composer without replacing active gen
     onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments: [], onRemoveAttachment: vi.fn(), attachmentStatus: 'idle',
     documents: [], onRemoveDocument: vi.fn(), input: '', setInput: vi.fn(), onKeyDown: vi.fn(), disabled: false,
     phase: 'idle', onAddAttachment: vi.fn(), onStop: vi.fn(), aborting: false, onSend: vi.fn(), canSend: false,
-    msgsLength: 2, responseFinishReason: 'length', ct: key => translate('en', `chat.${key}`),
+    msgsLength: 2, responseState: 'complete', responseFinishReason: 'length', ct: key => translate('en', `chat.${key}`),
   };
   const view = render(<I18nProvider initialLocale="en"><ChatComposer {...props} /></I18nProvider>);
   expect(screen.getByRole('status')).toHaveTextContent('Output token limit reached');
@@ -36,4 +36,14 @@ it('shows the latest response limit in the composer without replacing active gen
   expect(screen.getByRole('status')).toHaveTextContent('Waiting for the first token');
   view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseFinishReason="stop" /></I18nProvider>);
   expect(screen.getByRole('status')).toHaveTextContent('Response complete');
+  view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseState="failed" /></I18nProvider>);
+  expect(screen.getByRole('status')).toHaveTextContent('Request failed');
+  expect(screen.getByRole('status')).not.toHaveTextContent('Output token limit reached');
+  view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseState="interrupted" /></I18nProvider>);
+  expect(screen.getByRole('status')).toHaveTextContent('Generation stopped');
+  expect(screen.getByRole('status')).not.toHaveTextContent('Response complete');
+  view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseState="none" msgsLength={1} /></I18nProvider>);
+  expect(screen.getByRole('status')).toHaveTextContent(/^1 messages$/);
+  view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...props} responseState="none" msgsLength={0} /></I18nProvider>);
+  expect(screen.getByRole('status')).toHaveTextContent('Empty conversation');
 });

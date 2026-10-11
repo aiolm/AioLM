@@ -388,6 +388,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             onSend={sendMessage}
             canSend={canSend}
             msgsLength={viewMessages.length}
+            responseState={error || viewMessages.at(-1)?.failed ? 'failed' : viewMessages.at(-1)?.interrupted ? 'interrupted' : viewMessages.at(-1)?.role === 'assistant' ? 'complete' : 'none'}
             responseFinishReason={viewMessages.at(-1)?.finishReason}
             ct={ct}
             skillPicker={<ChatSkillPicker native={skills.native} catalog={skills.catalog} warnings={skills.warnings} loadError={skills.loadError} loading={skills.loading} loaded={skills.loaded} selectedSkillIds={skills.selectedSkillIds} onToggleSkill={skills.toggleSkill} onRefresh={() => void skills.refreshSkills()} locked={phase !== "idle" || pendingToolCall !== null} closeLabel={ct("close")} pt={pt} />}

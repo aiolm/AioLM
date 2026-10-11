@@ -11,7 +11,7 @@ function props(): ComponentProps<typeof ChatComposer> {
     selectedMcpTools: ['catalog:lookup'], toggleMcpTool: vi.fn(), loadingMcpTools: false, refreshMcpTools: vi.fn(), mcpDefinitions: [],
     pendingToolCall: null, onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments: [], onRemoveAttachment: vi.fn(), attachmentStatus: 'idle',
     documents: [], onRemoveDocument: vi.fn(), input: 'Next question', setInput: vi.fn(), onKeyDown: vi.fn(), disabled: false, phase: 'idle',
-    onAddAttachment: vi.fn(), onStop: vi.fn(), aborting: false, onSend: vi.fn(), canSend: true, msgsLength: 2, ct: key => key,
+    onAddAttachment: vi.fn(), onStop: vi.fn(), aborting: false, onSend: vi.fn(), canSend: true, msgsLength: 2, responseState: 'complete', ct: key => key,
   };
 }
 
@@ -54,6 +54,8 @@ describe('composer turn locks', () => {
     for (const name of ['attachFile', 'send', 'loadMcpTools']) expect(screen.getByRole('button', { name })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'approveTool' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'rejectTool' })).toBeEnabled();
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('mcpApprovalRequired');
+    expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('responseReady');
     fireEvent.click(screen.getByRole('button', { name: 'send' }));
     fireEvent.click(screen.getByRole('button', { name: 'attachFile' }));
     fireEvent.click(screen.getByRole('button', { name: 'loadMcpTools' }));

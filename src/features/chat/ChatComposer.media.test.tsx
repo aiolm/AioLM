@@ -32,7 +32,7 @@ function props(locale: Locale, attachments: ImageAttachment[]): ComponentProps<t
     documents: [{ name: 'notes.txt', path: '/synthetic/documents/notes.txt', text: 'Synthetic notes' }],
     onRemoveDocument: vi.fn(), input: '', setInput: vi.fn(), onKeyDown: vi.fn(), disabled: false, phase: 'idle',
     onAddAttachment: vi.fn(), onStop: vi.fn(), aborting: false, onSend: vi.fn(), canSend: false,
-    msgsLength: 0, ct: key => chatText[locale][key],
+    msgsLength: 0, responseState: 'none', ct: key => chatText[locale][key],
   };
 }
 
