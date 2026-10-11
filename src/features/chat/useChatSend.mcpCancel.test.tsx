@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "../../shared/api/index";
 import { createTestStore } from "../../testing/appStore";
-import type { ChatHistoryMessage } from "./chatHistory";
+import { CHAT_WORKSPACE_CLEAR_EVENT, type ChatHistoryMessage } from "./chatHistory";
 import type { DocumentAttachment, ImageAttachment } from "./chatUtils";
 import { useChatSend } from "./useChatSend";
 
@@ -74,7 +74,9 @@ beforeEach(() => {
 describe("MCP tool call cancellation", () => {
   it("Stop cancels the native call it started and does not continue the turn", async () => {
     const { result, approving, callId } = await startToolCall();
+    expect(result.current.toolCallInProgress).toBe(true);
     await act(async () => { result.current.stop(); await approving; });
+    expect(result.current.toolCallInProgress).toBe(false);
     expect(cancelMock).toHaveBeenCalledExactlyOnceWith(callId);
     expect(result.current.phase).toBe("idle");
     expect(result.current.error).toBeNull();
@@ -89,7 +91,32 @@ describe("MCP tool call cancellation", () => {
     expect(cancelMock).toHaveBeenCalledExactlyOnceWith(callId);
   });
 
+  it("clears the tool wait after native approval failure without requesting a follow-up", async () => {
+    const { result, approving, callId } = await startToolCall();
+    await act(async () => {
+      inFlight.get(callId)?.(new Error("MCP tool approval timed out"));
+      await approving;
+    });
+    expect(result.current.toolCallInProgress).toBe(false);
+    expect(result.current.phase).toBe("idle");
+    expect(result.current.error).toContain("MCP tool approval timed out");
+    expect(streamMock).toHaveBeenCalledOnce();
+  });
+
+  it("workspace clearing immediately removes the tool wait and ignores its cancelled completion", async () => {
+    const { result, approving, callId } = await startToolCall();
+    act(() => { window.dispatchEvent(new CustomEvent(CHAT_WORKSPACE_CLEAR_EVENT, { detail: { state: "clearing" } })); });
+    expect(result.current.toolCallInProgress).toBe(false);
+    expect(result.current.phase).toBe("idle");
+    await act(async () => { await approving; });
+    expect(cancelMock).toHaveBeenCalledExactlyOnceWith(callId);
+    expect(result.current.error).toBeNull();
+    expect(streamMock).toHaveBeenCalledOnce();
+  });
+
   it("gives every call its own id and leaves a finished call alone", async () => {
+    let finishFollowup!: () => void;
+    const followup = new Promise<void>(resolve => { finishFollowup = resolve; });
     callMock.mockResolvedValueOnce({ content: "Tool result" });
     streamMock.mockImplementationOnce(async (_url, _key, _model, _messages, _sampling, onDelta) => {
       onDelta({ tool_calls: [{ index: 0, id: "call-1", name: "lookup", arguments: "{}" }] });
@@ -97,11 +124,16 @@ describe("MCP tool call cancellation", () => {
     });
     streamMock.mockImplementationOnce(async (_url, _key, _model, _messages, _sampling, onDelta) => {
       onDelta({ content: "Answer" });
+      await followup;
       return "Answer";
     });
     const { result } = setup();
     await act(async () => { await result.current.send(); });
-    await act(async () => { await result.current.approvePendingTool(); });
+    let approving!: Promise<void>;
+    act(() => { approving = result.current.approvePendingTool(); });
+    await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+    expect(result.current.toolCallInProgress).toBe(false);
+    await act(async () => { finishFollowup(); await approving; });
     act(() => result.current.stop());
     expect(cancelMock).not.toHaveBeenCalled();
     expect(callMock.mock.calls[0][3]).toMatch(/^[0-9a-f-]{36}$/);

@@ -72,6 +72,7 @@ export function useChatSend({
   const [contextSources, setContextSources] = useState<string[]>([]);
   const [aborting, setAborting] = useState(false);
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
+  const [toolCallInProgress, setToolCallInProgress] = useState(false);
   const [streamingDraft, setStreamingDraft] = useState<StreamingDraft | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
   const turnGeneration = useRef(0);
@@ -155,6 +156,7 @@ export function useChatSend({
   const resetChatState = () => {
     cancelScheduledRender();
     setStreamingDraft(null);
+    setToolCallInProgress(false);
     failedRef.current = null;
     setError(null);
     documentTruncationRef.current = false;
@@ -186,6 +188,7 @@ export function useChatSend({
       skillReadsRef.current = 0;
       documentTruncationRef.current = false;
       setPendingToolCall(null);
+      setToolCallInProgress(false);
       setStreamingDraft(null);
       setAborting(false);
       setError(null);
@@ -469,6 +472,7 @@ export function useChatSend({
     if (!pending || !failed || phase !== "idle" || ctrlRef.current) return;
     const generation = turnGeneration.current;
     setPendingToolCall(null);
+    setToolCallInProgress(true);
     setError(null);
     setPhase("thinking");
     const controller = new AbortController();
@@ -484,6 +488,7 @@ export function useChatSend({
         result = await api.mcpCallTool(pending.serverId, pending.toolName, pending.argumentsValue, callId);
       } finally {
         controller.signal.removeEventListener("abort", cancelCall);
+        if (generation === turnGeneration.current) setToolCallInProgress(false);
       }
       controller.signal.throwIfAborted();
       if (generation !== turnGeneration.current) return;
@@ -526,7 +531,7 @@ export function useChatSend({
 
   return {
     error, setError, contextWarning, contextSources,
-    aborting, pendingToolCall, streamingDraft, failedRef,
+    aborting, pendingToolCall, toolCallInProgress, streamingDraft, failedRef,
     send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };
 }

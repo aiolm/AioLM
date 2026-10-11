@@ -166,6 +166,22 @@ describe("ChatPanel unified attachments", () => {
     mocked.sessionList.mockResolvedValue([]);
   });
 
+  it('restores saved tool requests as incomplete without silently executing a tool', async () => {
+    const thread = { ...createChatThread(1, 'tool-request-history'), title: 'Synthetic incomplete tool turn', messages: [
+      { role: 'user' as const, content: 'Synthetic tool question' },
+      { role: 'assistant' as const, content: '', finishReason: 'tool_calls', model: 'synthetic-model', metrics: { pp: { tokens: 20 }, tg: { tokens: 6 } } },
+    ] };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('MCP response incomplete');
+    expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('Response complete');
+    expect(screen.getByRole('textbox', { name: 'Chat message' })).toBeEnabled();
+    expect(mocked.mcpCallTool).not.toHaveBeenCalled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  });
+
   it.each([
     ['ko', '새 대화'], ['ja', '新しい会話'], ['zh', '新对话'],
   ] as const)("localizes the generated conversation title in %s without changing saved titles", async (locale, title) => {

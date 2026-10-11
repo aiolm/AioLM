@@ -27,7 +27,7 @@ function props(locale: Locale, attachments: ImageAttachment[]): ComponentProps<t
   return {
     locale, contextWarning: null, contextSources: [], mcpCatalog: [], selectedMcpTools: [],
     toggleMcpTool: vi.fn(), loadingMcpTools: false, refreshMcpTools: vi.fn(), mcpDefinitions: [],
-    pendingToolCall: null, onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments,
+    pendingToolCall: null, toolCallInProgress: false, onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments,
     onRemoveAttachment: vi.fn(), attachmentStatus: 'ready',
     documents: [{ name: 'notes.txt', path: '/synthetic/documents/notes.txt', text: 'Synthetic notes' }],
     onRemoveDocument: vi.fn(), input: '', setInput: vi.fn(), onKeyDown: vi.fn(), disabled: false, phase: 'idle',

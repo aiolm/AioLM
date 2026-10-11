@@ -23,7 +23,7 @@ it('keeps the output limit notice with the saved partial answer after reloading'
 it('shows the latest response limit in the composer without replacing active generation status', () => {
   const props: ComponentProps<typeof ChatComposer> = {
     contextWarning: null, contextSources: [], mcpCatalog: [], selectedMcpTools: [], toggleMcpTool: vi.fn(),
-    loadingMcpTools: false, refreshMcpTools: vi.fn(), mcpDefinitions: [], pendingToolCall: null,
+    loadingMcpTools: false, refreshMcpTools: vi.fn(), mcpDefinitions: [], pendingToolCall: null, toolCallInProgress: false,
     onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments: [], onRemoveAttachment: vi.fn(), attachmentStatus: 'idle',
     documents: [], onRemoveDocument: vi.fn(), input: '', setInput: vi.fn(), onKeyDown: vi.fn(), disabled: false,
     phase: 'idle', onAddAttachment: vi.fn(), onStop: vi.fn(), aborting: false, onSend: vi.fn(), canSend: false,

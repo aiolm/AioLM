@@ -140,7 +140,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     : null;
 
   const {
-    setError, error, contextWarning, contextSources, aborting, pendingToolCall, streamingDraft,
+    setError, error, contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraft,
     failedRef, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   } = useChatSend({
     store, effectiveConfig, engine: selectedStatus.engine, mediaPreprocessing: mediaOptions,
@@ -258,6 +258,12 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     }
   };
 
+  const lastMessage = viewMessages.at(-1);
+  const responseState = error || lastMessage?.failed ? 'failed'
+    : lastMessage?.interrupted ? 'interrupted'
+    : lastMessage?.finishReason === 'tool_calls' ? 'tool-request'
+    : lastMessage?.role === 'assistant' ? 'complete' : 'none';
+
   return (
     <div className="app-page-scroll chat-page">
       <ChatConversationHeader
@@ -369,6 +375,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             refreshMcpTools={() => void refreshMcpTools()}
             mcpDefinitions={mcpDefinitions}
             pendingToolCall={pendingToolCall}
+            toolCallInProgress={toolCallInProgress}
             onApproveTool={() => void approvePendingTool()}
             onRejectTool={rejectPendingTool}
             attachments={attachments}
@@ -388,8 +395,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             onSend={sendMessage}
             canSend={canSend}
             msgsLength={viewMessages.length}
-            responseState={error || viewMessages.at(-1)?.failed ? 'failed' : viewMessages.at(-1)?.interrupted ? 'interrupted' : viewMessages.at(-1)?.role === 'assistant' ? 'complete' : 'none'}
-            responseFinishReason={viewMessages.at(-1)?.finishReason}
+            responseState={responseState}
+            responseFinishReason={lastMessage?.finishReason}
             ct={ct}
             skillPicker={<ChatSkillPicker native={skills.native} catalog={skills.catalog} warnings={skills.warnings} loadError={skills.loadError} loading={skills.loading} loaded={skills.loaded} selectedSkillIds={skills.selectedSkillIds} onToggleSkill={skills.toggleSkill} onRefresh={() => void skills.refreshSkills()} locked={phase !== "idle" || pendingToolCall !== null} closeLabel={ct("close")} pt={pt} />}
             selectedSkills={skills.selectedSkills}

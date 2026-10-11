@@ -9,7 +9,7 @@ function props(): ComponentProps<typeof ChatComposer> {
   return {
     contextWarning: null, contextSources: [], mcpCatalog: [{ serverId: 'catalog', serverName: 'Catalog', tool: { name: 'lookup', input_schema: {} } }],
     selectedMcpTools: ['catalog:lookup'], toggleMcpTool: vi.fn(), loadingMcpTools: false, refreshMcpTools: vi.fn(), mcpDefinitions: [],
-    pendingToolCall: null, onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments: [], onRemoveAttachment: vi.fn(), attachmentStatus: 'idle',
+    pendingToolCall: null, toolCallInProgress: false, onApproveTool: vi.fn(), onRejectTool: vi.fn(), attachments: [], onRemoveAttachment: vi.fn(), attachmentStatus: 'idle',
     documents: [], onRemoveDocument: vi.fn(), input: 'Next question', setInput: vi.fn(), onKeyDown: vi.fn(), disabled: false, phase: 'idle',
     onAddAttachment: vi.fn(), onStop: vi.fn(), aborting: false, onSend: vi.fn(), canSend: true, msgsLength: 2, responseState: 'complete', ct: key => key,
   };
@@ -79,5 +79,19 @@ describe('composer turn locks', () => {
     expect(screen.getByRole('button', { name: 'attachFile' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'send' }));
     expect(options.onSend).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes the native tool wait from its follow-up model request while keeping Stop available', () => {
+    const options = props();
+    const view = render(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="thinking" toolCallInProgress /></I18nProvider>);
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('waitingMcpTool');
+    expect(document.querySelector('.chat-composer-status')).not.toHaveTextContent('waitingFirstToken');
+    expect(screen.getByRole('textbox', { name: 'chatMessage' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'stop' }));
+    expect(options.onStop).toHaveBeenCalledOnce();
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="thinking" toolCallInProgress={false} /></I18nProvider>);
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('waitingFirstToken');
+    view.rerender(<I18nProvider initialLocale="en"><ChatComposer {...options} phase="streaming" toolCallInProgress={false} /></I18nProvider>);
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('generating');
   });
 });

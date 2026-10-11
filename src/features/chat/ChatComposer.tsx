@@ -24,6 +24,7 @@ interface ChatComposerProps {
   refreshMcpTools: () => void;
   mcpDefinitions: api.ChatToolDefinition[];
   pendingToolCall: PendingToolCall | null;
+  toolCallInProgress: boolean;
   onApproveTool: () => void;
   onRejectTool: () => void;
   attachments: ImageAttachment[];
@@ -43,7 +44,7 @@ interface ChatComposerProps {
   onSend: () => void;
   canSend: boolean;
   msgsLength: number;
-  responseState: 'none' | 'complete' | 'failed' | 'interrupted';
+  responseState: 'none' | 'complete' | 'failed' | 'interrupted' | 'tool-request';
   responseFinishReason?: string;
   ct: (key: ChatTextKey) => string;
   skillPicker?: ReactNode;
@@ -56,7 +57,7 @@ interface ChatComposerProps {
 
 export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
-  mcpDefinitions, pendingToolCall, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
+  mcpDefinitions, pendingToolCall, toolCallInProgress, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
   aborting, onSend, canSend, msgsLength, responseState, responseFinishReason, ct, locale = 'en', loadingModel = false,
   skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
@@ -81,8 +82,10 @@ export default function ChatComposer({
   const controlsLocked = phase !== 'idle' || pendingToolCall !== null;
   const responseStatus = responseState === 'failed' ? ct('requestFailed')
     : responseState === 'interrupted' ? ct('interrupted')
+    : responseState === 'tool-request' ? ct('mcpResponseIncomplete')
     : responseState === 'complete' ? ct(responseFinishReason === 'length' ? 'responseLimited' : 'responseReady') : null;
-  const conversationStatus = phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken")
+  const conversationStatus = toolCallInProgress ? ct('waitingMcpTool')
+    : phase === "streaming" ? ct("generating") : phase === "thinking" ? ct("waitingFirstToken")
     : pendingToolCall ? ct('mcpApprovalRequired')
     : responseStatus ? `${responseStatus} · ${msgsLength} ${ct('messages')}`
     : msgsLength === 0 ? ct('emptyConversation') : `${msgsLength} ${ct('messages')}`;
