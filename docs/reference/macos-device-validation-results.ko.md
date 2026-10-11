@@ -1504,3 +1504,21 @@ raw는 `goal-production-orbit132-{fresh-defaults,source-inventory,registration,p
 production 정상 종료 뒤 원래 임시 홈·legacy 경로의 debug 앱/Vite를 복원했다. 실제 native 화면에서43개 대화와 원래 ORBIT-132 응답·모델명·지표 재로드, Default 프로필의 context4096을 확인하고 기존 값으로 저장/시작했다. 실제 loading→model loaded·composer 활성화와 읽기 전용 server status의 running을 확인했다. 최종 config는 프로필 영역 밖에서 불변이고43개 대화/hash·localStorage 전체·프로필 ID 목록/선택 메타데이터를 보존했다. vLLM Default는 revision19→20 외에 동일하며 library revision86→88·적용 snapshot1개만 갱신됐다. API off·생성 중 아님·추가 세션 정의 없음·UI 오류/overlay 없음이다. 이 개발 앱과 Ready 모델을 유지했다. raw는 `goal-native-audio-orbit132-restored-{loading,ready}-20261011.json/png`, `goal-runtime-selection-orbit132-restored-preservation.json`과 `logs/goal-runtime-selection-orbit132-restore-debug-20261011.log`다.
 
 별도 계정·Keychain·upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 unrun이며 미디어/MCP/OS 통합의 남은 실패·blocked를 유지한다. 개인 엔진 registry/manifest 등록은 [장기 설계](pluggable-inference-runtimes.ko.md)의 미구현 범위다. 공통 기능과 데이터 계약을 유지하는 어댑터 방향을 따르되 이번 안내 수정이나 production 응답을 해당 확장 기능 구현으로 계산하지 않는다. 전체 M01–M12/목표 완료를 선언하지 않으며 공개 업로드·원격 push는 수행하지 않았다.
+
+## 73. 이전 한국어 지시 실패의 직접 엔진 재현
+
+2026-10-11 `b2de520`에서 이전 턴의 수정·production 검증 완료를 확인하고 재개했다. 실제 CUA는 Mac 잠금을 반환해 새 창·트레이/Dock·MCP 승인 조작은 blocked다. 잠금 해제를 요청한 뒤 재확인에서도 동일한 차단이 있었다. 원래 debug 앱/Qwen 엔진은 현재 OS 프로세스와 읽기 전용 IPC에서 실행 중이며 상태 파일만으로 살아 있다고 추정하지 않았다.
+
+68절 production의 저장된 합성 입력 `ORBIT-129 검증입니다. 9 + 6의 답을 한국어 한 문장으로 설명해 주세요.`와 provider 옵션을 읽어 공통 `buildChatRequestBody`로 직접 요청을 재구성했다. 현재 모델 경로·provider 옵션이 당시와 같은 것을 확인했다. 기본 system prompt와 고정 모델 revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`를 사용했으며 sampling·seed·언어·template override는 추가하지 않았다. 세 요청의 body는 동일하다. 이 비교는 현재 같은 엔진 PID에 대한 직접 HTTP 요청이며 당시 native wire 요청을 캡처한 검사는 아니다.
+
+| 직접 호출 | 결과·근거 |
+| --- | --- |
+| 첫 요청 | HTTP200·20609ms·stop/[DONE], prompt48/completion8/cache0. 응답 `9加上6等于15。`로 산술은 맞지만 한국어 지시 fail이며68절 저장 응답과 같다. |
+| 두 번째 | HTTP200·1962ms·stop/[DONE], prompt48/completion20/cache32. `9에 6을 더하면 15가 되어, 15입니다.`로 해당 요청의 한국어 지시 pass. |
+| 세 번째 | HTTP200·970ms·stop/[DONE], prompt48/completion15/cache32. `9에 6을 더하면 15가 됩니다.`로 해당 요청의 한국어 지시 pass. |
+
+첫 실패는 앱 화면을 거치지 않는 엔진 직접 호출에서도 재현됐다. 따라서 native UI가 없어도 이 결과가 발생한다는 근거를 확보했다. cache 상태와 sampling에 따른 출력 차이의 인과관계, tokenizer/모델/runtime 내부의 구체 원인은 아직 확인하지 못했다. 후속 성공을 첫 실패의 해결로 계산하거나 cache 결함으로 단정하지 않는다. 강제 한국어 system prompt·seed·template 또는 임의 출력 한도를 제품 기본값에 넣지 않았으며 제품 코드·공개 API·설정 변경은 없다.
+
+전체 helper exit0·24.99s이며 원본 요청·각 SSE/응답·usage·종료 이유는 `goal-language-orbit133-direct-20261011-request.json`, `goal-language-orbit133-direct-20261011-{1,2,3}.sse/json`, `goal-language-orbit133-direct-20261011.json`과 `logs/goal-language-orbit133-direct-20261011.log`에 보관했다. config 전체/hash·43개 대화/hash·localStorage·동일 앱/엔진 PID 보존, running·API off·active requests0·생성 중 아님·UI 오류/overlay 없음의 읽기 전용 근거는 `goal-native-audio-orbit133-{current,final}-20261011.json/png`과 `goal-language-orbit133-preservation-20261011.json`이다. 잠금 상태의 보조 WKWebView PNG는 새 native 화면 통과 근거가 아니다.
+
+이번에는 제품 수정이 없어 이전 자동 검사·패키지를 반복하지 않았다. 70–72절의 검사/새 DMG/실제 native 응답·정상 종료 근거는 그대로 유지한다. 미디어 내용 실패·URI upstream 오류·실제 ffmpeg 부재, 실제 MCP Yes/No 이후 도구/후속 답변·호출 중 취소, 트레이/Dock/OS 알림 전달과 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 남은 범위를 유지한다. 전체 목표·M01–M12 완료와 개인 엔진 등록 구현을 선언하지 않으며 원격 push는 수행하지 않았다.
