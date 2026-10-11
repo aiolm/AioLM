@@ -443,6 +443,22 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
   });
 
+  it.each(['vllm', 'mlx-vlm'] as const)('asks to select a %s runtime without claiming an unselected runtime is missing', async provider => {
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
+    const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: '' } });
+    expect(await screen.findByText('No runtime is selected.')).toBeVisible();
+    await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalled());
+    expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This runtime is not installed. Install it or select another runtime.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
   it.each(['vllm', 'mlx-vlm'] as const)('reports a missing %s runtime after its inventory successfully loads empty', async provider => {
     vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: provider, server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
     vi.spyOn(api, 'providerRuntimes').mockResolvedValue([]);
