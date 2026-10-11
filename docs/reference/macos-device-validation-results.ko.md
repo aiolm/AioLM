@@ -30,6 +30,7 @@
 - 67절은 잠금 해제 뒤 `6a374ce` debug 앱의 실제 Qwen 시작·출처별 진단·한국어 제목·새 응답·이력 재로드·정상 종료와 개발 환경 복원을 기록한다. 65·66절의 당시 blocked/unrun을 보존하며 해당 production GUI를 검증한 것으로 대체하지 않는다.
 - 68절은 `6a374ce` production GUI의 실제 초기 설정·Ready·응답, 설치 목록 조회 중 잘못된 미설치 안내 수정 `3564440`과 공통 검사·개발 환경 보존을 기록한다. 69절은 새 수정 소스의 DMG다. 수정 후 native 화면은 재잠금으로 blocked이며 이전 소스의 production 실행과 구분한다.
 - 70절은 잠금 해제 뒤 설치 목록 수정의 실제 설정·응답·이력과 런타임 미선택 안내 수정 `9fcbbbb`, 공통 검사·MCP 승인 한계를 기록한다. 71절은 새 소스의 DMG이며 72절은 해당 production GUI의 실제 응답·재로드·정상 종료와 원래 개발 환경 복원이다. 68·69절의 당시 blocked/unrun은 보존한다.
+- 73절은 한국어 지시 실패의 직접 엔진 재현이며 74절은 잠금 해제 후 실제 사람이 MCP OS Yes를 누른 뒤 도구 호출·결과·정리를 확인한 기록이다. No와 실제 호출 중 취소는 승인 대기 만료로 미검증이며 과거 blocked를 소급 변경하지 않는다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -94,7 +95,7 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 26절에서 서로 다른 Qwen3/Gemma4를 같은 MLX 공용 프로필로 순차 실행·실제 응답·이력 보존·원래 vLLM 복원도 확인했다. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
 | M06 | pass | 실제 snapshot 취소/재시도, 고정 GGUF, 공개 3-shard 전체 GUI 다운로드/해시/한 항목/CPU 추론, 두 GGUF와 공유 companion 다운로드/재사용·다른 primary 삭제 후 보존. 활성/선택 draft·LoRA·named split 보호, 외부 파일·case-sensitive APFS·한글/공백·권한·FAT 불완전 상태 확인. |
 | M07 | fail | OS 이미지/WAV/MP4 선택·내용/usage·immutable 기록/재로드·실패 후 Retry·엔진 변경, 명시적 STT/frames·ffmpeg UI Stop, 비-WAV Whisper 전사/번역·ASR 전사. 21절의 Gemma4 실제 native 음성·취소와 잘못된 WAV의 동일 입력 Retry를 추가 확인했다. 긴/후속 음성 질문의 내용 실패·URI500·native SmolVLM 내용 오답·Gemma3n snapshot 실패 유지. ffmpeg 부재의 실제 앱 검사는 blocked. |
-| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. CUA의 별도 승인 프로세스 선택 한계로 실제 Yes/No→tool/후속 답변·호출 중 취소는 미검증이다. |
+| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. 74절에서 실제 사람의 OS Yes→수동 tools/call 1회→결과·소유 프로세스 정리를 통과했다. 실제 No·모델 후속 답변·호출 중 취소는 미검증이다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
 | M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
@@ -317,7 +318,7 @@ RSS는 `pti_resident_size` process-group resident memory다. 모든 unified-memo
 | --- | --- | --- |
 | M03·M04·M07 | fail | 직접 Metal/MLX file URI 이미지500, SmolVLM native projector의 알려진 이미지 내용 오답, 고정 Gemma3n native-audio snapshot의 누락 shard index는 미해결이다. upstream/model 수정 후 실제 내용·usage·기록/재로드/재시도 흐름을 다시 검사한다. |
 | M07 | blocked | 정상 PATH 복구가 기존 ffmpeg를 찾으므로 실제 ffmpeg 부재의 앱 안내·준비 실패/취소를 검증할 별도 환경이 필요하다. 기존 설치를 숨기거나 PATH 정책을 끄지 않는다. |
-| M08·M12 | blocked | 별도 native osascript MCP Yes/No→실제 tools/call→후속 답변, 승인 후 실제 호출 중 취소·자식/포트 정리. Cancel/승인 대기 취소와 합성 승인/호출 회귀를 실제 승인 성공으로 확대하지 않는다. |
+| M08·M12 | blocked | 74절의 실제 사람의 OS Yes→수동 tools/call·결과·정리 pass 이후에도 실제 No·모델 후속 답변·승인 후 실제 호출 중 취소·자식/포트 정리는 남아 있다. 승인 대기 만료·취소와 합성 회귀를 실제 호출 취소 성공으로 확대하지 않는다. |
 | M11 | blocked | 당시 한글 IME composition 중 Enter, 실제 Copy와 기존 pasteboard 전체 포맷 보존/복원, Dock/트레이 메뉴를 통한 Show/Quit·재열기가 남았다. 실제 paste·닫기/hide·두 번째 실행 restore·normal Quit·기존 OS 파일/저장 picker 성공과 구분한다. 실제 Copy와 확인된 원본 snapshot 복원은 이후 19절에서 통과했다. IME·Dock/트레이·임의 포맷은 남아 있다. |
 | M11 | unrun | 별도 OS 계정의 최초 실행·Keychain 허용/거부/취소/수정/삭제·업데이트 재승인·실제 과거 버전 upgrade/legacy 이전, 자연스러운 Finder DMG 설치/첫 실행. Finder/launchd PATH의 MCP·CMake 탐색과 실제 다운로드 quarantine/첫 실행 경고·시스템 설정 열기 경로도 필요하다. |
 | M11 | unrun | 당시 PDF/폴더 picker·OS 알림 배너 표시·macOS 창 확대 버튼 조작의 실제 근거가 없었다. 이미 검증한 이미지/음성/영상/Markdown/JSON/CSV/XLSX/LoRA picker와 취소, 세 창 크기·resize와 구분한 기록이다. PDF/폴더와 실제 확대 버튼은 이후 19절에서 통과했다. OS test 알림의 실제 수신·후속 OS 상태 확인은 19절에서도 blocked로 남는다. |
@@ -1522,3 +1523,21 @@ production 정상 종료 뒤 원래 임시 홈·legacy 경로의 debug 앱/Vite�
 전체 helper exit0·24.99s이며 원본 요청·각 SSE/응답·usage·종료 이유는 `goal-language-orbit133-direct-20261011-request.json`, `goal-language-orbit133-direct-20261011-{1,2,3}.sse/json`, `goal-language-orbit133-direct-20261011.json`과 `logs/goal-language-orbit133-direct-20261011.log`에 보관했다. config 전체/hash·43개 대화/hash·localStorage·동일 앱/엔진 PID 보존, running·API off·active requests0·생성 중 아님·UI 오류/overlay 없음의 읽기 전용 근거는 `goal-native-audio-orbit133-{current,final}-20261011.json/png`과 `goal-language-orbit133-preservation-20261011.json`이다. 잠금 상태의 보조 WKWebView PNG는 새 native 화면 통과 근거가 아니다.
 
 이번에는 제품 수정이 없어 이전 자동 검사·패키지를 반복하지 않았다. 70–72절의 검사/새 DMG/실제 native 응답·정상 종료 근거는 그대로 유지한다. 미디어 내용 실패·URI upstream 오류·실제 ffmpeg 부재, 실제 MCP Yes/No 이후 도구/후속 답변·호출 중 취소, 트레이/Dock/OS 알림 전달과 별도 계정/Finder/Keychain/upgrade·Intel/구형 macOS의 남은 범위를 유지한다. 전체 목표·M01–M12 완료와 개인 엔진 등록 구현을 선언하지 않으며 원격 push는 수행하지 않았다.
+
+## 74. 실제 MCP OS 승인 이후 수동 도구 호출·결과·정리
+
+2026-10-11 `efa020d`에서 Mac 잠금 해제 후 원래 debug 앱의 실제 CUA 조작을 재개했다. 서명된 Rust core는 `6a374ce`, frontend는 `9fcbbbb`이며 제품 코드는 변경하지 않았다. 기존 합성 MCP 정의를 사용해 조회→인자 입력·검토→`Approve and run once`를 실행했다. 이 fixture는 합성 결과와 작업용 로그만 만들며 외부 파일·네트워크 작업은 수행하지 않는다. CUA는 별도 승인 앱 선택에 `Invalid app: osascript`를 반환했으므로 실제 OS 클릭은 사람이 수행했다.
+
+| 실제 검사 | 판정·근거 |
+| --- | --- |
+| 사람의 OS Yes·수동 echo 호출 | pass — 사용자가 Yes 클릭을 회신한 뒤 native AX에서 `Tool synthetic_echo completed`와 결과 `synthetic result`를 확인했다. baseline 이후 discovery/실행 세션의 initialize/list와 `tools/call` 정확히1회를 기록했다. 실행 peer·승인 process와 앞선 discovery peer는 모두 종료됐다. 합성 승인이나 직접 IPC로 대체한 결과가 아니다. |
+| 실제 No | blocked — 별도 합성 인자로 새 승인창을 열고 No 클릭을 요청했으나 회신·클릭 근거가 없었다. 기존120초 승인 deadline 뒤 native `MCP tool approval timed out`와 소유 peer·승인 process 종료를 확인했다. 새 이벤트에 tools/call은 없으며 이를 사용자 거부 pass로 계산하지 않는다. 이 승인창은 더 이상 대기 중이 아니다. |
+| 승인 이후 실제 호출 중 취소 | unrun — 기존 hold 도구를 잠시 활성화하고 새 승인창을 열었다. 실제 tools/call 시작을 관찰하는 읽기 전용 watcher는130.16초 뒤 exit1로 종료됐고 실제 호출 시작 이벤트는 없었다. native 결과도 승인 시간 만료다. 기록한 서버 부모·자식은 종료됐으며 실제 호출 중 Cancel을 누른 검사로 계산하지 않는다. 별도 승인 요청도 만료돼 더 이상 대기 중이 아니다. |
+| 정의·데이터·원래 화면 복원 | pass — hold 정의를 원래 Disabled로 돌려6개 정의/1개 enabled와 registry 의미·hash를 복원했다. 첫 AX switch 클릭은 값이 바뀌지 않아 성공으로 기록하지 않고 실제 화면의 switch 클릭·저장 후 off를 확인했다. 작업에서 생긴 만료 알림만 닫고 Chat으로 돌아왔다. config 전체/hash·43개 대화/hash·localStorage·동일 앱/Ready 엔진을 보존했고 API off·생성 중 아님·UI 오류/overlay 없음이다. 원래 ORBIT-132 응답·모델명·PP/TG를 native AX와 screenshot에서 재확인했다. |
+| Dock·트레이 접근 | blocked — 실제 Dock/SystemUIServer 선택은 각각 약5초 뒤 `-10005 timeoutReached`로 실패했다. 트레이/Dock 동작이나 OS 알림 전달 pass로 계산하지 않는다. |
+
+수동 echo 도구 결과를 확인한 범위다. 모델이 도구를 선택하고 결과를 사용해 후속 답변하는 흐름은 이번에 실행하지 않았다. 현재 엔진의 `tools_auto`/`tool_parser`도 false이며 이를 승인 성공만으로 지원된다고 간주하지 않는다. 실제 No·모델 후속 답변·실제 호출 중 취소가 남아 있어 M08·M12의 전체 판정은 blocked를 유지한다. 승인 deadline이나 RPC 제한을 늘리거나 승인 절차를 우회하지 않았다.
+
+raw는 `goal-mcp-approval-orbit136-{before,pending,success,no-before,no-pending,no-terminal,preservation}.json`, `goal-mcp-call-cancel-orbit136-{before,terminal}.json`, `goal-mcp-call-cancel-orbit136-watch.py`와 대응 watcher 로그다. 실제 시작이 없으므로 호출 시작 record는 생성되지 않았다. echo fixture SHA-256은 `3d88b663794e2fdb35e9c2223da2e1e13b0f0f82c9d1f4fdf6a0376e8069646b`, hold fixture는 `93f330def71dccbdbb1048c8edbbb6c9ddd039d27e2f29ec3e64a4d37aa3026d`다. `goal-native-audio-orbit136-{baseline,mcp-pending,final}-20261011.json/png`와 `logs/goal-mcp-approval-orbit136-final-observe-20261011.log`는 보조 debug WKWebView·IPC·파일 근거이며 실제 native AX·입력·screenshot은 CUA tool 결과다.
+
+제품 수정이 없어 자동 검사·패키지를 반복하지 않았다. 70–72절의 공통 검사·현재 DMG·production GUI 검증 근거를 유지한다. 미디어 내용·upstream URI·실제 ffmpeg 부재, 언어 지시 실패의 원인, OS 통합과 별도 계정/Keychain/upgrade/Finder·Intel/구형 macOS의 남은 판정도 유지한다. 임의 개인 엔진 registry/manifest 등록은 미구현이며 전체 M01–M12나 목표 완료를 선언하지 않는다. 공개 업로드·원격 push는 수행하지 않았다.
