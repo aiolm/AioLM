@@ -31,6 +31,7 @@
 - 68절은 `6a374ce` production GUI의 실제 초기 설정·Ready·응답, 설치 목록 조회 중 잘못된 미설치 안내 수정 `3564440`과 공통 검사·개발 환경 보존을 기록한다. 69절은 새 수정 소스의 DMG다. 수정 후 native 화면은 재잠금으로 blocked이며 이전 소스의 production 실행과 구분한다.
 - 70절은 잠금 해제 뒤 설치 목록 수정의 실제 설정·응답·이력과 런타임 미선택 안내 수정 `9fcbbbb`, 공통 검사·MCP 승인 한계를 기록한다. 71절은 새 소스의 DMG이며 72절은 해당 production GUI의 실제 응답·재로드·정상 종료와 원래 개발 환경 복원이다. 68·69절의 당시 blocked/unrun은 보존한다.
 - 73절은 한국어 지시 실패의 직접 엔진 재현이며 74절은 잠금 해제 후 실제 사람이 MCP OS Yes를 누른 뒤 도구 호출·결과·정리를 확인한 기록이다. No와 실제 호출 중 취소는 승인 대기 만료로 미검증이며 과거 blocked를 소급 변경하지 않는다.
+- 75절은 실제 Qwen 도구 파서 프로필·모델의 요청·앱 Reject, 거부 뒤 잘못된 완료 안내 수정 `a4b7fe0`와 재검증을 기록한다. 76절은 해당 소스의 DMG다. 모델 후속 답변·원래 Default 프로필 복원은 재잠금으로 남아 있다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -79,6 +80,7 @@
 | `6a374ce` | 공통 spawn이 stdout을 버려 핵심 엔진 오류가 진단에서 사라졌다. 두 출력을 각각4KiB로 보존하고 종료 시 파이프에 남은 출력도 회수한다. | 수정 전 합성 실제 프로세스 회귀 fail/후 pass, 관련 Rust46개·전체 Rust/clippy·순차 공통 UI1810개 통과. 67절에서 실제 vLLM stdout/stderr 표시·로그 끝 접근·Ready·응답·정상 종료를 확인했다. 실제 실패/취소 시 진단은 이번 native 범위에서 실행하지 않았다. 65·66절 참조. |
 | `3564440` | 설치 목록 조회 중 실제 설치된 런타임을 미설치로 표시했다. 대기·조회 실패·확인된 미설치를 구분하고 Start는 확인 전 차단한다. 새로고침 시 이전 readiness를 철회하고 저장값을 유지한다. | production native 재현·세 엔진의 수정 전 회귀3개 fail, 수정 후 관련85개·공통 UI1816개/typecheck/lint pass. 성공한 빈 목록은 미설치로 유지하며 조회 실패가 미설치나 영구 로딩으로 표시되지 않는 것을 검사했다. 68절 당시 native 재검증은 재잠금으로 blocked였고 70–72절에서 새 실제 재검증을 기록한다. |
 | `9fcbbbb` | 런타임을 선택하지 않은 엔진에서도 선택된 런타임이 미설치됐다는 본문 경고가 나타났다. 미선택과 확인된 미설치를 구분한다. | 실제 debug 재현·vLLM/MLX 회귀2개 수정 전 fail/후 pass, 관련87개·공통 UI1818개/typecheck/lint 통과. 실제 debug와 새 production의 미선택 안내·Start 차단, 선택된 vLLM의 Ready·응답·재로드·정상 종료 확인. 70–72절 참조. |
+| `a4b7fe0` | 실제 MCP 요청을 거부하거나 요청이 실패해도 하단이 응답 완료로 표시됐다. 승인 대기·실패·중단·완료와 assistant 없는 대화를 구분한다. | 수정 전3개 회귀 fail/후 pass·관련36개·공통 UI1818개/typecheck/lint 통과. 실제 거부 후 실패 안내·다음 모델 요청의 승인 대기 안내를 native 앱에서 확인했다. 75절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1541,3 +1543,47 @@ production 정상 종료 뒤 원래 임시 홈·legacy 경로의 debug 앱/Vite�
 raw는 `goal-mcp-approval-orbit136-{before,pending,success,no-before,no-pending,no-terminal,preservation}.json`, `goal-mcp-call-cancel-orbit136-{before,terminal}.json`, `goal-mcp-call-cancel-orbit136-watch.py`와 대응 watcher 로그다. 실제 시작이 없으므로 호출 시작 record는 생성되지 않았다. echo fixture SHA-256은 `3d88b663794e2fdb35e9c2223da2e1e13b0f0f82c9d1f4fdf6a0376e8069646b`, hold fixture는 `93f330def71dccbdbb1048c8edbbb6c9ddd039d27e2f29ec3e64a4d37aa3026d`다. `goal-native-audio-orbit136-{baseline,mcp-pending,final}-20261011.json/png`와 `logs/goal-mcp-approval-orbit136-final-observe-20261011.log`는 보조 debug WKWebView·IPC·파일 근거이며 실제 native AX·입력·screenshot은 CUA tool 결과다.
 
 제품 수정이 없어 자동 검사·패키지를 반복하지 않았다. 70–72절의 공통 검사·현재 DMG·production GUI 검증 근거를 유지한다. 미디어 내용·upstream URI·실제 ffmpeg 부재, 언어 지시 실패의 원인, OS 통합과 별도 계정/Keychain/upgrade/Finder·Intel/구형 macOS의 남은 판정도 유지한다. 임의 개인 엔진 registry/manifest 등록은 미구현이며 전체 M01–M12나 목표 완료를 선언하지 않는다. 공개 업로드·원격 push는 수행하지 않았다.
+
+## 75. 실제 모델 도구 요청·앱 거부와 채팅 상태 안내 수정
+
+2026-10-11 `1cb7554`에서 원래 debug 앱의 native CUA 검증을 이어갔다. 설치된 고정 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`의 chat template이 JSON `<tool_call>` 형식이고 설치된 vLLM0.30.0의 `hermes` 파서가 같은 형식을 처리하는 것을 로컬 소스에서 확인했다. 기존 Default를 수정하지 않고 실제 UI의 Save as new로 별도 합성 프로필을 만든 뒤 `--enable-auto-tool-choice`/`--tool-call-parser hermes`와 기존 context4096으로 정상 종료·재시작했다. Ready와 `tools_auto`/`tool_parser` true를 실제 앱과 IPC에서 확인했다. 제품 기본값이나 다른 모델의 파서를 변경하지 않았다.
+
+| 실제 앱 검사 | 판정·근거 |
+| --- | --- |
+| 모델의 첫 도구 요청·인자 검토 | pass(해당 요청) — 새 합성 대화에서 기존 echo 도구1개를 조회·선택했다. 실제 Qwen이 요청한 이름·JSON 인자가 입력과 일치했고 앱 승인 control이 나타났다. native PP204/cache0, TG37/1.49s/24.1tok/s, TTFT6.52s·준비0.03s·요청7.35s다. PP 시간/속도는 미제공으로 유지한다. |
+| 실제 앱 Reject | pass — CUA로 Reject를 눌러 `MCP tool call rejected by the user`와 입력·첨부·도구 선택 활성화를 확인했다. actual tools/call은 없고 active requests0이다. 별도 OS No 클릭을 검증한 결과로 대체하지 않는다. |
+| 거부 뒤 하단 안내 | fail→수정 후 pass — 실제 오류가 표시되고 assistant 응답은 제거됐는데 footer는 `Response complete · 1 messages`였다. 수정 후 같은 native 화면에 `Request failed · 1 messages`가 나타났다. 다음 실제 모델 요청의 승인 대기에서도 완료 대신 `MCP approval required`를 확인했다. |
+| 같은 대화의 다음 인자 지시 | fail(원인 미확인) — 다음 입력에서 ORBIT-137B 인자를 요청했지만 모델은 첫 ORBIT-137 인자를 다시 요청했다. 앱이 실제 요청 인자를 표시한 것을 기록했다. 두 합성 인자 모두 같은 안전한 echo 검증 범위이며 이를 원하는 인자 선택 pass로 계산하지 않는다. PP57/cache192, TG37/1.32s/27.2tok/s, TTFT5.89s·준비0.03s·요청6.63s다. cache와 실패의 인과관계를 단정하지 않는다. |
+| 실제 OS 승인 이후 모델 후속 답변 | blocked — 앱 Approve once로 소유 peer·OS 승인 process를 만들고 사람의 Yes를 요청했으나 재잠금과 미회신으로 승인 deadline이 만료됐다. 읽기 전용 IPC에서 `MCP tool approval timed out`·수정된 실패 footer와 두 process 종료·tools/call 없음·생성 중 아님을 확인했다. 실제 도구 결과를 받은 후속 모델 답변은 unrun이다. 현재 대기 중인 승인창은 없다. |
+
+재잠금 뒤 같은 Ready 엔진·도구 파서 프로필로 일반 채팅을 직접 HTTP 요청했다. tools를 넣지 않은 공통 request builder·기본 system prompt·현재 요청 설정을 사용했다. HTTP200·15280ms·stop/[DONE], prompt48/completion12/cache0과 `4에 5를 더하면 9입니다.`를 확인했다. helper exit0·15.55s이며 config hash와 같은 엔진을 보존했다. `goal-mcp-followup-orbit137-plain-20261011-request.json`, `goal-mcp-followup-orbit137-plain-20261011.json/.sse`와 대응 로그가 근거다. 이 결과는 일반 엔진 요청이며 native 앱 재검증이나 MCP 도구 결과 이후 답변을 대신하지 않는다.
+
+`a4b7fe04a3d46aba8dd7ebb8a2df2cfc888ae181`은 공통 composer에 현재 오류와 저장된 마지막 assistant의 failed/interrupted/finish reason을 반영한다. MCP 승인 대기를 완료로 표현하지 않으며 assistant 응답이 없는 대화는 메시지 수만 표시한다. 정상 완료·출력 한도·생성 중 안내를 유지한다. private component 입력·관련 회귀·채팅 설명만 바꿨으며 API·저장 schema·기본값·엔진/프로필·lockfile 계약은 변경하지 않았다. React best-practices 검토에서는 단순 파생 상태를 render에서 계산하고 새 effect/state/memo나 의존성을 추가하지 않은 것을 확인했다.
+
+| 자동 검사 | 결과·시간 |
+| --- | --- |
+| 수정 전 요청 실패·승인 대기 회귀 | fail — 2 files/3 failures·2.83s. 두 discovery 결과에서도 오류 후 footer가 완료로 표시되는 것을 재현했다. |
+| 관련 채팅·MCP 취소/알림 검사 | pass — 7 files/36 tests·3.24s. |
+| 마지막 상태 전환·관련 회귀 | pass — 3 files/7 tests·2.92s. 정상·한도·실패·중단·user-only·빈 대화 안내와 active generation 우선순위를 확인했다. |
+| TypeScript / lint | pass — 9.94s / 5.87s. |
+| 전체 `npm run test:unit` | pass — 125.33s. contracts/provider options/scripts/direct 검사와 UI180 files/1818 tests, coverage80.8%/75.78%/79.37%/84.9%. |
+
+raw는 `goal-native-audio-orbit137-{baseline,start,ready,pending,rejected,repeat-pending,terminal,final}-20261011.json/png`, `goal-mcp-followup-orbit137-{call-before,rejection,native-pending,native-terminal,preservation,final-preservation}.json`이다. native 조작/AX/screenshot은 CUA tool 결과이고 observer PNG는 보조 debug WKWebView 근거다. 로그 prefix는 `logs/goal-chat-status-orbit137-`와 `logs/goal-mcp-followup-orbit137-`다. 74절의 echo fixture/hash를 그대로 사용했으며 새 실행 코드로 승인을 우회하지 않았다.
+
+원래43개 대화/hash·기존 모든 프로필을 보존하고 합성 대화1개·검증 프로필1개만 추가했다. config에서 변경된 영역은 provider_options/settings_profiles다. 현재 같은 앱과 고정 Qwen이 검증 프로필로 Ready이며 API off·UI 오류/overlay 없음이다. 재잠금으로 native Default 선택·원래 실행 옵션 복원은 아직 못 했으며 전체 config/localStorage가 불변이라고 표시하지 않는다. 실제 OS No·도구 호출 중 취소·모델 후속 답변·트레이/Dock/OS 알림과 다른 미디어/계정/플랫폼 잔여 범위를 유지한다. 전체 목표·M01–M12 또는 개인 엔진 등록 구현 완료를 선언하지 않으며 원격 push는 수행하지 않았다.
+
+## 76. 채팅 상태 안내 수정 소스의 arm64 DMG
+
+제품 소스 `a4b7fe04a3d46aba8dd7ebb8a2df2cfc888ae181`에서 기존 `npm run package:tauri`로 CLI·frontend·release GUI·arm64 DMG를 생성했다. exit0·221.22s이며 chunk 크기 경고와 공증 자격 증명 부재에 따른 ad-hoc 서명은 유지한다.
+
+| 산출물 | SHA-256 |
+| --- | --- |
+| `goal-package-a4b7fe0/AioLM_0.3.1_aarch64.dmg` — 16,812,674 bytes | `5be92c8cfa4f8cda6709ed364827381b675f73161875d8d81c5fe543555bf380` |
+| GUI `aiolm` | `4bbd85f8172a4262593de440062c7e02e137baeabf9b431b25886b6202f3a3f5` |
+| CLI `aiolm-cli` | `9c4d0386bbd05672d32b99a75bd27cd208b052fe1791feced46c2fbadd6fd63a` |
+
+`goal-native-runtime-lock-package-a4b7fe0-results.json`과 `logs/goal-chat-status-orbit137-package{-inspect,}-20261011.log`가 근거다. native arm64 CPython3.12의 read-only/nobrowse mount 검사 exit0·5.65s. source HEAD 전후 일치·version0.3.1/최소macOS13.3·정확한5개 bundle 파일·GUI/CLI arm64·strict deep ad-hoc 서명·build app과 이미지 내부 binary hash 일치가 pass다. UTF-8/UTF-16 양 byte order에서 개인 홈/checkout 경로·기존 fixture·ORBIT-136/137 fixture 일치0건을 확인했다.
+
+새 격리 홈의 packaged CLI config get exit0·미완료 onboarding·빈 모델/runtime·격리 홈 내부 모델 경로, 이미지 원본/보존 복사 hash 일치·mount 해제도 pass다. 검증 프로필·합성 대화·실행 환경과 모델·로그·캡처는 배포 bundle에 들어 있지 않으며 Git 제외 tmp에만 보관한다.
+
+해당 production GUI의 실행은 unrun이고 새 native 이력 재로드·원래 Default 실행 복원은 Mac 잠금으로 blocked다. 75절의 debug 화면 통과나72절의 이전 production GUI 성공을 새 binary 실행으로 대체하지 않는다. Developer ID·공증·quarantine·자연스러운 Finder 설치 실행·별도 계정/Keychain/upgrade·Intel/구형 macOS와 미디어/MCP/OS 통합의 잔여 범위를 유지한다. package 이후 읽기 전용 검사에서 같은 Ready 엔진·44개 대화와 기존43개 hash·기존 프로필·config의 승인 만료 이후 불변·이전 엔진 group과 승인/도구 peer 종료·API off·active requests0·UI 오류 없음도 확인했다. 전체 목표 완료를 선언하지 않으며 원격 push는 수행하지 않았다.
