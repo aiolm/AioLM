@@ -4,7 +4,7 @@
 
 ## 1. 소스·환경·근거
 
-- 실행일: 2026-10-07–12 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
+- 실행일: 2026-10-07–13 (Asia/Seoul). 기준 소스: `11996aa26b326164ef97f7ba005438f05c30891d`.
 - 브랜치: `codex/macos-device-validation`. 초기 기기 검증·패키지 소스: `6261d0b`. 개발 앱 채팅 후속 수정: `2e63118`이며 11절에 별도로 기록한다. 추가 채팅·프로젝트·레이아웃 수정 `0424ab5`와 재검증은 12절, 해당 소스의 DMG는 13절에 기록한다. 삭제·실행 상태·좁은 창의 후속 수정 `533b450`과 재검증은 14절, 당시 잔여 범위는 15절, 해당 DMG는 16절에 기록한다. 접근성 의미 수정 `0709eda`와 재검증은 17절, 해당 DMG는 18절에 기록한다. 19절은 실제 창·PDF/폴더·clipboard·gateway·알림 검증과 알림 안내 수정 `5fd5e82`이며 해당 소스의 DMG는 20절에 기록한다. 21절은 실제 Gemma4 음성·취소·재시도·원래 실행 복원과 active-response 안내 수정 `b523f79`의 후속 기록이며 해당 소스의 DMG는 22절에 기록한다. 23절은 MCP 조회·승인 대기 정리와 기술 입력 치환 수정 `bbd2df6`을, 24절은 해당 소스의 DMG를 기록한다. 수정 커밋은 아래 표에 기록한다. 원격 push는 수행하지 않았다.
 - 기기: macOS 26.6.2 / native arm64 / Apple M2 / 16 GB.
 - 25·26절은 `c8fae57`에서 제품 코드 변경 없이 실제 창 숨김·설정 복원과 동일 MLX 공용 프로필의 두 모델·원래 vLLM 복원을 검증한 후속 기록이다. native debug 앱과 23절의 frontend 수정 소스를 사용했다.
@@ -1692,3 +1692,37 @@ raw는 `goal-production-source20f1ff4-orbit141-{prepared,launch,boot,completed,c
 실제 MCP OS No·승인 이후 모델 도구 결과 후속 답변·실제 호출 중 Cancel, Dock/트레이/OS 알림·실제 ffmpeg 부재, URI upstream/미디어 내용 실패와 별도 계정/Keychain/upgrade/Finder·Intel/구형 macOS의 기존 남은 범위는 유지한다. 임의 개인 엔진 registry/manifest 등록도 미구현이며 전체 목표/M01–M12 완료를 선언하지 않는다.
 
 최종적으로 원래 작업용 홈의 debug 앱을 다시 정상 실행하고 실제 Default 시작→Ready를 확인했다. Default22→23은 저장 metadata만 바뀌었고 모든 프로필 내용·다른 config 값·46개 대화/hash·한국어 저장 응답/모델/PP·TG를 보존했다. API off·active requests0·생성 중 아님·기록된 UI 오류/overlay 없음이며 현재 새 앱/엔진 PID가 실제로 살아 있다. `goal-native-audio-orbit141-{finalstarting,final}-20261012.json/png`, `goal-native-orbit141-final-preservation.json`, `logs/goal-runtime-selection-orbit141-final-restore-debug-20261012.log`가 근거다. finalstarting 관찰 때에도 이미 running이었으므로 이름만으로 대기 중이라고 판단하지 않는다. 원래 Default 선택/실행 옵션 복원은 더 이상 남은 작업이 아니며 실제 MCP OS 클릭·호출 중 취소 등 위의 잔여 범위는 유지한다.
+
+## 82. 런타임 오류 배너 닫기 수정과 현재 MCP 승인 결과
+
+`6e27196bf628b8973f6b9ea9dbe73df82c17c87e`는 실제 WKWebView에서 재현한 배너 닫기 결함을 수정했다. 메모리 용량 실패 후 Dismiss를 누르면 store에서 지운 error를 다음 native status poll이 다시 반환해 같은 배너가 반복됐다. 앱은 현재 오류의 알림 확인 여부를 보관하고, store는 backend 오류·로그를 유지한다. 달라진 오류·새 작업 실패·복구 후 재발은 다시 알리며 진단 화면의 failed 상태·원인 로그를 숨기지 않는다. 공개 타입·엔진·프로필·기본값·readiness·시간 제한은 바꾸지 않았다.
+
+| 검증 | 판정·근거 |
+| --- | --- |
+| 수정 전 회귀 | fail — 합성 배너 재표시·authoritative error 삭제 두 검사가 실패, 5.96s. |
+| 수정 후 관련 검사 | pass — 두 파일 43 tests, 6.09s. |
+| TypeScript / lint / build | pass — 10.95s / 6.24s / 36.11s. 기존 bundle chunk 경고 유지. |
+| 전체 `npm run test:unit` | pass — 157.79s. contracts·provider options·scripts·direct 및 UI180 files/1824 tests. coverage80.84%/75.78%/79.42%/84.91%. |
+| 실제 오류 알림·진단 보존 | pass — 원래 Default를 보존하고 기존 합성 memory 프로필의 실제 KV 실패를 재현했다. 수정 전 native Dismiss 후 재등장, 수정 후 Dismiss·후속 poll·Diagnostics 이동에서도 배너 없음/같은 오류와 로그 보존. 기존46개 대화/hash와 실패 소유 server/core 프로세스 종료 확인. native core는 `6a374ce`, Vite frontend는 `6e27196`이다. |
+
+원본은 `goal-dismiss-orbit142-before.json`, `goal-dismiss-orbit142-native-results.json`, `goal-native-audio-orbit142-{baseline,dismiss-before,dismiss-fixed}-20261013.json/png`와 `logs/goal-dismiss-orbit142-{before,related,typecheck,lint,unit,build,native-before,native-fixed}-20261013.log`다. 이번 frontend 수정에 Rust/Python 전체 검사를 새로 실행한 것으로 기록하지 않는다.
+
+74절의 수동 echo는 사람의 OS Yes·실제 tools/call1회·결과·정리 pass를 유지한다. Yes 회신만으로 별도 모델 후속 요청의 성공을 소급 처리하지 않았다. 기존 합성 MCP 프로필을 실제 선택/시작하여 새 요청을 만들었다. 새 대화의 도구가 기본 off인 상태의 첫 응답에는 호출이 없었고, 앱의 Load MCP tools 후 정확한 새 인자의 tool request가 생성됐다. native Approve once→Waiting for MCP tool·Stop이 실제로 표시됐지만 CUA는 새 OS 창도 `Invalid app: osascript`로 선택할 수 없었다. 새 사람 클릭을 요청한 뒤 기존120초 한도에서 실제 approval timed out을 확인했다. peer/approval 프로세스 종료·입력 활성화·미완료4메시지 재선택 안내와 모델/측정값 보존은 pass다. 이번 요청의 tools/call은0건이며 OS No와 모델 도구 결과 후속 답변·실제 호출 중 Cancel은 blocked를 유지한다. 첫 응답을 실제 도구 결과나 모델 후속 처리 성공으로 계산하지 않는다.
+
+원본은 `goal-native-audio-orbit142-{mcp-starting,mcp-wait,mcp-timeout,mcp-history}-20261013.json/png`, 대응 `logs/goal-dismiss-orbit142-*.log`와 `mcp-quit-events.jsonl`이다. mcp-starting 관찰은 backend failed에서 UI loading으로 전환하는 중의 순차 읽기이며 Ready 근거가 아니다. 도구 환경은 앞 절과 같은 고정 Qwen revision·vllm-metal0.30.0/vLLM0.30.0+cpu이고 외부 환경·모델 파일을 보존했다. OS 승인 우회나 시간 제한 확대는 하지 않았다.
+
+## 83. 오류 배너 수정 소스의 arm64 패키지
+
+제품 소스 `6e27196`의 기존 `npm run package:tauri`가 exit0·277.84s로 완료됐다. GUI/CLI·DMG와 version0.3.1/최소macOS13.3를 유지했고 기존 chunk 경고·ad-hoc 서명·공증 자격 증명 부재도 유지했다.
+
+| 산출물 | SHA-256 |
+| --- | --- |
+| `goal-package-6e27196/AioLM_0.3.1_aarch64.dmg` — 16,815,924 bytes | `56bd050df02f8b55e4406522b89bc6e176d6fe2f127e5f6ed0edfc5f6802400b` |
+| aiolm | `48cb971d1ded04e1d46d52bd6ab9f27dcf8bee01a723bcf3ce60c3c83e0328e8` |
+| aiolm-cli | `9c4d0386bbd05672d32b99a75bd27cd208b052fe1791feced46c2fbadd6fd63a` |
+
+read-only/nobrowse mount 검사 exit0·13.33s. native arm64 CPython3.12·source HEAD 전후 일치·정확한5개 bundle 파일·두 binary arm64·strict deep ad-hoc 서명·build/이미지 hash 일치·UTF-8/UTF-16 양 byte order 개인 홈/checkout 경로와 추가 fixture 일치0건·새 격리 홈 CLI 초기값·이미지 보존/hash·mount 해제가 pass다. raw는 `goal-native-runtime-lock-package-6e27196-results.json`, `logs/goal-dismiss-orbit142-package{-inspect,}-20261013.log`다. 이번 새 이미지의 실제 production GUI 실행은 unrun이며 이전20f1ff4 production 실행 결과를 새 이미지의 실행 통과로 대체하지 않는다. 배너 수정의 실제 기기 근거는82절 WKWebView다.
+
+전체 M01–M12 통과나 임의 개인 엔진 등록 구현을 선언하지 않는다. 기존 upstream/미디어 내용 실패·OS No/모델 도구 후속 답변과 실제 호출 중 취소·Dock/트레이/알림·별도 계정/Keychain/실제 업그레이드/Finder·Intel/구형 macOS 잔여 범위는 유지한다. 원격 push와 공개 upload는 수행하지 않았다.
+
+실제 native Default 복원 후 backend running과 같은 모델명·저장 응답/PP/TG·입력 활성화를 확인했다. max_model_len4096·tools_auto/tool_parser false·API off·active response 없음·composer 빈 값·UI 오류/overlay 없음이며 현재 앱/엔진 생존, 이전 MCP engine/peer/approval 종료가 pass다. Default23→24·기존 MCP2→3·memory2→3은 저장 revision만 바뀌었고 모든 프로필 내용·다른 config 값·기존46개 대화/hash를 보존했다. 새 합성 MCP 대화 한 파일만 추가되어47개다. `goal-native-audio-orbit142-restored-20261013.json/png`, `goal-dismiss-orbit142-final-preservation.json`이 근거다. 앞선 final 관찰은 backend starting이라 그 자체를 Ready로 계산하지 않는다. 원래 저장 응답/측정값을 재확인한 것이며 새 Default 추론 샘플로 계산하지 않는다.
