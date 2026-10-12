@@ -6,6 +6,9 @@ export type LifecycleErrorKind = "active-response" | "timeout" | "port" | "execu
 export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
   const text = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (/^finish or stop the active response(?: in session '[^']+')? before (?:loading a model|replacing this model|unloading this model)$/.test(text)) return "active-response";
+  // Allocation failures often include model-loading frames and startup timeout
+  // wrappers. Their concrete memory diagnosis takes precedence over that text.
+  if (text.includes("out of memory") || /\boom\b|no available memory for (?:the )?cache blocks|(?:larger than|exceeds?) (?:the )?available (?:kv cache )?memory/.test(text)) return "memory";
   if (text.includes("timeout") || text.includes("timed out")) return "timeout";
   if (text.includes("address already in use") || text.includes("port") && (text.includes("use") || text.includes("bind"))) return "port";
   if (text.includes("not found") || text.includes("no such file") || text.includes("executable")) return "executable";

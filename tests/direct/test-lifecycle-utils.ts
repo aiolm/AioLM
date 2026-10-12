@@ -45,6 +45,18 @@ for (const [detail, kind, hint] of [
   assert.equal(classifyLifecycleError(detail), kind);
   assert.ok(lifecycleErrorMessage("start", detail).includes(hint));
 }
+for (const detail of [
+  'server exited before ready (1). File "/synthetic/runtime/loader.py": ValueError: To serve at least one request with the model max seq len, 2.0 GiB KV cache is needed, which is larger than the available KV cache memory (1.0 GiB).',
+  'Model load failed: CUDA out of memory during startup timeout. File "/synthetic/runtime/model.py"',
+  'Model loader: ValueError: No available memory for the cache blocks.',
+]) {
+  assert.equal(classifyLifecycleError(detail), "memory", "explicit allocation failures take precedence over model/traceback and startup wrapper text");
+  const message = lifecycleErrorMessage("start", detail);
+  assert.match(message, /There is not enough available memory or VRAM/);
+  assert.doesNotMatch(message, /model path|file integrity/);
+  assert.ok(message.endsWith(` (${detail})`), "the runtime allocation failure remains available in diagnostics");
+}
+assert.equal(classifyLifecycleError('invalid model file; inspect /synthetic/memory/loader.py'), "model");
 assert.equal(isLifecycleCancellation(new Error("server start cancelled")), true);
 assert.equal(isLifecycleCancellation(new Error("server failed to load")), false);
 assert.equal(nextPollDelay(1000, 0), 1000);
