@@ -34,9 +34,10 @@
 - 75절은 실제 Qwen 도구 파서 프로필·모델의 요청·앱 Reject, 거부 뒤 잘못된 완료 안내 수정 `a4b7fe0`와 재검증을 기록한다. 76절은 해당 소스의 DMG다. 모델 후속 답변·원래 Default 프로필 복원은 재잠금으로 남아 있다.
 - 77절은 실제 MCP 실행 대기의 첫 토큰 안내와 저장된 미완료 도구 요청의 완료 안내 수정 `a7ce853` 및 자동 검증을 기록한다. 78절은 해당 소스의 DMG다. 새 native 재검증은 Mac 잠금으로 blocked다.
 - 79절은 잠금 해제 후 실제 MCP 실행 대기/미완료 이력 안내·Default 복원, 80절은 production GUI와 메모리 부족 안내 수정 `20f1ff4`의 자동/실기기 검증, 81절은 새 DMG와 해당 production GUI의 응답·이력·종료를 기록한다. 이전 차단/미실행은 당시 근거로 보존한다.
+- 82절은 오류 배너 닫기 수정 `6e27196`의 자동/실기기 검증과 MCP 모델 후속 승인 한계를 기록한다. 83절은 해당 DMG이며 84절은 새 이미지의 실제 production 실패 안내·응답·작은 창·재로드·종료 검증이다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
-- 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
+- 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81·84절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
 - raw 로그·모델·번들·캡처·검사 도구는 Git 제외 대상 `tmp/macos-acceptance/`에 보관했다. 아래 근거 파일은 이 디렉터리 기준이며 `checks.jsonl`에 명령·종료 코드·소요 시간을 기록했다. 자체 검사에서 반환한 보존 홈은 `retained-homes/`에 복사했다.
 - 이 문서와 패키지에는 개인 경로·계정/기기 식별자·생성 런타임 ID·API 키를 넣지 않았다. hosted runner 조건을 위조하지 않았고 공개 benchmark 서비스 업로드도 수행하지 않았다.
 
@@ -85,6 +86,7 @@
 | `a4b7fe0` | 실제 MCP 요청을 거부하거나 요청이 실패해도 하단이 응답 완료로 표시됐다. 승인 대기·실패·중단·완료와 assistant 없는 대화를 구분한다. | 수정 전3개 회귀 fail/후 pass·관련36개·공통 UI1818개/typecheck/lint 통과. 실제 거부 후 실패 안내·다음 모델 요청의 승인 대기 안내를 native 앱에서 확인했다. 75절 참조. |
 | `a7ce853` | native MCP 실행/OS 승인 대기를 첫 토큰 대기로 표시하고 저장된 tool_calls 응답을 완료로 표시했다. 실행 대기·후속 모델 요청·재로드한 미완료 요청을 구분한다. | 수정 전 회귀4개 fail/후 pass·관련54개·공통 UI1822개/typecheck/lint 통과. 77절 당시 새 native 재검증은 blocked였고 79절에서 실제 실행 대기·정상 재실행 뒤 미완료 이력을 확인했다. |
 | `20f1ff4` | vLLM의 실제 KV cache 용량 부족을 모델 경로/파일 무결성 문제로 안내했다. 구체적인 할당 실패를 wrapper·model/traceback 표현보다 먼저 분류한다. | 합성 회귀 수정 전 fail/후 pass·공통 UI1822개/typecheck/lint pass. 실제 KV cache 실패에서 메모리 안내·원인 로그·소유 프로세스 정리를 확인했다. 80절 참조. |
+| `6e27196` | 오류 알림 Dismiss가 UI store의 runtime error를 지우고 다음 poll에서 같은 배너를 재표시했다. shell은 알림 확인 여부를 유지하고 store는 원인 진단을 보존한다. | 수정 전 두 회귀 fail/후43개 pass·공통 UI1824개/typecheck/lint/build pass. 실제 debug 및 해당 DMG production에서 배너 닫기·진단 보존·정상 설정 복원 확인. 82–84절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -104,7 +106,7 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. 74절에서 실제 사람의 OS Yes→수동 tools/call 1회→결과·소유 프로세스 정리를 통과했다. 실제 No·모델 후속 답변·호출 중 취소는 미검증이다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
-| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. 84절의 새6e27196 DMG production 응답·작은 창·재로드·normal Quit도 통과했다. Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
 | M12 | blocked | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. MCP 승인 후 실제 호출 중 취소는 승인창 조작 차단으로 미검증. |
 
 ## 4. 초기 기기 검증의 공통 자동 검사 (`6261d0b`)
@@ -1721,8 +1723,29 @@ raw는 `goal-production-source20f1ff4-orbit141-{prepared,launch,boot,completed,c
 | aiolm | `48cb971d1ded04e1d46d52bd6ab9f27dcf8bee01a723bcf3ce60c3c83e0328e8` |
 | aiolm-cli | `9c4d0386bbd05672d32b99a75bd27cd208b052fe1791feced46c2fbadd6fd63a` |
 
-read-only/nobrowse mount 검사 exit0·13.33s. native arm64 CPython3.12·source HEAD 전후 일치·정확한5개 bundle 파일·두 binary arm64·strict deep ad-hoc 서명·build/이미지 hash 일치·UTF-8/UTF-16 양 byte order 개인 홈/checkout 경로와 추가 fixture 일치0건·새 격리 홈 CLI 초기값·이미지 보존/hash·mount 해제가 pass다. raw는 `goal-native-runtime-lock-package-6e27196-results.json`, `logs/goal-dismiss-orbit142-package{-inspect,}-20261013.log`다. 이번 새 이미지의 실제 production GUI 실행은 unrun이며 이전20f1ff4 production 실행 결과를 새 이미지의 실행 통과로 대체하지 않는다. 배너 수정의 실제 기기 근거는82절 WKWebView다.
+read-only/nobrowse mount 검사 exit0·13.33s. native arm64 CPython3.12·source HEAD 전후 일치·정확한5개 bundle 파일·두 binary arm64·strict deep ad-hoc 서명·build/이미지 hash 일치·UTF-8/UTF-16 양 byte order 개인 홈/checkout 경로와 추가 fixture 일치0건·새 격리 홈 CLI 초기값·이미지 보존/hash·mount 해제가 pass다. raw는 `goal-native-runtime-lock-package-6e27196-results.json`, `logs/goal-dismiss-orbit142-package{-inspect,}-20261013.log`다. 이 절 당시 새 이미지의 실제 production GUI 실행은 unrun이었다. 84절에서 해당 이미지의 새 실제 실행을 검증했으며 이전20f1ff4 실행으로 대체하지 않았다. 배너 수정의 실제 기기 근거는82절 WKWebView다.
 
 전체 M01–M12 통과나 임의 개인 엔진 등록 구현을 선언하지 않는다. 기존 upstream/미디어 내용 실패·OS No/모델 도구 후속 답변과 실제 호출 중 취소·Dock/트레이/알림·별도 계정/Keychain/실제 업그레이드/Finder·Intel/구형 macOS 잔여 범위는 유지한다. 원격 push와 공개 upload는 수행하지 않았다.
 
 실제 native Default 복원 후 backend running과 같은 모델명·저장 응답/PP/TG·입력 활성화를 확인했다. max_model_len4096·tools_auto/tool_parser false·API off·active response 없음·composer 빈 값·UI 오류/overlay 없음이며 현재 앱/엔진 생존, 이전 MCP engine/peer/approval 종료가 pass다. Default23→24·기존 MCP2→3·memory2→3은 저장 revision만 바뀌었고 모든 프로필 내용·다른 config 값·기존46개 대화/hash를 보존했다. 새 합성 MCP 대화 한 파일만 추가되어47개다. `goal-native-audio-orbit142-restored-20261013.json/png`, `goal-dismiss-orbit142-final-preservation.json`이 근거다. 앞선 final 관찰은 backend starting이라 그 자체를 Ready로 계산하지 않는다. 원래 저장 응답/측정값을 재확인한 것이며 새 Default 추론 샘플로 계산하지 않는다.
+
+## 84. 새 DMG의 실제 production 실패·응답·작은 창·재로드
+
+2026-10-13 `abdab98` checkout에서83절의 검증 이미지(제품 소스 `6e27196`)를 read-only로 열어 별도 app copy를 만들었다. GUI/CLI hash·strict 서명이 이미지와 일치했고 기존 작업용 production 홈의 명시적4096 프로필·네 메시지를 유지했다. 원래 debug 앱을 native Quit→launcher exit0으로 종료하고 engine/driver/Vite 포트와 소유 프로세스 정리를 확인한 뒤, Vite 없이 격리된 binary를 실행했다. 실제 CUA 화면/입력과 파일·프로세스·해시 관찰을 근거로 삼았다.
+
+| 실제 흐름 | 판정·근거 |
+| --- | --- |
+| 새 이미지 실행·기존 기록 | pass — native 한국어 앱과 기존 네 메시지/모델/측정값을 확인했다. 새 onboarding·모델 자동 시작은 없었다. |
+| 메모리 실패·배너 닫기 | pass — 원래 프로필을 보존한 별도 합성 프로필에서 context override를 제거해 실제 KV capacity 실패를 재현했다. 올바른 메모리 안내→Dismiss 한 번→후속 poll에도 배너 없음·failed 진단/원인 로그 보존을 확인했다. 실패 후 소유 자식은 없고 GUI만 남았다. 이 실패의 bound port를 포착하지 못했으므로 실패 포트 왕복으로 확대하지 않는다. |
+| 정상 설정·새 응답 | pass — 보존한4096 프로필 선택/시작→Ready. 새 합성 대화에서 `12에 13을 더하면 25입니다.`. PP54/cache0, TG15/0.49s/28.7tok/s, TTFT5.26s·준비0.02s·요청5.61s. 실제 모델명·완료 안내·stop·측정값을 저장했다. PP 단계 시간/속도 미제공은 dash와 설명으로 표시하고 추정값을 넣지 않았다. |
+| 실제 작은 창 | pass — CUA native resize로약800×600·360×520의 작은 창을 확인했다. 메뉴·모델명·composer·첨부/완료/전송 영역의 겹침 없음을 확인했고 좁은 답변 영역의 native scroll로 PP/TG에 접근했다. 모델/측정값/설정을 유지하고1280×800으로 복원했다. 임의 모든 내용·크기의 배치 통과를 의미하지 않는다. |
+| 정상 종료·재로드 | pass — native Quit→launcher exit0, 소유 GUI/engine group·실제 listener 포트·작업용 short temp 정리. 같은 검증 copy의 정상 재실행에서 새 두 메시지와 이전 네 메시지·모델/측정값/stop이 그대로 복원됐고 모델 없는 composer는 비활성이었다. 재로드 앱도 native Quit→exit0·short-temp 정리 확인. |
+| 데이터·외부 환경 보호 | pass — 원래 개발 config/hash·47개 대화/hash는 production 검증 전체에서 불변. production 기존 대화 불변/새 합성 대화 한 파일 추가, 모든 기존 프로필 내용 보존/선택 프로필4→5는 revision만 변경. 합성 실패 프로필 하나 추가. 외부 환경·고정 공개 모델 파일은 이동/삭제하지 않았다. |
+
+raw는 `goal-production-source6e27196-orbit143-{prepared,launch,boot,memory-start,memory-failed,restoring,answer,completed,native-results,reload-checks,quit-checks,exit,cleanup,final-cleanup}.json`, `goal-production-source6e27196-orbit143-reload-{launch,reloaded,exit,cleanup}.json`과 대응 `logs/goal-production-source6e27196-orbit143-*.log`다. 실제 native AX/screenshot·resize·scroll·입력은 CUA tool 결과이며 observer는 UI를 조작하지 않고 파일/소유 프로세스만 읽는다. answer 관찰 이름만으로 완료를 판단하지 않고 실제 완료 뒤 completed의 새 assistant·finishReason·metrics를 검사했다.
+
+Dock와 SystemUIServer는 이번 새 시도에서도 각각 CUA `-10005 timeoutReached`로 접근하지 못했다. 실제 OS No·모델 도구 결과 후속 답변/호출 중 취소·알림·별도 계정/Keychain/실제 업그레이드/Finder 설치·Intel/구형 macOS·기존 upstream/미디어 내용 실패는 남아 있다. 같은0.3.1의 작업용 app copy를 직접 실행/재로드한 것이며 별도 계정·과거 버전 업그레이드·자연스러운 Finder 설치를 대신하지 않는다. 제품 소스는 변경하지 않았고 전체 M01–M12 통과를 선언하지 않는다.
+
+개발 앱 복원 직후 첫 설정 열기에서는 loading 표시 뒤 모달이 닫히는 native 관찰이 있었으며 원인은 미분류다. 읽기 전용 보조 캡처에는 모달이 열린 시점도 있어 서로 다른 시점의 관찰을 같은 상태로 취급하지 않았다. 이후 native 좌표 클릭으로 연 설정은 유지되고 정상 프로필 시작이 진행됐다. `goal-native-audio-orbit143-restored-20261013.json/png`, `goal-debug-modal-orbit143-events.json`에 관찰을 보존했다. 뒤의 passive close 이벤트 한 건은 open=true로 복원된 모달의 기록이며 앞선 두 닫힘의 원인 증거로 확대하지 않는다. 새로운 제품 결함으로 분류/수정 완료했다고 주장하지 않는다.
+
+최종 native 개발 앱의 Default 시작→모델 로드됨·backend running·입력 활성화를 확인했다. Default24→25는 저장 revision만 변경됐고 모든 기존 프로필 내용·다른 config 값·47개 대화/hash·저장 응답/모델/PP/TG를 보존했다. API off·생성 중 아님·composer 빈 값·UI 오류/overlay 없음과 현재 앱/엔진 생존을 확인했다. `goal-native-audio-orbit143-final-20261013.json/png`, `goal-runtime-selection-orbit143-final-preservation.json`, `logs/goal-runtime-selection-orbit143-final-restore-debug-20261013.log`가 근거다. final-starting은 실제 starting이므로 Ready 근거로 계산하지 않는다. 원래 실행 설정 복원은 완료했고 앞의 미분류 초기 설정창 관찰 및 외부/수동 검증 잔여 범위는 유지한다.
