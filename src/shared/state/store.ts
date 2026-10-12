@@ -245,7 +245,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const clearActionError = useCallback(() => setActionError(null), []);
   const getConfig = useCallback(() => cfgRef.current, []);
   const getConfigRevision = useCallback(() => configRevisionRef.current, []);
-  const clearErrors = useCallback(() => { setBootError(null); setActionError(null); setStatusPollError(null); setStatus((current) => ({ ...current, error: undefined })); }, []);
+  // Runtime failures remain authoritative diagnostics; the shell acknowledges their notice.
+  const clearErrors = useCallback(() => { setBootError(null); setActionError(null); setStatusPollError(null); }, []);
 
   useEffect(() => {
     void loadConfig().catch(() => undefined);

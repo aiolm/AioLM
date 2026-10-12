@@ -132,6 +132,43 @@ describe("Workspace navigation", () => {
     expect(store.clearErrors).toHaveBeenCalledOnce();
   });
 
+  it('acknowledges a runtime failure across polls and announces later failures', async () => {
+    const originalError = 'Synthetic KV cache capacity failure';
+    store.status = { state: 'failed', error: originalError, log_tail: 'Synthetic allocation detail' };
+    store.actionError = 'Model load failed: synthetic allocation failure';
+    vi.mocked(store.clearErrors).mockImplementation(() => {
+      store.bootError = null; store.actionError = null; store.statusPollError = null;
+    });
+    const view = mount();
+    const rerender = () => view.rerender(<I18nProvider initialLocale="en"><App /></I18nProvider>);
+    const dismiss = () => {
+      fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Dismiss' }));
+      rerender();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    };
+    dismiss();
+    for (let poll = 0; poll < 3; poll += 1) {
+      store.status = { ...store.status, log_tail: `Synthetic diagnostic update ${poll}` };
+      rerender();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(store.status.error).toBe(originalError);
+    }
+    store.actionError = 'Synthetic configuration save failed';
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent(store.actionError);
+    dismiss();
+    store.status = { state: 'failed', error: 'Synthetic new runtime failure' };
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent('Synthetic new runtime failure');
+    dismiss();
+    store.status = { state: 'running' };
+    rerender();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    store.status = { state: 'failed', error: originalError };
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent(originalError);
+  });
+
   it("keeps global cancellation through panel loading and restores it after leaving the owner page", async () => {
     showBenchmarkCancel = true;
     let release!: () => void;

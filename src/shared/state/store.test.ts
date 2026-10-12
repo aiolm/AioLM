@@ -123,6 +123,21 @@ it("preserves the rendered snapshot when polling returns unchanged nested status
   expect(result.current).toBe(rendered);
 });
 
+it('clears transient notices without erasing authoritative runtime failure diagnostics', async () => {
+  const failed: api.ServerStatus = {
+    state: 'failed', error: 'Synthetic allocation failure', log_tail: 'Synthetic diagnostic detail',
+  };
+  vi.mocked(api.serverStatus).mockImplementation(async () => structuredClone(failed));
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.status.state).toBe('failed'));
+  const snapshot = result.current.status;
+  await act(async () => { result.current.clearErrors(); });
+  expect(result.current.status).toBe(snapshot);
+  expect(result.current.status.error).toBe(failed.error);
+  await act(async () => { await result.current.refreshStatus(); });
+  expect(result.current.status).toBe(snapshot);
+});
+
 it("still publishes changed diagnostics and removes stale optional status fields", async () => {
   const initial: api.ServerStatus = {
     state: "running", log_tail: "ready",

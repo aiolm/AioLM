@@ -166,14 +166,21 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // and that message was the only place it existed: without somewhere to accept
   // it, being told "or start it anyway with key ..." led nowhere.
   const [overrideAccepted, setOverrideAccepted] = useState(false);
+  const [dismissedRuntimeError, setDismissedRuntimeError] = useState<string | null>(null);
+  useEffect(() => { setDismissedRuntimeError(null); }, [store.status.error]);
   const serverState = store.status.state;
   const stopServer = store.stop;
-  const hasError = store.bootError || store.actionError || store.statusPollError || store.status.error;
-  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? store.status.error ?? "";
+  const runtimeError = store.status.error === dismissedRuntimeError ? undefined : store.status.error;
+  const hasError = store.bootError || store.actionError || store.statusPollError || runtimeError;
+  const errorText = store.bootError ?? store.actionError ?? store.statusPollError ?? runtimeError ?? "";
+  const dismissErrors = () => {
+    setDismissedRuntimeError(store.status.error ?? null);
+    store.clearErrors();
+  };
   const overrideKey = verificationOverrideKey(errorText);
   const acceptOverride = () => {
     void api.allowVerificationOverride(overrideKey!)
-      .then(() => { setOverrideAccepted(true); store.clearErrors(); })
+      .then(() => { setOverrideAccepted(true); dismissErrors(); })
       .catch(() => undefined);
   };
 
@@ -312,7 +319,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         <TaskActivity hasActivity={!!hasError || store.bootState === 'native-unavailable'} title={t("ui.taskStripTitle")} indicator={<PanelFeedbackIndicator message={t("error.attention")} globalError={!!hasError} />}>
         <PanelFeedback>
           {store.bootState === "native-unavailable" && view !== "chat" && <FeedbackBanner tone="warning" title={t("native.unavailable")} action={view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{t("native.message")}</FeedbackBanner>}
-          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={store.clearErrors}
+          {hasError && store.bootState !== "native-unavailable" && <FeedbackBanner tone="error" title={t("error.attention")} onDismiss={dismissErrors}
             action={overrideKey ? { label: t("ui.verificationOverride"), onClick: acceptOverride } : view === "diagnostics" ? undefined : { label: t("native.openDiagnostics"), onClick: openDiagnostics }}>{normalizeDisplayText(errorText)}</FeedbackBanner>}
           {overrideAccepted && !hasError && <FeedbackBanner tone="success" onDismiss={() => setOverrideAccepted(false)}>{t("ui.verificationOverrideDone")}</FeedbackBanner>}
         </PanelFeedback>
