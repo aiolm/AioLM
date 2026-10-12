@@ -1749,3 +1749,17 @@ Dock와 SystemUIServer는 이번 새 시도에서도 각각 CUA `-10005 timeoutR
 개발 앱 복원 직후 첫 설정 열기에서는 loading 표시 뒤 모달이 닫히는 native 관찰이 있었으며 원인은 미분류다. 읽기 전용 보조 캡처에는 모달이 열린 시점도 있어 서로 다른 시점의 관찰을 같은 상태로 취급하지 않았다. 이후 native 좌표 클릭으로 연 설정은 유지되고 정상 프로필 시작이 진행됐다. `goal-native-audio-orbit143-restored-20261013.json/png`, `goal-debug-modal-orbit143-events.json`에 관찰을 보존했다. 뒤의 passive close 이벤트 한 건은 open=true로 복원된 모달의 기록이며 앞선 두 닫힘의 원인 증거로 확대하지 않는다. 새로운 제품 결함으로 분류/수정 완료했다고 주장하지 않는다.
 
 최종 native 개발 앱의 Default 시작→모델 로드됨·backend running·입력 활성화를 확인했다. Default24→25는 저장 revision만 변경됐고 모든 기존 프로필 내용·다른 config 값·47개 대화/hash·저장 응답/모델/PP/TG를 보존했다. API off·생성 중 아님·composer 빈 값·UI 오류/overlay 없음과 현재 앱/엔진 생존을 확인했다. `goal-native-audio-orbit143-final-20261013.json/png`, `goal-runtime-selection-orbit143-final-preservation.json`, `logs/goal-runtime-selection-orbit143-final-restore-debug-20261013.log`가 근거다. final-starting은 실제 starting이므로 Ready 근거로 계산하지 않는다. 원래 실행 설정 복원은 완료했고 앞의 미분류 초기 설정창 관찰 및 외부/수동 검증 잔여 범위는 유지한다.
+
+## 85. 초기 설정창 관찰의 수동 입력 재검증
+
+`0543058` checkout/제품 frontend `6e27196`, native debug core `6a374ce`에서84절의 초기 설정창 닫힘 관찰을 다시 확인했다. 실행 중인 앱의 요소 기반 클릭·정상 Quit/relaunch 후 stopped 앱의 첫 요소 기반 클릭 모두 실제 설정창을 열어 유지했다. passive observer는 pointer/click·Escape/cancel·dialog 연결/open/close만 관찰했으며 controls를 조작하거나 cancel을 합성하지 않았다. 첫 열기의 close 이벤트 한 건 뒤에도 open=true였으므로 close 이벤트 자체를 사용자 닫힘이나 제품 실패로 계산하지 않는다. 실제 Escape→닫힘/cancel1회→재열기 유지도 확인했다. 설정을 저장하기 전 config 전체/hash와47개 대화/hash는 불변이었다. 진단용 listener와 MutationObserver는 제거했다.
+
+현재 재검증은 pass다. 앞선 두 닫힘의 원인은 여전히 미분류이며 이번 통과를 과거 원인 규명·결함 수정 성공으로 바꾸지 않는다. 제품 코드·기본값·프로필 정책·시간 제한을 변경하지 않았고 이전 단위 검사를 이번 새 실행으로 주장하지 않는다. warm/open·cold/open·Escape/reopen을 이번 실제 범위로 한정한다.
+
+raw는 `goal-modal-orbit144-{passive-installed,warm-first,warm-closed,before-quit,quit-checks,cold-installed,cold-first,cold-escape,cold-reopened,cold-removed,results}.json`, `goal-native-audio-orbit144-{baseline,before-restore,restoring}-20261013.json/png`, `logs/goal-modal-orbit144-*.log`다. 원래 앱 normal Quit/launcher exit0→소유 engine/driver/Vite listener 및 프로세스 정리 뒤 같은 격리 홈으로 정상 재실행했고 현재 PID가 살아 있음을 확인해 CUA를 연결했다. 관찰 시간 초과만으로 재실행하거나 종료된 앱을 CUA로 다시 열지 않았다.
+
+Dock·SystemUIServer 프로세스가 실제로 실행 중임을 확인했지만 이번 두 CUA 접근도 각각 `-10005 timeoutReached`다.82–85절의 연속 후속 검증에서 같은 OS 조작 조건이 유지됐다. 현재 새 MCP 승인창은 없으며, 남은 실제 OS No·도구 결과 후속 모델 응답/실제 호출 중 취소에는 새 사람 클릭이 필요하다. OS 알림·별도 계정/Keychain/실제 upgrade/Finder·Intel/구형 macOS·기존 upstream/미디어 내용 실패의 남은 판정도 유지한다. 전체 M01–M12 완료를 선언하지 않는다.
+
+별도 normal Quit/relaunch의 첫 설정 열기는 WebDriver session을 만들지 않은 상태에서 CUA만으로 확인했다. 실제 AX/screenshot의 설정창 유지와 session 파일 부재·config/hash·47개 대화/hash 불변이 pass다. 이후 WebDriver를 연결한 뒤에도 같은 열린 창이 유지됐으므로 이번에는 관찰기 연결에 의한 닫힘도 재현하지 못했다. `goal-modal-orbit144-native-{no-observer,first-preservation,after-wd-connect,results,before-quit,quit-checks}.json`, `logs/goal-modal-orbit144-native-only-launch-20261013.log`와 native CUA 결과가 근거다. 이 비교를 앞선 닫힘의 원인 규명으로 대체하지 않는다.
+
+최종 native Default 모델 로드됨·backend running·입력 활성화·저장 모델명/PP/TG를 확인했다. 두 정상 재실행의 Default25→27은 저장 revision만 변경됐으며 기존 프로필 내용·다른 config 값·47개 대화/hash를 보존했다. API off·생성 중 아님·composer 빈 값·UI 오류/overlay 없음과 현재 앱/엔진 생존이 pass다. `goal-native-audio-orbit144-final-20261013.json/png`, `goal-modal-orbit144-final-preservation.json`이 근거다. 새 추론 샘플로 계산하지 않으며 restoring 관찰 두 건은 이름과 달리 당시 이미 running이었다.
