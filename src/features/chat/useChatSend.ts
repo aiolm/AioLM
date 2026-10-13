@@ -228,7 +228,7 @@ export function useChatSend({
         mediaPreprocessing: mediaPreprocessing ? structuredClone(mediaPreprocessing) : undefined,
         embeddingTarget: embeddingTarget ? structuredClone(embeddingTarget) : undefined,
         baseUrl: baseUrl!, apiKey, model, sessionId,
-        systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || "You are a helpful assistant.",
+        systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || (activeThread?.useDefaultSystemPrompt === false ? "" : "You are a helpful assistant."),
         tools: structuredClone(mcpDefinitions),
         toolEntries: new Map(mcpEntryByFunctionName),
         personalization: null,
@@ -291,7 +291,7 @@ export function useChatSend({
       };
       const systemMessage: api.ChatMessage = { role: "system", content: buildPersonalizedSystemPrompt(turn.systemPrompt, turn.personalization) };
       const rawHistory = historyOverride ?? (retry && failed ? failed.history : [
-        systemMessage,
+        ...(systemMessage.content ? [systemMessage] : []),
         ...msgs.map(toChatMessage),
         userMessage,
       ]);

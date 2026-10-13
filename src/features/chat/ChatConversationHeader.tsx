@@ -16,7 +16,7 @@ interface ChatConversationHeaderProps {
   activeProjectName: string | null;
   phase: "idle" | "thinking" | "streaming";
   targetBusy?: boolean;
-  onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt">>) => void;
+  onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt">>) => void;
   sessionLabel: string;
   sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
   selectedSessionId: string;
@@ -121,6 +121,17 @@ export default function ChatConversationHeader({
             />
           </div>
           <p className="text-xs leading-relaxed ui-color-faint" >{ct("savedLocallyDescription")}</p>
+          <div>
+            <label className="flex items-center gap-2 text-xs ui-color-ink" htmlFor="chat-default-system-prompt">
+              <input id="chat-default-system-prompt" type="checkbox"
+                checked={activeThread?.useDefaultSystemPrompt !== false}
+                onChange={(event) => onUpdateThread({ useDefaultSystemPrompt: event.target.checked })}
+                disabled={phase !== "idle" || targetBusy}
+                aria-describedby="chat-default-system-prompt-hint" />
+              {ct("useDefaultSystemPrompt")}
+            </label>
+            <p id="chat-default-system-prompt-hint" className="mt-1.5 text-xs ui-color-muted">{ct("useDefaultSystemPromptHint")}</p>
+          </div>
         </div>
       </details>
       </div>

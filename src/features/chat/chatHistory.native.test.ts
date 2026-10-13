@@ -71,6 +71,15 @@ beforeEach(() => {
 });
 
 describe("conversations in the data folder", () => {
+  it('preserves an explicit automatic-prompt opt-out in an otherwise empty conversation', async () => {
+    const conversation: ChatThread = { id: 'prompt-choice', title: 'New conversation', systemPrompt: '', useDefaultSystemPrompt: false, messages: [], createdAt: 1, updatedAt: 1 };
+    const history = await freshHistory();
+    await history.loadChatWorkspaceAsync();
+    await history.saveChatWorkspaceAsync({ activeThreadId: conversation.id, threads: [conversation] });
+    expect(native.files.get(conversation.id)).toMatchObject({ useDefaultSystemPrompt: false, messages: [] });
+    const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
+    expect(loaded.threads.find(item => item.id === conversation.id)?.useDefaultSystemPrompt).toBe(false);
+  });
   it('preserves runtime finish reasons through native saving and a fresh history load', async () => {
     const conversation = thread('limits', 'Question');
     conversation.messages.push({ role: 'assistant', content: 'Partial answer', finishReason: 'length', model: 'synthetic-model' });

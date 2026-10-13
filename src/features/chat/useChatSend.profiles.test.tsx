@@ -71,6 +71,22 @@ describe('chat profile application', () => {
     await act(async () => { await result.current.send(); });
     expect(systemPrompt()).toBe('You are a helpful assistant.');
   });
+  it('omits automatic guidance only when the conversation explicitly disables it', async () => {
+    const { result } = setup({ modelProfile: null, activeThread: { ...createChatThread(), useDefaultSystemPrompt: false } });
+    await act(async () => { await result.current.send(); });
+    expect(systemPrompt()).toBeUndefined();
+    expect(vi.mocked(api.chatStream).mock.calls[0][3]).toEqual([{ role: 'user', content: 'Hello' }]);
+  });
+  it('keeps explicit profile instructions when automatic guidance is disabled', async () => {
+    const { result } = setup({ activeThread: { ...createChatThread(), useDefaultSystemPrompt: false } });
+    await act(async () => { await result.current.send(); });
+    expect(systemPrompt()).toBe('Copied default instruction');
+  });
+  it('keeps explicit conversation instructions when automatic guidance is disabled', async () => {
+    const { result } = setup({ activeThread: { ...createChatThread(), systemPrompt: 'Keep these instructions.', useDefaultSystemPrompt: false } });
+    await act(async () => { await result.current.send(); });
+    expect(systemPrompt()).toBe('Keep these instructions.');
+  });
   it('bounds vLLM output by its selected context without changing saved options', async () => {
     const cfg = createTestStore().cfg!;
     const options = { max_model_len: 128, max_tokens: 2048, temperature: 0.4 };
