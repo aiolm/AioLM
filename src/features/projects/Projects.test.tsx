@@ -422,6 +422,35 @@ describe("Project configuration snapshots", () => {
     expect(readProjects()[0].profileApplication?.profile_id).toBeTruthy();
   });
 
+  it.each([true, false])('does not reactivate a deleted project when its pending runtime assignment finishes (remaining project: %s)', async hasRemaining => {
+    const store = createTestStore();
+    const project = projectFromConfig('Pending project', 'Pending prompt', { ...store.cfg!, ctx_size: 8192 }, [], [], '', 100);
+    const remaining = projectFromConfig('Remaining project', 'Remaining prompt', store.cfg!, [], [], '', 200);
+    const afterDeletion = hasRemaining ? [remaining] : [];
+    writeProjects([project, ...afterDeletion]); setActiveProjectId(project.id);
+    const update = store.updateConfig;
+    let finish!: () => void;
+    store.updateConfig = vi.fn(async patch => {
+      const saved = await update(patch);
+      await new Promise<void>(resolve => { finish = resolve; });
+      return saved;
+    });
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply runtime settings' }));
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(store.getConfig()?.ctx_size).toBe(8192);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    expect(readProjects()).toEqual(afterDeletion);
+    expect(activeProjectId()).toBe(hasRemaining ? remaining.id : null);
+    await act(async () => { finish(); });
+    expect(readProjects()).toEqual(afterDeletion);
+    expect(activeProjectId()).toBe(hasRemaining ? remaining.id : null);
+    expect(screen.getByLabelText('Project name')).toHaveValue(hasRemaining ? 'Remaining project' : '');
+    expect(store.getConfig()?.ctx_size).toBe(8192);
+    expect(screen.queryByText(/^Applied “Pending project”\./)).not.toBeInTheDocument();
+  });
+
   it("keeps saved tuning when only project metadata changes", () => {
     const store = createTestStore({ ctx_size: 8192, temperature: 0.3, runtime_defaults: ["ngl"] });
     const project = projectFromConfig("Research", "Cite the source", store.cfg!);

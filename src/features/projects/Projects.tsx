@@ -249,11 +249,14 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
         savedApplication = appliedProfile(saved);
       });
       if (!applied) return;
+      const latest = readProjects();
+      // Runtime persistence can finish after deletion; preserve that newer
+      // project action instead of restoring its removed active pointer.
+      if (!latest.some(item => item.id === project.id)) return;
       let projectStateWritten = false;
       if (savedApplication) {
         const application = savedApplication;
         const profileSettings = executionSettings(profileApplicationConfig(application));
-        const latest = readProjects();
         const savedProject = latest.find(item => item.id === project.id);
         if (savedProject && savedProject.config.active_model === project.config.active_model
           && savedProject.systemPrompt === project.systemPrompt && settingsEqual(savedProject.config, project.config)) {
