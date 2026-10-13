@@ -30,12 +30,13 @@ function setup(initialDocuments: DocumentAttachment[] = []) {
       attachments, setAttachments, documents, setDocuments, atBottomRef,
       mcpDefinitions: [], mcpEntryByFunctionName: new Map(),
     });
-    return { ...send, msgs, phase, documents, input };
+    return { ...send, msgs, phase, documents, input, setInput, attachments, setAttachments };
   });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.chatStream).mockReset();
   vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1);
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
 });
@@ -79,5 +80,50 @@ describe('chat turn lifecycle', () => {
     act(() => result.current.setError('File attachment failed'));
     await act(async () => { await result.current.send(true); });
     expect(api.chatStream).toHaveBeenCalledOnce();
+  });
+
+  it.each(['successful', 'failed'] as const)('preserves a new unsent draft and attachment during a %s retry of the original message', async (retryOutcome) => {
+    vi.mocked(api.chatStream)
+      .mockRejectedValueOnce(new Error('Original connection failed'))
+      .mockImplementationOnce(async (_url, _key, _model, _history, _sampling, onDelta) => {
+        if (retryOutcome === 'failed') throw new Error('Retry connection failed');
+        onDelta({ content: 'Original answer' });
+        return 'Original answer';
+      })
+      .mockResolvedValueOnce('Next answer');
+    const { result } = setup();
+    await act(async () => { await result.current.send(); });
+    const originalHistory = structuredClone(vi.mocked(api.chatStream).mock.calls[0][3]);
+    expect(result.current.failedRef.current?.text).toBe('Original question');
+
+    const draft = 'A different question for the next turn';
+    const attachment: ImageAttachment = { name: 'next-turn.png', dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6xkAAAAASUVORK5CYII=' };
+    act(() => {
+      result.current.setInput(draft);
+      result.current.setAttachments([attachment]);
+    });
+    await act(async () => { await result.current.send(true); });
+
+    expect(api.chatStream).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.chatStream).mock.calls[1][3]).toEqual(originalHistory);
+    expect(result.current.msgs.filter(message => message.role === 'user')).toEqual([
+      expect.objectContaining({ content: 'Original question', images: [] }),
+    ]);
+    expect(result.current.attachments).toEqual([attachment]);
+    expect(result.current.input).toBe(draft);
+    expect(result.current.phase).toBe('idle');
+    expect(result.current.error).toBe(retryOutcome === 'failed' ? 'Retry connection failed' : null);
+
+    await act(async () => { await result.current.send(); });
+    expect(result.current.input).toBe('');
+    expect(result.current.attachments).toEqual([]);
+    expect(result.current.msgs.filter(message => message.role === 'user')).toHaveLength(2);
+    expect(vi.mocked(api.chatStream).mock.calls[2][3].at(-1)).toMatchObject({
+      role: 'user',
+      content: [
+        { type: 'text', text: draft },
+        { type: 'image_url', image_url: { url: attachment.dataUrl } },
+      ],
+    });
   });
 });

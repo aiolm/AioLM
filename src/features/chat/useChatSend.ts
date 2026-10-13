@@ -316,7 +316,7 @@ export function useChatSend({
       failedRef.current = toolFollowup && failed
         ? { text: failed.text, images: failed.images, documents: failed.documents, history: bounded.messages, personalization: turn.personalization }
         : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization };
-      if (!toolFollowup) setInput("");
+      if (!retry && !toolFollowup) setInput("");
       if (!retry && !toolFollowup) onSkillsAccepted?.();
       if (!retry && !toolFollowup) setAttachments([]);
       if (!retry && !toolFollowup) setDocuments([]);
