@@ -212,6 +212,8 @@ a.tuning-default-note:hover { text-decoration-thickness: 2px; }
 .chat-conversation-heading > :first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 .chat-heading-controls { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; flex: 0 0 auto; margin-inline-start: auto; }
 .chat-heading-controls > details { position: relative; flex: 0 0 auto; }
+.chat-settings-summary[data-icon]::before { display: none; }
+.chat-settings-summary-label { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .chat-thread-sidebar { display: none; position: absolute; inset-block: 0; left: 0; z-index: 20; width: min(288px,100%); flex-shrink: 0; flex-direction: column; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-panel); padding: 12px; box-shadow: var(--ui-elev-2); }
 .chat-thread-sidebar.is-open { display: flex; }
 .chat-conversation-title { min-width: 0; }

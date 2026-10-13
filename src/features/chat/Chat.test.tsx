@@ -649,6 +649,55 @@ describe("ChatPanel document context warning", () => {
     expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
   });
 
+  it('bounds only the rendered preview of a very long title while preserving editing, tail search and reload', async () => {
+    const title = `Synthetic long conversation prefix. ${'long title '.repeat(4100)}ONLYINTITLETAIL`;
+    const thread = { ...createChatThread(1, 'long-title'), title,
+      messages: [{ role: 'user' as const, content: 'Synthetic stored message.' }] };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    const first = renderPanel();
+    let heading = await screen.findByRole('heading', { name: title });
+    expect(heading).toHaveAttribute('title', title);
+    expect(heading.textContent).toMatch(/^Synthetic long conversation prefix\./);
+    expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(heading.textContent).toMatch(/…$/);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+
+    fireEvent.click(screen.getByText(chatText.en.conversationSettings));
+    expect(screen.getByLabelText(chatText.en.title)).toHaveValue(title);
+    fireEvent.click(screen.getByRole('button', { name: chatText.en.conversations }));
+    fireEvent.change(screen.getByLabelText(chatText.en.search), { target: { value: 'ONLYINTITLETAIL' } });
+    const entry = screen.getByRole('button', { name: title });
+    const preview = entry.querySelector('.chat-thread-title')!;
+    expect(preview).toHaveAttribute('title', title);
+    expect(preview.textContent).toMatch(/^Synthetic long conversation prefix\./);
+    expect(preview.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(preview.textContent).toMatch(/…$/);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    first.unmount();
+
+    renderPanel();
+    heading = await screen.findByRole('heading', { name: title });
+    expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(heading).toHaveAttribute('title', title);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+  });
+
+  it('bounds the combined conversation and project heading while retaining both full labels', async () => {
+    const title = `Synthetic conversation prefix. ${'x'.repeat(989)}`;
+    const project = projectFromConfig('Synthetic project context', '', cfg, []);
+    writeProjects([project]); setActiveProjectId(project.id);
+    const thread = { ...createChatThread(1, 'project-title'), title };
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    const fullHeading = `${title} · ${project.name}`;
+    const heading = await screen.findByRole('heading', { name: fullHeading });
+    expect(heading).toHaveAttribute('title', fullHeading);
+    expect(heading.textContent).toMatch(/^Synthetic conversation prefix\./);
+    expect(heading.textContent!.length).toBeLessThanOrEqual(1025);
+    expect(loadChatWorkspace().threads[0].title).toBe(title);
+  });
+
   it("locks the composer while preparing a request and lets Stop cancel before generation", async () => {
     let release!: () => void;
     mocked.serverActivity.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));

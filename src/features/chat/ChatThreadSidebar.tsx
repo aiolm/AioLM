@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ChatThread } from "./chatHistory";
 import type { ChatTextKey } from "../../shared/i18n/chatI18n";
-import { displayChatTitle } from './chatThreadTitle';
+import { chatTitlePreview, displayChatTitle } from './chatThreadTitle';
 
 interface ChatThreadSidebarProps {
   open: boolean;
@@ -91,9 +91,10 @@ export default function ChatThreadSidebar({
                 onClose?.();
               }}
               className="chat-thread-entry app-list-row__action"
+              aria-label={displayChatTitle(thread.title, ct('newConversation'))}
               aria-current={thread.id === activeThreadId ? "true" : undefined}
             >
-              <span className="chat-thread-title text-xs font-medium ui-color-ink" title={displayChatTitle(thread.title, ct('newConversation'))}>{displayChatTitle(thread.title, ct('newConversation'))}</span>
+              <span className="chat-thread-title text-xs font-medium ui-color-ink" title={displayChatTitle(thread.title, ct('newConversation'))}>{chatTitlePreview(displayChatTitle(thread.title, ct('newConversation')))}</span>
             </button>
               <span className="mt-0.5 block px-2.5 text-xs tabular-nums ui-color-faint" >{thread.messages.length ? `${thread.messages.length} ${ct("messages")}` : ct("empty")}</span>
             </div>

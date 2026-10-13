@@ -7,7 +7,7 @@ import { normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import ModelIcon from "../../shared/ui/ModelIcon";
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
 import type { AppConfig } from '../../shared/api/types';
-import { displayChatTitle, isGeneratedChatTitle } from './chatThreadTitle';
+import { chatTitlePreview, displayChatTitle, isGeneratedChatTitle } from './chatThreadTitle';
 
 interface ChatConversationHeaderProps {
   threadPanelOpen: boolean;
@@ -34,6 +34,7 @@ export default function ChatConversationHeader({
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
   const title = displayChatTitle(activeThread?.title, ct('newConversation'));
+  const headingTitle = activeProjectName ? `${title} · ${activeProjectName}` : title;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -60,7 +61,7 @@ export default function ChatConversationHeader({
         </button>
         {/* Keep long conversation titles to one line so the controls stay visible. */}
         <div className="chat-conversation-title">
-          <h2 title={title} className="text-sm font-semibold ui-color-ink" >{title}{activeProjectName ? ` · ${activeProjectName}` : ""}</h2>
+          <h2 title={headingTitle} aria-label={headingTitle} className="text-sm font-semibold ui-color-ink" >{chatTitlePreview(headingTitle)}</h2>
         </div>
       </div>
       {/* No model-settings action here: the app header opens the same editor, and
@@ -78,8 +79,9 @@ export default function ChatConversationHeader({
           }
         }}
       >
-        <summary ref={summaryRef} className="app-button app-button--secondary app-button--sm cursor-pointer list-none">
-          {ct("conversationSettings")}
+        <summary ref={summaryRef} className="chat-settings-summary app-button app-button--secondary app-button--sm cursor-pointer list-none"
+          data-icon="settings" aria-label={ct("conversationSettings")} title={ct("conversationSettings")}>
+          <span className="chat-settings-summary-label">{ct("conversationSettings")}</span>
         </summary>
         <div className="absolute right-0 z-30 mt-2 w-[min(24rem,calc(100vw-2rem))] app-card app-card--raised space-y-3" >
           {/* Answering target lives here rather than in the heading row: it is

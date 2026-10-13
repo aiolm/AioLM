@@ -43,6 +43,12 @@
 @container workspace (max-width: 599px) {
  .chat-conversation-heading { gap: 8px; }
 }
+/* Keep the title readable beside both controls without adding a header row. */
+@container workspace (max-width: 399px) {
+ .chat-settings-summary { --ui-control-pad-inline: 6px; inline-size: 32px; min-inline-size: 32px; block-size: 32px; gap: 0; }
+ .chat-settings-summary-label, .chat-settings-summary::after { display: none; }
+ .chat-settings-summary[data-icon]::before { display: block; }
+}
 @container workspace (max-width: 719px) {
  .chat-layout { min-height: 240px; }
 }
