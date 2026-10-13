@@ -1,68 +1,20 @@
-# 교체 가능한 추론 런타임 설계 방향
+# 교체 가능한 추론 런타임
 
-이 문서는 **장기 제품 방향과 제안 설계이며 아직 구현되지 않았다.** 현재 AioLM이 임의의 개인 추론 엔진·실행 파일·adapter manifest를 등록할 수 있다는 의미가 아니다. 이번 Mac 기기 검증·결함 수정과 별도로 구현해야 하며, 이 문서 추가로 현재 동작·기본값·공개 API를 바꾸지 않는다.
+공통 런타임 인터페이스와 외부 프로세스 어댑터 v1을 구현했다. llama.cpp·vLLM·MLX의 기존 설치·실행·프로필 계약을 유지하며, `custom.*` 엔진은 사용자 선택 manifest로 앱 재빌드 없이 등록한다. 등록은 외부 실행 파일을 실제 실행하는 작업이다. 사용자가 검토한 자신의 빌드와 probe를 선택한다.
 
-목표는 Chat, 모델 관리, 프로젝트·RAG, MCP, 프로필, 세션, gateway, 벤치마크의 공통 UX·기능 계약과 사용자 데이터를 유지하면서 추론 런타임 adapter만 교체하는 것이다. llama.cpp·vLLM·MLX뿐 아니라 사용자가 빌드한 개인 엔진도 AioLM 핵심 코드 수정이나 앱 재빌드 없이 등록할 수 있어야 한다. 엔진마다 다른 네이티브 기능을 동일하게 지원하는 것으로 표시하지는 않는다.
+Rust의 `InferenceRuntimeAdapter`는 실행 파일, 구조화된 `EngineCommand`, 실행 종류와 `EngineInfo`를 제공한다. 내장 세 엔진과 외부 어댑터는 같은 프로세스 소유권·readiness·종료 경로를 사용한다. 외부 프로그램을 Python 환경으로 취급하지 않는다. 구현은 [adapter.rs](../../src-tauri/src/providers/adapter.rs), [registry.rs](../../src-tauri/src/providers/registry.rs), [등록 UI](../../src/features/runtimes/ExternalRuntimeRegistration.tsx)에 있다.
 
-현재 구현과 운영 규칙은 [소스 아키텍처](architecture.md)와 [추론 런타임](inference-runtimes.md), 실제 기기 검증 절차는 [런타임 인계](provider-runtime-handoff.ko.md)와 [Mac 검증 결과](macos-device-validation-results.ko.md)를 따른다. 이 문서는 그 동작 설명이나 검증 결과를 대체하지 않는다.
+v1 외부 경계는 loopback OpenAI v1 HTTP다. 해당 API를 직접 제공하는 서버나 사용자 빌드 bridge를 등록한다. bridge는 고유 엔진의 요청·응답을 canonical HTTP/SSE로 변환한다. 등록된 부모 프로세스는 foreground로 남아야 하며, 독립 daemon이나 AioLM 밖에서 실행한 서버에 연결하는 모드는 제공하지 않는다. 기존 gateway 공개 API는 유지한다.
 
-## 현재 재사용할 경계와 제한
+`custom.*` 선택과 옵션은 등록이 없어도 설정·프로필·프로젝트에 보존된다. 등록 누락·OS 불일치·probe 실패 때 실행을 거부하며 llama.cpp로 바꾸지 않는다. 설정 schema는 14다. schema 13 파일을 읽을 때 기존 내용을 `config.v13-before-v14.json`에 보관하고 이전 설정을 이전한다. 구버전 앱은 schema 14를 지원하지 않으므로 백업 복구는 앱을 종료한 상태에서 명시적으로 수행한다.
 
-아래는 작성 시점 소스에 대한 관찰이다. 링크의 라인은 현재 구현의 위치이며 제안 API의 구현 근거가 아니다.
+외부 v1은 모델별 probe가 확인한 task·입력·chat template·도구 능력과 실제 usage를 공통 Chat·프로젝트·세션·MCP·RAG·gateway에 전달한다. 외부 엔진의 정확한 tokenizer/cold-cache 벤치마크, CPU reference 심층 검증, ABI가 보장된 portable bundle은 **unsupported**다. 기존 내장 엔진 기능·측정·이력·CSV/XLSX는 유지한다. 등록된 opaque 모델 binding의 무게 파일 크기는 미확인으로 표시하며 deployment JSON 크기를 weights 크기로 사용하지 않는다.
 
-| 경계 | 이미 있는 기반 | 개인 엔진 확장을 제한하는 부분 |
-| --- | --- | --- |
-| 엔진·런타임 식별 | 공통 runtime inventory와 execution selection | [ProviderId와 고정 목록](../../src-tauri/src/providers/mod.rs#L37), [frontend ID](../../src/shared/api/providers.ts#L4), [EngineSelect](../../src/shared/ui/EngineSelect.tsx#L7)는 세 내장 엔진으로 닫혀 있다. |
-| 외부 등록·실행 | 기존 Python 환경의 등록·probe·환경 보존 | [provider_register](../../src-tauri/src/commands/providers.rs#L47)는 Python 경로를 받고, [probe](../../src-tauri/src/providers/python_env.rs#L481)와 [launch](../../src-tauri/src/providers/launch.rs#L1049)는 vLLM/MLX 모듈로 고정돼 있다. [native 실행 경로](../../src-tauri/src/server.rs#L596)도 관리형 llama-server만 선택한다. |
-| 공통 실행 계약 | [EngineCommand](../../src-tauri/src/providers/launch.rs#L965)의 program·argv·환경·readiness, [공통 spawn](../../src-tauri/src/server.rs#L901)의 소유 프로세스·로그 처리 | 비-llama 엔진을 Python으로 취급하는 분기를 runtime 종류와 adapter 선택으로 바꿔야 한다. |
-| 모델·요청 | [ModelCompatibility](../../src-tauri/src/providers/compat.rs#L36), [EngineInfo](../../src-tauri/src/providers/protocol.rs#L21), [gateway lease](../../src-tauri/src/gateway/routing.rs#L297) | [artifact 검사](../../src-tauri/src/providers/execution.rs#L42), [호환성 분기](../../src-tauri/src/providers/compat.rs#L177), [요청 설정 목록](../../src/shared/config/providerRequestSettings.ts#L6)에 내장 엔진의 형식·옵션 가정이 남아 있다. |
-| 프로필·설정 | provider별 옵션·최근 runtime·프로필 revision·적용 snapshot | [설정 검증](../../src-tauri/src/config.rs#L843)과 [프로필 검증](../../src-tauri/src/config/profiles.rs#L842)은 미등록 ID를 거부하고, [기본 프로필 생성](../../src-tauri/src/config/profiles.rs#L181)은 고정 목록을 순회한다. |
-| 벤치마크 | 공통 실행·기록·CSV/XLSX와 정규화된 결과 | [워크로드 설정](../../src-tauri/src/performance_bench.rs#L202)과 [tokenizer·요청·context·cache 절차](../../src-tauri/src/performance_bench/providers.rs#L89)는 내장 엔진에 맞춰져 있다. [공개 runtime 이름](../../packages/benchmark-contracts/src/types.ts#L91)도 폐쇄형이다. |
+등록과 실행마다 프로그램·선언한 adapter artifact SHA-256을 확인하고 선택 모델로 fresh probe를 실행한다. 변경한 실행 파일은 등록 제거 후 다시 등록해야 한다. 모델별 probe cache는 모델과 launch 옵션별로 분리한다. 모델 cache identity는 metadata와 제한된 header/config fingerprint이며 전체 weights의 무결성 검증을 대신하지 않는다. 다운로드·실제 기기 검증에서는 별도 전체 SHA-256과 revision을 사용한다.
 
-현재 외부 Python 등록을 개인 엔진 plugin 등록으로 부르지 않는다. `ProviderId`에 문자열 하나를 추가하는 것만으로는 확장되지 않는다. 비-vLLM을 MLX로 취급하거나 미등록 ID를 llama.cpp로 대체하는 경로까지 함께 해소해야 한다.
+등록 제거는 앱의 등록 metadata만 제거한다. 외부 실행 파일·모델·작업 디렉터리는 보존한다. 모델 bindings는 manifest의 명시적인 `models` 목록만 모델 라이브러리에 추가한다. 외부 디렉터리의 임의 JSON을 모델로 검색하지 않는다.
 
-## 제안하는 공통 경계 — 미구현
-
-```mermaid
-flowchart LR
-    App["공통 앱 기능과 사용자 데이터"] <--> Contract["Canonical 실행·요청·결과 계약"]
-    Registry["엔진 registry와 capability descriptor"] --> Contract
-    Contract <--> Llama["llama.cpp adapter"]
-    Contract <--> Vllm["vLLM adapter"]
-    Contract <--> Mlx["MLX adapter"]
-    Contract <--> Custom["개인 엔진 adapter"]
-    Custom <--> Engine["사용자가 빌드한 엔진"]
-```
-
-이 그림은 목표 구조다. 공통 기능은 engine ID 비교로 동작을 선택하지 않고 registry가 제공한 계약·capability를 사용한다. 내장 엔진도 같은 adapter 경계를 통과한다. adapter별 구현·내장 등록부·이전 코드에 필요한 기존 ID 처리는 유지하되, 새 엔진 추가를 위해 공통 기능에 전용 분기를 추가하지 않는다.
-
-Registry는 표시 이름과 분리된 안정적인 opaque engine ID를 해석한다. engine ID, runtime instance ID, 실제 엔진 build/version, 모델 identity, 프로필 identity를 구분한다. 실행 파일 위치나 표시 이름 변경을 엔진 ID 변경으로 취급하지 않는다. 내장 ID와 다른 등록의 ID를 덮어쓰는 충돌은 거부한다.
-
-Rust trait는 내부 adapter 구성에 사용할 수 있지만 그것만으로 개인 엔진 등록을 완성하지 못한다. 사용자 엔진은 **versioned manifest와 내장 protocol adapter**, 또는 **versioned out-of-process adapter**로 연결해야 한다. 후자는 엔진의 고유 protocol을 공통 계약으로 변환하는 별도 사용자 실행 프로그램이며 AioLM에 새 코드를 링크하지 않는다.
-
-### 제안 등록·descriptor 계약 — 미구현
-
-아래는 필요한 정보의 설계 범위다. 필드명·전송 방식·최종 schema는 구현 단계에서 확정하며, 현재 IPC/CLI에서 이 계약을 받는다고 해석하지 않는다.
-
-| 정보 | 계약에 필요한 의미 |
-| --- | --- |
-| 계약 버전 | 등록 manifest, descriptor, adapter protocol의 버전을 구분한다. 지원하지 않는 필수 버전은 실행 전에 거부하고 원본 등록 정보는 보존한다. |
-| 식별·플랫폼 | stable engine/runtime ID, 표시 이름, OS·architecture 조건, 실제 probe가 확인한 build/version·identity를 제공한다. |
-| 실행·adapter | 사용자 선택 executable과 별도 argv, adapter 방식, working directory·필요한 환경 전달 규칙을 기술한다. native process를 Python으로 가정하지 않는다. |
-| Probe | 설치 여부·실제 version·장치·옵션·task 근거를 구조화해 반환한다. 등록 기록만으로 영구 readiness를 부여하지 않으며 실행·측정 전 다시 검사한다. |
-| 모델 | 지원 artifact 형식, 필요한 companion·tokenizer·processor, 모델 검사·호환성 결과와 근거를 제공한다. 파일 확장자만으로 loader 지원을 확정하지 않는다. |
-| 옵션·bindings | 타입·범위·기본값의 출처, request/launch 적용 위치, restart 필요 여부, LoRA·draft·embedding 등 binding을 기술한다. 공통 editor·import·preview·backend 검증이 같은 schema를 사용한다. |
-| 기능·지표 | task·modality·tools·tokenizer·benchmark·deep verification·portable 기능별 지원 상태와 이유, 측정값의 단위·범위·방법을 제공한다. |
-
-등록 manifest는 사용자가 선택한 환경을 참조한다. 등록 제거는 외부 실행 파일·모델·환경을 삭제하지 않는다. 앱이 관리하는 설치나 임시 자원과 외부 자원의 소유권은 명시적으로 구분한다. 기본값은 engine의 검증된 schema·기존 제품 정책에서 얻으며 개발 기기의 설정을 복사하지 않는다.
-
-### 실행·readiness·소유권
-
-Adapter는 선택된 모델·설정과 앱이 할당한 loopback port·모델 alias·자격 증명으로 구조화된 launch 계획을 만든다. 옵션이 앱 소유 binding을 덮어쓰지 못하도록 검증한다. credential은 command preview·공개 provenance·로그에 포함하지 않는다.
-
-공통 lifecycle이 엔진과 adapter의 소유 child/process group·Windows job, port, 로그, 임시 credential·media·staging을 추적한다. 준비 실패·취소·재시작·정상 종료 때 그 소유 자원을 정리하며 외부 환경과 원본 파일은 보존한다. readiness는 단순한 port 응답이 아니라 실행한 process의 listener와 예상 모델·task를 확인해야 한다. active request/stream의 lease와 취소 의미를 유지하며 API listener와 모델 lifecycle도 계속 분리한다.
-
-기존 모델을 중지하기 전의 probe·모델·옵션 검증이 실패하면 기존 실행을 보존한다. 기기 메모리 제약 때문에 두 엔진의 동시 running을 전제하지 않는다. 기존 모델을 중지한 뒤 새 모델의 실제 loading이 실패하면 이전 선택·설정과 실패 진단을 보존하고 명시적인 복구 경로를 제공한다. 기존 실행이 계속 유지된 것으로 표시하거나 알 수 없는 엔진을 llama.cpp로 자동 대체하지 않는다.
+등록 형식, 실행 가능한 예제와 Windows·Linux 검증 절차는 [어댑터 인계](runtime-adapter-handoff.ko.md)를 따른다. 아래 계약 중 v1에 없는 확장 능력은 후속 구현 방향이며 현재 지원으로 표시하지 않는다.
 
 ## 공통 기능과 engine-native capability
 

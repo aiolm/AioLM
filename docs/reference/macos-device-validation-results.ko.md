@@ -1998,4 +1998,55 @@ manifest는 `goal-native-runtime-lock-package-orbit155-24a3dbd-results.json`, �
 
 최종 read-only 보존 검사 `orbit155-preservation-draft-final-observed-20261013.json`은 전체 required pass/예상 밖 차이0이다. 원래51개 대화 hash와 현재53개 파일의 snapshot/disk hash, config의 profiles 외 영역·profile entry 순서/내용·provider recent/default·원래 default identity·applied binding keys/내용·빈 MLX binding·localStorage·선택 대화·UI preferences/theme, 별도 production config/두 대화의 hash를 확인했다. 이번 명시적 profile 저장/실행에 따른 library revision143→152, Default31→34·검증용 MLX 프로필 두 개의 revision4→5/3→4는 변경으로 기록한다. runtime process/session endpoint·log bytes의 동일성을 주장하지 않는다. 마지막 관찰 시 개발 GUI와 모델 process는 살아 있고 앱을 실행 상태로 남겼다. raw는 `goal-native-audio-orbit155-final-ready-observed-20261013.json/png`, `goal-window-orbit155-final-launch-owner.json`과 최종 보존 JSON이다. 이전 `final-ready`/`preservation-draft-final` 관찰도 원본으로 유지한다.
 
-M01–M12 전체 판정은 **7 pass / 4 fail / 1 unrun**이다. M03/M04/M07의 실제 upstream URI500·미디어 내용/모델 snapshot 실패와 M08의 실제 도구 결과 대신 입력 인자를 반복하는 모델 내용 실패는 남아 있다. 현재 설치된 ffmpeg와 앱 PATH 복구 때문에 실제 부재 환경은 M07 하위 blocked다. M11의 별도 계정 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치/launchd·다운로드 quarantine·Intel/구형 macOS는 unrun이며 현재 기기 결과로 추정하지 않는다. 개인 엔진 registry/manifest는 [미구현 장기 설계](pluggable-inference-runtimes.ko.md)로 유지한다. 이번 여섯 제품 수정·공통 검사·실제 재검증·최종 패키지를 완료했으며 전체 기기 검증 통과는 선언하지 않는다. 원격 push·공개 서비스 upload는 수행하지 않았다.
+M01–M12 전체 판정은 **7 pass / 4 fail / 1 unrun**이다. M03/M04/M07의 실제 upstream URI500·미디어 내용/모델 snapshot 실패와 M08의 실제 도구 결과 대신 입력 인자를 반복하는 모델 내용 실패는 남아 있다. 현재 설치된 ffmpeg와 앱 PATH 복구 때문에 실제 부재 환경은 M07 하위 blocked다. M11의 별도 계정 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치/launchd·다운로드 quarantine·Intel/구형 macOS는 unrun이며 현재 기기 결과로 추정하지 않는다. 이 관찰 당시 개인 엔진 registry/manifest는 미구현이었다. 후속 구현과 검증 상태는 아래 §98 및 [공통 런타임 문서](pluggable-inference-runtimes.ko.md)를 따른다. 이번 여섯 제품 수정·공통 검사·실제 재검증·최종 패키지를 완료했으며 전체 기기 검증 통과는 선언하지 않는다. 원격 push·공개 서비스 upload는 수행하지 않았다.
+
+
+## 98. 외부 런타임 인터페이스와 Windows/Linux 인계
+
+2026-10-13, 기준 소스 `54b605759786d4f39a1fbb3059a80698d88efbd1`에서 `9d0e9cbc4dc710a77573dc3b30713166f364a496`로 공통 런타임과 등록형 process adapter v1을 구현했다. SDK 후속 보완은 `b3da9bd`(GPU 미확인 값 보존), `f1b94e40f98d2e4c4b31b5936a418981bfa5c69d`(다른 native build를 가리키는 deployment 거부)다. 이전 Mac 후속 수정 `52f7a55`(세션 소유권/정리), `4444ce5`(API 상태), `6090558`(프로젝트 삭제 경합), `54b6057`(취소 판정)는 기준 소스에 포함돼 있다. 이 절의 새 어댑터 검증으로 이전 M01–M12의 **7 pass / 4 fail / 1 unrun**을 전체 통과로 변경하지 않는다.
+
+`InferenceRuntimeAdapter`가 세 내장 엔진과 외부 `custom.*` 엔진의 실행 파일·구조화된 argv/env/cwd·EngineInfo를 제공하며 같은 소유 child/process group·Windows job·readiness·종료 경로로 연결한다. loopback OpenAI v1 서버 또는 별도 bridge를 manifest로 등록한다. 등록 UI/파일 선택·CLI 등록/선택/probe/제거, 명시적인 외부 모델 bindings, 공용 프로필·프로젝트·request 옵션 schema와 모델별 task/modality/tools 능력을 추가했다. 외부 제거는 등록 metadata만 제거하고 원본 환경·모델을 보존한다. 내장 세 엔진의 설치·benchmark·portable 계약은 유지한다.
+
+설정 schema 13→14는 이전 bytes 백업을 보존한다. 이전 active provider/runtime·옵션·프로필 보존과 새 외부 프로필 기본값을 합성 임시 홈에서 검사했다. 미등록 `custom.*` 선택은 저장 데이터에 남으며 실행을 거부하고 llama.cpp로 대체하지 않는다. 외부 어댑터 v1의 정확한 tokenizer/cold-cache benchmark·CPU reference 심층 검증·portable ABI bundle은 **unsupported**이며 UI/backend에서 이유를 표시한다. 기존 이력·CSV/XLSX는 유지한다. opaque deployment binding 크기를 weights 크기로 표시하지 않는다.
+
+검사 중 발견한 모델별 늦은 probe 경합, 새 등록 전 시작된 catalog 요청 재사용, 재등록 뒤 옛 instance 옵션 cache, cold editor에서 schema 부재 때문에 화면이 실패하는 문제를 수정했다. 모델/launch 옵션별 cache, 등록 후 새 inventory 요청, instance schema 무효화와 보수적인 reload 판정으로 회귀 검사했다. probe stdout의 JSON과 제한된 stderr 진단을 별도로 수집하며 취소·timeout 때 소유 프로세스를 정리한다. health endpoint 인증 여부도 manifest대로 적용한다. readiness·hash 검사 제거, 실패 skip, timeout 확대는 하지 않았다.
+
+### 공통 자동 검사
+
+원본은 `tmp/macos-acceptance/logs/pluggable-runtimes-*.log`와 `checks.jsonl`에 보존했다. 중간 타입 오류·구버전 schema backup 테스트 기대값·API mock 누락·clippy 오류와 수정 전 실패 로그도 남겼다. schema 13 이전 검사에 사용한 불일치 profile snapshot은 기존 복구 정책으로 별도 Recovered profile을 생성했다. 유효한 이전 profile application을 준비한 뒤 보존/정확한 backup 검사를 통과했으며 복구 정책을 우회하지 않았다.
+
+| 검사 | 판정 | 근거 |
+| --- | --- | --- |
+| TypeScript·scripts 타입 | pass | `pluggable-runtimes-final-contract-types`, 9.36s. |
+| lint | pass | `pluggable-runtimes-final-common-lint`, 7.05s. |
+| 전체 공통 단위·coverage | pass | `pluggable-runtimes-final-common-suite`, 132.53s. frontend 183 files/1902 tests pass, contracts·script·direct 검사 포함. |
+| Rust 전체 타깃·feature | pass | `pluggable-runtimes-final-common-native`, 46.95s. lib 953 pass/4 ignored, CLI·합성 실제 child/HTTP/SSE·기존 smoke 포함. 하드웨어 opt-in ignored 검사를 실제 수행한 것으로 계산하지 않음. |
+| rustfmt·clippy | pass | `pluggable-runtimes-commit-fmt`, `pluggable-runtimes-final-source-clippy`, `-D warnings`. |
+| 배포 feature 검사 | pass | `pluggable-runtimes-production-feature-check`, `--all-targets --no-default-features`, 28.32s. |
+| Python SDK | pass | `pluggable-runtimes-strata-build-binding`, CPython 3.12, 합성 GGUF/template·truncation·Strata config 소유권/등록 build 보존 4 tests. 실제 Strata 추론을 수행한 테스트가 아님. |
+| production frontend·CLI·debug native 빌드 | pass | `pluggable-runtimes-build-source-freeze`, `pluggable-runtimes-committed-cli`, `pluggable-runtimes-debug-source-final`. 이 빌드 성공을 패키지 설치/GUI 실제 조작으로 확대하지 않음. |
+
+합성 네 번째 엔진은 실제 registry·모델 binding·readiness·SSE·usage fixture·스트림 종료·소유 PID/port 정리·중복/identity/hash 오류·probe 실패 진단·취소·제거 뒤 선택 보존·재등록과 다른 모델의 늦은 probe를 검사한다. 응답 `OK`와 fixture usage는 실제 모델 추론으로 계산하지 않는다. 외부 canonical request가 선언한 추가 필드와 model alias를 유지하고 미지원 tool/local path를 거부하는 native 검사도 포함했다.
+
+### 실제 외부 CPU 빌드
+
+기기는 macOS 26.6.2 / Apple M2 / 16GB다. 기존 검증의 외부 CPU llama-server build `b11460`, version `0.6.0-dev`, source `78651c410`을 등록했다. 작은 공개 `Qwen/Qwen2.5-0.5B-Instruct-GGUF`, revision `9217f5db79a29953eb74d5343926648285ec7e67`, `qwen2.5-0.5b-instruct-q4_k_m.gguf` 491400032 bytes, SHA-256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`를 재사용했다. 새 모델 다운로드·Strata 설치·공개 업로드는 하지 않았다.
+
+`custom.native-reference/cpu-local`을 새 임시 CLI 홈에 등록해 실제 `2+3` 응답 `5`, authoritative prompt42/completion2/total44·cached0, 내용을 받은 뒤 스트림 취소와 서버 유지, 재시작, 종료, 제거 후 저장 선택 유지/실행 거부, 앱 재빌드 없는 재등록 후 실제 응답을 확인했다. A01–A09 **pass**이며 마지막에는 소유 PID와 port가 사라지고 명시된 전체 모델 SHA-256이 보존됨을 확인했다. 원본은 `runtime-interface-real/cli-sdk-final/`와 최종 커밋 소스 재실행 `runtime-interface-real/cli-committed/`이며 SDK 보완 뒤 `runtime-interface-real/cli-final-sdk-source/`와 `cli-final-sdk-binding/`에서 재실행했다. 최종 source는 SDK 보완 커밋까지 포함하며 raw의 source_dirty=true는 문서 작업 때문이다. 첫 시도의 AbortError 처리 실패는 harness 결함으로 수정했으며 `cli-run/` 실패 결과를 보존했다. 실제 SSE parser로 처리하고 최종 arithmetic 내용·usage를 검사하도록 보완했다.
+
+SDK의 실제 upstream env 인증도 별도 소유 실행에서 검사했다. `/health` 무인증200, `/v1/models` 무인증401/정상 bearer200, 실제 chat `5`와 prompt42/completion2/total44, 소유 PID/port 종료를 확인했다. 원본은 `runtime-interface-real/auth-binding/`와 `pluggable-runtimes-actual-upstream-auth.log`다. 이 검사는 앱 gateway 인증/라우팅의 새 GUI 전체 검증을 대신하지 않는다.
+
+원래 개발 앱의 vllm-metal 모델은 생성 요청 없이 Ready로 보존했다. 따라서 위 CPU 기능 검사를 단독 엔진 메모리·성능·cold-cache 측정 근거로 사용하지 않는다. read-only 관찰에서 원래 전체53개 대화 hash와 설정 bytes가 앞선 `orbit156-restored-ready` snapshot과 정확히 같고 schema13/library revision158, API off·생성 중 아님을 확인했다. `runtime-interface-preservation-v2.json`과 `goal-native-audio-runtime-interface-original-preserved.json/png`가 근거다. 더 오래된 revision152 snapshot과의 config 차이는 이전 승인된 작업의 변화이므로 이 작업의 설정 불변 근거로 사용하지 않았다.
+
+### 남은 실제 기기 검사와 인계
+
+| 항목 | 판정 | 이유 및 다음 작업 |
+| --- | --- | --- |
+| 새 native GUI의 등록→profile→모델 실행, 최소 창, 취소/재로드 | blocked | CUA가 Mac 잠금을 보고했고 해제를 요청했으나 현재 해제 확인이 없음. 새 debug 빌드는 완료했고 기존 앱/모델을 종료하거나 교체하지 않았다. 잠금 해제 후 정상 Quit→새 격리 홈에서 실제 조작→원래 홈/모델 복원 필요. DOM/IPC 관찰·UI 단위 검사를 실제 입력 성공으로 계산하지 않음. |
+| 외부 엔진의 실제 MCP/RAG/미디어/멀티 세션/앱 gateway 인증 | unrun | 공통 core/회귀 검사는 통과했으나 새 어댑터에 대한 해당 실제 내용·상호작용은 별도 기기 검사 필요. SDK CPU reference는 text/generate, tools/image/audio/video 미지원. |
+| 원본 Niko1221/Strata | unrun | 이 Mac M2/16GB는 원본 Windows/Linux x86-64 GPU·메모리 조건을 충족하지 않음. 고정 source revision·전용 deployment config와 설치된 Python/엔진을 받는 SDK 제공. 실제 source help/version과 serving은 대상 기기에서 확인해야 함. |
+| Windows·Linux 실제 빌드·GUI·엔진·패키지 | unrun | 현재 기기에서 추정하지 않음. [OS 인계](runtime-adapter-handoff.ko.md)에 PowerShell/Linux 명령, 합성/실제 harness, source/model/hash provenance, W/L01–09 검사표 제공. |
+| 외부 v1 benchmark/deep/portable | unsupported | 실제 tokenizer/cold-cache/reference/ABI 구현 없이 성공으로 표시하지 않음. 기존 내장 엔진 기능은 유지. |
+| 새 소스의 Mac 배포 패키지·별도 계정·Intel/구형 macOS | unrun | 이 절에서 새 DMG/설치/upgrade를 수행하지 않음. 이전 §97 패키지는 그때의 소스 결과이며 새 source 패키지로 재사용하지 않음. |
+
+[공통 런타임 문서](pluggable-inference-runtimes.ko.md)와 [Windows/Linux 인계](runtime-adapter-handoff.ko.md)에 v1 계약·SDK 사용법·제약·재검증 조건을 반영했다. 원본 로그·모델·manifest·환경별 경로·capture는 `tmp/`에 두고 커밋에는 코드·회귀 검사·익명화 문서만 포함한다. 원격 push는 수행하지 않았다.
