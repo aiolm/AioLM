@@ -29,19 +29,23 @@ export function useApiServer(fallbackPort: number, active = true) {
   // Bumped at both ends of every action, so a read that began before an action
   // finished can never overwrite the newer state it produced.
   const generation = useRef(0);
+  // Visibility changes and returning to the page can overlap a pending poll.
+  // Only the newest read within a lifecycle generation may update the screen.
+  const readSequence = useRef(0);
   const hasRead = useRef(false);
 
   const refresh = useCallback(async (quiet = false) => {
     if (busy.current) return;
     const requested = generation.current;
+    const read = ++readSequence.current;
     try {
       const next = await api.apiServerStatus();
-      if (requested === generation.current) setStatus(next);
+      if (requested === generation.current && read === readSequence.current) setStatus(next);
     } catch (cause) {
       // A background read that fails keeps the last known status; only an explicit one reports.
-      if (!quiet && requested === generation.current) setError(errorText(cause));
+      if (!quiet && requested === generation.current && read === readSequence.current) setError(errorText(cause));
     } finally {
-      setChecked(true);
+      if (requested === generation.current && read === readSequence.current) setChecked(true);
     }
   }, []);
 
