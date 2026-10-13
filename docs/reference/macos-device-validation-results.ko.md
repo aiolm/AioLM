@@ -35,6 +35,7 @@
 - 77절은 실제 MCP 실행 대기의 첫 토큰 안내와 저장된 미완료 도구 요청의 완료 안내 수정 `a7ce853` 및 자동 검증을 기록한다. 78절은 해당 소스의 DMG다. 새 native 재검증은 Mac 잠금으로 blocked다.
 - 79절은 잠금 해제 후 실제 MCP 실행 대기/미완료 이력 안내·Default 복원, 80절은 production GUI와 메모리 부족 안내 수정 `20f1ff4`의 자동/실기기 검증, 81절은 새 DMG와 해당 production GUI의 응답·이력·종료를 기록한다. 이전 차단/미실행은 당시 근거로 보존한다.
 - 82절은 오류 배너 닫기 수정 `6e27196`의 자동/실기기 검증과 MCP 모델 후속 승인 한계를 기록한다. 83절은 해당 DMG이며 84절은 새 이미지의 실제 production 실패 안내·응답·작은 창·재로드·종료 검증이다.
+- 87절은 엔진 미디어 거부 harness의 서버 오류 진단과 빈4xx 통과 판정 수정 `ff97a4c`·회귀/공통 검사·실제 엔진 오류 재확인을 기록한다. 앱/엔진 자체의 수정으로 확대하지 않는다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81·84절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -1774,3 +1775,16 @@ Mac 승인창의 실제 Yes 클릭을 요청했으나 클릭 결과와 tools/cal
 원래47개 대화/hash는 이번 요청 전체에서 보존됐으며 새 합성 대화 한 파일만 추가됐다. raw는 `goal-native-audio-orbit148-{mcp-baseline,starting,ready-check,model-request,os-pending,timeout,restoring}-20261013.json/png`, `goal-mcp-orbit148-pending-evidence.json`과 대응 검사 로그다. 제품 코드 변경 없이 실제 결과만 기록했으며 기존 자동 검사·패키지 결과를 새 검사로 주장하지 않는다. 전체 M01–M12 완료를 선언하지 않는다.
 
 최종 native Default→model loaded·backend running·입력 활성화를 확인했다. 모든 기존 프로필 내용과 다른 config 값·localStorage·47개 대화/hash를 보존했다. Default27→28·MCP 프로필3→4는 저장 revision만 변경됐다. API off·생성 중 아님·UI 오류/overlay 없음과 소유 peer/approval 정리가 pass다. `goal-native-audio-orbit148-final-20261013.json/png`, `goal-mcp-orbit148-final-preservation.json`이 근거다. 이전 저장 답변/측정값 표시를 새 추론으로 계산하지 않으며 원격 push는 수행하지 않았다.
+
+
+## 87. 엔진 미디어 거부 검사의 진단·판정 보완
+
+`a057b8c` checkout에서 실제 실패 기록과 harness를 대조해 두 결함을 재현하고 `ff97a4c`로 수정했다. 직접 엔진의 file URI500을 입력 허용으로 읽히는 “not refused”로 기록하고, 오류 설명이 없는 빈400을 actionable refusal pass로 기록했다. 실제 loopback 최소 재현은 각각 수정 전 실패했다. 서버5xx·입력200·설명 없는4xx를 구분하며 셋 모두 fail이다. 설명 있는 JSON4xx만 pass로 유지하고 HTTP status·실패 요약·cleanup을 보존한다. 새 회귀 세 개는 이 판정과 정리를 검사한다. 앱의 입력 프로토콜이나 엔진 자체를 수정한 결과로 확대하지 않는다.
+
+현재 고정 Qwen의 실제 vllm-metal에 합성 비존재 file URI를 직접 전송해500을 다시 확인했다. 앱 입력 거부와 별개의 엔진 HTTP 검사이며 이전 upstream 실패를 해소했다고 기록하지 않는다. 첫 보조 요청은 이미/v1인 endpoint에/v1을 중복해 models404로 실패했고, 관찰기 URL 조합 수정 뒤 실제 media500을 확인했다. 이404를 제품 결함/통과 근거로 계산하지 않는다.
+
+현재 native 화면에서 모델명과 저장 PP/TG·입력 활성화를 확인했고 direct error 뒤에도 backend running·active requests0이다.48개 대화/hash·config/hash·localStorage가 불변이고 API off·UI 오류/overlay 없음이다. 저장 지표 표시를 새 추론으로 계산하지 않는다. raw는 goal-harness-orbit149-engine-uri.json, goal-harness-orbit149-preservation.json, goal-native-audio-orbit149-{current,final}-20261013.json/png다.
+
+M03/M04/M07의 실제 upstream/내용 실패와 M08/M11/M12의 OS 수동 조작·계정/환경 차단은 유지한다. 새 OS 승인창을 만들거나 deadline을 늘리지 않았다. 전체 M01–M12 완료·새 DMG 검증을 선언하지 않으며 원격 push/공개 upload를 하지 않았다.
+
+검사는 pass다. `npm run test:provider-runtime`31개/16.88s·합성 self-test, 최종 typecheck9.95s·lint5.28s, 최종 `npm run test:unit`129.29s(계약/provider-options/scripts/direct 포함·UI180파일/1824개), build12.71s를 확인했다. coverage80.84/75.78/79.42/84.91%다. `logs/goal-harness-orbit149-{related-final,typecheck-final,lint-final,unit-final,build}-20261013.log`와 `checks.jsonl`이 근거다. 수정 전500 진단 회귀/빈400 판정 회귀의 exit1은 각각 `before`/`empty-before` 로그로 보존했다. chunk 크기 경고를 유지하며 Rust/Python/app 소스는 변경하지 않아 과거 검사를 새 실행으로 주장하지 않는다.
