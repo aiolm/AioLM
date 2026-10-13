@@ -1,4 +1,5 @@
 import BenchmarkTableScroll from './BenchmarkTableScroll';
+import ModelName, { useModelNames } from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -14,7 +15,7 @@ import type { AppStore } from "../../shared/state/store";
 import { finishTask, registerTask, updateTask, useTasks } from "../../shared/state/taskRegistry";
 import { useI18n } from "../../shared/i18n/i18n";
 import { isServerRunning } from "../../shared/lib/serverLifecycle";
-import { modelDisplayName, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { readPerformanceHistory, summarizePerformanceRows, type PerformanceBenchmarkRecord } from "./performanceRecords";
 import { exportBenchmarkResults, type BenchmarkExportFormat } from './benchmarkExport';
 import { performanceMarkdown } from './performanceMarkdown';
@@ -202,6 +203,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const copyTargetRef = useRef({ record: selectedRecord, locale });
   copyTargetRef.current = { record: selectedRecord, locale };
   const previousRecords = history.filter(item => item.id !== record?.id);
+  const historyModelNames = useModelNames(previousRecords.map(item => item.model));
   const exportAllDiffers = history.length > 0 && (history.length > 1 || history[0].id !== selectedRecord?.id);
   const visibleRows = selectedHistory && selectedRecord ? selectedRecord.result.rows : rows;
   const visibleResult = selectedHistory && selectedRecord ? selectedRecord.result : result;
@@ -404,7 +406,6 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     finally { deleteInFlight.current = false; setDeleting(false); }
   };
 
-  const modelLabel = displayedModel.model ? modelDisplayName(displayedModel.model) : copy.noModel;
   return <div className="app-page-scroll performance-page">
     <header className="app-page-header performance-heading"><div><h2 className="app-page-title">{copy.title}</h2><p className="app-page-description">{copy.description}</p></div></header>
     <BenchmarkExplorerActions listenerReady={profileImport.listenerReady} />
@@ -414,7 +415,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     <form className="app-card app-card--flush performance-card performance-setup" onSubmit={(event) => { event.preventDefault(); void run(); }}>
       <div className="performance-target">
         <div className="performance-target-identity"><span className="performance-target-label">{copy.model}</span>
-          <strong className="performance-target-name" title={normalizeDisplayPath(displayedModel.model)}><ModelIcon model={displayedModel.model} /><span>{modelLabel}</span></strong>
+          <strong className="performance-target-name" title={normalizeDisplayPath(displayedModel.model)}><ModelIcon model={displayedModel.model} /><span><ModelName model={displayedModel.model} empty={copy.noModel} /></span></strong>
         </div>
         {modelSettings && <div className="performance-target-actions">
           <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy} data-icon="settings" onClick={() => editModel('model')}>{modelCopy.settings}</button>
@@ -464,8 +465,8 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {(history.length > 0 || rows.length > 0 || record) && <div className="performance-history-bar">
       {previousRecords.length > 0 ? <label><span>{copy.history}</span><CustomSelect ariaLabel={copy.history} value={selectedHistory} disabled={busy || exporting || deleting}
         onChange={value => { setSelectedHistory(value); resetCopied(); setError(null); setExportNotice(null); setHistoryNotice(null); }}
-        options={[{ value: '', label: copy.current }, ...previousRecords.map(item => ({ value: item.id,
-          label: `${new Date(item.createdAt).toLocaleString()} · ${modelDisplayName(item.model)} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
+        options={[{ value: '', label: copy.current }, ...previousRecords.map((item, index) => ({ value: item.id,
+          label: `${new Date(item.createdAt).toLocaleString()} · ${historyModelNames[index]} · ${({ complete: copy.complete, partial: copy.partial, cancelled: copy.cancelled, failed: copy.failed })[item.result.status]}`,
           icon: <ModelIcon model={item.model} /> }))]} /></label> : <span>{copy.current}</span>}
       <div>{selectedRecord && <>
         <button type="button" className="app-button app-button--secondary app-button--sm" disabled={profileImport.importing || deleting} onClick={() => void profileImport.importLocal(selectedRecord)}>{profileImport.importing ? explorerCopy.importing : explorerCopy.import}</button>
@@ -480,7 +481,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     {historyNotice && <FeedbackBanner tone="success" className="performance-notice">{historyNotice}</FeedbackBanner>}
     {historyOffset !== null && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={busy || historyLoading || deleting} data-icon="refresh" onClick={() => void loadHistory(true)}>{copy.loadMore}</button>}
     {historyLoading && <p role="status">{copy.historyLoading}</p>}
-    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} />{modelDisplayName(selectedRecord.model)}<ModelBadges mode="compact" model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
+    {selectedRecord && <div className="performance-result-context"><strong><ModelIcon model={selectedRecord.model} /><ModelName model={selectedRecord.model} /><ModelBadges mode="compact" model={selectedRecord.model} /></strong><span>{statusLabel} · {selectedRecord.backend} · {formatBenchmarkRuntimeVersion(selectedRecord.result, selectedRecord.build, copy.unavailable)} · {copy[selectedRecord.request.context_profile]}</span><span>{selectedRecord.localState === 'cached' ? copy.localCached : copy.localRecovery}</span>{visibleResult?.message && <p>{normalizeDisplayText(visibleResult.message)}</p>}</div>}
     <ResultTable rows={singleRows} batch={false} copy={copy} /><ResultTable rows={batchRows} batch copy={copy} />
     {selectedRecord && <PublicBenchmarkReview key={selectedRecord.id} record={selectedRecord} busy={busy || otherBenchmark || deleting || !!pendingDelete} copy={copy} onWorkingChange={setSharingBusy} onPublished={() => setSharingRevision(value => value + 1)} />}
     <BenchmarkOwnedList busy={busy || otherBenchmark} copy={copy} revision={sharingRevision} />
@@ -512,7 +513,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
     </dl><p>{copy.metricsHint}</p></details>
     <ConfirmDialog open={!!pendingDelete} title={copy.deleteTitle} confirmLabel={copy.deleteHistory} busy={deleting}
       confirmDisabled={busy || otherBenchmark || exporting || sharingBusy || historyLoading}
-      description={<>{pendingDelete && <p><strong>{modelDisplayName(pendingDelete.model)}</strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
+      description={<>{pendingDelete && <p><strong><ModelName model={pendingDelete.model} /></strong> · {new Date(pendingDelete.createdAt).toLocaleString()}</p>}<p>{copy.deleteHint}</p>{deleteError && <FeedbackBanner tone="error">{copy.deleteError}</FeedbackBanner>}</>}
       onConfirm={() => void deleteSelectedHistory()} onCancel={() => { if (!deleting) setPendingDelete(null); }} />
   </div>;
 }

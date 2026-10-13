@@ -1,8 +1,8 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { modelArtifact, type ModelArtifact } from '../api/providers';
 import { isNativeRuntimeAvailable } from '../api/transport';
-import ModelName from './ModelName';
+import ModelName, { useModelNames } from './ModelName';
 
 vi.mock('../api/providers', async original => ({ ...await original<typeof import('../api/providers')>(), modelArtifact: vi.fn() }));
 vi.mock('../api/transport', async original => ({ ...await original<typeof import('../api/transport')>(), isNativeRuntimeAvailable: vi.fn() }));
@@ -79,5 +79,39 @@ it('keeps browser preview and empty model labels available without native IPC', 
   expect(screen.getByText('a'.repeat(40))).toBeVisible();
   view.rerender(<ModelName empty="Choose a model" />);
   expect(screen.getByText('Choose a model')).toBeVisible();
+  expect(modelArtifact).not.toHaveBeenCalled();
+});
+
+it('resolves dynamic option names independently, deduplicates paths and retains their order', async () => {
+  let finish!: (value: ModelArtifact) => void;
+  vi.mocked(modelArtifact).mockImplementation(path => path === first
+    ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(artifact(second, 'second-model')));
+  const { result, rerender } = renderHook(({ paths }) => useModelNames(paths), { initialProps: { paths: [first, second, first, '/synthetic/known.gguf'] } });
+  expect(result.current).toEqual(['a'.repeat(40), 'b'.repeat(40), 'a'.repeat(40), 'known.gguf']);
+  await waitFor(() => expect(result.current).toEqual(['a'.repeat(40), 'second-model', 'a'.repeat(40), 'known.gguf']));
+  expect(modelArtifact).toHaveBeenCalledTimes(2);
+  rerender({ paths: [second, '/synthetic/known.gguf', first] });
+  expect(result.current).toEqual(['second-model', 'known.gguf', 'a'.repeat(40)]);
+  await act(async () => { finish(artifact(first, 'first-model')); });
+  expect(result.current).toEqual(['second-model', 'known.gguf', 'first-model']);
+  expect(modelArtifact).toHaveBeenCalledTimes(2);
+});
+
+it('ignores removed option reads and leaves failed inspections as their original labels', async () => {
+  let finish!: (value: ModelArtifact) => void;
+  vi.mocked(modelArtifact).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  vi.mocked(modelArtifact).mockRejectedValueOnce(new Error('Synthetic unreadable model card'));
+  const { result, rerender } = renderHook(({ paths }) => useModelNames(paths), { initialProps: { paths: [first] } });
+  await waitFor(() => expect(modelArtifact).toHaveBeenCalledWith(first));
+  rerender({ paths: [second] });
+  await waitFor(() => expect(modelArtifact).toHaveBeenCalledWith(second));
+  await act(async () => { finish(artifact(first, 'removed-model')); });
+  expect(result.current).toEqual(['b'.repeat(40)]);
+});
+
+it('does not fetch dynamic option names in browser preview', () => {
+  vi.mocked(isNativeRuntimeAvailable).mockReturnValue(false);
+  const { result } = renderHook(() => useModelNames([first, '/synthetic/known.gguf', '']));
+  expect(result.current).toEqual(['a'.repeat(40), 'known.gguf', '']);
   expect(modelArtifact).not.toHaveBeenCalled();
 });
