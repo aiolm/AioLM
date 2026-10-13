@@ -148,7 +148,8 @@ def probe(args):
         config, executable = strata_config(root, file_path(model or args.config))
         engine_version = capture([str(executable), "--version"], config.get("cwd") or root).strip()
         version = f"Strata {revision} / {engine_version}"
-        accelerator = "hip" if config.get("backend") == "hip" else "cuda"
+        # Deployment options and build metadata do not prove a live GPU device.
+        accelerator = "unverified"
         served = config.get("model_name") or "qwen3.8-flash-next"
         chat, tools, image = True, True, bool(config.get("vision"))
     if not version:
