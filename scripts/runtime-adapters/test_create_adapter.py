@@ -1,4 +1,6 @@
+import argparse
 import importlib.util
+from unittest.mock import patch
 import json
 from pathlib import Path
 import struct
@@ -52,6 +54,24 @@ class LoaderProbeTests(unittest.TestCase):
                     adapter.strata_config(root, path)
             path.write_text(json.dumps(base))
             self.assertEqual(adapter.strata_config(root, path)[1], exe)
+
+    def test_strata_model_binding_cannot_replace_the_registered_native_build(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            for name in ("engine-a", "engine-b"):
+                (root / name).write_bytes(b"synthetic engine")
+            tokenizer = root / "tokenizer"; tokenizer.mkdir()
+            for name in ("vocab.json", "merges.txt", "token_type.json"):
+                (tokenizer / name).write_text("synthetic")
+            registered, selected = root / "registered.json", root / "selected.json"
+            base = {"args": [], "tokenizer": str(tokenizer)}
+            registered.write_text(json.dumps({**base, "exe": str(root / "engine-a")}))
+            selected.write_text(json.dumps({**base, "exe": str(root / "engine-b")}))
+            revision = "0123456789abcdef0123456789abcdef01234567"
+            args = argparse.Namespace(kind="strata", root=str(root), config=str(registered), model=str(selected), revision=revision)
+            with patch.object(adapter, "capture", side_effect=[revision, "--engine --config --host --port"]):
+                with self.assertRaisesRegex(ValueError, "another Strata engine build"):
+                    adapter.probe(args)
 
 
 if __name__ == "__main__":

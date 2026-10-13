@@ -145,7 +145,10 @@ def probe(args):
         help_text = capture([sys.executable, "-m", "serve.server", "--help"], root)
         if not all(flag in help_text for flag in ("--engine", "--config", "--host", "--port")):
             raise ValueError("this Strata version lacks the adapter's server CLI contract")
+        _, registered_executable = strata_config(root, file_path(args.config))
         config, executable = strata_config(root, file_path(model or args.config))
+        if executable.resolve() != registered_executable.resolve():
+            raise ValueError("selected deployment uses another Strata engine build; register it separately")
         engine_version = capture([str(executable), "--version"], config.get("cwd") or root).strip()
         version = f"Strata {revision} / {engine_version}"
         # Deployment options and build metadata do not prove a live GPU device.
