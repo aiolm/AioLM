@@ -1877,3 +1877,59 @@ raw는 `goal-clipboard-orbit154-native-results.json`, `goal-clipboard-orbit154/e
 최종 실제 개발 앱은 원래 vLLM Default/고정 Qwen snapshot의 running·모델 로드됨·원래 선택 대화/저장 모델명·PP/TG·입력 활성화 상태다. 51개 대화/hash·localStorage·프로필 내용과 프로필 외 config가 정확히 보존됐다. Default30→31·matching applied revision과 profile library141→143만 저장 revision 변경이므로 config 전체 bytes 불변으로 주장하지 않는다. 재실행한 runtime session의 PID·endpoint·credential·log/idle time도 이전 session과 같다고 주장하지 않는다. API off·active requests0·생성 중 아님·입력 빈 값·UI 오류/overlay 없음·Close to tray off이며 이전 GUI/engine·Vite group·production process는 종료됐다. 별도 production config/두 대화 hash도 그대로다. `goal-final-orbit154-preservation.json`·`goal-native-audio-orbit154-final-20261013.json/png`가 근거다. 이후 현재 GUI/engine 생존과 driver/engine/Vite listener도 `goal-final-orbit154-live-listeners.json`에서 다시 확인했다. Vite는 IPv6 listener이며 IPv4 부재를 실패로 계산하지 않는다. 저장 PP/TG는 새 추론 샘플이 아니다.
 
 현재 M01–M12는7 pass /4 fail /1 unrun이다. M03/M04/M07의 실제 upstream URI500·미디어 내용/모델 snapshot 실패, M08의 실제 전달된 도구 결과 대신 입력 인자를 반복하는 내용 실패는 해결되지 않았다. 실제 ffmpeg 부재 환경도 현재 시스템 설치·PATH 복구 때문에 만들 수 없어 M07의 하위 blocked로 남긴다. M11의 현재 기기 데스크톱 하위 검사를 보완했지만 별도 계정 최초 실행·자연스러운 Finder 설치/launchd의 MCP·CMake 탐색·Keychain 허용/거부/취소/업데이트 재승인·실제 upgrade·다운로드 quarantine·Intel/구형 macOS는 unrun이다. 개인 엔진 registry/manifest는 [별도 미구현 설계](pluggable-inference-runtimes.ko.md)로 유지한다. 전체 기기 검증 통과·새 제품 회귀 수정·새 공통 자동 검사/DMG를 선언하지 않았고 공개 upload·원격 push는 수행하지 않았다.
+
+## 93. 재시도 초안·모델명·런타임 취소·좁은 창의 후속 수정
+
+2026-10-13 `d95721a` checkout에서 92절 이후 실제 WKWebView 검증을 재개했다. native debug core는 `6a374ce`, 이번 frontend 수정은 `297f5dc`(Retry), `aa7b140`(Benchmark 이름), `7fc95e4`(런타임 취소/알림), `7dc1917`(제목/최소 창)에 커밋했다. 기기·작업용 도구·격리 홈은 앞선 검증 조건을 유지했다. 새 실제 채팅에는 원래 vLLM Default와 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`, vllm-metal 0.30.0/vLLM 0.30.0+cpu를 사용했다.
+
+제품 변경은 다음 네 작업 단위로 정리한다.
+
+| 변경 | 재현된 문제와 수정된 동작 |
+| --- | --- |
+| 실패한 이전 요청 Retry 시 새 초안 보존 | 실제 HTTP400 요청의 Retry를 누르면 그 뒤 입력한 미전송 초안이 지워졌다. Retry는 원래 실패 메시지·첨부를 다시 전송하면서 현재 composer의 새 텍스트·첨부·문서를 유지한다. 새 메시지의 정상 Send와 도구 후속 요청의 기존 정리는 유지한다. |
+| Benchmark snapshot 모델명 | 외부 `snapshots/<40자리 revision>` 모델은 대상·이력 선택·결과·삭제 안내에 revision만 표시될 수 있었다. 기존 모델 metadata 이름 확인을 이 화면들에도 공유하고 동시 읽기를 재사용한다. metadata 대기·실패 중에도 기존 이름 fallback으로 표시하며 실행·export·삭제의 모델 경로/record identity는 바꾸지 않는다. |
+| Python 런타임 bundle 알림·취소 | export/import 완료가 Download complete로 분류되고, local Cancel은 cleanup 동안 반복 요청될 수 있었다. bundle 작업은 취소 가능한 로컬 작업으로 유지하며 다운로드 완료 알림을 보내지 않는다. 실제 환경 설치의 완료 알림은 유지한다. local/global Cancel은 같은 실행 identity를 사용해 Cancelling 동안 반복 요청을 막고 실제 작업 종료까지 busy를 유지한다. 취소 요청 IPC 오류는 현재 작업을 실패 완료로 바꾸지 않고 읽을 수 있는 detail/error와 재시도를 제공한다. 이전 실행의 늦은 오류·보관된 취소 callback은 다음 실행에 적용하지 않는다. 실제 backend/picker의 명시적 cancellation 문자열만 cancelled로 분류하며 cancellation을 언급하는 다른 실패는 오류로 남긴다. |
+| 긴 채팅 제목·최소 창의 설정 제어 | 합성 45,088 UTF-16 code-unit 제목은 전체 문자열을 매번 heading/sidebar에 그려 shaping 폭이 약 267,000px/242,000px가 됐다. 표시 preview만 grapheme 경계에서 1,024 code units 이내+말줄임으로 제한하고 저장·편집·검색·tooltip/접근 가능한 전체 제목은 보존한다. Segmenter가 없는 구형 WebView는 기존 표시를 유지한다. workspace 폭399px 이하에서는 Conversation settings를 이름이 있는32×32 아이콘으로 표시해 제목 영역을 확보하며 기존 설정 editor·Escape focus 복원을 유지한다. |
+
+이 네 frontend 수정은 공개 API·프로필/모델 identity·기본값·readiness·hash 검증·엔진 요청 의미·시간 제한·lockfile을 변경하지 않았다. 개인 엔진 registry/manifest 구현이나 기존 upstream/내용 실패를 이번 수정으로 해결했다고 주장하지 않는다.
+
+| 수정 전/후 자동 검증 | 판정·근거 |
+| --- | --- |
+| Retry 최소 회귀 | 수정 전 fail — 1 file/2 failures·2 pass·0.90s. 성공/실패 Retry 모두 새 초안을 지웠다. 수정 후 pass — 관련6 files/55 tests·2.64s. |
+| Benchmark snapshot 이름 | 수정 전 fail — 2 failures/10 pass·4.46s. 후속 범위 추가 중 mock에 `isNativeRuntimeAvailable`가 빠진1 failure/48 pass·4.44s도 원본 로그에 보존했다. 이는 검사 준비 오류이며 mock을 보완한 뒤 최종 관련3 files/49 tests·6.22s가 pass다. |
+| Python 환경 작업 | 수정 전 fail — 확장 검사9 failures/6 pass·1.30s. local 수정 후 global callback 우회가 별도 통합 검사에서3 failures/15 pass·2.31s로 재현됐다. 같은 실행을 캡처한 callback을 적용한 뒤 관련4 files/42 tests·2.90s가 pass다. 실제 backend 작업 완료 전 busy·실패 진단·재시도와 늦은 이전 실행 오류 격리를 확인했다. |
+| 긴 제목 preview | 수정 전 fail — 1 failure/43 skipped·1.29s. skipped 항목은 실행한 검사로 계산하지 않는다. 최종 관련3 files/61 tests·6.52s가 pass이며 full text 편집·tail 검색·reload·Unicode 경계/fallback을 확인했다. |
+| 최소 창 설정 제어 | 수정 전 fail — 2 failures·0.93s. 수정 후 관련3 files/56 tests·4.53s가 pass이며 이름·기존 editor·Escape focus를 확인했다. |
+| 최종 `npm run typecheck` / `npm run lint` | pass — 12.04s / 7.26s. |
+| 최종 `npm run test:unit` | pass — 138.73s. contracts offline install/Node/browser import·schema/TypeScript, provider options, scripts, direct 검사 및 UI182 files/1857 tests. coverage statements80.97%/branches75.97%/functions79.61%/lines85.02%. jsdom의 pseudo-element/canvas 미구현 경고는 native 동작 통과 근거로 사용하지 않는다. |
+
+집중 검사의 raw log는 `logs/goal-retry-draft-orbit155-{before-isolated,related-after}-20261013.log`, `logs/goal-benchmark-model-orbit155-{before,related,final}-20261013.log`, `logs/goal-provider-environment-orbit155-{before-expanded,global-before,global-after,global-lint}-20261013.log`, `logs/goal-chat-title-orbit155-{before,final}-20261013.log`, `logs/goal-chat-compact-orbit155-{before,after}-20261013.log`다. 공통 검사는 `logs/goal-orbit155-final-{typecheck,lint,unit}-20261013.log`와 `checks.jsonl`에 기록했다. 이 네 frontend 수정에서 Rust/Python 소스는 바꾸지 않았으며 해당 전체 검사를 이 표의 frontend 검사로 대체하지 않는다.
+
+| 실제 WKWebView 검증 | 판정·근거 |
+| --- | --- |
+| Retry 수정 전 재현 | fail — 합성 긴 입력이 실제 vLLM context4096을 넘어 HTTP400/input_tokens4097로 거부됐다. 새 미전송 초안이 있는 상태에서 실제 Retry를 누르면 composer가 빈 값이 됐다. 이400은 의도한 과대 입력의 정확한 거부이며 정상 답변 기능 실패로 재분류하지 않는다. |
+| Retry 수정 후 | pass — 같은 engine·동일 실제400을 유지한 채 새 초안이 문자 그대로 남았다. 새 user bubble을 추가하지 않았고 원래 실패·Retry 안내를 숨기지 않았다. 기존51개 대화/hash도 보존했다. 수정 전53자 초안과 수정 후45자 초안은 서로 다른 합성 입력이므로 두 문자열이 같다고 주장하지 않는다. |
+| 긴 제목 표시·최소 창 | pass(현재 기기) — 원래45,088-unit 제목이 저장/tooltip/heading 접근 이름에 남고 표시 heading/sidebar는1,025-unit preview다. 실제360×488 viewport에서 제목 영역173.5px·settings32×32·Conversation settings 이름·label 숨김·Escape 종료 후 summary focus·composer 화면 내 배치를 확인했다. CSS/DOM 합성 회귀만으로 native 통과를 선언하지 않았다. |
+| 새 정상 요청과 모델명·PP/TG | pass — 실제 새 입력 “ORBIT155. What is 6 plus 9? Answer with one number.”의 답변15·Response complete·두 메시지와 Qwen3-VL-2B-Instruct-4bit를 확인했다. PP38/cache0, TG3/0.08s/25.6tok/s, TTFT9.54s·준비0.02s·요청9.55s다. PP 시간/속도는 engine 미제공으로 `—`와 설명을 유지하며 추정하지 않았다. 저장된 이전 응답을 새 추론 샘플로 대체하지 않는다. |
+| Benchmark 기존 이력 이름 | pass(기존 이력 화면 범위) — 실제 Result history 목록에 기존 Qwen2.5 Instruct 이름·상태가 표시되고 revision만으로 표시하지 않았다. 이 read-only 목록 근거를 새 Gemma Benchmark 실행 성공으로 확대하지 않는다. |
+
+native raw는 `goal-retry-draft-orbit155-native-results.json`, `goal-native-audio-orbit155-{before-draft,before-lost,after-draft,after-kept,normal-response,title-after,title-minimum}-20261013.json/png`, `goal-chat-title-orbit155-{readonly,native-geometry}.json`, `goal-chat-compact-orbit155-geometry.json`, `goal-benchmark-orbit155-options-readonly.json`이다. 실제 입력/화면은 root의 CUA 조작·AX/screenshot이고 observer/geometry는 상태·파일·read-only WKWebView 보조 근거다. `before-ready`라는 파일 이름의 관찰은 실제 stopped였으므로 Ready 성공 근거로 사용하지 않는다.
+
+## 94. 실제 Python bundle 취소와 frontend 수정 패키지
+
+2026-10-13 같은 격리 홈의 실제 앱에서 default 모델을 Unload하고 named session/API가 동작하지 않는 상태로 MLX 환경을 검사했다. `mlx-vlm`0.7.6의 기존 외부 환경을 재사용했다. 소유 임시 출력만 선택하며 기존 bundle과 외부 환경을 삭제하지 않았다.
+
+| 실제 흐름 | 판정·근거 |
+| --- | --- |
+| export 저장 picker Cancel | pass — 실제 macOS Save의 Cancel 후 TaskStrip은 `Cancelled · portable runtime export cancelled`, 작업 수0이다. 오류 배너·결과 파일 없이 export/import 제어가 다시 활성화됐다. |
+| import picker Cancel | pass — 실제 macOS Open의 Cancel 후 `Cancelled · portable runtime import cancelled`, 작업 수0·오류 배너 없음·환경 Ready/제어 활성화를 확인했다. |
+| export 처리 중 local Cancel | pass — 새 작업용 출력으로 Save, 실제 package 다운로드 progress와 작업 수1·환경 제어 잠금을 확인했다. native local Cancel 뒤 `Cancelled · portable runtime operation cancelled`, 작업 수0·오류 배너 없음·제어 활성화·환경 Ready다. 빠른 cleanup 때문에 중간 Cancelling 화면은 별도 native 캡처하지 못했으며 그 상태/반복 클릭 보호는 자동 회귀로만 확인했다. |
+| 출력·staging·process 정리 | pass(관찰 범위) — 새 출력은 없고 OS 임시 경로의 `aiolm-portable-*` staging과 작업용 pip process가 남지 않았다. 작업 중 pip PID/group을 따로 포착하지 못했으므로 특정 PID의 종료로 확대하지 않는다. 전체 외부 환경의 before/after bytes를 비교한 근거로도 확대하지 않는다. |
+
+raw는 `goal-native-audio-orbit155-{export-picker-cancel,import-picker-cancel,portable-working,portable-cancelled}-20261013.json/png`와 `goal-provider-orbit155-native-cancel-cleanup.json`이다. 성공한 portable 완료 알림의 무전송은42개 회귀 검사 범위이며 OS 배너 수신 검사를 다시 실행하지 않았다. 기존 실제 bundle 성공/보호 검사는 앞선 결과를 유지한다.
+
+`7dc1917` 소스에서 `npm run build`14.31s·`npm run package:tauri`238.21s·새 arm64 DMG 검사6.56s가 모두 exit0다. DMG의 GUI/CLI가 모두 arm64·0.3.1이며 빌드 앱과 hash가 일치하고, 5개 파일·strict ad-hoc 서명·UTF-8/UTF-16 개인 경로/fixture 제외·새 임시 CLI 홈의 초기값·read-only image detach를 확인했다. ad-hoc 서명이며 notarization 자격 증명은 없어 공증을 수행하지 않았다. 로그는 `logs/goal-orbit155-{production-build,arm64-package}-20261013.log`, `logs/goal-orbit155-package-inspect-7dc1917-20261013.log`, manifest는 `goal-native-runtime-lock-package-orbit155-7dc1917-results.json`이다. 원본 image는 `goal-package-orbit155-7dc1917/`에 보존했다. 이 image는 아래에서 새로 발견한 native tokenizer 수정 전 소스이며 최종 수정 패키지로 대체하지 않는다.
+
+실제 Gemma4 Benchmark는 `gemma-4-e2b-it-4bit` revision `238767527555cb75a05732a84dff5d6ba0dd6809`·mlx-vlm0.7.6, Code/Python·입력1,024·출력16·반복1·single 요청으로 실행했다. 대상·failed 결과·삭제 확인창에는 revision 대신 모델명이 표시됐고 삭제는 Cancel로 끝냈다. 그러나 prompt 준비 단계에서 `Gemma4Processor` import가 실패해 benchmark는 fail이다. 결과를 숨기거나 tokens 검사/readiness를 제거하지 않았다. 원본은 `goal-native-audio-orbit155-benchmark-{failed,delete-label}-20261013.json/png`다. 원인 조사와 수정 후 실제 재검증은 다음 절에 기록한다.
+
+이후 실제 normal Quit으로 debug GUI·소유 launcher가 exit0으로 끝났고 이전 engine 및 Vite process가 종료됐다. `logs/goal-window-orbit155-native-launch-20261013.log`가 근거다. 첫 관찰에서 이전 turn의 소유 process가 모두 종료된 상태였고, stale CUA 앱 선택은 isolation/Vite 없는 별도 blank 실행을 만들었다. root가 생존 확인 전에 선택한 순서 오류를 인정하고 해당 실행만 정상 종료했다. 원인을 제품 render 결함으로 단정하거나 일반 홈의 파일을 삭제/덮어쓰지 않았다. 이후 새 detached 소유 launcher로 같은 임시 홈을 재실행해 이번 검증을 진행했다.
