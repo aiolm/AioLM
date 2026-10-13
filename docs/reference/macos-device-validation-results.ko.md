@@ -1763,3 +1763,14 @@ Dock·SystemUIServer 프로세스가 실제로 실행 중임을 확인했지만 
 별도 normal Quit/relaunch의 첫 설정 열기는 WebDriver session을 만들지 않은 상태에서 CUA만으로 확인했다. 실제 AX/screenshot의 설정창 유지와 session 파일 부재·config/hash·47개 대화/hash 불변이 pass다. 이후 WebDriver를 연결한 뒤에도 같은 열린 창이 유지됐으므로 이번에는 관찰기 연결에 의한 닫힘도 재현하지 못했다. `goal-modal-orbit144-native-{no-observer,first-preservation,after-wd-connect,results,before-quit,quit-checks}.json`, `logs/goal-modal-orbit144-native-only-launch-20261013.log`와 native CUA 결과가 근거다. 이 비교를 앞선 닫힘의 원인 규명으로 대체하지 않는다.
 
 최종 native Default 모델 로드됨·backend running·입력 활성화·저장 모델명/PP/TG를 확인했다. 두 정상 재실행의 Default25→27은 저장 revision만 변경됐으며 기존 프로필 내용·다른 config 값·47개 대화/hash를 보존했다. API off·생성 중 아님·composer 빈 값·UI 오류/overlay 없음과 현재 앱/엔진 생존이 pass다. `goal-native-audio-orbit144-final-20261013.json/png`, `goal-modal-orbit144-final-preservation.json`이 근거다. 새 추론 샘플로 계산하지 않으며 restoring 관찰 두 건은 이름과 달리 당시 이미 running이었다.
+
+
+## 86. 포괄 승인 이후 새 모델 MCP 요청의 실제 대기 결과
+
+2026-10-13 `b500aed` checkout/제품 frontend `6e27196`·native core `6a374ce`에서 사람의 포괄 승인을 받은 뒤 새 호출을 실행했다. 기존 MCP 전용 프로필을 native UI로 선택/시작하고 새 합성 대화에 Load MCP tools를 적용했다. 고정 Qwen snapshot·런타임 버전은 앞선 검증과 같다. 모델이 정확한 `ORBIT-148 native tool followup` 인자의 synthetic_echo 요청을 만들었고 PP201/cache0·TG37/1.26s/28.6tok/s와 실제 모델명을 표시했다. native Approve once→Waiting for MCP tool·Stop→소유 peer/별도 Mac 승인 process를 확인했다.
+
+Mac 승인창의 실제 Yes 클릭을 요청했으나 클릭 결과와 tools/call은 확인되지 않았다. 기존120초 deadline 뒤 native `MCP tool approval timed out`·Request failed·입력 복구, 두 소유 process 종료를 확인했다. 신규 fixture 이벤트8건은 discovery/initialize/list뿐이며 실제 tools/call은0건이다. 포괄 승인을 실제 OS 클릭이나 도구 결과 후속 답변의 성공으로 계산하지 않는다. 이 요청의 창은 만료됐으며 실제 No·모델 도구 결과 후속 답변·실제 호출 중 취소는 남아 있다. 승인을 우회하거나 제한을 늘리지 않았다.
+
+원래47개 대화/hash는 이번 요청 전체에서 보존됐으며 새 합성 대화 한 파일만 추가됐다. raw는 `goal-native-audio-orbit148-{mcp-baseline,starting,ready-check,model-request,os-pending,timeout,restoring}-20261013.json/png`, `goal-mcp-orbit148-pending-evidence.json`과 대응 검사 로그다. 제품 코드 변경 없이 실제 결과만 기록했으며 기존 자동 검사·패키지 결과를 새 검사로 주장하지 않는다. 전체 M01–M12 완료를 선언하지 않는다.
+
+최종 native Default→model loaded·backend running·입력 활성화를 확인했다. 모든 기존 프로필 내용과 다른 config 값·localStorage·47개 대화/hash를 보존했다. Default27→28·MCP 프로필3→4는 저장 revision만 변경됐다. API off·생성 중 아님·UI 오류/overlay 없음과 소유 peer/approval 정리가 pass다. `goal-native-audio-orbit148-final-20261013.json/png`, `goal-mcp-orbit148-final-preservation.json`이 근거다. 이전 저장 답변/측정값 표시를 새 추론으로 계산하지 않으며 원격 push는 수행하지 않았다.
