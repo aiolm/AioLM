@@ -37,6 +37,7 @@
 - 82절은 오류 배너 닫기 수정 `6e27196`의 자동/실기기 검증과 MCP 모델 후속 승인 한계를 기록한다. 83절은 해당 DMG이며 84절은 새 이미지의 실제 production 실패 안내·응답·작은 창·재로드·종료 검증이다.
 - 87절은 엔진 미디어 거부 harness의 서버 오류 진단과 빈4xx 통과 판정 수정 `ff97a4c`·회귀/공통 검사·실제 엔진 오류 재확인을 기록한다. 앱/엔진 자체의 수정으로 확대하지 않는다.
 - 88절은 실제 사람의 MCP OS No·승인 후 호출 중 취소·모델 후속 답변과 동일 고정 모델의 vLLM/MLX 도구 결과 내용 비교를 기록한다. 승인·전달·취소는 통과했으나 결과 내용은 실패했다. OS 알림 권한의 실제 확인·일시 변경·원상 복원도 구분한다.
+- 89–90절은 실제 사람의 트레이 Show·Dock 클릭 복원·트레이 Quit과 배포 앱 입력 제한을, 91절은 이후 배포 앱의 실제 알림 제출·사람의 제목/본문 수신 확인·OS 설정 복원·정상 종료와 개발 앱 재실행을 기록한다. 이전 입력 제한의 원인은 확정하지 않았다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81·84절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -108,7 +109,7 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M08 | fail | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 조회·승인 deadline·소유 프로세스 정리·기술 입력 치환 수정과 74절의 실제 OS Yes→수동 호출·결과는 통과했다. 88절의 실제 OS No→거부·tools/call0·정리와 승인 후 호출·모델 후속 요청도 통과했다. 후속 답변은 전달된 synthetic result 대신 입력 인자를 반복해 내용 검증에 실패했다. 동일 고정 모델의 직접 vLLM/MLX 비교에서도 재현됐으며 앱 전달 결함의 근거는 확인되지 않았다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
-| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 Close to tray·닫기 숨김·CUA 재활성화·설정 복원과89–90절의 실제 사람의 트레이 Show/Dock 클릭 복원·트레이 Quit도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 88절에서 OS Allow off→일시 on→알림 제출→원래 off 복원을 실제 확인했으나 수신은 미확인/blocked다. 84절의 새6e27196 DMG production 응답·작은 창·재로드·normal Quit도 통과했다. promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 Close to tray·닫기 숨김·CUA 재활성화·설정 복원과89–90절의 실제 사람의 트레이 Show/Dock 클릭 복원·트레이 Quit도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 91절의 custom-protocol 배포 앱에서 새 test notification 제출·사람의 정확한 제목/본문 수신 확인·원래 OS Allow off 복원·정상 종료와 개발 앱 재실행도 통과했다. 84절의 새6e27196 DMG production 응답·작은 창·재로드·normal Quit도 통과했다. promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
 | M12 | pass | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. 88절에서 실제 OS 승인 후 hold tools/call 시작→native Cancel→Cancelled·결과0·소유 부모/자식 종료·MCP 정의 원본 복원을 확인했다. 승인 대기 만료나 RPC timeout을 실제 호출 취소로 계산하지 않았다. |
 
 ## 4. 초기 기기 검증의 공통 자동 검사 (`6261d0b`)
@@ -1839,3 +1840,19 @@ OS의 AioLM Allow off를 확인하고 일시 on으로 변경했다가 알림 제
 raw는 `goal-window-orbit152-{tray-quit-human-confirmed,owned-vite-cleanup,offline-config-restored}.json`, `goal-notification-production-orbit152-{copy-verified,before,launch,running-preservation,first-input-block}.json`과 대응 로그다. production 검사 중 debug config/51개 대화·production config/두 대화 파일의 exact hash를 확인했다. 기존 모델·외부 runtime·사용자 자료는 이동/삭제하지 않았다. 새 소스 수정·DMG 생성·전체 기기 검증 통과로 확대하지 않는다. 개발 앱의 실제 재실행/Ready 복원과 배포 앱의 실제 입력·알림 수신은 이 절 시점에 남아 있다.
 
 새 입력 관찰과 관련된 기존 App navigation/App/Settings layout/preferences의 집중 검사는5 files/48 tests·exit0·6.43s로 통과했다. `logs/goal-navigation-settings-orbit152-focused-20261013.log`가 근거다. 같은 제품 소스의 React/jsdom 검사이며 현재 native 입력이나 OS 알림 수신을 통과했다고 해석하지 않는다. 새 회귀를 추가하거나 기존 전체 자동 검사를 이번 실행으로 주장하지 않았다.
+
+## 91. 배포 앱 알림 수신·정상 종료와 개발 앱 복원
+
+2026-10-13 `ce71695` checkout에서90절의 입력 검사를 이어갔다. 배포 앱은 검증된 `6e27196` 소스의 copy이며 복원한 개발 앱은 frontend `6e27196`·native core `6a374ce`다. 사람의 “설정 → 알림을 열었음” 회신 뒤 실제 실행 중인 배포 앱의 Settings→Notifications 선택 상태를 확인했다. 이후 “Dock 아이콘/한국어 창이 보이지 않음” 회신도 별도로 보존한다. 새 CUA의 General→Notifications 전환·focus가 실제 화면에 반영됐지만 앞선 입력 제한의 원인을 제품 결함이나 CUA 원인으로 확정하지 않았다. 이를 코드 수정 결과로 기록하지 않는다.
+
+| 실제 흐름 | 판정·근거 |
+| --- | --- |
+| 배포 앱 알림 제출 | pass — 개발 서버가 없는 검증된6e27196 custom-protocol GUI에서 한국어 테스트 알림을 한 번 클릭했다. 실제 화면의 피드백은 시스템에 전송을 요청했다는 문구이며 전달 성공을 단정하지 않았다. 채팅·다운로드·벤치마크 완료 알림 category는 모두 off를 유지했다. |
+| 새 알림 제목·본문 수신 | pass — 사람이 방금 보낸 새 항목의 제목 “AioLM 테스트 알림”과 본문 “AioLM에서 보낸 테스트 알림입니다.”를 둘 다 확인했다고 회신했다. 이는 사람의 실제 수신 관찰이며 자동 NotificationCenter 캡처 성공으로 확대하지 않는다. |
+| OS 알림 설정 복원 | pass — 실제 System Settings의 AioLM Allow off→일시 on→test 제출 뒤 원래 off를 복원했다. 나머지 알림 필드·미리 보기·그룹·공유 중 알림 설정을 바꾸지 않았다. System Settings는 정상 종료했다. |
+| 배포 앱 종료·홈 보존 | pass — 원래 Chat으로 돌아가 normal Quit, launcher exit0·GUI 종료·소유 짧은 임시 경로 제거를 확인했다. 배포 홈의 config/두 대화와 개발 홈의 config/51개 대화는 이 종료 시점에 exact bytes/hash를 보존했다. 원래 대화·외부 환경·모델을 이동/삭제하지 않았다. |
+| 개발 앱 실제 복원 | pass — 같은 격리 홈으로 Vite/native debug 앱을 재실행하고 실제 Model settings의 원래 vLLM Default를 저장/시작했다. backend running·모델 로드됨·원래 선택 대화/모델명·입력 활성화를 확인했다. Server 화면의 Close to system tray는 off이며 읽기 전용 native tray 조회도 해당 tray 부재를 확인했다. 이는90절의 offline 파일 복원과 구분되는 실제 재실행 근거다. |
+
+raw는 `goal-notification-production-orbit153-{fresh-receipt,restored-results}.json`, `goal-notification-production-orbit152-{exit,cleanup}.json`, `goal-tray-orbit153-readonly.json`, `goal-native-audio-orbit153-{debug-boot,debug-starting,restored-off}-20261013.json/png`와 대응 로그다. debug-starting이라는 파일 이름과 달리 해당 관찰의 실제 backend는 이미 running이었다. 표시된 PP52/cache0·TG15와 응답은 원래 저장 이력이며 새 추론 실행으로 계산하지 않는다. 원래 고정 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`와 vllm-metal 환경을 재사용했다.
+
+88·90절의 당시 알림 수신 차단·입력 미확인은 보존하며 새 수신 근거로 연결한다. 이번에는 제품 소스·의존성·공통 자동 검사·DMG를 바꾸거나 재실행한 것으로 주장하지 않는다. promised/unreadable clipboard와 별도 계정의 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치 실행은 아직 남아 있으며 M11/전체 기기 검증 통과를 선언하지 않는다. Intel·구형 macOS 결과도 추정하지 않았고 원격 push·공개 upload는 수행하지 않았다.
