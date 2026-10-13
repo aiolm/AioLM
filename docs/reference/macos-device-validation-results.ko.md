@@ -36,6 +36,7 @@
 - 79절은 잠금 해제 후 실제 MCP 실행 대기/미완료 이력 안내·Default 복원, 80절은 production GUI와 메모리 부족 안내 수정 `20f1ff4`의 자동/실기기 검증, 81절은 새 DMG와 해당 production GUI의 응답·이력·종료를 기록한다. 이전 차단/미실행은 당시 근거로 보존한다.
 - 82절은 오류 배너 닫기 수정 `6e27196`의 자동/실기기 검증과 MCP 모델 후속 승인 한계를 기록한다. 83절은 해당 DMG이며 84절은 새 이미지의 실제 production 실패 안내·응답·작은 창·재로드·종료 검증이다.
 - 87절은 엔진 미디어 거부 harness의 서버 오류 진단과 빈4xx 통과 판정 수정 `ff97a4c`·회귀/공통 검사·실제 엔진 오류 재확인을 기록한다. 앱/엔진 자체의 수정으로 확대하지 않는다.
+- 88절은 실제 사람의 MCP OS No·승인 후 호출 중 취소·모델 후속 답변과 동일 고정 모델의 vLLM/MLX 도구 결과 내용 비교를 기록한다. 승인·전달·취소는 통과했으나 결과 내용은 실패했다. OS 알림 권한의 실제 확인·일시 변경·원상 복원도 구분한다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
 - 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81·84절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
@@ -104,11 +105,11 @@ gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다
 | M05 | pass | 11 메뉴×3 엔진·공용 프로필·3 창 크기, GUI v12→v13/두 번째 이전/backup 불변. 설치된 flag별 호환 옵션 UI, 실제 OS LoRA 선택→draft-simple→공용 프로필 저장/시작→응답/usage, MLX embedding-only 및 잘못된 binding 거부 확인. 26절에서 서로 다른 Qwen3/Gemma4를 같은 MLX 공용 프로필로 순차 실행·실제 응답·이력 보존·원래 vLLM 복원도 확인했다. 임의의 모든 옵션 순열을 검증한 의미는 아님. |
 | M06 | pass | 실제 snapshot 취소/재시도, 고정 GGUF, 공개 3-shard 전체 GUI 다운로드/해시/한 항목/CPU 추론, 두 GGUF와 공유 companion 다운로드/재사용·다른 primary 삭제 후 보존. 활성/선택 draft·LoRA·named split 보호, 외부 파일·case-sensitive APFS·한글/공백·권한·FAT 불완전 상태 확인. |
 | M07 | fail | OS 이미지/WAV/MP4 선택·내용/usage·immutable 기록/재로드·실패 후 Retry·엔진 변경, 명시적 STT/frames·ffmpeg UI Stop, 비-WAV Whisper 전사/번역·ASR 전사. 21절의 Gemma4 실제 native 음성·취소와 잘못된 WAV의 동일 입력 Retry를 추가 확인했다. 긴/후속 음성 질문의 내용 실패·URI500·native SmolVLM 내용 오답·Gemma3n snapshot 실패 유지. ffmpeg 부재의 실제 앱 검사는 blocked. |
-| M08 | blocked | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 승인창·Cancel/quit 정리와 23절의 실제 도구 조회·미응답 승인 deadline 뒤 소유 부모/자식 정리·기술 입력 치환 수정을 확인했다. 74절에서 실제 사람의 OS Yes→수동 tools/call 1회→결과·소유 프로세스 정리를 통과했다. 실제 No·모델 후속 답변·호출 중 취소는 미검증이다. |
+| M08 | fail | 실제 문서 선택·프로젝트 native 왕복·자동 문서 첨부·벡터/keyword/명시적 후보 선택·멀티 세션·gateway 인증/라우팅/Responses·개인화 요청 확인. 19절의 native PDF 내용 응답·재로드, gateway SSE 연결 종료·후속 응답과 Responses/Messages 미디어 거부도 통과. MCP 조회·승인 deadline·소유 프로세스 정리·기술 입력 치환 수정과 74절의 실제 OS Yes→수동 호출·결과는 통과했다. 88절의 실제 OS No→거부·tools/call0·정리와 승인 후 호출·모델 후속 요청도 통과했다. 후속 답변은 전달된 synthetic result 대신 입력 인자를 반복해 내용 검증에 실패했다. 동일 고정 모델의 직접 vLLM/MLX 비교에서도 재현됐으며 앱 전달 결함의 근거는 확인되지 않았다. |
 | M09 | pass | 세 엔진 tokenizer usage·cold-cache/KV·RSS/OS 대조·이력/native CSV/XLSX 저장/viewer. MLX/native Metal deep pass. vllm partial/Unsupported와 CPU-only 비교 Unsupported를 full pass로 계산하지 않음. 공개 서비스 upload 제외. |
 | M10 | pass | 세 엔진 새 홈 offline export/import/probe·실제 추론, imported STT/embedding. 해시/ABI/arch/OS 오류·pip/native 취소·활성 모델 거부·기존 출력·외부 환경 보호. 직접 URI의 전체 harness 실패는 M03/M04/M07에 별도 기록. |
-| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 알림 안내 수정·OS 제출은 통과했으나 후속 OS 상태·실제 수신은 미확인/blocked다. 84절의 새6e27196 DMG production 응답·작은 창·재로드·normal Quit도 통과했다. Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
-| M12 | blocked | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. MCP 승인 후 실제 호출 중 취소는 승인창 조작 차단으로 미검증. |
+| M11 | blocked | arm64 DMG/GUI/CLI·버전/strict ad-hoc/해시/개인 경로 제외/새 홈 CLI 기본값. 실제 hide·2차 실행 restore·정상 quit, 파일/문서/JSON/CSV/XLSX picker·취소·한글 paste 확인. 19절의 green-button 확대/복원, PDF/폴더 선택·취소·복원, 실제 Cmd+V/Chat Copy와 합성 다중 포맷·확인된 원본 clipboard snapshot 복원은 통과. 25절의 실제 Close to tray 설정·닫기 숨김·CUA 재활성화·설정 복원도 통과했다. 27절의 현재 두벌식 native 조합·첫 Enter 확정·다음 Enter 응답·포인터 클릭 뒤 단일 Enter는 통과했으며 DOM composition 이벤트는 관찰되지 않았다. 88절에서 OS Allow off→일시 on→알림 제출→원래 off 복원을 실제 확인했으나 수신은 미확인/blocked다. 84절의 새6e27196 DMG production 응답·작은 창·재로드·normal Quit도 통과했다. Dock 클릭·트레이 Show/Quit·promised/unreadable clipboard는 미검증이며 별도 계정/Finder/Keychain/upgrade는 unrun. |
+| M12 | pass | `6261d0b`에서 실제 모델3/API 실행 중 normal Quit→소유 자식·5포트 정리/파일 보존/launcher exit0. pip/CMake/ffmpeg·준비/실제 loading replacement·3 엔진×warmup/single/batch·native deep CPU/Metal 취소 통과. 별도 진단 환경에서 MLX CPU/GPU 평가 진입을 각각 관찰 후 취소·job 정리/cache 불변. 88절에서 실제 OS 승인 후 hold tools/call 시작→native Cancel→Cancelled·결과0·소유 부모/자식 종료·MCP 정의 원본 복원을 확인했다. 승인 대기 만료나 RPC timeout을 실제 호출 취소로 계산하지 않았다. |
 
 ## 4. 초기 기기 검증의 공통 자동 검사 (`6261d0b`)
 
@@ -1788,3 +1789,26 @@ Mac 승인창의 실제 Yes 클릭을 요청했으나 클릭 결과와 tools/cal
 M03/M04/M07의 실제 upstream/내용 실패와 M08/M11/M12의 OS 수동 조작·계정/환경 차단은 유지한다. 새 OS 승인창을 만들거나 deadline을 늘리지 않았다. 전체 M01–M12 완료·새 DMG 검증을 선언하지 않으며 원격 push/공개 upload를 하지 않았다.
 
 검사는 pass다. `npm run test:provider-runtime`31개/16.88s·합성 self-test, 최종 typecheck9.95s·lint5.28s, 최종 `npm run test:unit`129.29s(계약/provider-options/scripts/direct 포함·UI180파일/1824개), build12.71s를 확인했다. coverage80.84/75.78/79.42/84.91%다. `logs/goal-harness-orbit149-{related-final,typecheck-final,lint-final,unit-final,build}-20261013.log`와 `checks.jsonl`이 근거다. 수정 전500 진단 회귀/빈400 판정 회귀의 exit1은 각각 `before`/`empty-before` 로그로 보존했다. chunk 크기 경고를 유지하며 Rust/Python/app 소스는 변경하지 않아 과거 검사를 새 실행으로 주장하지 않는다.
+
+## 88. 실제 MCP 거부·호출 취소·후속 답변과 두 런타임 비교
+
+2026-10-13 `94db689` checkout에서 제품 frontend `6e27196`·native core `6a374ce`의 실제 WKWebView와 별도 Mac 승인창을 검증했다. 기존 공개 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`, vllm-metal0.30.0/vLLM0.30.0+cpu와 mlx-vlm0.7.6을 사용했다. 모델·환경을 새로 설치하거나 승인 요구·기존 deadline을 변경하지 않았다.
+
+| 실제 흐름 | 판정·근거 |
+| --- | --- |
+| 수동 Yes | pass — 첫 거부용 요청에는 사람이 실제 Yes를 눌렀다. tools/call1회·native synthetic result·소유 peer 정리를 확인했다. 요청 의도만으로 No 성공으로 기록하지 않았다. |
+| 실제 OS No | pass — 새 ORBIT-151B 창에서 사람이 No를 눌렀다. native user rejection·도구 호출0·소유 peer/승인 process 종료를 확인했다. |
+| 실제 호출 중 취소 | pass — 기존 hold 도구를 잠시 활성화하고 실제 OS Yes 뒤 tools-call-start를 관찰했다. native Cancel→Cancelled·결과0·소유 부모/자식 종료를 확인했다. Cancelled 캡처는 호출 시작 후14.824s로 기존15s RPC timeout 이전이다. MCP 정의를 정확한 원본 bytes/hash로 복원했다. 승인 대기 취소를 실제 RPC 취소로 대체하지 않았다. |
+| 모델→도구→모델 후속 처리 | 실행 pass / 내용 fail — 첫 ORBIT-151 요청은120s 승인 만료·tools/call0·소유 process 정리로 끝났다. 새151C/151D 요청은 실제 사람의 Yes→tools/call1회→후속 모델 요청·stop 완료까지 도달했다. 그러나 두 답변은 static 반환값 synthetic result 대신 각 요청의 입력 text를 반복했다. |
+| 실제 도구 결과 전달 관찰 | pass —151D의 passive fetch 관찰에서 system/user/assistant/tool 네 역할, 일치하는 tool_call_id/name과 실제 JSON 결과 `{"content":[{"text":"synthetic result","type":"text"}]}`를 확인했다. 요청·응답을 변경하지 않았다. invoke 관찰에는 기록0건이므로 native RPC 반환을 그 관찰기로 확인했다고 주장하지 않는다. 관찰 후 원래 fetch/invoke 함수와 global 제거를 확인했다. |
+| 직접 vLLM 비교 | 내용 fail — 실제 캡처와 동일한 후속 body를 같은 엔진에 재전송해 HTTP200·stop·같은 입력 인자 답변을 확인했다. 별도 fresh cache_salt의 cache0, temperature0·원래 JSON 결과, temperature0·순수 text 결과 비교도 모두 같은 오답이다. 앱 이력·UI·MCP 도구를 재실행한 결과가 아니다. |
+| 직접 MLX 비교 | 내용 fail — 실제 앱에서 기존 MLX 환경/프로필·같은 snapshot을 선택해 Ready/tools_auto/tool_parser를 확인했다. 캡처의 messages/tools/call ID/결과를 유지하고 model만 실제 local routing으로 바꾸며 temperature0/max_tokens128을 명시했다. HTTP200·stop·PP267/cache0·TG12에서 같은 입력 인자 답변이다. 정답을 넣지 않은 추가 user 지시로 최신 content[0].text를 읽도록 한 비교도 PP305/cache0·TG12·같은 오답이다. 새 native MLX 승인 여정의 성공으로 확대하지 않는다. |
+| OS 알림 상태·복원 | 상태/제출 pass / 수신 blocked — System Settings의 AioLM Allow가 off임을 실제 확인했다. 일시 on→앱 test notification 제출→원래 off로 복원했고 다른 OS/app 알림 설정을 보존했다. NotificationCenter 접근은 두 번 timeoutReached로 실패해 실제 제목/본문 수신은 확인하지 못했다. System Settings도 정상 종료했다. |
+
+151D의 실제 native 최종 지표는 PP75/cache192·TG12/0.36s/30.7tok/s·TTFT3.08s·요청3.35s·stop이다. 정상 완료/측정값은 내용 정답의 근거가 아니다. 올바른 결과 전달과 두 런타임의 직접 재현으로 앱 전달 결함의 근거는 확인되지 않았다. 모델/엔진의 내용 실패로 남기며 결과 필드 제거·역할 변경·cache 무효화를 제품 수정으로 적용하지 않았다.
+
+raw는 `goal-mcp-orbit151-manual-results.json`, `goal-mcp-orbit151-{hold-started,cancel-results,followup-timeout-results,wire-observed,passive-removed,direct-followup,cold-original,cold-temperature-zero-envelope,cold-temperature-zero-text}.json`, `goal-mcp-orbit151-mlx-vlm-{controlled-envelope,explicit-reading}.json`, `goal-native-audio-orbit151-{manual-yes,native-no,actual-cancel,followup-answer,mlx-ready,final-ready}-20261013.json/png`와 대응 로그다. 기존 fixture와 실제 반환값을 바꾸지 않았고 OS 클릭은 사람이 수행했다. CUA가 선택하지 못한 osascript 창을 다른 자동화 기술로 조작하지 않았다.
+
+M08은 미실행 차단에서 실제 내용 fail로, M12는 기록된 기기 범위 pass로 갱신했다. M03/M04/M07의 실제 upstream/미디어 내용 실패와 M11의 Dock/트레이·알림 수신·promised/unreadable clipboard는 남는다. 현재 앱은 시작 때 PATH를 복구해 실제 설치된 ffmpeg를 다시 찾으므로 작업용 PATH만으로 진짜 부재 환경을 만들 수 없다. 시스템 binary를 숨기거나 PATH 복구를 제거한 검사를 부재 통과로 계산하지 않는다. 별도 계정·Keychain·실제 upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 unrun이다. 개인 엔진 registry/manifest 등록은 [미구현 장기 설계](pluggable-inference-runtimes.ko.md)로 유지한다. 이번 제품 소스/자동 검사/DMG 변경은 없으며 전체 기기 검증 통과·원격 push·공개 upload를 선언하지 않는다.
+
+최종 실제 vLLM Default→Ready·입력 활성화·원래 선택 대화/저장 모델명·PP/TG를 확인했다. 기존48개 대화/hash·프로필 내용·프로필 외 config·localStorage는 보존됐고 새 합성 대화 세 파일만 추가됐다. Default28→30·MCP4→6·MLX audio3→4는 저장 revision 변경이다. Qwen의 원래 MLX97 적용도 복원했고 이 복원 선택으로 MLX recent만93→97로 갱신됐으므로 config 전체 불변으로 주장하지 않는다. 선택 복원 중 저장 실행 설정은 일시 변경됐지만 현재 실행 중인 vLLM process는 유지했다. API off·active requests0·생성 중 아님·composer 빈 값·UI 오류/overlay 없음·이전 engine/hold 소유 group 종료를 확인했다. `goal-native-audio-orbit151-final-preserved-20261013.json/png`, `goal-mcp-orbit151-final-preserved-results.json`이 근거다. 앞의 final-preservation/final-all-preservation에는 복원 미완료와 비교 실패가 기록돼 있으며 최종 통과 근거로 대체하지 않는다. 저장 응답 표시를 새 Default 추론 샘플로 계산하지 않는다.
