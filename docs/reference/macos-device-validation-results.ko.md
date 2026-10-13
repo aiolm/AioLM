@@ -39,9 +39,10 @@
 - 88절은 실제 사람의 MCP OS No·승인 후 호출 중 취소·모델 후속 답변과 동일 고정 모델의 vLLM/MLX 도구 결과 내용 비교를 기록한다. 승인·전달·취소는 통과했으나 결과 내용은 실패했다. OS 알림 권한의 실제 확인·일시 변경·원상 복원도 구분한다.
 - 89–90절은 실제 사람의 트레이 Show·Dock 클릭 복원·트레이 Quit과 배포 앱 입력 제한을, 91절은 이후 배포 앱의 실제 알림 제출·사람의 제목/본문 수신 확인·OS 설정 복원·정상 종료와 개발 앱 재실행을 기록한다. 이전 입력 제한의 원인은 확정하지 않았다.
 - 92절은 실제 native clipboard data provider·읽기 실패·파일 promise의 Cmd+V 처리, Chat Copy·변경 감지·원본 복원과 최종 홈/실행 보존을 기록한다. 현재 기기의 데스크톱 하위 검증을 보완했으나 별도 환경 여정이 남아 M11은 unrun이며 전체 검증은 통과하지 않았다.
+- 93–94절은 Retry 초안·Benchmark 모델명·Python bundle 취소/알림·긴 제목/최소 창 수정과 실제 재검증이다. 95절은 새로 재현한 MLX Benchmark processor 초기화 결함 수정 `9fde6da`와 동일 고정 Gemma4의 실제 완료를 기록한다. 96절은 로컬 CSV/XLSX 모델명 수정 `24a3dbd`·browser CSV 동작 보존·최종 공통 검사이며, 97절은 해당 소스의 최종 DMG·production GUI·설정 복구와 원래 모델/데이터 보존 결과다.
 - 작업용 도구: Node 22.23.2, npm 12.0.2, Rust 1.98.0/rustfmt/clippy, CMake 4.4.4, CPython 3.12.15 arm64. 기존 ffmpeg 8.1.2를 사용했다.
 - 도구·캐시·설정은 작업용 경로에 설치했다. 기존 시스템 설정과 lockfile을 보존했다. 자동 검사·CLI·앱의 HOME과 legacy 경로를 격리했다. 별도 OS 계정의 최초 실행을 대신한 검사는 아니다.
-- 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81·84절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
+- 앱 검사는 `macos-ui-smoke` debug 빌드의 실제 Tauri WKWebView·IPC·W3C WebDriver 및 CUA 네이티브 조작이다. 61·63·68·72·80·81·84·97절에서는 각 검증 DMG와 바이트가 같은 production GUI도 개발 서버 없이 직접 실행했다. 자연스러운 Finder 설치 실행은 unrun이다.
 - raw 로그·모델·번들·캡처·검사 도구는 Git 제외 대상 `tmp/macos-acceptance/`에 보관했다. 아래 근거 파일은 이 디렉터리 기준이며 `checks.jsonl`에 명령·종료 코드·소요 시간을 기록했다. 자체 검사에서 반환한 보존 홈은 `retained-homes/`에 복사했다.
 - 이 문서와 패키지에는 개인 경로·계정/기기 식별자·생성 런타임 ID·API 키를 넣지 않았다. hosted runner 조건을 위조하지 않았고 공개 benchmark 서비스 업로드도 수행하지 않았다.
 
@@ -91,6 +92,12 @@
 | `a7ce853` | native MCP 실행/OS 승인 대기를 첫 토큰 대기로 표시하고 저장된 tool_calls 응답을 완료로 표시했다. 실행 대기·후속 모델 요청·재로드한 미완료 요청을 구분한다. | 수정 전 회귀4개 fail/후 pass·관련54개·공통 UI1822개/typecheck/lint 통과. 77절 당시 새 native 재검증은 blocked였고 79절에서 실제 실행 대기·정상 재실행 뒤 미완료 이력을 확인했다. |
 | `20f1ff4` | vLLM의 실제 KV cache 용량 부족을 모델 경로/파일 무결성 문제로 안내했다. 구체적인 할당 실패를 wrapper·model/traceback 표현보다 먼저 분류한다. | 합성 회귀 수정 전 fail/후 pass·공통 UI1822개/typecheck/lint pass. 실제 KV cache 실패에서 메모리 안내·원인 로그·소유 프로세스 정리를 확인했다. 80절 참조. |
 | `6e27196` | 오류 알림 Dismiss가 UI store의 runtime error를 지우고 다음 poll에서 같은 배너를 재표시했다. shell은 알림 확인 여부를 유지하고 store는 원인 진단을 보존한다. | 수정 전 두 회귀 fail/후43개 pass·공통 UI1824개/typecheck/lint/build pass. 실제 debug 및 해당 DMG production에서 배너 닫기·진단 보존·정상 설정 복원 확인. 82–84절 참조. |
+| `297f5dc` | 이전 실패 메시지를 Retry하면 새 미전송 초안이 지워졌다. 재전송 대상과 현재 composer의 소유권을 분리해 새 텍스트·첨부·문서를 유지한다. | 수정 전 회귀/실제400에서 초안 소실, 수정 후 회귀55개·같은 native400에서 새 초안 보존. 93절 참조. |
+| `aa7b140` | Benchmark 대상·이력·결과·삭제 안내가 외부 snapshot을 revision으로만 표시했다. 기존 제한된 metadata 표시 이름을 공유한다. | 회귀49개·실제 기존/신규 이력·결과·삭제 확인창의 모델명. record identity·provenance 보존. 93–95절 참조. |
+| `7fc95e4` | bundle 전송이 다운로드 완료 알림을 보내고 local/global 취소의 실행 identity와 busy가 일치하지 않았다. 명시적 취소·진행·재시도 오류를 구분한다. | 회귀42개·실제 Save/Open Cancel·처리 중 Cancel과 출력/staging 정리. 환경 설치 알림 유지. 93–94절 참조. |
+| `7dc1917` | 매우 긴 제목의 렌더링 폭이 커지고 최소 창의 설정 버튼이 제목 공간을 차지했다. 표시 preview를 grapheme 경계로 제한하고 좁은 창의 named icon을 적용한다. | 제목 회귀61개·설정 회귀56개·실제45,088-unit 제목과360×488 화면/포커스 복원. 저장·편집·검색의 전체 제목 보존. 93절 참조. |
+| `9fde6da` | MLX Benchmark가 모델 loader의 processor 등록을 건너뛰어 설치된 Gemma4Processor를 해결하지 못했다. 가중치를 읽지 않는 일반 loader 초기화를 processor 앞에 적용한다. | Python contract5개·관련 Rust4개/전체 Rust·실제 서버와 token ID 일치·같은 Gemma4 Benchmark complete/PP1,024·TG16. 95절 참조. |
+| `24a3dbd` | 로컬 CSV/XLSX의 Model과 제안 파일명이 화면과 달리 revision이었다. export의 표시 projection에 공통 이름을 적용하고 browser CSV의 동기 download 경로를 유지한다. | export 회귀18개·최종 UI1865개·실제 CSV/XLSX 이름/수치·저장 이력 원본 보존. 96–97절 참조. |
 
 gateway 요청 형식·benchmark 계약·엔진/프로필 정책을 유지했다. 재현 결함 해결을 위해 프로젝트 네이티브 파일 IPC 두 개와 선택적 채팅 기능 정보를 추가했다. 채팅 기능 정보가 없는 기존 기록은 기존 동작을 유지한다. 플랫폼 공통 계약을 회귀 검사했으며, 이번에 Windows/Linux 실기기를 새로 검증한 것으로 해석하지 않는다. 해시 무시·readiness 제거·실패 skip·근거 없는 timeout 확대로 통과시키지 않았다.
 
@@ -1954,3 +1961,41 @@ raw는 `goal-native-audio-orbit155-{export-picker-cancel,import-picker-cancel,po
 native raw는 `goal-native-audio-orbit155-loader-{history-name,benchmark-started,benchmark-completed,default-restoring,default-starting,default-ready}-20261013.json/png`, `goal-mlx-benchmark-orbit155-native-{records,cleanup,export}.json`이다. default-restoring 관찰은 실제 stopped, default-starting은 starting, default-ready만 running이므로 각각의 실제 상태로 구분한다. 새 GUI/driver는 이전 실행과 다른 process이며 source-matched binary hash·strict debug 서명은 `goal-mlx-benchmark-orbit155-debug-prepared.json`에 보관했다. 이 fresh 앱의 Benchmark/복원 동안 passive error/unhandledrejection observer를 설치했고 errors0·overlay 없음이다. 앞선 observer 미설치 구간의 빈 errors 배열을 전체 console 검증으로 확대하지 않는다.
 
 `9fde6da`의 표준 `npm run package:tauri`234.12s·패키지 검사8.28s가 exit0다. 새 GUI/CLI arm64·0.3.1·빌드와 hash 일치·strict ad-hoc·5개 파일·개인 경로/fixture 제외·새 CLI 초기값·read-only detach를 다시 확인했다. `goal-native-runtime-lock-package-orbit155-9fde6da-results.json`·`goal-package-orbit155-9fde6da/`와 대응 로그가 원본이다. 공증·자연스러운 Finder 설치/실행·별도 계정/Keychain·실제 upgrade 결과로 확대하지 않는다. export 표시 개선이 추가되면 그 이후 소스/검사/패키지를 별도로 기록한다.
+
+## 96. CSV/XLSX 모델명 일관성과 최종 공통 검사
+
+95절의 실제 export는 저장과 수치가 정상이었으나 Model 열과 제안 파일명에는 snapshot revision이 남았다. `24a3dbd`는 기존 metadata의 대상 제한·동시 조회 재사용·fallback을 공통 resolver로 추출하고 로컬 CSV/XLSX의 표시 projection에만 적용한다. 저장된 benchmark record·model path·provenance·공개 공유 요청은 원래 값을 유지하며 metadata 오류는 기존 fallback 이름으로 export할 수 있다. Markdown Copy의 계약도 유지한다.
+
+| 수정 전/후 검증 | 판정·근거 |
+| --- | --- |
+| 모델명 export 회귀 | 수정 전 fail — 7 failures/10 pass·1.78s. 수정 후 관련6 files/81 tests·3.40s, 보완한 export18 tests·1.29s pass. native CSV/XLSX 이름·동시 조회·실패 fallback·원본 record 불변을 확인했다. |
+| browser CSV timing | 최초 전체 검사 fail — 137.36s·기존2 failures/1863 pass. metadata를 기다리는 unconditional await가 browser의 CSV download 시작을 늦췄다. 기존 화면 검사를 완화하지 않고 native 여부를 한 번 확인해 browser CSV는 첫 await 전에 기존 download를 시작하게 수정했다. 강화한2개 anchor 회귀도 수정 전 fail/1.00s였으며 수정 후 관련7 files/109 tests·4.57s가 pass다. browser XLSX의 기존 비동기 workbook 생성은 유지한다. |
+| 최종 `npm run typecheck` / `npm run lint` | pass — 11.74s / 6.59s. |
+| 최종 `npm run test:unit` | pass — 135.18s. 기존 contracts/direct/scripts와 UI182 files/1865 tests, coverage statements80.98%/branches75.98%/functions79.62%/lines85.03%. 이전 실패 로그를 삭제하거나 skip으로 전환하지 않았다. |
+| 실제 native CSV/XLSX | pass — 같은 고정 Gemma4 완료 이력을 선택해 macOS Save로 새 작업용 파일을 저장했다. 제안 filename과 Model은 `gemma-4-e2b-it-4bit`, CSV616 bytes/XLSX7,353 bytes이며 XLSX ZIP/Results sheet와 input1,024/output16을 확인했다. CSV 수치는 canonical 저장 row와 정확히 일치하고 기존 두 이력 record의 JSON은 변경되지 않았다. 최종 browser 경로 수정 후에도 실제 native XLSX의 이름을 다시 확인하고 Save를 Cancel해 오류 없이 끝냈다. |
+
+이전 live 결과 export와 이후 이력 export를 raw 문자열로 비교한 첫 진단은 fail이다. Model 외에 Measured at가14:24:31→14:24:34, TG가37.026001642947364→37.02600164294736으로 달랐다. live 시작 시각과 canonical 이력 완료 시각·직렬화 마지막 자리의 차이를 별도 원본에 보존하고, 새 export는 실제 canonical 저장 row에 대해 정확히 비교했다. export 변경이 수치를 재계산하거나 원래 저장 이력을 수정한 근거로 해석하지 않는다.
+
+회귀/공통 로그는 `logs/goal-benchmark-export-name-orbit155-{before,related-after,final-export-regression}-20261013.log`, `logs/goal-benchmark-export-browser-orbit155-{before,related-after}-20261013.log`, `logs/goal-benchmark-export-orbit155-{final-unit,final2-typecheck,final2-lint,final2-unit}-20261013.log`와 `checks.jsonl`이다. native raw는 `goal-benchmark-export-name-orbit155-{native-results,history-preserved,live-history-differences}.json`, `goal-native-audio-orbit155-export-final-cancel-20261013.json/png`, 새 `goal-orbit155-gemma-benchmark-named.csv/xlsx`다. Rust/Python은95절 이후 변경하지 않았으며 해당 전체 검사의 소스/결과는95절을 유지한다. 플랫폼 공통 browser 계약은 자동 검증했고 Windows/Linux 실기기를 새로 실행했다고 주장하지 않는다.
+
+## 97. 최종 패키지·production 화면·설정 복구와 실행 보존
+
+최종 제품 소스는 `24a3dbd68b098f9286de2757d1572aee677843c0`이다. 표준 `npm run package:tauri`214.23s·새 image 검사7.21s가 exit0다. GUI/CLI arm64·0.3.1·빌드와 같은 bytes·5개 파일·strict ad-hoc 서명, UTF-8/UTF-16 개인 경로/fixture 제외, 새 CLI 홈 초기값과 read-only image detach를 확인했다. 공증은 수행하지 않았다.
+
+| 최종 패키지 | SHA-256·근거 |
+| --- | --- |
+| `AioLM_0.3.1_aarch64.dmg` | 16,815,894 bytes · `1ae37de45d407c4f460f2cd2f951a8b2840c9ed3adc32d1b1b7e9ce23b3de8e9` |
+| GUI `aiolm` | `826d23bbb7da63cd87127286bbfe69a325485e1d9dc1218471aa74fc8b28661d` |
+| CLI `aiolm-cli` | `6fba7114783f4464d12c051fc5d40792942afcdb7cff950831cd781a36ffb7ae` |
+
+manifest는 `goal-native-runtime-lock-package-orbit155-24a3dbd-results.json`, 원본은 `goal-package-orbit155-24a3dbd/AioLM_0.3.1_aarch64.dmg`, 로그는 `logs/goal-benchmark-export-orbit155-{final-arm64-package,package-inspect-24a3dbd}-20261013.log`다. 94–95절의 중간 소스 image도 유지하며 최종 소스의 검사로 대체하지 않는다.
+
+같은 bytes의 production 앱을 기존 격리 production 홈에서 Vite 없이 직접 실행했다. 준비2.97s·실행/정상 종료133.95s, exit0다. 실제 CUA에서 `tauri://localhost`의 한국어 Chat→Settings/General→Benchmark→원래 Chat을 클릭했다. 0.3.1/ko/comfortable, Qwen3-VL-2B-Instruct-4bit와 기존 runtime/profile 조건이 표시됐다. 모델 미실행의 비활성 composer와 저장 응답 PP54/TG15는 확인했으나 새 추론·Run benchmark·설정 변경·공개 업로드는 실행하지 않았다. normal Quit 뒤 기존 config와 두 대화 파일의 hash/bytes/mode가 정확히 유지되고 소유 짧은 임시 경로가 정리됐다. screenshot은 CUA tool trace에 있으며 로컬 파일로 저장한 캡처로 주장하지 않는다. `goal-production-source24a3dbd-orbit155-{home-before,prepared,launch,ui-observed,exit,cleanup}.json`과 대응 로그가 근거다.
+
+최종 보존 비교에서 원래51개·현재53개 대화와 config의 나머지 영역은 보존됐지만, 모델이 비어 있는 MLX applied binding 한 값이 `Mac verification mlx-vlm`에서 검증용 `Native shared models ORBIT-97`로 바뀐 것을 발견했다. 이를 단순 revision 차이나 전체 설정 불변으로 처리하지 않았다. 실제 normal Quit 뒤 소유 GUI/launcher/engine/Vite 종료와 관련 port 폐쇄, 최종 snapshot의 config bytes·전체53개 파일 hash·active request0/API off를 확인한 상태에서 해당 JSON 값 하나만 원래 binding으로 offline 복구했다. 다른 binding·entry·revision·파일 mode·대화는 그대로 보존했다. 최초 살아 있는 process/오래된 snapshot guard 실패도 raw에 남겼으며 실제 UI 조작에 의한 복원으로 주장하지 않는다. 적용 결과는 `orbit155-preservation-draft-empty-mlx-restored-20261013.json`의 `applied=true`·`postApplyDataVerified=true`·unexpected0다.
+
+복구한 같은 홈을 새 detached 개발 launcher로 실행했다. frontend는 `24a3dbd`, native core는 Rust 변경이 동일한 `9fde6da` build다. 실제 CUA에서 기존 Default/외부 vllm-metal0.30.0/vLLM0.30.0+cpu·context4096을 저장/시작하고, preparing→starting 후 `model loaded`와 backend `running`을 확인했다. 원래 고정 Qwen revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`이며 원래 선택 대화의 저장 모델명/PP·TG를 유지한다. API off·named active request0·composer 빈 값·생성 중 아님·overlay 없음이다. 최종 Ready 관찰 구간에서 명시적으로 등록한 passive error/unhandledrejection observer의 오류0을 확인하고 해당 listener를 제거했다. 이 구간 이전의 빈 errors fallback을 복원 명령 전체의 console 검증으로 확대하지 않는다. 설치/정리 원본은 `goal-native-audio-orbit155-finish-observer-{installed,cleanup}-20261013.json`이다. 저장 응답 표시를 새 추론으로 계산하지 않는다.
+
+최종 read-only 보존 검사 `orbit155-preservation-draft-final-observed-20261013.json`은 전체 required pass/예상 밖 차이0이다. 원래51개 대화 hash와 현재53개 파일의 snapshot/disk hash, config의 profiles 외 영역·profile entry 순서/내용·provider recent/default·원래 default identity·applied binding keys/내용·빈 MLX binding·localStorage·선택 대화·UI preferences/theme, 별도 production config/두 대화의 hash를 확인했다. 이번 명시적 profile 저장/실행에 따른 library revision143→152, Default31→34·검증용 MLX 프로필 두 개의 revision4→5/3→4는 변경으로 기록한다. runtime process/session endpoint·log bytes의 동일성을 주장하지 않는다. 마지막 관찰 시 개발 GUI와 모델 process는 살아 있고 앱을 실행 상태로 남겼다. raw는 `goal-native-audio-orbit155-final-ready-observed-20261013.json/png`, `goal-window-orbit155-final-launch-owner.json`과 최종 보존 JSON이다. 이전 `final-ready`/`preservation-draft-final` 관찰도 원본으로 유지한다.
+
+M01–M12 전체 판정은 **7 pass / 4 fail / 1 unrun**이다. M03/M04/M07의 실제 upstream URI500·미디어 내용/모델 snapshot 실패와 M08의 실제 도구 결과 대신 입력 인자를 반복하는 모델 내용 실패는 남아 있다. 현재 설치된 ffmpeg와 앱 PATH 복구 때문에 실제 부재 환경은 M07 하위 blocked다. M11의 별도 계정 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치/launchd·다운로드 quarantine·Intel/구형 macOS는 unrun이며 현재 기기 결과로 추정하지 않는다. 개인 엔진 registry/manifest는 [미구현 장기 설계](pluggable-inference-runtimes.ko.md)로 유지한다. 이번 여섯 제품 수정·공통 검사·실제 재검증·최종 패키지를 완료했으며 전체 기기 검증 통과는 선언하지 않는다. 원격 push·공개 서비스 upload는 수행하지 않았다.
