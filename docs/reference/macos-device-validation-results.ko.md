@@ -2095,3 +2095,74 @@ SDK의 실제 upstream env 인증도 별도 소유 실행에서 검사했다. `/
 | native/SDK | pass | native source·SDK 변경 없이 §98의 전체 타깃/feature·fmt/clippy·production feature·Python 검사를 유지. 새 native debug 빌드 `adapter-ui-unlocked-build`와 실제 외부 CPU 및 기존 vllm-metal 실행 확인. Rust 전체 검사를 이번 frontend 수정 후 다시 실행한 것으로 기록하지 않음. |
 
 원본은 `tmp/macos-acceptance/adapter-ui-*`, `goal-native-audio-adapter-ui-*`, `logs/adapter-ui-*`, `checks.jsonl`에 남겼다. 로그·credential·개인 경로·capture는 커밋에 포함하지 않는다. 새 패키지 설치·별도 계정·Intel/구형 macOS는 unrun이다. M01–M12의 기존 전체 판정 **7 pass / 4 fail / 1 unrun**은 유지하며 전체 기기 검증 통과를 선언하지 않는다. Windows·Linux는 [어댑터 인계](runtime-adapter-handoff.ko.md)의 기준 소스와 W/L01–09로 작업을 이어간다.
+
+## 100. 남은 4개 fail의 원인 수정과 실제 앱 재검증
+
+2026-10-14(KST), 이어서 검증한 기준 소스는 `250b834`다. 복구 도구/호환 runtime/native probe 수정은 `64791d2d940fb5fc538257ceec9df888286832a4`, 대화의 자동 system 안내 선택은 `158f966ce6b6d47713f07c841428fdb73752be3f`다. 실제 native core는 기준 소스에 위 native 변경을 적용해 빌드한 `macos-ui-smoke` debug이며 frontend도 위 대화 변경을 반영했다. 자동 검사·실제 앱 조작은 커밋 전 같은 코드 내용으로 수행했다. 새 DMG 설치 결과로 확대하지 않는다.
+
+기기는 macOS26.6.2 / Apple M2 /16GB다. Node22.23.2/npm12.0.2, Rust1.98.0, native arm64 CPython3.12.15를 작업용 경로에서 사용했다. 원래 앱을 정상 Quit한 뒤 새 홈·legacy/WebKit 경로를 격리한 실제 WKWebView에서 파일 선택·등록·프로필 저장·실행·입력·Stop/Retry·정상 Quit/재시작을 CUA로 조작했다. WebDriver는 읽기 전용 IPC/DOM/캡처와 요청을 변경하지 않는 수동 오류/전송 관찰에만 사용했다. 모델은 하나씩 실행했다. 원본 모델·환경·관리형 설치 기본 버전은 변경하지 않았다.
+
+### 검증 환경과 고정 모델
+
+| 엔진/모델 | 고정 정보 |
+| --- | --- |
+| vllm-metal | plugin0.30.0, core `0.30.0+cpu.aiolm.media1`. 별도 venv에서 원래 175개 의존성 버전을 유지하고 core만 별도 wheel로 교체. pinned MLX/MLX-LM/native paged ops·MetalPlatform 검사 유지. |
+| mlx-vlm | 최종 `0.7.6+aiolm.media4`, 별도 venv에서 원래 57개 패키지의 provider 외 버전 유지. 실제 최종 native 등록/load·오류/음성 검사를 수행. 중간 media1/2/3 결과는 해당 버전 범위로 구분. |
+| llama.cpp | 기존 공개 CPU build b11460, version0.6.0-dev(11460), source78651c410. 검증된 CPU ZIP을 실제 앱으로 import. 이번 SmolVLM 재검증은 CPU/ngl0이며 Metal 성공으로 계산하지 않음. |
+| Qwen3-VL | `mlx-community/Qwen3-VL-2B-Instruct-4bit`, revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`, weight1782040921 bytes. |
+| Gemma3n | `mlx-community/gemma-3n-E2B-it-4bit`, revision `66e7276cfc589073b4f92ebed58c05301f990222`, weight4462976625 bytes. 원본을 보존한 별도 derived snapshot. |
+| Gemma4 | `mlx-community/gemma-4-E2B-it-4bit`, revision `238767527555cb75a05732a84dff5d6ba0dd6809`, weight3550670554 bytes. 원래 weights/processor/template를 유지. |
+| SmolVLM | `ggml-org/SmolVLM-256M-Instruct-GGUF`, revision `b9e4379657e1450d04d02eec8e345667265b0a00`, Q8_0 weight175054528 bytes·f16 projector190031616 bytes. |
+
+새 weights 다운로드는 하지 않았다. 공식 canonical template와 upstream 소스는 원인 비교용으로 별도 조회/보관했고 원래 snapshot에 적용하지 않았다. 합성 PNG는 왼쪽 빨간 세로 직사각형/오른쪽 파란 원이며 WAV는 “The red square is on the left. The blue circle is on the right.”다. 서로 다른 도형 내용을 섞어 정답을 판정하지 않는다. 원본 source/model/index/wheel과 원래 vLLM connector의 마지막 52개 파일 무결성 검사는 `residual100-final-preservation.json`에 보존했다.
+
+vLLM 호환 wheel SHA-256은 `306bbf9faf6db3dcaa6161d13a1d795ca33dee39aaff62ef196d8a52439c12e1`, 최종 MLX wheel은 `03e7379294c9c7268cec27cc9df055f19019ce8cb550c0e77412cd89bd8f3e21`다. 입력 wheel의 hash·버전·알려진 source 문맥·RECORD·라이선스/native 속성을 확인하는 [복구 도구와 사용법](macos-validation-recovery.ko.md)을 추가했다. 별도 env 설치는 offline wheel cache를 사용했으며 dependency 검사도 통과했다.
+
+### 해결한 재현 문제
+
+| 문제 | 판정 | 원인·수정·실제 근거 |
+| --- | --- | --- |
+| M03 file URI가500 | pass | upstream connector가 allowlist 거부를 일반 RuntimeError/ValueError로 던졌다. 별도 core wheel에서 VLLMValidationError로 분류해400 반환. allowlist 유지. `residual100-r2-vllm-file-uri-authenticated.json`. 처음 harness의 인증 없는401은 실패 로그로 남겼으며 실제 오류 검증으로 계산하지 않음. |
+| 검증된 local Metal core 등록 거부 | pass | 정확한 local version·입력 wheel provenance·설치 connector hash를 Python/Rust가 새 probe로 확인하게 수정. native CPython/macOS/MLX/MetalPlatform/native extension 조건과 imported version 검사 유지. 임의 suffix·다른 hash는 계속 거부. 실제 native 등록/Ready는 `residual100-r2-ui-vllm-ready`. |
+| M04 MLX file URI500 | pass | 별도 wheel의 normalizer가 file media를400으로 명시적으로 거부. 최종 native Gemma4 엔진에서 `residual100-r3-mlx-media4-negative.json` 확인. 파일 접근 권한을 넓히지 않음. |
+| M04 Gemma3n 누락 shard index | pass | 원본 인덱스는 존재하지 않는3 shards/1556 BF16 names를 가리켰으나 실제 파일은2302 quantized tensors였다. 전체 weight SHA-256·dtype/shape/byte 범위로 새 index를 파생 폴더에 생성. 원본 index/weights 보존. 최종 도구 산출물로 실제 native Ready·음성 추론 확인. 모델 내용의 정확성은 아래 fail로 별도 유지. |
+| M07 오디오 이력 배치 | pass | 설치된 normalizer/template가 모든 audio marker를 마지막 user에 배치했다. 명시적 audio를 원래 user에 배치하고 marker 없는 side-channel 호환 fallback 유지. 실제 설치된 checker가 수정 전 `[0,0,2]`, 최종 수정 후 `[1,0,1]`. `residual100-mlx-media4-audio-ownership`. |
+| M07 invalid WAV500·in-flight 누수 | pass | stream preflight decoder 오류가 시작한 metric을 정리하지 못했다. 별도 최종 wheel이 오류/취소를 한 번 기록·정리하고 알려진 audio format ValueError를400으로 반환. 실제 동일 bad bytes: media1은500/in-flight1, media4는400/in-flight0/failure+1. `residual100-mlx-preflight-before.json`, `residual100-r3-mlx-media4-negative.json`. protected-budget 초과는 request 시작 전400/metric delta0이었다. 별도 preflight overflow의 중복 기록 방지는 회귀 검사로 확인했으며 이 live path를 실행했다고 주장하지 않음. |
+| M07 자동 system 안내 선택 부재 | pass | Gemma4 직접 추론도 긴 동일 질문에 generic system이 있으면 음성을 다시 요구했다. 대화별 opt-out을 추가하되 명시적 대화·프로필·개인화 지침과 기존 기본 동작 유지. 실제 짧은 전사와 첫 녹음을 사용하는 후속 전사가 둘 다 정확. `residual100-r3-ui-no-default-short-audio-history`. 정상 Quit/재실행 뒤 checkbox off·10개 대화/기록/metrics 보존은 `residual100-r4-ui-checkbox-off-reloaded`. |
+
+Gemma3n weight SHA-256은 `8d5af4ae73617d12496301ebad11226f9056c4b0d51dbb9ef9409234fb87d6fa`다. 원본 index `3ed4d02b8c245c61ba2f542e48cc40ed98398f7098457d63d3d7d0fda8d09c0c`를 별도로 보관하고 derived index `e31d30fceae1bdf9da3bcd7fa72568b53fcb1306464d86a9ab012e26ad6f6946`를 생성했다. repaired snapshot을 원본 Hub/관리형 다운로드로 가장하지 않는다. 무결성·readiness 우회, 실패 skip·timeout 확대는 하지 않았다.
+
+### 실제 내용·lifecycle 재검증과 남은 실패
+
+| 흐름 | 판정 | 근거·남은 범위 |
+| --- | --- | --- |
+| vLLM 이미지 내용·usage | pass | 실제 PNG 첨부/응답에서 빨간 직사각형 왼쪽·파란 원 오른쪽, PP115/TG85/cache0. `residual100-r2-ui-vllm-image-result`. |
+| 실제 취소·Retry·정상 종료/재시작 | pass | max256 두 번은 자연 종료가 먼저 완료돼 취소 성공으로 계산하지 않았다. 별도 프로필의 출력2048로 재시작해 내용 수신 후 Stop, 부분 응답/Retry·active requests0 확인. Retry는 실제 완료/length2048·새 metrics였으며 숫자1000개 내용 달성으로 계산하지 않음. `residual100-r2-ui-vllm-cancelled`, `vllm-retry-complete`. 정상 Quit 후 소유3 PID/port 종료, 같은 홈 재시작 후5개 대화 보존. SmolVLM 검증 종료 후에도 소유 PID/port 정리 통과. |
+| Gemma4 긴 오디오 첫 답변 | pass | opt-out에서 동일 WAV의 정확한 단수 전사/도형 내용을 답함. PP123/TG256으로 output limit의 부분 응답. 전체 긴 설명 완료로 계산하지 않음. 원래 automatic system이 있는 최종 media4 답변은 계속 reattach를 요구해 fail. |
+| Gemma4 긴 부분 답변 뒤 후속 전사 | fail | opt-out에서도 PP405/TG22로 다시 audio를 요구. 수동 wire 관찰에서 첫/후속 roles `[user]`/`[user,assistant,user]`, 동일 materialized WAV hash를 확인. 짧은 완결 답변 뒤의 후속 전사는 PP137/TG17로 정확했으나 긴 대화의 실패를 대체하지 않음. `residual100-no-default-wire-summary.json`, `residual100-r3-ui-passive-chat-remove.json`, `residual100-r3-ui-no-default-short-audio-history`. |
+| Gemma3n 전사 내용 | fail | 구조 복구/Ready와 별개로 singular square를 plural squares로 답하는 내용 오류가 남음. 모델 값·processor를 추측 수정하지 않음. |
+| SmolVLM 이미지 내용 | fail | 정확한 고정 Q8_0/f16 projector, CPU/ngl0/context4096/temperature0, automatic system off로 실제 PNG 재검증. “The circle is blue.”만 답해 rectangle/position을 누락. PP156/TG6/cache0. `residual100-r3-ui-smol-image-no-default`. 해당 모델의 기존 native 내용 실패를 그대로 유지. |
+| Gemma4 실제 MCP 승인→도구→최종 답변 | pass | 별도 홈의 실제 fixture에서 입력 `RESIDUAL-100 input`과 다른 고정 반환 `synthetic result` 사용. 앱 Approve once→Mac Yes를 사용자가 클릭한 뒤 최종 답변도 `synthetic result`, PP167/TG3. `residual100-ui-gemma4-mcp-result`, `residual100-mcp-events.jsonl`. 이 호출은 MLX media1에서 수행했으며 최종 media4의 새 MCP 호출로 재표기하지 않음. |
+| 고정 Qwen3 MCP 후속 내용 | fail | 원래 runtime/model로 복원한 뒤 같은 completed tool history를 인증된 직접 추론으로 재검증. JSON envelope와 순수 text 모두 HTTP200이지만 반환값 대신 입력 인자 반복. temperature0/tool_choice none이며 도구를 새로 실행한 검사가 아님. `residual100-original-direct.json`. 앱 결과 serialization을 근거 없이 변경하지 않음. |
+| 실제 ffmpeg 부재 | blocked | 현재 시스템 설치/PATH 복구 조건은 기존 그대로. 시스템 executable을 숨기거나 제품 탐색을 제거하지 않음. |
+| Windows/Linux·Strata·새 배포 패키지 | unrun | 해당 실제 기기/패키지 결과 없음. Mac 전용 wheel·다른 모델의 답변을 해당 OS/모델의 통과로 계산하지 않음. |
+
+[Google 공식 Gemma4 prompt 형식](https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4)은 system 역할을 지원한다. 공식 canonical template도 고정 source revision `3e22461f65e89153144f8adb70e3b8c2cc9845a7`에서 확인했다. 같은 rendered prompt/동일 실패를 재현했고 system 뒤 공백을 바꿔도 해결되지 않았다. `residual100-gemma4-direct-system-templates.json`, `residual100-gemma4-canonical-probe.json`. 따라서 template 결함이나 엔진 전체의 system 미지원으로 단정하지 않는다.
+
+위 pass는 명시된 **별도 호환 환경/옵션/모델**의 하위 검사 결과다. 기존 stock environment의 URI500, 고정 모델의 내용 실패를 다른 환경/모델의 성공으로 삭제하지 않는다. M03/M04/M07/M08의 원인 조사·제품 수정·실제 앱 재검증을 수행했으나 **4개 모두 pass는 아니다**. 기존 기준의 M01–M12 전체 **7 pass /4 fail /1 unrun**과 역사적 실패를 유지하며 전체 기기 검증 통과를 선언하지 않는다. 원본 weights 업데이트 없이 모델 내용 오답을 제품 코드로 강제로 통과시키지 않는다.
+
+### 최종 공통 검사·원래 환경 복원
+
+| 검사 | 판정 | 근거 |
+| --- | --- | --- |
+| 전체 frontend·contracts/direct/scripts/coverage | pass | `residual100-final-js-suite`,175.41s. frontend183 files/1908 tests, line85.17%. 기존 jsdom canvas/pseudo-style 진단은 남아 있으나 실패0. |
+| 타입·lint·production frontend | pass | `residual100-final-typecheck`26.37s, `residual100-final-lint`20.13s, `residual100-final-build`20.45s. 기존500KiB chunk 경고 유지. |
+| Rust 전체 타깃/feature | pass | `residual100-native-all-targets`,45.72s. lib954 pass/4 ignored, 전체982 pass/13 ignored/0 fail. CLI/합성 child/HTTP/SSE 포함. 기존 명시적 live opt-in ignored를 실제 수행으로 계산하지 않음. |
+| rustfmt·clippy | pass | `residual100-final-fmt`, `residual100-native-clippy`,5.50s, all-targets/all-features `-D warnings`. |
+| Python 도구·native probe | pass | stdlib 복구5/호환5/probe6 tests. 최종 probe 재실행은 `residual100-final-probe-tests`. `residual100-final-reindex-preservation`, `residual100-final-python-tests`와 probe 로그. 원본·기존 출력·취소·발행 경합·라이선스 보존, overflow의 실패 기록 한 번, 변조 local runtime 거부 포함. |
+| 현재 native core/CLI 빌드 | pass | `residual100-media-debug-build`13.94s, `residual100-final-cli-build`32.92s, CLI no-default-features. 둘 다 원래 bundle을 보존한 새 사본에 적용하고 strict ad-hoc signature 확인. |
+| 현재 CLI 합성 smoke | pass | `residual100-final-cli-smoke`,2.04s. 새 임시 홈의 초기화·옵션·선택 rollback·진단·소유 snapshot 삭제를 확인. 실제 모델 추론 검사가 아님. |
+| 실제 화면/오류 관찰 | pass | 최종 옵션의 실제 클릭/응답/정상 재시작, `residual100-r3-ui-observer-r3d-remove`와 `residual100-r4-ui-observer-r4-remove`의 errors/warnings/events0. 각각 설치~제거 기간에 한정. 원래 환경 observer의 빈 fallback을 이 성공 근거로 사용하지 않음. |
+| 원래 환경 보존 | pass | `residual100-final-preservation.json`. 작업 전 전체53개 대화 hash·localStorage 정확히 동일, 원래 vllm-metal0.30.0/default Qwen3 model/runtime 선택·옵션 보존. 실제 Save & start에 따른 library revision160→162/Default36→37 외 예상 밖 설정 차이0. Ready/active requests0/API off, 직접 산술 응답 `5`. 기존 stock env를 호환 env로 자동 교체하지 않음. |
+
+원래 앱·원래 모델은 실행 상태로 남겼다. `residual100-final-source-proof.json`은 최종 제품 source diff 없음과 검증 앱/복원 앱의 unsigned native 입력 일치를 확인한다. 마지막 native 캡처는 `goal-native-audio-residual100-original-final.json/png`다. 정상 종료한 검증 앱의 모델/포트와 staging은 정리했고 원본 모델/환경/번들/도구 로그는 보존했다. 개인 경로·credential·capture·원본 로그는 `tmp/macos-acceptance/`에 두고 커밋하지 않는다. [Windows/Linux 인계](runtime-adapter-handoff.ko.md)에 새 source·회귀 명령·옵션 저장/재로드·잘못된 media/오디오 이력 검사와 모델별 남은 실패를 반영했다. 별도 계정 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 계속 unrun이며 공개 업로드·원격 push는 하지 않았다.

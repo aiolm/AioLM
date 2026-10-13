@@ -1,6 +1,6 @@
 # Linux·Mac 추론 런타임 검증 인계
 
-이번 변경은 llama.cpp, Linux vLLM, Apple Silicon의 vllm-metal 및 mlx-vlm을 같은 앱에서 선택하는 구현입니다. 런타임별 프로필·옵션·모델 호환성, 검색·다운로드·실행, 세션·프로젝트·대화 기록, 도구·문서 검색·벤치마크·검증 경로를 포함합니다. 현재 장비는 Windows이며 Linux와 Mac은 연결되어 있지 않습니다. 해당 추론 엔진의 실제 설치·모델 추론은 **미실행**입니다.
+이번 변경은 llama.cpp, Linux vLLM, Apple Silicon의 vllm-metal 및 mlx-vlm을 같은 앱에서 선택하는 구현입니다. 런타임별 프로필·옵션·모델 호환성, 검색·다운로드·실행, 세션·프로젝트·대화 기록, 도구·문서 검색·벤치마크·검증 경로를 포함합니다. 초기 인계 시 Linux와 Mac 추론은 미실행이었습니다. 이후 Mac Apple Silicon 실제 검증은 [결과 문서](macos-device-validation-results.ko.md)에 기록했습니다. Windows/Linux에서의 후속 실제 검증은 [어댑터 인계](runtime-adapter-handoff.ko.md)를 따르며 Mac 결과로 대체하지 않습니다.
 
 Git으로 기기에서 이어갈 때는 [Linux 작업 문서](linux-device-handoff.ko.md) 또는 [Mac 작업 문서](macos-device-handoff.ko.md)를 사용합니다. 세션의 구현 커밋과 `tmp`의 유효한 조사·검증 내용을 반영한 우선순위, 실제 실행 명령, 결과 제출 기준이 들어 있습니다. 이 문서는 공통 흐름의 요약입니다.
 
@@ -71,3 +71,7 @@ node scripts/smoke-provider-runtime.mjs --engine vllm \
 스크립트는 자체 임시 홈에 번들을 가져옵니다. 다른 홈의 런타임 ID는 그곳에서 찾을 수 없습니다. 생성·임베딩·음성은 각각 `--task chat`, `--task embedding`, `--task transcription`으로 검사합니다. 실제 음성 의미 검증에는 `--audio-file`로 알려진 발화를 지정하세요. 합성 무음 파일은 인식 정확도를 증명하지 않습니다.
 
 공유 JSON은 경로·프로세스 식별자·URL을 제외하지만 콘솔과 보관한 테스트 홈에는 로컬 경로가 있을 수 있습니다. 결과는 `tmp/`에 두고 개인 설정·경로·자격 증명을 커밋하지 마세요. `pass`, `fail`, `unsupported`, `unrun`, `blocked`를 구분하며, 부분 수치 비교나 프로세스 RSS를 전체 검증·GPU 메모리 검증으로 보고하지 않습니다.
+
+## Mac 잔여 실패의 후속 복구
+
+`64791d2`는 새 파생 safetensors index·별도 호환 wheel과 검증된 local vllm-metal core 등록을 제공하고, `158f966`는 지침이 비었을 때의 자동 system 안내를 대화별로 끌 수 있게 합니다. 원래 모델/환경/관리형 기본 버전은 변경하지 않습니다. [복구 도구 사용법](macos-validation-recovery.ko.md)과 [실제 결과 §100](macos-device-validation-results.ko.md#100-남은-4개-fail의-원인-수정과-실제-앱-재검증)을 확인하고 새 환경을 명시적으로 등록/선택하세요. Windows/Linux에서는 해당 OS wheel·loader·모델·취소·이력 재로드를 실제로 검사해야 합니다. 기존 도구 승인과 명시적 system/개인화 지침은 유지합니다.
