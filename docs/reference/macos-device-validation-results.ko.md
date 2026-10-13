@@ -2042,11 +2042,56 @@ SDK의 실제 upstream env 인증도 별도 소유 실행에서 검사했다. `/
 
 | 항목 | 판정 | 이유 및 다음 작업 |
 | --- | --- | --- |
-| 새 native GUI의 등록→profile→모델 실행, 최소 창, 취소/재로드 | blocked | CUA가 Mac 잠금을 보고했고 해제를 요청했으나 현재 해제 확인이 없음. 새 debug 빌드는 완료했고 기존 앱/모델을 종료하거나 교체하지 않았다. 잠금 해제 후 정상 Quit→새 격리 홈에서 실제 조작→원래 홈/모델 복원 필요. DOM/IPC 관찰·UI 단위 검사를 실제 입력 성공으로 계산하지 않음. |
-| 외부 엔진의 실제 MCP/RAG/미디어/멀티 세션/앱 gateway 인증 | unrun | 공통 core/회귀 검사는 통과했으나 새 어댑터에 대한 해당 실제 내용·상호작용은 별도 기기 검사 필요. SDK CPU reference는 text/generate, tools/image/audio/video 미지원. |
+| 새 native GUI의 등록→profile→모델 실행, 최소 창, 취소/재로드 | pass | 당시 잠금으로 blocked였으나 사용자 해제 확인 후 실제 조작·종료·재시작·원래 환경 복원을 수행했다. 후속 제품 수정과 실행 근거는 §99. |
+| 외부 엔진의 앱 gateway 인증/라우팅 | pass | §99의 별도 홈에서 실제 UI로 시작/중지하고 무인증·잘못된 키 401, 정상 인증 200과 실제 `5`/usage를 확인. |
+| 외부 엔진의 실제 MCP/RAG/미디어/멀티 세션 | unrun | 새 어댑터에 대한 해당 실제 내용·상호작용은 별도 기기 검사 필요. SDK CPU reference는 text/generate만 확인했으며 tools/image/audio/video는 unsupported. |
 | 원본 Niko1221/Strata | unrun | 이 Mac M2/16GB는 원본 Windows/Linux x86-64 GPU·메모리 조건을 충족하지 않음. 고정 source revision·전용 deployment config와 설치된 Python/엔진을 받는 SDK 제공. 실제 source help/version과 serving은 대상 기기에서 확인해야 함. |
 | Windows·Linux 실제 빌드·GUI·엔진·패키지 | unrun | 현재 기기에서 추정하지 않음. [OS 인계](runtime-adapter-handoff.ko.md)에 PowerShell/Linux 명령, 합성/실제 harness, source/model/hash provenance, W/L01–09 검사표 제공. |
 | 외부 v1 benchmark/deep/portable | unsupported | 실제 tokenizer/cold-cache/reference/ABI 구현 없이 성공으로 표시하지 않음. 기존 내장 엔진 기능은 유지. |
 | 새 소스의 Mac 배포 패키지·별도 계정·Intel/구형 macOS | unrun | 이 절에서 새 DMG/설치/upgrade를 수행하지 않음. 이전 §97 패키지는 그때의 소스 결과이며 새 source 패키지로 재사용하지 않음. |
 
 [공통 런타임 문서](pluggable-inference-runtimes.ko.md)와 [Windows/Linux 인계](runtime-adapter-handoff.ko.md)에 v1 계약·SDK 사용법·제약·재검증 조건을 반영했다. 원본 로그·모델·manifest·환경별 경로·capture는 `tmp/`에 두고 커밋에는 코드·회귀 검사·익명화 문서만 포함한다. 원격 push는 수행하지 않았다.
+
+## 99. 외부 런타임의 실제 Mac GUI와 기존 환경 복원
+
+2026-10-13, 사용자 잠금 해제 확인 후 §98의 GUI blocked 항목을 재개했다. native core는 `1a74a7fcb5944092b464d931699e868d39ee180a`에서 빌드한 `macos-ui-smoke` debug이고 frontend는 같은 소스에서 아래 두 수정까지 적용한 `51afc569ceb7b0cf126c26664cf756889ae51c25`다. 실제 WKWebView 입력·파일 선택·창 조절·종료는 CUA로 수행했다. WebDriver는 읽기 전용 IPC/DOM/캡처와 수동 오류 관찰에 사용했으며 등록·설정 변경·실행을 대신 호출하지 않았다. 이 결과를 배포용 DMG 설치 성공으로 계산하지 않는다.
+
+원래 앱은 정상 Quit로 종료하고 빈 작업용 홈에서 새 native bundle을 실행했다. 홈·legacy/WebKit 저장 경로를 격리했고 원래 설정/대화를 fixture로 복사하지 않았다. §98과 같은 공개 Qwen2.5 GGUF와 외부 CPU 빌드·고정 revision/hash를 재사용했다. 실제 native 파일 선택에서 manifest를 고르고 검사 후 등록했다. 최종 전체 모델 SHA-256 보존은 `adapter-ui-final-model-integrity.json`에서 확인했다. 새 모델 다운로드·공개 서비스 업로드·원격 push는 하지 않았다.
+
+### 실제 조작 중 해결한 결함
+
+- `3c5b067`: 처음 선택한 외부 엔진의 기본 프로필 객체가 반환된 공용 프로필 library에 없어서 설정 본문이 비었다. profile assignment 경로가 현재 provider의 기본 entry를 library에 포함하도록 수정했다. `adapter-ui-external-dialog-empty.json/png`에서 실제 실패를 관찰하고 `adapter-ui-profile-repro`에서 합성 최소 재현을 실패시켰다. 수정 뒤 프로필·모델 선택·생성 옵션이 표시됐으며 관련 4 files/169 tests와 실제 프로필 저장/실행을 통과했다. source library를 변경하지 않는 검사도 포함했다.
+- `51afc56`: 중지한 부분 응답의 retry 정보를 유지하면서 버튼은 오류 banner 안에서만 표시했다. 마지막 응답이 interrupted이고 retry 정보가 있는 경우에도 기존 Retry 동작을 표시했다. `adapter-ui-retry-repro`의 실제 ChatPanel 경로 검사는 수정 전 실패했다. 수정 뒤 관련 2 files/15 tests와 실제 부분 응답 Retry가 통과했다. 같은 요청 history 재사용, 사용자 메시지 중복 방지, 부분 응답 교체, 완료 후 버튼 제거와 새 metrics를 검사했다. 재시작한 대화에 휘발성 retry 정보가 없는 경우 버튼을 임의로 제공하지 않는다.
+
+### 실행 결과
+
+| 항목 | 판정 | 실제 근거 |
+| --- | --- | --- |
+| 새 홈과 native manifest 등록 | pass | `adapter-ui-fresh.json/png`, `adapter-ui-registered.json/png`. 빈 홈에서 온보딩·native 파일 선택·검사 후 네 번째 엔진/version/CPU/external 표시. |
+| 공용 프로필·모델·옵션·실행 | pass | `adapter-ui-fixed-dialog`, `model-selected`, `profile-saved`, `start` JSON/PNG. 외부 모델 binding 선택, `Adapter GUI validation` 공용 프로필과 request max_tokens32/temperature0 저장, 실제 Ready·chat/text 능력 확인. 세 내장 엔진 default entry 보존. |
+| 실제 응답과 usage | pass | `adapter-ui-answer.json/png`. 합성 `2+3` 입력에 `5`, 실제 입력36/출력2 토큰 표시·저장. |
+| 실제 스트림 취소 | pass | `adapter-ui-real-cancelled.json/png`. 긴 합성 이야기에서 내용 수신 후 Stop, 4382자 부분 응답의 interrupted=true·Ready 유지·active requests0. 종료 usage가 오지 않은 취소는 PP/TG를 미제공으로 남김. 앞선 숫자 목록은 자연 종료가 먼저 완료돼 `adapter-ui-cancelled`를 취소 통과 근거로 사용하지 않음. |
+| 부분 응답 Retry | pass | `adapter-ui-retry-completed.json/png`. 실제 버튼으로 같은 요청을 재전송, 사용자/assistant 두 메시지 유지, 출력1024 토큰·length 종료와 새 metrics 기록. cached59 토큰과 신규 PP1 토큰을 구분해 표시. 내용의 품질이나 2000단어 달성을 모델 성공 기준으로 삼지 않음. |
+| 최소 창의 실행 영역·설정 열기 | pass | `adapter-ui-minimum-window`, `minimum-settings`, `minimum-generation` JSON/PNG. 실제 모서리 drag로 외부 창360×520, client360×488·scrollWidth360. 고정 모델/설정/언로드 영역과 외부 프로필 표시, 생성 탭 선택 확인. max_tokens1024/temperature0은 접근성 tree로 확인했으며 이 캡처에서 접힌 아래 옵션의 실제 스크롤/수정 성공으로 확대하지 않음. |
+| 최소 창의 아래 옵션 스크롤·직접 수정 | unrun | 일반 크기에서는 실제 입력/저장을 확인했지만 최소 창에서는 탭 선택과 설정 값 관찰까지 수행. 대상 OS의 W/L04에서 아래 옵션까지 실제 스크롤·입력 확인 필요. |
+| 앱 gateway 인증·alias 라우팅 | pass | 실제 UI 시작/중지, `adapter-ui-gateway.json/png`, `adapter-ui-gateway-check.json`. `/v1/models` 무인증/잘못된 bearer401, 정상 bearer200. 목록의 alias로 실제 chat200/`5`와 prompt42/completion2/total44·cached5. API 중지 후 모델 Ready 유지. |
+| 정상 Quit·재시작·재실행 | pass | `adapter-ui-exit/cleanup`, `first-quit-ownership`, `restart-reloaded/ready`, `restart-final-preservation` JSON/PNG. 설정 값 정확히 동일, 등록1개와 대화2개 파일 hash 보존, 저장 프로필로 다시 Ready. 두 번째 정상 Quit 후 해당 GUI/engine/Vite PID와 model/API/driver/Vite port 종료. 첫 종료의 Vite1420은 재시작 검증 때 이미 재사용 중이므로 첫 소유 PID 종료/cleanup과 두 번째 최종 port 종료를 구분함. Cmd+R 입력만으로 reload 성공을 주장하지 않고 실제 Quit/재실행으로 검사. |
+| 외부 미지원 표시 | pass | 실제 CUA Benchmark에서 실행 disabled와 정확한 tokenizer/cold-cache 미지원 사유 표시. 등록 runtime inventory의 deep 미지원과 portable export 부재 확인. 해당 기능 자체는 §98대로 unsupported이며 새 benchmark/CSV/XLSX 결과를 만들지 않음. |
+| 화면 오류 관찰 | pass | `adapter-ui-observer-remove.json`, `adapter-ui-restart-observer-restart-remove.json`의 errors/warnings/error events/unhandledrejection 각각0. 관찰 기간은 설치~제거에 한정하며 원래 앱 복원 기간까지 확대하지 않음. production build의 기존 500KiB chunk 경고는 남아 있으며 build 실패는 아님. |
+
+이번 GUI 검증에서는 모델을 하나씩 실행했다. 재시도의 warm cache·실제 runtime PP/TG 표시를 cold-cache benchmark 또는 단독 성능 검증으로 확대하지 않는다. CPU reference의 도구·미디어 지원은 unsupported이며 외부 엔진의 실제 MCP/RAG/멀티 세션과 지원 미디어 검사는 여전히 unrun이다. 원본 Strata와 Windows/Linux 실제 실행도 unrun이다.
+
+### 기존 작업 환경과 최종 검사
+
+검증 앱을 정상 종료한 뒤 원래 bundle을 보존한 새 native 사본으로 같은 원래 작업용 홈을 복원했다. schema13→14 이전 backup bytes는 실행 전 설정과 정확히 같았다. 원래 vllm-metal0.30.0/vLLM0.30.0+cpu와 Qwen3-VL-2B-Instruct-4bit revision `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`를 CUA에서 같은 Default 프로필로 시작했다. 인증된 로컬 엔진에 합성 산술 요청을 별도로 보내 실제 `5`, prompt21/completion2/total23·cached0을 확인했다. 앱 대화에 새 메시지를 추가하지 않았다.
+
+`adapter-ui-original-preservation.json`은 전체53개 대화 hash·localStorage·선택 모델/runtime·profile entry 순서/내용 보존, 정확한 schema13 backup, 예상 밖 설정 차이0을 확인한다. 명시적인 Save profile & start에 따른 library revision158→160와 vLLM Default/profile application revision35→36, config_version13→14는 실제 변화로 기록한다. 최종 `goal-native-audio-adapter-ui-original-final.json/png`에서 모델 Ready·active requests0·API off·생성 중 아님이다. 앱과 원래 모델을 실행 상태로 남겼다. 오래된 observer의 addedConversationFiles30은 과거23개 baseline과의 차이이며 이번 작업의 추가 대화 수가 아니다. 이번 실행 전53개 전부와 직접 비교해 모두 보존했다. 원래 앱의 빈 errors fallback을 오류 관찰 성공으로 계산하지 않는다.
+
+| 최종 검사 | 판정 | 근거 |
+| --- | --- | --- |
+| 타입·lint | pass | `adapter-ui-final-typecheck`9.48s, `adapter-ui-final-lint`4.88s. |
+| 전체 공통 검사 | pass | `adapter-ui-final-suite`130.11s, contracts/scripts/direct 포함, frontend183 files/1904 tests·line coverage85.17%. |
+| production frontend 빌드 | pass | `adapter-ui-final-build`12.25s. |
+| native/SDK | pass | native source·SDK 변경 없이 §98의 전체 타깃/feature·fmt/clippy·production feature·Python 검사를 유지. 새 native debug 빌드 `adapter-ui-unlocked-build`와 실제 외부 CPU 및 기존 vllm-metal 실행 확인. Rust 전체 검사를 이번 frontend 수정 후 다시 실행한 것으로 기록하지 않음. |
+
+원본은 `tmp/macos-acceptance/adapter-ui-*`, `goal-native-audio-adapter-ui-*`, `logs/adapter-ui-*`, `checks.jsonl`에 남겼다. 로그·credential·개인 경로·capture는 커밋에 포함하지 않는다. 새 패키지 설치·별도 계정·Intel/구형 macOS는 unrun이다. M01–M12의 기존 전체 판정 **7 pass / 4 fail / 1 unrun**은 유지하며 전체 기기 검증 통과를 선언하지 않는다. Windows·Linux는 [어댑터 인계](runtime-adapter-handoff.ko.md)의 기준 소스와 W/L01–09로 작업을 이어간다.

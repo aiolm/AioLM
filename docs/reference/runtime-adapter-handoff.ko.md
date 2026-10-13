@@ -2,11 +2,13 @@
 
 ## 현재 상태와 검증 범위
 
-공통 core 구현은 `9d0e9cbc4dc710a77573dc3b30713166f364a496`, SDK 보완까지의 기준은 `f1b94e40f98d2e4c4b31b5936a418981bfa5c69d`이며 작업 브랜치는 `codex/macos-device-validation`이다. 상세 Mac 실행 근거와 남은 항목은 [검증 결과 §98](macos-device-validation-results.ko.md#98-외부-런타임-인터페이스와-windowslinux-인계)를 따른다.
+공통 core 구현은 `9d0e9cbc4dc710a77573dc3b30713166f364a496`, SDK 보완은 `f1b94e40f98d2e4c4b31b5936a418981bfa5c69d`이며 Mac GUI 검증 중 수정한 프로필·취소 후 재시도까지의 기준은 `51afc569ceb7b0cf126c26664cf756889ae51c25`다. 작업 브랜치는 `codex/macos-device-validation`이다. 상세 실행 근거와 남은 항목은 [검증 결과 §98](macos-device-validation-results.ko.md#98-외부-런타임-인터페이스와-windowslinux-인계)와 [실제 Mac GUI §99](macos-device-validation-results.ko.md#99-외부-런타임의-실제-mac-gui와-기존-환경-복원)를 따른다.
 
 내장 llama.cpp·vLLM·MLX와 등록형 `custom.*` 엔진이 공통 `InferenceRuntimeAdapter`/`EngineCommand` 경계를 사용한다. 등록 UI는 런타임 화면의 **외부 엔진 등록**이다. 실행 중인 모델 세션을 먼저 언로드하고 JSON manifest를 선택해 **검사 후 등록**을 누른다. 등록된 엔진·런타임은 공용 실행 설정에서 선택하며 모델별 probe 후 실행한다.
 
 Mac arm64에서는 네 번째 합성 엔진의 실제 소유 프로세스·readiness·HTTP/SSE 경로와 외부 CPU llama-server 빌드의 실제 Qwen2.5 응답·tokenizer usage·취소·재시작·종료·재등록을 검사했다. 실제 Windows·Linux 및 원본 Strata 추론은 **unrun**이다. 다른 OS의 결과를 Mac 결과로 대체하지 않는다. 기존 Mac M01–M12 판정은 이 문서로 전체 통과가 되지 않는다.
+
+별도 빈 홈의 실제 WKWebView에서 manifest 파일 선택·등록, 처음 선택한 외부 엔진의 기본 프로필, 공용 프로필 저장과 실제 응답/usage, 부분 응답 취소·재시도, 360px 최소 창, 정상 Quit와 앱 재시작 후 설정/이력/등록 보존을 확인했다. 앱 gateway의 무인증·잘못된 키 401/정상 인증 200과 실제 모델 alias 라우팅도 확인했다. 처음 외부 엔진을 선택하면 설정 본문이 비던 문제는 `3c5b067`, 중지한 부분 응답의 재시도 버튼 누락은 `51afc56`에서 수정했다. Windows·Linux에서는 아래 W/L03–06을 실제 GUI로 다시 수행한다.
 
 외부 어댑터 v1의 정확한 tokenizer/cold-cache 벤치마크, CPU reference 심층 검증, portable ABI export/import는 **unsupported**다. 관련 실행은 UI와 backend에서 거부하며 기존 이력·CSV/XLSX는 보존한다. Chat·MCP·미디어·embedding/transcription은 실제 모델별 probe가 해당 능력을 확인해야 사용한다. 단순 OpenAI 호환 서버라는 이유로 도구·멀티모달·지표를 지원으로 표시하지 않는다.
 
@@ -148,7 +150,7 @@ python scripts/runtime-adapters/create_adapter.py create --kind strata --engine-
 | W/L01 | 위 공통 검사와 합성 네 번째 엔진. 실행 명령·exit code·원본 로그, 실제 OS/arch/도구 버전. |
 | W/L02 | manifest 파일 선택·등록·취소·중복/변경 hash/잘못된 OS 거부·제거. 소유 자원 정리와 외부 원본 보존. |
 | W/L03 | 라이브러리 모델 binding·실행 설정의 네 번째 엔진·공용 프로필 저장/재로드·프로젝트 import·등록 제거 후 선택 보존. 내장 세 엔진 설정이 그대로 유지됨. |
-| W/L04 | 실제 loader 모델별 probe·응답/usage·스트림 취소/재시도/재시작·최소 창 크기·이력 재로드. base 모델 chat 거부도 확인. |
+| W/L04 | 실제 loader 모델별 probe·응답/usage·스트림 취소/재시도/재시작·최소 창 크기·이력 재로드. 내용을 받은 뒤 중지한 부분 응답이 보존되고 Retry가 같은 사용자 메시지를 중복 없이 다시 보내며 이전 usage를 재사용하지 않는지 확인. 정상 Quit 후 소유 PID/port 종료와 재실행 후 등록/프로필/이력 보존도 확인. base 모델 chat 거부도 확인. |
 | W/L05 | 지원 엔진의 MCP 승인/거부/실행 취소/후속 답변, tools 미지원 모델의 명시적 거부. 합성 도구만 사용. |
 | W/L06 | 프로젝트/RAG·embedding runtime namespace·멀티 세션·앱 gateway 인증 실패/성공·모델 alias 라우팅·API listener와 모델 lifecycle 분리. |
 | W/L07 | 실제 지원 모델의 이미지·STT·음성/영상 전처리, 합성 입력·내용 확인·보관/재로드/재시도/취소. 미지원 항목은 unsupported. |

@@ -16,6 +16,8 @@ v1 외부 경계는 loopback OpenAI v1 HTTP다. 해당 API를 직접 제공하�
 
 등록 형식, 실행 가능한 예제와 Windows·Linux 검증 절차는 [어댑터 인계](runtime-adapter-handoff.ko.md)를 따른다. 아래 계약 중 v1에 없는 확장 능력은 후속 구현 방향이며 현재 지원으로 표시하지 않는다.
 
+실제 Mac WKWebView에서 외부 CPU 빌드의 등록·공용 프로필·응답/usage·취소/Retry·앱 재시작과 gateway 인증/라우팅을 확인했다. 처음 선택한 외부 엔진의 기본 프로필과 중지한 부분 응답의 Retry 표시도 수정했다. 상세 근거와 미실행 범위는 [Mac 검증 §99](macos-device-validation-results.ko.md#99-외부-런타임의-실제-mac-gui와-기존-환경-복원)를 따른다. 원본 Strata와 Windows·Linux 실제 실행은 아직 unrun이다.
+
 ## 공통 기능과 engine-native capability
 
 지원 여부는 engine 이름만으로 결정하지 않는다. 설치 probe, 선택 모델·bindings, protocol 구현을 해석한 **model-resolved capability**가 task·modality·tools의 사용 가능 여부를 결정한다. 지원, 명시적 미지원, 아직 확인되지 않음과 readiness 문제를 구분하고 근거·이유를 표시한다. 미확인 값을 지원으로 승격하지 않는다.
@@ -42,7 +44,7 @@ v1 외부 경계는 loopback OpenAI v1 HTTP다. 해당 API를 직접 제공하�
 
 ## API·데이터 호환성
 
-제안 구현은 frontend/native engine ID와 catalog·runtime/engine info를 확장하고, 새로운 manifest 등록·probe·adapter 계약을 추가해야 한다. 기존 Python 등록 IPC/CLI와 manifest는 계속 읽을 수 있게 유지한다. `is_python = non-llama` 같은 판정은 descriptor의 runtime 종류로 옮기며 공통 API가 개인 엔진을 내장 engine 이름으로 위장하지 않는다.
+frontend/native engine ID와 catalog·runtime/engine info를 확장하고 manifest 등록·probe·adapter 계약을 추가했다. 기존 Python 등록 IPC/CLI와 manifest도 계속 읽을 수 있게 유지한다. Python 환경 대상은 vLLM·MLX로 명시하고 외부 process adapter를 Python으로 취급하지 않는다. 공통 API가 개인 엔진을 내장 engine 이름으로 위장하지 않는다.
 
 - 기존 `llama.cpp`, `vllm`, `mlx-vlm` ID와 해당 options, runtime 선택, 프로필·적용 revision, system prompt, 대화·프로젝트·세션·벤치마크 원문 의미를 보존한다. 과거 provider 누락 값이 llama.cpp라는 이전 규칙도 유지한다.
 - nonempty 미등록 ID를 llama.cpp로 fallback하지 않는다. adapter가 제거되었거나 offline이어도 해당 설정·옵션·프로필·기록을 보존하고 unavailable로 표시한다. adapter 재등록 후 저장된 선택을 복구할 수 있어야 한다.
