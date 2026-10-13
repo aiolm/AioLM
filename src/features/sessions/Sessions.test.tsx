@@ -250,6 +250,58 @@ describe("session model settings", () => {
     expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled');
   });
 
+  it.each(['global', 'local'] as const)('does not let a previous %s cancellation failure overwrite the next load of the same session', async source => {
+    let failFirst!: (error: Error) => void;
+    let finishNext!: (status: api.SessionStatus) => void;
+    let failCancellation!: (error: Error) => void;
+    mocked.sessionStart
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNext = resolve; }));
+    mocked.sessionStop.mockImplementationOnce(() => new Promise((_resolve, reject) => { failCancellation = reject; }));
+    renderPanel();
+    render(<I18nProvider initialLocale="en"><TaskStrip /></I18nProvider>);
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    const cancellation = source === 'global' ? within(screen.getByTestId('task-strip')) : sessionRow();
+    fireEvent.click(cancellation.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith('work'));
+    await act(async () => failFirst(new Error('server start cancelled')));
+    await waitFor(() => expect(sessionRow().getByRole('button', { name: 'Load session' })).toBeEnabled());
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledTimes(2));
+    try {
+      await act(async () => failCancellation(new Error('Synthetic previous cancellation IPC error')));
+      expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('running');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(sessionRow().getByText('Starting')).toBeInTheDocument();
+    } finally {
+      await act(async () => finishNext({ id: 'work', name: 'Work session', state: 'running' }));
+    }
+  });
+
+  it('does not stop a new load through a cancellation callback retained from the completed load', async () => {
+    let finishFirst!: (status: api.SessionStatus) => void;
+    let finishNext!: (status: api.SessionStatus) => void;
+    mocked.sessionStart
+      .mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishNext = resolve; }));
+    renderPanel();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    const previousCancel = getTaskSnapshot().find(task => task.id === 'session-load-work')!.cancel;
+    await act(async () => finishFirst({ id: 'work', name: 'Work session', state: 'running' }));
+    await waitFor(() => expect(sessionRow().getByRole('button', { name: 'Load session' })).toBeEnabled());
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledTimes(2));
+    try {
+      await act(async () => previousCancel?.());
+      expect(mocked.sessionStop).not.toHaveBeenCalled();
+      expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('running');
+    } finally {
+      await act(async () => finishNext({ id: 'work', name: 'Work session', state: 'running' }));
+    }
+  });
+
   it("uses settings returned by the modal for the next load", async () => {
     const store = renderPanel(); await selectWork();
     fireEvent.click(sessionRow().getByRole("button", { name: "Model & settings" }));
@@ -327,8 +379,119 @@ describe("session model settings", () => {
   it("unloads a stopped session before removing its definition", async () => {
     const store = renderPanel(); await selectWork();
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ sessions: [] })));
+    await waitFor(() => expect(store.cfg!.sessions).toEqual([]));
+    expect(store.cfg!.settings_profiles).toBeUndefined();
     expect(mocked.sessionUnload).toHaveBeenCalledWith("work");
+    expect(screen.queryByRole('article', { name: 'Work session' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Session name')).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])('removes only the deleted session application, preserving shared profiles and other targets (assigned: %s)', async assigned => {
+    const other: api.SessionDefinition = { ...definition, id: 'other', name: 'Other session',
+      models: { ...definition.models, primary_model: 'models/other.gguf' } };
+    const configured = { ...cfg, sessions: [definition, other] };
+    const library = profileLibrary(configured);
+    const key = profileTargetKey(definition.models.primary_model, definition.id);
+    const application = structuredClone(library.applied[key]);
+    library.revision = 21;
+    library.provider_recent = { ...library.provider_recent, 'llama.cpp': application.profile_id };
+    library.applied[profileTargetKey('models/remembered.gguf')] = { ...application, model: 'models/remembered.gguf' };
+    library.applied['session:legacy-target'] = structuredClone(application);
+    if (!assigned) delete library.applied[key];
+    const expected = structuredClone(library);
+    delete expected.applied[key];
+    if (assigned) expected.revision++;
+    const store = renderPanel({ ...configured, settings_profiles: library });
+    await selectWork();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(store.cfg!.sessions).toEqual([other]));
+    expect(store.cfg!.settings_profiles).toEqual(expected);
+    expect(profileLibrary(store.cfg!).applied).toEqual(expected.applied);
+    expect(mocked.sessionUnload).toHaveBeenCalledExactlyOnceWith('work');
+    expect(mocked.sessionStop).not.toHaveBeenCalled();
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+  });
+
+  it('removes the session and its application from the latest queued configuration without losing later saves', async () => {
+    const library = profileLibrary(cfg);
+    library.revision = 21;
+    const store = renderPanel({ ...cfg, settings_profiles: library });
+    let finish!: () => void;
+    vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise(resolve => {
+      finish = () => resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch));
+    }));
+    await selectWork();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+
+    const later: api.SessionDefinition = { ...definition, id: 'later', name: 'Later session',
+      models: { ...definition.models, primary_model: 'models/later.gguf' } };
+    const latest = profileLibrary({ ...store.cfg!, sessions: [definition, later] });
+    latest.revision = 22;
+    const workKey = profileTargetKey(definition.models.primary_model, definition.id);
+    const profileId = latest.applied[workKey].profile_id!;
+    latest.entries = latest.entries.map(profile => profile.id === profileId
+      ? { ...profile, name: 'Updated shared profile', revision: profile.revision + 1,
+        settings: { ...profile.settings, ctx_size: 16384 } } : profile);
+    store.cfg!.sessions = [definition, later];
+    store.cfg!.settings_profiles = latest;
+    const expected = structuredClone(latest);
+    delete expected.applied[workKey];
+    expected.revision++;
+
+    await act(async () => finish());
+
+    expect(store.cfg!.settings_profiles).toEqual(expected);
+    expect(store.cfg!.sessions).toEqual([later]);
+    expect(await screen.findByRole('article', { name: 'Later session' })).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: 'Work session' })).not.toBeInTheDocument();
+  });
+
+  it.each(['unload', 'persistence'] as const)('preserves a session and its profile application after a %s failure', async failure => {
+    const library = profileLibrary(cfg);
+    const store = renderPanel({ ...cfg, settings_profiles: library });
+    if (failure === 'unload') mocked.sessionUnload.mockRejectedValueOnce(new Error('Synthetic removal failure'));
+    else vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error('Synthetic removal failure'));
+    await selectWork();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic removal failure');
+    expect(store.cfg!.sessions).toEqual([definition]);
+    expect(store.cfg!.settings_profiles).toEqual(library);
+    expect(screen.getByLabelText('Session name')).toHaveValue('Work session');
+  });
+
+  it.each(['unload', 'persistence'] as const)('preserves another session selection and unsaved name after removal waits for %s', async pending => {
+    const other: api.SessionDefinition = { ...definition, id: 'other', name: 'Other session',
+      models: { ...definition.models, primary_model: 'models/other.gguf' } };
+    const store = renderPanel({ ...cfg, sessions: [definition, other] });
+    let finish!: () => void;
+    if (pending === 'unload') {
+      mocked.sessionUnload.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    } else {
+      vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise(resolve => {
+        finish = () => resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch));
+      }));
+    }
+    await selectWork();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(pending === 'unload' ? mocked.sessionUnload : store.updateConfig).toHaveBeenCalledOnce());
+    fireEvent.click(sessionRow('Other session').getByRole('button', { name: /Other session/ }));
+    expect(screen.getByLabelText('Session name')).toHaveValue('Other session');
+    expect(sessionRow('Other session').getByRole('button', { name: /Other session/ })).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Keep this unsaved name' } });
+
+    await act(async () => finish());
+
+    await waitFor(() => expect(store.cfg!.sessions).toEqual([other]));
+    expect(screen.getByLabelText('Session name')).toHaveValue('Keep this unsaved name');
+    expect(sessionRow('Other session').getByRole('button', { name: /Other session/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('article', { name: 'Work session' })).not.toBeInTheDocument();
+    expect(store.cfg!.sessions![0].name).toBe('Other session');
+    expect(mocked.sessionUnload).toHaveBeenCalledExactlyOnceWith('work');
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    fireEvent.click(sessionRow('Other session').getByRole('button', { name: /Other session/ }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeInTheDocument();
   });
   it("preserves the definition after an unload failure", async () => {
     mocked.sessionUnload.mockRejectedValueOnce(new Error("Unload failed"));

@@ -19,6 +19,7 @@ import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { settingsForSession } from "../../shared/config/executionSettings";
+import { profileTargetKey } from "../../shared/config/settingsProfiles";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
@@ -98,6 +99,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const currentEdit = useRef("");
   currentEdit.current = JSON.stringify([selectedId, editing]);
+  const currentSelection = useRef(selectedId);
+  currentSelection.current = selectedId;
+  const currentLoad = useRef<object | null>(null);
   const saving = useRef(false);
   const legacyState = store.status.state;
   const legacyUrl = store.status.url;
@@ -255,6 +259,8 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     }
     if (!cfg) return;
     let launchConfig = store.getConfig?.() ?? cfg;
+    const loadOperation = {};
+    currentLoad.current = loadOperation;
     const taskId = `session-load-${runnableDefinition.id}`;
     setBusyId(runnableDefinition.id);
     setLoadingId(runnableDefinition.id);
@@ -278,7 +284,9 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       phase: t("ui.sessionStarting"),
       interruptible: true,
       cancel: async () => {
-        await api.sessionStop(runnableDefinition.id);
+        if (currentLoad.current !== loadOperation) return;
+        try { await api.sessionStop(runnableDefinition.id); }
+        catch (error) { if (currentLoad.current === loadOperation) throw error; }
       },
     });
     try {
@@ -309,6 +317,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
         finishTask(taskId, "failed", message);
       }
     } finally {
+      if (currentLoad.current === loadOperation) currentLoad.current = null;
       setBusyId(null);
       setLoadingId(null);
       await refresh();
@@ -346,15 +355,17 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   };
 
   const cancelLoad = async (id: string) => {
+    const loadOperation = currentLoad.current;
     updateTask(`session-load-${id}`, { state: "cancelling", phase: t("ui.taskCancelling") });
     setStatuses((current) => current[id]
       ? { ...current, [id]: { ...current[id], state: "stopping" } }
       : current);
     try {
       await api.sessionStop(id);
+      if (currentLoad.current !== loadOperation) return;
       notifySessionStatusChanged();
     } catch (error) {
-      setFailure(errorText(error));
+      if (currentLoad.current === loadOperation) setFailure(errorText(error));
     }
   };
 
@@ -370,11 +381,21 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     try {
       await api.sessionUnload(definition.id);
       notifySessionStatusChanged();
-      const next = ((store.getConfig?.() ?? cfg)?.sessions ?? definitions).filter((item) => item.id !== definition.id);
-      await persist(next);
-      setSelectedId(DEFAULT_SESSION_ID);
-      setDetailsOpen(false);
-      setEditing(null);
+      const saved = await store.updateConfig(current => {
+        const sessions = (current.sessions ?? []).filter(item => item.id !== definition.id);
+        const library = current.settings_profiles;
+        const key = profileTargetKey(definition.models.primary_model, definition.id);
+        if (!library || !Object.prototype.hasOwnProperty.call(library.applied, key)) return { sessions };
+        const applied = { ...library.applied };
+        delete applied[key];
+        return { sessions, settings_profiles: { ...library, applied, revision: library.revision + 1 } };
+      });
+      setDefinitions(saved.sessions ?? []);
+      if (currentSelection.current === definition.id) {
+        setSelectedId(DEFAULT_SESSION_ID);
+        setDetailsOpen(false);
+        setEditing(null);
+      }
       setNotice(t("ui.sessionDeleted"));
     } catch (error) {
       setFailure(errorText(error));
