@@ -161,6 +161,37 @@ describe("ChatPanel streaming re-render isolation (P1-7)", () => {
     mocked.serverActivity.mockResolvedValue(undefined);
   });
 
+  it("offers a stopped response retry without duplicating the user message or partial answer", async () => {
+    let emit!: (delta: api.ChatDelta) => void;
+    mocked.chatStream.mockImplementationOnce((_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: typeof emit, signal: AbortSignal) => {
+      emit = onDelta;
+      return new Promise<string>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")), { once: true });
+      });
+    });
+    renderPanel();
+    await screen.findByTestId(`bubble-${SEED_MESSAGE_COUNT - 1}`);
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Explain the moon" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledOnce());
+    act(() => emit({ content: "Partial answer" }));
+    await screen.findByText("Partial answer");
+    fireEvent.click(screen.getByRole("button", { name: "Stop generation" }));
+    const retry = await screen.findByRole("button", { name: "Retry last message" });
+    expect(retry).toBeEnabled();
+    expect(screen.getByText("Partial answer")).toBeInTheDocument();
+    const originalHistory = mocked.chatStream.mock.calls[0][3];
+    const replacement = controlledStream();
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledTimes(2));
+    expect(mocked.chatStream.mock.calls[1][3]).toEqual(originalHistory);
+    expect(screen.getAllByText("Explain the moon")).toHaveLength(1);
+    expect(screen.queryByText("Partial answer")).not.toBeInTheDocument();
+    await act(async () => replacement.finish("Complete answer"));
+    expect(screen.getByText("Complete answer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry last message" })).not.toBeInTheDocument();
+  });
+
   it("re-renders only the newest bubble across streaming ticks in a 220-message thread", async () => {
     renderPanel();
 

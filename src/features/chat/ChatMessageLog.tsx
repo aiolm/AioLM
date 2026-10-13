@@ -102,6 +102,9 @@ export default function ChatMessageLog({
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
         {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
       </FeedbackBanner>}
+      {!error && canRetry && msgs.at(-1)?.interrupted && (
+        <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--secondary app-button--sm mt-2.5">{ct("retry")}</button>
+      )}
     </div>
   );
 }
