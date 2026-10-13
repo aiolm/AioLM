@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Workbook } from 'exceljs';
 import { invoke, isNativeRuntimeAvailable } from '../../shared/api/transport';
+import { modelArtifact, type ModelArtifact } from '../../shared/api/providers';
 import { exportBenchmarkResults } from './benchmarkExport';
 import { loadAllBenchmarkHistory } from './benchmarkRepository';
 import type { PerformanceBenchmarkRecord } from './performanceRecords';
 
 vi.mock('../../shared/api/transport', () => ({ invoke: vi.fn(), isNativeRuntimeAvailable: vi.fn(() => true) }));
+vi.mock('../../shared/api/providers', async original => ({ ...await original<typeof import('../../shared/api/providers')>(), modelArtifact: vi.fn() }));
 
 const record: PerformanceBenchmarkRecord = {
   schemaVersion: 1, id: 'saved', createdAt: new Date(2025, 3, 5, 6, 7, 8).getTime(), model: 'models/예제.gguf', backend: 'cpu', build: 'b1',
@@ -13,10 +15,86 @@ const record: PerformanceBenchmarkRecord = {
   result: { run_id: 'saved', rows: [], status: 'failed', message: 'Synthetic failure', args: [], runtime_version: 'test', context_size: 4096, parallel: 1 },
 };
 
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(isNativeRuntimeAvailable).mockReturnValue(true); });
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(modelArtifact).mockReset(); vi.mocked(isNativeRuntimeAvailable).mockReturnValue(true); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('benchmark CSV delivery', () => {
+  const snapshot = `/synthetic/external/snapshots/${'a'.repeat(40)}`;
+  const artifact = (path: string, name: string): ModelArtifact => ({
+    path, name, format: 'mlx', role: 'model', size_bytes: 10, file_count: 3, architectures: [],
+    modalities: { text: true, image: false, audio: false, video: false }, missing: [],
+    incomplete: false, ownership: 'external', notes: [],
+  });
+
+  it.each(['csv', 'xlsx'] as const)('uses an external snapshot display name in the %s report and save suggestion without changing the saved identity', async format => {
+    const saved = { ...record, model: snapshot };
+    const original = JSON.stringify(saved);
+    vi.mocked(modelArtifact).mockResolvedValue(artifact(snapshot, 'converted-instruct-4bit'));
+    vi.mocked(invoke).mockResolvedValue(true);
+    expect(await exportBenchmarkResults([saved], 'selected', format)).toBe('saved');
+    const [command, args] = vi.mocked(invoke).mock.calls[0];
+    expect(command).toBe(`benchmark_export_${format}`);
+    expect(args?.fileName).toBe(`aiolm-benchmark_converted-instruct-4bit_2025-04-05_06-07-08.${format}`);
+    if (format === 'csv') {
+      expect(args?.contents).toContain('"converted-instruct-4bit"');
+      expect(args?.contents).not.toContain('a'.repeat(40));
+      expect(args?.contents).not.toContain('/synthetic/');
+    } else {
+      const workbook = new Workbook();
+      await workbook.xlsx.load(new Uint8Array(args?.contents as number[]).buffer);
+      expect(workbook.getWorksheet('Results')!.getCell('A2').value).toBe('converted-instruct-4bit');
+    }
+    expect(modelArtifact).toHaveBeenCalledExactlyOnceWith(snapshot);
+    expect(JSON.stringify(saved)).toBe(original);
+  });
+
+  it('deduplicates external model reads while keeping every full-history result in its original order', async () => {
+    const second = `/synthetic/external/snapshots/${'b'.repeat(40)}`;
+    const records = [{ ...record, model: snapshot }, { ...record, model: second }, { ...record, model: snapshot }, record];
+    const original = JSON.stringify(records);
+    vi.mocked(modelArtifact).mockImplementation(async path => artifact(path, path === snapshot ? 'first-model' : 'second-model'));
+    vi.mocked(invoke).mockResolvedValue(true);
+    await exportBenchmarkResults(records, 'all', 'csv');
+    const contents = vi.mocked(invoke).mock.calls[0][1]!.contents as string;
+    expect(contents.trim().split('\r\n').slice(1).map(line => line.split(',')[0])).toEqual([
+      '"first-model"', '"second-model"', '"first-model"', '"예제.gguf"',
+    ]);
+    expect(modelArtifact).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(records)).toBe(original);
+  });
+
+  it('keeps export available with the original label when snapshot metadata cannot be read', async () => {
+    vi.mocked(modelArtifact).mockRejectedValue(new Error('Synthetic unreadable model metadata'));
+    vi.mocked(invoke).mockResolvedValue(true);
+    expect(await exportBenchmarkResults([{ ...record, model: snapshot }], 'selected', 'csv')).toBe('saved');
+    expect(vi.mocked(invoke).mock.calls[0][1]!.contents).toContain(`"${'a'.repeat(40)}"`);
+    expect(modelArtifact).toHaveBeenCalledExactlyOnceWith(snapshot);
+  });
+
+  it('applies existing path privacy and portable filename rules to declared snapshot names', async () => {
+    vi.mocked(modelArtifact).mockResolvedValue(artifact(snapshot, 'C:\\synthetic\\private\\Readable-model'));
+    vi.mocked(invoke).mockResolvedValue(true);
+    await exportBenchmarkResults([{ ...record, model: snapshot }], 'selected', 'csv');
+    const args = vi.mocked(invoke).mock.calls[0][1]!;
+    expect(args.fileName).toBe('aiolm-benchmark_Readable-model_2025-04-05_06-07-08.csv');
+    expect(args.contents).toContain('"Readable-model"');
+    expect(JSON.stringify(args)).not.toMatch(/synthetic|private|C:/);
+  });
+
+  it.each(['csv', 'xlsx'] as const)('keeps declared formula-like model names inert in %s', async format => {
+    vi.mocked(modelArtifact).mockResolvedValue(artifact(snapshot, '=SUM("1",2)'));
+    vi.mocked(invoke).mockResolvedValue(true);
+    await exportBenchmarkResults([{ ...record, model: snapshot }], 'selected', format);
+    const args = vi.mocked(invoke).mock.calls[0][1]!;
+    if (format === 'csv') expect(args.contents).toContain('"\'=SUM(""1"",2)"');
+    else {
+      const workbook = new Workbook();
+      await workbook.xlsx.load(new Uint8Array(args.contents as number[]).buffer);
+      expect(workbook.getWorksheet('Results')!.getCell('A2').value).toBe('=SUM("1",2)');
+    }
+    expect(args.fileName).not.toMatch(/[<>:"/\\|?*\p{Cc}\p{Cf}]/u);
+  });
+
   it('defaults to a formatted workbook and sends its bytes unchanged to the native save dialog', async () => {
     vi.mocked(invoke).mockResolvedValue(true);
     expect(await exportBenchmarkResults([record], 'selected', 'xlsx', 'ko')).toBe('saved');
@@ -90,7 +168,10 @@ describe('benchmark CSV delivery', () => {
     expect(csv.split('\r\n').filter(Boolean)).toHaveLength(3);
   });
 
-  it('keeps the browser download URL alive until the browser can consume it', async () => {
+  it.each([
+    { selected: record, fileName: 'aiolm-benchmark_예제_2025-04-05_06-07-08.csv' },
+    { selected: { ...record, model: snapshot }, fileName: `aiolm-benchmark_${'a'.repeat(40)}_2025-04-05_06-07-08.csv` },
+  ])('starts the browser download $fileName in the user action without native reads and retains its URL until consumption', async ({ selected, fileName }) => {
     vi.mocked(isNativeRuntimeAvailable).mockReturnValue(false);
     vi.useFakeTimers();
     const revoke = vi.fn();
@@ -98,16 +179,20 @@ describe('benchmark CSV delivery', () => {
       static createObjectURL = vi.fn(() => 'blob:benchmark-csv');
       static revokeObjectURL = revoke;
     });
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       expect(this.isConnected).toBe(true);
-      expect(this.download).toBe('aiolm-benchmark_예제_2025-04-05_06-07-08.csv');
+      expect(this.download).toBe(fileName);
       expect(revoke).not.toHaveBeenCalled();
     });
-    expect(await exportBenchmarkResults([record], 'selected', 'csv')).toBe('download-started');
+    const exporting = exportBenchmarkResults([selected], 'selected', 'csv');
+    const startedInUserAction = click.mock.calls.length === 1;
+    expect(await exporting).toBe('download-started');
     expect(document.querySelector('a[download]')).toBeNull();
     expect(revoke).not.toHaveBeenCalled();
     vi.runAllTimers();
     expect(revoke).toHaveBeenCalledWith('blob:benchmark-csv');
     expect(invoke).not.toHaveBeenCalled();
+    expect(modelArtifact).not.toHaveBeenCalled();
+    expect(startedInUserAction).toBe(true);
   });
 });
