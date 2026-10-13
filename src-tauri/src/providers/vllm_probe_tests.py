@@ -1,5 +1,8 @@
 """Execute the production probe with synthetic packages; never install engines."""
+import ast
+import json
 import pathlib
+import tempfile
 import sys
 import types
 import unittest
@@ -58,6 +61,38 @@ def probe(*, os="Darwin", arch="arm64", macos="15.0", python=(3, 12, 7),
         namespace = {}
         exec(compile(SOURCE, "vllm_probe.py", "exec"), namespace)
         return namespace["out"]
+
+
+class CompatibilityTests(unittest.TestCase):
+    def test_local_core_rejects_unreviewed_manifest_and_modified_source(self):
+        tree = ast.parse(SOURCE)
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "audited_media_compatibility")
+        namespace = {"json": json}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "vllm_probe.py", "exec"), namespace)
+        check = namespace["audited_media_compatibility"]
+        # This is the published correction's provenance contract, not a model fixture.
+        provenance = {
+            "schema_version": 1,
+            "source_wheel_sha256": "fd9adfd566a8afa4ecbdf36b04bab10ebf43cd9ca18eca4b0a0bf2013b8de135",
+            "upstream_version": "0.30.0+cpu",
+            "local_version": "0.30.0+cpu.aiolm.media1",
+            "corrections": [{"member": "vllm/multimodal/media/connector.py",
+                "before_sha256": "41230d20984205fc1fa711bab4e06cd56962ad542c2e179f82fd730e5da39a06",
+                "after_sha256": "d03b8894026cf212973095b2182347f621c035c7061b3b0547d35c54179e7045"}],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            source = pathlib.Path(root) / "connector.py"
+            source.write_bytes(b"modified installed source")
+            distribution = types.SimpleNamespace(read_text=lambda _: json.dumps(provenance), locate_file=lambda _: source)
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                check(distribution)
+            provenance["source_wheel_sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "provenance differs"):
+                check(distribution)
+            provenance["source_wheel_sha256"] = "fd9adfd566a8afa4ecbdf36b04bab10ebf43cd9ca18eca4b0a0bf2013b8de135"
+            source.unlink()
+            with self.assertRaisesRegex(ValueError, "missing or unsafe"):
+                check(distribution)
 
 
 class ProbeTests(unittest.TestCase):

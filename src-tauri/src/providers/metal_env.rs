@@ -5,6 +5,9 @@ use super::python_env::{parse_python_version, ProbeRecord};
 pub const VARIANT: &str = "vllm-metal";
 pub const VERSION: &str = "0.30.0";
 pub const CORE_VERSION: &str = "0.30.0+cpu";
+pub const MEDIA_CORE_VERSION: &str = "0.30.0+cpu.aiolm.media1";
+pub const MEDIA_SOURCE_SHA256: &str =
+    "d03b8894026cf212973095b2182347f621c035c7061b3b0547d35c54179e7045";
 pub const MLX_VERSION: &str = "0.32.1";
 pub const MLX_LM_COMMIT: &str = "9e6acca691e64d6d8bb808c328fcdea459099cca";
 pub const REQUIREMENTS: &str = "vllm-metal requires Apple Silicon macOS 15 or later and native arm64 CPython 3.12; managed installs pair vllm-metal 0.30.0 with vLLM 0.30.0+cpu.";
@@ -61,14 +64,23 @@ pub fn probe_problems(record: &ProbeRecord) -> Vec<String> {
         return vec![format!("unknown vLLM runtime variant: {}", record.variant)];
     }
     let mut problems = interpreter_problems(record);
-    if record.metal_version != VERSION || !matches!(record.version.as_str(), VERSION | CORE_VERSION)
+    // The optional media correction retains the pinned native core and plugin.
+    // Its distinct local version requires a fresh installed-source hash probe.
+    let audited_media_core = record.version == MEDIA_CORE_VERSION
+        && record
+            .package_versions
+            .get("vllm-media-compatibility")
+            .is_some_and(|digest| digest == MEDIA_SOURCE_SHA256);
+    if record.metal_version != VERSION
+        || (!matches!(record.version.as_str(), VERSION | CORE_VERSION) && !audited_media_core)
     {
         problems.push("supported vllm-metal 0.30.0 requires matching vLLM 0.30.0 core".into());
     }
     // Core setup.py can add +cpu to distribution metadata after writing the
-    // imported _version.py. Accept only that known pinned build suffix split.
+    // imported _version.py. The audited correction preserves that public version.
     let core_import_matches = record.imported_version == record.version
-        || (record.version == CORE_VERSION && record.imported_version == VERSION);
+        || ((record.version == CORE_VERSION || audited_media_core)
+            && record.imported_version == VERSION);
     if !core_import_matches || record.imported_metal_version != record.metal_version {
         problems
             .push("imported vLLM/plugin versions differ from installed package metadata".into());
@@ -205,6 +217,32 @@ mod tests {
         record.imported_version = VERSION.into();
         assert!(probe_problems(&record).is_empty());
         record.imported_version = "0.29.0".into();
+        assert!(!probe_problems(&record).is_empty());
+    }
+
+    #[test]
+    fn reviewed_media_core_requires_installed_source_identity_and_all_metal_checks() {
+        let mut record = ready_probe();
+        record.version = MEDIA_CORE_VERSION.into();
+        record.imported_version = VERSION.into();
+        assert!(!probe_problems(&record).is_empty());
+        record.package_versions.insert(
+            "vllm-media-compatibility".into(),
+            MEDIA_SOURCE_SHA256.into(),
+        );
+        assert!(probe_problems(&record).is_empty());
+        record
+            .package_versions
+            .insert("vllm-media-compatibility".into(), "0".repeat(64));
+        assert!(!probe_problems(&record).is_empty());
+        record.package_versions.insert(
+            "vllm-media-compatibility".into(),
+            MEDIA_SOURCE_SHA256.into(),
+        );
+        record.metal_native_importable = false;
+        assert!(!probe_problems(&record).is_empty());
+        record.metal_native_importable = true;
+        record.version = "0.30.0+cpu.unreviewed".into();
         assert!(!probe_problems(&record).is_empty());
     }
 }

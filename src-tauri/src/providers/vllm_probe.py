@@ -5,6 +5,33 @@ import platform
 import sys
 import sysconfig
 
+def audited_media_compatibility(distribution):
+    """Identify the reviewed correction only after checking its installed bytes."""
+    import hashlib
+    import pathlib
+    expected = {
+        "schema_version": 1,
+        "source_wheel_sha256": "fd9adfd566a8afa4ecbdf36b04bab10ebf43cd9ca18eca4b0a0bf2013b8de135",
+        "upstream_version": "0.30.0+cpu",
+        "local_version": "0.30.0+cpu.aiolm.media1",
+        "corrections": [{
+            "member": "vllm/multimodal/media/connector.py",
+            "before_sha256": "41230d20984205fc1fa711bab4e06cd56962ad542c2e179f82fd730e5da39a06",
+            "after_sha256": "d03b8894026cf212973095b2182347f621c035c7061b3b0547d35c54179e7045",
+        }],
+    }
+    record = json.loads(distribution.read_text("aiolm_compatibility.json") or "{}")
+    if record != expected:
+        raise ValueError("vLLM compatibility provenance differs from the audited correction")
+    correction = expected["corrections"][0]
+    path = pathlib.Path(distribution.locate_file(correction["member"]))
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+        raise ValueError("vLLM compatibility source is missing or unsafe")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != correction["after_sha256"]:
+        raise ValueError("vLLM compatibility source SHA-256 mismatch")
+    return correction["after_sha256"]
+
+
 out = {
     "python_version": "%d.%d.%d" % sys.version_info[:3],
     "python_arch": platform.machine(),
@@ -21,6 +48,12 @@ try:
     out["version"] = m.version("vllm")
 except Exception as e:
     out["errors"].append("vllm: %s" % e)
+
+if out.get("version") == "0.30.0+cpu.aiolm.media1":
+    try:
+        out["package_versions"]["vllm-media-compatibility"] = audited_media_compatibility(m.distribution("vllm"))
+    except Exception as e:
+        out["errors"].append("vllm compatibility: %s" % e)
 
 # Numerical verification identity includes dependencies for Linux runtimes too.
 # Optional distributions may be absent; the imports below establish readiness.
