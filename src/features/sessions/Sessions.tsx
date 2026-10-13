@@ -297,7 +297,13 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       setStatuses((current) => ({ ...current, [loaded.id]: loaded }));
       finishTask(taskId, "completed");
     } catch (error) {
-      const cancelled = errorText(error).toLowerCase().includes("cancel");
+      const message = errorText(error);
+      // Launch validation also forwards probe/dependency cancellation. Runtime
+      // diagnostics and model paths containing "cancel" remain visible failures.
+      const cancelled = [
+        'Session load cancelled.', 'server start cancelled', 'runtime probe cancelled',
+        'runtime installation cancelled', 'runtime install cancelled',
+      ].includes(message);
       if (cancelled) {
         setNotice(t("ui.taskCancelled"));
         finishTask(taskId, "cancelled");
@@ -312,7 +318,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
           finishTask(taskId, "failed", message);
         }
       } else {
-        const message = errorText(error);
         setFailure(message);
         finishTask(taskId, "failed", message);
       }

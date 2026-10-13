@@ -192,6 +192,54 @@ describe("session model settings", () => {
     expect(mocked.sessionStart).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['launch', 'server exited before ready (1). gguf_init_from_file: invalid magic in /synthetic/cancel-check.gguf'],
+    ['launch', 'server exited before ready (1). loader diagnostic: server start cancelled while reading an invalid fixture'],
+    ['preparation', 'Unable to persist settings at /synthetic/cancel-profile/config.json'],
+  ] as const)('keeps a %s failure visible when its diagnostic contains cancellation text: %s', async (phase, diagnostic) => {
+    const model = '/synthetic/cancel-check.gguf';
+    const target = { ...definition, models: { ...definition.models, primary_model: model } };
+    const store = renderPanel({ ...cfg, sessions: [target] });
+    if (phase === 'launch') mocked.sessionStart.mockRejectedValueOnce(diagnostic);
+    else vi.mocked(store.updateConfig).mockRejectedValueOnce(new Error(diagnostic));
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(diagnostic);
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')).toMatchObject({ state: 'failed', detail: diagnostic });
+    expect(screen.queryByText('Cancelled')).not.toBeInTheDocument();
+    await waitFor(() => expect(sessionRow().getByRole('button', { name: 'Load session' })).toBeEnabled());
+    if (phase === 'launch') expect(mocked.sessionStart).toHaveBeenCalledWith('work', expect.objectContaining({ active_model: model }), false);
+    else expect(mocked.sessionStart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'server start cancelled', 'runtime probe cancelled', 'runtime installation cancelled', 'runtime install cancelled',
+  ])('retains the cancelled result for the explicit native sentinel "%s"', async diagnostic => {
+    mocked.sessionStart.mockRejectedValueOnce(diagnostic);
+    renderPanel();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled'));
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps a runtime failure visible after a cancellation request when the backend does not confirm cancellation', async () => {
+    let fail!: (error: string) => void;
+    mocked.sessionStart.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    mocked.sessionStop.mockResolvedValueOnce(undefined);
+    renderPanel();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(mocked.sessionStop).toHaveBeenCalledWith('work'));
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelling');
+
+    const diagnostic = 'server exited before ready (1). invalid header in /synthetic/cancel-check.gguf';
+    await act(async () => fail(diagnostic));
+    expect(screen.getByRole('alert')).toHaveTextContent(diagnostic);
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')).toMatchObject({ state: 'failed', detail: diagnostic });
+  });
+
   it("cancels a load while profile preparation is pending without starting the engine", async () => {
     const store = renderPanel();
     await act(async () => {});
@@ -226,9 +274,10 @@ describe("session model settings", () => {
       expect(sessionRow().getByRole('button', { name: 'Working' })).toBeDisabled();
       expect(sessionRow().queryByText('Starting')).not.toBeInTheDocument();
     } finally {
-      await act(async () => { fail(new Error('Synthetic load cancelled.')); });
+      await act(async () => { fail(new Error('server start cancelled')); });
     }
     await waitFor(() => expect(sessionRow().getByText('Stopped')).toBeInTheDocument());
+    expect(getTaskSnapshot().find(task => task.id === 'session-load-work')?.state).toBe('cancelled');
   });
 
   it("does not launch after global cancellation fails while profile preparation is pending", async () => {
