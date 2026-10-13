@@ -172,6 +172,7 @@ pub fn package_name(provider: ProviderId) -> &'static str {
         ProviderId::Vllm => "vllm",
         ProviderId::MlxVlm => "mlx-vlm",
         ProviderId::Llama => "llama.cpp",
+        ProviderId::Custom(_) => "external",
     }
 }
 
@@ -180,7 +181,7 @@ pub fn pinned_version(provider: ProviderId) -> Option<&'static str> {
         ProviderId::Vllm if managed_metal(provider) => Some(metal_env::VERSION),
         ProviderId::Vllm => Some(VLLM_PINNED_VERSION),
         ProviderId::MlxVlm => Some(MLX_VLM_PINNED_VERSION),
-        ProviderId::Llama => None,
+        ProviderId::Llama | ProviderId::Custom(_) => None,
     }
 }
 
@@ -486,6 +487,9 @@ pub async fn probe_interpreter(
                     help.args(["-m", "mlx_vlm.server", "--help"]);
                 }
                 ProviderId::Llama => return Err("llama.cpp uses its native runtime probe".into()),
+                ProviderId::Custom(_) => {
+                    return Err("external engines use their registered probe".into())
+                }
             }
             let output = crate::procutil::capture_stdout_cancellable(
                 &mut help,
@@ -633,7 +637,7 @@ pub fn python_supported(provider: ProviderId, major: u32, minor: u32) -> bool {
         ProviderId::Vllm => major == 3 && (10..15).contains(&minor),
         // mlx-vlm v0.7.6: ">=3.10"
         ProviderId::MlxVlm => major == 3 && minor >= 10,
-        ProviderId::Llama => false,
+        ProviderId::Llama | ProviderId::Custom(_) => false,
     }
 }
 

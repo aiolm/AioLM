@@ -76,7 +76,7 @@ export function defaultSettingsProfile(): SettingsProfile {
     legacy: true, coverage: [...DEFAULT_PROFILE_KEYS] };
 }
 
-export function ensureProfileLibrary(library: SettingsProfileLibrary): SettingsProfileLibrary {
+export function ensureProfileLibrary(library: SettingsProfileLibrary, selectedProvider?: ProviderId): SettingsProfileLibrary {
   const source = library;
   library = structuredClone(library);
   for (const profile of library.entries) {
@@ -119,7 +119,8 @@ export function ensureProfileLibrary(library: SettingsProfileLibrary): SettingsP
   normalized.provider_defaults ??= {};
   normalized.provider_recent ??= {};
   normalized.provider_defaults['llama.cpp'] ??= normalized.default_profile_id;
-  for (const provider of PROVIDERS.filter(provider => provider !== 'llama.cpp')) {
+  for (const provider of new Set<ProviderId>([...PROVIDERS, ...normalized.entries.map(entry => entry.provider ?? 'llama.cpp'), ...(selectedProvider ? [selectedProvider] : [])])) {
+    if (provider === 'llama.cpp') continue;
     if (normalized.entries.some(entry => entry.id === normalized.provider_defaults?.[provider] && entry.provider === provider && entry.scope === 'global')) continue;
     let id = `profile-default-${provider}`;
     for (let suffix = 2; normalized.entries.some(entry => entry.id === id && (entry.provider !== provider || entry.scope !== 'global')); suffix++) id = `profile-default-${provider}-${suffix}`;
@@ -151,7 +152,7 @@ export function setDefaultSettingsProfile(library: SettingsProfileLibrary, id: s
 }
 
 export function defaultSettingsProfileEntry(library: SettingsProfileLibrary, provider: ProviderId = 'llama.cpp'): SettingsProfile {
-  const normalized = ensureProfileLibrary(library);
+  const normalized = ensureProfileLibrary(library, provider);
   return normalized.entries.find(entry => entry.id === (normalized.provider_defaults?.[provider] ?? normalized.default_profile_id))!;
 }
 
@@ -180,7 +181,7 @@ export function deleteSettingsProfile(source: SettingsProfileLibrary, id: string
     const cfg = applySettingsProfile(profileApplicationConfig(application), fallback);
     return [key, materializeProfileApplication(cfg, fallback.system_prompt ?? application.system_prompt, fallback)];
   }));
-  const provider_recent = Object.fromEntries(Object.entries(library.provider_recent ?? {}).filter(([, recent]) => !removed.has(recent)));
+  const provider_recent = Object.fromEntries(Object.entries(library.provider_recent ?? {}).filter(([, recent]) => recent !== undefined && !removed.has(recent)));
   return { ...library, entries, applied, provider_recent };
 }
 

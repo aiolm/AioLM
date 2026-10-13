@@ -647,10 +647,24 @@ pub(super) fn initialize_profiles(
         llama_provider(),
         library.default_profile_id.clone().unwrap_or_default(),
     );
-    for provider in [
+    let mut providers = vec![
         crate::providers::ProviderId::Vllm,
         crate::providers::ProviderId::MlxVlm,
-    ] {
+    ];
+    providers.extend(
+        library
+            .entries
+            .iter()
+            .filter_map(|entry| crate::providers::ProviderId::parse(&entry.provider))
+            .filter(|id| id.is_custom()),
+    );
+    let selected = crate::providers::provider_of(cfg);
+    if selected.is_custom() {
+        providers.push(selected);
+    }
+    providers.sort();
+    providers.dedup();
+    for provider in providers {
         if library.entries.iter().any(|entry| {
             Some(&entry.id) == library.provider_defaults.get(provider.as_str())
                 && entry.provider == provider.as_str()

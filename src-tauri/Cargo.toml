@@ -25,6 +25,11 @@ name = "smoke_fake"
 path = "tests/smoke_fake.rs"
 required-features = ["test-fixtures"]
 
+[[test]]
+name = "runtime_adapters"
+path = "tests/runtime_adapters.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "aiolm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

@@ -16,11 +16,13 @@ fn provider(value: &str) -> Result<ProviderId, String> {
 
 #[tauri::command]
 pub(crate) fn provider_catalog() -> serde_json::Value {
-    serde_json::json!(ProviderId::ALL.iter().map(|id| serde_json::json!({
+    let mut catalog = ProviderId::ALL.iter().map(|id| serde_json::json!({
         "id": id, "engine": id.engine(), "server": id.server(), "availability": id.availability(),
         "managed_version": providers::python_env::pinned_version(*id), "options": providers::options::schema(*id),
         "managed_variant": if *id == ProviderId::Vllm && cfg!(all(target_os = "macos", target_arch = "aarch64")) { Some("vllm-metal") } else { None }
-    })).collect::<Vec<_>>())
+    })).collect::<Vec<_>>();
+    catalog.extend(providers::registry::catalog());
+    serde_json::json!(catalog)
 }
 
 #[tauri::command]
@@ -34,13 +36,27 @@ pub(crate) async fn provider_runtimes() -> Result<Vec<providers::RuntimeInstance
 pub(crate) fn provider_runtime_options(
     provider_id: String,
     runtime_id: String,
-) -> Result<Vec<providers::options::OptionSpec>, String> {
+) -> Result<Vec<serde_json::Value>, String> {
     let provider = provider(&provider_id)?;
+    if provider.is_custom() {
+        let manifest = providers::registry::manifest(provider, &runtime_id)?;
+        return manifest
+            .options
+            .iter()
+            .map(|option| serde_json::to_value(option).map_err(|e| e.to_string()))
+            .collect();
+    }
     if provider == ProviderId::Llama || runtime_id.is_empty() {
-        return Ok(providers::options::schema(provider).to_vec());
+        return providers::options::schema(provider)
+            .iter()
+            .map(|option| serde_json::to_value(option).map_err(|e| e.to_string()))
+            .collect();
     }
     let runtime = providers::python_env::read(provider, &runtime_id)?;
-    Ok(providers::launch::option_schema(&runtime))
+    providers::launch::option_schema(&runtime)
+        .iter()
+        .map(|option| serde_json::to_value(option).map_err(|e| e.to_string()))
+        .collect()
 }
 
 #[tauri::command]
@@ -95,7 +111,11 @@ pub(crate) async fn provider_remove(
     if super::runtimes::runtime_resources_in_use(&state)? {
         return Err("stop model sessions before removing runtimes".into());
     }
-    providers::python_env::remove(provider(&provider_id)?, &runtime_id)
+    let selected = provider(&provider_id)?;
+    if selected.is_custom() {
+        return providers::registry::remove(selected, &runtime_id);
+    }
+    providers::python_env::remove(selected, &runtime_id)
 }
 
 /// Export one probed Python runtime as a portable bundle.
@@ -203,9 +223,17 @@ pub(crate) async fn provider_portable_import(
 
 #[tauri::command]
 pub(crate) async fn model_artifact(path: String) -> Result<ModelArtifact, String> {
-    tokio::task::spawn_blocking(move || providers::execution::inspect(Path::new(&path)))
-        .await
-        .map_err(|error| error.to_string())?
+    tokio::task::spawn_blocking(move || {
+        if let Some(artifact) = providers::registry::registered_models()
+            .into_iter()
+            .find(|model| model.path == path)
+        {
+            return Ok(artifact);
+        }
+        providers::execution::inspect(Path::new(&path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[derive(serde::Serialize)]
@@ -273,10 +301,27 @@ pub fn inspect_catalog(
             }
         }
     }
+    let mut seen = artifacts
+        .iter()
+        .map(|artifact| artifact.path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    artifacts.extend(
+        providers::registry::registered_models()
+            .into_iter()
+            .filter(|artifact| seen.insert(artifact.path.clone())),
+    );
     let models = artifacts
         .into_iter()
         .map(|artifact| {
-            let compatibility = ProviderId::ALL
+            let mut ids = ProviderId::ALL.to_vec();
+            ids.extend(
+                providers::registry::runtime_instances()
+                    .into_iter()
+                    .map(|r| r.provider),
+            );
+            ids.sort();
+            ids.dedup();
+            let compatibility = ids
                 .iter()
                 .map(|id| {
                     providers::compat::assess(
@@ -342,6 +387,10 @@ pub(crate) async fn list_model_artifacts(
 pub(crate) async fn model_compatibility(
     cfg: config::AppConfig,
 ) -> Result<ModelCompatibility, String> {
+    cfg.validate()?;
+    if providers::provider_of(&cfg).is_custom() {
+        providers::registry::refresh(&cfg, None).await?;
+    }
     tokio::task::spawn_blocking(move || providers::execution::compatibility(&cfg))
         .await
         .map_err(|error| error.to_string())?
@@ -357,6 +406,11 @@ pub(crate) fn provider_import_command(
 
 #[tauri::command]
 pub(crate) fn provider_command_preview(cfg: config::AppConfig) -> Result<Vec<String>, String> {
+    if providers::provider_of(&cfg).is_custom() {
+        return Ok(providers::launch::preview(&providers::registry::command(
+            &cfg, cfg.port, "",
+        )?));
+    }
     let runtime = providers::selected_python_runtime(&cfg)?;
     Ok(providers::launch::preview(
         &providers::launch::engine_command(&cfg, &runtime, cfg.port, "")?,
@@ -369,9 +423,44 @@ pub(crate) fn provider_option_issues(
 ) -> Result<Vec<providers::options::OptionIssue>, String> {
     let selected = providers::provider_of(&cfg);
     let options = providers::launch::provider_options(&cfg, selected);
+    if selected.is_custom() {
+        return Ok(providers::registry::option_issues(
+            &providers::registry::manifest(selected, &cfg.active_runtime)?,
+            &options,
+        ));
+    }
     if cfg.active_runtime.is_empty() {
         return Ok(providers::launch::option_issues(selected, &options));
     }
     let runtime = providers::selected_python_runtime(&cfg)?;
     Ok(providers::launch::runtime_option_issues(&runtime, &options))
+}
+
+/// Register a user-selected process adapter without installing or deleting its
+/// executable/environment. The existing operation lock protects live sessions.
+#[tauri::command]
+pub(crate) async fn runtime_adapter_register(
+    state: State<'_, AppState>,
+    manifest_path: String,
+) -> Result<providers::registry::RuntimeManifest, String> {
+    let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
+    let _operation = state.operation.lock().await;
+    if super::runtimes::runtime_resources_in_use(&state)? {
+        return Err("stop model sessions before registering a runtime".into());
+    }
+    state.runtime_cancel.store(false, Ordering::Release);
+    providers::registry::register(
+        Path::new(&manifest_path),
+        Some(state.runtime_cancel.clone()),
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn pick_runtime_adapter() -> Result<Option<String>, String> {
+    let file = rfd::AsyncFileDialog::new()
+        .add_filter("Runtime manifest", &["json"])
+        .pick_file()
+        .await;
+    Ok(file.map(|file| file.path().to_string_lossy().into_owned()))
 }

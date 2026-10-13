@@ -100,7 +100,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     if (status?.mmproj !== undefined) cfg.mmproj = status.mmproj;
     const replacement = requestFallback(id, cfg.active_model);
     if (replacement && (replacement.provider ?? 'llama.cpp') === providerOf(cfg)) {
-      cfg.provider_options = mergeProviderRequestSettings(cfg, replacement.settings.provider_options);
+      cfg.provider_options = mergeProviderRequestSettings(cfg, replacement.settings.provider_options, status?.engine?.request_option_keys);
       Object.assign(cfg, Object.fromEntries(REQUEST_KEYS.filter(key => replacement.settings[key] !== undefined).map(key => [key, structuredClone(replacement.settings[key])])));
       const requestKeys: readonly string[] = REQUEST_KEYS;
       cfg.runtime_defaults = [...(cfg.runtime_defaults ?? []).filter(key => !requestKeys.includes(key)), ...(replacement.settings.runtime_defaults ?? []).filter(key => requestKeys.includes(key))];

@@ -32,6 +32,7 @@ fn handle(mut stream: TcpStream) {
     if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
         return;
     }
+    let mut authorization = false;
     let mut content_length = 0usize;
     loop {
         let mut line = String::new();
@@ -43,6 +44,7 @@ fn handle(mut stream: TcpStream) {
             break;
         }
         if let Some((name, value)) = trimmed.split_once(':') {
+            authorization |= name.eq_ignore_ascii_case("authorization");
             if name.eq_ignore_ascii_case("content-length") {
                 content_length = value.trim().parse().unwrap_or(0);
             }
@@ -59,6 +61,18 @@ fn handle(mut stream: TcpStream) {
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("");
 
+    if path == "/health"
+        && authorization
+        && std::env::args().any(|arg| arg == "--adapter-no-health-auth")
+    {
+        respond(
+            &mut stream,
+            "400 Bad Request",
+            "text/plain",
+            "Health endpoint must not receive credentials",
+        );
+        return;
+    }
     match (method, path) {
         ("OPTIONS", _) => respond(&mut stream, "200 OK", "text/plain", ""),
         ("GET", "/health") => respond(
@@ -89,6 +103,10 @@ fn handle(mut stream: TcpStream) {
                 let _ = stream.write_all(b"data: [DONE]\n\n");
                 return;
             }
+            if std::env::args().any(|arg| arg == "--adapter-engine") {
+                respond(&mut stream, "200 OK", "text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1,\"total_tokens\":4}}\n\ndata: [DONE]\n\n");
+                return;
+            }
             let body = "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n";
             respond(&mut stream, "200 OK", "text/event-stream", body);
         }
@@ -97,6 +115,29 @@ fn handle(mut stream: TcpStream) {
 }
 
 fn main() {
+    let arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(index) = arguments.iter().position(|arg| arg == "--adapter-probe") {
+        let engine = arguments.get(index + 1).expect("adapter engine ID");
+        let runtime = arguments.get(index + 2).expect("adapter runtime ID");
+        let model = arguments.get(index + 3).expect("adapter model binding");
+        if arguments.iter().any(|arg| arg == "--adapter-probe-jitter")
+            && model.contains("slow-model")
+        {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        if arguments.iter().any(|arg| arg == "--adapter-probe-slow") {
+            std::thread::sleep(std::time::Duration::from_secs(20));
+        }
+        if arguments.iter().any(|arg| arg == "--adapter-probe-fail") {
+            eprintln!("synthetic probe: selected loader dependency is missing");
+            std::process::exit(7);
+        }
+        println!(
+            "{}",
+            serde_json::json!({"schema_version":1,"engine_id":engine,"runtime_id":runtime,"version":"synthetic-adapter-1","accelerator":"cpu","model":model,"served_model":"fake-model","model_supported":model.is_empty() || std::path::Path::new(model).is_file(),"capabilities":{"tasks":["generate"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}})
+        );
+        return;
+    }
     if std::env::args().any(|arg| arg == "--version" || arg == "--help") {
         println!("llama-server test fixture b1\n--model --port --api-key --api-key-file --ctx-size --threads --temp --top-p --top-k");
         return;

@@ -1,5 +1,5 @@
 import type { AppConfig, SessionDefinition } from '../api/types';
-import providerRequestKeys from './providerRequestOptions.json' with { type: 'json' };
+import { providerRequestKeys } from './providerRequestSettings';
 
 /** Only model execution fields cross the settings editor boundary. */
 export const EXECUTION_KEYS = [
@@ -69,7 +69,14 @@ export function serverSettingsChanged(base: AppConfig, draft: AppConfig): boolea
     if ((REQUEST_KEYS as readonly string[]).includes(key)) return false;
     if (key === 'provider_options') {
       const provider = draft.active_provider ?? 'llama.cpp';
-      const request: readonly string[] = provider === 'llama.cpp' ? [] : [...providerRequestKeys[provider], ...(provider === 'vllm' ? ['request_lora'] : [])];
+      if (equal(base.provider_options?.[provider] ?? {}, draft.provider_options?.[provider] ?? {})) return false;
+      let request: readonly string[];
+      try { request = provider === 'llama.cpp' ? [] : [...providerRequestKeys(provider, draft.active_runtime), ...(provider === 'vllm' ? ['request_lora'] : [])]; }
+      catch {
+        // A cold editor has not fetched an external installation's schema yet.
+        // Keep changes pending a reload instead of crashing or claiming request-only.
+        return true;
+      }
       const launch = (cfg: AppConfig) => Object.fromEntries(Object.entries(cfg.provider_options?.[provider] ?? {}).filter(([key]) => !request.includes(key)));
       return !equal(launch(base), launch(draft));
     }

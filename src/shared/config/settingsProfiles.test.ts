@@ -361,4 +361,13 @@ describe('settings a save would rewrite', () => {
     const changes = changedSettings({ top_k: 40 }, { top_p: 0.9 });
     expect(changes.map(change => change.key).sort()).toEqual(['top_k', 'top_p']);
   });
+  it('creates an external engine default without rewriting built-in profiles or source data', () => {
+    const source = ensureProfileLibrary(emptyProfileLibrary());
+    const before = structuredClone(source);
+    const expanded = ensureProfileLibrary(source, 'custom.personal');
+    expect(expanded.entries.filter(entry => entry.provider !== 'custom.personal')).toEqual(source.entries);
+    expect(defaultSettingsProfileEntry(expanded, 'custom.personal')).toMatchObject({ provider: 'custom.personal', settings: { provider_options: { 'custom.personal': {} } } });
+    expect(ensureProfileLibrary(expanded, 'custom.personal')).toBe(expanded);
+    expect(source).toEqual(before);
+  });
 });

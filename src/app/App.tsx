@@ -26,7 +26,7 @@ import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedback
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
 import RuntimeSelectionLabel from '../shared/ui/RuntimeSelectionLabel';
-import { PROVIDERS, providerDisplayName, providerOf, type ProviderId } from '../shared/api/providers';
+import { isProviderId, providerDisplayName, providerOf, type ProviderId } from '../shared/api/providers';
 import { loadPreferences, resetPreferences, savePreferences, type AppPreferences } from "../shared/config/preferences";
 import { applyTypography } from "../shared/config/typography";
 import { normalizeDisplayPath, normalizeDisplayText } from "../shared/lib/displayPaths";
@@ -256,7 +256,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   useEffect(() => {
     const manage = (event: Event) => {
       const provider = (event as CustomEvent<{ provider?: ProviderId }>).detail?.provider;
-      if (provider && PROVIDERS.includes(provider)) setRuntimeEngineRequest(previous => ({ provider, revision: (previous?.revision ?? 0) + 1 }));
+      if (provider && isProviderId(provider)) setRuntimeEngineRequest(previous => ({ provider, revision: (previous?.revision ?? 0) + 1 }));
       navigateRef.current('runtimes');
     };
     window.addEventListener(MANAGE_MODEL_RUNTIMES, manage);

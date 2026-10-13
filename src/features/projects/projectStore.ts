@@ -1,3 +1,4 @@
+import { isProviderId } from '../../shared/api/providerIdentity.ts';
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
 import type { ProfileApplication } from "../../shared/config/settingsProfiles";
@@ -102,11 +103,13 @@ function normalizeConfig(value: unknown): ProjectConfig {
   const keep = clampInt(source.keep, 0, 0, 131072);
   const cache_type_k = typeof source.cache_type_k === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_k) ? source.cache_type_k : "f16";
   const cache_type_v = typeof source.cache_type_v === "string" && PROJECT_CACHE_TYPES.has(source.cache_type_v) ? source.cache_type_v : "f16";
+  const selectedProvider = stringValue(source.active_provider);
+  if (selectedProvider && !isProviderId(selectedProvider)) throw new Error('Unknown inference engine in project settings.');
   return {
     runtime_defaults: stringList(source.runtime_defaults, MAX_PROJECT_RUNTIME_DEFAULTS),
     ...(source.gpu ? { gpu: safeClone(source.gpu) } : {}),
     active_model: stringValue(source.active_model),
-    active_provider: source.active_provider === 'vllm' || source.active_provider === 'mlx-vlm' ? source.active_provider : 'llama.cpp',
+    active_provider: isProviderId(selectedProvider) ? selectedProvider : 'llama.cpp',
     active_runtime: stringValue(source.active_runtime),
     provider_options: source.provider_options && typeof source.provider_options === 'object' && !Array.isArray(source.provider_options) ? safeClone(source.provider_options) : {},
     active_backend: stringValue(source.active_backend),

@@ -8,7 +8,7 @@ use uuid::Uuid;
 pub mod execution;
 pub mod profiles;
 
-const CURRENT_CONFIG_VERSION: u32 = 13;
+const CURRENT_CONFIG_VERSION: u32 = 14;
 const MAX_SERVER_ARGS: usize = 512;
 const MAX_SERVER_ARG_LENGTH: usize = 32_768;
 const MAX_SERVER_ARGS_BYTES: usize = 131_072;
@@ -1064,7 +1064,7 @@ fn migrate_with_presence(
         // type default, so a config written before either existed migrates
         // for free through the container-level `#[serde(default)]` on
         // `AppConfig` itself; no per-field repair is needed here.
-        2..=12 => {}
+        2..=13 => {}
         CURRENT_CONFIG_VERSION => {}
         _ => unreachable!("future config versions are rejected above"),
     }
@@ -1526,14 +1526,53 @@ mod tests {
         let original = "{\n  \"config_version\": 12, \"future_field\": {\"preserved\":true}\n}\n";
         fs::write(&path, original).unwrap();
         let migrated = load_from_path(&path).unwrap();
-        assert_eq!(migrated.config_version, 13);
+        assert_eq!(migrated.config_version, CURRENT_CONFIG_VERSION);
         assert_eq!(migrated.active_provider, "llama.cpp");
-        let backup = path.with_extension("v12-before-v13.json");
+        let backup = path.with_extension(format!("v12-before-v{CURRENT_CONFIG_VERSION}.json"));
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
         // A second older document cannot replace the first recovery point.
         fs::write(&path, "{\"config_version\":12,\"ctx_size\":8192}").unwrap();
         assert_eq!(load_from_path(&path).unwrap().ctx_size, 8192);
         assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn adapter_schema_upgrade_preserves_builtin_options_profiles_and_exact_backup() {
+        let directory =
+            std::env::temp_dir().join(format!("aiolm-adapter-migration-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        let mut previous = AppConfig {
+            active_provider: "vllm".into(),
+            active_runtime: "synthetic-build".into(),
+            ctx_size: 8192,
+            ..Default::default()
+        };
+        previous.provider_options.insert(
+            "vllm".into(),
+            serde_json::json!({"temperature":0.4})
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        previous.normalize();
+        profiles::initialize_profiles(&mut previous, true, false, false).unwrap();
+        previous.config_version = 13;
+        let original = serde_json::to_vec_pretty(&previous).unwrap();
+        fs::write(&path, &original).unwrap();
+        let migrated = load_from_path(&path).unwrap();
+        assert_eq!(migrated.config_version, CURRENT_CONFIG_VERSION);
+        assert_eq!(migrated.active_provider, previous.active_provider);
+        assert_eq!(migrated.active_runtime, previous.active_runtime);
+        assert_eq!(migrated.ctx_size, previous.ctx_size);
+        assert_eq!(migrated.provider_options, previous.provider_options);
+        assert_eq!(migrated.settings_profiles, previous.settings_profiles);
+        assert_eq!(
+            fs::read(path.with_extension(format!("v13-before-v{CURRENT_CONFIG_VERSION}.json")))
+                .unwrap(),
+            original
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 

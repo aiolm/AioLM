@@ -711,7 +711,15 @@ async fn server_status() -> Result<Value, String> {
     let alive = state_process_is_managed(&state);
     let health = if alive {
         reqwest::Client::new()
-            .get(health_url(&configured_server_url(cfg.port)))
+            .get(if aiolm_lib::providers::provider_of(&cfg).is_custom() {
+                let manifest = aiolm_lib::providers::registry::manifest(
+                    aiolm_lib::providers::provider_of(&cfg),
+                    &cfg.active_runtime,
+                )?;
+                format!("http://127.0.0.1:{}{}", cfg.port, manifest.health_path)
+            } else {
+                health_url(&configured_server_url(cfg.port))
+            })
             .timeout(std::time::Duration::from_secs(2))
             .send()
             .await
@@ -764,18 +772,11 @@ async fn server_start_unlocked() -> Result<Value, String> {
     }
     let bin = server::server_bin(&cfg)?;
     let provider = aiolm_lib::providers::provider_of(&cfg);
-    let (args, environment) = if provider == aiolm_lib::providers::ProviderId::Llama {
-        (
-            server::build_args_with_gpu(&cfg, "", &resolved_gpu),
-            runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?,
-        )
-    } else {
-        let selected = aiolm_lib::providers::selected_python_runtime(&cfg)?;
-        let engine = aiolm_lib::providers::launch::engine_command(&cfg, &selected, cfg.port, "")?;
-        let mut environment = aiolm_lib::providers::python_env::engine_environment();
-        environment.extend(engine.env);
-        (engine.args, environment)
-    };
+    let plan =
+        aiolm_lib::providers::adapter::resolve(&cfg).launch(&cfg, cfg.port, "", &resolved_gpu)?;
+    let args = plan.args;
+    let environment = plan.env;
+    let working_directory = plan.working_directory;
     let engine_info = aiolm_lib::providers::execution::probed_info(&cfg).await?;
     let log_file_path = log_path();
     if let Some(parent) = log_file_path.parent() {
@@ -803,6 +804,9 @@ async fn server_start_unlocked() -> Result<Value, String> {
     let child = {
         let mut command = Command::new(&bin);
         command.env_clear().envs(environment);
+        if let Some(cwd) = working_directory {
+            command.current_dir(cwd);
+        }
         #[cfg(windows)]
         command.creation_flags(HEADLESS_CREATION_FLAGS);
         #[cfg(unix)]
@@ -1035,9 +1039,15 @@ fn parse_provider_options(
         })?;
     for (key, values) in &options {
         let provider = ProviderId::parse(key)
-            .filter(|provider| provider.is_python() && provider.as_str() == key)
+            .filter(|provider| *provider != ProviderId::Llama && provider.as_str() == key)
             .ok_or_else(|| format!("provider options cannot be saved for '{key}'"))?;
-        let issues = aiolm_lib::providers::launch::option_issues(provider, values);
+        // External schemas depend on the selected registered instance. Preserve
+        // their typed JSON here; launch/request application validate that schema.
+        let issues = if provider.is_custom() {
+            Vec::new()
+        } else {
+            aiolm_lib::providers::launch::option_issues(provider, values)
+        };
         if !issues.is_empty() {
             let messages = issues
                 .iter()
@@ -1068,8 +1078,8 @@ fn config_set_value(key: &str, value: &str) -> Result<Value, String> {
 }
 
 fn runtime_select_value(backend: &str, build: &str) -> Result<Value, String> {
-    let provider =
-        aiolm_lib::providers::ProviderId::parse(backend).filter(|provider| provider.is_python());
+    let provider = aiolm_lib::providers::ProviderId::parse(backend)
+        .filter(|provider| *provider != aiolm_lib::providers::ProviderId::Llama);
     if provider.is_none() {
         runtime::validate_runtime_identifiers(backend, build)?;
     }
@@ -1079,7 +1089,11 @@ fn runtime_select_value(backend: &str, build: &str) -> Result<Value, String> {
     if let Some(provider) = provider {
         cfg.active_provider = provider.as_str().into();
         cfg.active_runtime = build.into();
-        aiolm_lib::providers::selected_python_runtime(&cfg)?;
+        if provider.is_custom() {
+            aiolm_lib::providers::registry::manifest(provider, build)?;
+        } else {
+            aiolm_lib::providers::selected_python_runtime(&cfg)?;
+        }
     } else {
         cfg.active_provider = "llama.cpp".into();
         cfg.active_runtime.clear();
@@ -1146,6 +1160,17 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
 }
 
 async fn runtime_probe_value(backend: &str, build: &str) -> Result<Value, String> {
+    if let Some(provider) =
+        aiolm_lib::providers::ProviderId::parse(backend).filter(|p| p.is_custom())
+    {
+        let _lock = acquire_command_lock()?;
+        let mut cfg = config::load_result()?;
+        cfg.active_provider = provider.as_str().into();
+        cfg.active_runtime = build.into();
+        aiolm_lib::providers::registry::refresh(&cfg, None).await?;
+        return serde_json::to_value(aiolm_lib::providers::execution::info(&cfg)?)
+            .map_err(|e| e.to_string());
+    }
     if let Some(provider) =
         aiolm_lib::providers::ProviderId::parse(backend).filter(|provider| provider.is_python())
     {
@@ -1215,8 +1240,8 @@ async fn doctor_value() -> Value {
     let cfg = config::load_result().ok();
     let provider = cfg.as_ref().map(provider_of);
     let runtime = match &cfg {
-        Some(cfg) if provider_of(cfg).is_python() => Some(
-            match aiolm_lib::providers::refresh_selected_python_runtime(cfg, None).await {
+        Some(cfg) if provider_of(cfg) != ProviderId::Llama => Some(
+            match aiolm_lib::providers::adapter::refresh(cfg, None).await {
                 Ok(_) => server::server_bin(cfg),
                 Err(error) => Err(error),
             },
@@ -1225,7 +1250,11 @@ async fn doctor_value() -> Value {
         None => None,
     };
     let runtimes = aiolm_lib::providers::list_runtime_instances();
-    let counts = ProviderId::ALL
+    let mut ids = ProviderId::ALL.to_vec();
+    ids.extend(runtimes.iter().map(|runtime| runtime.provider));
+    ids.sort();
+    ids.dedup();
+    let counts = ids
         .into_iter()
         .map(|provider| {
             let count = runtimes
@@ -1242,7 +1271,7 @@ async fn doctor_value() -> Value {
         "runtime": cfg.as_ref().map(runtime_id_of),
         "server_executable": runtime.as_ref().and_then(|value| value.as_ref().ok()),
         "runtime_ready": runtime.as_ref().is_some_and(Result::is_ok),
-        "readiness_source": if provider.is_some_and(ProviderId::is_python) { "live-python-probe" } else { "executable-presence" },
+        "readiness_source": if provider.is_some_and(ProviderId::is_custom) { "live-adapter-model-probe" } else if provider.is_some_and(ProviderId::is_python) { "live-python-probe" } else { "executable-presence" },
         "runtime_problem": runtime.and_then(Result::err),
         "runtime_count": runtimes.len(),
         "runtime_counts": counts,
@@ -1260,7 +1289,10 @@ fn help_value() -> Value {
             "config set provider_options <json>":"replace the vllm/mlx-vlm option map; every value must pass the engine option schema",
             "models list":"scan model files and snapshots with engine compatibility",
             "models delete <path>":"delete a non-active GGUF/mmproj file, or an app-downloaded snapshot folder (only the files its manifest lists; other files stay)",
-            "runtime list":"list native and Python engine installations",
+            "runtime list":"list built-in and registered external engine installations",
+            "runtime register-manifest <json>":"probe and register a versioned external process adapter; engine files stay external",
+            "runtime select <custom.engine> <id>":"select a registered engine without replacing its files",
+            "runtime probe <custom.engine> <id>":"probe the exact active model on an external adapter",
             "runtime select <vllm|mlx-vlm> <id>":"select an installed Python engine runtime",
             "runtime register <vllm|mlx-vlm> <python>":"probe and register an existing engine environment",
             "runtime install <vllm|mlx-vlm> [python]":"install the pinned engine in an isolated environment; Ctrl-C cancels and removes the partial environment",
@@ -1303,6 +1335,9 @@ enum CliCommand {
     RuntimeSelect {
         backend: String,
         build: String,
+    },
+    RuntimeAdapterRegister {
+        manifest: String,
     },
     RuntimeRegister {
         provider: String,
@@ -1361,6 +1396,7 @@ fn parse_command(args: &[String]) -> Result<CliCommand, String> {
         },
         "runtime" | "runtimes" => match args.get(1).map(String::as_str) {
             Some("list") if args.len() == 2 => Ok(CliCommand::RuntimesList),
+            Some("register-manifest") if args.len() == 3 => Ok(CliCommand::RuntimeAdapterRegister { manifest: args[2].clone() }),
             Some("register") if args.len() == 4 => Ok(CliCommand::RuntimeRegister { provider: args[2].clone(), python: args[3].clone() }),
             Some("install") if (3..=4).contains(&args.len()) => Ok(CliCommand::RuntimeInstall { provider: args[2].clone(), python: args.get(3).cloned() }),
             Some("remove") if args.len() == 4 => Ok(CliCommand::RuntimeRemove { provider: args[2].clone(), runtime: args[3].clone() }),
@@ -1413,6 +1449,23 @@ async fn run(args: &[String]) -> Result<Value, String> {
         CliCommand::DeviceProfile => device_value(),
         CliCommand::RuntimeProbe { backend, build } => runtime_probe_value(&backend, &build).await,
         CliCommand::RuntimeSelect { backend, build } => runtime_select_value(&backend, &build),
+        CliCommand::RuntimeAdapterRegister { manifest } => {
+            let _lock = acquire_command_lock()?;
+            if read_state()?.is_some_and(|state| {
+                state_process_is_managed(&state) && process_is_alive(state.pid)
+            }) {
+                return Err("stop the headless server before registering a runtime".into());
+            }
+            let cancel = Arc::new(AtomicBool::new(false));
+            let register = aiolm_lib::providers::registry::register(
+                Path::new(&manifest),
+                Some(cancel.clone()),
+            );
+            let registered = run_interruptible(register, tokio::signal::ctrl_c(), &cancel).await?;
+            Ok(
+                json!({"engine_id":registered.engine_id,"runtime_id":registered.runtime_id,"display_name":registered.display_name}),
+            )
+        }
         CliCommand::RuntimeRegister { provider, python } => {
             let provider = aiolm_lib::providers::ProviderId::parse(&provider)
                 .filter(|provider| provider.is_python())
@@ -1444,11 +1497,13 @@ async fn run(args: &[String]) -> Result<Value, String> {
         }
         CliCommand::RuntimeRemove { provider, runtime } => {
             let provider = aiolm_lib::providers::ProviderId::parse(&provider)
-                .filter(|provider| provider.is_python())
+                .filter(|provider| *provider != aiolm_lib::providers::ProviderId::Llama)
                 .ok_or("select vllm or mlx-vlm")?;
             let _lock = acquire_command_lock()?;
             let cfg = config::load_result()?;
-            if aiolm_lib::providers::provider_of(&cfg) == provider && cfg.active_runtime == runtime
+            if aiolm_lib::providers::provider_of(&cfg) == provider
+                && cfg.active_runtime == runtime
+                && !provider.is_custom()
             {
                 return Err("select another runtime before removing this environment".into());
             }
@@ -1457,7 +1512,11 @@ async fn run(args: &[String]) -> Result<Value, String> {
             }) {
                 return Err("stop the headless server before removing a runtime".into());
             }
-            aiolm_lib::providers::python_env::remove(provider, &runtime)?;
+            if provider.is_custom() {
+                aiolm_lib::providers::registry::remove(provider, &runtime)?;
+            } else {
+                aiolm_lib::providers::python_env::remove(provider, &runtime)?;
+            }
             Ok(json!({"ok":true,"provider":provider,"runtime":runtime}))
         }
         CliCommand::RuntimeExport {

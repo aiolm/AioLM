@@ -95,7 +95,7 @@ pub enum ArtifactRole {
     Embedding,
 }
 
-#[derive(Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modalities {
     pub text: bool,
     pub image: bool,

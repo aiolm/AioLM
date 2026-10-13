@@ -56,7 +56,8 @@
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
     "test:i18n": "node --experimental-strip-types tests/direct/test-i18n.ts",
-    "test:ui": "npm run build:contracts && vitest run"
+    "test:ui": "npm run build:contracts && vitest run",
+    "test:runtime-adapters": "node --experimental-strip-types scripts/smoke-runtime-adapters.mjs"
   },
   "dependencies": {
     "@aiolm/benchmark-contracts": "file:packages/benchmark-contracts",

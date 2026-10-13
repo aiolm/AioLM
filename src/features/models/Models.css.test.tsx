@@ -13,6 +13,8 @@ import * as api from "../../shared/api/index";
 
 vi.mock("../../shared/api/index", () => ({
   PROVIDERS: ['llama.cpp', 'vllm', 'mlx-vlm'],
+  registeredProviderIds: () => ['llama.cpp', 'vllm', 'mlx-vlm'],
+  providerDisplayName: (id: string) => id,
   providerOf: (cfg: Partial<AppConfig>) => cfg.active_provider ?? 'llama.cpp',
   modelLoadable: (model: { is_vision: boolean }, provider: string) => provider === 'llama.cpp' && !model.is_vision,
   isNativeRuntimeAvailable: () => false,

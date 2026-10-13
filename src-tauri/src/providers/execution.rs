@@ -53,6 +53,9 @@ pub fn inspect(path: &Path) -> Result<artifacts::ModelArtifact, String> {
 }
 
 pub fn compatibility(cfg: &AppConfig) -> Result<compat::ModelCompatibility, String> {
+    if super::provider_of(cfg).is_custom() {
+        return super::registry::compatibility(cfg);
+    }
     let artifact = inspect(Path::new(&cfg.active_model))?;
     let provider = super::provider_of(cfg);
     let runtime = if provider == ProviderId::Llama {
@@ -91,6 +94,10 @@ pub async fn probed_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
 
 pub fn validate(cfg: &AppConfig) -> Result<(), String> {
     let provider = super::provider_of(cfg);
+    if provider.is_custom() {
+        super::registry::command(cfg, cfg.port, "")?;
+        return Ok(());
+    }
     let availability = provider.availability();
     if !availability.supported {
         return Err(availability.detail);
@@ -115,6 +122,10 @@ pub fn validate(cfg: &AppConfig) -> Result<(), String> {
 }
 
 pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
+    super::adapter::resolve(cfg).engine_info(cfg)
+}
+
+pub(super) fn builtin_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     let provider = super::provider_of(cfg);
     let compatible = compatibility(cfg)?;
     let modalities = compatible.modalities;
@@ -212,6 +223,7 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         } else {
             vec!["generate".into()]
         },
+        request_option_keys: Vec::new(),
         request_fields: super::options::request_fields(provider, &schema_options),
         chat_supported: if provider == ProviderId::Vllm
             && compatible.tasks.contains(&"generate")

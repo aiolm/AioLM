@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
+import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAdapterRegister, publishRuntimeCatalog, type ProviderDescription, listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
 import { invoke } from './transport.ts';
 import type { GgufModel } from './types';
 
@@ -79,5 +79,33 @@ describe('portable runtime IPC', () => {
     await expect(providerPortableImport()).resolves.toEqual(imported);
     expect(invoke).toHaveBeenCalledWith('provider_portable_import');
     expect(imported.id.startsWith('portable-')).toBe(true);
+  });
+});
+
+
+describe('external runtime inventory publication', () => {
+  it('fetches a new catalog after registration instead of reusing an older in-flight snapshot', async () => {
+    let release!: (value: ProviderDescription[]) => void;
+    const old = new Promise<ProviderDescription[]>(done => { release = done; });
+    const fresh: ProviderDescription[] = [{ id: 'custom.new', engine: 'New engine', server: 'openai-v1', options: [], availability: { supported: true, detail: 'Synthetic' } }];
+    vi.mocked(invoke).mockReturnValueOnce(old).mockResolvedValueOnce(fresh);
+    const pending = providerCatalog();
+    const afterRegistration = providerCatalog(true);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    release([]);
+    await pending;
+    await expect(afterRegistration).resolves.toEqual(fresh);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+  it('invalidates a re-registered runtime schema and never substitutes another installation schema', async () => {
+    publishRuntimeCatalog([{ id: 'custom.cache', engine: 'Synthetic', server: 'openai-v1', options: [], availability: { supported: true, detail: 'Synthetic' } }]);
+    const schema = [{ key: 'temperature', target: 'request', group: 'sampling', kind: { type: 'number', min: 0, max: 2 } }];
+    vi.mocked(invoke).mockResolvedValueOnce(schema);
+    await providerRuntimeOptions('custom.cache', 'build-1');
+    expect(runtimeOptionSchema('custom.cache', 'build-1')).toEqual(schema);
+    expect(runtimeOptionSchema('custom.cache', 'build-2')).toBeUndefined();
+    vi.mocked(invoke).mockResolvedValueOnce({ engine_id: 'custom.cache', runtime_id: 'build-1', display_name: 'Synthetic' });
+    await runtimeAdapterRegister('/synthetic/new-manifest.json');
+    expect(runtimeOptionSchema('custom.cache', 'build-1')).toBeUndefined();
   });
 });

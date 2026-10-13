@@ -584,7 +584,7 @@ const MAX_JSON_BYTES: usize = 65_536;
 
 pub fn schema(provider: ProviderId) -> &'static [OptionSpec] {
     match provider {
-        ProviderId::Llama => &[],
+        ProviderId::Llama | ProviderId::Custom(_) => &[],
         ProviderId::Vllm => VLLM_OPTIONS,
         ProviderId::MlxVlm => MLX_VLM_OPTIONS,
     }
@@ -595,6 +595,13 @@ pub fn schema(provider: ProviderId) -> &'static [OptionSpec] {
 /// raw arguments would let a saved option silently override the selection.
 pub fn app_managed_flags(provider: ProviderId) -> &'static [&'static str] {
     match provider {
+        ProviderId::Custom(_) => &[
+            "--model",
+            "--host",
+            "--port",
+            "--api-key",
+            "--served-model-name",
+        ],
         ProviderId::Llama => crate::config::APP_MANAGED_SERVER_ARGS,
         ProviderId::Vllm => &[
             "--model",

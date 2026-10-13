@@ -451,7 +451,7 @@ fn uses_device(provider: ProviderId, variant: &str, accelerator: &str) -> bool {
         ProviderId::Vllm if variant == "vllm-metal" => accelerator == "metal",
         ProviderId::Vllm => ["cuda", "rocm", "xpu"].contains(&accelerator),
         ProviderId::MlxVlm => accelerator == "metal",
-        ProviderId::Llama => false,
+        ProviderId::Llama | ProviderId::Custom(_) => false,
     }
 }
 
@@ -848,6 +848,9 @@ pub(crate) async fn run_engine_script(
 /// Score the selected Python engine's device path against a host reference
 /// over the user's own weights, store the verdict and return it.
 pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result<Record, String> {
+    if crate::providers::provider_of(cfg).is_custom() {
+        return Err("unsupported: this runtime adapter provides no reference comparison for deep verification".into());
+    }
     let runtime =
         crate::providers::refresh_selected_python_runtime(cfg, Some(cancel.clone())).await?;
     crate::providers::execution::validate(cfg)?;
@@ -986,6 +989,7 @@ pub(crate) async fn run_deep(cfg: &AppConfig, cancel: Arc<AtomicBool>) -> Result
                 }
             }
         }
+        ProviderId::Custom(_) => return Err("unsupported external reference comparison".into()),
         ProviderId::Llama => {
             return Err("llama.cpp runtimes use llama-perplexity verification".into())
         }

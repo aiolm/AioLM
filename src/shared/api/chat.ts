@@ -12,6 +12,7 @@ import { mapChatOptionAliases, type JsonObject } from "../config/tuningValidatio
 import { readBoundedResponseText } from "./http.ts";
 import type { ChatDelta, ChatMessage, ChatRequestBody, ChatSampling } from "./types.ts";
 import { resolveMedia } from './commands.ts';
+import { isExternalProvider } from './providers.ts';
 import { providerRequestFields } from '../config/providerRequestSettings.ts';
 
 function asJsonObject(value: unknown): JsonObject | null {
@@ -29,9 +30,9 @@ export function buildChatRequestBody(
     const engine = sampling.engine;
     if (!engine) throw new Error('Runtime request capabilities are not ready.');
     if (engine.tasks && !engine.tasks.includes('generate')) throw new Error('Select a generation session for chat; this session serves a different task.');
-    if (engine.chat_supported === false) throw new Error('This model has no chat template. Select an Instruct/chat model or configure --chat-template in its runtime profile. Text completions remain available.');
-    if (sampling.tools?.length && engine.tools_auto === false) throw new Error('Enable automatic tool choice and select the model tool parser in the runtime profile.');
-    const fields = { ...(sampling.provider_options === undefined ? engine.request_fields : providerRequestFields(engine.provider, sampling.provider_options)) };
+    if (engine.chat_supported === false) throw new Error(isExternalProvider(engine.provider) ? 'The selected runtime/model adapter does not support chat. Select a chat-capable model/runtime or update its adapter configuration.' : 'This model has no chat template. Select an Instruct/chat model or configure --chat-template in its runtime profile. Text completions remain available.');
+    if (sampling.tools?.length && engine.tools_auto === false) throw new Error(isExternalProvider(engine.provider) ? 'The selected runtime/model does not declare tool-call support.' : 'Enable automatic tool choice and select the model tool parser in the runtime profile.');
+    const fields = { ...(sampling.provider_options === undefined ? engine.request_fields : providerRequestFields(engine.provider, sampling.provider_options, engine.request_option_keys)) };
     if (typeof fields.max_tokens === 'number' && Number.isFinite(fields.max_tokens)
       && typeof sampling.max_tokens_limit === 'number' && Number.isSafeInteger(sampling.max_tokens_limit) && sampling.max_tokens_limit > 0) {
       fields.max_tokens = Math.min(fields.max_tokens, sampling.max_tokens_limit);

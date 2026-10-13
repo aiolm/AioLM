@@ -124,6 +124,9 @@ fn adapter_problem(provider: ProviderId, path: &Path, max_rank: Option<i64>) -> 
     };
     let name = path.display();
     match provider {
+        ProviderId::Custom(_) => {
+            return Some("external adapter bindings must be declared by its option schema".into())
+        }
         ProviderId::Vllm => {
             let rank = match config.get("r").and_then(Value::as_i64) {
                 Some(rank) if rank > 0 => rank,
@@ -967,6 +970,7 @@ pub struct EngineCommand {
     pub args: Vec<String>,
     /// Environment entries added to the engine's cleared base environment.
     pub env: Vec<(OsString, OsString)>,
+    pub working_directory: Option<PathBuf>,
     /// The id requests must carry in `model`.
     pub upstream_model: String,
     pub readiness: Readiness,
@@ -975,7 +979,7 @@ pub struct EngineCommand {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Readiness {
     /// Path relative to the server root polled until it answers 200.
-    pub health_path: &'static str,
+    pub health_path: String,
     /// Whether the health endpoint requires the bearer key.
     pub health_authenticated: bool,
     /// The model id that must appear in `/v1/models`.
@@ -1126,7 +1130,7 @@ pub fn engine_command(
             (
                 served.clone(),
                 Readiness {
-                    health_path: "/health",
+                    health_path: "/health".into(),
                     health_authenticated: false,
                     expected_model: served,
                 },
@@ -1191,13 +1195,14 @@ pub fn engine_command(
             (
                 model.to_owned(),
                 Readiness {
-                    health_path: "/health",
+                    health_path: "/health".into(),
                     health_authenticated: true,
                     expected_model: model.to_owned(),
                 },
             )
         }
         ProviderId::Llama => return Err("llama.cpp is launched through server::spawn".into()),
+        ProviderId::Custom(_) => return Err("external engines use their registered adapter".into()),
     };
     // Every flag the command carries, dedicated bindings included, must be one
     // the installed server reported; an older or newer engine would otherwise
@@ -1221,6 +1226,7 @@ pub fn engine_command(
     }
     Ok(EngineCommand {
         program: PathBuf::from(&runtime.python),
+        working_directory: None,
         args,
         env,
         upstream_model,

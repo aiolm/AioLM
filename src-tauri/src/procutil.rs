@@ -336,11 +336,36 @@ pub fn capture_stdout_cancellable(
     cap: usize,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> std::io::Result<std::process::Output> {
+    capture_helper_cancellable(command, limit, cap, cancel, false)
+}
+
+/// Capture probe diagnostics separately from its JSON stdout, with bounded
+/// drains and the same cancellation/process-tree ownership as system probes.
+pub fn capture_output_cancellable(
+    command: &mut std::process::Command,
+    limit: std::time::Duration,
+    cap: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> std::io::Result<std::process::Output> {
+    capture_helper_cancellable(command, limit, cap, cancel, true)
+}
+
+fn capture_helper_cancellable(
+    command: &mut std::process::Command,
+    limit: std::time::Duration,
+    cap: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    diagnostics: bool,
+) -> std::io::Result<std::process::Output> {
     use std::io::Read;
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+        .stderr(if diagnostics {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        });
     let mut child = OwnedChild::spawn(command)?;
     let mut stdout = child.stdout.take().expect("captured helper stdout");
     let reader = std::thread::Builder::new()
@@ -357,6 +382,28 @@ pub fn capture_stdout_cancellable(
             }
             output.snapshot()
         })?;
+    let errors = if let Some(mut stderr) = child.stderr.take() {
+        Some(
+            std::thread::Builder::new()
+                .name("helper-stderr".into())
+                .spawn(move || {
+                    let mut output = crate::process_output::OutputBuffer::new(
+                        cap,
+                        crate::process_output::Retain::Tail,
+                    );
+                    let mut buffer = [0_u8; 8192];
+                    loop {
+                        match stderr.read(&mut buffer) {
+                            Ok(0) | Err(_) => break,
+                            Ok(size) => output.push(&buffer[..size]),
+                        }
+                    }
+                    output.snapshot()
+                })?,
+        )
+    } else {
+        None
+    };
     let deadline = std::time::Instant::now() + limit;
     let status = loop {
         if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
@@ -376,10 +423,16 @@ pub fn capture_stdout_cancellable(
     let stdout = reader
         .join()
         .map_err(|_| std::io::Error::other("helper output reader failed"))?;
+    let stderr = match errors {
+        Some(reader) => reader
+            .join()
+            .map_err(|_| std::io::Error::other("helper diagnostic reader failed"))?,
+        None => Vec::new(),
+    };
     Ok(std::process::Output {
         status: status?,
         stdout,
-        stderr: Vec::new(),
+        stderr,
     })
 }
 

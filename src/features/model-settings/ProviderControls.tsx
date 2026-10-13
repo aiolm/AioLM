@@ -86,9 +86,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const unknown = schemaKnown ? Object.keys(values).filter(key => !schema.some(option => option.key === key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model'].includes(key)
     && !(key === 'trust_remote_code' && values[key] === false)) : [];
   const supports = (...flags: string[]) => !runtimeFlags || flags.every(flag => runtimeFlags.includes(flag));
-  const showLora = supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined;
+  const showLora = !api.isExternalProvider(provider) && (supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined);
   const bindingKey = provider === 'vllm' ? 'request_lora' : 'draft_model';
-  const showBinding = (provider === 'vllm' ? supports('--enable-lora', '--lora-modules') : supports('--draft-model')) || values[bindingKey] !== undefined;
+  const showBinding = !api.isExternalProvider(provider) && ((provider === 'vllm' ? supports('--enable-lora', '--lora-modules') : supports('--draft-model')) || values[bindingKey] !== undefined);
   const unknownCount = unknown.length;
   const checking = validating || loadingSchema;
   useEffect(() => {
@@ -117,7 +117,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
     {advanced && <>
-    <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />
+    {!api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
     <label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => setPaste(event.target.value)} /></label>
     <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim()} onClick={() => void api.providerImportCommand(provider, paste).then(result => {
       if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }

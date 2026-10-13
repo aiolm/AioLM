@@ -37,7 +37,7 @@ export interface ProfileEditorResult {
 export interface ProfileCommitResult { config: AppConfig; application: ProfileApplication }
 
 export function profileLibrary(cfg: AppConfig): SettingsProfileLibrary {
-  return ensureProfileAssignments(cfg, ensureProfileLibrary(cfg.settings_profiles ?? migrateProfileLibrary(cfg)));
+  return ensureProfileAssignments(cfg, ensureProfileLibrary(cfg.settings_profiles ?? migrateProfileLibrary(cfg), providerOf(cfg)));
 }
 
 export function appliedProfile(cfg: AppConfig, sessionId = 'default'): ProfileApplication | undefined {
@@ -160,8 +160,8 @@ export function rebaseStaleProfileEdit(base: SettingsProfileLibrary | undefined,
     if (latestValue !== undefined && same(latestValue, editedValue)) { applied[key] = structuredClone(editedValue); continue; }
     return null;
   }
-  const mergeSelections = (base: Record<string, string> = {}, latest: Record<string, string> = {}, edited: Record<string, string> = {}) => {
-    const merged: Record<string, string> = {};
+  const mergeSelections = (base: Partial<Record<string, string>> = {}, latest: Partial<Record<string, string>> = {}, edited: Partial<Record<string, string>> = {}) => {
+    const merged: Partial<Record<string, string>> = {};
     for (const key of new Set([...Object.keys(base), ...Object.keys(latest), ...Object.keys(edited)])) {
       const value = edited[key] === base[key] ? latest[key] : edited[key];
       if (edited[key] !== base[key] && latest[key] !== base[key] && latest[key] !== edited[key]) return null;

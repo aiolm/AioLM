@@ -1,7 +1,6 @@
 // src-tauri/src/server.rs
 use crate::config::{AppConfig, APP_MANAGED_SERVER_ARGS};
 use crate::process_output::{OutputBuffer, Retain};
-use crate::runtime;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -591,25 +590,10 @@ pub fn strip_ansi(text: &str) -> String {
 }
 
 /// Resolve the managed runtime executable. Only runtimes installed in AioLM
-/// are ever used; system PATH and WinGet copies are intentionally ignored so
-/// a stale outside binary can never serve a launch.
+/// are used for built-in engines; external adapters use the explicitly
+/// registered executable. System PATH and WinGet copies are never substituted.
 pub fn server_bin(cfg: &AppConfig) -> Result<String, String> {
-    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
-        return Ok(crate::providers::selected_python_runtime(cfg)?.python);
-    }
-    if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-        return Err(
-            "select a runtime installed in AioLM before starting the server; system runtimes outside AioLM are not used".into(),
-        );
-    }
-    let path = runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?;
-    if path.is_file() {
-        return Ok(path.to_string_lossy().into_owned());
-    }
-    Err(format!(
-        "managed runtime is missing llama-server: {}",
-        path.display()
-    ))
+    crate::providers::adapter::resolve(cfg).executable(cfg)
 }
 
 /// Build the llama-server command line with no GPU placement resolved,
@@ -904,40 +888,18 @@ pub fn spawn(
     ring: &Arc<ErrBuf>,
     resolved_gpu: &crate::gpu::ResolvedGpu,
 ) -> Result<(Child, String, Option<PathBuf>), String> {
-    let provider = crate::providers::provider_of(cfg);
-    let bin = server_bin(cfg)?;
-    // Resolve fallible environment setup before creating a credential file.
-    // Keep early environment-setup errors outside the credential lifetime.
-    // Launch validation guarantees a managed runtime, so the system
-    // environment fallback below is unreachable in production.
-    let engine = if provider == crate::providers::ProviderId::Llama {
-        None
-    } else {
-        Some(crate::providers::launch::engine_command(
-            cfg,
-            &crate::providers::selected_python_runtime(cfg)?,
-            cfg.port,
-            api_key,
-        )?)
-    };
-    let mut environment = if engine.is_some() {
-        crate::providers::python_env::engine_environment()
-    } else {
-        runtime::child_environment_for_runtime(&cfg.active_backend, &cfg.active_build)?
-    };
-    let api_key_file = if engine.is_some() {
-        None
-    } else {
+    let adapter = crate::providers::adapter::resolve(cfg);
+    let plan = adapter.launch(cfg, cfg.port, api_key, resolved_gpu)?;
+    let bin = plan.program.to_string_lossy().into_owned();
+    let api_key_file = if adapter.kind() == crate::providers::adapter::RuntimeKind::Native {
         create_api_key_file(api_key)?
+    } else {
+        None
     };
     let key_guard = api_key_file.clone().map(ApiKeyFile);
-    let mut args = match engine {
-        Some(engine) => {
-            environment.extend(engine.env);
-            engine.args
-        }
-        None => build_args_with_gpu(cfg, api_key, resolved_gpu),
-    };
+    let environment = plan.env;
+    let working_directory = plan.working_directory;
+    let mut args = plan.args;
     if let Some(path) = api_key_file.as_ref() {
         args.push("--api-key-file".into());
         args.push(path.to_string_lossy().into_owned());
@@ -948,6 +910,9 @@ pub fn spawn(
     // consistent with probes and benchmarks, and never hand it inherited
     // credentials or unrelated application state.
     command.env_clear().envs(environment).args(&args);
+    if let Some(cwd) = working_directory {
+        command.current_dir(cwd);
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let process = crate::procutil::OwnedChild::spawn(&mut command).map_err(|e| {
         cleanup_api_key_file(api_key_file.as_deref());
@@ -1168,6 +1133,7 @@ pub async fn wait_ready(
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(500))
         .timeout(Duration::from_secs(2))
         .build()
@@ -1177,13 +1143,27 @@ pub async fn wait_ready(
             }
             format!("failed to create readiness client: {e}")
         })?;
-    let health = url.replace("/v1", "/health");
+    let mut health = url.replace("/v1", "/health");
+    let mut health_authenticated = true;
     let models = format!("{url}/models");
     let engine = shared
         .lock()
         .map_err(|_| "server state lock was poisoned")?
         .engine
         .clone();
+    if let Some(info) = engine.as_ref().filter(|info| info.provider.is_custom()) {
+        let manifest = match crate::providers::registry::manifest(info.provider, &info.runtime_id) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                if let Ok(mut state) = shared.lock() {
+                    kill(&mut state.child, None);
+                }
+                return Err(error);
+            }
+        };
+        health_authenticated = manifest.health_authenticated;
+        health = format!("{}{}", url.trim_end_matches("/v1"), manifest.health_path);
+    }
     let port = match port_from_url(url) {
         Some(port) => port,
         None => {
@@ -1240,12 +1220,11 @@ pub async fn wait_ready(
         }
 
         let header = auth_header(api_key);
-        let health_response = client
-            .get(&health)
-            .header("Authorization", &header)
-            .send()
-            .await
-            .ok();
+        let mut health_request = client.get(&health);
+        if health_authenticated {
+            health_request = health_request.header("Authorization", &header);
+        }
+        let health_response = health_request.send().await.ok();
         let health_ok = match health_response {
             Some(response) if response.status().is_success() => {
                 if engine

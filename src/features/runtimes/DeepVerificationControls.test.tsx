@@ -14,4 +14,11 @@ describe('runtime verification coverage', () => {
     expect(screen.queryByText('ui.deepVerifyPass')).not.toBeInTheDocument();
     expect(screen.queryByText('ui.deepVerifyFail')).not.toBeInTheDocument();
   });
+  it('explains unavailable external reference verification before a request is sent', () => {
+    const start = vi.fn();
+    render(<I18nProvider initialLocale="en"><DeepVerificationControls t={key => key} provider="custom.example" serverRunning={false} state={{ busy: false, error: null, record: null, start, cancel: vi.fn() }} /></I18nProvider>);
+    expect(screen.getByRole('button', { name: 'ui.deepVerify' })).toBeDisabled();
+    expect(screen.getByText('External adapter v1 does not provide CPU reference verification.')).toBeInTheDocument();
+    expect(start).not.toHaveBeenCalled();
+  });
 });

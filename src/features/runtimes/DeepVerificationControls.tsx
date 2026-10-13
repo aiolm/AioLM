@@ -1,6 +1,7 @@
+import { runtimeAdapterCopy } from '../../shared/i18n/runtimeAdapterCopy';
 import type { UnifiedKey, TranslationVars } from '../../shared/i18n/i18nUnified';
 import { useI18n } from '../../shared/i18n/i18n';
-import type { ProviderId } from '../../shared/api/providers';
+import { isExternalProvider, type ProviderId } from '../../shared/api/providers';
 import type { VerificationRecord } from '../../shared/api/types';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import StatusBadge from '../../shared/ui/StatusBadge';
@@ -24,13 +25,15 @@ export default function DeepVerificationControls({ t, state, provider = 'llama.c
   t: (key: UnifiedKey, vars?: TranslationVars) => string; state: DeepVerificationState; provider?: ProviderId; runtimeBusy?: boolean; serverRunning: boolean;
 }) {
   const { locale } = useI18n(); const text = copy[locale];
+  const external = isExternalProvider(provider);
+  const externalHint = runtimeAdapterCopy[locale].deep;
   const record = state.record;
   const unsupported = record?.verdict === 'unsupported';
   return <div className="runtime-deep-verify">
-    <p className="app-section-hint">{provider === 'llama.cpp' ? t('ui.deepVerifyHint') : text.hint}</p>
+    <p className="app-section-hint">{external ? externalHint : provider === 'llama.cpp' ? t('ui.deepVerifyHint') : text.hint}</p>
     <div className="runtime-deep-verify-actions">
       {state.busy ? <LocalTaskCancelButton taskId={DEEP_VERIFICATION_TASK} onClick={state.cancel} className="app-button app-button--danger app-button--sm">{t('common.cancel')}</LocalTaskCancelButton>
-        : <button type="button" data-icon="probe" onClick={state.start} disabled={runtimeBusy || serverRunning} title={serverRunning ? t('ui.stopBeforeSelect') : undefined} className="app-button app-button--secondary app-button--sm">{t('ui.deepVerify')}</button>}
+        : <button type="button" data-icon="probe" onClick={state.start} disabled={external || runtimeBusy || serverRunning} title={serverRunning ? t('ui.stopBeforeSelect') : undefined} className="app-button app-button--secondary app-button--sm">{t('ui.deepVerify')}</button>}
       {record && <StatusBadge label={unsupported ? record.coverage === 'partial' ? text.partial : text.unavailable : t(record.verdict === 'pass' ? 'ui.deepVerifyPass' : 'ui.deepVerifyFail')}
         tone={unsupported ? 'warning' : record.verdict === 'pass' ? 'success' : 'danger'} />}
     </div>

@@ -1,5 +1,5 @@
 import type { AppConfig } from '../api/types';
-import { PROVIDERS, providerOf, type ProviderId } from '../api/providers';
+import { providerOf, isProviderId, type ProviderId } from '../api/providers';
 import type { ExecutionSettings } from './executionSettings';
 import {
   emptyProfileLibrary, MODEL_PROFILE_KEYS,
@@ -101,7 +101,7 @@ function validateSettings(value: RecordValue, source: string, provider: Provider
     } else if (key === 'provider_options') {
       const providers = record(field, `${source}.${key}`);
       for (const [provider, options] of Object.entries(providers)) {
-        if (!['llama.cpp', 'vllm', 'mlx-vlm'].includes(provider)) invalid(`${source}.${key}`);
+        if (!isProviderId(provider)) invalid(`${source}.${key}`);
         record(options, `${source}.${key}.${provider}`);
       }
     } else if (key === 'lora_adapters') {
@@ -232,7 +232,8 @@ export function migrateProfileLibrary(cfg: AppConfig, storage: Pick<Storage, 'ge
     const raw = record(executionRaw, EXECUTION_KEY);
     if (raw.version !== 1) invalid(EXECUTION_KEY);
     for (const [path, settings] of Object.entries(record(raw.models, EXECUTION_KEY))) {
-      const provider = PROVIDERS.find(provider => provider !== 'llama.cpp' && path.startsWith(`provider:${provider}:model:`));
+      const candidate = /^provider:([^:]+):model:/.exec(path)?.[1];
+      const provider = isProviderId(candidate) && candidate !== 'llama.cpp' ? candidate : undefined;
       if (provider) {
         const model = path.slice(`provider:${provider}:model:`.length);
         const key = profileTargetKey(model, 'default', provider);

@@ -2185,7 +2185,7 @@ mod tests {
                     ..Default::default()
                 }
             }
-            ProviderId::Llama => Default::default(),
+            ProviderId::Llama | ProviderId::Custom(_) => Default::default(),
         }
     }
 

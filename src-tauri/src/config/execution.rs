@@ -76,16 +76,27 @@ pub fn apply_request_settings(live: &AppConfig, edited: &AppConfig) -> Result<Ap
             .entry(provider.as_str().into())
             .or_default();
         let edited_options = crate::providers::launch::provider_options(edited, provider);
-        for option in crate::providers::options::schema(provider)
-            .iter()
-            .filter(|option| option.target == crate::providers::options::OptionTarget::Request)
-        {
-            match edited_options.get(option.key) {
+        let request_keys = if provider.is_custom() {
+            crate::providers::registry::manifest(provider, &live.active_runtime)?
+                .options
+                .into_iter()
+                .filter(|option| option.target == "request")
+                .map(|option| option.key)
+                .collect::<Vec<_>>()
+        } else {
+            crate::providers::options::schema(provider)
+                .iter()
+                .filter(|option| option.target == crate::providers::options::OptionTarget::Request)
+                .map(|option| option.key.to_owned())
+                .collect()
+        };
+        for key in request_keys {
+            match edited_options.get(&key) {
                 Some(value) => {
-                    saved.insert(option.key.into(), value.clone());
+                    saved.insert(key.clone(), value.clone());
                 }
                 None => {
-                    saved.remove(option.key);
+                    saved.remove(&key);
                 }
             }
         }

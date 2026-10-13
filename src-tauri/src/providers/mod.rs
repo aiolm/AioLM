@@ -18,6 +18,7 @@
 //! `config`; the llama adapter here only describes it in the shared contracts.
 use serde::{Deserialize, Serialize};
 
+pub mod adapter;
 pub mod artifacts;
 pub mod catalog_data;
 pub mod compat;
@@ -29,18 +30,35 @@ pub mod options;
 pub mod portable;
 pub mod protocol;
 pub mod python_env;
+pub mod registry;
 pub use resolve_python_runtime as selected_python_runtime;
 
 /// The serving implementation behind a runtime. The wire spelling is stable
 /// and persisted in configuration, profiles and benchmark records.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProviderId {
-    #[serde(rename = "llama.cpp")]
     Llama,
-    #[serde(rename = "vllm")]
     Vllm,
-    #[serde(rename = "mlx-vlm")]
     MlxVlm,
+    Custom(ExternalEngineId),
+}
+
+/// Bounded opaque identifiers keep selection inexpensive to copy. Only the
+/// three established wire IDs are reserved; external IDs use `custom.*`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ExternalEngineId([u8; 64]);
+
+impl Serialize for ProviderId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).ok_or_else(|| serde::de::Error::custom("invalid inference engine ID"))
+    }
 }
 
 pub const LLAMA_PROVIDER: &str = "llama.cpp";
@@ -48,11 +66,18 @@ pub const LLAMA_PROVIDER: &str = "llama.cpp";
 impl ProviderId {
     pub const ALL: [ProviderId; 3] = [ProviderId::Llama, ProviderId::Vllm, ProviderId::MlxVlm];
 
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Llama => LLAMA_PROVIDER,
             Self::Vllm => "vllm",
             Self::MlxVlm => "mlx-vlm",
+            Self::Custom(id) => {
+                let end =
+                    id.0.iter()
+                        .position(|byte| *byte == 0)
+                        .unwrap_or(id.0.len());
+                std::str::from_utf8(&id.0[..end]).expect("external engine IDs are ASCII")
+            }
         }
     }
 
@@ -63,6 +88,18 @@ impl ProviderId {
             "" | LLAMA_PROVIDER => Some(Self::Llama),
             "vllm" => Some(Self::Vllm),
             "mlx-vlm" => Some(Self::MlxVlm),
+            id if id.starts_with("custom.")
+                && id.len() > 7
+                && id.len() <= 64
+                && id.as_bytes()[7].is_ascii_alphanumeric()
+                && id.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+                }) =>
+            {
+                let mut bytes = [0; 64];
+                bytes[..id.len()].copy_from_slice(id.as_bytes());
+                Some(Self::Custom(ExternalEngineId(bytes)))
+            }
             _ => None,
         }
     }
@@ -72,6 +109,7 @@ impl ProviderId {
             Self::Llama => "llama.cpp",
             Self::Vllm => "vllm",
             Self::MlxVlm => "mlx",
+            Self::Custom(_) => "external",
         }
     }
 
@@ -80,11 +118,16 @@ impl ProviderId {
             Self::Llama => "llama-server",
             Self::Vllm => "vllm",
             Self::MlxVlm => "mlx-vlm",
+            Self::Custom(_) => "external engine",
         }
     }
 
     pub fn is_python(self) -> bool {
-        !matches!(self, Self::Llama)
+        matches!(self, Self::Vllm | Self::MlxVlm)
+    }
+
+    pub fn is_custom(self) -> bool {
+        matches!(self, Self::Custom(_))
     }
 
     pub fn availability(self) -> Availability {
@@ -121,6 +164,7 @@ pub fn availability_for_with_macos(
     macos_version: &str,
 ) -> Availability {
     match provider {
+        ProviderId::Custom(_) => registry::availability(provider, os, arch),
         ProviderId::Llama => Availability {
             supported: true,
             reason: None,
@@ -235,8 +279,8 @@ pub struct ExecutionSelection {
     pub profile_id: Option<String>,
 }
 
-/// The provider a configuration selects. Unknown spellings are rejected by
-/// `AppConfig::validate`; callers here treat them as llama.cpp only after that.
+/// Config validation rejects invalid IDs. A missing external registration is
+/// still an external selection, never an implicit switch to llama.cpp.
 pub fn provider_of(cfg: &crate::config::AppConfig) -> ProviderId {
     ProviderId::parse(&cfg.active_provider).unwrap_or(ProviderId::Llama)
 }
@@ -328,6 +372,7 @@ pub fn list_runtime_instances() -> Vec<RuntimeInstance> {
             }
         }));
     }
+    instances.extend(registry::runtime_instances());
     instances
 }
 

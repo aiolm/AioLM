@@ -1,10 +1,11 @@
+import { runtimeCatalogSnapshot, subscribeRuntimeCatalog } from '../../shared/api/providers';
 import ModelName from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { isCurrentScan, nextScanGeneration } from "./scanGeneration";
@@ -34,6 +35,7 @@ import { loadedModelPath } from '../../shared/runtime/loadedModel';
 
 export default function ModelsPanel({ store, focus = "library", onSelectModel, onModels, compact = false, active = true }: { store: AppStore; focus?: "library" | "lora"; onSelectModel?: (model: api.GgufModel) => Promise<void>; onModels?: (models: api.GgufModel[]) => void; compact?: boolean; active?: boolean }) {
   const { t, locale } = useI18n();
+  useSyncExternalStore(subscribeRuntimeCatalog, runtimeCatalogSnapshot, runtimeCatalogSnapshot);
   const copy = executionText[locale];
 
   const cfg = store.cfg;
@@ -411,7 +413,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       {focus !== "lora" && <div className="models-list-toolbar">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
         <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
-        <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.PROVIDERS.map(provider => ({ value: provider, label: provider === 'vllm' ? 'vLLM' : provider === 'mlx-vlm' ? 'MLX' : provider }))]} />
+        <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
         {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
       </div>}
@@ -466,7 +468,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
                 <span className="models-model-title app-text-wrap" ><ModelIcon model={model.name} />{displayName}</span><ModelBadges mode="compact" model={model.name} artifact={model.artifact} {...(model.artifact?.format === 'gguf' || !model.artifact ? { localPath: model.path } : {})} />
                 {model.shards && <span className={`block app-text-wrap text-xs ${incomplete ? "ui-color-danger" : "ui-color-muted"}`}>{incomplete ? t("ui.modelShardsMissing", { count: model.shards.missing.length, total: model.shards.total }) : t("ui.modelShards", { count: model.shards.total })}</span>}
               </button>
-              <span className="models-model-size" >{formatMebibytes(model.size_mb)}</span>
+              <span className="models-model-size" >{model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}</span>
               <div className="models-model-actions">
                 {model.is_vision && <Badge>{t("ui.visionTag")}</Badge>}
                 {running && <StatusBadge label={copy.running} tone="success" />}

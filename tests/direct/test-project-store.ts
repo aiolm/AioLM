@@ -111,4 +111,13 @@ assert.equal(projects[0].systemPrompt, "Review code carefully.");
 assert.deepEqual(projects[0].toolIds, ["local:read_file"]);
 assert.equal(deleteProject(project.id, projects).length, 1);
 assert.equal(deleteProject(imported.id, projects).length, 0);
+const externalProject = projectFromConfig('External engine', '', {
+  ...config, active_provider: 'custom.personal', active_runtime: 'local-build',
+  provider_options: { 'custom.personal': { temperature: 0.25 } },
+});
+const externalImport = importProject(exportProject(externalProject));
+assert.equal(externalImport.config.active_provider, 'custom.personal');
+assert.equal(externalImport.config.active_runtime, 'local-build');
+assert.deepEqual(externalImport.config.provider_options, { 'custom.personal': { temperature: 0.25 } });
+assert.throws(() => projectFromConfig('Invalid engine', '', { ...config, active_provider: 'unregistered-invalid-id' } as unknown as AppConfig), /Unknown inference engine/);
 console.log("project store tests passed");

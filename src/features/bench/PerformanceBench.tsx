@@ -1,3 +1,4 @@
+import { runtimeAdapterCopy } from '../../shared/i18n/runtimeAdapterCopy';
 import BenchmarkTableScroll from './BenchmarkTableScroll';
 import ModelName, { useModelNames } from '../../shared/ui/ModelName';
 import ModelBadges from '../../shared/ui/ModelBadges';
@@ -10,7 +11,7 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import ProgressBar from '../../shared/ui/ProgressBar';
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
-import { providerOf } from '../../shared/api/providers';
+import { providerOf, isExternalProvider } from '../../shared/api/providers';
 import type { AppStore } from "../../shared/state/store";
 import { finishTask, registerTask, updateTask, useTasks } from "../../shared/state/taskRegistry";
 import { useI18n } from "../../shared/i18n/i18n";
@@ -197,7 +198,8 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
   const setupGaps = targetConfig
     ? runSetupGaps({ activeModel: model, activeProvider: targetConfig.active_provider, activeRuntime: targetConfig.active_runtime, activeBackend: targetConfig.active_backend, activeBuild: targetConfig.active_build })
     : [];
-  const canRun = !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
+  const externalTarget = isExternalProvider(providerOf(targetConfig ?? {}));
+  const canRun = !externalTarget && !!targetConfig && !setupGaps.length && valid && !busy && !exporting && !deleting && !serverRunning && !store.busy && !otherBenchmark && !sessionsError && (!modelSettings || sessionsReady) && !blockingSessions.length && !stoppingSessions;
   const total = promptLengths.length * (batchSizes.length + 1) * (validRepetitions ? repetitionsNumber : 0);
   const selectedRecord = selectedHistory ? history.find((item) => item.id === selectedHistory) ?? null : record;
   const copyTargetRef = useRef({ record: selectedRecord, locale });
@@ -449,6 +451,7 @@ export default function PerformanceBench({ store, active = true }: { store: AppS
         {busy ? <LocalTaskCancelButton taskId={TASK_ID} pending={phase === "cancelling"} className="app-button app-button--danger" disabled={phase === "cancelling"} onClick={() => void cancel()}>{phase === "cancelling" ? copy.cancelling : copy.cancel}</LocalTaskCancelButton> : <button type="submit" className="app-button app-button--primary" disabled={!canRun}>{copy.run}</button>}
       </div>
     </form>
+    {externalTarget && <FeedbackBanner tone="warning" className="performance-notice">{runtimeAdapterCopy[locale].benchmark}</FeedbackBanner>}
     {setupGaps.length > 0 && !busy && <FeedbackBanner tone="warning" className="performance-notice"
       action={modelSettings ? { label: setupGaps.includes('runtime') ? runCopy.needRuntimeAction : runCopy.needModelAction, onClick: () => editModel(setupGaps.includes('runtime') ? 'runtime' : 'model') } : undefined}>
       {setupGaps.map(gap => runSetupGapMessage(gap, locale)).join(' ')}

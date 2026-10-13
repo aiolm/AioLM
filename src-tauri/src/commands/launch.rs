@@ -102,6 +102,10 @@ pub(crate) async fn verify_model_deeply(
     state: State<'_, AppState>,
     mut cfg: config::AppConfig,
 ) -> Result<crate::verify::Record, String> {
+    crate::providers::adapter::require_feature(
+        &cfg,
+        crate::providers::adapter::RuntimeFeature::DeepVerification,
+    )?;
     let _operation = begin_deep_verification(&state)?;
     cfg.normalize();
     cfg.validate()?;
@@ -160,9 +164,7 @@ async fn validate_launch(
 ) -> Result<gpu::ResolvedGpu, String> {
     cfg.normalize();
     cfg.validate()?;
-    if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
-        crate::providers::refresh_selected_python_runtime(cfg, cancel.cloned()).await?;
-    }
+    crate::providers::adapter::refresh(cfg, cancel.cloned()).await?;
     validate_start_config(cfg)?;
     if crate::providers::provider_of(cfg) != crate::providers::ProviderId::Llama {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {

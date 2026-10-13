@@ -59,6 +59,7 @@ impl ModelCompatibility {
 /// still has to support an input for it to be usable.
 pub fn provider_input_support(provider: ProviderId) -> Modalities {
     match provider {
+        ProviderId::Custom(_) => Modalities::default(),
         // llama-server accepts image and audio parts through a projector; it
         // has no video input.
         ProviderId::Llama => Modalities {
@@ -175,6 +176,7 @@ fn assess_impl(
     };
     let mut mlx_audio = true;
     match provider {
+        ProviderId::Custom(_) => return super::registry::assess(artifact, provider),
         ProviderId::Llama => assess_llama(artifact, &mut result),
         ProviderId::Vllm => assess_vllm(artifact, probe, &mut result),
         ProviderId::MlxVlm => {

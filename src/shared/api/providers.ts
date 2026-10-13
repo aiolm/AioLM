@@ -1,9 +1,18 @@
 import { invoke } from './transport.ts';
 import type { AppConfig, GgufModel } from './types.ts';
 
-export const PROVIDERS = ['llama.cpp', 'vllm', 'mlx-vlm'] as const;
-export type ProviderId = typeof PROVIDERS[number];
-export const providerDisplayName = (provider: ProviderId): string => provider === 'vllm' ? 'vLLM' : provider === 'mlx-vlm' ? 'MLX' : 'llama.cpp';
+import { PROVIDERS, type ProviderId } from './providerIdentity.ts';
+export { PROVIDERS, isProviderId, isExternalProvider } from './providerIdentity.ts';
+export type { ProviderId, BuiltinProviderId } from './providerIdentity.ts';
+const optionSchemas = new Map<string, ProviderOption[]>();
+export const runtimeOptionSchema = (provider: ProviderId, runtimeId?: string): ProviderOption[] | undefined => runtimeId ? optionSchemas.get(`${provider}/${runtimeId}`) : catalogSnapshot.find(item => item.id === provider)?.options;
+let catalogSnapshot: ProviderDescription[] = [];
+const catalogListeners = new Set<() => void>();
+export const runtimeCatalogSnapshot = () => catalogSnapshot;
+export const subscribeRuntimeCatalog = (listener: () => void) => { catalogListeners.add(listener); return () => { catalogListeners.delete(listener); }; };
+export function publishRuntimeCatalog(catalog: ProviderDescription[]) { catalogSnapshot = catalog; for (const listener of catalogListeners) listener(); }
+export const registeredProviderIds = (): ProviderId[] => [...new Set<ProviderId>([...PROVIDERS, ...catalogSnapshot.map(item => item.id)])];
+export const providerDisplayName = (provider: ProviderId): string => provider === 'vllm' ? 'vLLM' : provider === 'mlx-vlm' ? 'MLX' : provider === 'llama.cpp' ? 'llama.cpp' : catalogSnapshot.find(item => item.id === provider)?.engine ?? provider;
 export const providerOf = (cfg: Partial<AppConfig>): ProviderId => cfg.active_provider ?? 'llama.cpp';
 export interface Modalities { text: boolean; image: boolean; audio: boolean; video: boolean }
 export interface ModelArtifact {
@@ -38,6 +47,7 @@ export interface ProviderOption {
 export interface ProviderDescription {
   id: ProviderId; engine: string; server: string; managed_version?: string;
   managed_variant?: string | null;
+  kind?: 'external-process'; capabilities?: { benchmark: string; deep_verification: string; portable: string };
   availability: { supported: boolean; reason?: string; detail: string }; options: ProviderOption[];
 }
 export interface EngineInfo {
@@ -45,15 +55,24 @@ export interface EngineInfo {
   runtime_variant?: string; speech_model_type?: string | null;
   tasks?: string[];
   chat_supported?: boolean;
+  request_option_keys?: string[];
   request_fields: Record<string, unknown>; request_lora?: string;
   embedding_model?: string | null; embedding_namespace?: string | null; tools_auto?: boolean; tool_parser?: boolean;
 }
-export const providerCatalog = () => invoke<ProviderDescription[]>('provider_catalog');
+let catalogRequest: Promise<ProviderDescription[]> | undefined;
+export const providerCatalog = (fresh = false): Promise<ProviderDescription[]> => {
+  // Registration must not reuse an inventory request started before publication.
+  if (fresh && catalogRequest) return catalogRequest.catch(() => undefined).then(() => providerCatalog());
+  if (!catalogRequest) catalogRequest = invoke<ProviderDescription[]>('provider_catalog').then(catalog => { publishRuntimeCatalog(catalog); return catalog; }).finally(() => { catalogRequest = undefined; });
+  return catalogRequest;
+};
+export const pickRuntimeAdapter = () => invoke<string | null>('pick_runtime_adapter');
+export const runtimeAdapterRegister = async (manifestPath: string) => { const registered = await invoke<{ engine_id: ProviderId; runtime_id: string; display_name: string }>('runtime_adapter_register', { manifestPath }); optionSchemas.delete(`${registered.engine_id}/${registered.runtime_id}`); return registered; };
 export const providerRuntimes = () => invoke<RuntimeInstance[]>('provider_runtimes');
-export const providerRuntimeOptions = (providerId: ProviderId, runtimeId: string) => invoke<ProviderOption[]>('provider_runtime_options', { providerId, runtimeId });
+export const providerRuntimeOptions = async (providerId: ProviderId, runtimeId: string) => { const schema = await invoke<ProviderOption[]>('provider_runtime_options', { providerId, runtimeId }); optionSchemas.set(`${providerId}/${runtimeId}`, schema); return schema; };
 export const providerInstall = (providerId: ProviderId, python?: string) => invoke('provider_install', { providerId, python: python ?? null });
 export const providerRegister = (providerId: ProviderId, python: string) => invoke('provider_register', { providerId, python });
-export const providerRemove = (providerId: ProviderId, runtimeId: string) => invoke<void>('provider_remove', { providerId, runtimeId });
+export const providerRemove = async (providerId: ProviderId, runtimeId: string) => { await invoke<void>('provider_remove', { providerId, runtimeId }); optionSchemas.delete(`${providerId}/${runtimeId}`); };
 /** Portable bundle export result. Identities stay provider-scoped: `provider`
  * plus `runtime_id`, never the native llama `(backend, build)` vocabulary. */
 export interface PortableExportInfo {

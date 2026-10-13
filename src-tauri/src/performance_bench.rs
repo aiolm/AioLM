@@ -605,6 +605,10 @@ pub async fn run(
     runtime: RuntimeInfo,
 ) -> PerformanceBenchResult {
     let mut result = failed(&request, &cfg, String::new());
+    if crate::providers::provider_of(&cfg).is_custom() {
+        result.message = Some("unsupported: this adapter does not provide exact tokenizer and cold-cache benchmark procedures".into());
+        return result;
+    }
     if let Err(error) = validate_request(&mut request) {
         result.message = Some(error);
         return result;

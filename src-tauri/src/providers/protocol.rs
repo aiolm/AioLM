@@ -34,6 +34,7 @@ pub struct EngineInfo {
     pub chat_supported: Option<bool>,
     /// Validated request fields from the provider's saved options.
     pub request_fields: Map<String, Value>,
+    pub request_option_keys: Vec<String>,
     /// vLLM: adapter name requests are routed to, when one is selected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_lora: Option<String>,
@@ -56,6 +57,7 @@ impl EngineInfo {
             modalities,
             tasks: vec!["generate".into(), "embed".into()],
             chat_supported: None,
+            request_option_keys: Vec::new(),
             request_fields: Map::new(),
             request_lora: None,
             embedding_model: Some(model.to_owned()),
@@ -80,7 +82,7 @@ fn forbidden_fields(provider: ProviderId) -> &'static [&'static str] {
         // model folders from `model_dir`.
         ProviderId::MlxVlm => &["adapter_path", "model_dir", "resize_shape"],
         ProviderId::Vllm => &[],
-        ProviderId::Llama => &[],
+        ProviderId::Llama | ProviderId::Custom(_) => &[],
     }
 }
 
@@ -451,6 +453,18 @@ fn normalize_parts(provider: ProviderId, body: &mut Value) -> Result<(), AdaptEr
 /// vLLM v0.31.0 refuses tool calls it cannot parse at request time; say which
 /// runtime profile setting is missing before the request reaches it.
 fn check_tools(info: &EngineInfo, body: &Map<String, Value>) -> Result<(), AdaptError> {
+    if info.provider.is_custom()
+        && !info.tool_parser
+        && body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| !tools.is_empty())
+    {
+        return Err(adapt_error(
+            "unsupported_tools",
+            "The selected model adapter does not support tool calls.",
+        ));
+    }
     if info.provider != ProviderId::Vllm
         || !body
             .get("tools")
@@ -781,6 +795,43 @@ pub fn adapt_request(
         "invalid_request",
         "request body must be a JSON object",
     ))?;
+    if info.provider.is_custom() {
+        const CANONICAL: &[&str] = &[
+            "model",
+            "messages",
+            "prompt",
+            "input",
+            "stream",
+            "stream_options",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "max_completion_tokens",
+            "stop",
+            "seed",
+            "presence_penalty",
+            "frequency_penalty",
+            "response_format",
+            "reasoning_effort",
+            "logprobs",
+            "top_logprobs",
+            "user",
+            "n",
+            "encoding_format",
+            "dimensions",
+        ];
+        if let Some(field) = object.keys().find(|field| {
+            !CANONICAL.contains(&field.as_str()) && !info.request_option_keys.contains(field)
+        }) {
+            return Err(adapt_error(
+                "unsupported_field",
+                format!("The selected runtime adapter does not declare request field `{field}`."),
+            ));
+        }
+    }
     for field in forbidden_fields(info.provider) {
         object.remove(*field);
     }
@@ -826,6 +877,7 @@ mod tests {
             modalities,
             tasks: vec!["generate".into()],
             chat_supported: None,
+            request_option_keys: Vec::new(),
             request_fields: json!({"temperature": 0.3}).as_object().unwrap().clone(),
             request_lora: None,
             embedding_model: Some("/models/embedding".into()),
@@ -833,6 +885,36 @@ mod tests {
             tools_auto: true,
             tool_parser: true,
         }
+    }
+
+    #[test]
+    fn external_requests_keep_declared_fields_and_refuse_unsupported_tools_and_local_paths() {
+        let mut engine = info(
+            ProviderId::parse("custom.synthetic").unwrap(),
+            Modalities::text_only(),
+        );
+        engine.request_option_keys = vec!["custom_sampling".into()];
+        engine.tools_auto = false;
+        engine.tool_parser = false;
+        let mut body = json!({"model":"public-alias","messages":[{"role":"user","content":"synthetic"}],"custom_sampling":0.4,"stream":true});
+        adapt_request(&engine, "chat/completions", &mut body).unwrap();
+        assert_eq!(body["model"], engine.upstream_model);
+        assert_eq!(body["custom_sampling"], 0.4);
+        assert_eq!(body["messages"][0]["content"], "synthetic");
+        let mut paths = json!({"messages":[],"adapter_path":"/synthetic/unowned"});
+        assert_eq!(
+            adapt_request(&engine, "chat/completions", &mut paths)
+                .unwrap_err()
+                .code,
+            "unsupported_field"
+        );
+        let mut tools = json!({"messages":[],"tools":[{"type":"function","function":{"name":"synthetic","parameters":{}}}]});
+        assert_eq!(
+            adapt_request(&engine, "chat/completions", &mut tools)
+                .unwrap_err()
+                .code,
+            "unsupported_tools"
+        );
     }
 
     #[test]

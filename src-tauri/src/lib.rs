@@ -141,6 +141,8 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::providers::provider_catalog,
+            commands::providers::runtime_adapter_register,
+            commands::providers::pick_runtime_adapter,
             commands::providers::provider_runtimes,
             commands::providers::provider_runtime_options,
             commands::providers::provider_register,

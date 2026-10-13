@@ -32,3 +32,19 @@ describe('provider request settings', () => {
     expect(body).not.toHaveProperty('seed');
   });
 });
+
+it('uses an external engine request schema without forwarding launch options or changing its identity', () => {
+  const external: EngineInfo = { ...engine, provider: 'custom.synthetic', request_option_keys: ['temperature', 'max_tokens'], request_fields: { temperature: 0.5 } };
+  const body = buildChatRequestBody('ignored', [], { temperature: 99, top_p: 99, top_k: 99, engine: external,
+    provider_options: { temperature: 0.2, max_tokens: 32, workers: 8, api_key: 'synthetic-secret' } });
+  expect(body).toMatchObject({ model: 'served-model', temperature: 0.2, max_tokens: 32, stream: true });
+  expect(body).not.toHaveProperty('workers'); expect(body).not.toHaveProperty('api_key');
+  expect(() => buildChatRequestBody('ignored', [], { temperature: 1, top_p: 1, top_k: 1, engine: { ...external, tools_auto: false }, tools: [{ type: 'function', function: { name: 'synthetic', parameters: {} } }] })).toThrow('does not declare tool-call support');
+  expect(() => buildChatRequestBody('ignored', [], { temperature: 1, top_p: 1, top_k: 1, engine: { ...external, chat_supported: false } })).toThrow('Select a chat-capable model/runtime');
+});
+
+it('keeps a cold external editor usable until its runtime option schema is fetched', () => {
+  const cold = { ...testConfig, active_provider: 'custom.unprobed' as const, active_runtime: 'unprobed-1', provider_options: { 'custom.unprobed': { sampling: 0.3 } } };
+  expect(serverSettingsChanged(cold, structuredClone(cold))).toBe(false);
+  expect(serverSettingsChanged(cold, { ...cold, provider_options: { 'custom.unprobed': { sampling: 0.4 } } })).toBe(true);
+});

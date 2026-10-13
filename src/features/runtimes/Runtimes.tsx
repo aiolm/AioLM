@@ -1,3 +1,4 @@
+import ExternalRuntimeRegistration from './ExternalRuntimeRegistration';
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
 import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
@@ -37,6 +38,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   useEffect(() => { if (engineRequest) setProvider(engineRequest.provider); }, [engineRequest]);
   const [providerRevision, setProviderRevision] = useState(0);
   const [providerBusy, setProviderBusy] = useState(false);
+  const [adapterBusy, setAdapterBusy] = useState(false);
   const llama = provider === 'llama.cpp';
   const rt = useRuntimesController(store, active, llama);
   const { visibleRows, hiddenCount } = computeVisibleRows(rt.rows, rt.device, rt.showAll);
@@ -54,14 +56,14 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
         <div className="app-page-actions">
           {llama && rt.bundleBusy
             ? <LocalTaskCancelButton taskId="runtime-operation" pending={rt.cancelBusy} onClick={() => void rt.cancelInstall()} disabled={rt.cancelBusy} className="app-button app-button--danger shrink-0"><StableLabel value={rt.cancelBusy ? t("ui.cancelling") : t("ui.cancelRuntimeBundle")} labels={[t("ui.cancelling"), t("ui.cancelRuntimeBundle")]} /></LocalTaskCancelButton>
-            : <button type="button" onClick={() => { if (llama) void rt.refresh(true); else setProviderRevision(value => value + 1); }} disabled={rt.runtimeBusy || providerBusy} className="app-button app-button--secondary shrink-0 runtime-refresh">
+            : <button type="button" onClick={() => { if (llama) void rt.refresh(true); else setProviderRevision(value => value + 1); }} disabled={rt.runtimeBusy || providerBusy || adapterBusy} className="app-button app-button--secondary shrink-0 runtime-refresh">
                 <svg aria-hidden="true" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M16 10a6 6 0 1 1-1.76-4.24M16 4v3.5h-3.5" /></svg>
                 {rt.loadError ? t("panel.retry") : t("ui.refreshRemote")}
               </button>}
         </div>
       </header>
 
-      <div className="app-card app-card--tight runtime-engine-context"><EngineSelect value={provider} onChange={setProvider} disabled={rt.runtimeBusy || rt.probeBusy || providerBusy || deepVerify.busy} /></div>
+      <div className="app-card app-card--tight runtime-engine-context"><EngineSelect value={provider} onChange={setProvider} disabled={rt.runtimeBusy || rt.probeBusy || providerBusy || adapterBusy || deepVerify.busy} /></div>
       <div className="runtimes-layout">
       <aside className="runtimes-aside">
         <RuntimeDeviceCard t={t} device={rt.device} deviceSummary={deviceSummary} />
@@ -74,11 +76,12 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       </aside>
 
       <div className="runtimes-main">
-      <div hidden={llama}><ProviderEnvironments active={active && !llama} provider={llama ? undefined : provider} revision={providerRevision} resourcesInUse={rt.serverRunning} onBusyChange={setProviderBusy} /></div>
+      <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy} onRegistered={setProvider} onBusyChange={setAdapterBusy} />
+      <div hidden={llama}><ProviderEnvironments active={active && !llama} provider={llama ? undefined : provider} revision={providerRevision} resourcesInUse={rt.serverRunning || adapterBusy} onBusyChange={setProviderBusy} /></div>
       {provider === providerOf(store.cfg ?? {}) && <section className="app-card mb-4">
         <h2 className="app-section-title">{t('ui.deepVerify')}</h2>
         <p><RuntimeSelectionLabel config={store.cfg} /></p>
-        <DeepVerificationControls t={t} state={deepVerify} provider={provider} runtimeBusy={rt.runtimeBusy || providerBusy} serverRunning={rt.serverRunning} />
+        <DeepVerificationControls t={t} state={deepVerify} provider={provider} runtimeBusy={rt.runtimeBusy || providerBusy || adapterBusy} serverRunning={rt.serverRunning} />
       </section>}
       {llama && <>
       <PanelFeedback>

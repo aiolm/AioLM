@@ -132,6 +132,10 @@ pub(crate) async fn run_performance_bench(
     let validation = performance_bench::validate_request(&mut request).and_then(|()| {
         cfg.normalize();
         cfg.validate()?;
+        crate::providers::adapter::require_feature(
+            &cfg,
+            crate::providers::adapter::RuntimeFeature::ExactBenchmark,
+        )?;
         if state.runtime_busy.load(Ordering::Acquire) || state.exiting.load(Ordering::Acquire) {
             return Err("wait for the runtime operation to finish before benchmarking".into());
         }
