@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { testConfig } from '../../testing/appStore';
 import { emptyGpuPlacement } from '../runtime/sessionUtils';
-import { ensureProfileAssignments, resolveProfileApplication, resolveProfileApplicationOrDefault, resolveProfileForExecution } from './profileAssignments';
+import { applyDefaultProfile, ensureProfileAssignments, resolveProfileApplication, resolveProfileApplicationOrDefault, resolveProfileForExecution } from './profileAssignments';
 import {
-  captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication,
+  captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication,
   profileSettingsSnapshot, profileTargetKey,
 } from './settingsProfiles';
 
@@ -187,4 +187,15 @@ describe('required profile assignments', () => {
     expect(recovered.application).toMatchObject({ system_prompt: 'Old prompt', settings: { temperature: 0.12 } });
     expect(recovered.application.profile_id).not.toBe(profile.id);
   });
+});
+
+it('includes a newly selected external engine default in the returned profile library', () => {
+  const source = ensureProfileLibrary(emptyProfileLibrary());
+  const before = structuredClone(source);
+  const next = { ...testConfig, active_provider: 'custom.new-engine' as const, active_runtime: 'local-build' };
+  const resolved = applyDefaultProfile(next, source);
+  expect(resolved.library.entries).toContainEqual(resolved.profile);
+  expect(resolved.profile.provider).toBe('custom.new-engine');
+  expect(resolved.application.provider).toBe('custom.new-engine');
+  expect(source).toEqual(before);
 });

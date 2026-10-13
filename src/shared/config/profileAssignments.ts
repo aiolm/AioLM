@@ -31,7 +31,7 @@ function recoveredId(library: SettingsProfileLibrary, targetKey: string): string
 }
 
 export function applyDefaultProfile(cfg: AppConfig, source: SettingsProfileLibrary): ResolvedProfileApplication {
-  const library = ensureProfileLibrary(source);
+  const library = ensureProfileLibrary(source, providerOf(cfg));
   const profile = defaultSettingsProfileEntry(library, providerOf(cfg));
   return { library, profile, application: materializeProfileApplication(applySettingsProfile(cfg, profile), profile.system_prompt ?? '', profile) };
 }
@@ -50,7 +50,7 @@ export function resolveProfileApplicationOrDefault(
 export function resolveProfileForExecution(
   cfg: AppConfig, source: SettingsProfileLibrary, saved?: ProfileApplication, targetKey = profileTargetKey(cfg.active_model, 'default', providerOf(cfg)),
 ): ResolvedProfileApplication {
-  const library = ensureProfileLibrary(source);
+  const library = ensureProfileLibrary(source, providerOf(cfg));
   const reference = saved ?? library.applied[targetKey];
   if (reference && (reference.provider ?? 'llama.cpp') !== providerOf(cfg)) return applyDefaultProfile(cfg, library);
   if (!reference) return applyDefaultProfile(cfg, library);
@@ -73,7 +73,7 @@ export function resolveProfileApplication(
   saved?: ProfileApplication,
   targetKey = profileTargetKey(cfg.active_model, 'default', providerOf(cfg)),
 ): ResolvedProfileApplication {
-  let library = ensureProfileLibrary(source);
+  let library = ensureProfileLibrary(source, providerOf(cfg));
   const prompt = saved?.system_prompt ?? '';
   const target = saved ? { ...cfg, ...profileSettingsSnapshot({ ...saved.settings, active_provider: providerOf(cfg) }), active_model: saved.model } : cfg;
   const assigned = library.entries.find(entry => entry.id === saved?.profile_id && (entry.provider ?? 'llama.cpp') === providerOf(cfg));
@@ -99,7 +99,7 @@ export function resolveProfileApplication(
 
 /** Every persisted execution target has a profile identity, including the empty initial workspace. */
 export function ensureProfileAssignments(cfg: AppConfig, source: SettingsProfileLibrary): SettingsProfileLibrary {
-  let library = structuredClone(ensureProfileLibrary(source));
+  let library = structuredClone(ensureProfileLibrary(source, providerOf(cfg)));
   const profiles = new Map(library.entries.map(profile => [profile.id, profile]));
   const sessionModels = new Map((cfg.sessions ?? []).map(definition => [
     profileTargetKey(definition.models.primary_model, definition.id), profileTargetKey(definition.models.primary_model),
