@@ -386,6 +386,18 @@ function startFakeEngine({ behavior = "ok" } = {}) {
           return;
         }
         if (text.includes("file://")) {
+          if (has("file-refusal-empty")) {
+            send(res, 400, {});
+            return;
+          }
+          if (has("file-refusal-500")) {
+            send(res, 500, { error: "synthetic file URI server error" });
+            return;
+          }
+          if (has("file-accepted")) {
+            send(res, 200, { choices: [{ message: { role: "assistant", content: "synthetic file content" } }] });
+            return;
+          }
           send(res, 400, { error: { code: "unsupported_input", message: "Local paths are refused." } });
           return;
         }
@@ -621,6 +633,46 @@ test("declared capability failure: expected media refusal is fail, not unsupport
     } finally {
       closeLive({ live: run.live, model: run.model, engine: run.engine });
     }
+  }
+});
+
+test("file URI server errors remain failures without claiming the engine accepted the input", async () => {
+  const run = await runLiveWithFakes({ behavior: "file-refusal-500" });
+  try {
+    assert.equal(run.result.checks.media_refusal.status, "fail");
+    assert.equal(run.result.checks.media_refusal.evidence.status, 500);
+    assert.match(run.result.checks.media_refusal.detail, /server error.*500/);
+    assert.doesNotMatch(run.result.checks.media_refusal.detail, /not refused|accepted/);
+    assert.equal(run.result.summary.outcome, "fail");
+    assert.equal(run.result.checks.cleanup.status, "pass");
+  } finally {
+    closeLive(run);
+  }
+});
+
+test("file URI acceptance remains a failure", async () => {
+  const run = await runLiveWithFakes({ behavior: "file-accepted" });
+  try {
+    assert.equal(run.result.checks.media_refusal.status, "fail");
+    assert.equal(run.result.checks.media_refusal.evidence.status, 200);
+    assert.match(run.result.checks.media_refusal.detail, /not refused.*200/);
+    assert.equal(run.result.summary.outcome, "fail");
+    assert.equal(run.result.checks.cleanup.status, "pass");
+  } finally {
+    closeLive(run);
+  }
+});
+
+test("file URI refusal without an error explanation cannot pass", async () => {
+  const run = await runLiveWithFakes({ behavior: "file-refusal-empty" });
+  try {
+    assert.equal(run.result.checks.media_refusal.status, "fail");
+    assert.equal(run.result.checks.media_refusal.evidence.status, 400);
+    assert.match(run.result.checks.media_refusal.detail, /without an error explanation/);
+    assert.equal(run.result.summary.outcome, "fail");
+    assert.equal(run.result.checks.cleanup.status, "pass");
+  } finally {
+    closeLive(run);
   }
 });
 

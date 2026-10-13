@@ -1301,11 +1301,22 @@ export function sanitizeResultForFile(result) {
              stream: false,
            }),
          }, args.timeoutMs);
-         if (!refusal.ok && refusal.status >= 400 && refusal.status < 500) {
+         const clientError = !refusal.ok && refusal.status >= 400 && refusal.status < 500;
+         const errorMessages = [refusal.body?.error, refusal.body?.error?.message, refusal.body?.message, refusal.body?.detail];
+         if (Array.isArray(refusal.body?.detail)) {
+           errorMessages.push(...refusal.body.detail.map(item => item?.msg));
+         }
+         const hasExplanation = errorMessages.some(message => typeof message === "string" && message.trim().length > 0);
+         if (clientError && hasExplanation) {
            setCheck(checks, "media_refusal", "pass", `engine refused file:// input (${refusal.status}) with an actionable error; app file-path handling still needs GUI/native tests`, { status: refusal.status });
          } else {
-           setCheck(checks, "media_refusal", "fail", `file:// input was not refused (status ${refusal.status})`, { status: refusal.status });
-           throw new Error(`file:// input was not refused (status ${refusal.status})`);
+           const detail = refusal.status >= 500
+             ? `engine returned a server error for file:// input (status ${refusal.status}); expected an actionable 4xx refusal`
+             : clientError
+               ? `engine returned a 4xx response for file:// input without an error explanation (status ${refusal.status})`
+               : `file:// input was not refused (status ${refusal.status})`;
+           setCheck(checks, "media_refusal", "fail", detail, { status: refusal.status });
+           throw new Error(detail);
          }
        } catch (error) {
          if (checks.media_refusal.status === "unrun") setCheck(checks, "media_refusal", "fail", error.message, {});
