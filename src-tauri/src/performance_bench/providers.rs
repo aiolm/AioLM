@@ -33,10 +33,14 @@ pub(super) struct ProviderProtocol {
 
 const MLX_PROMPTS: &str = r#"
 def main(job):
-    from mlx_vlm.utils import load_config, load_processor, resolve_eos_token_ids
+    from pathlib import Path
+    from mlx_vlm.utils import get_model_and_args, load_config, load_processor, resolve_eos_token_ids
     from mlx_vlm.prompt_utils import apply_chat_template
     options = {'trust_remote_code': True} if job['trust_remote_code'] else {}
     config = load_config(job['model'], **options)
+    # Model modules register the installed runtime's processor, as the server
+    # does before loading it. Resolving the module loads no weights or model.
+    get_model_and_args(config=config, model_path=Path(job['model']))
     processor = load_processor(job['model'], add_detokenizer=False, eos_token_ids=config.get('eos_token_id'), **options)
     tok = getattr(processor, 'tokenizer', processor)
     # mlx_vlm.server.generation._cpu_preprocess
