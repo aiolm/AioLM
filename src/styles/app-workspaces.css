@@ -84,7 +84,7 @@
 .runtime-group__note { margin-top: 2px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
 .runtime-group__latest { min-width: 0; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
 .runtime-group__latest.is-error { color: var(--tone-error-ink); }
-.runtime-group__latest .app-text-wrap { overflow-wrap: break-word; white-space: normal; }
+.runtime-group__latest .app-text-wrap { overflow-wrap: anywhere; white-space: normal; }
 .runtime-group__digest { color: var(--ui-faint); }
 .runtime-number { font-variant-numeric: tabular-nums; }
 .runtime-group__action { display: flex; min-width: 0; }
@@ -107,7 +107,7 @@
 .runtime-advanced__body > section.app-card:first-child { border-top: 0; padding-top: 4px; }
 .runtime-advanced__body .app-card--muted { border-color: var(--ui-border); background: var(--ui-panel); }
 @container workspace (min-width: 640px) {
- .runtime-group__header { grid-template-columns: minmax(0,1fr) minmax(0,max-content) max-content; }
+ .runtime-group__header { grid-template-columns: minmax(0,1fr) minmax(0,1fr) max-content; }
  .runtime-group__latest { text-align: end; }
  .runtime-group__action { justify-content: flex-end; }
 }

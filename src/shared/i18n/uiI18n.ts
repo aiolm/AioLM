@@ -341,6 +341,9 @@ const en = {
   reasonAlwaysWorks: "Always available.",
   reasonNoGpuDetected: "No GPU detected, so the CPU build is the fit.",
   reasonArchNotSupported: "The release catalog only publishes x64 builds.",
+  reasonOsNotSupported: "This backend does not support this operating system.",
+  reasonPlatformNotSupported: "The release catalog has no build for this operating system and architecture.",
+  reasonUnavailable: "No compatibility explanation is available. Refresh device detection for current details.",
   reasonNeedsGpu: "No GPU was detected.",
   wipeDataTitle: "Conversation and document data",
   wipeDataDescription: "Conversations, attached document text and cached embeddings live in this app's local browser storage. Removing them frees that space and leaves nothing readable behind.",
@@ -1006,6 +1009,9 @@ none: "없음", active: "활성", serverRunningHint: "먼저 모델을 언로드
   reasonAlwaysWorks: "항상 사용할 수 있습니다.",
   reasonNoGpuDetected: "GPU가 감지되지 않아 CPU 빌드가 적합합니다.",
   reasonArchNotSupported: "릴리스 카탈로그는 x64 빌드만 제공합니다.",
+  reasonOsNotSupported: "이 백엔드는 현재 운영체제를 지원하지 않습니다.",
+  reasonPlatformNotSupported: "현재 운영체제와 아키텍처에 맞는 빌드가 릴리스 카탈로그에 없습니다.",
+  reasonUnavailable: "호환성 설명이 없습니다. 최신 정보를 확인하려면 기기 감지를 새로 고치세요.",
   reasonNeedsGpu: "GPU가 감지되지 않았습니다.",
   wipeDataTitle: "대화 및 문서 데이터",
   wipeDataDescription: "대화, 첨부한 문서 본문, 임베딩 캐시는 이 앱의 로컬 브라우저 저장소에 있습니다. 삭제하면 공간이 확보되고 읽을 수 있는 잔여물이 남지 않습니다.",
@@ -1220,6 +1226,9 @@ none: "없음", active: "활성", serverRunningHint: "먼저 모델을 언로드
 
 const ja: UiCatalog = {
   ...en,
+  reasonOsNotSupported: "このバックエンドは現在のオペレーティングシステムをサポートしていません。",
+  reasonPlatformNotSupported: "現在のオペレーティングシステムとアーキテクチャに対応するビルドがリリースカタログにありません。",
+  reasonUnavailable: "互換性の説明がありません。最新情報を確認するにはデバイス検出を更新してください。",
   stopSessionsBeforeRuntime: "ランタイムを変更・転送する前に、すべてのモデルセッションをアンロードしてください。",
   runtimesIntro: "推論エンジンごとに分離された環境を管理します。モデルのランタイムは実行プロファイルで選択します。",
   sessionsIntro: "推論エンジン、プロファイルとGPU割り当てを持つ独立したモデルセッションを管理します。",
@@ -1343,6 +1352,9 @@ running: "実行中", stopped: "停止中", enabled: "有効", disabled: "無効
 
 const zh: UiCatalog = {
   ...en,
+  reasonOsNotSupported: "此后端不支持当前操作系统。",
+  reasonPlatformNotSupported: "发布目录中没有适用于当前操作系统和架构的构建。",
+  reasonUnavailable: "暂无兼容性说明。请刷新设备检测以查看最新信息。",
   stopSessionsBeforeRuntime: "更改或传输运行时之前，请卸载所有模型会话。",
   runtimesIntro: "分别管理各推理引擎的隔离环境。在模型的运行配置中选择运行时。",
   sessionsIntro: "管理具有独立推理引擎、配置和GPU分配的模型会话。",

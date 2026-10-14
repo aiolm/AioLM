@@ -1,6 +1,6 @@
 import type * as api from "../../shared/api/types";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
-import type { UiTextKey } from "../../shared/i18n/uiI18n";
+import { uiText, type UiTextKey } from "../../shared/i18n/uiI18n";
 import { translate } from "../../shared/i18n/i18nUnified";
 import { FIT_ORDER, type BackendRow } from "./runtimesHelpers";
 import { formatMebibytes } from "../../shared/lib/units";
@@ -45,7 +45,7 @@ export function fitLabelOf(locale: Locale, fit: api.BackendFit): string {
 export function reasonText(locale: Locale, suitability?: api.BackendSuitability): string {
   if (!suitability) return "";
   const key = `reason${suitability.reason.charAt(0).toUpperCase()}${suitability.reason.slice(1)}` as UiTextKey;
-  return translate(locale, `ui.${key}`, { device: suitability.device ?? "" });
+  return translate(locale, `ui.${Object.prototype.hasOwnProperty.call(uiText.en, key) ? key : "reasonUnavailable"}`, { device: suitability.device ?? "" });
 }
 
 /**
