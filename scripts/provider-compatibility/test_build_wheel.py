@@ -105,7 +105,7 @@ class MlxStreamPreflight(unittest.IsolatedAsyncioTestCase):
     async def test_preflight_failure_and_cancellation_finalize_once_without_double_counting_overflow(self):
         import asyncio
         import types
-        from build_wheel import patch_mlx_preflight
+        from build_wheel import patch_mlx_preflight, patch_mlx_audio_window_preflight
         source = 'async def handler(endpoint, model, preflight, audio=None):\n    try:\n        await preflight()\n    except PromptTooLongError as e:\n        runtime.metrics.record_failure(endpoint=endpoint, model=model, stream=True, error=str(e))\n        raise HTTPException(status_code=400, detail=str(e))\n\n\ndef _build_structured_logits_processors():\n    pass\n'
         class Metrics:
             def __init__(self):
@@ -119,16 +119,16 @@ class MlxStreamPreflight(unittest.IsolatedAsyncioTestCase):
             def __init__(self, status_code, detail):
                 self.status_code = status_code
                 super().__init__(detail)
-        cases = (ValueError("invalid synthetic waveform"), ValueError("Unable to detect audio format from bytes"), asyncio.CancelledError(), PromptTooLongError("synthetic overflow"))
+        cases = (ValueError("invalid synthetic waveform"), ValueError("Unable to detect audio format from bytes"), ValueError("Gemma3n audio padding supports at most 30 seconds per clip"), ValueError("Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip"), asyncio.CancelledError(), PromptTooLongError("synthetic overflow"))
         for error in cases:
             async def preflight():
                 raise error
-            for text, corrected in ((source, False), (patch_mlx_preflight(source), True)):
+            for text, corrected in ((source, False), (patch_mlx_audio_window_preflight(source), True)):
                 metrics = Metrics()
                 namespace = {"runtime": types.SimpleNamespace(metrics=metrics), "PromptTooLongError": PromptTooLongError, "HTTPException": HTTPException}
                 exec(text, namespace)
                 overflow = isinstance(error, PromptTooLongError)
-                invalid_audio = corrected and str(error) == "Unable to detect audio format from bytes"
+                invalid_audio = corrected and str(error) in ("Unable to detect audio format from bytes", "Gemma3n audio padding supports at most 30 seconds per clip", "Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip")
                 with self.assertRaises(HTTPException if overflow or invalid_audio else type(error)) as caught:
                     await namespace["handler"]("/chat/completions", "Synthetic", preflight, ["synthetic audio"])
                 if overflow or invalid_audio:
@@ -227,6 +227,140 @@ class ProcessorTemplateTokens(unittest.TestCase):
         self.assertIsNone(values['chat_template'])
         with self.assertRaisesRegex(ValueError, 'upstream source differs'):
             patch_mlx_gemma3n_template(source.replace('tokenizer=tokenizer', 'tokenizer=other'))
+
+
+class Gemma3nAudioWindow(unittest.TestCase):
+    def test_encoded_padding_preserves_valid_frame_values_and_order_for_each_recording(self):
+        import ast
+        import math
+        import types
+        from build_wheel import patch_mlx_gemma3n_audio_embeddings
+        source = 'from typing import Optional\n\n\ndef masked_scatter(input_tensor, mask, source):\n    pass\n\nclass Model:\n    def prepare(self):\n        inputs_embeds = self.language_model.model.embed_tokens(input_ids)\n        if True:\n            audio_features = mx.concatenate(\n                (audio_features, extra_padding_features), axis=1\n            )\n'
+        tree = ast.parse(patch_mlx_gemma3n_audio_embeddings(source))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == '_align_gemma3n_audio_features')
+        class Tensor:
+            def __init__(self, values, shape):
+                self.values, self.shape = list(values), tuple(shape)
+                assert len(self.values) == math.prod(self.shape)
+            def __getitem__(self, index):
+                width = math.prod(self.shape[1:])
+                return Tensor(self.values[index * width:(index + 1) * width], self.shape[1:])
+            def tolist(self):
+                if len(self.shape) == 1:
+                    return self.values
+                return [self[index].tolist() for index in range(self.shape[0])]
+        def take(features, positions, axis):
+            self.assertEqual(axis, 0)
+            width = features.shape[-1]
+            return Tensor([value for index in positions.values for value in features.values[index * width:(index + 1) * width]], (len(positions.values), width))
+        def concatenate(rows, axis):
+            self.assertEqual(axis, 0)
+            return Tensor([value for row in rows for value in row.values], (sum(row.shape[0] for row in rows), rows[0].shape[1]))
+        def stack(rows, axis):
+            self.assertEqual(axis, 0)
+            return Tensor([value for row in rows for value in row.values], (len(rows), *rows[0].shape))
+        namespace = {'mx': types.SimpleNamespace(array=lambda values, dtype: Tensor(values, (len(values),)), int32=int, take=take, concatenate=concatenate, stack=stack, broadcast_to=lambda value, shape: Tensor(value.values * (shape[0] * shape[1]), shape))}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'gemma3n.py', 'exec'), namespace)
+        align = namespace['_align_gemma3n_audio_features']
+        features = Tensor([10, 11, 90, 91, 20, 21, 30, 31, 40, 41, 80, 81], (2, 3, 2))
+        padding = Tensor([False, True, False, False, False, True], (2, 3))
+        pad = Tensor([0, 1], (1, 1, 2))
+        self.assertEqual(align(features, padding, 4, pad).values, [0, 1, 0, 1, 10, 11, 20, 21, 0, 1, 0, 1, 30, 31, 40, 41])
+        self.assertEqual(align(features, padding, 2, pad).values, [10, 11, 20, 21, 30, 31, 40, 41])
+        with self.assertRaisesRegex(ValueError, 'no valid frames'):
+            align(features, Tensor([True] * 6, (2, 3)), 4, pad)
+        with self.assertRaisesRegex(ValueError, 'at most 30 seconds'):
+            align(features, Tensor([False] * 6, (2, 3)), 2, pad)
+        self.assertEqual(features.values, [10, 11, 90, 91, 20, 21, 30, 31, 40, 41, 80, 81])
+
+    def test_nonstream_endpoints_reject_wrapped_window_errors_without_reclassifying_other_failures(self):
+        from build_wheel import patch_mlx_audio_window_nonstream
+        class HTTPException(Exception):
+            def __init__(self, status_code, detail):
+                self.status_code = status_code
+                super().__init__(detail)
+        source = '''class Endpoints:
+    def first(self, e, audio):
+        if True:
+            if True:
+                raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+    def second(self, e, audio):
+        if True:
+            if True:
+                raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+'''
+        namespace = {'HTTPException': HTTPException}
+        exec(patch_mlx_audio_window_nonstream(source), namespace)
+        for endpoint in (namespace['Endpoints']().first, namespace['Endpoints']().second):
+            for message in ('Gemma3n audio padding supports at most 30 seconds per clip', 'Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip', 'different generation failure'):
+                for audio in (None, ['synthetic audio']):
+                    with self.assertRaises(HTTPException) as caught:
+                        endpoint(ValueError(message), audio)
+                    self.assertEqual(caught.exception.status_code, 400 if audio and 'at most 30 seconds' in message else 500)
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_audio_window_nonstream(source.replace('def second', 'def unused', 1).split('    def unused')[0])
+
+    def helper(self):
+        import ast
+        import os
+        import types
+        from build_wheel import patch_mlx_gemma3n_audio
+        source = 'from typing import List, Optional, Union\n\n\nclass Gemma3nProcessor(ProcessorMixin):\n    def prepare(self, audio, audio_kwargs):\n        if audio is not None:\n            audio_inputs = self.feature_extractor(audio, **audio_kwargs)\n'
+        tree = ast.parse(patch_mlx_gemma3n_audio(source))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
+        class Array:
+            def __init__(self, samples):
+                self.samples, self.ndim = samples, 1
+            def __len__(self):
+                return self.samples
+        namespace = {'os': os, 'np': types.SimpleNamespace(ndarray=Array, number=int)}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'processor.py', 'exec'), namespace)
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma3n_audio(source.replace('**audio_kwargs)', '**different_kwargs)'))
+        return namespace['_extract_gemma3n_audio'], Array
+
+    def test_explicit_window_preserves_waveforms_and_original_processor_settings(self):
+        import os
+        extract, Array = self.helper()
+        class Extractor:
+            sampling_rate, padding_side = 16000, 'right'
+            def __call__(self, audio, **kwargs):
+                return audio, self.padding_side, kwargs
+        original = Extractor()
+        for audio in (Array(480000), [Array(3200), Array(8000)], [0.0, 0.25, -0.25]):
+            options = {'sampling_rate': 16000, 'padding': False, 'truncation': True}
+            with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'model'}):
+                result = extract(original, audio, options)
+                self.assertIs(result[0], audio)
+                self.assertEqual(result[1:], ('right', options))
+            with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left'}):
+                result = extract(original, audio, options)
+                self.assertIs(result[0], audio)
+                self.assertEqual(result[1], 'right')
+                self.assertEqual(result[2], dict(sampling_rate=16000, padding=False, max_length=480000, truncation=False, return_attention_mask=True))
+            self.assertEqual(original.padding_side, 'right')
+            self.assertEqual(options, {'sampling_rate': 16000, 'padding': False, 'truncation': True})
+        with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left'}):
+            for audio in (Array(480001), [Array(100), Array(480001)]):
+                with self.assertRaisesRegex(ValueError, 'at most 30 seconds'):
+                    extract(original, audio, {})
+
+    def test_server_cli_selects_a_known_policy_and_clears_a_previous_policy(self):
+        import argparse
+        import os
+        from build_wheel import patch_mlx_audio_padding_cli
+        source = 'def configure():\n    parser = argparse.ArgumentParser()\n    args = parser.parse_args()\n    return args\n'
+        namespace = {'argparse': argparse, 'os': os}
+        exec(patch_mlx_audio_padding_cli(source), namespace)
+        with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left'}):
+            with patch('sys.argv', ['server']):
+                self.assertEqual(namespace['configure']().gemma3n_audio_padding, 'model')
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_PADDING'], 'model')
+            with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'encoded-left']):
+                self.assertEqual(namespace['configure']().gemma3n_audio_padding, 'encoded-left')
+            with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'unknown']):
+                with self.assertRaises(SystemExit):
+                    namespace['configure']()
 
 
 class Gemma4AudioPacking(unittest.TestCase):

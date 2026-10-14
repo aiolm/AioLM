@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media8"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media11"}
 
 
 def replace_once(text, before, after):
@@ -126,6 +126,40 @@ def patch_mlx_gemma3n_positions(text):
         "            queries = queries.transpose(0, 2, 1, 3)\n            queries = self.rope(queries, offset=offset)\n            if cache is not None:\n                keys, values = cache.update_and_fetch(keys, values)\n\n        if self.is_kv_shared_layer and cache is not None:\n            queries = queries.transpose(0, 2, 1, 3)\n            queries = self.rope(queries, offset=offset)\n")
 
 
+def patch_mlx_gemma3n_audio_embeddings(text):
+    text = patch_mlx_gemma3n_embeddings(text)
+    text = replace_once(text, 'from typing import Optional\n',
+                        'import os\n\nfrom typing import Optional\n')
+    text = replace_once(text, '\n\ndef masked_scatter(input_tensor, mask, source):', '''
+
+def _align_gemma3n_audio_features(features, padding_mask, token_count, padding_feature):
+    rows = []
+    for index, mask in enumerate(padding_mask.tolist()):
+        positions = [position for position, padded in enumerate(mask) if not padded]
+        if not positions:
+            raise ValueError("Gemma3n audio encoder produced no valid frames")
+        if len(positions) > token_count:
+            raise ValueError("Gemma3n audio padding supports at most 30 seconds per clip")
+        valid = mx.take(features[index], mx.array(positions, dtype=mx.int32), axis=0)
+        prefix = mx.broadcast_to(padding_feature, (1, token_count - len(positions), features.shape[-1]))[0]
+        rows.append(mx.concatenate((prefix, valid), axis=0))
+    return mx.stack(rows, axis=0)
+
+
+def masked_scatter(input_tensor, mask, source):''')
+    return replace_once(text,
+        '            audio_features = mx.concatenate(\n                (audio_features, extra_padding_features), axis=1\n            )\n',
+        '''            if os.environ.get("MLX_VLM_GEMMA3N_AUDIO_PADDING", "model") == "encoded-left":
+                audio_features = _align_gemma3n_audio_features(
+                    audio_features, audio_mask, self.config.audio_soft_tokens_per_image, audio_padding_embs
+                )
+            else:
+                audio_features = mx.concatenate(
+                    (audio_features, extra_padding_features), axis=1
+                )
+''')
+
+
 def patch_mlx_special_tokens(text):
     # A processor's **kwargs accepts tokenizer options even when its signature
     # does not enumerate them. Preserve the caller's template token policy.
@@ -142,17 +176,87 @@ def patch_mlx_gemma3n_template(text):
         '            tokenizer=tokenizer,\n            chat_template=getattr(tokenizer, "chat_template", None),\n            **proc_kwargs,\n')
 
 
+def patch_mlx_gemma3n_audio(text):
+    # Keep the waveform/preprocessor unchanged in encoded-left mode. Enforce
+    # the model's 30-second capacity before upstream can truncate the input.
+    text = replace_once(text, 'from typing import List, Optional, Union\n',
+                        'import os\n\nfrom typing import List, Optional, Union\n')
+    text = replace_once(text, '\n\nclass Gemma3nProcessor(ProcessorMixin):', '''
+
+def _extract_gemma3n_audio(feature_extractor, audio, audio_kwargs):
+    if os.environ.get("MLX_VLM_GEMMA3N_AUDIO_PADDING", "model") != "encoded-left":
+        return feature_extractor(audio, **audio_kwargs)
+    window = feature_extractor.sampling_rate * 30
+    batched = (
+        isinstance(audio, np.ndarray) and audio.ndim > 1
+    ) or (
+        isinstance(audio, (list, tuple)) and len(audio) > 0
+        and not isinstance(audio[0], (int, float, np.number))
+    )
+    clips = audio if batched else [audio]
+    if any(len(clip) > window for clip in clips):
+        raise ValueError("Gemma3n audio padding supports at most 30 seconds per clip")
+    options = dict(audio_kwargs)
+    options.update(max_length=window, truncation=False, return_attention_mask=True)
+    return feature_extractor(audio, **options)
+
+
+class Gemma3nProcessor(ProcessorMixin):''')
+    return replace_once(text,
+        '            audio_inputs = self.feature_extractor(audio, **audio_kwargs)\n',
+        '            audio_inputs = _extract_gemma3n_audio(self.feature_extractor, audio, audio_kwargs)\n')
+
+
+def patch_mlx_gemma3n_processor(text):
+    return patch_mlx_gemma3n_audio(patch_mlx_gemma3n_template(text))
+
+
+def patch_mlx_audio_padding_cli(text):
+    return replace_once(text, '    args = parser.parse_args()\n', '''    parser.add_argument(
+        "--gemma3n-audio-padding", choices=("model", "encoded-left"), default="model",
+        help="Gemma3n audio padding policy; encoded-left places unused soft-token padding before valid audio features without changing the waveform.",
+    )
+    args = parser.parse_args()
+    os.environ["MLX_VLM_GEMMA3N_AUDIO_PADDING"] = args.gemma3n_audio_padding
+''')
+
+
+def patch_mlx_audio_window_preflight(text):
+    text = patch_mlx_preflight(text)
+    return replace_once(text,
+        '        if audio and isinstance(exc, ValueError) and str(exc) == "Unable to detect audio format from bytes":\n',
+        '        if audio and isinstance(exc, ValueError) and str(exc) in ("Gemma3n audio padding supports at most 30 seconds per clip", "Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip"):\n'
+        '            raise HTTPException(status_code=400, detail=str(exc)) from exc\n'
+        '        if audio and isinstance(exc, ValueError) and str(exc) == "Unable to detect audio format from bytes":\n')
+
+
+def patch_mlx_audio_window_nonstream(text):
+    # prepare_inputs wraps processor ValueErrors. Both non-streaming endpoints
+    # must classify this known validation failure after their metric cleanup.
+    before = '                raise HTTPException(status_code=500, detail=f"Generation failed: {e}")\n'
+    if text.count(before) != 2:
+        raise ValueError("upstream source differs from the audited patch; refusing to guess")
+    after = (
+        '                if audio and isinstance(e, ValueError) and str(e) in ("Gemma3n audio padding supports at most 30 seconds per clip", "Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip"):\n'
+        '                    raise HTTPException(status_code=400, detail=str(e)) from e\n'
+        + before
+    )
+    return text.replace(before, after)
+
+
 PATCHES = {
     "vllm": {"vllm/multimodal/media/connector.py": patch_vllm},
     "mlx-vlm": {
         "mlx_vlm/server/request_normalization.py": patch_mlx_normalization,
         "mlx_vlm/prompt_utils.py": patch_mlx_prompt,
-        "mlx_vlm/server/app.py": patch_mlx_preflight,
+        "mlx_vlm/server/app.py": patch_mlx_audio_window_preflight,
+        "mlx_vlm/server/cli.py": patch_mlx_audio_padding_cli,
+        "mlx_vlm/server/openai.py": patch_mlx_audio_window_nonstream,
         "mlx_vlm/models/gemma4/gemma4.py": patch_mlx_gemma4_audio,
-        "mlx_vlm/models/gemma3n/gemma3n.py": patch_mlx_gemma3n_embeddings,
+        "mlx_vlm/models/gemma3n/gemma3n.py": patch_mlx_gemma3n_audio_embeddings,
         "mlx_vlm/models/gemma3n/language.py": patch_mlx_gemma3n_positions,
         "mlx_vlm/utils.py": patch_mlx_special_tokens,
-        "mlx_vlm/models/gemma3n/processing_gemma3n.py": patch_mlx_gemma3n_template,
+        "mlx_vlm/models/gemma3n/processing_gemma3n.py": patch_mlx_gemma3n_processor,
     },
 }
 
