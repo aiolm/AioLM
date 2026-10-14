@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media13"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media14"}
 
 
 def replace_once(text, before, after):
@@ -59,6 +59,32 @@ def patch_mlx_prompt(text):
     text = replace_once(text,
         '    if any(part["type"] == "image" for part in parts):\n',
         '    if any(part["type"] in ("image", "audio") for part in parts):\n')
+    # The list formatter must preserve explicit audio positions, not merely
+    # allocate each recording to the right conversation turn.
+    text = replace_once(text,
+        '            if not explicit_images:\n',
+        '            explicit_audio = _content_media_count(prompt, ("audio", "input_audio"))\n            if not explicit_images and not explicit_audio:\n')
+    text = replace_once(text,
+        '    def _content_parts(prompt, text_builder, image_builder, include_images):\n',
+        '    def _content_parts(prompt, text_builder, image_builder, include_images, audio_builder=None):\n')
+    text = replace_once(text,
+        '        if not isinstance(prompt, list) or not include_images:\n',
+        '        if not isinstance(prompt, list) or not (include_images or audio_builder):\n')
+    text = replace_once(text,
+        '            if kind in ("image", "image_url", "input_image"):\n                parts.append(image_builder(image_count))\n                image_count += 1\n',
+        '            if kind in ("image", "image_url", "input_image") and include_images:\n                parts.append(image_builder(image_count))\n                image_count += 1\n            elif kind in ("audio", "input_audio") and audio_builder:\n                parts.append(audio_builder())\n')
+    text = replace_once(text,
+        '            lambda _: image_builder(),\n            role == "user" and not skip_image_token,\n',
+        '            lambda _: image_builder(),\n            role == "user" and not skip_image_token,\n            MessageBuilder.audio_message if role == "user" and not skip_audio_token else None,\n')
+    text = replace_once(text,
+        '            audio_tokens = [MessageBuilder.audio_message()] * num_audios\n',
+        '            explicit_audio = _content_media_count(content, ("audio",))\n            audio_tokens = [MessageBuilder.audio_message()] * max(num_audios - explicit_audio, 0)\n')
+    text = replace_once(text,
+        '            lambda _: MessageBuilder.image_message(),\n            role == "user" and not skip_image_token,\n        )\n        message = {"role": role, "content": content}\n',
+        '            lambda _: MessageBuilder.image_message(),\n            role == "user" and not skip_image_token,\n            MessageBuilder.audio_message if role == "user" and not skip_audio_token else None,\n        )\n        message = {"role": role, "content": content}\n')
+    text = replace_once(text,
+        '                    message["content"] + [MessageBuilder.audio_message()] * num_audios\n',
+        '                    message["content"] + [MessageBuilder.audio_message()] * max(\n                        num_audios - _content_media_count(content, ("audio",)), 0\n                    )\n')
     return replace_once(text,
         '        audio_counts = [0] * len(prompt)\n        if last_user_idx >= 0:\n            audio_counts[last_user_idx] = num_audios\n',
         '''        explicit_audio_counts = [
