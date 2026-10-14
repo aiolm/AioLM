@@ -1,5 +1,7 @@
 # Mac 기기 검증 결과
 
+2026-10-14까지의 기록을 종합한 현재 잔여 범위·재검증 절차·완료 기준은 [Mac 추가 검증 목록](macos-device-validation-remaining.ko.md)을 따른다. 아래 각 절의 당시 판정과 원본 근거는 그대로 보존한다.
+
 [Mac 기기 작업 인계](macos-device-handoff.ko.md)의 M01–M12 후속 기록이다. **전체 기기 검증은 통과하지 않았다.** 공통 자동 검사, 세 엔진의 실제 추론·offline bundle 왕복, 실제 WKWebView 파일 선택·미디어·프로젝트·GUI 프로필 이전, arm64 DMG 생성과 재현 결함 수정은 완료했다. upstream 오류와 아래의 차단·미실행 범위는 남아 있다.
 
 ## 1. 소스·환경·근거
