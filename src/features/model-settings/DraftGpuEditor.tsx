@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import type { DeviceReport, GpuPlacement, SplitMode } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
-import { cloneGpuPlacement, gpuDeviceLabel, missingGpuIds, resolvedGpuPlacement, toggleGpuSelection } from '../../shared/runtime/sessionUtils';
+import { cloneGpuPlacement, emptyGpuPlacement, gpuDeviceLabel, missingGpuIds, resolvedGpuPlacement, toggleGpuSelection } from '../../shared/runtime/sessionUtils';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
@@ -17,19 +17,24 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
   const copy = modelSettingsCopy[locale];
   const help = modelSettingsHelp[locale];
   const id = useId();
-  const gpu = resolvedGpuPlacement(cloneGpuPlacement(placement));
+  const savedGpu = cloneGpuPlacement(placement);
+  const gpu = resolvedGpuPlacement(savedGpu);
   const devices = (device?.profile.gpus ?? []).filter((item): item is typeof item & { stable_id: string } => !!item.stable_id);
   const [weights, setWeights] = useState<string | null>(null);
   const deviceOptions = devices.map((item, index) => ({ value: item.stable_id, label: gpuDeviceLabel(item, index) }));
   // Only the draft device keeps an empty choice: a draft model is optional, so
   // "none pinned" is a real state there, unlike the main GPU and the split mode.
   const options = [{ value: '', label: copy.automatic }, ...deviceOptions];
+  const canClear = devices.length === 0 && (savedGpu.gpu_ids.length > 0 || savedGpu.main_gpu !== null
+    || savedGpu.draft_gpu_id !== null || savedGpu.split_mode !== 'none' || savedGpu.tensor_split.length > 0);
   const patch = (value: Partial<GpuPlacement>) => onChange({ ...gpu, ...value });
   return <section className="model-settings-fields" aria-label={copy.gpu}>
-    {/* No "clear to automatic" action: selecting a runtime fills the placement
-        with the devices that runtime reports, so this panel always edits an
-        explicit selection rather than offering an empty one to interpret. */}
-    <div className="model-settings-section-heading"><h3>{copy.gpu}</h3></div>
+    {/* Keep reported GPU selections explicit. A CPU runtime has no device
+        checkboxes, so a saved assignment needs an explicit recovery action. */}
+    <div className="model-settings-section-heading"><h3>{copy.gpu}</h3>
+      {canClear && <button type="button" className="app-button app-button--secondary" disabled={disabled}
+        onClick={() => { setWeights(null); onInvalid('gpu_tensor_split', false); onChange(emptyGpuPlacement()); }}>{copy.clearGpu}</button>}
+    </div>
     {/* An empty list means the runtime has not reported its devices yet, not
         that the saved ones are gone. Warning then fired on every backend switch. */}
     {devices.length > 0 && missingGpuIds(gpu, devices).length > 0 && <FeedbackBanner tone="warning">{t('ui.gpuMissingWarning')}</FeedbackBanner>}

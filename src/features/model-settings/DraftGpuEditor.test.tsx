@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import type { DeviceReport, GpuPlacement } from '../../shared/api/types';
 import DraftGpuEditor from './DraftGpuEditor';
+import { emptyGpuPlacement } from '../../shared/runtime/sessionUtils';
 
 const device = { profile: { gpus: [
   { stable_id: 'gpu-a', name: 'Radeon 9700', vendor: 'amd', integrated: false, vram_mb: 16384 },
@@ -73,5 +74,30 @@ describe('DraftGpuEditor linkage', () => {
     mount();
     expect(screen.queryByRole('button', { name: 'Automatic' })).not.toBeInTheDocument();
     expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+
+  it('lets the user clear a saved assignment when the selected runtime reports no GPUs', () => {
+    const placement = { ...twoGpus, main_gpu: 'gpu-a', tensor_split: [1, 2], draft_gpu_id: 'gpu-b' };
+    const { onChange, onInvalid } = mount(placement, { ...device, profile: { ...device.profile, gpus: [] } } as DeviceReport);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear GPU assignment' }));
+    expect(onChange).toHaveBeenCalledWith(emptyGpuPlacement());
+    expect(onInvalid).toHaveBeenCalledWith('gpu_tensor_split', false);
+    expect(placement.gpu_ids).toEqual(['gpu-a', 'gpu-b']);
+  });
+
+  it('keeps the clear action disabled while runtime settings are locked', () => {
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><DraftGpuEditor placement={twoGpus} device={null} disabled onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    const clear = screen.getByRole('button', { name: 'Clear GPU assignment' });
+    expect(clear).toBeDisabled();
+    fireEvent.click(clear);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not offer recovery for an already empty CPU assignment', () => {
+    const { onChange } = mount(emptyGpuPlacement(), { ...device, profile: { ...device.profile, gpus: [] } } as DeviceReport);
+    expect(screen.queryByRole('button', { name: 'Clear GPU assignment' })).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
