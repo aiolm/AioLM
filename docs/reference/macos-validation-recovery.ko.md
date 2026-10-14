@@ -25,7 +25,7 @@ python3 scripts/model-repair/reindex_snapshot.py \
 | 기반 버전 | 새 버전 | 수정 내용 |
 | --- | --- | --- |
 | vLLM `0.30.0+cpu` | `0.30.0+cpu.aiolm.media1` | local media allowlist 거부를 validation 오류로 분류해 HTTP400 반환. allowlist 유지. |
-| mlx-vlm `0.7.6` | `0.7.6+aiolm.media8` | media7의 URI·audio 이력·preflight·Gemma4 padding·Gemma3n embedding/공유 위치 수정 유지. Gemma3n processor에 실제 tokenizer template를 전달하고 `**kwargs` 처리기에 caller의 `add_special_tokens` 옵션을 전달해 BOS 중복 제거. context overflow의 기존 기록/400 유지. |
+| mlx-vlm `0.7.6` | `0.7.6+aiolm.media12` | media8의 URI·audio 이력·preflight·Gemma4 packing·Gemma3n embedding/공유 위치/BOS 수정 유지. 명시적 `encoded-left` 오디오 정렬 정책과 30초 초과 입력의 HTTP400 처리 추가. 기존 context overflow·기본 정책 유지. |
 
 ```sh
 python3 scripts/provider-compatibility/build_wheel.py \
@@ -53,6 +53,7 @@ vllm-metal0.30.0은 기존 pinned MLX/MLX-LM/native paged ops와 MetalPlatform �
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma4_audio_packing.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_embeddings.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_mlx_chat_tokens.py
+"$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_audio_padding.py
 ```
 
 첫 검사는 모델 추론 없이 설치된 normalizer/template의 audio marker가 `[1,0,1]`인지 확인한다. 두 번째는 작은 합성 encoder/embedding 값으로 **설치된 Gemma4의 실제 embedding 배치 메서드**를 호출한다. 녹음 사이 padding이 다음 녹음의 토큰을 대체하면 실패하며, 모델 weights·내용 추론이나 처리 속도 검사는 아니다. 앱의 런타임 관리에서 새 Python을 외부 환경으로 등록하고 **별도 프로필**로 선택한다. 올바른 인증으로 URI/invalid-WAV400, 정상 미디어 내용·usage·취소·Retry·재시작·종료를 실제 확인한다. 원본 환경/프로필을 자동 교체하지 않는다.
@@ -60,6 +61,20 @@ vllm-metal0.30.0은 기존 pinned MLX/MLX-LM/native paged ops와 MetalPlatform �
 세 번째는 실제 Gemma3n 메서드를 작은 텐서로 호출해 텍스트 prefill 배율과 concrete/shared attention의 쿼리·키 위치를 비교한다. 단일 및 길이가 다른 두 입력의 batched cache에서 prefill/decode를 검사한다. 원본0.7.6은 배율 검사, 배율만 수정한 media6은 공유 위치 검사에서 실패했다. media7은 네 cache 조건을 통과했다. **같은 원래4bit 모델의 전사 단수·복수 오류는 실제 앱에서도 남았다.** checker 성공을 내용 성공으로 바꾸지 않는다.
 
 네 번째는 실제 설치된 Gemma3n processor loader와 input dispatcher에 합성 tokenizer/임시 template를 사용한다. template가 있으면 시작 토큰을 한 번만 넣고, 없으면 tokenizer가 한 번 넣으며 명시적 caller 옵션도 유지되는지 검사한다. 모델·음성·네트워크는 사용하지 않는다. media7은 template 전달 검사에서 실패하고 media8은 통과했다. [Hugging Face의 template 지침](https://github.com/huggingface/transformers/blob/main/docs/source/en/chat_templating.md)처럼 이미 template가 넣은 special token을 다시 추가하지 않는다. 같은 원래 Gemma3n의 실제 앱 입력은209→208토큰으로 고쳐졌지만 전사 오류는 여전히 남았다. 정답 보정이나 모델 교체로 성공 처리하지 않는다. §103에서는 공개 배포본의 세 shard 전체 해시가 Google 원본 metadata와 같음을 확인해 원본 파라미터와 원본 processor로 대조했으며, 동일한 전사 오류가 재현됐다. 원본과 변환본의 audio padding_side 차이도 해결 방법으로 입증되지 않아 제품 수정에 넣지 않았다.
+
+## Gemma3n의 유효 오디오 임베딩 정렬
+
+[결과 §104](macos-device-validation-results.ko.md#104-gemma3n의-오디오-임베딩-위치와-동일-모델-재검증)는 waveform·mel·mask·가중치를 유지한 채 남는 오디오 슬롯의 위치를 대조했다. 기본의 `[유효 음성20][padding168]` 대신 `[padding168][유효 음성20]`로 음성 끝을 오디오 종료 토큰에 맞추면 원래 전사가 정확했다. 같은 원본 파라미터의 공식 decoder에서도 효과를 확인했다. 30초 waveform 왼쪽 padding은 다른 문장을 악화시켜 제품 옵션에 넣지 않았다.
+
+media12을 별도 환경에 설치·등록하고 별도 Gemma3n 프로필의 **고급 → extra_args**에 다음 JSON을 지정한다. 실행 중인 세션은 먼저 언로드한다.
+
+```json
+["--gemma3n-audio-padding", "encoded-left"]
+```
+
+해당 옵션은 이 호환 runtime에만 있다. upstream 환경에서 임의로 지원을 선언하거나 probe를 우회하지 않는다. 기본 `model`은 기존 처리와 원본 processor 설정을 유지한다. `encoded-left`는 각 녹음의 mask가 유효한 벡터 값·순서를 유지하고, 남는 슬롯을 기존 learned padding embedding으로 앞에 채운다. 입력·출력 토큰이나 응답 텍스트를 교정하지 않는다. 30초를 넘는 clip은 처리 전에 거부하며 스트리밍/일반 chat에서 알려진 입력 오류를 HTTP400으로 분류한다. 파일·기존 환경·기본 프로필은 바꾸지 않는다.
+
+다섯 번째 checker는 실제 설치된 feature extractor/helper로 waveform/mel/mask 불변, 서로 다른 유효 길이의 padding 정렬, 전체 padding 및 길이 초과 거부를 확인한다. 모델·네트워크는 사용하지 않는다. 같은 원래 모델의 내용·usage·다른 음성·이력·오류 후 재시도·재시작을 앱에서 별도로 확인해야 한다. §104의 긴 결합 음성에는 관사 오류가 남아 있어 모든 Gemma3n 음성의 정확도를 보장하는 결과가 아니다.
 
 ## llama.cpp의 Idefics3 단일 이미지
 
