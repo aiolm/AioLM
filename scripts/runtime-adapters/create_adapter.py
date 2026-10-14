@@ -215,7 +215,17 @@ def create(args):
             raise ValueError("pin a full Strata source revision before registration")
         installed, executable = strata_config(root, config)
         common["models"] = [{"path":str(config),"name":installed.get("model_name") or "qwen3.8-flash-next"}]
-        files = [helper, root / "serve/server.py", executable, *sorted((root / "serve").glob("*.py"))]
+        modules = sorted(path for path in (root / "serve").glob("*.py") if not path.name.startswith("test_"))
+        files = [helper, root / "serve/server.py", executable, *modules]
+        tokenizer_module = root / "tools/strata_tokenizer.py"
+        if tokenizer_module.is_file():
+            files.append(tokenizer_module)
+        # Hash the native libraries loaded beside the executable or from its
+        # configured search directories, just as for a dynamic llama.cpp build.
+        for directory in dict.fromkeys([str(executable.parent), *installed.get("lib_dirs", [])]):
+            if Path(directory).is_dir():
+                files.extend(sorted(path for path in Path(directory).iterdir()
+                                    if path.is_file() and SHARED_LIBRARY.search(path.name)))
         artifacts = list(dict.fromkeys(str(file_path(path)) for path in files))
         if len(artifacts) > 64:
             raise ValueError("Strata adapter source exceeds the artifact count; provide an audited custom manifest")

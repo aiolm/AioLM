@@ -100,6 +100,37 @@ class LoaderProbeTests(unittest.TestCase):
             path.write_text(json.dumps(base))
             self.assertEqual(adapter.strata_config(root, path)[1], exe)
 
+    def test_strata_manifest_hashes_native_libraries_and_tokenizer_without_upstream_tests(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            engine = root / "engine"; engine.mkdir()
+            exe = engine / "strata.exe"; exe.write_bytes(b"synthetic engine")
+            local_lib = engine / "runtime.dll"; local_lib.write_bytes(b"synthetic runtime")
+            vendor = root / "vendor libraries"; vendor.mkdir()
+            vendor_lib = vendor / "libbackend.so.1"; vendor_lib.write_bytes(b"synthetic backend")
+            serve = root / "serve"; serve.mkdir()
+            server = serve / "server.py"; server.write_text("# synthetic server")
+            module = serve / "frontend.py"; module.write_text("# synthetic frontend")
+            for number in range(70):
+                (serve / f"test_example_{number}.py").write_text("# upstream tests")
+            tools = root / "tools"; tools.mkdir()
+            tokenizer_module = tools / "strata_tokenizer.py"; tokenizer_module.write_text("# synthetic tokenizer")
+            tokenizer = root / "tokenizer"; tokenizer.mkdir()
+            for name in ("vocab.json", "merges.txt", "token_type.json"):
+                (tokenizer / name).write_text("synthetic")
+            config = root / "deployment.json"
+            config.write_text(json.dumps({"exe": str(exe), "args": [], "tokenizer": str(tokenizer),
+                                         "lib_dirs": [str(vendor)]}))
+            output = root / "runtime.json"
+            args = argparse.Namespace(kind="strata", engine_id="custom.synthetic", runtime_id="r1", python=None,
+                                      root=str(root), config=str(config), name=None, output=str(output),
+                                      revision="0123456789abcdef0123456789abcdef01234567")
+            with patch("builtins.print"):
+                adapter.create(args)
+            files = set(json.loads(output.read_text())["artifacts"])
+            self.assertEqual(files, {str(Path(adapter.__file__).absolute()), str(exe), str(local_lib),
+                                     str(vendor_lib), str(server), str(module), str(tokenizer_module)})
+
     def test_strata_model_binding_cannot_replace_the_registered_native_build(self):
         with tempfile.TemporaryDirectory() as area:
             root = Path(area)
