@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media11"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media12"}
 
 
 def replace_once(text, before, after):
@@ -237,7 +237,7 @@ def patch_mlx_audio_window_nonstream(text):
     if text.count(before) != 2:
         raise ValueError("upstream source differs from the audited patch; refusing to guess")
     after = (
-        '                if audio and isinstance(e, ValueError) and str(e) in ("Gemma3n audio padding supports at most 30 seconds per clip", "Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip"):\n'
+        '                if isinstance(e, ValueError) and str(e) in ("Gemma3n audio padding supports at most 30 seconds per clip", "Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip"):\n'
         '                    raise HTTPException(status_code=400, detail=str(e)) from e\n'
         + before
     )

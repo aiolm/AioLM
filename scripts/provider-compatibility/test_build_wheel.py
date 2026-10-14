@@ -280,7 +280,7 @@ class Gemma3nAudioWindow(unittest.TestCase):
                 self.status_code = status_code
                 super().__init__(detail)
         source = '''class Endpoints:
-    def first(self, e, audio):
+    def first(self, e):
         if True:
             if True:
                 raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
@@ -291,12 +291,16 @@ class Gemma3nAudioWindow(unittest.TestCase):
 '''
         namespace = {'HTTPException': HTTPException}
         exec(patch_mlx_audio_window_nonstream(source), namespace)
-        for endpoint in (namespace['Endpoints']().first, namespace['Endpoints']().second):
+        endpoints = namespace['Endpoints']()
+        for endpoint in (lambda error, audio: endpoints.first(error), endpoints.second):
             for message in ('Gemma3n audio padding supports at most 30 seconds per clip', 'Failed to process inputs with error: Gemma3n audio padding supports at most 30 seconds per clip', 'different generation failure'):
                 for audio in (None, ['synthetic audio']):
                     with self.assertRaises(HTTPException) as caught:
                         endpoint(ValueError(message), audio)
-                    self.assertEqual(caught.exception.status_code, 400 if audio and 'at most 30 seconds' in message else 500)
+                    self.assertEqual(caught.exception.status_code, 400 if 'at most 30 seconds' in message else 500)
+            with self.assertRaises(HTTPException) as caught:
+                endpoint(RuntimeError('Gemma3n audio padding supports at most 30 seconds per clip'), None)
+            self.assertEqual(caught.exception.status_code, 500)
         with self.assertRaisesRegex(ValueError, 'upstream source differs'):
             patch_mlx_audio_window_nonstream(source.replace('def second', 'def unused', 1).split('    def unused')[0])
 
