@@ -22,6 +22,10 @@ import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 type Approval = { tool: api.McpTool; args: Record<string, unknown> };
 type ToolCall = { id: string; taskId: string; label: string; cancelRequested: boolean; settled: boolean; cancelPending?: Promise<void> };
 
+function toolExecutionFailed(response: unknown): boolean {
+  return response !== null && typeof response === "object" && "isError" in response && response.isError === true;
+}
+
 function requestCallCancellation(call: ToolCall): Promise<void> {
   if (call.cancelPending) return call.cancelPending;
   call.cancelRequested = true;
@@ -294,13 +298,15 @@ export default function McpPanel(_props: { store: AppStore }) {
     try {
       const response = await api.mcpCallTool(serverId, pending.tool.name, pending.args, id);
       call.settled = true;
-      finishTask(call.taskId, call.cancelRequested ? "cancelled" : "completed");
+      const toolError = toolExecutionFailed(response) ? t("ui.mcpToolFailed", { name: pending.tool.name }) : null;
+      finishTask(call.taskId, call.cancelRequested ? "cancelled" : toolError ? "failed" : "completed", call.cancelRequested ? undefined : toolError ?? undefined);
       if (activeCallRef.current !== call || generation !== selectionGeneration.current) return;
       if (call.cancelRequested) { setNotice(t("ui.taskCancelled")); return; }
       setResult(response);
       if (approvalPolicy === "session" || approvalPolicy === "server-tool") {
         setApprovedCalls((current) => new Set(current).add(key));
       }
+      if (toolError) { setError(toolError); return; }
       setNotice(autoApproved
         ? `${t("ui.mcpAutoApproved", { policy: policyLabel(approvalPolicy) })} ${t("ui.mcpToolCompleted", { name: pending.tool.name })}`
         : t("ui.mcpToolCompleted", { name: pending.tool.name }));
@@ -358,7 +364,7 @@ export default function McpPanel(_props: { store: AppStore }) {
           {selectedServer && <section className="app-card"><div className="flex items-start justify-between gap-3"><div><h3 className="app-section-title">{t("ui.toolsTitle")} {tools.length > 0 && <span className="text-accent">· {tools.length}</span>}</h3><p className="app-section-hint">{t("ui.toolsHint")}</p></div><Badge tone="warning">{t("ui.approvalRequiredBadge")}</Badge></div>{tools.length === 0 && <p className="mt-4 text-sm text-faint">{t("ui.discoverToolsHint")}</p>}<div className="mt-3.5 space-y-2.5">{tools.map((tool) => <div key={tool.name} className={`app-list-row p-3.5 ${selectedTool?.name === tool.name ? "is-selected" : ""}`}><div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><code className="font-mono text-xs text-accent">{normalizeDisplayText(tool.name)}</code><p className="mt-1 text-xs leading-relaxed text-muted">{normalizeDisplayText(tool.description || t("ui.noToolDescription"))}</p></div><button type="button" disabled={saving} onClick={() => { setSelectedTool(tool); setArgsJson("{}\n"); setApproval(null); setResult(null); }} aria-label={`${t("ui.prepareCall")}: ${normalizeDisplayText(tool.name)}`} className="app-button app-button--secondary app-button--sm">{t("ui.prepareCall")}</button></div>{selectedTool?.name === tool.name && <div className="mt-3.5 border-t border-line pt-3.5"><label className="block text-xs text-muted">{t("ui.jsonArguments")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayText(argsJson)} onChange={(event) => setArgsJson(event.target.value)} rows={4} className="app-textarea mt-1 app-mono" /></label><details className="mt-2.5"><summary className="cursor-pointer text-xs text-faint">{t("ui.inputSchema")}</summary><pre tabIndex={0} aria-label={t("ui.inputSchema")} className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-canvas p-2 font-mono text-xs text-faint">{normalizeDisplayText(JSON.stringify(tool.input_schema, null, 2))}</pre></details><button type="button" onClick={prepareCall} disabled={saving} className="app-button app-button--primary app-button--sm mt-3.5">{t("ui.reviewToolCall")}</button></div>}</div>)}</div></section>}
 
           {approval && selectedServer && <section ref={approvalSectionRef} tabIndex={-1} className="app-card app-card--warning focus:outline-none" role="alert"><h3 className="app-section-title text-warning">{t("ui.approveTitle")}</h3><p className="app-section-hint text-warning/80">{t("ui.approveBody", { tool: normalizeDisplayText(approval.tool.name), server: normalizeDisplayText(selectedServer.name) })}</p><pre tabIndex={0} aria-label={t("ui.approveTitle")} className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(JSON.stringify(approval.args, null, 2))}</pre><div className="mt-3.5 flex gap-2"><button type="button" disabled={saving || approvalBusy} onClick={() => void approveCall()} className="app-button app-button--primary app-button--sm"><StableLabel value={approvalBusy ? t("ui.approveRunning") : t("ui.approveRun")} labels={[t("ui.approveRunning"), t("ui.approveRun")]} /></button><button type="button" disabled={approvalBusy} onClick={() => setApproval(null)} className="app-button app-button--secondary app-button--sm">{t("panel.cancel")}</button></div></section>}
-          {result !== null && <section className="app-card app-card--success"><h3 className="app-section-title text-success">{t("ui.toolResult")}</h3><pre tabIndex={0} aria-label={t("ui.toolResult")} className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(typeof result === "string" ? result : JSON.stringify(result, null, 2))}</pre></section>}
+          {result !== null && <section className={toolExecutionFailed(result) ? "app-card" : "app-card app-card--success"}><h3 className={`app-section-title ${toolExecutionFailed(result) ? "text-error" : "text-success"}`}>{t("ui.toolResult")}</h3><pre tabIndex={0} aria-label={t("ui.toolResult")} className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-canvas p-3 font-mono text-xs text-ink">{normalizeDisplayText(typeof result === "string" ? result : JSON.stringify(result, null, 2))}</pre></section>}
         </div>
       </div>
 

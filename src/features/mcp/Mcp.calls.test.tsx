@@ -128,6 +128,28 @@ describe('MCP manual call ownership', () => {
     expect(api.mcpCancelToolCall).not.toHaveBeenCalled();
   });
 
+  it('preserves a tool execution error and marks its task and result as failed', async () => {
+    const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    render(<Surface />); await startCall();
+    const response = { content: [{ type: 'text', text: 'Synthetic execution failure' }], isError: true };
+    await act(async () => call.resolve(response));
+    const result = await screen.findByLabelText('Tool result');
+    expect(JSON.parse(result.textContent!)).toEqual(response);
+    expect(result.closest('section')).not.toHaveClass('app-card--success');
+    expect(getTaskSnapshot()[0]).toEqual(expect.objectContaining({ state: 'failed', detail: 'Tool echo reported an execution error.' }));
+    expect(screen.queryByText('Tool echo completed.')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Tool echo reported an execution error.').length).toBeGreaterThan(0);
+    expect(api.mcpCancelToolCall).not.toHaveBeenCalled();
+  });
+
+  it('does not infer tool failure from error-like text or a non-boolean flag', async () => {
+    const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);
+    render(<Surface />); await startCall();
+    await act(async () => call.resolve({ content: [{ type: 'text', text: 'Error handling documentation' }], isError: 'true' }));
+    expect(await screen.findByLabelText('Tool result')).toHaveTextContent('Error handling documentation');
+    expect(getTaskSnapshot()[0].state).toBe('completed');
+  });
+
   it('does not remember a cancelled call as a session approval', async () => {
     saveMcpApprovalPolicy('session');
     const call = deferred<unknown>(); vi.mocked(api.mcpCallTool).mockReturnValue(call.promise);

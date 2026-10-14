@@ -454,6 +454,7 @@ const en = {
   mcpArgsInvalid: "Arguments must be valid JSON.",
   mcpBlockedByPolicy: "This MCP tool is blocked by the current approval policy.",
   mcpToolCompleted: "Tool {name} completed.",
+  mcpToolFailed: "Tool {name} reported an execution error.",
   mcpAutoApproved: "Auto-approved by the “{policy}” policy.",
 
   // ---- Projects ----
@@ -1073,6 +1074,7 @@ none: "없음", active: "활성", serverRunningHint: "먼저 모델을 언로드
   mcpArgsObject: "인자는 JSON 객체여야 합니다.", mcpArgsInvalid: "인자는 유효한 JSON이어야 합니다.",
   mcpBlockedByPolicy: "현재 승인 정책에 의해 이 MCP 도구가 차단되었습니다.",
   mcpToolCompleted: "{name} 도구를 실행했습니다.", mcpAutoApproved: "“{policy}” 정책에 따라 자동 승인되었습니다.",
+  mcpToolFailed: "{name} 도구가 실행 오류를 반환했습니다.",
 
   projectsTitle: "재사용 가능한 로컬 작업 공간",
   projectsDescription: "시스템 프롬프트, 모델/런타임 선택, 샘플링 제어, 고급 옵션, 도구 바인딩을 하나로 묶습니다. 프리셋은 로컬 JSON이며 API 자격 증명을 포함하지 않습니다.",
@@ -1318,6 +1320,7 @@ running: "実行中", stopped: "停止中", enabled: "有効", disabled: "無効
   discovering: "検出中", toolsTitle: "ツール", prepareCall: "呼び出しを準備", jsonArguments: "JSON引数",
   inputSchema: "入力スキーマ", reviewToolCall: "ツール呼び出しを確認", approveRun: "承認して1回実行",
   approveRunning: "実行中", toolResult: "ツールの結果", deleteServer: "サーバーを削除",
+  mcpToolFailed: "ツール {name} が実行エラーを返しました。",
   deleteServerTitle: "MCPサーバーを削除しますか？", destructiveAction: "取り消せない操作",
   projectsTitle: "再利用可能なローカルワークスペース", savedProjectsCount: "保存済みプロジェクト", noModelShort: "モデルなし",
   fieldProjectName: "プロジェクト名", fieldDescription: "説明", fieldSystemPrompt: "システムプロンプト",
@@ -1440,6 +1443,7 @@ running: "运行中", stopped: "已停止", enabled: "已启用", disabled: "已
   discovering: "正在发现", toolsTitle: "工具", prepareCall: "准备调用", jsonArguments: "JSON 参数",
   inputSchema: "输入架构", reviewToolCall: "查看工具调用", approveRun: "批准并执行一次",
   approveRunning: "正在执行", toolResult: "工具结果", deleteServer: "删除服务器",
+  mcpToolFailed: "工具 {name} 返回了执行错误。",
   deleteServerTitle: "要删除 MCP 服务器吗？", destructiveAction: "不可撤销的操作",
   projectsTitle: "可复用的本地工作区", savedProjectsCount: "已保存项目", noModelShort: "无模型",
   fieldProjectName: "项目名称", fieldDescription: "描述", fieldSystemPrompt: "系统提示词",
