@@ -10,7 +10,10 @@ export function classifyLifecycleError(error: unknown): LifecycleErrorKind {
   // wrappers. Their concrete memory diagnosis takes precedence over that text.
   if (text.includes("out of memory") || /\boom\b|no available memory for (?:the )?cache blocks|(?:larger than|exceeds?) (?:the )?available (?:kv cache )?memory/.test(text)) return "memory";
   if (text.includes("timeout") || text.includes("timed out")) return "timeout";
-  if (text.includes("address already in use") || text.includes("port") && (text.includes("use") || text.includes("bind"))) return "port";
+  // Tracebacks contain words such as importing, reuse_port and model even
+  // when the rejected setting is a parser. Require an actual bind diagnosis.
+  if (/\binvalid (?:tool call|reasoning) parser\b/.test(text)) return "unknown";
+  if (/address already in use|\beaddrinuse\b|\bport\b[^\n]{0,80}\b(?:already in use|in use|bind failed)\b|\b(?:failed|unable|cannot) to bind\b/.test(text)) return "port";
   if (text.includes("not found") || text.includes("no such file") || text.includes("executable")) return "executable";
   if (text.includes("model") && (text.includes("load") || text.includes("file") || text.includes("invalid"))) return "model";
   if (text.includes("out of memory") || text.includes("oom") || text.includes("vram") || text.includes("memory")) return "memory";

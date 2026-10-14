@@ -150,9 +150,9 @@ export function buildDocumentContext(documents: DocumentAttachment[], maxChars =
   return context;
 }
 
-export function buildMultimodalContent(text: string, images: ImageAttachment[]): ChatContentPart[] {
+export function buildMultimodalContent(text: string, images: ImageAttachment[], mediaBeforeText = false): ChatContentPart[] {
   const parts: ChatContentPart[] = [];
-  if (text.trim()) parts.push({ type: "text", text: text.trim() });
+  if (!mediaBeforeText && text.trim()) parts.push({ type: "text", text: text.trim() });
   for (const image of images) {
     if (image.preparation) {
       if (!validMediaPreparation(image.preparation, image)) throw new Error(`Attachment preparation is unavailable: ${image.name}`);
@@ -169,6 +169,7 @@ export function buildMultimodalContent(text: string, images: ImageAttachment[]):
     else if ((image.kind ?? 'image') === 'image' && image.dataUrl) parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
     else throw new Error(`Attachment is unavailable: ${image.name}`);
   }
+  if (mediaBeforeText && text.trim()) parts.push({ type: "text", text: text.trim() });
   return parts;
 }
 

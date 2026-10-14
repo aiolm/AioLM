@@ -232,7 +232,7 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
     onSwitchThread();
   };
 
-  const updateActiveThread = (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt">>) => {
+  const updateActiveThread = (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt" | "mediaBeforeText">>) => {
     if (!activeThread || !requireIdle()) return;
     setWorkspace((current) => ({
       ...current,

@@ -46,6 +46,8 @@ export interface ChatThread {
   systemPrompt: string;
   /** Legacy conversations keep the automatic prompt unless explicitly disabled. */
   useDefaultSystemPrompt?: boolean;
+  /** Explicit model compatibility choice; legacy conversations keep text first. */
+  mediaBeforeText?: boolean;
   createdAt: number;
   updatedAt: number;
   messages: ChatHistoryMessage[];
@@ -148,6 +150,7 @@ function normalizeThread(value: unknown): ChatThread | null {
     title: thread.title.trim() || "New conversation",
     systemPrompt: typeof thread.systemPrompt === "string" ? thread.systemPrompt : "You are a helpful assistant.",
     ...(thread.useDefaultSystemPrompt === false ? { useDefaultSystemPrompt: false } : {}),
+    ...(thread.mediaBeforeText === true ? { mediaBeforeText: true } : {}),
     createdAt: typeof thread.createdAt === "number" ? thread.createdAt : Date.now(),
     updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : Date.now(),
     messages: thread.messages,
@@ -523,9 +526,9 @@ function inNativeQueue<T>(task: () => Promise<T>): Promise<T> {
   return operation;
 }
 
-/** An empty draft without an explicit prompt choice gets no file. */
+/** An empty draft without an explicit conversation choice gets no file. */
 function untouched(thread: ChatThread): boolean {
-  return thread.messages.length === 0 && !thread.systemPrompt.trim() && thread.useDefaultSystemPrompt !== false && thread.title === "New conversation";
+  return thread.messages.length === 0 && !thread.systemPrompt.trim() && thread.useDefaultSystemPrompt !== false && thread.mediaBeforeText !== true && thread.title === "New conversation";
 }
 
 function readActiveThreadId(): string | null {

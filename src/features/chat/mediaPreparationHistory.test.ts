@@ -10,6 +10,17 @@ const video: ImageAttachment = { name: 'scene.mp4', ref: `${'b'.repeat(64)}.mp4`
   preparation: { kind: 'video-frames', frames: [{ ref: `${'c'.repeat(64)}.jpg`, timestampSeconds: 2.5 }] } };
 
 describe('explicit media preparation in conversation replay', () => {
+  it('preserves attachment sequence and frame labels when a conversation explicitly sends media before text', () => {
+    const picture: ImageAttachment = { name: 'synthetic.png', dataUrl: 'data:image/png;base64,AA==', kind: 'image' };
+    const message = { role: 'user' as const, content: 'Describe', images: [picture, video, audio] };
+    const legacy = toChatMessage(message).content;
+    expect(legacy).toEqual(buildMultimodalContent('Describe', message.images));
+    expect(toChatMessage(message, true).content).toEqual([
+      ...(legacy as Exclude<typeof legacy, string>).slice(1), { type: 'text', text: 'Describe' },
+    ]);
+    expect(message.images).toEqual([picture, video, audio]);
+    expect(buildMultimodalContent('Text only', [], true)).toEqual([{ type: 'text', text: 'Text only' }]);
+  });
   it('replays a labeled transcript without sending original audio or changing its source identity', () => {
     const message = toChatMessage({ role: 'user', content: 'Summarize', images: [audio] });
     expect(message.content).toEqual([{ type: 'text', text: 'Summarize' }, { type: 'text', text: expect.stringContaining(audio.preparation!.kind === 'transcription' ? audio.preparation!.text : '') }]);

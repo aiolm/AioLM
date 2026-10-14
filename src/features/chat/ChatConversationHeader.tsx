@@ -16,7 +16,7 @@ interface ChatConversationHeaderProps {
   activeProjectName: string | null;
   phase: "idle" | "thinking" | "streaming";
   targetBusy?: boolean;
-  onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt">>) => void;
+  onUpdateThread: (patch: Partial<Pick<ChatThread, "title" | "systemPrompt" | "useDefaultSystemPrompt" | "mediaBeforeText">>) => void;
   sessionLabel: string;
   sessionOptions: Array<{ id: string; label: string; disabled?: boolean }>;
   selectedSessionId: string;
@@ -131,6 +131,17 @@ export default function ChatConversationHeader({
               {ct("useDefaultSystemPrompt")}
             </label>
             <p id="chat-default-system-prompt-hint" className="mt-1.5 text-xs ui-color-muted">{ct("useDefaultSystemPromptHint")}</p>
+          </div>
+          <div>
+            <label className="flex items-center gap-2 text-xs ui-color-ink" htmlFor="chat-media-before-text">
+              <input id="chat-media-before-text" type="checkbox"
+                checked={activeThread?.mediaBeforeText === true}
+                onChange={(event) => onUpdateThread({ mediaBeforeText: event.target.checked })}
+                disabled={phase !== "idle" || targetBusy}
+                aria-describedby="chat-media-before-text-hint" />
+              {ct("mediaBeforeText")}
+            </label>
+            <p id="chat-media-before-text-hint" className="mt-1.5 text-xs ui-color-muted">{ct("mediaBeforeTextHint")}</p>
           </div>
         </div>
       </details>

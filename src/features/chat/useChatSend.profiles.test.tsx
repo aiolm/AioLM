@@ -45,6 +45,19 @@ function systemPrompt() {
 
 describe('chat profile application', () => {
   beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); });
+  it('uses the conversation media order for both attached history and the new request, including Retry', async () => {
+    const image: ImageAttachment = { name: 'synthetic.png', dataUrl: 'data:image/png;base64,AA==', kind: 'image' };
+    const messages: ChatHistoryMessage[] = [{ role: 'user', content: 'Earlier', images: [image] }, { role: 'assistant', content: 'Earlier answer' }];
+    vi.mocked(api.chatStream).mockRejectedValueOnce(new Error('synthetic interruption'));
+    const { result } = setup({ activeThread: { ...createChatThread(), mediaBeforeText: true }, msgs: messages, attachments: [image] });
+    await act(async () => { await result.current.send(); });
+    const initial = structuredClone(vi.mocked(api.chatStream).mock.calls[0][3]);
+    for (const message of initial.filter(item => item.role === 'user')) {
+      expect(message.content).toEqual([{ type: 'image_url', image_url: { url: image.dataUrl } }, { type: 'text', text: expect.any(String) }]);
+    }
+    await act(async () => { await result.current.send(true); });
+    expect(vi.mocked(api.chatStream).mock.calls[1][3]).toEqual(initial);
+  });
   it('inherits the copied target prompt for a new conversation while later profile edits stay separate', async () => {
     const { result } = setup();
     await act(async () => { await result.current.send(); });

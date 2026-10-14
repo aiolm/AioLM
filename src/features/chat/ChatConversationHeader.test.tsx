@@ -6,6 +6,16 @@ import { chatText } from '../../shared/i18n/chatI18n';
 
 afterEach(cleanup);
 
+it('keeps media ordering opt-in and sends the explicit conversation choice', () => {
+  const update = renderHeader();
+  fireEvent.click(screen.getByLabelText('Conversation settings', { selector: 'summary' }));
+  const choice = screen.getByRole('checkbox', { name: 'Attachments before message text' });
+  expect(choice).not.toBeChecked();
+  expect(choice).toHaveAccessibleDescription(/conversation history/);
+  fireEvent.click(choice);
+  expect(update).toHaveBeenCalledExactlyOnceWith({ mediaBeforeText: true });
+});
+
 function renderHeader() {
   const update = vi.fn();
   render(<ChatConversationHeader threadPanelOpen={false} setThreadPanelOpen={vi.fn()}

@@ -93,6 +93,7 @@ export function useChatSend({
     model: string;
     sessionId: string;
     systemPrompt: string;
+    mediaBeforeText: boolean;
     tools: api.ChatToolDefinition[];
     toolEntries: Map<string, ChatMcpTool>;
     /** Loaded once per new user turn; follow-ups and retries reuse it unchanged. */
@@ -229,6 +230,7 @@ export function useChatSend({
         embeddingTarget: embeddingTarget ? structuredClone(embeddingTarget) : undefined,
         baseUrl: baseUrl!, apiKey, model, sessionId,
         systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || (activeThread?.useDefaultSystemPrompt === false ? "" : "You are a helpful assistant."),
+        mediaBeforeText: activeThread?.mediaBeforeText === true,
         tools: structuredClone(mcpDefinitions),
         toolEntries: new Map(mcpEntryByFunctionName),
         personalization: null,
@@ -287,12 +289,12 @@ export function useChatSend({
       const requestContent = `${text}${documentContext ?? ""}`;
       const userMessage: api.ChatMessage = {
         role: "user",
-        content: images.length ? buildMultimodalContent(requestContent, images) : requestContent,
+        content: images.length ? buildMultimodalContent(requestContent, images, turn.mediaBeforeText) : requestContent,
       };
       const systemMessage: api.ChatMessage = { role: "system", content: buildPersonalizedSystemPrompt(turn.systemPrompt, turn.personalization) };
       const rawHistory = historyOverride ?? (retry && failed ? failed.history : [
         ...(systemMessage.content ? [systemMessage] : []),
-        ...msgs.map(toChatMessage),
+        ...msgs.map(message => toChatMessage(message, turn.mediaBeforeText)),
         userMessage,
       ]);
       const { contextSize, runtimeContext } = chatContextBudget(requestConfig);

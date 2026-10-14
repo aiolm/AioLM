@@ -19,6 +19,13 @@ assert.equal(classifyLifecycleError(new Error("address already in use")), "port"
 assert.equal(classifyLifecycleError(new Error("out of memory")), "memory");
 assert.equal(classifyLifecycleError(new Error("startup timeout")), "timeout");
 assert.match(lifecycleErrorMessage("start", new Error("port bind failed")), /port/i);
+const parserFailure = "server exited before ready (1). importing.py: Triton not installed. model /synthetic/model. setup_server(args, reuse_port=False)\nKeyError: invalid tool call parser: Hermes (chose from { hermes })";
+assert.equal(classifyLifecycleError(parserFailure), "unknown", "parser rejection must not be mistaken for a conflicting port or invalid model");
+assert.match(lifecycleErrorMessage("start", parserFailure), /Open diagnostics/);
+assert.equal(classifyLifecycleError("server exited before ready. importing.py: use_fast deprecated"), "unknown");
+for (const detail of ["listen EADDRINUSE", "port 8080 is already in use", "unable to bind to 127.0.0.1:8080"]) {
+  assert.equal(classifyLifecycleError(detail), "port", detail);
+}
 for (const [action, detail] of [
   ["start", "finish or stop the active response in session 'default' before loading a model"],
   ["start", "finish or stop the active response before replacing this model"],

@@ -16,11 +16,11 @@ export function sameImages(left: ImageAttachment[] | undefined, right: ImageAtta
     && JSON.stringify(image.preparation) === JSON.stringify(right[index]?.preparation));
 }
 
-export function toChatMessage(message: Msg): api.ChatMessage {
+export function toChatMessage(message: Msg, mediaBeforeText = false): api.ChatMessage {
   const content = `${message.content}${buildDocumentContext(message.documents ?? [], 12_000, message.content)}`;
   return {
     role: message.role,
-    content: message.images?.length ? buildMultimodalContent(content, message.images) : content,
+    content: message.images?.length ? buildMultimodalContent(content, message.images, mediaBeforeText) : content,
   };
 }
 

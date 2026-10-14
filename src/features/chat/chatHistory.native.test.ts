@@ -71,6 +71,15 @@ beforeEach(() => {
 });
 
 describe("conversations in the data folder", () => {
+  it('preserves an explicit media ordering choice in an empty conversation through a fresh native load', async () => {
+    const conversation: ChatThread = { id: 'media-order', title: 'New conversation', systemPrompt: '', mediaBeforeText: true, messages: [], createdAt: 1, updatedAt: 1 };
+    const history = await freshHistory();
+    await history.loadChatWorkspaceAsync();
+    await history.saveChatWorkspaceAsync({ activeThreadId: conversation.id, threads: [conversation] });
+    expect(native.files.get(conversation.id)).toMatchObject({ mediaBeforeText: true, messages: [] });
+    const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
+    expect(loaded.threads.find(item => item.id === conversation.id)?.mediaBeforeText).toBe(true);
+  });
   it('preserves an explicit automatic-prompt opt-out in an otherwise empty conversation', async () => {
     const conversation: ChatThread = { id: 'prompt-choice', title: 'New conversation', systemPrompt: '', useDefaultSystemPrompt: false, messages: [], createdAt: 1, updatedAt: 1 };
     const history = await freshHistory();
