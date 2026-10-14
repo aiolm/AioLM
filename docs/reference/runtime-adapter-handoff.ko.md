@@ -179,3 +179,5 @@ python scripts/runtime-adapters/create_adapter.py create --kind strata --engine-
 원본 로그·모델·캡처는 `tmp/`에 두고 익명화한 결과 문서에는 source/수정 commit, engine/source/model revision, 실제 기기·환경, 항목별 `pass/fail/unsupported/unrun/blocked`, 근거와 남은 작업을 남긴다. 제품 결함은 최소 합성 재현과 회귀 검사로 수정하고 관련 실제 흐름을 다시 실행한다. readiness 제거·hash 무시·실패 skip·근거 없는 timeout 확대로 통과시키지 않는다. staged diff·개인정보·공백 오류 검토 후 필요한 작업만 커밋하며 원격 push는 하지 않는다.
 
 Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 호환 환경으로 수정했지만 SmolVLM·Gemma3n·일부 Gemma4·Qwen3 도구 후속 답변의 내용 실패를 유지했다. 모델 변경으로 기존 고정 모델의 실패를 삭제하지 않는다. `158f966`의 source에 대한 실제 Windows/Linux 검증·Strata serving·새 플랫폼 패키지는 여전히 unrun이다.
+
+[오디오 순서 재검증 §106](macos-device-validation-results.ko.md#106-gemma3n-원본-fp와-새-음성의-전사-대조)의 `f1049eb`/media14는 명시적 text/image/audio 순서 보존을 추가한다. 기존 media13의 선택 옵션·기본 정책을 유지한다. 지원 기기의 실제 런타임에서 확장된 `check_mlx_audio_history.py`를 실행하고 앱의 첨부 우선 선택·저장/재로드·서로 다른 음성의 이력을 검증한다. Mac 원본 FP 긴 관사와 새3개 전사는 여전히 fail이며 native float32 RoPE 버퍼를 유지하지 않은 BF16 실험의 성공도 채택하지 않았다. 이 결과를 다른 OS/런타임의 실제 성공으로 복사하지 않는다.

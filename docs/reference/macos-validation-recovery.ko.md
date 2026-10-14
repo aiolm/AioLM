@@ -25,7 +25,7 @@ python3 scripts/model-repair/reindex_snapshot.py \
 | 기반 버전 | 새 버전 | 수정 내용 |
 | --- | --- | --- |
 | vLLM `0.30.0+cpu` | `0.30.0+cpu.aiolm.media1` | local media allowlist 거부를 validation 오류로 분류해 HTTP400 반환. allowlist 유지. |
-| mlx-vlm `0.7.6` | `0.7.6+aiolm.media13` | media8의 URI·audio 이력·preflight·Gemma4 packing·Gemma3n embedding/공유 위치/BOS 수정 유지. 명시적 `encoded-left` 오디오 정렬 정책과 30초 초과 입력의 HTTP400 처리 추가. 기존 context overflow·기본 정책 유지. 별도 재현 가능한 Gemma3n 입력 dither 옵션 추가. |
+| mlx-vlm `0.7.6` | `0.7.6+aiolm.media14` | media8의 URI·audio 이력·preflight·Gemma4 packing·Gemma3n embedding/공유 위치/BOS 수정 유지. 명시적 `encoded-left` 오디오 정렬 정책과 30초 초과 입력의 HTTP400 처리 추가. 기존 context overflow·기본 정책 유지. 별도 재현 가능한 Gemma3n 입력 dither 옵션과 명시적 오디오 위치 보존 추가. |
 
 ```sh
 python3 scripts/provider-compatibility/build_wheel.py \
@@ -141,3 +141,5 @@ npm run build
 ```
 
 Rust 전체 타깃/feature·fmt/clippy 명령은 [OS 인계](runtime-adapter-handoff.ko.md)를 따른다. Windows/Linux는 실제 기기에서 새 옵션 저장/재로드·명시적 지침 보존·지원 미디어/도구 내용을 재검증한다. Mac 전용 wheel이나 이 Mac의 답변을 Windows/Linux 성공 근거로 사용하지 않는다. 공개 업로드·원격 push 없이 원본 실패 로그를 보존한다.
+
+media14는 명시적 text/image/audio 배열의 순서를 보존한다. 표식 없는 side-channel audio는 기존대로 뒤에 붙이며 text-first 기본·프로필·dither 정책은 유지한다. `check_mlx_audio_history.py`의 순서·소유권 검사를 실행하고 실제 앱에서 “Attachments before message text” 저장/재로드와 서로 다른 두 음성의 이력을 검사한다. 순서 보존 성공은 내용 정확도 성공을 뜻하지 않는다. [§106](macos-device-validation-results.ko.md#106-gemma3n-원본-fp와-새-음성의-전사-대조)에 원본 FP와 새3개 음성의 잔여 실패·실험 조건을 기록했다.
