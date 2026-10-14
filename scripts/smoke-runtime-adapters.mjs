@@ -17,8 +17,21 @@ const output = resolve(args.output ?? join('tmp', 'runtime-adapter-validation', 
 await mkdir(dirname(output), { recursive: true });
 await mkdir(output, { recursive: false });
 const home = join(output, 'home'); await mkdir(home);
-const env = { ...process.env, AIOLM_HOME: home };
-for (const name of Object.keys(env)) if (/^(AIOLM_|LLAMA_BOARD_)/i.test(name) && name !== 'AIOLM_HOME') delete env[name];
+// The CLI imports legacy data from the OS profile folders (and moves old
+// runtimes), so they point inside the output too, never at the operator's.
+const profile = join(output, 'profile'); await mkdir(profile);
+const env = { ...process.env };
+for (const name of Object.keys(env)) if (/^(AIOLM_|LLAMA_BOARD_)/i.test(name)) delete env[name];
+Object.assign(env, {
+  AIOLM_HOME: home,
+  HOME: profile,
+  USERPROFILE: profile,
+  APPDATA: join(profile, 'roaming'),
+  LOCALAPPDATA: join(profile, 'local'),
+  XDG_CONFIG_HOME: join(profile, 'config'),
+  XDG_DATA_HOME: join(profile, 'data'),
+  XDG_CACHE_HOME: join(profile, 'cache'),
+});
 const manifest = JSON.parse(await readFile(resolve(args.manifest), 'utf8'));
 const provenance = JSON.parse(await readFile(resolve(args.provenance), 'utf8'));
 if (!/^[0-9a-f]{40}$/.test(provenance.model_revision ?? '') || !Array.isArray(provenance.files) || !provenance.files.length) throw new Error('Provenance requires a full model revision and files with SHA-256');
