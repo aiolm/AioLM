@@ -1,6 +1,6 @@
 # Mac 미디어 검증의 복구 도구와 옵션
 
-이 문서는 [Mac 결과 §101](macos-device-validation-results.ko.md#101-미디어-내용과-도구-후속-답변의-추가-원인-검증)의 재현된 문제를 별도 환경에서 복구하는 절차다. 원본 모델·설치 환경은 변경하지 않는다. 관리형 설치의 기본 upstream 버전도 그대로 유지한다. 도구 실행 성공은 실제 모델 응답의 내용 검증을 대신하지 않는다.
+이 문서는 [Mac 결과 §101](macos-device-validation-results.ko.md#101-미디어-내용과-도구-후속-답변의-추가-원인-검증)과 [§103](macos-device-validation-results.ko.md#103-gemma3n-토큰-중복과-독립-디코더-대조)의 재현된 문제를 별도 환경에서 복구하는 절차다. 원본 모델·설치 환경은 변경하지 않는다. 관리형 설치의 기본 upstream 버전도 그대로 유지한다. 도구 실행 성공은 실제 모델 응답의 내용 검증을 대신하지 않는다.
 
 ## safetensors 인덱스의 파생 snapshot
 
@@ -25,7 +25,7 @@ python3 scripts/model-repair/reindex_snapshot.py \
 | 기반 버전 | 새 버전 | 수정 내용 |
 | --- | --- | --- |
 | vLLM `0.30.0+cpu` | `0.30.0+cpu.aiolm.media1` | local media allowlist 거부를 validation 오류로 분류해 HTTP400 반환. allowlist 유지. |
-| mlx-vlm `0.7.6` | `0.7.6+aiolm.media7` | 기존 media5의 URI·audio 이력·preflight·Gemma4 padding 수정에 Gemma3n media prefill의 텍스트 embedding 배율과 공유 KV 쿼리 위치 수정 추가. context overflow의 기존 기록/400 유지. |
+| mlx-vlm `0.7.6` | `0.7.6+aiolm.media8` | media7의 URI·audio 이력·preflight·Gemma4 padding·Gemma3n embedding/공유 위치 수정 유지. Gemma3n processor에 실제 tokenizer template를 전달하고 `**kwargs` 처리기에 caller의 `add_special_tokens` 옵션을 전달해 BOS 중복 제거. context overflow의 기존 기록/400 유지. |
 
 ```sh
 python3 scripts/provider-compatibility/build_wheel.py \
@@ -52,11 +52,14 @@ vllm-metal0.30.0은 기존 pinned MLX/MLX-LM/native paged ops와 MetalPlatform �
 "$NEW_PYTHON" scripts/provider-compatibility/check_mlx_audio_history.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma4_audio_packing.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_embeddings.py
+"$NEW_PYTHON" scripts/provider-compatibility/check_mlx_chat_tokens.py
 ```
 
 첫 검사는 모델 추론 없이 설치된 normalizer/template의 audio marker가 `[1,0,1]`인지 확인한다. 두 번째는 작은 합성 encoder/embedding 값으로 **설치된 Gemma4의 실제 embedding 배치 메서드**를 호출한다. 녹음 사이 padding이 다음 녹음의 토큰을 대체하면 실패하며, 모델 weights·내용 추론이나 처리 속도 검사는 아니다. 앱의 런타임 관리에서 새 Python을 외부 환경으로 등록하고 **별도 프로필**로 선택한다. 올바른 인증으로 URI/invalid-WAV400, 정상 미디어 내용·usage·취소·Retry·재시작·종료를 실제 확인한다. 원본 환경/프로필을 자동 교체하지 않는다.
 
 세 번째는 실제 Gemma3n 메서드를 작은 텐서로 호출해 텍스트 prefill 배율과 concrete/shared attention의 쿼리·키 위치를 비교한다. 단일 및 길이가 다른 두 입력의 batched cache에서 prefill/decode를 검사한다. 원본0.7.6은 배율 검사, 배율만 수정한 media6은 공유 위치 검사에서 실패했다. media7은 네 cache 조건을 통과했다. **같은 원래4bit 모델의 전사 단수·복수 오류는 실제 앱에서도 남았다.** checker 성공을 내용 성공으로 바꾸지 않는다.
+
+네 번째는 실제 설치된 Gemma3n processor loader와 input dispatcher에 합성 tokenizer/임시 template를 사용한다. template가 있으면 시작 토큰을 한 번만 넣고, 없으면 tokenizer가 한 번 넣으며 명시적 caller 옵션도 유지되는지 검사한다. 모델·음성·네트워크는 사용하지 않는다. media7은 template 전달 검사에서 실패하고 media8은 통과했다. [Hugging Face의 template 지침](https://github.com/huggingface/transformers/blob/main/docs/source/en/chat_templating.md)처럼 이미 template가 넣은 special token을 다시 추가하지 않는다. 같은 원래 Gemma3n의 실제 앱 입력은209→208토큰으로 고쳐졌지만 전사 오류는 여전히 남았다. 정답 보정이나 모델 교체로 성공 처리하지 않는다. §103에서는 공개 배포본의 세 shard 전체 해시가 Google 원본 metadata와 같음을 확인해 원본 파라미터와 원본 processor로 대조했으며, 동일한 전사 오류가 재현됐다. 원본과 변환본의 audio padding_side 차이도 해결 방법으로 입증되지 않아 제품 수정에 넣지 않았다.
 
 ## llama.cpp의 Idefics3 단일 이미지
 

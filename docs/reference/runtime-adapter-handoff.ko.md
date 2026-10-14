@@ -12,7 +12,9 @@ Idefics3 source 준비 도구는 고정 archive/두 소스 해시를 확인하�
 
 MLX media7에는 Gemma3n media prefill 배율과 single/batched shared query 위치 보정이 들어갔다. 지원 기기에서는 설치한 Python으로 `check_gemma3n_embeddings.py`도 실행한다. Mac 원래4bit 모델의 단수·복수 전사 오류는 이 수정 뒤에도 남았으므로 내용을 pass로 표시하지 않는다. MLX 미지원 OS의 해당 검사는 unsupported이며 이 문서로 지원을 선언하지 않는다. 이번 소스의 실제 Windows/Linux·Strata 추론·새 배포 패키지는 계속 unrun이다.
 
-Windows/Linux 실제 앱에서 **첨부를 질문보다 먼저 전달**을 선택하고 새 입력/첨부 이력의 순서, Retry snapshot, 빈 대화 저장·재로드를 확인한다. 기존 대화는 text-first를 유지해야 한다. 영상 프레임·시각 설명과 전사문을 잘라내거나 원본 파일의 정체성을 바꾸면 실패다. runtime probe와 모델별 미디어/도구 지원을 우회하지 않는다. SmolVLM256M/Qwen3-VL2B의 오류를 500M/4B의 성공으로 대체하지 않는다. Gemma3n4bit/공개8bit의 전사 오류도 남았고 공식 원본 대조는 접근 제한으로 unrun이다. 해당 OS의 실제 검증·새 패키징·Strata 추론은 계속 unrun이다.
+[후속 Gemma3n 검증 §103](macos-device-validation-results.ko.md#103-gemma3n-토큰-중복과-독립-디코더-대조)의 `754faf1`/media8은 tokenizer template를 processor에 전달하고 `**kwargs` dispatcher에도 caller의 `add_special_tokens` 정책을 전달한다. 기존 기본 runtime은 교체하지 않으며 새 환경에서 `check_mlx_chat_tokens.py`를 실행한다. Mac 실제 앱의 원래 입력은 BOS 한 번/PP208로 고쳐졌지만 전사는 여전히 fail이다. 같은4bit 파라미터의 실제 Transformers decoder/Torch head 생성도 오답이다. 공개 Unsloth 배포본에서 Google metadata와 전체 해시가 같은 원본 BF16 shard를 확보했고, 원본 전처리/공식 decoder의 float32 대조에서도 같은 전사 오답이 재현됐다. checker 성공이나 다른 모델의 답변으로 전사 정확도를 통과 처리하지 않는다. 대상 OS에서는 template 있음/없음·명시적 caller 정책·기존 미디어 이력과 실제 내용을 따로 검사한다.
+
+Windows/Linux 실제 앱에서 **첨부를 질문보다 먼저 전달**을 선택하고 새 입력/첨부 이력의 순서, Retry snapshot, 빈 대화 저장·재로드를 확인한다. 기존 대화는 text-first를 유지해야 한다. 영상 프레임·시각 설명과 전사문을 잘라내거나 원본 파일의 정체성을 바꾸면 실패다. runtime probe와 모델별 미디어/도구 지원을 우회하지 않는다. SmolVLM256M/Qwen3-VL2B의 오류를 500M/4B의 성공으로 대체하지 않는다. Gemma3n4bit/공개8bit의 전사 오류도 남았다. §102 당시 접근 제한이던 원본 대조는 §103의 공개 배포본으로 실행했으나 내용은 fail이며, 원본 padding_side 차이를 반영해도 해결되지 않았다. 해당 OS의 실제 검증·새 패키징·Strata 추론은 계속 unrun이다.
 
 내장 llama.cpp·vLLM·MLX와 등록형 `custom.*` 엔진이 공통 `InferenceRuntimeAdapter`/`EngineCommand` 경계를 사용한다. 등록 UI는 런타임 화면의 **외부 엔진 등록**이다. 실행 중인 모델 세션을 먼저 언로드하고 JSON manifest를 선택해 **검사 후 등록**을 누른다. 등록된 엔진·런타임은 공용 실행 설정에서 선택하며 모델별 probe 후 실행한다.
 
