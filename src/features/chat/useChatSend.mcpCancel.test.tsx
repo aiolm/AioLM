@@ -72,6 +72,27 @@ beforeEach(() => {
 });
 
 describe("MCP tool call cancellation", () => {
+  it("sends the approved native observation under its tool-call ID without nesting a simple text block", async () => {
+    const observation = { content: [{ type: "text", text: "River-482: 31" }] };
+    callMock.mockResolvedValueOnce(observation);
+    streamMock.mockImplementationOnce(async (_url, _key, _model, _messages, _sampling, onDelta) => {
+      onDelta({ tool_calls: [{ index: 0, id: "call-1", name: "lookup", arguments: "{}" }] });
+      return "";
+    });
+    streamMock.mockResolvedValueOnce("Read the observation");
+    const { result } = setup();
+    await act(async () => { await result.current.send(); });
+    expect(callMock).not.toHaveBeenCalled();
+    await act(async () => { await result.current.approvePendingTool(); });
+    expect(streamMock).toHaveBeenCalledTimes(2);
+    expect(streamMock.mock.calls[1][3].at(-1)).toEqual({
+      role: "tool", tool_call_id: "call-1", name: "lookup", content: '{"text":"River-482: 31"}',
+    });
+    expect(observation).toEqual({ content: [{ type: "text", text: "River-482: 31" }] });
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe("idle");
+  });
+
   it("Stop cancels the native call it started and does not continue the turn", async () => {
     const { result, approving, callId } = await startToolCall();
     expect(result.current.toolCallInProgress).toBe(true);

@@ -18,6 +18,7 @@ import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import { answerSkillToolCall, buildPersonalizedSystemPrompt, hasPersonalization, MAX_SKILL_READS_PER_RESPONSE, prepareTurnPersonalization, SKILL_TOOL_NAME, skillToolDefinition, type TurnPersonalization } from "./chatPersonalization";
 import { canPrepareAttachment, prepareChatAttachments, type MediaPreprocessingOptions } from './mediaPreprocessing';
+import { serializeMcpToolResult } from './mcpToolResult';
 
 export type { PendingToolCall } from "./chatSendTypes";
 
@@ -494,8 +495,7 @@ export function useChatSend({
       }
       controller.signal.throwIfAborted();
       if (generation !== turnGeneration.current) return;
-      const serializedResult = JSON.stringify(result);
-      if (serializedResult.length > 256_000) throw new Error("MCP tool result exceeds the 256 KiB chat safety limit.");
+      const serializedResult = serializeMcpToolResult(result);
       const followupHistory: api.ChatMessage[] = [
         ...failed.history,
         { role: "assistant", content: "", tool_calls: [pending.call] },
