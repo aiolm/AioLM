@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media4"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media5"}
 
 
 def replace_once(text, before, after):
@@ -80,12 +80,37 @@ def patch_mlx_preflight(text):
     return replace_once(text, before, after)
 
 
+def patch_mlx_gemma4_audio(text):
+    # Different recording lengths leave padding between encoded clips. Those
+    # rows must not occupy the next clip's language-model audio-token slots.
+    text = replace_once(text, "\n\nclass MultimodalEmbedder(nn.Module):", '''
+
+def _pack_audio_features(features, padding_mask):
+    positions = [
+        index for index, padded in enumerate(padding_mask.reshape(-1).tolist())
+        if not padded
+    ]
+    if not positions:
+        raise ValueError("Audio encoder produced no valid frames")
+    return mx.take(
+        features.reshape(-1, features.shape[-1]),
+        mx.array(positions, dtype=mx.int32), axis=0,
+    )
+
+
+class MultimodalEmbedder(nn.Module):''')
+    return replace_once(text,
+        "                enc, _ = self.audio_tower(feat, mask)\n                return self.embed_audio(enc)\n",
+        "                enc, encoded_padding = self.audio_tower(feat, mask)\n                return _pack_audio_features(self.embed_audio(enc), encoded_padding)\n")
+
+
 PATCHES = {
     "vllm": {"vllm/multimodal/media/connector.py": patch_vllm},
     "mlx-vlm": {
         "mlx_vlm/server/request_normalization.py": patch_mlx_normalization,
         "mlx_vlm/prompt_utils.py": patch_mlx_prompt,
         "mlx_vlm/server/app.py": patch_mlx_preflight,
+        "mlx_vlm/models/gemma4/gemma4.py": patch_mlx_gemma4_audio,
     },
 }
 

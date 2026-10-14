@@ -148,5 +148,48 @@ class MlxStreamPreflight(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((metrics.in_flight, metrics.failures), (0, 1))
 
 
+class Gemma4AudioPacking(unittest.TestCase):
+    def test_padding_between_recordings_cannot_take_the_next_recordings_token_slots(self):
+        import ast
+        import math
+        import types
+        from build_wheel import patch_mlx_gemma4_audio
+
+        source = '\n\nclass MultimodalEmbedder(nn.Module):\n    pass\n\nclass Model:\n    def embeddings(self):\n        if True:\n            def _encode_audio(feat):\n                enc, _ = self.audio_tower(feat, mask)\n                return self.embed_audio(enc)\n'
+        tree = ast.parse(patch_mlx_gemma4_audio(source))
+        function = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == '_pack_audio_features')
+
+        class Tensor:
+            def __init__(self, values, shape):
+                self.values, self.shape = list(values), tuple(shape)
+                assert len(self.values) == math.prod(self.shape)
+            def reshape(self, *shape):
+                if -1 in shape:
+                    shape = tuple(len(self.values) // math.prod(d for d in shape if d != -1) if d == -1 else d for d in shape)
+                return Tensor(self.values, shape)
+            def tolist(self):
+                assert len(self.shape) == 1
+                return self.values
+
+        def take(features, positions, axis):
+            self.assertEqual(axis, 0)
+            width = features.shape[-1]
+            return Tensor([value for index in positions for value in features.values[index * width:(index + 1) * width]], (len(positions), width))
+
+        namespace = {'mx': types.SimpleNamespace(take=take, array=lambda values, dtype: values, int32=int)}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'gemma4.py', 'exec'), namespace)
+        pack = namespace['_pack_audio_features']
+        # Encoder padding can become nonzero after the learned projection.
+        features = Tensor([10, 11, 20, 21, 90, 91, 30, 31, 40, 41, 50, 51], (2, 3, 2))
+        packed = pack(features, Tensor([False, False, True, False, False, False], (2, 3)))
+        self.assertEqual(packed.values, [10, 11, 20, 21, 30, 31, 40, 41, 50, 51])
+        self.assertNotEqual(features.values[:10], packed.values, 'upstream scattering includes the first recording padding and drops the final observation')
+        self.assertEqual(pack(features, Tensor([False] * 6, (2, 3))).values, features.values)
+        with self.assertRaisesRegex(ValueError, 'no valid frames'):
+            pack(features, Tensor([True] * 6, (2, 3)))
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma4_audio(source.replace('enc, _ =', 'enc, changed ='))
+
+
 if __name__ == "__main__":
     unittest.main()
