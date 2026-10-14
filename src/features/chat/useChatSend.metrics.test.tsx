@@ -123,6 +123,26 @@ describe("request-scoped response metrics", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([
+    { reasoning: "Reasoning before the final answer" },
+    { tool_calls: [{ index: 0, id: "call-progress", name: "lookup", arguments: "{" }] },
+  ])("leaves first-token waiting when a reasoning or tool token arrives", async delta => {
+    const stream = controlledStream();
+    const { result } = setup();
+    act(() => { void result.current.send(); });
+    await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
+    stream.emit({ usage: { prompt_tokens: 12 } });
+    expect(result.current.phase).toBe("thinking");
+    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBeUndefined();
+    now = 1200;
+    stream.emit(delta);
+    expect(result.current.phase).toBe("streaming");
+    expect(result.current.streamingDraft?.metrics?.firstTokenMs).toBe(200);
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("idle"));
+    expect(result.current.pendingToolCall).toBeNull();
+  });
+
   it("separates preparation and TTFT from server PP/TG durations and updates only the draft", async () => {
     vi.mocked(api.serverActivity).mockImplementationOnce(async () => { now = 5000; });
     const stream = controlledStream();

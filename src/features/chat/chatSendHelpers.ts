@@ -123,13 +123,13 @@ export function createStreamDeltaHandler(options: {
   return (delta: api.ChatDelta) => {
     const generated = delta.content || delta.reasoning || delta.tool_calls?.some((tool) => tool.name || tool.arguments);
     if (generated && metricsRef.current.firstTokenAt === undefined) metricsRef.current.firstTokenAt = performance.now();
+    if (generated && streamResponses) setPhase("streaming");
     if (delta.usage) metricsRef.current.usage = { ...metricsRef.current.usage, ...delta.usage };
     if (delta.timings) metricsRef.current.timings = { ...metricsRef.current.timings, ...delta.timings };
     if (delta.metrics) metricsRef.current.serverMetrics = { ...metricsRef.current.serverMetrics, ...delta.metrics };
     if (typeof delta.finish_reason === 'string' && delta.finish_reason) streamRef.current.finishReason = delta.finish_reason;
     if (delta.reasoning) streamRef.current.reasoning += delta.reasoning;
     if (delta.content) {
-      if (streamResponses) setPhase("streaming");
       streamRef.current.assistant += delta.content;
     }
     for (const toolDelta of delta.tool_calls ?? []) {
