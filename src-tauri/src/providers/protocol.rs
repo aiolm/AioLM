@@ -785,6 +785,15 @@ pub fn adapt_request(
         }
     }
     if info.provider == ProviderId::Llama {
+        if endpoint == "embeddings"
+            && !info.tasks.iter().any(|task| task == "embed")
+            && info.embedding_model.is_none()
+        {
+            return Err(adapt_error(
+                "unsupported_task",
+                task_refusal(info, "embeddings"),
+            ));
+        }
         if let Some(messages) = body.get("messages").and_then(Value::as_array) {
             check_parts(info, messages)?;
         }

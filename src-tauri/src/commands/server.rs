@@ -494,7 +494,7 @@ pub(crate) async fn apply_request_settings(
     let snapshot = config::execution::snapshot(&next);
     let mut engine = crate::providers::execution::info(&next)?;
     if let Some(previous) = &server.engine {
-        engine.modalities = previous.modalities;
+        crate::providers::execution::keep_launch_capabilities(&mut engine, previous);
     }
     server.engine = Some(engine);
     server.execution = Some(next);
