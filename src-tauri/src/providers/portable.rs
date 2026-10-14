@@ -2313,7 +2313,10 @@ mod tests {
         let mut buffer = Vec::new();
         {
             let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
-            let options = zip::write::SimpleFileOptions::default();
+            // Fixed entry time: callers hash these bytes and later rebuild the
+            // same wheel, so the wall-clock default would make them differ.
+            let options = zip::write::SimpleFileOptions::default()
+                .last_modified_time(zip::DateTime::default());
             for (path, bytes) in &files {
                 writer.start_file(path, options).unwrap();
                 writer.write_all(bytes).unwrap();
