@@ -6095,13 +6095,25 @@ fn msvc_openmp_has_required_files(directory: &Path) -> bool {
     msvc_runtime_directory_has_dll(directory, "vcomp140.dll")
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn is_msvc_runtime_library_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name.starts_with("msvcp140")
-        || name.starts_with("vcruntime140")
-        || name.starts_with("vcomp140")
-        || name.starts_with("concrt140")
+    // Prefix matching also selects DebugCRT and CLR-specific libraries from
+    // a developer's System32. Only the retail C/C++ and OpenMP runtime belongs
+    // in a portable inference bundle (VS 2022's redistributable file set).
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "concrt140.dll"
+            | "msvcp140.dll"
+            | "msvcp140_1.dll"
+            | "msvcp140_2.dll"
+            | "msvcp140_atomic_wait.dll"
+            | "msvcp140_codecvt_ids.dll"
+            | "vccorlib140.dll"
+            | "vcruntime140.dll"
+            | "vcruntime140_1.dll"
+            | "vcruntime140_threads.dll"
+            | "vcomp140.dll"
+    )
 }
 
 #[cfg(windows)]
@@ -6194,7 +6206,45 @@ fn copy_msvc_runtime_dependencies(
     destination: &Path,
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let sources = locate_msvc_runtime_directories();
+    copy_msvc_runtime_dependencies_from_sources(
+        destination,
+        cancel,
+        &locate_msvc_runtime_directories(),
+    )
+}
+
+#[cfg(windows)]
+fn copy_msvc_runtime_dependencies_from_sources(
+    destination: &Path,
+    cancel: &Arc<AtomicBool>,
+    sources: &[PathBuf],
+) -> Result<(), String> {
+    // Do not silently strip an existing runtime's dependencies or export a
+    // bundle contaminated by an earlier permissive copy. The source runtime
+    // stays untouched; export's owned snapshot is discarded on error.
+    for entry in fs::read_dir(destination).map_err(|error| error.to_string())? {
+        if cancel.load(Ordering::Acquire) {
+            return Err("runtime install cancelled".into());
+        }
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.ends_with(".dll")
+            && [
+                "msvcp140",
+                "vcruntime140",
+                "vccorlib140",
+                "vcomp140",
+                "concrt140",
+            ]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            && !is_msvc_runtime_library_name(&name)
+        {
+            return Err(format!(
+                "runtime contains a non-retail MSVC library ({name}); rebuild with the retail redistributable before exporting"
+            ));
+        }
+    }
     if sources.is_empty() && msvc_crt_has_required_files(destination) {
         return Ok(());
     }
@@ -6204,7 +6254,7 @@ fn copy_msvc_runtime_dependencies(
         );
     }
     for source in sources {
-        let entries = fs::read_dir(&source).map_err(|error| error.to_string())?;
+        let entries = fs::read_dir(source).map_err(|error| error.to_string())?;
         for entry in entries {
             if cancel.load(Ordering::Acquire) {
                 return Err("runtime install cancelled".into());
@@ -6218,8 +6268,8 @@ fn copy_msvc_runtime_dependencies(
             if !metadata.is_file() || metadata.file_type().is_symlink() || !is_dll {
                 continue;
             }
-            if path_has_directory(&source, "System32")
-                && !is_msvc_runtime_library_name(&entry.file_name().to_string_lossy())
+            if path_has_directory(source, "debug_nonredist")
+                || !is_msvc_runtime_library_name(&entry.file_name().to_string_lossy())
             {
                 continue;
             }
@@ -6850,6 +6900,99 @@ mod tests {
             commit_check: "github-actions-checkout-ref".into(),
             url: "https://github.com/ggml-org/llama.cpp/pull/27342".into(),
         }
+    }
+
+    #[test]
+    fn msvc_runtime_names_reject_debug_clr_and_prefix_lookalikes() {
+        for name in [
+            "msvcp140.dll",
+            "MSVCP140_1.DLL",
+            "msvcp140_2.dll",
+            "msvcp140_atomic_wait.dll",
+            "msvcp140_codecvt_ids.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "vcruntime140_threads.dll",
+            "vccorlib140.dll",
+            "concrt140.dll",
+            "vcomp140.dll",
+        ] {
+            assert!(is_msvc_runtime_library_name(name), "retail DLL: {name}");
+        }
+        for name in [
+            "msvcp140d.dll",
+            "msvcp140_1d.dll",
+            "msvcp140d_atomic_wait.dll",
+            "vcruntime140d.dll",
+            "vcruntime140_1d.dll",
+            "vcruntime140_threadsd.dll",
+            "concrt140d.dll",
+            "vcomp140d.dll",
+            "vccorlib140d.dll",
+            "msvcp140_clr0400.dll",
+            "vcruntime140_clr0400.dll",
+            "msvcp140_fake.dll",
+            "msvcp140.dll.exe",
+            "kernel32.dll",
+        ] {
+            assert!(
+                !is_msvc_runtime_library_name(name),
+                "non-retail DLL: {name}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msvc_runtime_copy_uses_retail_files_without_capturing_developer_utilities() {
+        let root = test_directory("msvc-retail-copy");
+        let system = root.join("System32");
+        let debug = root.join("debug_nonredist").join("x64");
+        let destination = root.join("destination");
+        for directory in [&system, &debug, &destination] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        for name in [
+            "msvcp140.dll",
+            "vcruntime140.dll",
+            "vccorlib140.dll",
+            "vcomp140.dll",
+        ] {
+            fs::write(system.join(name), b"synthetic retail DLL").unwrap();
+            fs::write(debug.join(name), b"synthetic developer utility").unwrap();
+        }
+        for name in ["msvcp140d.dll", "vcruntime140_clr0400.dll", "kernel32.dll"] {
+            fs::write(system.join(name), b"synthetic non-runtime file").unwrap();
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        copy_msvc_runtime_dependencies_from_sources(
+            &destination,
+            &cancel,
+            &[debug, system.clone()],
+        )
+        .unwrap();
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 4);
+        assert_eq!(
+            fs::read(destination.join("msvcp140.dll")).unwrap(),
+            b"synthetic retail DLL"
+        );
+        assert!(system.join("msvcp140d.dll").is_file());
+        assert!(!destination.join("msvcp140d.dll").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn msvc_runtime_export_refuses_existing_non_retail_files_without_removing_them() {
+        let root = test_directory("msvc-non-retail-input");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("vcruntime140d.dll");
+        fs::write(&file, b"synthetic original dependency").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let error = copy_msvc_runtime_dependencies_from_sources(&root, &cancel, &[]).unwrap_err();
+        assert!(error.contains("non-retail MSVC library"), "{error}");
+        assert_eq!(fs::read(&file).unwrap(), b"synthetic original dependency");
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn test_bundle_manifest(root: &Path) -> RuntimeBundleManifest {
