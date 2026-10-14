@@ -3,6 +3,7 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { defaultPrBackendForDevice, formatRuntimeVersion } from "../../shared/runtime/runtimeUtils";
 import { publishInstalledRuntimes } from "../../shared/runtime/installedRuntimes";
+import { notifyRuntimeInventoryChanged } from "../../shared/runtime/runtimeInventoryEvents";
 import { useI18n } from "../../shared/i18n/i18n";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { isServerBusy } from "../../shared/lib/serverLifecycle";
@@ -221,6 +222,7 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
     setUninstallBusy(true);
     try {
       await api.rtUninstall(backend, build);
+      notifyRuntimeInventoryChanged();
       flashT(t("ui.uninstalledOk", { backend, build: formatRuntimeVersion(build, installedVersion(backend, build)) }));
       // Removing a build clears it from every profile that named it, so the
       // panel reloads the configuration rather than keeping a selection that

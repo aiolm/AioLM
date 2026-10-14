@@ -8,6 +8,7 @@ import { finishTask, registerTask, updateTask } from '../../shared/state/taskReg
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import Badge from '../../shared/ui/Badge';
 import { providerDisplayName, isExternalProvider } from '../../shared/api/providers';
+import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 const TASK_ID = 'provider-environment-operation';
 const CANCELLATION_MESSAGES = new Set([
@@ -59,7 +60,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       setError(message);
     }
   };
-  const run = async (label: string, operation: () => Promise<unknown>, options: { cancellable?: boolean; notifyDownload?: boolean } = {}) => {
+  const run = async (label: string, operation: () => Promise<unknown>, options: { cancellable?: boolean; notifyDownload?: boolean; inventory?: boolean } = {}) => {
     if (operationLock.current || resourcesInUse) return;
     const currentOperation = { cancelRequested: false };
     operationLock.current = currentOperation;
@@ -67,7 +68,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     registerTask({ id: TASK_ID, kind: 'runtime', label, interruptible: true,
       ...(options.cancellable ? { cancel: () => cancelOperation(currentOperation) } : {}),
       ...(options.notifyDownload ? { notifyOnComplete: 'download' as const } : {}) });
-    try { await operation(); setRevision(value => value + 1); finishTask(TASK_ID, 'completed'); }
+    try { await operation(); setRevision(value => value + 1); if (options.inventory) notifyRuntimeInventoryChanged(); finishTask(TASK_ID, 'completed'); }
     catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       const cancelled = CANCELLATION_MESSAGES.has(message);
@@ -85,7 +86,7 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     void run(label, async () => {
       const imported = await api.providerPortableImport();
       setResult(`${t('ui.importProviderRuntimeBundle')} · ${providerDisplayName(imported.provider)} · ${imported.id}`);
-    }, { cancellable: true });
+    }, { cancellable: true, inventory: true });
   return <section className="app-card app-card--tight">
     {lockReason && <FeedbackBanner tone="info" className="mb-3">{lockReason}</FeedbackBanner>}
     <h3 className="app-section-title">{copy.environment}</h3>
@@ -94,11 +95,11 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       <h4>{providerDisplayName(provider.id)} · {provider.managed_variant ?? provider.server}</h4>
       {provider.managed_variant === 'vllm-metal' && provider.availability.supported && <p>{provider.availability.detail}</p>}
       {!provider.availability.supported && <p>{copy.unsupported} {provider.availability.detail}</p>}
-      {!isExternalProvider(provider.id) && <><button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true })}>{copy.install} {provider.managed_version}</button>
-      <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()))}>{copy.register}</button></>}
+      {!isExternalProvider(provider.id) && <><button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.install}`, () => api.providerInstall(provider.id, python.trim() || undefined), { cancellable: true, notifyDownload: true, inventory: true })}>{copy.install} {provider.managed_version}</button>
+      <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse || !python.trim() || !provider.availability.supported} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.register}`, () => api.providerRegister(provider.id, python.trim()), { inventory: true })}>{copy.register}</button></>}
       {isExternalProvider(provider.id) && <p className="app-section-hint">{runtimeAdapterCopy[locale].capabilities}</p>}
       <div className="provider-runtime-list" role="group" aria-label={`${providerDisplayName(provider.id)} · ${copy.runtime}`}>
-      {runtimes.filter(runtime => runtime.provider === provider.id).map(runtime => <div key={runtime.id} className="app-list-row provider-runtime-row"><span><strong>{api.runtimeLabel(runtime)}</strong><Badge tone={runtime.available ? 'info' : 'warning'}>{runtime.available ? copy.ready : copy.notReady}</Badge><small>{runtime.problems.join('; ')}</small></span><div className="app-page-actions">{!isExternalProvider(provider.id) && <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableExport(provider.id, runtime.id, `${provider.engine} · ${t('ui.exportProviderRuntimeBundle')}`)}>{t('ui.exportProviderRuntimeBundle')}</button>}<button type="button" className="app-button app-button--danger" disabled={busy || resourcesInUse} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.remove}`, () => api.providerRemove(provider.id, runtime.id))}>{copy.remove}</button></div></div>)}
+      {runtimes.filter(runtime => runtime.provider === provider.id).map(runtime => <div key={runtime.id} className="app-list-row provider-runtime-row"><span><strong>{api.runtimeLabel(runtime)}</strong><Badge tone={runtime.available ? 'info' : 'warning'}>{runtime.available ? copy.ready : copy.notReady}</Badge><small>{runtime.problems.join('; ')}</small></span><div className="app-page-actions">{!isExternalProvider(provider.id) && <button type="button" className="app-button app-button--secondary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableExport(provider.id, runtime.id, `${provider.engine} · ${t('ui.exportProviderRuntimeBundle')}`)}>{t('ui.exportProviderRuntimeBundle')}</button>}<button type="button" className="app-button app-button--danger" disabled={busy || resourcesInUse} title={lockReason} onClick={() => void run(`${provider.engine} · ${copy.remove}`, () => api.providerRemove(provider.id, runtime.id), { inventory: true })}>{copy.remove}</button></div></div>)}
       {!runtimes.some(runtime => runtime.provider === provider.id) && <p className="app-section-hint">{copy.noRuntimes}</p>}
       </div>
     </div>)}

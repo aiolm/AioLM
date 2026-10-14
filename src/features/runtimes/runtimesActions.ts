@@ -5,6 +5,7 @@ import { canBuildPrBackend, formatRuntimeVersion, isInstallCancellation } from "
 import { translate } from "../../shared/i18n/i18nUnified";
 import { finishTask, registerTask } from "../../shared/state/taskRegistry";
 import type { BackendRow } from "./runtimesHelpers";
+import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 const RUNTIME_TASK_ID = "runtime-operation";
 
@@ -49,6 +50,7 @@ export async function runInstall(
   const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.runtimeInstalling")} ${backend}`, translate(deps.locale, "ui.runtimeInstalling"), api.rtCancel, true);
   try {
     const installed = await api.rtInstall(backend, info.build);
+    notifyRuntimeInventoryChanged();
     deps.flashT(translate(deps.locale, "ui.installedOk", { backend, build: formatRuntimeVersion(info.build, installed?.version) }));
     await refresh();
     finishTask(taskId, "completed");
@@ -126,6 +128,7 @@ export async function runImportRuntime(
   const taskId = beginRuntimeTask(translate(deps.locale, "ui.importRuntimeBundle"), translate(deps.locale, "ui.runtimeBundleWorking"));
   try {
     const installed = await api.rtImport();
+    notifyRuntimeInventoryChanged();
     deps.flashT(translate(deps.locale, "ui.runtimeBundleImported", { backend: installed.backend, build: formatRuntimeVersion(installed.build, installed.version) }));
     await refresh(true);
     finishTask(taskId, "completed");
@@ -232,6 +235,7 @@ export async function runInstallPullRequest(state: PrInstallState, deps: CommonD
   const taskId = beginRuntimeTask(`${translate(deps.locale, "ui.installingPr")} ${backend}`, translate(deps.locale, "ui.installingPr"), api.rtCancel, true);
   try {
     const installed = await api.rtInstallPr(backend, source, preview.commit);
+    notifyRuntimeInventoryChanged();
     // A PR keeps one directory, so a rebuild swaps the bytes behind a row
     // whose name did not change. Say which commit went away.
     const replaced = installed.replaced;

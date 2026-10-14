@@ -7,6 +7,7 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { notifySessionStatusChanged } from "../../shared/runtime/sessionUtils";
 import { withSessionTransition } from "../../shared/state/sessionTransitions";
+import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 
 vi.mock("../../shared/api/index", () => ({
   isNativeRuntimeAvailable: () => false,
@@ -609,5 +610,20 @@ describe("RuntimesPanel pull-request builds", () => {
     await screen.findByText(/CMake configuring failed/);
     // The source stays so the user can fix the toolchain and retry.
     expect(await screen.findByLabelText("PR number or URL")).toHaveValue("27342");
+  });
+});
+
+describe('saved profile location hint (U3)', () => {
+  it.each(['en', 'ko', 'ja', 'zh'] as const)('names the Model settings profiles section it opens, not a Tuning page, in %s', async (locale) => {
+    const onOpenProfiles = vi.fn();
+    render(createElement(I18nProvider, { initialLocale: locale, children: createElement(RuntimesPanel, { store, onOpenProfiles }) }));
+    const hint = document.querySelector('.runtime-profiles-link')!;
+    expect(hint).not.toBeNull();
+    const copy = modelSettingsCopy[locale];
+    expect(hint).toHaveTextContent(copy.title);
+    expect(hint).toHaveTextContent(copy.profiles);
+    expect(hint.textContent).not.toMatch(/Tuning|튜닝|チューニング|调优/);
+    fireEvent.click(within(hint as HTMLElement).getByRole('button'));
+    expect(onOpenProfiles).toHaveBeenCalledOnce();
   });
 });

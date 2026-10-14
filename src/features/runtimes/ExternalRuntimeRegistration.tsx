@@ -5,6 +5,7 @@ import { useI18n } from '../../shared/i18n/i18n';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
+import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 /** Selecting a manifest registers external files; it never installs or removes them. */
 export default function ExternalRuntimeRegistration({ locked, onRegistered, onBusyChange }: { locked: boolean; onRegistered: (provider: api.ProviderId) => void; onBusyChange: (busy: boolean) => void }) {
@@ -29,6 +30,7 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => cancel(owner) });
     try {
       const registered = await api.runtimeAdapterRegister(path.trim());
+      notifyRuntimeInventoryChanged();
       onRegistered(registered.engine_id);
       setResult(`${registered.display_name} · ${registered.runtime_id}`);
       finishTask(taskId, 'completed');

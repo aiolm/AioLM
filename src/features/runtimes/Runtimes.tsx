@@ -27,6 +27,7 @@ import { useEffect, useState } from 'react';
 import type { ProviderId } from '../../shared/api/providers';
 import EngineSelect from '../../shared/ui/EngineSelect';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import { modelSettingsCopy } from '../model-settings/modelSettingsCopy';
 
 export type { BackendRow } from "./runtimesHelpers";
 
@@ -72,7 +73,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
           <label htmlFor="runtime-show-all">{t("ui.showAllBackends")}</label>
           {!rt.showAll && hiddenCount > 0 && <span id="runtime-hidden-count" className="runtime-hidden-count">{t("ui.hiddenBackends", { count: hiddenCount })}</span>}
         </div>}
-        {onOpenProfiles && <p className="runtime-profiles-link">{t("ui.runtimeProfilesMoved")} <button type="button" onClick={onOpenProfiles} className="app-link-button">{t("ui.executionProfiles")}</button></p>}
+        {onOpenProfiles && <p className="runtime-profiles-link">{modelSettingsCopy[locale].title} → {modelSettingsCopy[locale].profiles} <button type="button" onClick={onOpenProfiles} className="app-link-button">{t("ui.executionProfiles")}</button></p>}
       </aside>
 
       <div className="runtimes-main">

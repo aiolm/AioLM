@@ -218,3 +218,30 @@ describe('runtime-specific option controls', () => {
     expect(screen.getByRole('option', { name: 'Runtime default' })).toBeVisible();
   });
 });
+
+describe('custom engine before a runtime is chosen (U1)', () => {
+  it('asks for a runtime instead of validating an empty runtime id, then validates once one is chosen', async () => {
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'custom.synthetic', engine: 'Synthetic engine', server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockReset();
+    // What the native check answers for an empty id; the panel must never ask it.
+    vi.mocked(api.providerOptionIssues).mockRejectedValue('invalid runtime id: ');
+    const onInvalid = vi.fn(); const onChecking = vi.fn();
+    const config = { ...testConfig, active_provider: 'custom.synthetic' as const, active_runtime: '' };
+    const view = (cfg: api.AppConfig) => <I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={onChecking} /></I18nProvider>;
+    const rendered = render(view(config));
+    expect(await screen.findByText('Choose a runtime')).toBeVisible();
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(screen.queryByText(/invalid runtime id/)).not.toBeInTheDocument();
+    expect(api.providerOptionIssues).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Command preview' })).toBeDisabled();
+
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    rendered.rerender(view({ ...config, active_runtime: 'syn-1' }));
+    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledOnce());
+    expect(vi.mocked(api.providerOptionIssues).mock.calls[0][0]).toMatchObject({ active_provider: 'custom.synthetic', active_runtime: 'syn-1' });
+    expect(screen.getByRole('button', { name: 'Command preview' })).toBeEnabled();
+  });
+});

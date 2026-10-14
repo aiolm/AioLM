@@ -4,6 +4,7 @@ import type { AppStore } from '../../shared/state/store';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry';
 import * as api from '../../shared/api/index';
 import { DEEP_VERIFICATION_TASK, useDeepVerification } from './useDeepVerification';
+import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 vi.mock('../../shared/api/index', () => ({
   verifyModelDeeply: vi.fn(),
@@ -53,5 +54,25 @@ describe('deep verification', () => {
     act(() => result.current.start());
     act(() => result.current.start());
     expect(api.verifyModelDeeply).toHaveBeenCalledOnce();
+  });
+
+  it('does not attach a late result to a changed runtime or re-registered build', async () => {
+    let settle: (value: unknown) => void = () => {};
+    mocked.verifyModelDeeply.mockReturnValue(new Promise(resolve => { settle = resolve; }));
+    const holder = { cfg: { active_model: 'models/a.gguf', active_runtime: 'original' } };
+    const selected = { getConfig: () => holder.cfg } as unknown as AppStore;
+    const { result, rerender } = renderHook(() => useDeepVerification(selected, 'en'));
+    act(() => result.current.start());
+    holder.cfg = { ...holder.cfg, active_runtime: 'replacement' };
+    rerender();
+    await act(async () => settle({ verdict: 'pass', detail: 'original runtime only', suite_version: 1, recorded_at: '' }));
+    expect(result.current.record).toBeNull();
+    expect(task()).toMatchObject({ state: 'completed', detail: 'original runtime only' });
+
+    mocked.verifyModelDeeply.mockResolvedValue({ verdict: 'pass', detail: 'replacement runtime', suite_version: 1, recorded_at: '' });
+    await act(async () => result.current.start());
+    expect(result.current.record?.detail).toBe('replacement runtime');
+    act(() => notifyRuntimeInventoryChanged());
+    expect(result.current.record).toBeNull();
   });
 });

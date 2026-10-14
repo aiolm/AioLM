@@ -61,14 +61,18 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const [validating, setValidating] = useState(true);
   const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
   const values = cfg.provider_options?.[provider] ?? {};
+  // An external engine's options come from the runtime's manifest, so there is
+  // nothing to validate (or preview) until a runtime is chosen above.
+  const runtimeNeeded = api.isExternalProvider(provider) && !cfg.active_runtime;
   useEffect(() => {
     let active = true; setValidating(true); setError('');
+    if (runtimeNeeded) { setIssues([]); setValidating(false); return; }
     const timer = setTimeout(() => {
       void api.providerOptionIssues(cfg).then(result => { if (active) { setIssues(result); setValidating(false); } })
         .catch(cause => { if (active) { setError(String(cause)); setValidating(false); } });
     }, 150);
     return () => { active = false; clearTimeout(timer); };
-  }, [cfg]);
+  }, [cfg, runtimeNeeded]);
   useEffect(() => {
     let active = true; setSchema([]); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError('');
     void Promise.all([api.providerCatalog(), api.providerRuntimes(), cfg.active_runtime ? api.providerRuntimeOptions(provider, cfg.active_runtime) : Promise.resolve(undefined)]).then(([catalog, runtimes, runtimeOptions]) => {
@@ -110,6 +114,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   return <div className="model-settings-fields">
     <h3>{copy.options}</h3>
     {loadingSchema && <p role="status">{copy.loading}</p>}
+    {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
     {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
@@ -123,10 +128,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }
       setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
     }).catch(cause => setError(String(cause)))}>{copy.import}</button>
-    <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => void api.providerCommandPreview(cfg).then(args => { setError(''); setPreview(args.map(arg => JSON.stringify(arg)).join(' ')); }).catch(cause => setError(String(cause)))}>{copy.preview}</button>
+    <button type="button" className="app-button app-button--secondary" disabled={disabled || runtimeNeeded} onClick={() => void api.providerCommandPreview(cfg).then(args => { setError(''); setPreview(args.map(arg => JSON.stringify(arg)).join(' ')); }).catch(cause => setError(String(cause)))}>{copy.preview}</button>
     {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
     </>}
-    {!validating && !loadingSchema && !error && !schemaError && !advanced && !visible.length && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
+    {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !visible.length && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
     {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </div>;

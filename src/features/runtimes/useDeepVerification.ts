@@ -5,6 +5,7 @@ import type { AppStore } from '../../shared/state/store';
 import { translate } from '../../shared/i18n/i18nUnified';
 import type { Locale } from '../../shared/i18n/i18nCatalog';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
+import { runtimeInventoryRevision, useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 
 export const DEEP_VERIFICATION_TASK = 'deep-verification';
 
@@ -18,8 +19,9 @@ export const DEEP_VERIFICATION_TASK = 'deep-verification';
  */
 export function useDeepVerification(store: AppStore, locale: Locale) {
   const [busy, setBusy] = useState(false);
-  const [record, setRecord] = useState<VerificationRecord | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const revision = useRuntimeInventoryRevision();
+  const identity = JSON.stringify([store.getConfig?.() ?? store.cfg, revision]);
+  const [result, setResult] = useState<{ identity: string; record?: VerificationRecord; error?: string } | null>(null);
 
   const cancel = useCallback(() => {
     updateTask(DEEP_VERIFICATION_TASK, { state: 'cancelling' });
@@ -30,8 +32,10 @@ export function useDeepVerification(store: AppStore, locale: Locale) {
     const cfg = store.getConfig?.() ?? store.cfg;
     if (!cfg || busy) return;
     setBusy(true);
-    setRecord(null);
-    setError(null);
+    setResult(null);
+    // The result belongs to this exact configuration and inventory. A late
+    // completion still finishes its task, but never labels another selection.
+    const verifiedIdentity = JSON.stringify([cfg, runtimeInventoryRevision()]);
     registerTask({
       id: DEEP_VERIFICATION_TASK,
       kind: 'runtime',
@@ -42,16 +46,17 @@ export function useDeepVerification(store: AppStore, locale: Locale) {
     });
     void api.verifyModelDeeply(cfg)
       .then(result => {
-        setRecord(result);
+        setResult({ identity: verifiedIdentity, record: result });
         finishTask(DEEP_VERIFICATION_TASK, result.verdict === 'pass' ? 'completed' : 'failed', result.detail);
       })
       .catch(cause => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        setError(message);
+        setResult({ identity: verifiedIdentity, error: message });
         finishTask(DEEP_VERIFICATION_TASK, /cancel/i.test(message) ? 'cancelled' : 'failed', message);
       })
       .finally(() => setBusy(false));
   }, [busy, locale, store]);
 
-  return { busy, record, error, start, cancel, dismiss: () => { setRecord(null); setError(null); } };
+  const current = result?.identity === identity ? result : null;
+  return { busy, record: current?.record ?? null, error: current?.error ?? null, start, cancel, dismiss: () => setResult(null) };
 }

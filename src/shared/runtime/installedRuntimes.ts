@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import * as api from "../api/index";
 import { formatRuntimeVersion } from "./runtimeUtils";
+import { subscribeRuntimeInventory, useRuntimeInventoryRevision } from './runtimeInventoryEvents';
 
 /**
  * The installed runtime list, shared by every surface that names a runtime.
@@ -15,6 +16,8 @@ import { formatRuntimeVersion } from "./runtimeUtils";
  */
 let cache: api.InstalledRuntime[] | null = null;
 let pending: Promise<void> | null = null;
+let generation = 0;
+const EMPTY: api.InstalledRuntime[] = [];
 const listeners = new Set<() => void>();
 
 function announce(): void {
@@ -23,38 +26,44 @@ function announce(): void {
 
 /** Hand the shared cache a list that was just read, from anywhere. */
 export function publishInstalledRuntimes(runtimes: api.InstalledRuntime[]): void {
+  generation += 1;
   cache = runtimes;
+  pending = null;
   announce();
 }
 
 function ensureLoaded(): Promise<void> {
   if (cache) return Promise.resolve();
+  const owner = generation;
   pending ??= (async () => {
     try {
-      cache = api.isNativeRuntimeAvailable() ? await api.rtList() : [];
+      const result = api.isNativeRuntimeAvailable() ? await api.rtList() : [];
+      if (owner === generation) cache = result;
     } catch {
       // Naming a runtime is a label, never a gate: an unreadable list leaves
       // the honest build number in place instead of failing the surface.
-      cache = [];
+      if (owner === generation) cache = [];
     }
-    pending = null;
-    announce();
+    if (owner === generation) { pending = null; announce(); }
   })();
   return pending;
 }
 
 export function useInstalledRuntimes(enabled = true): api.InstalledRuntime[] {
-  const [runtimes, setRuntimes] = useState<api.InstalledRuntime[]>(() => cache ?? []);
+  const revision = useRuntimeInventoryRevision();
+  const runtimes = useSyncExternalStore(subscribe, snapshot, snapshot);
   useEffect(() => {
     if (!enabled) return;
-    let live = true;
-    const sync = () => { if (live) setRuntimes(cache ?? []); };
-    listeners.add(sync);
-    void ensureLoaded().then(sync);
-    return () => { live = false; listeners.delete(sync); };
-  }, [enabled]);
+    void ensureLoaded();
+  }, [enabled, revision]);
   return runtimes;
 }
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function snapshot(): api.InstalledRuntime[] { return cache ?? EMPTY; }
 
 /**
  * `0.3.0-dev(10638)` when the install recorded what the binary calls itself,
@@ -75,7 +84,10 @@ export function useRuntimeVersionLabel(backend: string, build: string): string {
 
 /** Test seam: forget the shared list so the next read goes to the backend. */
 export function resetInstalledRuntimes(): void {
+  generation += 1;
   cache = null;
   pending = null;
   announce();
 }
+
+subscribeRuntimeInventory(resetInstalledRuntimes);
