@@ -25,7 +25,7 @@ python3 scripts/model-repair/reindex_snapshot.py \
 | 기반 버전 | 새 버전 | 수정 내용 |
 | --- | --- | --- |
 | vLLM `0.30.0+cpu` | `0.30.0+cpu.aiolm.media1` | local media allowlist 거부를 validation 오류로 분류해 HTTP400 반환. allowlist 유지. |
-| mlx-vlm `0.7.6` | `0.7.6+aiolm.media12` | media8의 URI·audio 이력·preflight·Gemma4 packing·Gemma3n embedding/공유 위치/BOS 수정 유지. 명시적 `encoded-left` 오디오 정렬 정책과 30초 초과 입력의 HTTP400 처리 추가. 기존 context overflow·기본 정책 유지. |
+| mlx-vlm `0.7.6` | `0.7.6+aiolm.media13` | media8의 URI·audio 이력·preflight·Gemma4 packing·Gemma3n embedding/공유 위치/BOS 수정 유지. 명시적 `encoded-left` 오디오 정렬 정책과 30초 초과 입력의 HTTP400 처리 추가. 기존 context overflow·기본 정책 유지. 별도 재현 가능한 Gemma3n 입력 dither 옵션 추가. |
 
 ```sh
 python3 scripts/provider-compatibility/build_wheel.py \
@@ -54,6 +54,7 @@ vllm-metal0.30.0은 기존 pinned MLX/MLX-LM/native paged ops와 MetalPlatform �
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_embeddings.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_mlx_chat_tokens.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_audio_padding.py
+"$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_audio_dither.py
 ```
 
 첫 검사는 모델 추론 없이 설치된 normalizer/template의 audio marker가 `[1,0,1]`인지 확인한다. 두 번째는 작은 합성 encoder/embedding 값으로 **설치된 Gemma4의 실제 embedding 배치 메서드**를 호출한다. 녹음 사이 padding이 다음 녹음의 토큰을 대체하면 실패하며, 모델 weights·내용 추론이나 처리 속도 검사는 아니다. 앱의 런타임 관리에서 새 Python을 외부 환경으로 등록하고 **별도 프로필**로 선택한다. 올바른 인증으로 URI/invalid-WAV400, 정상 미디어 내용·usage·취소·Retry·재시작·종료를 실제 확인한다. 원본 환경/프로필을 자동 교체하지 않는다.
@@ -75,6 +76,18 @@ media12을 별도 환경에 설치·등록하고 별도 Gemma3n 프로필의 **�
 해당 옵션은 이 호환 runtime에만 있다. upstream 환경에서 임의로 지원을 선언하거나 probe를 우회하지 않는다. 기본 `model`은 기존 처리와 원본 processor 설정을 유지한다. `encoded-left`는 각 녹음의 mask가 유효한 벡터 값·순서를 유지하고, 남는 슬롯을 기존 learned padding embedding으로 앞에 채운다. 입력·출력 토큰이나 응답 텍스트를 교정하지 않는다. 30초를 넘는 clip은 처리 전에 거부하며 스트리밍/일반 chat에서 알려진 입력 오류를 HTTP400으로 분류한다. 파일·기존 환경·기본 프로필은 바꾸지 않는다.
 
 다섯 번째 checker는 실제 설치된 feature extractor/helper로 waveform/mel/mask 불변, 서로 다른 유효 길이의 padding 정렬, 전체 padding 및 길이 초과 거부를 확인한다. 모델·네트워크는 사용하지 않는다. 같은 원래 모델의 내용·usage·다른 음성·이력·오류 후 재시도·재시작을 앱에서 별도로 확인해야 한다. §104의 긴 결합 음성에는 관사 오류가 남아 있어 모든 Gemma3n 음성의 정확도를 보장하는 결과가 아니다.
+
+## Gemma3n 입력 디더의 명시적 선택
+
+media13은 앞의 `encoded-left`와 함께 `--gemma3n-audio-dither`를 선택할 수 있다. 별도 프로필의 `extra_args`는 다음과 같다.
+
+```json
+["--gemma3n-audio-padding", "encoded-left", "--gemma3n-audio-dither"]
+```
+
+이 옵션은 특징 추출 직전에 표준편차 `1e-4`의 Gaussian 입력 dither를 사용한다. 녹음별 local `RandomState(0)`로 재현성을 확보하며 전역 난수 상태·원래 processor 객체·파일·샘플 수·mask를 바꾸지 않는다. 처리 중의 신호와 mel 값은 달라진다. 질문이나 모델 출력에 접근하거나 후보 답변을 골라 교정하지 않는다. 기본은 꺼짐이며 선택하지 않으면 이전 처리다. 30초 제한·초과400·probe를 유지한다.
+
+여섯 번째 checker는 실제 설치된 extractor를 upstream seed-0 계산과 비교하고 반복/동시 호출·원본 입력·processor·전역 RNG·mask·기본 정책·길이 제한 보존을 확인한다. [결과 §105](macos-device-validation-results.ko.md#105-gemma3n의-긴-결합-음성과-입력-디더-재검증)에 내용 대조와 실제 앱 근거를 남긴다. 무작위 디더에서는 같은 긴 음성의16개 seed 중9개만 단어가 일치해 임의 seed의 성공을 일반 효과로 계산하지 않는다. 새 별도 음성의 quiet→gray, tower/plural, cup→cap 오류도 남아 있다. 모든 전사나 원본 FP 조건을 해결하는 옵션으로 안내하지 않는다.
 
 ## llama.cpp의 Idefics3 단일 이미지
 
