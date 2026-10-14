@@ -2,6 +2,7 @@ import argparse
 import importlib.util
 from unittest.mock import patch
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -18,6 +19,34 @@ def text(value):
 
 
 class LoaderProbeTests(unittest.TestCase):
+    def test_strata_version_probe_uses_deployment_libraries_without_changing_host_env(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            libraries = root / "native libraries"; libraries.mkdir()
+            missing = root / "missing libraries"
+            exe = root / "engine"; exe.write_bytes(b"synthetic")
+            tokenizer = root / "tokenizer"; tokenizer.mkdir()
+            for name in ("vocab.json", "merges.txt", "token_type.json"):
+                (tokenizer / name).write_text("synthetic")
+            config = root / "deployment.json"
+            config.write_text(json.dumps({"exe": str(exe), "args": [], "tokenizer": str(tokenizer),
+                                         "lib_dirs": [str(libraries), str(missing)],
+                                         "env": {"SYNTHETIC_DEPLOYMENT": "enabled"}}))
+            revision = "0123456789abcdef0123456789abcdef01234567"
+            args = argparse.Namespace(kind="strata", root=str(root), config=str(config), model=str(config),
+                                      revision=revision, engine_id="custom.synthetic", runtime_id="r1")
+            variable = "PATH" if os.name == "nt" else "LD_LIBRARY_PATH"
+            with patch.dict(os.environ, {variable: "synthetic-host-path"}):
+                original = dict(os.environ)
+                with patch.object(adapter, "capture", side_effect=[revision, "--engine --config --host --port", "synthetic 1.0"]) as capture, patch("builtins.print"):
+                    adapter.probe(args)
+                native_call = capture.call_args_list[-1]
+                self.assertEqual(native_call.args[0], [str(exe), "--version"])
+                env = native_call.kwargs["env"]
+                self.assertEqual(env[variable], os.pathsep.join([str(libraries), "synthetic-host-path"]))
+                self.assertEqual(env["SYNTHETIC_DEPLOYMENT"], "enabled")
+                self.assertEqual(dict(os.environ), original)
+
     def test_gguf_chat_support_requires_its_own_template(self):
         with tempfile.TemporaryDirectory() as area:
             path = Path(area) / "synthetic.gguf"

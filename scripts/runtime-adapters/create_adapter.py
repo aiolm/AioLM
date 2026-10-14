@@ -21,8 +21,8 @@ LIMIT = 262144
 SHARED_LIBRARY = re.compile(r"\.(dll|dylib|so)(\.\d+)*$", re.IGNORECASE)
 
 
-def capture(args, cwd=None):
-    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=15)
+def capture(args, cwd=None, env=None):
+    result = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=15)
     if result.returncode != 0:
         raise ValueError("runtime version/help probe failed; inspect the selected installation")
     return (result.stdout + result.stderr)[:65536]
@@ -126,6 +126,19 @@ def strata_config(root, path):
     return config, executable
 
 
+def strata_engine_env(config):
+    # Match the deployment server's library search path when inspecting the
+    # native executable; probing must not depend on a globally installed SDK.
+    env = dict(os.environ)
+    for key, value in (config.get("env") or {}).items():
+        env[str(key)] = str(value)
+    directories = [path for path in config.get("lib_dirs") or [] if Path(path).is_dir()]
+    if directories:
+        variable = "PATH" if os.name == "nt" else "LD_LIBRARY_PATH"
+        env[variable] = os.pathsep.join(directories + ([env[variable]] if env.get(variable) else []))
+    return env
+
+
 def probe(args):
     model = args.model or ""
     if args.kind == "llama.cpp":
@@ -150,7 +163,8 @@ def probe(args):
         config, executable = strata_config(root, file_path(model or args.config))
         if executable.resolve() != registered_executable.resolve():
             raise ValueError("selected deployment uses another Strata engine build; register it separately")
-        engine_version = capture([str(executable), "--version"], config.get("cwd") or root).strip()
+        engine_version = capture([str(executable), "--version"], config.get("cwd") or root,
+                                 env=strata_engine_env(config)).strip()
         version = f"Strata {revision} / {engine_version}"
         # Deployment options and build metadata do not prove a live GPU device.
         accelerator = "unverified"
