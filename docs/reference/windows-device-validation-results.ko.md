@@ -6,19 +6,36 @@
 
 - 시작 source: `df3264bad99deb0144b947f96300e8625f7a2da5`, `origin/codex/windows-runtime-adapter-handoff`의 필수 인계 commit 포함을 확인했다.
 - 작업 branch: `codex/windows-runtime-adapter-validation`. 기존 변경과 사용자 설치·데이터를 보존했으며 원격 push는 수행하지 않았다.
-- 현재 수정 checkpoint: `4d57c112dd7918ed5c9d6dcf73426d05e92a0a56`.
-- 최신 production GUI/CLI는 `eb3b2bf4055db76d5181cbd5b496a5b8f366d47b`에서 Windows native로 재빌드했다. 별도 Python adapter helper는 `4d57c11`의 파일을 명시적으로 재등록한다. 두 실행 source를 같은 것으로 표시하지 않는다.
+- 현재 수정 checkpoint: `0cfbbb5083becf9281df7e47c320bdbb9e61f5b1`. G01–G07은 아직 구현되지 않았다.
+- 실제 GUI의 최근 완료 검사는 `0cfbbb5`의 package6에서 D14 설명/레이아웃과 D12 실제 BGE gateway 라우팅이다. 나머지 실제 흐름의 재검증은 진행 중이며 실행 전 항목을 pass로 계산하지 않는다. 별도 Python adapter helper는 `4d57c11`의 파일을 명시적으로 재등록한다.
 - raw: 저장소의 `tmp/windows-acceptance/`. 지속적인 재개 기록은 그 아래 `progress.md`다. raw·모델·개인 경로·프로필·토큰·build 산출물은 Git에 포함하지 않는다.
 
 결과는 `pass`, `fail`, `unsupported`, `unrun`, `blocked`로 구분한다. 표의 `unrun`은 해당 묶음의 필수 검사가 남았다는 뜻이며 그 안의 이미 실행한 결과는 별도로 남긴다. 실패를 미지원으로 바꾸거나 다른 모델의 성공으로 덮지 않는다.
 
-| 실행 산출물 | SHA256 |
+아래는 이전 package3의 산출물이며 이후 실행으로 소급 변경하지 않는다. package5와 새 패키지의 근거는 다음 절에서 구분한다.
+
+| 이전 실행 산출물 | SHA256 |
 | --- | --- |
 | production GUI | `f914174a03893c747d7a8e126bd556c92f6433f6d04093fae9992d48bb57c652` |
 | production CLI | `c39e2cb1f245e596892fdc617e3fa7d5f666a824217a51ea4e3cc9900db5eebc` |
 | NSIS | `6bece1039c28a0c5362fcb0aaf23197d4eefe0bb4c7c28a78f9d857bbd6e83c2` |
 | MSI | `9df152b4eaf59bc7e1f29e3205717eb662aac2199830921de19fa84720052cd7` |
 | adapter helper (`4d57c11`) | `30191bcc9f6d39795235466e39d8a81be1c431bfe667cef984a92f210aee1847` |
+
+### 후속 실제 실행 checkpoint
+
+package5 source는 `8b4c5ea`이며 GUI SHA256 `ebabee8ab866b3f808e596c96e268cd37bde2f4d3d5eacf80da9860a6392f7de`, CLI `d3d32597e7dedca2d6a2fd245244f861bf2f49c6dd5c04947fb533cbc1af9d02`, NSIS `8324ec69e069bb3c7ac4946aae296aa05056d77759e26a5ed49b2da88ebe411f`, MSI `373dd30fd791df17fbaafb0668a118d12932abbe526b28b379f6fe3a72d786d1`이다. 패키지 생성 성공과 실제 설치 성공은 구분한다.
+
+package6/source `0cfbbb5`의 네 target도 Windows native 빌드 exit0이다. 최종 GUI SHA256 `06965b1fc74508a51cb88312552782d19d93c3db8795bc5cd1e3a25d22d0ae8a`, CLI `56068220700624d98ae9c8772d95dbe6e4a3f6d20e459c03f3a685308f5224ef`, NSIS `94bd5a0d61e32d04aedd4000eef7df42475195d52f66789cd709db7e33646f99`, MSI `07932494084c9b64ef0136d6d142592acc5c4e2b77b7119e020d2776fde715c5`다. D14 실제 큰 창과 640×560 논리 크기 창에서 사유/긴 오류가 읽혔고, 좁은 탐색 메뉴 열기→Escape 닫기와 원래 창 크기 복구를 확인했다. 전체 접근성 검사 통과로 확대하지 않는다. raw `gui/60,68–72`.
+
+- **ROCm 실제 실행 pass 조건:** 기존 HIP7.2의 두 GPU numerical gate는 median KLD 1.341866으로 허용값 0.038160을 넘겨 **fail**이다. 별도의 공식 TheRock `10.2.0a20260923` SDK(archive SHA256 `01893448a7d5d5efe921afd15da800d44fb0a98076934a82fffe45c2932aa799`, rocm-systems `0816fc809a4ff1f21c330357368f977f4ffe67fd`)로 같은 b11617 source를 새로 빌드한 조합은 gate·export/import·재검사와 두 GPU의 실제 Qwen0.5B 응답/usage·stream 취소·재시작·정리를 통과했다. runtime ZIP SHA256 `82eb56534293410d08bcf14016af74ce08af61c63c11905cafcc691ce3247808`. 이 실행의 앱 source는 `140fef0`이며 최종 source의 GUI 재검증은 남아 있다. 전역 SDK·driver·기존 실패 기록을 바꾸지 않았다. raw `rocm-native/actual-acceptance/REPORT.md`.
+- **W06 공통 연결 pass 조건:** package4/source `a17c758`에서 실제 BGE embedding 384차원과 Strata 답변을 분리해 vector RAG, 독립 세션 정지, gateway 누락/오류 key 401·모델 라우팅·미등록 모델 404를 확인했다. raw `strata-native/logs/34–35`. 이후 package6의 같은 실제 BGE 세션을 GUI에서 로드해 gateway embedding 200/384차원/usage8, chat의 앱 수준 400 `unsupported_task`, 누락/오류 key401을 확인했다. D12의 해당 결함은 실제 gateway에서 재검증 pass이며 `gui/67-d12-gateway-package6-result.json`이 근거다.
+- **실제 STT 연결:** Whisper `0c7be696371069e0baa2515ed7aa08d5a5473aa6`의 Windows CPU CLI SHA256 `21bfbad3dd5749b6f82e82786c30f8714a82a754d424af46903d4370f738d984`와 명시적 임시 bridge를 사용했다. tiny.en revision `5359861c739e955e79d9a303bcbc70fb988958b1`, weight SHA256 `921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`. 공식 JFK WAV SHA256 `59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e`를 GUI에서 선택해 실제 전사→Qwen0.5B 답변→저장/재시작을 확인했다. 첫 답변의 녹음에 없는 추가 주장은 fail 기록으로 보존했고, 같은 이력의 정답을 포함하지 않은 정확한 문구 질문에는 실제 녹음의 문장을 반환했다. raw `whisper-native/38–41`; 최종 source 반복은 남아 있다.
+- **실제 이미지와 portable:** 원래 SmolVLM256 Q8_0/f16 projector를 유지했다. model revision `b9e4379657e1450d04d02eec8e345667265b0a00`, model SHA256 `2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65`, projector `0802360aca1748f112ea510b8ff277c65b1361c8ef30ed89b83c9c7a60d08e96`. 고정 b11460 source `78651c410dd8d97e3e22e533e0e7117889e3863a`에 기존 검증 도구의 single-view 호환 변경을 적용한 별도 native CPU build를 만들었다. server SHA256 `eed375732c4a6dc5d262c039f6f4a761a57ec2312c58826e4230c16ac60dd64d`, portable ZIP `25f51348d57a5eab0f9bfc8a43a564d947914804d3d9ff081542e4228eb1d722`. SDK 없는 PATH의 새 격리 홈 import 후 package5 CLI 실제 응답과 GUI import·명시적 profile 선택·Ready를 확인했다. 새 OS 설치 검증으로 확대하지 않는다.
+- **이미지 내용의 한계와 보존:** 이미지 SHA256 `18f3d506bbcfb8d098782883c6553ec7f9a8c69643884e5d8c2d92a61fd15dc3`. 색과 도형을 함께 물은 질문에서 모양을 누락한 기존/호환 엔진의 답변은 **fail**로 남는다. 같은 이미지/모델/이력에서 정답을 포함하지 않고 도형을 다시 물었을 때 package5 실제 GUI는 `Circle.`과 usage를 반환했다. 일반적인 시각 묘사 지침과 image-first 설정은 응답·대화 전환·정상 Quit/재시작 뒤 유지됐고 이전 네 메시지가 그대로 보존됐다. raw `media-native/42–43,51–52`, `gui/54–56`. 이 조건부 성공을 원래 복합 질문의 통과로 바꾸지 않는다.
+- **D12 실제 production CLI:** `0cfbbb5`의 package6 최종 CLI(위 SHA256)에서 실제 b11617 CPU/BGE를 새 홈 세 개로 검사했다. 명시적 `--embedding`과 격리된 `config.ini`의 `embedding=true` 모두 Ready 후 tasks `[embed]`·chat false·실제 384차원/usage를 확인했다. embedding 모드가 없는 BGE는 실제 generation 500을 확인해 Ready 전에 실패하고 소유 listener/state를 정리했다. headless CLI는 엔진에 직접 연결하므로 앱 gateway의 잘못된 task 거부와 별도로 판정한다. raw `d12-claude/effective-mode/production-1792017871815`. 패키징 전 CLI 해시로 실행한 같은 세 검사도 이전 기록으로 보존한다.
+
+W03 실제 GUI의 느린 probe 취소→즉시 새 등록→이전 응답 대기 후 상태 보존·이전 child 정리도 pass다(`w03/gui-probe/44–46`). 일반 모델 선택 probe 경합, W07 나머지 실패/취소, W08 OS 통합과 별도 계정 설치, G 구현 및 최종 전체 재검증은 계속 남아 있다.
 
 ## 기기와 격리
 
@@ -44,12 +61,12 @@ GUI/CLI 검사는 `AIOLM_HOME`뿐 아니라 HOME/USERPROFILE/APPDATA/LOCALAPPDAT
 | --- | --- | --- |
 | W01 | pass | 기준 공통 20개 명령과 native CLI smoke를 실행했다. D01/D02 수정 후 재검사 통과. 최신 전체 source의 최종 공통 검사는 모든 구현이 끝난 뒤 다시 필요하다. raw `w01/results.tsv` 및 개별 로그 |
 | W02 | blocked | 격리 CLI 12개 검사와 실제 GUI onboarding/폴더 선택 pass. v13 backup/round trip·미등록 engine 보존·미래 schema 거부를 확인. 실제 OS 최초 실행·기존 설치 이전/자격 증명은 별도 OS 세션 대기 |
-| W03 | unrun | CLI 26개 등록/변조/삭제/재등록 검사 pass, 최신 CLI/helper로 새 격리 홈에서 26개 재검사 pass(`w03/run5-package3`). 실제 GUI 합성 네 번째 엔진 등록·직접 argv·artifact 변경 거부 pass. D08의 Strata DLL 변조 전후 실제 CLI 검사 pass. GUI의 늦은 probe 경합·취소와 최종 G source 재검증 필요 |
-| W04 | unrun | 개인 CPU llama.cpp CLI A01–A09, 내장 CPU/Vulkan GUI 응답·usage·취소/Retry·재시작/Quit pass. 고정 Strata native GUI 응답·취소/Retry·normal Quit pass. 개인 build의 최종 GUI 흐름과 새 production 재검증, ROCm numerical gate 및 실제 응답이 남음 |
-| W05 | unrun | 실제 GUI/Strata와 synthetic stdio MCP에서 승인·거부·호출 중 취소·입력과 다른 반환값 후속 답변 pass. native GUI의 rich/error/call ID 보존 pass. 지원 모델의 실제 미디어 내용·첨부 순서·재로드와 취소 복구 수정이 남음 |
-| W06 | unrun | 실제 프로젝트/RAG·STT 연결·멀티 세션·gateway 인증/라우팅 검사가 남음 |
+| W03 | unrun | CLI 26개 등록/변조/삭제/재등록, GUI 네 번째 엔진 등록·argv·변조 거부·느린 probe 취소 후 새 등록과 이전 child 정리 pass. 모델 선택 probe 경합·최종 G source 재검증 필요 |
+| W04 | unrun | CPU/Vulkan·고정 Strata GUI의 실제 응답/usage·취소/Retry·재시작/Quit pass. 별도 고정 SDK 조합의 ROCm 실제 두 GPU gate/응답 pass, 기존 SDK 실패 보존. 개인 build 및 최종 source의 전체 GUI 흐름 재검증 필요 |
+| W05 | unrun | MCP 승인/거부/호출 취소/입력과 다른 반환값 후속·rich/error/call ID pass. 이미지 복합 질문의 내용 누락 fail 유지, 도형 후속·설정/이미지/이력 재로드 pass. 실제 다른 지원 미디어와 새 Retry 복구 재검증 필요 |
+| W06 | unrun | 실제 vector RAG·STT 전처리/답변/이력·멀티 세션·gateway 인증/라우팅 pass 조건은 위 checkpoint 참조. 최종 source task 거부·프로젝트 적용/내보내기·기존 CSV/XLSX 등 보존 재검증 필요 |
 | W07 | unrun | Unicode/공백 경로와 hostile 값의 단일 argv, runtime 설치 취소의 staging 정리, load/stream 취소 및 normal Quit의 소유 job/port 정리 pass. import/build/tool/benchmark 실패·취소, 다른 프로세스 보호의 남은 실제 흐름 필요 |
-| W08 | blocked | 최신 native production GUI/CLI와 NSIS/MSI 빌드 pass. 패키지 설치→응답→재로드→업그레이드/제거는 별도 OS 세션 대기. IME 실제 composition·clipboard/tray/알림·지원 runtime 새 홈 portable 후 추론도 남음 |
+| W08 | blocked | production GUI/CLI·NSIS/MSI 빌드, Smol CPU 새 홈 portable 후 실제 추론과 GUI import pass. ROCm portable 실제 조건은 위 checkpoint 참조. 설치/업그레이드/제거는 별도 OS 세션 대기. IME composition·tray/알림·최종 재검증은 남음 |
 
 Windows native의 MLX·표준 vLLM·Metal 실제 추론은 현재 local runtime 플랫폼 계약상 `unsupported`다. 값 보존·명시적인 거부는 별도의 Windows 공통 검사이며 Linux vLLM과 Mac MLX/Metal의 실제 추론 성공으로 기록하지 않는다. WSL 실행은 이번 Windows native 성공 근거가 아니다.
 
@@ -62,7 +79,7 @@ Windows native의 MLX·표준 vLLM·Metal 실제 추론은 현재 local runtime 
 - Qwen/Qwen2.5-0.5B-Instruct-GGUF revision `9217f5db79a29953eb74d5343926648285ec7e67`, Q4_K_M SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`: 개인 엔진의 격리 CLI A01–A09 pass.
 - Qwen/Qwen3-1.7B-GGUF revision `90862c4b9d2787eaed51d12237eafdfe7c5f6077`, Q8_0 SHA256 `061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a`: 내장 CPU GUI의 `2+3` 답변 `5`와 usage, 긴 생성 취소·Retry 및 정상 종료/재시작 pass. 명시적으로 고른 Vulkan GPU0에서 한국어 `7×6` 답변 `42` pass. Unicode 입력 주입을 실제 IME composition 검사로 확대하지 않는다.
 - 공식 ROCm b11617 archive에는 필요한 hipblas DLL이 없고 설치된 HIP7.2와 다른 DLL byte identity를 가진다. SDK 혼합을 거부하고 staging을 정리한 동작은 pass이며 해당 archive의 실제 추론은 blocked다.
-- 같은 llama.cpp source와 HIP7.2/gfx1201로 만든 개인 native ROCm bundle은 D05 수정 후 clean export/import/probe pass. ZIP SHA256 `9feb7404e89ff6b53aa281408032dde7e17e67be421055a198e76799d0cabf8a`, 588,299,928 bytes, payload 2,759 files. 실제 numerical gate/추론은 unrun이며 두 GPU gate 실패를 다른 배치의 성공으로 대체하지 않는다. 짧은 격리 홈으로 vendor MAX_PATH 조건을 만족해야 한다.
+- 같은 llama.cpp source와 HIP7.2/gfx1201로 만든 개인 native ROCm bundle은 D05 수정 후 clean export/import/probe pass. ZIP SHA256 `9feb7404e89ff6b53aa281408032dde7e17e67be421055a198e76799d0cabf8a`, 588,299,928 bytes, payload 2,759 files. 이후 실제 두 GPU numerical gate는 fail이었다. 위 후속 checkpoint의 별도 SDK 조합 성공과 구분한다. 짧은 격리 홈으로 vendor MAX_PATH 조건을 만족해야 한다.
 
 ### Strata
 
@@ -108,8 +125,15 @@ fixture 2-rich의 실제 native 관리 GUI에서 단일 text와 embedded resourc
 | D06 | Strata native version probe에 deployment library paths 누락 | host env를 보존한 child env, 6 helper tests 및 동일 native probe pass; `21f56ae` |
 | D07 | reasoning/tool 토큰을 생성 중에도 composer가 첫 토큰 대기로 표시 | 실제 GUI 재현, 수정 전 2 regression fail, 수정 후 관련 29 tests/typecheck/lint pass; `eb3b2bf`. 새 production의 같은 Strata reasoning stream에서 Generating·취소/저장 pass |
 | D08 | Strata의 DLL/tokenizer 보호 누락과 upstream test 개수에 따른 artifact 한도 | 7 helper tests, 실제 native CLI engine 사본의 수정 전 변조 허용 fail→수정 후 probe/start 거부 pass, 원본 보존; `4d57c11` |
+| D09 | 저장된 중단/빈 응답과 tool round에서 Retry 경로 유실 | 정확한 재시도 입력의 backward-compatible 저장·기존 부분 응답 보존, 관련 자동 검사 pass; `d98029b`, `e96c700`. 최종 production 실제 복구 여정은 unrun |
+| D10 | MCP `isError:true`를 완료/성공으로 표시 | full 반환을 보존하고 failed 상태로 표시. 36 관련 검사와 package4 native 승인→실제 error 반환→Failed 표시 pass; `a17c758` |
+| D11 | CPU에서 기존 GPU 배치를 해제할 조작 부재 | GPU 미감지 시 명시적 Clear GPU assignment 제공, 자동 초기화 없음. 93 관련 검사 및 실제 BGE CPU 시작/벡터 연결 pass; `c437380` |
+| D12 | help/argv만으로 실제 실행 task를 확정하여 BGE chat 500 전달 | help arity 구분과 Ready 이후 실제 API task 확인. backend 전체 검사·실제 세 모드 CLI 및 package6 GUI gateway의 embedding/잘못된 chat task 거부 pass; `140fef0`, `876231f`, `8b4c5ea` |
+| D13 | 프로젝트 기본값 재적용이 사용자의 대화 지침·도구 선택을 덮어씀 | binding/version별 기본값 적용과 저장 marker, 관련 384 tests 및 history round trip pass. 실제 지침·이미지 순서의 응답/재로드/재시작 보존 pass; `1f97170` |
+| D14 | 호환성 reason 원시 키와 긴 오류 때문에 runtime 행 설명 붕괴 | 4개 언어 설명/미확인 사유 안내·유연한 열 배분/줄바꿈, 관련 52 tests/typecheck/lint/i18n pass. package6 실제 큰/좁은 창 표시 재검증 pass; `0cfbbb5` |
+| U1–U3 | 미선택 외부 runtime의 raw ID 오류·오래된 inventory/probe 표시·사라진 Tuning 경로 안내 | 107 관련 검사/typecheck/lint pass; `c920bec`. package5 실제 Model & settings→Profiles 안내 pass, 선택/cache 경합 최종 GUI 검사는 남음 |
 
-재현된 runtime 선택 오류의 raw 문구, 삭제/재등록 후 Deep verification의 오래된 metadata, 사라진 Tuning 동선 안내, 앱 재시작 후 저장된 중단 응답에서 Retry가 사라지는 복구 동선, MCP 호출 취소 뒤 Retry 부재는 현재 unresolved다. 이번 G07 구현/재검증에 포함하며 단순 제안으로 완료 처리하지 않는다. 재시작 전 일반 생성 Retry의 성공과 다른 복구 동선의 문제를 구분한다.
+수정 코드와 자동 검사 성공만 있는 항목은 실제 production 재검증 전까지 해결 완료로 판정하지 않는다. 이번 G07에는 재시작한 중단 응답·MCP 취소 후 Retry, 선택/cache 경합, 작은 창·접근성·대량 옵션 관찰을 포함한다. 기존 일반 생성 Retry의 성공과 다른 복구 동선의 문제를 구분한다.
 
 ## G01–G07과 후속 인계
 
