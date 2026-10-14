@@ -1,5 +1,7 @@
 # 교체 가능한 추론 런타임
 
+제품의 주된 방향은 임의의 지원 추론엔진을 등록·설정·실행하는 엔진 중립 GUI 어댑터다. 설치된 엔진의 `--help`를 공통 옵션 GUI로 전환하고 기존 기능을 보존하는 후속 설계·검증 순서는 [Windows → Linux → Mac 계획](windows-device-handoff.ko.md)을 따른다. 아래 v1 구현과 계획된 확장을 구분한다.
+
 공통 런타임 인터페이스와 외부 프로세스 어댑터 v1을 구현했다. llama.cpp·vLLM·MLX의 기존 설치·실행·프로필 계약을 유지하며, `custom.*` 엔진은 사용자 선택 manifest로 앱 재빌드 없이 등록한다. 등록은 외부 실행 파일을 실제 실행하는 작업이다. 사용자가 검토한 자신의 빌드와 probe를 선택한다.
 
 Rust의 `InferenceRuntimeAdapter`는 실행 파일, 구조화된 `EngineCommand`, 실행 종류와 `EngineInfo`를 제공한다. 내장 세 엔진과 외부 어댑터는 같은 프로세스 소유권·readiness·종료 경로를 사용한다. 외부 프로그램을 Python 환경으로 취급하지 않는다. 구현은 [adapter.rs](../../src-tauri/src/providers/adapter.rs), [registry.rs](../../src-tauri/src/providers/registry.rs), [등록 UI](../../src/features/runtimes/ExternalRuntimeRegistration.tsx)에 있다.

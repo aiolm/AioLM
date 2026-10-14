@@ -8,7 +8,7 @@
 
 상태는 `pass`(명시한 조건에서 성공), `fail`(실행 후 기준 미충족), `unsupported`(현재 계약·플랫폼의 미지원), `unrun`(실행 근거 없음), `blocked`(실행 조건을 확보하지 못함)를 사용한다. 우선순위 P1은 내용 실패·최신 배포 검증, P2는 환경이 필요한 OS·기기·추가 회귀 검사다. 우선순위가 낮아도 완료로 취급하지 않는다.
 
-Linux·Windows의 실행 계획과 결과는 별도로 작성한다. 그 작업의 입력 문서는 [공통 런타임 인계](runtime-adapter-handoff.ko.md)이며 Mac의 성공을 다른 OS의 성공으로 복사하지 않는다.
+Windows → Linux → Mac의 후속 실행 순서는 [Windows 검증과 구조 전환 계획](windows-device-handoff.ko.md)을 따른다. 현재 구현 계약은 [공통 런타임 인계](runtime-adapter-handoff.ko.md)를 참조하고 각 OS의 결과는 별도로 기록한다. Mac의 성공을 다른 OS의 성공으로 복사하지 않는다.
 
 ## 남은 항목 요약
 

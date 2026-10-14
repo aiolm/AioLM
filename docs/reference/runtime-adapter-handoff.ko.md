@@ -2,6 +2,8 @@
 
 ## 현재 상태와 검증 범위
 
+2026-10-14 이후 Windows → Linux → Mac에서 변경 검증을 우선하고 `--help` 기반 엔진 중립 GUI로 전환하는 실행 순서는 [Windows 검증과 구조 전환 계획](windows-device-handoff.ko.md)을 따른다. 아래 문서는 현재 구현된 manifest/probe 계약과 기존 실행 절차를 보존한다.
+
 공통 core 구현은 `9d0e9cbc4dc710a77573dc3b30713166f364a496`, SDK 보완은 `f1b94e40f98d2e4c4b31b5936a418981bfa5c69d`이며 Mac GUI 검증 중 수정한 프로필·취소 후 재시도까지의 기준은 `51afc569ceb7b0cf126c26664cf756889ae51c25`다. Mac 잔여 미디어 복구 도구와 검증된 local runtime 등록은 `64791d2`, 자동 시스템 안내 선택은 `158f966`이다. Gemma4 audio padding 호환 wheel은 `5ba74fe`, 대화별 첨부 순서와 parser 오류 안내는 `4a97627`이다. 작업 브랜치는 `codex/macos-device-validation`이다. 상세 실행 근거와 남은 항목은 [검증 결과 §98](macos-device-validation-results.ko.md#98-외부-런타임-인터페이스와-windowslinux-인계)와 [실제 Mac GUI §99](macos-device-validation-results.ko.md#99-외부-런타임의-실제-mac-gui와-기존-환경-복원)를 따른다.
 
 추가 미디어 검증은 [Mac 결과 §101](macos-device-validation-results.ko.md#101-미디어-내용과-도구-후속-답변의-추가-원인-검증)과 [복구 절차](macos-validation-recovery.ko.md)를 따른다. 선택한 실제 MLX Python에서 `check_mlx_audio_history.py`와 `check_gemma4_audio_packing.py`를 실행한 뒤, 길이가 다른 두 녹음의 내용·첫 녹음 재사용·usage·취소/Retry·정상 재시작을 검사한다. 두 checker의 성공은 실제 모델 내용 성공을 뜻하지 않는다. MLX 미지원 기기에서는 stdlib 도구만 실행하고 실제 MLX 검사는 unsupported로 기록한다.

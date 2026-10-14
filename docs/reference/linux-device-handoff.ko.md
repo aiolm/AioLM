@@ -1,5 +1,7 @@
 # Linux 기기 작업 인계
 
+2026-10-14 이후의 source·작업 순서는 [Windows → Linux → Mac 후속 계획](windows-device-handoff.ko.md)을 우선한다. 아래 branch/commit은 최초 Linux 인계 당시 기준이며 최신 Windows 종료 commit을 대신하지 않는다.
+
 작성 기준은 2026-10-07, AioLM 0.3.1, 다중 런타임 구현 커밋 `2c7d6d3`까지다. Linux에서 해야 할 일은 **현재 구현을 실제 GPU·데스크톱·설치 패키지에서 검증하고, 재현된 결함을 수정하는 것**이다. 과거 llama.cpp Linux 검증과 이번 vLLM 검증을 구분한다. 이번 변경의 Linux vLLM 실제 설치·추론은 아직 실행하지 않았다.
 
 이 문서는 세션의 변경, `tmp`의 조사·수정 보고서·검증 로그, 현재 코드와 명령을 대조해 작성했다. 필요한 내용은 본문에 정리했으므로 Git으로 이 저장소만 받아도 작업할 수 있다. Mac 작업은 [Mac 기기 작업 인계](macos-device-handoff.ko.md)를 사용한다.
