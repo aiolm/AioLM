@@ -30,10 +30,13 @@ scripts_dir = pathlib.Path(sysconfig.get_path("scripts")).resolve()
 script_names = {entry.name for entry in dist.entry_points if entry.group == "console_scripts"}
 for entry in dist.files or []:
     relative = pathlib.PurePosixPath(str(entry).replace("\\", "/"))
-    if relative.is_absolute() or ".." in relative.parts:
+    # A Windows drive/root anchor ("C:/..." or "\\server") is not absolute to
+    # PurePosixPath but still escapes site-packages when located on Windows.
+    anchored = relative.is_absolute() or bool(pathlib.PureWindowsPath(str(entry)).anchor)
+    if anchored or ".." in relative.parts:
         # Entry-point scripts live outside site-packages and are regenerated
         # from entry_points.txt; arbitrary outside files cannot be vendored.
-        if (not relative.is_absolute() and relative.name in script_names
+        if (not anchored and relative.name in script_names
                 and pathlib.Path(dist.locate_file(entry)).parent.resolve() == scripts_dir):
             continue
         raise RuntimeError("mlx-lm contains an unsupported outside distribution file")

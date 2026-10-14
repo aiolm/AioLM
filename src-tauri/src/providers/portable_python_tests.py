@@ -1,5 +1,6 @@
 """Synthetic closure and genuine offline pip round trips; no native engines."""
 import contextlib
+import hashlib
 import importlib.metadata as metadata
 import io
 import json
@@ -76,6 +77,21 @@ class PortablePythonTests(unittest.TestCase):
             self.assertEqual(namespace["portable_source_commit"](restored), "")
             with self.assertRaisesRegex(RuntimeError, "source revision"):
                 self.execute("portable_git_wheel.py", [COMMIT, str(root)], distribution=lambda _: restored)
+
+    def test_source_record_rejects_drive_or_root_anchored_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            outside = root / "outside.py"
+            outside.write_text("Synthetic outside file\n")
+            dist = self.make_dist(root, "mlx-lm", "0.3.4")
+            info = root / "mlx_lm-0.3.4.dist-info"
+            digest = hashlib.sha256(outside.read_bytes()).hexdigest()
+            namespace = {}
+            exec((ROOT / "portable_source_probe.py").read_text(), namespace)
+            # "C:/..." on Windows and "/..." elsewhere both resolve outside the
+            # distribution even though the content hash matches.
+            (info / "aiolm_portable_source.json").write_text(json.dumps({"format": 1, "distribution": "mlx-lm", "commit": COMMIT, "files": {outside.resolve().as_posix(): digest}}))
+            self.assertEqual(namespace["portable_source_commit"](dist), "")
 
     def test_capture_regenerates_only_declared_console_scripts_in_the_scripts_directory(self):
         with tempfile.TemporaryDirectory() as temporary:

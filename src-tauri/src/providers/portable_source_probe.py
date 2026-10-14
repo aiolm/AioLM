@@ -13,7 +13,7 @@ def portable_source_commit(distribution):
     total = 0
     for name, expected in files.items():
         relative = pathlib.PurePosixPath(name)
-        if relative.is_absolute() or ".." in relative.parts or "\\" in name:
+        if relative.is_absolute() or pathlib.PureWindowsPath(name).anchor or ".." in relative.parts or "\\" in name:
             return ""
         source = pathlib.Path(distribution.locate_file(name))
         if source.is_symlink() or not source.is_file() or source.stat().st_size > 64 * 1024 * 1024:
