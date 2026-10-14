@@ -125,14 +125,27 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     super::adapter::resolve(cfg).engine_info(cfg)
 }
 
+fn llama_info(cfg: &AppConfig, modalities: artifacts::Modalities) -> EngineInfo {
+    let mut info = EngineInfo::llama(&cfg.active_model, modalities);
+    info.runtime_id = super::runtime_id_of(cfg);
+    // llama.cpp b11617 `common/arg.cpp`: `--embedding`/`--embeddings` set
+    // `params.embedding`, restricting llama-server to the embedding use case;
+    // a chat request then fails inside the engine instead of being refused.
+    if crate::server::build_args(cfg, "")
+        .iter()
+        .any(|argument| argument == "--embedding" || argument == "--embeddings")
+    {
+        info.tasks = vec!["embed".into()];
+    }
+    info
+}
+
 pub(super) fn builtin_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     let provider = super::provider_of(cfg);
     let compatible = compatibility(cfg)?;
     let modalities = compatible.modalities;
     if provider == ProviderId::Llama {
-        let mut info = EngineInfo::llama(&cfg.active_model, modalities);
-        info.runtime_id = super::runtime_id_of(cfg);
-        return Ok(info);
+        return Ok(llama_info(cfg, modalities));
     }
     let runtime = super::selected_python_runtime(cfg)?;
     let options = launch::provider_options(cfg, provider);
@@ -282,6 +295,66 @@ mod tests {
         .unwrap();
         assert_eq!(vllm_chat_support(&gguf, &options, true, false), Some(true));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn llama_embedding_flag_serves_only_embeddings_and_refuses_generation() {
+        use super::super::protocol::adapt_request;
+        for flag in ["--embedding", "--embeddings"] {
+            let cfg = AppConfig {
+                active_model: "synthetic-embedder.gguf".into(),
+                server_args: vec![flag.into()],
+                ..AppConfig::default()
+            };
+            let info = llama_info(&cfg, artifacts::Modalities::text_only());
+            assert_eq!(info.tasks, ["embed"], "{flag}");
+            assert_eq!(
+                info.embedding_model.as_deref(),
+                Some("synthetic-embedder.gguf")
+            );
+            for (endpoint, mut body) in [
+                (
+                    "chat/completions",
+                    json!({"messages":[{"role":"user","content":"hi"}]}),
+                ),
+                ("completions", json!({"prompt":"hi"})),
+                (
+                    "chat/completions",
+                    json!({
+                        "messages":[{"role":"user","content":"hi"}],
+                        "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
+                        "tool_choice":"auto"
+                    }),
+                ),
+            ] {
+                let error = adapt_request(&info, endpoint, &mut body).unwrap_err();
+                assert_eq!(error.code, "unsupported_task", "{flag} {endpoint}");
+                assert!(error.message.contains("serves embeddings"), "{flag}");
+            }
+            let mut embedding = json!({"model":"alias","input":["a","b"]});
+            adapt_request(&info, "embeddings", &mut embedding).unwrap();
+        }
+    }
+
+    #[test]
+    fn llama_without_embedding_flag_keeps_generation_and_embeddings() {
+        use super::super::protocol::adapt_request;
+        let cfg = AppConfig {
+            active_model: "synthetic-generator.gguf".into(),
+            server_args: vec!["--jinja".into()],
+            ..AppConfig::default()
+        };
+        let info = llama_info(&cfg, artifacts::Modalities::text_only());
+        assert_eq!(info.tasks, ["generate", "embed"]);
+        assert!(info.tools_auto && info.tool_parser);
+        assert_eq!(info.chat_supported, None);
+        let mut chat = json!({
+            "messages":[{"role":"user","content":"hi"}],
+            "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]
+        });
+        adapt_request(&info, "chat/completions", &mut chat).unwrap();
+        adapt_request(&info, "completions", &mut json!({"prompt":"hi"})).unwrap();
+        adapt_request(&info, "embeddings", &mut json!({"input":"a"})).unwrap();
     }
 
     #[test]
