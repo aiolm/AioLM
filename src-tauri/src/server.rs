@@ -954,19 +954,20 @@ fn auth_header(api_key: &str) -> String {
     format!("Bearer {api_key}")
 }
 
+/// PID of a TCP listener on `port` in one `netstat -ano` line.
 #[cfg(any(windows, test))]
-fn netstat_line_owns_listener(line: &str, pid: u32, port: u16) -> bool {
+fn netstat_listener_pid(line: &str, port: u16) -> Option<u32> {
     let fields = line.split_whitespace().collect::<Vec<_>>();
     if fields.len() < 5
         || !fields[0].eq_ignore_ascii_case("TCP")
         || !fields[3].eq_ignore_ascii_case("LISTENING")
-        || fields[4] != pid.to_string()
+        || !fields[1]
+            .rsplit_once(':')
+            .is_some_and(|(_, value)| value == port.to_string())
     {
-        return false;
+        return None;
     }
-    fields[1]
-        .rsplit_once(':')
-        .is_some_and(|(_, value)| value == port.to_string())
+    fields[4].parse().ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -1066,7 +1067,14 @@ fn lsof_listener_owned_by_child(pid: u32, port: u16) -> bool {
     })
 }
 
-fn listener_owned_by_child(pid: u32, port: u16) -> bool {
+/// Unix accepts the child's process group; Windows accepts the child or any
+/// process in its job, e.g. the interpreter a venv `python.exe` launcher starts.
+#[cfg_attr(not(windows), allow(unused_variables))]
+fn listener_owned_by_child(
+    pid: u32,
+    port: u16,
+    owner: Option<crate::procutil::ProcessHandle>,
+) -> bool {
     #[cfg(windows)]
     {
         let mut command = crate::procutil::std_command("netstat");
@@ -1080,7 +1088,10 @@ fn listener_owned_by_child(pid: u32, port: u16) -> bool {
         };
         let text = String::from_utf8_lossy(&output.stdout);
         text.lines()
-            .any(|line| netstat_line_owns_listener(line, pid, port))
+            .filter_map(|line| netstat_listener_pid(line, port))
+            .any(|listener| {
+                listener == pid || owner.as_ref().is_some_and(|tree| tree.contains(listener))
+            })
     }
     #[cfg(target_os = "linux")]
     {
@@ -1295,17 +1306,18 @@ pub async fn wait_ready(
                                 .map(|info| info.upstream_model.clone())
                         });
                     if let Some(model_id) = model_id {
-                        let pid = shared
+                        let (pid, owner) = shared
                             .lock()
                             .map_err(|_| "server state lock was poisoned".to_string())?
                             .child
                             .as_ref()
-                            .map(|child| child.id())
+                            .map(|child| (child.id(), child.process_handle()))
                             .ok_or_else(|| "server process tracking was lost".to_string())?;
-                        let owns_listener =
-                            tokio::task::spawn_blocking(move || listener_owned_by_child(pid, port))
-                                .await
-                                .unwrap_or(false);
+                        let owns_listener = tokio::task::spawn_blocking(move || {
+                            listener_owned_by_child(pid, port, owner)
+                        })
+                        .await
+                        .unwrap_or(false);
                         if owns_listener {
                             if let Ok(mut state) = shared.lock() {
                                 state.model = model_id;
@@ -1583,9 +1595,74 @@ mod tests {
     #[test]
     fn netstat_listener_ownership_requires_managed_pid_and_port() {
         let line = "  TCP    127.0.0.1:8080    0.0.0.0:0    LISTENING    24128";
-        assert!(netstat_line_owns_listener(line, 24128, 8080));
-        assert!(!netstat_line_owns_listener(line, 24129, 8080));
-        assert!(!netstat_line_owns_listener(line, 24128, 8081));
+        assert_eq!(netstat_listener_pid(line, 8080), Some(24128));
+        assert_eq!(netstat_listener_pid(line, 8081), None);
+        let connection = "  TCP    127.0.0.1:8080    127.0.0.1:50013    ESTABLISHED    24128";
+        assert_eq!(netstat_listener_pid(connection, 8080), None);
+    }
+
+    /// A venv `python.exe` launcher re-spawns the interpreter that listens, so
+    /// the listener is a grandchild in the owned job, never the direct child.
+    #[cfg(windows)]
+    #[test]
+    fn windows_listener_in_the_owned_job_counts_and_an_outside_listener_does_not() {
+        let free_port = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let listen = |port: u16| {
+            format!(
+                "$l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,{port});$l.Start();Start-Sleep 60"
+            )
+        };
+        let (owned_port, outside_port) = (free_port(), free_port());
+        let mut launcher = crate::procutil::std_command("cmd");
+        launcher
+            .args([
+                "/c",
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                &listen(owned_port),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut owned = crate::procutil::OwnedChild::spawn(&mut launcher).unwrap();
+        let mut outside = crate::procutil::std_command("powershell")
+            .args(["-NoProfile", "-Command", &listen(outside_port)])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let tree = owned.process_handle();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut seen = false;
+        while Instant::now() < deadline && !seen {
+            seen = listener_owned_by_child(owned.id(), owned_port, tree.clone());
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let exact_pid_only = listener_owned_by_child(owned.id(), owned_port, None);
+        let mut outside_seen = false;
+        while Instant::now() < deadline && !outside_seen {
+            outside_seen = std::net::TcpStream::connect(("127.0.0.1", outside_port)).is_ok();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let outside_claimed = listener_owned_by_child(owned.id(), outside_port, tree);
+        owned.terminate();
+        let _ = outside.kill();
+        let _ = outside.wait();
+        assert!(seen, "the grandchild listener in the owned job must count");
+        assert!(!exact_pid_only, "the launcher PID itself does not listen");
+        assert!(outside_seen, "the outside listener must have started");
+        assert!(
+            !outside_claimed,
+            "a listener outside the job must not count"
+        );
     }
 
     #[test]

@@ -45,6 +45,12 @@ impl ProcessHandle {
         self.0.terminate();
     }
 
+    /// Whether `pid` belongs to this owned process tree (its job object).
+    #[cfg(windows)]
+    pub fn contains(&self, pid: u32) -> bool {
+        self.0.job.contains(pid)
+    }
+
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
         Self(std::sync::Arc::new(ProcessTree {

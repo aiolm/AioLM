@@ -6,11 +6,13 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, OpenThread, ResumeThread, PROCESS_QUERY_LIMITED_INFORMATION, THREAD_SUSPEND_RESUME,
+};
 
 pub(super) struct ProcessJob(OwnedHandle);
 
@@ -50,6 +52,20 @@ impl ProcessJob {
 
     pub(super) fn terminate(&self) {
         unsafe { TerminateJobObject(self.handle(), 1) };
+    }
+
+    /// Whether `pid` runs in this job. Descendants join their parent's job,
+    /// so this covers launchers that re-spawn the real server.
+    pub(super) fn contains(&self, pid: u32) -> bool {
+        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if process.is_null() {
+            return false;
+        }
+        let process = unsafe { OwnedHandle::from_raw_handle(process) };
+        let mut member = 0;
+        let queried =
+            unsafe { IsProcessInJob(process.as_raw_handle(), self.handle(), &mut member) };
+        queried != 0 && member != 0
     }
 }
 
