@@ -2166,3 +2166,56 @@ Gemma3n weight SHA-256은 `8d5af4ae73617d12496301ebad11226f9056c4b0d51dbb9ef9409
 | 원래 환경 보존 | pass | `residual100-final-preservation.json`. 작업 전 전체53개 대화 hash·localStorage 정확히 동일, 원래 vllm-metal0.30.0/default Qwen3 model/runtime 선택·옵션 보존. 실제 Save & start에 따른 library revision160→162/Default36→37 외 예상 밖 설정 차이0. Ready/active requests0/API off, 직접 산술 응답 `5`. 기존 stock env를 호환 env로 자동 교체하지 않음. |
 
 원래 앱·원래 모델은 실행 상태로 남겼다. `residual100-final-source-proof.json`은 최종 제품 source diff 없음과 검증 앱/복원 앱의 unsigned native 입력 일치를 확인한다. 마지막 native 캡처는 `goal-native-audio-residual100-original-final.json/png`다. 정상 종료한 검증 앱의 모델/포트와 staging은 정리했고 원본 모델/환경/번들/도구 로그는 보존했다. 개인 경로·credential·capture·원본 로그는 `tmp/macos-acceptance/`에 두고 커밋하지 않는다. [Windows/Linux 인계](runtime-adapter-handoff.ko.md)에 새 source·회귀 명령·옵션 저장/재로드·잘못된 media/오디오 이력 검사와 모델별 남은 실패를 반영했다. 별도 계정 최초 실행·Keychain·실제 upgrade·자연스러운 Finder 설치 실행·Intel/구형 macOS는 계속 unrun이며 공개 업로드·원격 push는 하지 않았다.
+
+## 101. 미디어 내용과 도구 후속 답변의 추가 원인 검증
+
+2026-10-14, 같은 macOS26.6.2/M2/16GB에서 §100의 `227e9ff`를 기준으로 조사했다. `5ba74fe`는 Gemma4 audio encoder padding을 제거하는 별도 호환 wheel/회귀 검사, `4a97627`은 대화별 첨부 순서 선택/저장과 parser 오류 안내 수정이다. native core는 §100의 `64791d2`와 동일하며 실제 WKWebView는 이번 frontend 소스를 사용했다. 관리형 upstream 기본 버전·원본 모델·기존 환경은 자동 교체하지 않았다. 실제 엔진은 하나씩 실행했고 독립 직접 검사 전 앱의 모델을 언로드했다. 공통 검사가 함께 실행된 구간의 수치를 성능 벤치마크로 보고하지 않는다.
+
+### 고정 모델·별도 환경
+
+설치된 loader/processor 지원을 먼저 확인하고 다운로드 전에 전체 revision을 고정했다. 아래 크기는 선택한 snapshot 파일 합계다. 각 LFS 전체 SHA-256·sidecar git blob 및 라이선스/저작권 파일은 raw provenance에 보관했다. 공개 모델 다운로드이며 계정 token·공개 업로드는 사용하지 않았다.
+
+| 용도 | 출처·전체 revision | 크기(bytes) |
+| --- | --- | ---: |
+| 원래 Gemma4 | `mlx-community/gemma-4-E2B-it-4bit`, `238767527555cb75a05732a84dff5d6ba0dd6809` | 3,583,088,661 |
+| 원래 Gemma3n | `mlx-community/gemma-3n-E2B-it-4bit`, `66e7276cfc589073b4f92ebed58c05301f990222` | 4,502,727,070 |
+| SmolVLM 원본 대조 | `HuggingFaceTB/SmolVLM-256M-Instruct`, `7e3e67edbbed1bf9888184d9df282b700a323964` | 517,904,565 |
+| Qwen3 원본 대조 | `Qwen/Qwen3-VL-2B-Instruct`, `89644892e4d85e24eaac8bacfd4f463576704203` | 4,266,648,961 |
+| SmolVLM 대안 | `ggml-org/SmolVLM-500M-Instruct-GGUF`, `72e986006ef53e37cdd3f6d4241c90b0f01df376` | 636,277,783 |
+| Gemma3n 정밀도 대조 | `mlx-community/gemma-3n-E2B-it-8bit`, `e391bc9e5397e6bd0d392ae6f1dfe69f4e694d61` | 6,734,451,320 |
+| Qwen3 대안 | `mlx-community/Qwen3-VL-4B-Instruct-4bit`, `2fd8dacbdb8f1e54b8c005f081ec5bf79c56376b` | 3,109,732,071 |
+
+원래 SmolVLM256M GGUF revision은 `b9e4379657e1450d04d02eec8e345667265b0a00`, Qwen3-VL2B4bit는 `9c4f5209e57b31f4b9dfba735de3fb983739c9cc`로 유지했다. `residual101-reference-model-provenance.json`, `residual101-alternative-provenance.json`, `residual101-staged-model-provenance.json`에 전체 파일 검증을 보존했다. Qwen4B snapshot도 실제 단일 weight와 다른 shard index를 제공해 기존 복구 도구로 **별도** 파생 폴더를 생성했다. 원본/파생 index SHA-256은 `58a7841d7bff2548dd91577d216274a83cf1b500bc6a534b809d6c1b1707cf2b`/`5b093d9ec44e62ecdf62142a1b56a4e5eec1811ae63cf1b01813d3d36c0d0496`, 동일 weight SHA-256은 `90eeb02604181dbcccd0a30a1f550a4a8928ca7dcbee4aee1449239306cfdfca`다. 이를 원본 Hub snapshot으로 가장하지 않았다.
+
+MLX 최종 환경은 native arm64 CPython3.12.15/MLX0.32.3/transformers5.19.0과 `mlx-vlm0.7.6+aiolm.media5`다. 별도 venv의 정확한57개 dependency는 기존 환경과 같고 provider wheel만 변경했다. upstream 입력 SHA-256은 §100과 같은 `17fad1745e6c43dc0fd4d3b8593967b29928a1da5dbf6f781ca783922f68115d`, 새 wheel SHA-256은 `221300ed323af31530d80b44407c3cd81adcff12ed32ea12a930520e33f7bb71`다. offline dependency check와 실제 앱의 새 외부 Python 등록/probe/Ready를 확인했다. vLLM 대안 검사는 §100의 vllm-metal0.30.0/core `0.30.0+cpu.aiolm.media1` 별도 환경을 사용했다. CPU 이미지 검사는 llama.cpp b11460(`78651c410`), ngl0/context4096/temperature0과 정확한 해당 모델의 f16 projector다.
+
+### 원인·수정·실제 앱 결과
+
+| 검사 | 판정 | 실행 근거와 범위 |
+| --- | --- | --- |
+| Gemma4 긴 답변 뒤 첫 녹음 재사용 | pass | 같은 weights/이력을 no-thinking으로 직접 실행하면 녹음을 다시 요구했다. `enable_thinking=true`에서는 같은 이력이 정확했다. 별도 프로필의 출력1024/KV4096/temp0/seed0, automatic system off로 실제 앱의 긴 첫 답변·후속 전사가 정확하고 자연 종료했다. PP/TG는130/841,605/302. `residual101-gemma4-history.json`, `residual101-r1-ui-gemma4-thinking-long`, `gemma4-thinking-followup`. 모델별 옵션 결과이며 global default나 원래 실패를 변경하지 않음. |
+| Gemma4 두 녹음 사이 padding 결함 | pass | 두 번째 합성 녹음이 더 길 때 encoder의 padding mask를 버려 첫 녹음의 padding이 새 녹음 token을 차지했다. 실제 encoder `[2,101,1536]` 중 유효77/101 frames, padding24를 제거해 `[178,1536]`과 audio tokens178을 맞췄다. 설치된 production embedding 메서드의 작은 합성 재현은 media4 exit1/media5 exit0. `residual101-padding-before/after`, `residual101-gemma4-packed-audio.json`. |
+| 같은 두 녹음의 수정 전/후 실제 앱 | pass | 최초 red square/blue circle 녹음→그 녹음 후속 전사→green triangle/yellow circle의 새 녹음. media4는 새 녹음의 끝을 `yellow square`로 오답. media5는 `The green triangle is on the right. The yellow circle is on the left.`로 정확. 세 wire request body는 모두 완전히 동일하며 fetch observer는 원본 요청/응답을 변경하지 않았다. 최종 PP763/TG135,stop. `residual101-audio-wire-comparison.json`, `residual101-r1-ui-gemma4-media5-two-audios`. |
+| SmolVLM500M 첨부 순서 복구 | pass | CLI의 image-first는 정확했으나 실제 앱 text-first는 `Red and blue are the same color.`로 오답. 같은 authenticated server/image/question/temp0에서 순서만 바꾼 직접 검사도 같은 차이를 보였다. 대화별 **첨부를 질문보다 먼저 전달**을 추가해 기존 text-first 기본을 유지. 실제 앱에서 red rectangle LEFT/blue circle RIGHT를 모두 정확히 답함. PP1/cache156은 앞선 직접 요청의 cache이며 cold-cache 성과가 아니다. `residual101-smol500-cli.json`, `residual101-smol500-order.json`, `residual101-r1-ui-smol500-ui-ordered`, `passive-chat-order-remove`. |
+| 고정 SmolVLM256M 내용 | fail | 같은 PNG pixels/hash를 확인했다. native CLI의 jinja/built-in/default와 공식 원본 FP32 Torch CPU processor/image-first 및 text-first에서도 두 도형/좌우 내용을 정확히 답하지 못했다. 500M의 성공을256M 통과로 대체하지 않음. `residual101-smol-cli.json`, `residual101-hf-reference.json`. |
+| Qwen3-VL4B 실제 MCP 후속 답변 | pass | 파생 index/동일 weight·별도 vLLM 프로필, auto tool choice true/parser **소문자 `hermes`**/output512/context4096/maxseq1/GPUmem0.45/temp0. 실제 앱 요청의 입력 `RESIDUAL-101 input`과 다른 반환 `synthetic result` 사용. 모델의 실제 structured call→앱 Approve once→사용자 Mac Yes→fixture 실행→최종 `synthetic result`. 최초 도구 요청PP192/TG37, 최종 후속PP79/TG4. `residual101-r1-ui-qwen-mcp-start`, `qwen-mcp-result`, `residual100-mcp-events.jsonl`. 실제 승인 대상 인자와 도구 실행 이벤트를 확인했으며 completed-history 직접 검사만으로 대신하지 않음. |
+| 고정 Qwen3-VL2B MCP 내용 | fail | generic guidance/no tools/중립 도구 이름/temperature 변경 등7개 직접 조건에서 입력 인자를 반복했다. 실제 rendered prompt의 `<tool_response>` 안에는 반환값과 올바른 special IDs가 있었다. 공식 원본 bfloat16 Torch CPU의 canonical template/같은 completed history도 입력을 반복했다. 따라서 앱의 반환값 누락이나 Metal/4bit만의 문제로 수정하지 않음. 4B도 plain-text tool result 직접 조건은 실패했고 JSON envelope 조건만 정확했다. `residual101-qwen-matrix.json`, `residual101-qwen-actual-prompt.json`, `residual101-hf-reference.json`, `residual101-alternative-direct.json`. |
+| Gemma3n 내용 | fail | strict loader/같은 WAV의 system 제거·짧은 질문·audio-first 조건과 공개8bit 정밀도 대조가 모두 `The red squares are on the left. The blue circle is on the right.`로 단수/복수 오답. 최종 media5의 실제 앱 원래4bit 모델도 PP209/TG17로 동일. 모델 답을 강제로 바꾸는 후처리나 정답 유도 지침을 추가하지 않음. `residual101-gemma3n-prompts.json`, `residual101-alternative-direct.json`, `residual101-r1-ui-gemma3n-ui-result`. |
+| Gemma3n 공식 원본 대조 | unrun | 공식 원본 sidecar는401 접근 제한. 계정/license 조건을 우회하지 않았으며 full precision 원본으로 원인을 확정했다고 보고하지 않음. 공개8bit도 잘못된 index가 있었지만 strict 직접 loader는 실제 weight를 읽었다. 8bit의 실제 GUI 등록/전사는 수행하지 않았고 원래4bit GUI 결과와 구분함. |
+| parser 오류의 포트 오안내 | pass | OS 텍스트 입력 과정에서 parser가 `Hermes`로 저장되어 실제 startup이 invalid parser로 실패했다. traceback의 `importing`/`reuse_port`와 `use`를 조합해 포트 충돌로 분류하던 제품 결함을 수정했다. 동일 잘못된 parser로 실제 앱 재검증 후 runtime diagnostics 안내, 정상 `hermes`로 검증 프로필 복구. `residual101-r1-ui-qwen-load-failed`, `parser-hint-fixed`. |
+
+새 SmolVLM500M Q8 weight/projector SHA-256은 `9d4612de6a42214499e301494a3ecc2be0abdd9de44e663bda63f1152fad1bf4`/`4b2fca922e549e9b9608f4ba56f93565dd5220e935ba5570a2a864a0fcc988a6`다. 합성 PNG는 빨간 **직사각형**과 파란 원, WAV는 빨간 **정사각형**과 파란 원으로 서로 다른 입력이다. 새 WAV는 macOS 합성 음성의 green triangle/yellow circle 문장이며 original WAV는 보존했다. 모든 raw 파일·모델·개인 경로·캡처는 `tmp/macos-acceptance/`에 두었다.
+
+### 재시작·공통 회귀와 원래 환경 보존
+
+| 검사 | 판정 | 근거 |
+| --- | --- | --- |
+| 정상 Quit·같은 홈 재시작 | pass | 소유 Gemma4 PID/port 종료와 작업용 짧은 temp 정리. 전체16개 대화의 파일 hash가 동일하고 실제 UI의 automatic system off/media-before-text on 선택이 재로드됐다. Gemma4 프로필의 media5/reasoning true도 그대로. 재시작 뒤 두 녹음 이력에서 **첫** 녹음을 정확히 전사,PP815/TG184/stop. `residual101-restart-cleanup.json`, `residual101-restart-history.json`, `residual101-r2-ui-media-option-reloaded`, `gemma4-restarted-result`. |
+| UI 회귀·기존 기능 | pass | 새 첨부 순서는 기존 기본/첨부 배열·frame labels·전사문·원본 identity를 유지한다. 회귀 검사에서 현재 입력과 이력, 실제 hook의 실패 snapshot Retry 동일성, 빈 대화 native 저장/새 load, checkbox 이름/설명을 확인. 관련4files/29tests, `residual101-media-order-tests-r2`. 최초 검사에서 존재하지 않는 retry helper를 호출한 test 오류는 고쳐 재실행했으며 raw red를 보존함. |
+| 전체 JS·타입·lint·빌드 | pass | `residual101-final-common`145.67s, `final-typecheck`12.33s, `final-lint`6.96s, `final-build`14.64s. 기존 chunk/jsdom 진단은 보존하고 실패로 숨기지 않음. |
+| Rust 전체·fmt/clippy·CLI | pass | `residual101-native-common`49.44s, all-targets/all-features. 기존 opt-in ignored를 실제 실행으로 계산하지 않음. fmt0.80s/clippy1.03s(`-D warnings`), `residual101-final-cli-smoke`0.57s. CLI smoke는 새 임시 홈의 합성 검사이며 모델 내용 검사가 아니다. |
+| Python·설치 환경 | pass | compatibility6/repair5/native probe6, `residual101-python-final`, `final-repair-tests`, `final-probe-tests`. media5 offline package check/audio ownership/새 embedding checker 확인. 기존 source 문맥 변조와 all-padding을 거부하며 해시·readiness·context gate는 유지한다. |
+| 최종 UI 오류 관찰 | pass | 재시작 후 대화/옵션 확인 기간의 console errors/warnings/events0. `residual101-r2-ui-observer-r2-remove`. 처음 긴 observer는 개발 빌드 이후 제거에 실패해 이 성공 근거로 사용하지 않음. |
+| 원래 환경 복원·원본 보존 | pass | 원래53개 대화 hash와 모든 localStorage가 정확히 동일. 기존 vllm-metal0.30.0/Qwen3-VL2B runtime·model·프로필 옵션 유지. 정상 Save & start의 library162→164/Default37→38 외 설정 차이0. source model/wheel/connector52개 해시 검사 통과. Ready/active requests0/API off, 산술 직접 응답 `5`. `residual101-final-preservation.json`, `residual101-original-arithmetic.json`, `goal-native-audio-residual101-original-final.json/png`. |
+
+실제 음성 후속 흐름·500M 이미지·4B MCP의 명시한 환경은 통과했지만 **원래256M/2B 모델의 내용 실패와 Gemma3n 오류는 남아 있다**. 기존 M01–M12 **7 pass/4 fail/1 unrun**과 역사적 기록을 유지하며 전체 기기 검증 통과로 표시하지 않는다. 이번 media5의 새 live 취소/Retry는 수행하지 않았고 §100의 media4/vLLM 실제 취소와 이번 합성 Retry 회귀를 구분한다. 별도 계정·Finder/Keychain/upgrade·Intel/구형 macOS·Windows/Linux·Strata·새 배포 패키지와 실제 ffmpeg 부재 조건은 기존 unrun/blocked를 유지한다. 원래 앱과 모델은 실행 상태로 남기고 검증 앱의 소유 프로세스/포트/temp는 정상 종료 후 정리했다. 원본·개인 데이터·raw를 커밋하거나 공개 업로드·원격 push하지 않았다. [복구 절차](macos-validation-recovery.ko.md)와 [Windows/Linux 인계](runtime-adapter-handoff.ko.md)에 새 검사·정확한 설정과 남은 작업을 반영했다.

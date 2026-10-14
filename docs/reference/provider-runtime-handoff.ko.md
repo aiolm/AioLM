@@ -74,4 +74,6 @@ node scripts/smoke-provider-runtime.mjs --engine vllm \
 
 ## Mac 잔여 실패의 후속 복구
 
+`5ba74fe`의 MLX media5 wheel은 Gemma4의 길이가 다른 녹음 사이 padding을 제거합니다. 설치된 Python에서 `scripts/provider-compatibility/check_gemma4_audio_packing.py`를 실행하고 실제 두 녹음·후속 답변까지 검사하세요. `4a97627`은 기본 text-first를 유지하면서 대화별 첨부 우선 순서를 저장하고 parser 실패를 포트 충돌로 오안내하던 문제를 수정합니다. [추가 실제 결과 §101](macos-device-validation-results.ko.md#101-미디어-내용과-도구-후속-답변의-추가-원인-검증)에 모델 revision·정확한 환경과 남은 Gemma3n/256M/2B 실패가 있습니다. Windows/Linux에서는 이 Mac 결과를 통과 근거로 재사용하지 않습니다.
+
 `64791d2`는 새 파생 safetensors index·별도 호환 wheel과 검증된 local vllm-metal core 등록을 제공하고, `158f966`는 지침이 비었을 때의 자동 system 안내를 대화별로 끌 수 있게 합니다. 원래 모델/환경/관리형 기본 버전은 변경하지 않습니다. [복구 도구 사용법](macos-validation-recovery.ko.md)과 [실제 결과 §100](macos-device-validation-results.ko.md#100-남은-4개-fail의-원인-수정과-실제-앱-재검증)을 확인하고 새 환경을 명시적으로 등록/선택하세요. Windows/Linux에서는 해당 OS wheel·loader·모델·취소·이력 재로드를 실제로 검사해야 합니다. 기존 도구 승인과 명시적 system/개인화 지침은 유지합니다.
