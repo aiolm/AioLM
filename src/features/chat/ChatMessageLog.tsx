@@ -26,6 +26,10 @@ interface ChatMessageLogProps {
   onCopy: (index: number, text: string) => void;
   error: string | null;
   canRetry: boolean;
+  /** The last reply is unfinished and nothing is in flight or awaiting approval. */
+  recoverable: boolean;
+  /** Shown instead of Retry when the unfinished reply cannot be resent exactly. */
+  retryNotice: string | null;
   onRetry: () => void;
   ct: (key: ChatTextKey) => string;
   onOpenModels?: () => void;
@@ -37,7 +41,7 @@ interface ChatMessageLogProps {
 
 export default function ChatMessageLog({
   scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, msgs, streamingDraft, phase,
-  copiedIndex, compactMessages, locale, onCopy, error, canRetry, onRetry, ct,
+  copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, onRetry, ct,
   onOpenModels, modelSettingsLabel, onOpenDiagnostics, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
@@ -102,9 +106,10 @@ export default function ChatMessageLog({
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
         {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
       </FeedbackBanner>}
-      {!error && canRetry && msgs.at(-1)?.interrupted && (
+      {!error && recoverable && canRetry && (
         <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--secondary app-button--sm mt-2.5">{ct("retry")}</button>
       )}
+      {!error && recoverable && !canRetry && retryNotice && <p role="status" className="mt-2.5 text-xs ui-color-muted">{retryNotice}</p>}
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { createTestStore } from "../../testing/appStore";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey } from "../../shared/config/settingsProfiles";
 import { projectFromConfig, setActiveProjectId, writeProjects } from "../projects/projectStore";
-import { createChatThread, loadChatWorkspace, saveChatWorkspace } from "./chatHistory";
+import { createChatThread, loadChatWorkspace, saveChatWorkspace, type ChatRetrySnapshot } from "./chatHistory";
 
 vi.mock("../model-settings/ModelSettingsProvider", () => ({ useModelSettings: vi.fn(() => null) }));
 
@@ -30,6 +30,7 @@ vi.mock("../../shared/api/index", () => { const readImageData = vi.fn(); return 
   mcpListServers: vi.fn(),
   mcpListTools: vi.fn(),
   mcpCallTool: vi.fn(),
+  mcpCancelToolCall: vi.fn(async () => undefined),
   sessionList: vi.fn(async () => []),
   sessionStart: vi.fn(async () => ({ id: "work", state: "running" })),
   normalizeSessionList: vi.fn((value: unknown) => Array.isArray(value) ? value : []),
@@ -910,5 +911,113 @@ describe('ChatPanel completion-only models', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await screen.findByText('Ready');
     expect(mocked.chatStream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChatPanel retry recovery', () => {
+  const savedRequest: api.ChatMessage[] = [
+    { role: 'system', content: 'Synthetic saved system prompt' },
+    { role: 'user', content: 'Saved synthetic question' },
+  ];
+  const interruptedThread = (id: string, createdAt: number, retry?: ChatRetrySnapshot) => ({
+    ...createChatThread(createdAt, id), title: `Interrupted ${id}`,
+    messages: [
+      { role: 'user' as const, content: 'Saved synthetic question' },
+      { role: 'assistant' as const, content: '', reasoning: 'Saved reasoning', interrupted: true, model: cfg.active_model,
+        ...(retry === undefined ? {} : { retry }) },
+    ],
+  });
+  const snapshot: ChatRetrySnapshot = { version: 1, text: 'Saved synthetic question', images: [], documents: [], history: savedRequest };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    mocked.chatStream.mockReset();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it('offers Retry for an interrupted reply restored after a restart and resends its saved request once', async () => {
+    const thread = interruptedThread('restored', 1, snapshot);
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    respondWithText('Recovered synthetic answer');
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
+    await screen.findByText('Recovered synthetic answer');
+    expect(mocked.chatStream).toHaveBeenCalledOnce();
+    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+    expect(mocked.chatStream.mock.calls[0][1]).toBe('test-key');
+    await waitFor(() => expect(loadChatWorkspace().threads[0].messages.map(message => [message.role, message.content]))
+      .toEqual([['user', 'Saved synthetic question'], ['assistant', 'Recovered synthetic answer']]));
+    expect(loadChatWorkspace().threads[0].messages[1].retry).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+  });
+
+  it('explains instead of promising an exact retry for an interrupted reply saved without a snapshot', async () => {
+    const thread = interruptedThread('legacy', 1);
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    expect(await screen.findByText(/saved without the exact original request/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+    expect(loadChatWorkspace().threads[0].messages).toEqual(thread.messages);
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it('keeps the retry of each conversation with that conversation across switches', async () => {
+    const interrupted = interruptedThread('switch-a', 1, snapshot);
+    const complete = { ...createChatThread(2, 'switch-b'), title: 'Complete conversation', messages: [
+      { role: 'user' as const, content: 'Other question' }, { role: 'assistant' as const, content: 'Other answer', finishReason: 'stop' },
+    ] };
+    saveChatWorkspace({ activeThreadId: complete.id, threads: [complete, interrupted] });
+    renderPanel();
+    await screen.findByRole('heading', { name: complete.title });
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: interrupted.title }));
+    await screen.findByRole('heading', { name: interrupted.title });
+    respondWithText('Answer for the interrupted conversation');
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
+    await screen.findByText('Answer for the interrupted conversation');
+    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conversations' }));
+    fireEvent.click(screen.getByRole('button', { name: complete.title }));
+    await screen.findByRole('heading', { name: complete.title });
+    await waitFor(() => expect(loadChatWorkspace().threads.find(thread => thread.id === complete.id)?.messages).toEqual(complete.messages));
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+  });
+
+  it('offers Retry after Stop cancels an approved MCP tool call', async () => {
+    mocked.mcpListServers.mockResolvedValue([{ id: 'srv1', name: 'Test Server', command: 'node', args: [], enabled: true }]);
+    mocked.mcpListTools.mockResolvedValue([{ name: 'test_tool', description: 'A test tool.', input_schema: { type: 'object', properties: {} } }]);
+    let cancelCall!: (error: Error) => void;
+    mocked.mcpCallTool.mockImplementation(() => new Promise((_resolve, reject) => { cancelCall = reject; }));
+    mocked.mcpCancelToolCall.mockImplementation(async () => cancelCall(new Error('MCP tool call cancelled')));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Load MCP tools' }));
+    await screen.findByText(/Test Server/);
+    mocked.chatStream.mockImplementationOnce(async (_url: string, _key: string, _model: string, _messages: unknown, _sampling: unknown, onDelta: (delta: { tool_calls?: Array<{ index: number; id?: string; name?: string; arguments?: string }>; finish_reason?: string }) => void) => {
+      onDelta({ tool_calls: [{ index: 0, id: 'call-1', name: 'srv1__test_tool', arguments: '{}' }], finish_reason: 'tool_calls' });
+      return '';
+    });
+    await sendMessage('Use the synthetic tool.');
+    await waitFor(() => expect(mocked.chatStream).toHaveBeenCalledOnce());
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve once' }));
+    await waitFor(() => expect(mocked.mcpCallTool).toHaveBeenCalledOnce());
+    // Waiting for the native approval is not a recoverable turn yet.
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop generation' }));
+    const retry = await screen.findByRole('button', { name: 'Retry last message' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(mocked.mcpCancelToolCall).toHaveBeenCalledOnce();
+
+    respondWithText('Answer after retrying');
+    fireEvent.click(retry);
+    await screen.findByText('Answer after retrying');
+    expect(mocked.chatStream.mock.calls[1][3]).toEqual(mocked.chatStream.mock.calls[0][3]);
+    expect(mocked.mcpCallTool).toHaveBeenCalledOnce();
   });
 });

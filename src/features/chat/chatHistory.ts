@@ -1,4 +1,5 @@
 import type { ChatCitation, DocumentAttachment, ImageAttachment } from "./chatTypes.ts";
+import type { ChatContentPart, ChatMessage as ChatRequestMessage } from "../../shared/api/types.ts";
 import { invoke, isNativeRuntimeAvailable } from "../../shared/api/transport.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
 import { sanitizeResponseMetrics, type ResponseMetrics } from "../../shared/lib/metrics.ts";
@@ -23,6 +24,8 @@ const PERSISTED_REASONING_LIMIT = 16 * 1024;
 const PERSISTED_MESSAGES_LIMIT = 100;
 const PERSISTED_THREADS_LIMIT = 100;
 const PERSISTED_RAW_LIMIT = 4 * 1024 * 1024;
+/** Serialized size of the one request snapshot a conversation keeps for Retry. */
+const RETRY_SNAPSHOT_LIMIT = 1024 * 1024;
 
 export interface ChatHistoryMessage {
   role: "user" | "assistant";
@@ -38,7 +41,27 @@ export interface ChatHistoryMessage {
   finishReason?: string;
   citations?: ChatCitation[];
   metrics?: ResponseMetrics;
+  /** Only on an unfinished last reply: what Retry resends after a restart or conversation switch. */
+  retry?: ChatRetrySnapshot;
 }
+
+export type ChatRetryUnavailableReason = "not-saved" | "local-instructions" | "too-large";
+
+/**
+ * The request an unfinished reply was generated from, exactly as first
+ * prepared, so Retry never rebuilds a different prompt. Local instructions
+ * and skills are never written into saved conversations, so a turn that used
+ * them records only why it cannot be resent once this session forgets it.
+ * Auth, tools and approvals are not part of it: a retry always uses the live
+ * session and asks again before running any tool.
+ */
+export type ChatRetrySnapshot =
+  | { version: 1; text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[] }
+  | { version: 1; unavailable: Exclude<ChatRetryUnavailableReason, "not-saved"> };
+
+export type SavedChatRetry =
+  | { kind: "ready"; snapshot: Extract<ChatRetrySnapshot, { history: ChatRequestMessage[] }> }
+  | { kind: "unavailable"; reason: ChatRetryUnavailableReason };
 
 export interface ChatThread {
   id: string;
@@ -127,6 +150,67 @@ function validCitation(value: unknown): value is ChatCitation {
     && (citation.score === undefined || (typeof citation.score === "number" && Number.isFinite(citation.score)));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const optionalString = (value: unknown) => value === undefined || typeof value === "string";
+
+function validContentPart(value: unknown): value is ChatContentPart {
+  if (!isRecord(value)) return false;
+  switch (value.type) {
+    case "text": return typeof value.text === "string";
+    case "image_url": return isRecord(value.image_url) && typeof value.image_url.url === "string";
+    case "video_url": return isRecord(value.video_url) && typeof value.video_url.url === "string";
+    case "input_audio": return isRecord(value.input_audio) && typeof value.input_audio.data === "string" && typeof value.input_audio.format === "string";
+    case "input_video": return isRecord(value.input_video) && optionalString(value.input_video.data) && optionalString(value.input_video.url);
+    case "aiolm_media": return isRecord(value.media) && typeof value.media.ref === "string" && ["image", "audio", "video"].includes(value.media.kind as string);
+    default: return false;
+  }
+}
+
+function validRequestMessage(value: unknown): value is ChatRequestMessage {
+  if (!isRecord(value) || !["system", "user", "assistant", "tool"].includes(value.role as string)) return false;
+  return (typeof value.content === "string" || (Array.isArray(value.content) && value.content.every(validContentPart)))
+    && optionalString(value.tool_call_id) && optionalString(value.name)
+    && (value.tool_calls === undefined || (Array.isArray(value.tool_calls) && value.tool_calls.every((call) => isRecord(call)
+      && typeof call.id === "string" && call.type === "function" && isRecord(call.function)
+      && typeof call.function.name === "string" && typeof call.function.arguments === "string")));
+}
+
+function validRetrySnapshot(value: unknown): value is ChatRetrySnapshot {
+  if (!isRecord(value) || value.version !== 1) return false;
+  if ("unavailable" in value) return value.unavailable === "local-instructions" || value.unavailable === "too-large";
+  return typeof value.text === "string"
+    && Array.isArray(value.images) && value.images.every(validImage)
+    && Array.isArray(value.documents) && value.documents.every(validDocument)
+    && Array.isArray(value.history) && value.history.length > 0 && value.history.every(validRequestMessage);
+}
+
+/** Records what Retry needs for a turn, or why it cannot be resent exactly after this session. */
+export function chatRetrySnapshot(
+  request: { text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[] },
+  usesLocalInstructions: boolean,
+): ChatRetrySnapshot {
+  if (usesLocalInstructions) return { version: 1, unavailable: "local-instructions" };
+  const snapshot = { version: 1 as const, text: request.text, images: request.images, documents: request.documents, history: request.history };
+  return JSON.stringify(snapshot).length > RETRY_SNAPSHOT_LIMIT ? { version: 1, unavailable: "too-large" } : snapshot;
+}
+
+/** A reply that stopped, failed or still waits on a tool, so the turn it answers is not finished. */
+export function unfinishedReply(message: ChatHistoryMessage | undefined): boolean {
+  return message?.role === "assistant" && (!!message.interrupted || !!message.failed || message.finishReason === "tool_calls");
+}
+
+/** How Retry can recover the conversation's unfinished last reply from what was saved; null when nothing is unfinished. */
+export function savedRetry(message: ChatHistoryMessage | undefined): SavedChatRetry | null {
+  if (!unfinishedReply(message)) return null;
+  const snapshot = message?.retry;
+  // Replies saved before snapshots existed, or by a format this version does not know.
+  if (!validRetrySnapshot(snapshot)) return { kind: "unavailable", reason: "not-saved" };
+  return "unavailable" in snapshot ? { kind: "unavailable", reason: snapshot.unavailable } : { kind: "ready", snapshot };
+}
+
 function validMessage(value: unknown): value is ChatHistoryMessage {
   if (value === null || typeof value !== "object") return false;
   const message = value as Partial<ChatHistoryMessage>;
@@ -183,7 +267,7 @@ function safeThread(thread: ChatThread): ChatThread {
   return {
     ...thread,
     systemPrompt: thread.systemPrompt.slice(0, PERSISTED_TEXT_LIMIT),
-    messages: thread.messages.slice(-PERSISTED_MESSAGES_LIMIT).map((message) => {
+    messages: thread.messages.slice(-PERSISTED_MESSAGES_LIMIT).map((message, index, kept) => {
       const safeMessage: ChatHistoryMessage = {
         role: message.role,
         content: message.content.slice(0, PERSISTED_TEXT_LIMIT),
@@ -214,6 +298,8 @@ function safeThread(thread: ChatThread): ChatThread {
       if (message.citations !== undefined) safeMessage.citations = message.citations.slice(0, 64);
       const metrics = sanitizeResponseMetrics(message.metrics);
       if (metrics) safeMessage.metrics = metrics;
+      // Only the last reply can be retried; an earlier snapshot is superseded.
+      if (message.role === "assistant" && index === kept.length - 1 && validRetrySnapshot(message.retry)) safeMessage.retry = message.retry;
       return safeMessage;
     }),
   };

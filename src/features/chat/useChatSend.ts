@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, estimateMessageTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
-import { CHAT_WORKSPACE_CLEAR_EVENT, isChatWorkspaceClearing, type ChatHistoryMessage, type ChatThread, type ChatWorkspaceClearDetail } from "./chatHistory";
+import { CHAT_WORKSPACE_CLEAR_EVENT, chatRetrySnapshot, isChatWorkspaceClearing, savedRetry, type ChatHistoryMessage, type ChatThread, type ChatWorkspaceClearDetail } from "./chatHistory";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
 import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
@@ -23,6 +23,12 @@ import { serializeMcpToolResult } from './mcpToolResult';
 export type { PendingToolCall } from "./chatSendTypes";
 
 type Msg = ChatHistoryMessage;
+
+function withoutRetry(message: Msg): Msg {
+  const next = { ...message };
+  delete next.retry;
+  return next;
+}
 
 interface UseChatSendOptions {
   embeddingTarget?: { model: string; baseUrl: string; apiKey: string; namespace: string };
@@ -112,6 +118,12 @@ export function useChatSend({
   // turn's original message hit the search limit and keeps that warning visible
   // across follow-up rounds until a new user message (or thread switch) resets it.
   const documentTruncationRef = useRef(false);
+  // This session's failed turn wins; otherwise the snapshot saved with the
+  // conversation's unfinished last reply survives a restart or thread switch.
+  const lastMessage = msgs.at(-1);
+  const saved = useMemo(() => savedRetry(lastMessage), [lastMessage]);
+  const canRetry = !!failedRef.current || saved?.kind === "ready";
+  const retryUnavailable = !failedRef.current && saved?.kind === "unavailable" ? saved.reason : null;
 
   useEffect(() => () => {
     turnGeneration.current += 1;
@@ -207,7 +219,10 @@ export function useChatSend({
     const generation = turnGeneration.current;
     const isCurrent = () => generation === turnGeneration.current;
     const toolFollowup = !!historyOverride;
-    const failed = failedRef.current;
+    const restored = retry && !failedRef.current && saved?.kind === "ready" ? saved.snapshot : null;
+    const failed: FailedRequest | null = failedRef.current ?? (restored && structuredClone({
+      text: restored.text, images: restored.images, documents: restored.documents, history: restored.history, personalization: null,
+    }));
     const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
     let images = toolFollowup ? [] : (retry ? failed?.images ?? [] : attachments);
     if (!toolFollowup && engine && images.some(image => !canPrepareAttachment(image, engine.modalities, mediaPreprocessing ?? { videoFrames: false }))) {
@@ -219,6 +234,8 @@ export function useChatSend({
     if (!toolFollowup) {
       // A new message supersedes an earlier failure; if it fails during preparation, Retry must not resend the old one.
       if (!retry) failedRef.current = null;
+      // The same goes for a snapshot saved with an earlier unfinished reply.
+      if (!retry) setMsgs((current) => current.at(-1)?.retry ? [...current.slice(0, -1), withoutRetry(current.at(-1)!)] : current);
       toolRoundsRef.current = 0;
       skillReadsRef.current = 0;
       documentTruncationRef.current = false;
@@ -319,6 +336,8 @@ export function useChatSend({
       failedRef.current = toolFollowup && failed
         ? { text: failed.text, images: failed.images, documents: failed.documents, history: bounded.messages, personalization: turn.personalization }
         : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization };
+      // Saved with the reply so Retry survives a restart or thread switch.
+      const retrySnapshot = chatRetrySnapshot(failedRef.current, hasPersonalization(turn.personalization));
       if (!retry && !toolFollowup) setInput("");
       if (!retry && !toolFollowup) onSkillsAccepted?.();
       if (!retry && !toolFollowup) setAttachments([]);
@@ -329,10 +348,12 @@ export function useChatSend({
         const last = current[current.length - 1];
         const replaceAssistant = (retry || toolFollowup) && last?.role === "assistant";
         const withoutDanglingAssistant = replaceAssistant ? current.slice(0, -1) : current;
-        if (toolFollowup) return [...withoutDanglingAssistant, { role: "assistant" as const, content: "", reasoning: "", model: turn.model }];
+        if (toolFollowup) return [...withoutDanglingAssistant, { role: "assistant" as const, content: "", reasoning: "", model: turn.model, retry: retrySnapshot }];
         const previous = withoutDanglingAssistant[withoutDanglingAssistant.length - 1];
-        const hasUserBubble = previous?.role === "user" && previous.content === text && sameImages(previous.images, images) && sameDocuments(previous.documents, pendingDocuments);
-        return [...withoutDanglingAssistant, ...(hasUserBubble ? [] : [{ role: "user" as const, content: text, images, documents: pendingDocuments }]), { role: "assistant" as const, content: "", reasoning: "", model: turn.model }];
+        // A saved snapshot always follows its own user bubble, whose stored copy may be shortened.
+        const hasUserBubble = previous?.role === "user" && (!!restored
+          || (previous.content === text && sameImages(previous.images, images) && sameDocuments(previous.documents, pendingDocuments)));
+        return [...withoutDanglingAssistant, ...(hasUserBubble ? [] : [{ role: "user" as const, content: text, images, documents: pendingDocuments }]), { role: "assistant" as const, content: "", reasoning: "", model: turn.model, retry: retrySnapshot }];
       });
       assistantAppended = true;
       const sampling = {
@@ -405,7 +426,7 @@ export function useChatSend({
         if (current[current.length - 1]?.role !== "assistant") return current;
         const next = current.slice();
         next[next.length - 1] = {
-          ...next[next.length - 1],
+          ...withoutRetry(next[next.length - 1]),
           content: full,
           reasoning: streamRef.current.reasoning,
           citations: retrievalCitations.length ? retrievalCitations : undefined,
@@ -533,7 +554,7 @@ export function useChatSend({
 
   return {
     error, setError, contextWarning, contextSources,
-    aborting, pendingToolCall, toolCallInProgress, streamingDraft, failedRef,
+    aborting, pendingToolCall, toolCallInProgress, streamingDraft, failedRef, canRetry, retryUnavailable,
     send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };
 }

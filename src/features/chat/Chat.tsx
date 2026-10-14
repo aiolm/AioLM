@@ -22,7 +22,8 @@ import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessi
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
-import { titleFromMessage } from "./chatHistory";
+import { titleFromMessage, unfinishedReply } from "./chatHistory";
+import { chatRetryCopy } from "./chatRetryCopy";
 import { useChatSkills } from "./useChatSkills";
 import ChatSkillPicker from "./ChatSkillPicker";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
@@ -141,7 +142,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   const {
     setError, error, contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraft,
-    failedRef, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
+    canRetry, retryUnavailable, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   } = useChatSend({
     store, effectiveConfig, engine: selectedStatus.engine, mediaPreprocessing: mediaOptions,
     embeddingTarget: embeddingChoice ? { model: embeddingChoice.engine!.embedding_model!, baseUrl: embeddingChoice.url!, apiKey: embeddingChoice.api_key ?? '',
@@ -263,6 +264,8 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     : lastMessage?.interrupted ? 'interrupted'
     : lastMessage?.finishReason === 'tool_calls' ? 'tool-request'
     : lastMessage?.role === 'assistant' ? 'complete' : 'none';
+  // Retry belongs to the conversation that owns the live buffer, once nothing is running or awaiting approval.
+  const recoverable = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && unfinishedReply(lastMessage);
 
   return (
     <div className="app-page-scroll chat-page">
@@ -349,7 +352,9 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             locale={locale}
             onCopy={copyMessage}
             error={error}
-            canRetry={!!failedRef.current}
+            canRetry={viewingLiveThread && canRetry}
+            recoverable={recoverable}
+            retryNotice={retryUnavailable ? chatRetryCopy[locale][retryUnavailable] : null}
             onRetry={() => void send(true)}
             ct={ct}
             onOpenModels={modelSettings || onOpenModels ? openModelSettings : undefined}
