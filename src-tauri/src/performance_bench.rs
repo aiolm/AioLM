@@ -661,8 +661,11 @@ pub async fn run(
         tokio::select! {
             biased;
             _ = protocol::cancelled(&cancel) => return Err("benchmark cancelled".into()),
-            ready = server::wait_ready(shared, &url, &key, server::SERVER_START_TIMEOUT_SECS, &ring) => ready?,
+            ready = server::wait_ready(shared.clone(), &url, &key, server::SERVER_START_TIMEOUT_SECS, &ring) => ready?,
         }
+        let engine_info = shared.lock().map_err(|_| "server state lock was poisoned")?
+            .engine.clone().ok_or("runtime task verification did not produce engine information")?;
+        if !engine_info.tasks.iter().any(|task| task == "generate") { return Err("Select a generation session for a serving benchmark; the ready runtime serves a different task.".into()); }
         let base = url.trim_end_matches("/v1");
         let client = reqwest::Client::builder().no_proxy().connect_timeout(Duration::from_secs(5))
             .timeout(REQUEST_TIMEOUT).build().map_err(|error| error.to_string())?;

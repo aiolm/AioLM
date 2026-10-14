@@ -107,6 +107,10 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         cfg.mmproj.clone(),
         cfg.spec_draft_model.clone(),
     );
+    shared.lock().unwrap().engine = Some(aiolm_lib::providers::protocol::EngineInfo::llama(
+        &cfg.active_model,
+        aiolm_lib::providers::artifacts::Modalities::text_only(),
+    ));
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -145,6 +149,79 @@ fn smoke_fake_server_spawn_health_and_chat_stream() {
         got.contains("[DONE]"),
         "expected SSE completion marker, got: {got}"
     );
+
+    // Config-file mode is not present in the app's argv prediction. Resolve it
+    // through the owned endpoint and reject unknown/unusable tasks before Ready.
+    // The original server remains alive throughout failure cleanup.
+    for (flag, expected_error) in [
+        ("--fake-embedding-mode", None),
+        ("--fake-rerank-mode", Some("--rerank")),
+        ("--fake-invalid-pooling", Some("pooling settings")),
+        ("--fake-unverified-task-api", Some("no task was certified")),
+        ("--fake-no-generation", Some("did not verify generation")),
+    ] {
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let case = AppConfig {
+            port: reservation.local_addr().unwrap().port(),
+            server_args: vec![flag.into()],
+            ..cfg.clone()
+        };
+        drop(reservation);
+        let (child, case_url, key_file) = server::spawn(
+            &case,
+            api_key,
+            &ring,
+            &aiolm_lib::gpu::ResolvedGpu::default(),
+        )
+        .unwrap();
+        let state = Arc::new(Mutex::new(server::ServerState::default()));
+        state.lock().unwrap().attach_starting(
+            child,
+            case_url.clone(),
+            api_key.into(),
+            case.active_model.clone(),
+            String::new(),
+            String::new(),
+        );
+        state.lock().unwrap().engine = Some(aiolm_lib::providers::protocol::EngineInfo::llama(
+            &case.active_model,
+            aiolm_lib::providers::artifacts::Modalities::text_only(),
+        ));
+        let outcome = rt.block_on(server::wait_ready(
+            state.clone(),
+            &case_url,
+            api_key,
+            20,
+            &ring,
+        ));
+        if let Some(message) = expected_error {
+            assert!(outcome.unwrap_err().contains(message), "{flag}");
+            assert!(
+                state.lock().unwrap().child.is_none(),
+                "failed verification must reap its owned child"
+            );
+            assert!(
+                std::net::TcpListener::bind(("127.0.0.1", case.port)).is_ok(),
+                "failed verification must free its port"
+            );
+        } else {
+            outcome.unwrap();
+            let engine = state.lock().unwrap().engine.clone().unwrap();
+            assert_eq!(engine.tasks, ["embed"]);
+            assert_eq!(engine.chat_supported, Some(false));
+            assert!(!engine.tools_auto && !engine.tool_parser);
+            server::kill(&mut state.lock().unwrap().child, None);
+        }
+        server::cleanup_api_key_file(key_file.as_deref());
+        assert!(key_file.is_none_or(|path| !path.exists()));
+        let healthy = rt
+            .block_on(client.get(format!("{base}/health")).send())
+            .unwrap();
+        assert!(
+            healthy.status().is_success(),
+            "other server protected during {flag}"
+        );
+    }
 
     server::kill(
         &mut shared.lock().expect("server state lock").child,

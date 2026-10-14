@@ -74,6 +74,23 @@ fn handle(mut stream: TcpStream) {
         return;
     }
     match (method, path) {
+        ("POST", "/completion") => {
+            if std::env::args().any(|arg| arg == "--fake-no-generation") {
+                respond(
+                    &mut stream,
+                    "500 Internal Server Error",
+                    "application/json",
+                    r#"{"error":{"type":"server_error","message":"context has no logits"}}"#,
+                );
+            } else {
+                respond(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    r#"{"content":"a","tokens_evaluated":1,"tokens_predicted":1}"#,
+                );
+            }
+        }
         ("OPTIONS", _) => respond(&mut stream, "200 OK", "text/plain", ""),
         ("GET", "/health") => respond(
             &mut stream,
@@ -87,6 +104,61 @@ fn handle(mut stream: TcpStream) {
             "application/json",
             r#"{"data":[{"id":"fake-model","object":"model"}]}"#,
         ),
+        ("POST", "/v1/rerank") => {
+            if std::env::args().any(|arg| arg == "--fake-unverified-task-api") {
+                respond(
+                    &mut stream,
+                    "404 Not Found",
+                    "application/json",
+                    r#"{"error":{"type":"unknown_endpoint"}}"#,
+                );
+            } else if std::env::args().any(|arg| arg == "--fake-rerank-mode") {
+                respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":{"type":"invalid_request_error","message":"\"documents\" must be a non-empty string array"}}"#,
+                );
+            } else {
+                respond(
+                    &mut stream,
+                    "501 Not Implemented",
+                    "application/json",
+                    r#"{"error":{"type":"not_supported_error"}}"#,
+                );
+            }
+        }
+        ("POST", "/v1/embeddings") => {
+            if !authorization {
+                respond(
+                    &mut stream,
+                    "401 Unauthorized",
+                    "application/json",
+                    r#"{"error":{"type":"unauthorized"}}"#,
+                );
+            } else if std::env::args().any(|arg| arg == "--fake-embedding-mode") {
+                respond(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    r#"{"data":[{"embedding":[0.1,0.2]}]}"#,
+                );
+            } else if std::env::args().any(|arg| arg == "--fake-invalid-pooling") {
+                respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":{"type":"invalid_request_error","message":"pooling required"}}"#,
+                );
+            } else {
+                respond(
+                    &mut stream,
+                    "501 Not Implemented",
+                    "application/json",
+                    r#"{"error":{"type":"not_supported_error"}}"#,
+                );
+            }
+        }
         ("POST", "/v1/chat/completions") => {
             if slow {
                 let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n");

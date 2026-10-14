@@ -3,6 +3,9 @@ use super::{artifacts, compat, launch, protocol::EngineInfo, python_env, Provide
 use crate::config::AppConfig;
 use std::path::Path;
 
+mod readiness;
+pub use readiness::confirm_ready;
+
 fn vllm_chat_support(
     model: &Path,
     options: &serde_json::Map<String, serde_json::Value>,

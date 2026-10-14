@@ -849,6 +849,12 @@ async fn server_start_unlocked() -> Result<Value, String> {
         }
         return Err(error);
     }
+    let engine_info = shared
+        .lock()
+        .map_err(|_| "server state lock was poisoned")?
+        .engine
+        .clone()
+        .ok_or("runtime task verification did not produce engine information")?;
     if collector
         .0
         .as_mut()

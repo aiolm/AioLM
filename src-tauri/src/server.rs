@@ -1319,7 +1319,44 @@ pub async fn wait_ready(
                         .await
                         .unwrap_or(false);
                         if owns_listener {
+                            let confirmed = if let Some(info) = engine.clone() {
+                                let confirmation = tokio::time::timeout_at(
+                                    tokio::time::Instant::from_std(deadline),
+                                    crate::providers::execution::confirm_ready(
+                                        info, &client, url, api_key, deadline,
+                                    ),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    "runtime task verification exceeded the server startup deadline"
+                                        .to_string()
+                                })
+                                .and_then(|result| result);
+                                match confirmation {
+                                    Ok(info) => Some(info),
+                                    Err(error) => {
+                                        if let Ok(mut state) = shared.lock() {
+                                            if state
+                                                .child
+                                                .as_ref()
+                                                .is_some_and(|child| child.id() == pid)
+                                            {
+                                                kill(&mut state.child, None);
+                                            }
+                                        }
+                                        return Err(error);
+                                    }
+                                }
+                            } else {
+                                None
+                            };
                             if let Ok(mut state) = shared.lock() {
+                                if !state.child.as_ref().is_some_and(|child| child.id() == pid) {
+                                    return Err("server start cancelled".into());
+                                }
+                                if let Some(info) = confirmed {
+                                    state.engine = Some(info);
+                                }
                                 state.model = model_id;
                             }
                             return Ok(());
