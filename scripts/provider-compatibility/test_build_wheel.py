@@ -356,12 +356,22 @@ class Gemma3nAudioWindow(unittest.TestCase):
         source = 'def configure():\n    parser = argparse.ArgumentParser()\n    args = parser.parse_args()\n    return args\n'
         namespace = {'argparse': argparse, 'os': os}
         exec(patch_mlx_audio_padding_cli(source), namespace)
-        with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left'}):
+        with patch.dict(os.environ, {'MLX_VLM_GEMMA3N_AUDIO_PADDING': 'encoded-left', 'MLX_VLM_GEMMA3N_AUDIO_DITHER': '1'}):
             with patch('sys.argv', ['server']):
-                self.assertEqual(namespace['configure']().gemma3n_audio_padding, 'model')
+                args = namespace['configure']()
+                self.assertEqual(args.gemma3n_audio_padding, 'model')
+                self.assertFalse(args.gemma3n_audio_dither)
                 self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_PADDING'], 'model')
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_DITHER'], '0')
             with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'encoded-left']):
                 self.assertEqual(namespace['configure']().gemma3n_audio_padding, 'encoded-left')
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_DITHER'], '0')
+            with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'encoded-left', '--gemma3n-audio-dither']):
+                self.assertTrue(namespace['configure']().gemma3n_audio_dither)
+                self.assertEqual(os.environ['MLX_VLM_GEMMA3N_AUDIO_DITHER'], '1')
+            with patch('sys.argv', ['server', '--gemma3n-audio-dither']):
+                with self.assertRaises(SystemExit):
+                    namespace['configure']()
             with patch('sys.argv', ['server', '--gemma3n-audio-padding', 'unknown']):
                 with self.assertRaises(SystemExit):
                     namespace['configure']()

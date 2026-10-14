@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media12"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media13"}
 
 
 def replace_once(text, before, after):
@@ -177,8 +177,8 @@ def patch_mlx_gemma3n_template(text):
 
 
 def patch_mlx_gemma3n_audio(text):
-    # Keep the waveform/preprocessor unchanged in encoded-left mode. Enforce
-    # the model's 30-second capacity before upstream can truncate the input.
+    # Preserve the original signal policy unless dither is explicitly chosen.
+    # Enforce capacity before upstream can truncate the input.
     text = replace_once(text, 'from typing import List, Optional, Union\n',
                         'import os\n\nfrom typing import List, Optional, Union\n')
     text = replace_once(text, '\n\nclass Gemma3nProcessor(ProcessorMixin):', '''
@@ -198,6 +198,20 @@ def _extract_gemma3n_audio(feature_extractor, audio, audio_kwargs):
         raise ValueError("Gemma3n audio padding supports at most 30 seconds per clip")
     options = dict(audio_kwargs)
     options.update(max_length=window, truncation=False, return_attention_mask=True)
+    if os.environ.get("MLX_VLM_GEMMA3N_AUDIO_DITHER", "0") == "1":
+        # Keep the loaded processor and global RNG unchanged. Reproducible
+        # low-level dither affects signal extraction, never transcript text.
+        import copy
+
+        feature_extractor = copy.copy(feature_extractor)
+        feature_extractor.dither = 0.0
+        extract_spectrogram = feature_extractor._extract_spectrogram
+
+        def dither_spectrogram(waveform, attention_mask):
+            noise = np.random.RandomState(0).randn(*waveform.shape).astype(waveform.dtype)
+            return extract_spectrogram(waveform + 1e-4 * noise, attention_mask)
+
+        feature_extractor._extract_spectrogram = dither_spectrogram
     return feature_extractor(audio, **options)
 
 
@@ -216,8 +230,15 @@ def patch_mlx_audio_padding_cli(text):
         "--gemma3n-audio-padding", choices=("model", "encoded-left"), default="model",
         help="Gemma3n audio padding policy; encoded-left places unused soft-token padding before valid audio features without changing the waveform.",
     )
+    parser.add_argument(
+        "--gemma3n-audio-dither", action="store_true",
+        help="Enable reproducible Gemma3n input dither (1e-4, local seed 0); requires encoded-left padding. Files and transcript text remain unchanged.",
+    )
     args = parser.parse_args()
+    if args.gemma3n_audio_dither and args.gemma3n_audio_padding != "encoded-left":
+        parser.error("--gemma3n-audio-dither requires --gemma3n-audio-padding encoded-left")
     os.environ["MLX_VLM_GEMMA3N_AUDIO_PADDING"] = args.gemma3n_audio_padding
+    os.environ["MLX_VLM_GEMMA3N_AUDIO_DITHER"] = "1" if args.gemma3n_audio_dither else "0"
 ''')
 
 
