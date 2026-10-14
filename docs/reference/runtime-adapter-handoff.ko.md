@@ -154,6 +154,8 @@ harness는 새 작업용 홈에서 등록·선택·fresh probe·실제 `2+3` 응
 
 고정 source revision과 설치된 Python 환경, 엔진 binary·weights·tokenizer를 먼저 준비한다. SDK는 [serve/server.py](https://github.com/Niko1221/Strata/blob/main/serve/server.py)의 OpenAI 호환 server를 사용한다. AioLM 전용 deployment config를 작성해 엔진을 foreground로 실행한다. 독립 `lazy_load`, 저장 `api_key`, `mcp_servers`, `before_load`는 거부한다. lifecycle과 도구 승인은 AioLM이 담당한다. 기존 개인 config를 수정하지 않고 별도의 테스트 config를 선택한다.
 
+Strata의 browser CORS 설정도 명시한다. 고정 revision `296b59d2f73c8f04a805df29c2fa97655adace78`에서는 `cors_origins`의 기본값이 빈 목록이므로 native CLI와 health probe가 성공해도 GUI의 `/v1/*` 요청은 브라우저에서 거부된다. Windows production WebView의 origin이 `http://tauri.localhost`인 경우 전용 deployment JSON에 `"cors_origins": ["http://tauri.localhost"]`를 설정한다. 다른 OS나 개발 서버는 실제 origin을 확인하여 정확한 값만 추가하고, 모든 origin을 허용하는 `*`로 대체하지 않는다. loopback host와 AioLM이 전달하는 API key를 유지한다. helper의 native version probe는 같은 deployment의 `env`와 `lib_dirs`를 사용하며 전역 SDK 경로나 시스템 설정 변경을 요구하지 않는다.
+
 ```text
 python scripts/runtime-adapters/create_adapter.py create --kind strata --engine-id custom.strata --runtime-id pinned-build --python <설치된Python절대경로> --root <Stratacheckout절대경로> --config <전용deploymentJSON절대경로> --revision <전체40자리sourcecommit> --output <새manifest절대경로>
 ```
