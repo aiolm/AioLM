@@ -173,6 +173,62 @@ class Gemma3nEmbeddingScale(unittest.TestCase):
             patch_mlx_gemma3n_embeddings(source.replace('embed_tokens(input_ids)', 'other_embedding(input_ids)'))
 
 
+class ProcessorTemplateTokens(unittest.TestCase):
+    def test_forwards_explicit_token_policy_to_keyword_processors_without_changing_other_signatures(self):
+        import inspect
+        from build_wheel import patch_mlx_special_tokens
+
+        source = '''def process(processor, add_special_tokens=False):
+    parameters = inspect.signature(processor).parameters
+    args = {}
+    if "add_special_tokens" in parameters:
+        args["add_special_tokens"] = add_special_tokens
+    return processor(**args)
+'''
+        namespace = {'inspect': inspect}
+        exec(patch_mlx_special_tokens(source), namespace)
+        process = namespace['process']
+
+        def keyword_processor(**kwargs):
+            return kwargs
+        def explicit_processor(add_special_tokens=True):
+            return add_special_tokens
+        def no_token_option():
+            return 'unchanged'
+        for policy in (False, True):
+            self.assertEqual(process(keyword_processor, policy), {'add_special_tokens': policy})
+            self.assertIs(process(explicit_processor, policy), policy)
+            self.assertEqual(process(no_token_option, policy), 'unchanged')
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_special_tokens(source.replace('in parameters:', 'in other_parameters:'))
+
+    def test_processor_and_tokenizer_share_the_loaded_template_including_no_template(self):
+        import types
+        from build_wheel import patch_mlx_gemma3n_template
+        source = '''class Processor:
+    @classmethod
+    def loaded(cls, tokenizer, **proc_kwargs):
+        return cls(
+            tokenizer=tokenizer,
+            **proc_kwargs,
+        )
+    def __init__(self, **kwargs):
+        self.values = kwargs
+'''
+        namespace = {}
+        exec(patch_mlx_gemma3n_template(source), namespace)
+        for template in (None, '<bos>synthetic chat template'):
+            tokenizer = types.SimpleNamespace(chat_template=template)
+            values = namespace['Processor'].loaded(tokenizer, audio_seq_length=188).values
+            self.assertIs(values['tokenizer'], tokenizer)
+            self.assertEqual(values['chat_template'], template)
+            self.assertEqual(values['audio_seq_length'], 188)
+        values = namespace['Processor'].loaded(object()).values
+        self.assertIsNone(values['chat_template'])
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma3n_template(source.replace('tokenizer=tokenizer', 'tokenizer=other'))
+
+
 class Gemma4AudioPacking(unittest.TestCase):
     def test_padding_between_recordings_cannot_take_the_next_recordings_token_slots(self):
         import ast

@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media7"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media8"}
 
 
 def replace_once(text, before, after):
@@ -126,6 +126,22 @@ def patch_mlx_gemma3n_positions(text):
         "            queries = queries.transpose(0, 2, 1, 3)\n            queries = self.rope(queries, offset=offset)\n            if cache is not None:\n                keys, values = cache.update_and_fetch(keys, values)\n\n        if self.is_kv_shared_layer and cache is not None:\n            queries = queries.transpose(0, 2, 1, 3)\n            queries = self.rope(queries, offset=offset)\n")
 
 
+def patch_mlx_special_tokens(text):
+    # A processor's **kwargs accepts tokenizer options even when its signature
+    # does not enumerate them. Preserve the caller's template token policy.
+    return replace_once(text,
+        '    if "add_special_tokens" in parameters:\n',
+        '    if "add_special_tokens" in parameters or any(\n        parameter.kind == inspect.Parameter.VAR_KEYWORD\n        for parameter in parameters.values()\n    ):\n')
+
+
+def patch_mlx_gemma3n_template(text):
+    # Generation checks the processor template, while prompt rendering can
+    # fall back to the tokenizer. Both must describe the same loaded template.
+    return replace_once(text,
+        '            tokenizer=tokenizer,\n            **proc_kwargs,\n',
+        '            tokenizer=tokenizer,\n            chat_template=getattr(tokenizer, "chat_template", None),\n            **proc_kwargs,\n')
+
+
 PATCHES = {
     "vllm": {"vllm/multimodal/media/connector.py": patch_vllm},
     "mlx-vlm": {
@@ -135,6 +151,8 @@ PATCHES = {
         "mlx_vlm/models/gemma4/gemma4.py": patch_mlx_gemma4_audio,
         "mlx_vlm/models/gemma3n/gemma3n.py": patch_mlx_gemma3n_embeddings,
         "mlx_vlm/models/gemma3n/language.py": patch_mlx_gemma3n_positions,
+        "mlx_vlm/utils.py": patch_mlx_special_tokens,
+        "mlx_vlm/models/gemma3n/processing_gemma3n.py": patch_mlx_gemma3n_template,
     },
 }
 
