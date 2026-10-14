@@ -73,6 +73,8 @@ export interface ChatThread {
   useDefaultSystemPrompt?: boolean;
   /** Explicit model compatibility choice; legacy conversations keep text first. */
   mediaBeforeText?: boolean;
+  /** Project defaults already applied; later turns keep conversation overrides. */
+  projectBinding?: { id: string; updatedAt: number };
   createdAt: number;
   updatedAt: number;
   messages: ChatHistoryMessage[];
@@ -241,6 +243,10 @@ function normalizeThread(value: unknown): ChatThread | null {
     systemPrompt: typeof thread.systemPrompt === "string" ? thread.systemPrompt : "You are a helpful assistant.",
     ...(thread.useDefaultSystemPrompt === false ? { useDefaultSystemPrompt: false } : {}),
     ...(thread.mediaBeforeText === true ? { mediaBeforeText: true } : {}),
+    ...(thread.projectBinding && typeof thread.projectBinding.id === 'string'
+      && thread.projectBinding.id.length > 0 && thread.projectBinding.id.length <= 256
+      && typeof thread.projectBinding.updatedAt === 'number' && Number.isFinite(thread.projectBinding.updatedAt)
+      ? { projectBinding: { id: thread.projectBinding.id, updatedAt: thread.projectBinding.updatedAt } } : {}),
     createdAt: typeof thread.createdAt === "number" ? thread.createdAt : Date.now(),
     updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : Date.now(),
     messages: thread.messages,

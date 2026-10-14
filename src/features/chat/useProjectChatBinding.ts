@@ -42,6 +42,8 @@ export function useProjectChatBinding(options: Options) {
   // Identity identifies only attachments this hook supplied. A manual file with
   // the same path must not be removed or replaced when a project is deactivated.
   const owned = useRef<DocumentAttachment[]>([]);
+  const toolContext = useRef('');
+  const requestedDefaults = useRef<{ id: string; updatedAt: number } | null>(null);
   const [state, setState] = useState<BindingState>(() => {
     try {
       const id = activeProjectId();
@@ -57,7 +59,7 @@ export function useProjectChatBinding(options: Options) {
 
   useEffect(() => {
     let mounted = true;
-    const load = () => {
+    const load = (event?: Event) => {
       const ownGeneration = ++generation.current;
       const current = latest.current;
       const threadId = current.workspace.activeThreadId;
@@ -74,6 +76,9 @@ export function useProjectChatBinding(options: Options) {
         setState({ projectName: null, loading: false, error: projectChatBindingCopy[current.locale].projectReadFailed });
         return;
       }
+      if (event?.type === PROJECTS_CHANGED_EVENT) {
+        requestedDefaults.current = project ? { id: project.id, updatedAt: project.updatedAt } : null;
+      }
       if (current.phase !== "idle" || current.hasPendingTurn) {
         setState({ projectName: project?.name ?? null, loading: false, error: null });
         return;
@@ -86,19 +91,33 @@ export function useProjectChatBinding(options: Options) {
           return kept.length === documents.length ? documents : kept;
         });
         owned.current = [];
+        toolContext.current = '';
         setState({ projectName: null, loading: false, error: null });
         return;
       }
 
       const projectName = project.name;
       const prompt = project.systemPrompt;
+      const binding = { id: project.id, updatedAt: project.updatedAt };
+      const explicit = requestedDefaults.current?.id === binding.id
+        && requestedDefaults.current.updatedAt === binding.updatedAt;
       current.setWorkspace(workspace => {
         if (!isCurrent() || workspace.activeThreadId !== threadId) return workspace;
-        if (workspace.threads.find(thread => thread.id === threadId)?.systemPrompt === prompt) return workspace;
+        const thread = workspace.threads.find(thread => thread.id === threadId);
+        if (!thread || (!explicit && thread.projectBinding?.id === binding.id
+          && thread.projectBinding.updatedAt === binding.updatedAt)) return workspace;
+        // Legacy saved conversations already own their instructions. Applying
+        // a project explicitly can replace them; reopening Chat cannot.
+        const applyPrompt = explicit || !!thread.projectBinding || (!thread.messages.length && !thread.systemPrompt);
         return { ...workspace, threads: workspace.threads.map(thread => thread.id === threadId
-          ? { ...thread, systemPrompt: prompt, updatedAt: Date.now() } : thread) };
+          ? { ...thread, ...(applyPrompt ? { systemPrompt: prompt } : {}), projectBinding: binding, updatedAt: Date.now() } : thread) };
       });
-      current.setSelectedTools(project.toolIds.slice());
+      requestedDefaults.current = null;
+      const context = JSON.stringify([threadId, binding.id, binding.updatedAt]);
+      if (explicit || toolContext.current !== context) {
+        current.setSelectedTools(project.toolIds.slice());
+        toolContext.current = context;
+      }
       setState({ projectName, loading: true, error: null });
       const bindings = project.documentBindings.slice(0, MAX_AUTOMATIC_DOCUMENTS);
       void Promise.all(bindings.map(async binding => {

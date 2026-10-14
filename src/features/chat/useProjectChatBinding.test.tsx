@@ -27,10 +27,10 @@ function project(id: string, documentCount = 1): ProjectPreset {
 
 type Props = { phase: "idle" | "thinking" | "streaming"; hasPendingTurn: boolean; composerRevision: number };
 
-function setup(initialDocuments: DocumentAttachment[] = [], initialProps: Partial<Props> = {}, locale: Locale = "en") {
+function setup(initialDocuments: DocumentAttachment[] = [], initialProps: Partial<Props> = {}, locale: Locale = "en", savedWorkspace?: ChatWorkspace) {
   const documentWrites = vi.fn();
   const view = renderHook((props: Props) => {
-    const [workspace, setWorkspace] = useState<ChatWorkspace>({ activeThreadId: "first", threads: [createChatThread(1, "first"), createChatThread(2, "second")] });
+    const [workspace, setWorkspace] = useState<ChatWorkspace>(savedWorkspace ?? { activeThreadId: "first", threads: [createChatThread(1, "first"), createChatThread(2, "second")] });
     const [documents, setDocuments] = useState(initialDocuments);
     const [tools, setTools] = useState<string[]>([]);
     const binding = useProjectChatBinding({
@@ -38,7 +38,7 @@ function setup(initialDocuments: DocumentAttachment[] = [], initialProps: Partia
       setDocuments: action => { documentWrites(action); setDocuments(action); },
       setSelectedTools: setTools, locale, ...props,
     });
-    return { ...binding, workspace, documents, tools, setWorkspace, setDocuments };
+    return { ...binding, workspace, documents, tools, setWorkspace, setDocuments, setTools };
   }, { initialProps: { phase: "idle", hasPendingTurn: false, composerRevision: 0, ...initialProps } as Props });
   return { ...view, documentWrites };
 }
@@ -238,5 +238,61 @@ describe("active project chat binding", () => {
     unmount();
     await act(async () => pending.resolve("Too late"));
     expect(documentWrites).not.toHaveBeenCalled();
+  });
+
+  it('preserves conversation instructions and explicit tool picks across a completed turn and document retry', async () => {
+    const selected = project('conversation-overrides');
+    writeProjects([selected]); setActiveProjectId(selected.id);
+    const { result, rerender } = setup();
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    act(() => {
+      result.current.setWorkspace(workspace => ({ ...workspace, threads: workspace.threads.map(thread =>
+        thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: 'Keep my own instructions' } : thread) }));
+      result.current.setTools(['user-selected-tool']);
+    });
+    rerender({ phase: 'thinking', hasPendingTurn: false, composerRevision: 0 });
+    rerender({ phase: 'idle', hasPendingTurn: false, composerRevision: 1 });
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    act(() => result.current.retryDocuments());
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    expect(result.current.workspace.threads[0].systemPrompt).toBe('Keep my own instructions');
+    expect(result.current.tools).toEqual(['user-selected-tool']);
+    expect(result.current.documents).toHaveLength(1);
+  });
+
+  it('honors explicit project application and preserves later explicit empty instructions', async () => {
+    const selected = project('existing');
+    writeProjects([selected]);
+    const { result } = setup();
+    act(() => result.current.setWorkspace(workspace => ({ ...workspace, threads: workspace.threads.map(thread =>
+      thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: 'Existing saved instructions', messages: [{ role: 'user', content: 'Earlier turn' }] } : thread) })));
+    act(() => setActiveProjectId(selected.id));
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    // Activating a project is explicit and applies its defaults once.
+    expect(result.current.workspace.threads[0].systemPrompt).toBe('existing instructions');
+    act(() => result.current.setWorkspace(workspace => ({ ...workspace, threads: workspace.threads.map(thread =>
+      thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: '' } : thread) })));
+    act(() => result.current.retryDocuments());
+    await waitFor(() => expect(result.current.documentsLoading).toBe(false));
+    expect(result.current.workspace.threads[0].systemPrompt).toBe('');
+  });
+
+  it('retains overridden instructions when Chat is reopened, including legacy conversations', async () => {
+    const selected = project('reopen', 0);
+    writeProjects([selected]); setActiveProjectId(selected.id);
+    const initial = setup();
+    await waitFor(() => expect(initial.result.current.documentsLoading).toBe(false));
+    act(() => initial.result.current.setWorkspace(workspace => ({ ...workspace, threads: workspace.threads.map(thread =>
+      thread.id === workspace.activeThreadId ? { ...thread, systemPrompt: 'Conversation instructions after applying', messages: [{ role: 'user', content: 'Saved request' }] } : thread) })));
+    const saved = structuredClone(initial.result.current.workspace);
+    initial.unmount();
+    const reopened = setup([], {}, 'en', saved);
+    await waitFor(() => expect(reopened.result.current.documentsLoading).toBe(false));
+    expect(reopened.result.current.workspace.threads[0].systemPrompt).toBe('Conversation instructions after applying');
+    reopened.unmount();
+    delete saved.threads[0].projectBinding;
+    const legacy = setup([], {}, 'en', saved);
+    await waitFor(() => expect(legacy.result.current.documentsLoading).toBe(false));
+    expect(legacy.result.current.workspace.threads[0].systemPrompt).toBe('Conversation instructions after applying');
   });
 });
