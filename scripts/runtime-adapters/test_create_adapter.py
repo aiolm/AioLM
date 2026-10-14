@@ -39,6 +39,22 @@ class LoaderProbeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     adapter.gguf_metadata(path)
 
+    def test_llama_manifest_hashes_shared_libraries_beside_the_server(self):
+        with tempfile.TemporaryDirectory() as area:
+            root = Path(area)
+            server = root / "llama-server.exe"; server.write_bytes(b"synthetic server")
+            for name in ("llama.dll", "ggml-cpu.DLL", "libggml.so.1", "libmtmd.dylib", "README.txt"):
+                (root / name).write_bytes(b"synthetic")
+            output = root / "runtime.json"
+            args = argparse.Namespace(kind="llama.cpp", engine_id="custom.synthetic", runtime_id="r1", server=str(server),
+                                      python=None, name=None, output=str(output), model=None)
+            with patch("builtins.print"):
+                adapter.create(args)
+            artifacts = json.loads(output.read_text())["artifacts"]
+            self.assertEqual(artifacts[0], str(Path(adapter.__file__).absolute()))
+            self.assertEqual(sorted(Path(path).name for path in artifacts[1:]),
+                             sorted(["llama.dll", "ggml-cpu.DLL", "libggml.so.1", "libmtmd.dylib"]))
+
     def test_strata_config_cannot_enable_independent_tools_or_lazy_loading(self):
         with tempfile.TemporaryDirectory() as area:
             root = Path(area)

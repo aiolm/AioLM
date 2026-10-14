@@ -18,6 +18,7 @@ import sys
 
 
 LIMIT = 262144
+SHARED_LIBRARY = re.compile(r"\.(dll|dylib|so)(\.\d+)*$", re.IGNORECASE)
 
 
 def capture(args, cwd=None):
@@ -183,7 +184,13 @@ def create(args):
         host_arch = {"arm64":"aarch64", "aarch64":"aarch64", "AMD64":"x86_64", "x86_64":"x86_64"}.get(platform.machine())
         if not host_os or not host_arch:
             raise ValueError("unsupported host OS/architecture")
-        common.update(platforms=[{"os":host_os,"arch":host_arch}], model_formats=["gguf"], artifacts=[str(helper)])
+        # A dynamic build loads its shared libraries from the server's folder
+        # (llama.dll/ggml*.dll on Windows); hash them so a replaced library is
+        # refused like a changed executable.
+        libraries = sorted(path for path in server.parent.iterdir() if path.is_file() and SHARED_LIBRARY.search(path.name))
+        if len(libraries) + 1 > 64:
+            raise ValueError("server folder has too many shared libraries; provide an audited custom manifest")
+        common.update(platforms=[{"os":host_os,"arch":host_arch}], model_formats=["gguf"], artifacts=[str(helper), *map(str, libraries)])
         probe_args += ["--server",str(server)]
         common["launch"] = {"program":str(server),"env":{"LLAMA_API_KEY":"{api_key}"},"args":["--model","{model}","--alias","{model_alias}","--host","{host}","--port","{port}","--ctx-size","{ctx_size}","--parallel","{parallel}","--n-gpu-layers","0"]}
     else:
