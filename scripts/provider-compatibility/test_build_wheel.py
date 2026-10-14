@@ -148,6 +148,31 @@ class MlxStreamPreflight(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((metrics.in_flight, metrics.failures), (0, 1))
 
 
+class Gemma3nEmbeddingScale(unittest.TestCase):
+    def test_media_prefill_preserves_the_text_token_path_scale_without_scaling_media(self):
+        import types
+        from build_wheel import patch_mlx_gemma3n_embeddings
+
+        source = '''class Model:
+    def embeddings(self, input_ids, media=None):
+        inputs_embeds = self.language_model.model.embed_tokens(input_ids)
+        if media is not None:
+            return inputs_embeds, media
+        return inputs_embeds
+'''
+        namespace = {}
+        exec(patch_mlx_gemma3n_embeddings(source), namespace)
+        model = namespace['Model']()
+        model.config = types.SimpleNamespace(text_config=types.SimpleNamespace(hidden_size=16))
+        model.language_model = types.SimpleNamespace(model=types.SimpleNamespace(embed_tokens=lambda ids: 0.75))
+        token_path = 0.75 * (16**0.5)
+        self.assertEqual(model.embeddings([1]), token_path)
+        # Projected media already has its own normalization, unlike text tokens.
+        self.assertEqual(model.embeddings([1], media=2.5), (token_path, 2.5))
+        with self.assertRaisesRegex(ValueError, 'upstream source differs'):
+            patch_mlx_gemma3n_embeddings(source.replace('embed_tokens(input_ids)', 'other_embedding(input_ids)'))
+
+
 class Gemma4AudioPacking(unittest.TestCase):
     def test_padding_between_recordings_cannot_take_the_next_recordings_token_slots(self):
         import ast

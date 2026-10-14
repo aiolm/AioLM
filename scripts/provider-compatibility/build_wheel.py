@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media5"}
+LOCAL_VERSIONS = {"vllm": "aiolm.media1", "mlx-vlm": "aiolm.media7"}
 
 
 def replace_once(text, before, after):
@@ -104,6 +104,28 @@ class MultimodalEmbedder(nn.Module):''')
         "                enc, encoded_padding = self.audio_tower(feat, mask)\n                return _pack_audio_features(self.embed_audio(enc), encoded_padding)\n")
 
 
+def patch_mlx_gemma3n_embeddings(text):
+    # The language model scales token embeddings when it receives token IDs.
+    # Media prefill supplies embeddings directly, so scale text here before
+    # replacing media slots with their separately normalized projections.
+    return replace_once(text,
+        "        inputs_embeds = self.language_model.model.embed_tokens(input_ids)\n",
+        "        inputs_embeds = self.language_model.model.embed_tokens(input_ids) * (self.config.text_config.hidden_size**0.5)\n")
+
+
+def patch_mlx_gemma3n_positions(text):
+    # The concrete layer already appended this chunk to a shared cache. Its
+    # consumers must rotate queries at the chunk's start, rather than its end.
+    text = replace_once(text,
+        "            keys, values = state[0], state[1]\n            offset = cache.offset\n",
+        "            keys, values = state[0], state[1]\n            offset = cache.offset - L\n")
+    # Batched cache offsets are mutable arrays. Rotate both queries and keys
+    # before update_and_fetch advances that array in the concrete layer.
+    return replace_once(text,
+        "            if cache is not None:\n                keys, values = cache.update_and_fetch(keys, values)\n\n        queries = queries.transpose(0, 2, 1, 3)\n        queries = self.rope(queries, offset=offset)\n",
+        "            queries = queries.transpose(0, 2, 1, 3)\n            queries = self.rope(queries, offset=offset)\n            if cache is not None:\n                keys, values = cache.update_and_fetch(keys, values)\n\n        if self.is_kv_shared_layer and cache is not None:\n            queries = queries.transpose(0, 2, 1, 3)\n            queries = self.rope(queries, offset=offset)\n")
+
+
 PATCHES = {
     "vllm": {"vllm/multimodal/media/connector.py": patch_vllm},
     "mlx-vlm": {
@@ -111,6 +133,8 @@ PATCHES = {
         "mlx_vlm/prompt_utils.py": patch_mlx_prompt,
         "mlx_vlm/server/app.py": patch_mlx_preflight,
         "mlx_vlm/models/gemma4/gemma4.py": patch_mlx_gemma4_audio,
+        "mlx_vlm/models/gemma3n/gemma3n.py": patch_mlx_gemma3n_embeddings,
+        "mlx_vlm/models/gemma3n/language.py": patch_mlx_gemma3n_positions,
     },
 }
 

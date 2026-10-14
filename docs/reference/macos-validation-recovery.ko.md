@@ -25,7 +25,7 @@ python3 scripts/model-repair/reindex_snapshot.py \
 | 기반 버전 | 새 버전 | 수정 내용 |
 | --- | --- | --- |
 | vLLM `0.30.0+cpu` | `0.30.0+cpu.aiolm.media1` | local media allowlist 거부를 validation 오류로 분류해 HTTP400 반환. allowlist 유지. |
-| mlx-vlm `0.7.6` | `0.7.6+aiolm.media5` | `file:` media400, user별 audio marker 배치, stream preflight 오류/취소의 in-flight 정리, 오디오 decoder의 알려진 invalid-format 오류400, Gemma4의 녹음 사이 encoder padding 제거. context overflow의 기존 기록/400 유지. |
+| mlx-vlm `0.7.6` | `0.7.6+aiolm.media7` | 기존 media5의 URI·audio 이력·preflight·Gemma4 padding 수정에 Gemma3n media prefill의 텍스트 embedding 배율과 공유 KV 쿼리 위치 수정 추가. context overflow의 기존 기록/400 유지. |
 
 ```sh
 python3 scripts/provider-compatibility/build_wheel.py \
@@ -51,9 +51,37 @@ vllm-metal0.30.0은 기존 pinned MLX/MLX-LM/native paged ops와 MetalPlatform �
 ```sh
 "$NEW_PYTHON" scripts/provider-compatibility/check_mlx_audio_history.py
 "$NEW_PYTHON" scripts/provider-compatibility/check_gemma4_audio_packing.py
+"$NEW_PYTHON" scripts/provider-compatibility/check_gemma3n_embeddings.py
 ```
 
 첫 검사는 모델 추론 없이 설치된 normalizer/template의 audio marker가 `[1,0,1]`인지 확인한다. 두 번째는 작은 합성 encoder/embedding 값으로 **설치된 Gemma4의 실제 embedding 배치 메서드**를 호출한다. 녹음 사이 padding이 다음 녹음의 토큰을 대체하면 실패하며, 모델 weights·내용 추론이나 처리 속도 검사는 아니다. 앱의 런타임 관리에서 새 Python을 외부 환경으로 등록하고 **별도 프로필**로 선택한다. 올바른 인증으로 URI/invalid-WAV400, 정상 미디어 내용·usage·취소·Retry·재시작·종료를 실제 확인한다. 원본 환경/프로필을 자동 교체하지 않는다.
+
+세 번째는 실제 Gemma3n 메서드를 작은 텐서로 호출해 텍스트 prefill 배율과 concrete/shared attention의 쿼리·키 위치를 비교한다. 단일 및 길이가 다른 두 입력의 batched cache에서 prefill/decode를 검사한다. 원본0.7.6은 배율 검사, 배율만 수정한 media6은 공유 위치 검사에서 실패했다. media7은 네 cache 조건을 통과했다. **같은 원래4bit 모델의 전사 단수·복수 오류는 실제 앱에서도 남았다.** checker 성공을 내용 성공으로 바꾸지 않는다.
+
+## llama.cpp의 Idefics3 단일 이미지
+
+`prepare_llama_source.py`는 Python3.12에서 명시한 원본 archive를 읽고 새 디렉터리에만 소스를 준비한다. 대상은 llama.cpp b11460의 전체 commit `78651c410dd8d97e3e22e533e0e7117889e3863a`다. [고정 소스 archive](https://codeload.github.com/ggml-org/llama.cpp/tar.gz/78651c410dd8d97e3e22e533e0e7117889e3863a)의 관찰한 SHA-256은 `3261e7f33becb7ada614605116f96222fc097f016b48cd627e01055f1535f981`이다. 이 값은 내려받은 바이트를 고정하는 감사 기록이며 별도의 vendor 서명 증명이 아니다.
+
+Idefics3 공식 처리기는 한 장의 view에 row/column tile을 추가하지 않는다. 해당 native 경로는 같은 작은 이미지에 overview와 tile을 모두 넣었다. 준비 도구는 grid가1×1일 때 중복 tile과 tile 구분 개행을 제거한다. 다른 projector·여러 tile의 분기는 유지한다. archive와 수정할 두 소스의 해시·문맥을 검사하며 다른 revision·기존 출력 디렉터리를 거부한다. 원본 archive·weights·projector·LICENSE를 보존하고 수정 전후 해시를 `aiolm-source-compatibility.json`에 기록한다.
+
+```sh
+python3 -B scripts/provider-compatibility/prepare_llama_source.py \
+  --archive "$TASK_LLAMA_ARCHIVE" --output-directory "$TASK_LLAMA_OUTPUT"
+```
+
+새 소스의 해당 OS CPU 빌드에는 `llama-server`, `llama-bench`, `llama-perplexity`, `llama-mtmd-cli`를 포함한다. `LLAMA_BUILD_NUMBER=11460`, `LLAMA_BUILD_COMMIT=78651c410-aiolm.single1`로 local 수정을 표시하고 공식 runtime을 덮어쓰지 않는다. 배포 가능한 번들을 만들 때 빌드 경로를 remap하고 OS에 맞는 상대 library search path를 설정한다. 필수 실행 파일·공유 라이브러리·LICENSE·audit와 실제 OS/architecture·전체 파일 해시를 기존 portable manifest 계약으로 묶어 앱의 **Import runtime ZIP**으로 검사한다. Mac 검증의 build ID는 `local_b11460_single1`, backend는 `cpu`다. Windows/Linux는 해당 OS에서 빌드와 실제 앱 검사를 다시 수행해야 한다.
+
+같은 원래 SmolVLM256M Q8_0와 f16 projector는 이 CPU 빌드, 대화의 **첨부를 질문보다 먼저 전달**, 전용 프로필의 아래 일반 지침에서 원래 질문의 색상·도형·좌우와 후속 오른쪽 물체 설명을 정확히 답했다.
+
+```text
+List every visible object with its position, color, and geometric shape. Do not omit requested attributes.
+```
+
+이 지침에는 fixture의 색상·도형·정답을 넣지 않았다. 기존 Default나 다른 모델의 지침을 바꾸지 않는다. 지침이 없는 원래 질문에서는 요청 항목 누락이 남고, 해당 초기 부분 답변 뒤의 후속 설명도 오답이었다. 검증한 프로필/대화 조건의 성공을 모든 입력·모델의 정확성 보장으로 확장하지 않는다.
+
+## MCP 관찰값의 모델 전달 형식
+
+단일 MCP text block이고 다른 내용·metadata가 없는 결과는 모델의 tool 메시지에 `{"text":"실제 반환값"}`으로 전달한다. 명시한 `isError` boolean은 유지한다. 여러 block·이미지·structuredContent·annotations·알 수 없는 필드는 기존 JSON을 그대로 유지한다. native RPC 결과를 수정하지 않으며 승인·거부·취소·call ID와 기존 원본 크기 제한을 유지한다. 동일 Qwen3 2B 가중치의 직접 대조에서 중첩 envelope는 입력을 반복했지만 이 형식은 서로 다른 세 반환값을 정확히 읽었다. 실제 앱 승인→도구→후속 답변의 판정은 [결과 §102](macos-device-validation-results.ko.md#102-원래-모델을-유지한-잔여-오류-검증)를 따른다.
 
 ## 자동 시스템 안내 선택
 
