@@ -6,6 +6,12 @@
 
 추가 미디어 검증은 [Mac 결과 §101](macos-device-validation-results.ko.md#101-미디어-내용과-도구-후속-답변의-추가-원인-검증)과 [복구 절차](macos-validation-recovery.ko.md)를 따른다. 선택한 실제 MLX Python에서 `check_mlx_audio_history.py`와 `check_gemma4_audio_packing.py`를 실행한 뒤, 길이가 다른 두 녹음의 내용·첫 녹음 재사용·usage·취소/Retry·정상 재시작을 검사한다. 두 checker의 성공은 실제 모델 내용 성공을 뜻하지 않는다. MLX 미지원 기기에서는 stdlib 도구만 실행하고 실제 MLX 검사는 unsupported로 기록한다.
 
+[원래 모델 추가 검증 §102](macos-device-validation-results.ko.md#102-원래-모델을-유지한-잔여-오류-검증)의 수정은 MCP 관찰값 형식 `60626fb`, Idefics3 단일 이미지·Gemma3n 입력 계산 `d793781`이다. MCP는 단일 text block만 간결한 JSON으로 전달하며 rich/structured/error 결과·native 승인/취소·call ID/원본 제한을 유지한다. 같은 원래 Qwen3 2B4bit는 Mac 실제 앱의 structured call→앱 승인→Mac Yes→도구 실제 실행1회→입력과 다른 반환값 `synthetic result` 답변 및 정상 Quit/이력 재로드를 통과했다. Windows/Linux 실제 앱에서도 입력 인자와 다른 도구 반환값을 사용해 같은 소형 모델의 후속 답변을 확인한다. completed-history 직접 추론으로 실제 도구 호출을 대신하지 않는다. Mac 개발 화면의 재로드·승인창 timeout 시도는 실패 기록으로 보존하며 최종 검사는 production dist/Vite preview를 사용하는 실제 WKWebView였다.
+
+Idefics3 source 준비 도구는 고정 archive/두 소스 해시를 확인하며 기존 출력·weights·projector·다른 모델·여러 tile의 분기를 바꾸지 않는다. Python3.12에서 새 소스를 준비하고 대상 OS CPU runtime을 별도 local build로 생성한다. 상세 pin/빌드·portable import 계약은 복구 절차를 따른다. Mac에서는 원래 SmolVLM256M Q8_0/f16 projector와 image-first/모든 요청 항목을 다루는 일반 지침의 조합이 원래 질문·후속·정상 재시작을 통과했다. 지침 없는 조건의 누락·후속 오답과 multi-view 대조 실패는 별도로 남는다. Windows/Linux는 같은 원래 모델·입력·지침으로 fresh probe/내용/usage/취소/Retry/재시작을 실제 확인하고 해당 OS 결과를 기록한다.
+
+MLX media7에는 Gemma3n media prefill 배율과 single/batched shared query 위치 보정이 들어갔다. 지원 기기에서는 설치한 Python으로 `check_gemma3n_embeddings.py`도 실행한다. Mac 원래4bit 모델의 단수·복수 전사 오류는 이 수정 뒤에도 남았으므로 내용을 pass로 표시하지 않는다. MLX 미지원 OS의 해당 검사는 unsupported이며 이 문서로 지원을 선언하지 않는다. 이번 소스의 실제 Windows/Linux·Strata 추론·새 배포 패키지는 계속 unrun이다.
+
 Windows/Linux 실제 앱에서 **첨부를 질문보다 먼저 전달**을 선택하고 새 입력/첨부 이력의 순서, Retry snapshot, 빈 대화 저장·재로드를 확인한다. 기존 대화는 text-first를 유지해야 한다. 영상 프레임·시각 설명과 전사문을 잘라내거나 원본 파일의 정체성을 바꾸면 실패다. runtime probe와 모델별 미디어/도구 지원을 우회하지 않는다. SmolVLM256M/Qwen3-VL2B의 오류를 500M/4B의 성공으로 대체하지 않는다. Gemma3n4bit/공개8bit의 전사 오류도 남았고 공식 원본 대조는 접근 제한으로 unrun이다. 해당 OS의 실제 검증·새 패키징·Strata 추론은 계속 unrun이다.
 
 내장 llama.cpp·vLLM·MLX와 등록형 `custom.*` 엔진이 공통 `InferenceRuntimeAdapter`/`EngineCommand` 경계를 사용한다. 등록 UI는 런타임 화면의 **외부 엔진 등록**이다. 실행 중인 모델 세션을 먼저 언로드하고 JSON manifest를 선택해 **검사 후 등록**을 누른다. 등록된 엔진·런타임은 공용 실행 설정에서 선택하며 모델별 probe 후 실행한다.
