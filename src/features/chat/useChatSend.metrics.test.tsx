@@ -253,16 +253,22 @@ describe("request-scoped response metrics", () => {
     expect(result.current.msgs.at(-1)?.failed).toBeUndefined();
   });
 
-  it("removes an empty cancelled response even if statistics have arrived", async () => {
+  it("keeps an issued response cancelled before any output for Retry, with only the statistics the engine reported", async () => {
     const stream = controlledStream();
     const { result } = setup();
     act(() => { void result.current.send(); });
     await waitFor(() => expect(api.chatStream).toHaveBeenCalledOnce());
     stream.emit({ timings: { prompt_n: 100, prompt_ms: 300 } });
     await act(async () => result.current.stop());
-    expect(result.current.msgs).toEqual([expect.objectContaining({ role: "user" })]);
+    expect(result.current.msgs).toEqual([
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({ role: "assistant", content: "", reasoning: "", interrupted: true }),
+    ]);
+    const metrics = result.current.msgs[1].metrics;
+    expect(metrics?.pp).toMatchObject({ tokens: 100, durationMs: 300 });
+    expect(metrics?.tg.tokens).toBeUndefined();
     expect(result.current.streamingDraft).toBeNull();
-    expect(result.current.failedRef.current).toBeNull();
+    expect(result.current.failedRef.current).not.toBeNull();
   });
 
   it("cancels during preparation without starting metrics or releasing the session lock early", async () => {

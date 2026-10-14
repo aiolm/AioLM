@@ -1021,3 +1021,79 @@ describe('ChatPanel retry recovery', () => {
     expect(mocked.mcpCallTool).toHaveBeenCalledOnce();
   });
 });
+
+describe('ChatPanel recovery of replies without output and non-chat sessions', () => {
+  const savedRequest: api.ChatMessage[] = [{ role: 'user', content: 'Saved synthetic question' }];
+  const snapshot: ChatRetrySnapshot = { version: 1, text: 'Saved synthetic question', images: [], documents: [], history: savedRequest };
+  const savedThread = (reply: Record<string, unknown>) => ({
+    ...createChatThread(1, 'without-output'), title: 'Reply without output',
+    messages: [{ role: 'user' as const, content: 'Saved synthetic question' }, { role: 'assistant' as const, content: '', ...reply }],
+  });
+  const sessionStore = (tasks: string[]) => {
+    const panelStore = createTestStore({ ...cfg, active_provider: 'llama.cpp' });
+    panelStore.status = { ...store.status, engine: { provider: 'llama.cpp', runtime_id: 'synthetic', upstream_model: 'synthetic-model',
+      modalities: { text: true, image: false, audio: tasks.includes('transcription'), video: false }, tasks, request_fields: {}, chat_supported: false } };
+    return panelStore;
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    mocked.chatStream.mockReset();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+  });
+
+  it('says a reply stopped before any output instead of claiming a preserved partial response, and offers Retry', async () => {
+    const thread = savedThread({ reasoning: '', interrupted: true, model: cfg.active_model, retry: snapshot });
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    const log = within(screen.getByRole('log', { name: 'Conversation' }));
+    expect(log.getByText('Generation stopped before any output.')).toBeInTheDocument();
+    expect(screen.queryByText(/partial response preserved/)).not.toBeInTheDocument();
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('Generation stopped before any output.');
+    respondWithText('Answer after the empty stop');
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry last message' }));
+    await screen.findByText('Answer after the empty stop');
+    expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
+  });
+
+  it('restores a stopped MCP round reported without a tool_calls finish reason as incomplete and retryable', async () => {
+    const thread = savedThread({ model: cfg.active_model, toolRound: 'cancelled', retry: snapshot });
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel();
+    await screen.findByRole('heading', { name: thread.title });
+    expect(screen.getByText('The MCP tool call was stopped; its result was not used.')).toBeInTheDocument();
+    expect(document.querySelector('.chat-composer-status')).toHaveTextContent('MCP response incomplete');
+    expect(await screen.findByRole('button', { name: 'Retry last message' })).toBeEnabled();
+    expect(mocked.mcpCallTool).not.toHaveBeenCalled();
+    expect(loadChatWorkspace().threads[0].messages[1]).toMatchObject({ toolRound: 'cancelled' });
+    expect(loadChatWorkspace().threads[0].messages[1].finishReason).toBeUndefined();
+  });
+
+  it.each([
+    [['embed'], 'This session provides embeddings only, not chat or text generation.'],
+    [['transcription'], 'This session provides speech transcription only, not chat or text generation.'],
+  ] as const)('explains a %j session by its tasks instead of a missing chat template', async (tasks, explanation) => {
+    const thread = savedThread({ reasoning: '', interrupted: true, model: cfg.active_model, retry: snapshot });
+    saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
+    renderPanel(sessionStore([...tasks]));
+    await screen.findByRole('heading', { name: thread.title });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Chat message' }), { target: { value: 'hello' } });
+    expect(screen.getByText(new RegExp(explanation.replace(/[.]/g, '\\.')))).toBeInTheDocument();
+    expect(screen.queryByText(/no chat template/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Text completions remain available/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    // Retry cannot reach a session that does not generate.
+    expect(screen.getByRole('button', { name: 'Retry last message' })).toBeDisabled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it('keeps the missing-template advice for a generation session without a chat template', async () => {
+    renderPanel(sessionStore(['generate', 'embed']));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Chat message' }), { target: { value: 'hello' } });
+    expect(screen.getByText(/This model has no chat template/)).toBeInTheDocument();
+    expect(screen.queryByText(/not chat or text generation/)).not.toBeInTheDocument();
+  });
+});

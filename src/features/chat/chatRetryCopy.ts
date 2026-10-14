@@ -1,6 +1,36 @@
 import type { Locale } from '../../shared/i18n/i18nCatalog';
 import type { ChatRetryUnavailableReason } from './chatHistory';
 
+type ReplyState = 'stoppedEmpty' | 'failedEmpty' | 'toolCancelled' | 'toolFailed';
+
+/** What happened to an unfinished reply that shows no partial output of its own. */
+export const chatReplyStateCopy: Record<Locale, Record<ReplyState, string>> = {
+  en: {
+    stoppedEmpty: 'Generation stopped before any output.',
+    failedEmpty: 'Generation failed before any output.',
+    toolCancelled: 'The MCP tool call was stopped; its result was not used.',
+    toolFailed: 'The MCP tool call failed; no result was used.',
+  },
+  ko: {
+    stoppedEmpty: '출력이 나오기 전에 생성을 중지했습니다.',
+    failedEmpty: '출력이 나오기 전에 생성에 실패했습니다.',
+    toolCancelled: 'MCP 도구 호출을 중지했으며 그 결과는 사용되지 않았습니다.',
+    toolFailed: 'MCP 도구 호출이 실패해 결과를 사용하지 않았습니다.',
+  },
+  ja: {
+    stoppedEmpty: '出力が出る前に生成を停止しました。',
+    failedEmpty: '出力が出る前に生成に失敗しました。',
+    toolCancelled: 'MCPツール呼び出しを停止しました。結果は使用されていません。',
+    toolFailed: 'MCPツール呼び出しに失敗したため、結果は使用されていません。',
+  },
+  zh: {
+    stoppedEmpty: '在产生任何输出之前已停止生成。',
+    failedEmpty: '在产生任何输出之前生成失败。',
+    toolCancelled: 'MCP 工具调用已停止，其结果未被使用。',
+    toolFailed: 'MCP 工具调用失败，未使用任何结果。',
+  },
+};
+
 /** Why an unfinished reply restored from history cannot be retried exactly. */
 export const chatRetryCopy: Record<Locale, Record<ChatRetryUnavailableReason, string>> = {
   en: {

@@ -309,3 +309,201 @@ describe("D09b: Retry after cancelling an approved MCP tool call", () => {
     expect(restored.at(-1)?.retry).toBeDefined();
   });
 });
+
+function waitsForStop() {
+  streamMock.mockImplementationOnce((_url, _key, _model, _messages, _sampling, _onDelta, signal) => new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")), { once: true });
+  }));
+}
+
+async function stopFirstRequest(hook: ReturnType<typeof setup>, sendIt: () => Promise<void> = () => hook.result.current.send()) {
+  let sending!: Promise<void>;
+  const calls = streamMock.mock.calls.length;
+  act(() => { sending = sendIt(); });
+  await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(calls + 1));
+  await act(async () => { hook.result.current.stop(); await sending; });
+}
+
+describe("Recovery when an issued request produced no output", () => {
+  it("keeps a reply stopped before its first token, with its exact request, and retries it after a restart without a duplicate turn", async () => {
+    waitsForStop();
+    const first = setup();
+    await stopFirstRequest(first);
+    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+    const reply = first.result.current.msgs.at(-1)!;
+    expect(first.result.current.msgs).toHaveLength(2);
+    expect(reply).toMatchObject({ role: "assistant", content: "", reasoning: "", interrupted: true });
+    // Measured times only; the cancelled empty response reported no token counts.
+    expect(reply.metrics?.tg.tokens).toBeUndefined();
+    expect(reply.metrics?.pp.tokens).toBeUndefined();
+    expect(first.result.current.canRetry).toBe(true);
+    expect(first.result.current.error).toBeNull();
+
+    const restored = reloaded(first.result.current.msgs);
+    first.unmount();
+    const next = setup({ initial: restored, input: "", session: { baseUrl: "http://127.0.0.1:9090", apiKey: "current-session-key", tools: false } });
+    expect(next.result.current.canRetry).toBe(true);
+    answers("Answer after an empty stop");
+    await act(async () => { await next.result.current.send(true); });
+    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
+    expect(streamMock.mock.calls[1][1]).toBe("current-session-key");
+    expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question"], ["assistant", "Answer after an empty stop"]]);
+  });
+
+  it("keeps a reply that failed before any output, reports the real error, and retries it once after a restart", async () => {
+    streamMock.mockRejectedValueOnce(new Error("HTTP 503: synthetic engine unavailable"));
+    const first = setup();
+    await act(async () => { await first.result.current.send(); });
+    expect(first.result.current.error).toBe("HTTP 503: synthetic engine unavailable");
+    expect(first.result.current.msgs.at(-1)).toMatchObject({ role: "assistant", content: "", failed: true });
+    expect(first.result.current.msgs.at(-1)?.interrupted).toBeFalsy();
+    const originalRequest = structuredClone(streamMock.mock.calls[0][3]);
+
+    const restored = reloaded(first.result.current.msgs);
+    first.unmount();
+    const next = setup({ initial: restored, input: "" });
+    expect(next.result.current.canRetry).toBe(true);
+    answers("Recovered after an error");
+    await act(async () => { await next.result.current.send(true); });
+    expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
+    expect(next.result.current.msgs).toHaveLength(2);
+    expect(next.result.current.msgs.at(-1)).toMatchObject({ content: "Recovered after an error" });
+    expect(next.result.current.msgs.at(-1)?.failed).toBeUndefined();
+  });
+
+  it.each(["live", "restored"] as const)("leaves the earlier partial reply and its measurements unchanged when a %s Retry is stopped before a new token", async (source) => {
+    streamMock.mockImplementationOnce((_url, _key, _model, _messages, _sampling, onDelta, signal) => new Promise((_resolve, reject) => {
+      onDelta({ reasoning: "Earlier partial reasoning", content: "Earlier partial answer", usage: { prompt_tokens: 12, completion_tokens: 5 } });
+      signal?.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")), { once: true });
+    }));
+    const first = setup();
+    await stopFirstRequest(first);
+    const earlier = first.result.current.msgs.at(-1)!;
+    expect(earlier).toMatchObject({ content: "Earlier partial answer", reasoning: "Earlier partial reasoning", interrupted: true });
+    expect(earlier.metrics?.tg.tokens).toBe(5);
+    let hook = first;
+    let expected = first.result.current.msgs;
+    if (source === "restored") {
+      expected = reloaded(first.result.current.msgs);
+      first.unmount();
+      hook = setup({ initial: expected, input: "" });
+    }
+
+    waitsForStop();
+    await stopFirstRequest(hook, () => hook.result.current.send(true));
+    expect(hook.result.current.msgs).toEqual(expected);
+    expect(hook.result.current.canRetry).toBe(true);
+
+    streamMock.mockRejectedValueOnce(new Error("HTTP 500: synthetic retry failure"));
+    await act(async () => { await hook.result.current.send(true); });
+    expect(hook.result.current.error).toBe("HTTP 500: synthetic retry failure");
+    expect(hook.result.current.msgs).toEqual(expected);
+    expect(hook.result.current.canRetry).toBe(true);
+  });
+
+  it("keeps the draft and never issues or snapshots a request when a new message is stopped during preparation", async () => {
+    let release!: () => void;
+    personalizationMock.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ instructions: [], skills: [], warnings: [] });
+    }));
+    const earlier: ChatHistoryMessage[] = [{ role: "user", content: "Earlier" }, { role: "assistant", content: "Earlier answer", finishReason: "stop" }];
+    const { result } = setup({ initial: earlier, input: "Draft that is still preparing" });
+    let sending!: Promise<void>;
+    act(() => { sending = result.current.send(); });
+    await waitFor(() => expect(personalizationMock).toHaveBeenCalledOnce());
+    await act(async () => { result.current.stop(); release(); await sending; });
+    expect(streamMock).not.toHaveBeenCalled();
+    expect(result.current.msgs).toEqual(earlier);
+    expect(result.current.input).toBe("Draft that is still preparing");
+    expect(result.current.canRetry).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("does not drop the saved recovery of an earlier reply when a newer message is stopped before it is issued", async () => {
+    waitsForStop();
+    const first = setup();
+    await stopFirstRequest(first);
+    const restored = reloaded(first.result.current.msgs);
+    first.unmount();
+
+    let release!: () => void;
+    personalizationMock.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ instructions: [], skills: [], warnings: [] });
+    }));
+    const next = setup({ initial: restored, input: "A newer draft" });
+    let sending!: Promise<void>;
+    act(() => { sending = next.result.current.send(); });
+    await waitFor(() => expect(personalizationMock).toHaveBeenCalledTimes(2));
+    await act(async () => { next.result.current.stop(); release(); await sending; });
+    // The newer draft supersedes the old turn in this session, but nothing was issued, so its saved recovery stays.
+    expect(next.result.current.canRetry).toBe(false);
+    expect(next.result.current.retryUnavailable).toBeNull();
+    expect(next.result.current.msgs).toEqual(restored);
+    next.unmount();
+    const later = setup({ initial: reloaded(next.result.current.msgs), input: "" });
+    expect(later.result.current.canRetry).toBe(true);
+  });
+
+  it("keeps the saved reply and its recovery when a restored Retry is stopped during preparation", async () => {
+    waitsForStop();
+    const first = setup();
+    await stopFirstRequest(first);
+    const restored = reloaded(first.result.current.msgs);
+    first.unmount();
+    const personalizationReads = personalizationMock.mock.calls.length;
+
+    let wake: (() => void) | undefined;
+    vi.mocked(api.serverActivity).mockImplementationOnce(() => new Promise<void>((resolve) => { wake = resolve; }));
+    const next = setup({ initial: restored, input: "" });
+    let sending!: Promise<void>;
+    act(() => { sending = next.result.current.send(true); });
+    await waitFor(() => expect(wake).toBeDefined());
+    await act(async () => { next.result.current.stop(); wake!(); await sending; });
+    expect(streamMock).toHaveBeenCalledOnce();
+    expect(next.result.current.msgs).toEqual(restored);
+    expect(next.result.current.canRetry).toBe(true);
+    expect(personalizationMock).toHaveBeenCalledTimes(personalizationReads);
+  });
+});
+
+describe("MCP rounds whose runtime reported no tool_calls finish reason", () => {
+  function requestsLookupWithoutFinishReason() {
+    streamMock.mockImplementationOnce(async (_url, _key, _model, _messages, _sampling, onDelta) => {
+      onDelta({ tool_calls: [{ index: 0, id: "call-1", name: "catalog__lookup", arguments: "{\"key\":\"synthetic-key\"}" }] });
+      return "";
+    });
+  }
+
+  it.each(["cancelled", "failed"] as const)("marks a %s round recoverable from app state without inventing a finish reason or resuming the call", async (ending) => {
+    requestsLookupWithoutFinishReason();
+    const { result, unmount } = setup();
+    await act(async () => { await result.current.send(); });
+    expect(result.current.pendingToolCall?.call.id).toBe("call-1");
+    let approving!: Promise<void>;
+    act(() => { approving = result.current.approvePendingTool(); });
+    await waitFor(() => expect(callMock).toHaveBeenCalledOnce());
+    const callId = callMock.mock.calls[0][3]!;
+    await act(async () => {
+      if (ending === "cancelled") result.current.stop();
+      else inFlight.get(callId)?.(new Error("MCP tool approval timed out"));
+      await approving;
+    });
+    const reply = result.current.msgs.at(-1)!;
+    expect(reply.finishReason).toBeUndefined();
+    expect(reply.toolRound).toBe(ending);
+    expect(result.current.canRetry).toBe(true);
+    if (ending === "failed") expect(result.current.error).toContain("MCP tool approval timed out");
+    else expect(cancelMock).toHaveBeenCalledExactlyOnceWith(callId);
+
+    const restored = reloaded(result.current.msgs);
+    unmount();
+    expect(restored.at(-1)).toMatchObject({ toolRound: ending });
+    const next = setup({ initial: restored, input: "" });
+    expect(next.result.current.canRetry).toBe(true);
+    answers("Answer without resuming the tool");
+    await act(async () => { await next.result.current.send(true); });
+    expect(callMock).toHaveBeenCalledOnce();
+    expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question"], ["assistant", "Answer without resuming the tool"]]);
+    expect(next.result.current.msgs.at(-1)?.toolRound).toBeUndefined();
+  });
+});

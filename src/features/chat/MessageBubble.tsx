@@ -10,6 +10,7 @@ import Badge from "../../shared/ui/Badge";
 import type { Locale } from "../../shared/i18n/i18nCatalog";
 import ChatMarkdown from "./ChatMarkdown";
 import ResponseMetrics from "./ResponseMetrics";
+import { chatReplyStateCopy } from "./chatRetryCopy";
 
 interface MessageBubbleProps {
   message: ChatHistoryMessage;
@@ -35,6 +36,8 @@ interface MessageBubbleProps {
 export function MessageBubble({ message, index, messageCount, phase, copied, compact, locale, onCopy }: MessageBubbleProps) {
   const text = (key: ChatTextKey) => translate(locale, `chat.${key}`);
   const isUser = message.role === "user";
+  const replyState = chatReplyStateCopy[locale];
+  const withoutOutput = !message.content && !message.reasoning;
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} px-1`}>
       <div
@@ -69,8 +72,9 @@ export function MessageBubble({ message, index, messageCount, phase, copied, com
         {message.content && !isUser
           ? <ChatMarkdown source={message.content} />
           : <div className="chat-plain-text whitespace-pre-wrap break-words">{message.content || (phase === "thinking" && index === messageCount - 1 ? <span className="animate-pulse ui-color-faint" >{text("thinkingNow")}</span> : "")}</div>}
-        {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{text("interrupted")}</div>}
-        {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{text("partialFailed")}</div>}
+        {message.interrupted && <div className="mt-2 text-xs ui-color-warning"  role="status">{withoutOutput ? replyState.stoppedEmpty : text("interrupted")}</div>}
+        {message.failed && <div className="mt-2 text-xs ui-color-danger"  role="alert">{withoutOutput ? replyState.failedEmpty : text("partialFailed")}</div>}
+        {!isUser && message.toolRound && <div className="mt-2 text-xs ui-color-warning" role="status">{message.toolRound === 'failed' ? replyState.toolFailed : replyState.toolCancelled}</div>}
         {!isUser && message.finishReason === 'length' && !message.interrupted && !message.failed && <div className="mt-2 text-xs ui-color-warning" role="status">{text("outputLimitReached")}</div>}
         </div>
         {!isUser && <div className="mt-2 flex min-w-0 items-center gap-2 text-xs ui-color-muted">

@@ -33,6 +33,7 @@ import { embeddingTargetCopy } from './embeddingTargetCopy';
 import { canPrepareAttachment } from './mediaPreprocessing';
 import { mediaPreparationCopy } from './mediaPreparationCopy';
 import { chatTemplateCopy } from './chatTemplateCopy';
+import { chatTaskCopy } from './chatTaskCopy';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
 import { useProjectChatBinding } from './useProjectChatBinding';
 import { projectChatBindingCopy } from './projectChatBindingCopy';
@@ -200,7 +201,10 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     return !canPrepareAttachment(attachment, modalities ?? { text: true, image: visionReady, audio: false, video: false }, mediaOptions);
   });
   const chatSupported = selectedStatus.engine?.chat_supported !== false;
-  const canSend = serverOn && chatSupported && !clearingWorkspace && (selectedStatus.engine?.tasks?.includes('generate') ?? true) && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
+  const generates = selectedStatus.engine?.tasks?.includes('generate') ?? true;
+  // A session that serves only other tasks (embeddings, transcription) is explained by those tasks, not as a missing chat template.
+  const chatUnavailable = !serverOn ? null : !generates ? chatTaskCopy(locale, selectedStatus.engine?.tasks ?? []) : !chatSupported ? chatTemplateCopy[locale] : null;
+  const canSend = serverOn && chatSupported && !clearingWorkspace && generates && !!apiKey && !!model && !incompatibleMedia && attachmentStatus !== 'reading' && !projectDocumentsLoading && !projectDocumentsError && phase === "idle" && !pendingToolCall && !aborting && !store.busy && (!!input.trim() || attachments.length > 0 || documents.length > 0);
   const disabled = !serverOn || !model || !apiKey;
   const loadingModel = !serverOn && selectedStatus.state !== 'failed' && selectedStatus.state !== 'crashed' && (selectedStatus.state === 'starting' || store.busy || startingSession);
 
@@ -262,7 +266,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const lastMessage = viewMessages.at(-1);
   const responseState = error || lastMessage?.failed ? 'failed'
     : lastMessage?.interrupted ? 'interrupted'
-    : lastMessage?.finishReason === 'tool_calls' ? 'tool-request'
+    : lastMessage?.finishReason === 'tool_calls' || lastMessage?.toolRound ? 'tool-request'
     : lastMessage?.role === 'assistant' ? 'complete' : 'none';
   // Retry belongs to the conversation that owns the live buffer, once nothing is running or awaiting approval.
   const recoverable = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && unfinishedReply(lastMessage);
@@ -344,6 +348,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             status={selectedStatus}
             model={model}
             serverOn={serverOn}
+            canGenerate={chatSupported && generates}
             msgs={viewMessages}
             streamingDraft={viewingLiveThread ? streamingDraft : null}
             phase={phase}
@@ -371,7 +376,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           </PanelFeedback>
           <ChatComposer
             locale={locale}
-            contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, serverOn && !chatSupported ? chatTemplateCopy[locale] : null].filter(Boolean).join(' ') || null}
+            contextWarning={[contextWarning, incompatibleMedia ? providerCopy[locale].blocked : null, chatUnavailable].filter(Boolean).join(' ') || null}
             contextSources={contextSources}
             mcpCatalog={mcpCatalog}
             selectedMcpTools={selectedMcpTools}
@@ -401,6 +406,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             canSend={canSend}
             msgsLength={viewMessages.length}
             responseState={responseState}
+            responseWithoutOutput={lastMessage?.role === 'assistant' && !lastMessage.content && !lastMessage.reasoning}
             responseFinishReason={lastMessage?.finishReason}
             ct={ct}
             skillPicker={<ChatSkillPicker native={skills.native} catalog={skills.catalog} warnings={skills.warnings} loadError={skills.loadError} loading={skills.loading} loaded={skills.loaded} selectedSkillIds={skills.selectedSkillIds} onToggleSkill={skills.toggleSkill} onRefresh={() => void skills.refreshSkills()} locked={phase !== "idle" || pendingToolCall !== null} closeLabel={ct("close")} pt={pt} />}

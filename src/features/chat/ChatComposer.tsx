@@ -12,6 +12,7 @@ import type { Locale } from '../../shared/i18n/i18nCatalog';
 import type { ChatMcpTool } from "./useChatMcpTools";
 import type { PendingToolCall } from "./useChatSend";
 import { createChatImeGuard } from './chatImeGuard';
+import { chatReplyStateCopy } from './chatRetryCopy';
 
 interface ChatComposerProps {
   locale?: Locale;
@@ -46,6 +47,8 @@ interface ChatComposerProps {
   msgsLength: number;
   responseState: 'none' | 'complete' | 'failed' | 'interrupted' | 'tool-request';
   responseFinishReason?: string;
+  /** The last reply ended before producing any text or reasoning. */
+  responseWithoutOutput?: boolean;
   ct: (key: ChatTextKey) => string;
   skillPicker?: ReactNode;
   selectedSkills?: ChatSkill[];
@@ -59,7 +62,7 @@ export default function ChatComposer({
   contextWarning, contextSources, mcpCatalog, selectedMcpTools, toggleMcpTool, loadingMcpTools, refreshMcpTools,
   mcpDefinitions, pendingToolCall, toolCallInProgress, onApproveTool, onRejectTool, attachments, onRemoveAttachment, attachmentStatus,
   documents, onRemoveDocument, input, setInput, onKeyDown, disabled, phase, onAddAttachment, onStop,
-  aborting, onSend, canSend, msgsLength, responseState, responseFinishReason, ct, locale = 'en', loadingModel = false,
+  aborting, onSend, canSend, msgsLength, responseState, responseFinishReason, responseWithoutOutput = false, ct, locale = 'en', loadingModel = false,
   skillPicker, selectedSkills = [], onRemoveSkill, skillsLocked = false, selectedSkillsLabel, removeSkillLabel,
 }: ChatComposerProps) {
   const toolStripRef = useRef<HTMLDivElement>(null);
@@ -81,7 +84,7 @@ export default function ChatComposer({
   }, []);
   const controlsLocked = phase !== 'idle' || pendingToolCall !== null;
   const responseStatus = responseState === 'failed' ? ct('requestFailed')
-    : responseState === 'interrupted' ? ct('interrupted')
+    : responseState === 'interrupted' ? (responseWithoutOutput ? chatReplyStateCopy[locale].stoppedEmpty : ct('interrupted'))
     : responseState === 'tool-request' ? ct('mcpResponseIncomplete')
     : responseState === 'complete' ? ct(responseFinishReason === 'length' ? 'responseLimited' : 'responseReady') : null;
   const conversationStatus = toolCallInProgress ? ct('waitingMcpTool')

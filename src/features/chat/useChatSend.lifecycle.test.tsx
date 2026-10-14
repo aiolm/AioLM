@@ -30,7 +30,7 @@ function setup(initialDocuments: DocumentAttachment[] = []) {
       attachments, setAttachments, documents, setDocuments, atBottomRef,
       mcpDefinitions: [], mcpEntryByFunctionName: new Map(),
     });
-    return { ...send, msgs, phase, documents, input, setInput, attachments, setAttachments };
+    return { ...send, msgs, setMsgs, phase, documents, input, setInput, attachments, setAttachments };
   });
 }
 
@@ -74,7 +74,8 @@ describe('chat turn lifecycle', () => {
     const { result } = setup();
     await act(async () => { await result.current.send(); });
     expect(result.current.failedRef.current?.text).toBe('Original question');
-    act(() => result.current.resetChatState());
+    // A conversation switch shows the other conversation's messages and resets the composer.
+    act(() => { result.current.setMsgs([]); result.current.resetChatState(); });
     expect(result.current.failedRef.current).toBeNull();
     // An unrelated error in the new composer must not recover the old turn.
     act(() => result.current.setError('File attachment failed'));

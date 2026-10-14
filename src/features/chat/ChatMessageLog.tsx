@@ -17,6 +17,8 @@ interface ChatMessageLogProps {
   status: api.ServerStatus;
   model: string;
   serverOn: boolean;
+  /** The selected session can answer chat; Retry stays unavailable otherwise. */
+  canGenerate: boolean;
   msgs: ChatHistoryMessage[];
   streamingDraft: { content: string; reasoning: string; metrics?: ResponseMetrics } | null;
   phase: "idle" | "thinking" | "streaming";
@@ -40,7 +42,7 @@ interface ChatMessageLogProps {
 }
 
 export default function ChatMessageLog({
-  scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, msgs, streamingDraft, phase,
+  scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraft, phase,
   copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, onRetry, ct,
   onOpenModels, modelSettingsLabel, onOpenDiagnostics, onStart, starting,
 }: ChatMessageLogProps) {
@@ -104,10 +106,10 @@ export default function ChatMessageLog({
 
       {error && <FeedbackBanner tone="error" title={ct("requestFailed")}>
         <div className="whitespace-pre-wrap break-words">{normalizeDisplayText(error)}</div>
-        {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
+        {canRetry && <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || !canGenerate || phase !== "idle"} className="app-button app-button--danger app-button--sm mt-2.5">{ct("retry")}</button>}
       </FeedbackBanner>}
       {!error && recoverable && canRetry && (
-        <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || phase !== "idle"} className="app-button app-button--secondary app-button--sm mt-2.5">{ct("retry")}</button>
+        <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || !canGenerate || phase !== "idle"} className="app-button app-button--secondary app-button--sm mt-2.5">{ct("retry")}</button>
       )}
       {!error && recoverable && !canRetry && retryNotice && <p role="status" className="mt-2.5 text-xs ui-color-muted">{retryNotice}</p>}
     </div>

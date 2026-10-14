@@ -121,7 +121,9 @@ export function useChatSend({
   // This session's failed turn wins; otherwise the snapshot saved with the
   // conversation's unfinished last reply survives a restart or thread switch.
   const lastMessage = msgs.at(-1);
-  const saved = useMemo(() => savedRetry(lastMessage), [lastMessage]);
+  const supersededRef = useRef<Msg | null>(null);
+  const savedForLast = useMemo(() => savedRetry(lastMessage), [lastMessage]);
+  const saved = lastMessage === supersededRef.current ? null : savedForLast;
   const canRetry = !!failedRef.current || saved?.kind === "ready";
   const retryUnavailable = !failedRef.current && saved?.kind === "unavailable" ? saved.reason : null;
 
@@ -172,6 +174,7 @@ export function useChatSend({
     setStreamingDraft(null);
     setToolCallInProgress(false);
     failedRef.current = null;
+    supersededRef.current = null;
     setError(null);
     documentTruncationRef.current = false;
     setContextWarning(null);
@@ -196,6 +199,7 @@ export function useChatSend({
       }
       turnRef.current = null;
       failedRef.current = null;
+      supersededRef.current = null;
       streamRef.current = { assistant: "", reasoning: "", toolCalls: [] };
       metricsRef.current = { preparationStartedAt: 0 };
       toolRoundsRef.current = 0;
@@ -234,8 +238,10 @@ export function useChatSend({
     if (!toolFollowup) {
       // A new message supersedes an earlier failure; if it fails during preparation, Retry must not resend the old one.
       if (!retry) failedRef.current = null;
-      // The same goes for a snapshot saved with an earlier unfinished reply.
-      if (!retry) setMsgs((current) => current.at(-1)?.retry ? [...current.slice(0, -1), withoutRetry(current.at(-1)!)] : current);
+      // The same goes for a snapshot saved with an earlier unfinished reply, in
+      // this session only: until the new request is issued nothing replaces it,
+      // so the saved copy stays for a later restart or conversation switch.
+      if (!retry) supersededRef.current = lastMessage ?? null;
       toolRoundsRef.current = 0;
       skillReadsRef.current = 0;
       documentTruncationRef.current = false;
@@ -270,6 +276,7 @@ export function useChatSend({
     metricsRef.current = { preparationStartedAt: performance.now() };
     let awaitingTool = false;
     let assistantAppended = false;
+    let replacedReply: Msg | undefined;
     let skillFollowup: api.ChatMessage[] | null = null;
     const skillIds = selectedSkillIds.slice();
     try {
@@ -348,6 +355,7 @@ export function useChatSend({
         const last = current[current.length - 1];
         const replaceAssistant = (retry || toolFollowup) && last?.role === "assistant";
         const withoutDanglingAssistant = replaceAssistant ? current.slice(0, -1) : current;
+        if (replaceAssistant && retry) replacedReply = last;
         if (toolFollowup) return [...withoutDanglingAssistant, { role: "assistant" as const, content: "", reasoning: "", model: turn.model, retry: retrySnapshot }];
         const previous = withoutDanglingAssistant[withoutDanglingAssistant.length - 1];
         // A saved snapshot always follows its own user bubble, whose stored copy may be shortened.
@@ -451,23 +459,23 @@ export function useChatSend({
       if (assistantAppended) {
         const partialAssistant = streamRef.current.assistant;
         const partialReasoning = streamRef.current.reasoning;
-        if (partialAssistant || partialReasoning) {
-          failedRef.current = { ...(failedRef.current ?? { text, images, documents: pendingDocuments, history: [] }), partialAssistant, partialReasoning };
-          setMsgs((current) => {
-            if (!isCurrent()) return current;
-            if (current[current.length - 1]?.role !== "assistant") return current;
-            const next = current.slice();
-            next[next.length - 1] = { ...next[next.length - 1], content: partialAssistant, reasoning: partialReasoning, interrupted: isAbort, failed: !isAbort, metrics: responseMetrics };
-            return next;
-          });
-          setStreamingDraft(null);
-        } else {
-          setMsgs((current) => isCurrent() && current[current.length - 1]?.role === "assistant" ? current.slice(0, -1) : current);
-          setStreamingDraft(null);
-        }
+        const produced = !!(partialAssistant || partialReasoning);
+        if (produced) failedRef.current = { ...(failedRef.current ?? { text, images, documents: pendingDocuments, history: [] }), partialAssistant, partialReasoning };
+        // The request was issued, so its reply stays (even empty) with the exact
+        // snapshot for Retry. A retry that produced nothing restores the earlier
+        // reply as it was, including the measurements of the response it shows.
+        setMsgs((current) => {
+          if (!isCurrent()) return current;
+          if (current[current.length - 1]?.role !== "assistant") return current;
+          const next = current.slice();
+          next[next.length - 1] = !produced && replacedReply
+            ? replacedReply
+            : { ...next[next.length - 1], content: partialAssistant, reasoning: partialReasoning, interrupted: isAbort, failed: !isAbort, metrics: responseMetrics };
+          return next;
+        });
+        setStreamingDraft(null);
       }
       if (isAbort) {
-        if (!streamRef.current.assistant && !streamRef.current.reasoning) failedRef.current = null;
         toolRoundsRef.current = 0;
         skillReadsRef.current = 0;
         setPhase("idle");
@@ -531,6 +539,10 @@ export function useChatSend({
       ctrlRef.current = null;
       setAborting(false);
       setPhase("idle");
+      // Recorded from what the app saw, not from a finish reason the runtime may omit.
+      const toolRound = controller.signal.aborted ? "cancelled" as const : "failed" as const;
+      setMsgs((current) => generation === turnGeneration.current && current.at(-1)?.role === "assistant"
+        ? [...current.slice(0, -1), { ...current.at(-1)!, toolRound }] : current);
       if (!controller.signal.aborted) setError(`MCP tool call failed: ${caught instanceof Error ? caught.message : String(caught)}`);
     }
   };

@@ -39,6 +39,8 @@ export interface ChatHistoryMessage {
   failed?: boolean;
   /** Runtime-reported termination; absent in older conversations. */
   finishReason?: string;
+  /** An MCP call this reply requested was stopped or failed before its result was used. */
+  toolRound?: "cancelled" | "failed";
   citations?: ChatCitation[];
   metrics?: ResponseMetrics;
   /** Only on an unfinished last reply: what Retry resends after a restart or conversation switch. */
@@ -197,9 +199,13 @@ export function chatRetrySnapshot(
   return JSON.stringify(snapshot).length > RETRY_SNAPSHOT_LIMIT ? { version: 1, unavailable: "too-large" } : snapshot;
 }
 
+function validToolRound(value: unknown): value is "cancelled" | "failed" {
+  return value === "cancelled" || value === "failed";
+}
+
 /** A reply that stopped, failed or still waits on a tool, so the turn it answers is not finished. */
 export function unfinishedReply(message: ChatHistoryMessage | undefined): boolean {
-  return message?.role === "assistant" && (!!message.interrupted || !!message.failed || message.finishReason === "tool_calls");
+  return message?.role === "assistant" && (!!message.interrupted || !!message.failed || message.finishReason === "tool_calls" || validToolRound(message.toolRound));
 }
 
 /** How Retry can recover the conversation's unfinished last reply from what was saved; null when nothing is unfinished. */
@@ -281,6 +287,7 @@ function safeThread(thread: ChatThread): ChatThread {
       if (message.role === 'assistant' && typeof message.finishReason === 'string' && message.finishReason) {
         safeMessage.finishReason = message.finishReason.slice(0, 128);
       }
+      if (message.role === 'assistant' && validToolRound(message.toolRound)) safeMessage.toolRound = message.toolRound;
       if (message.images !== undefined) {
         safeMessage.images = message.images.slice(0, 4).map((image) => ({
           name: image.name,
