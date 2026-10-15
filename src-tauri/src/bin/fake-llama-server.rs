@@ -188,6 +188,56 @@ fn handle(mut stream: TcpStream) {
 
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+    if arguments
+        .iter()
+        .any(|arg| arg == "--bridge-engine-argv-fixture")
+    {
+        // A separate, short-lived synthetic engine receives exact tokens
+        // from the bridge. This is argv evidence, not inference evidence.
+        std::fs::write(
+            std::env::var("FAKE_BRIDGE_CHILD_ARGV_FILE").expect("bridge child argv path"),
+            serde_json::to_vec(&arguments[1..]).unwrap(),
+        )
+        .unwrap();
+        return;
+    }
+    if arguments
+        .iter()
+        .any(|arg| arg == "--adapter-bridge-fixture")
+    {
+        let engine: Vec<String> = serde_json::from_str(
+            &std::env::var("SYNTHETIC_ENGINE_ARGV").expect("explicit bridge engine argv"),
+        )
+        .expect("bridge engine JSON argv");
+        let phase = if arguments.iter().any(|arg| arg == "--help") {
+            "help"
+        } else if arguments.iter().any(|arg| arg == "--adapter-probe") {
+            "probe"
+        } else {
+            "launch"
+        };
+        let path = std::env::var("FAKE_BRIDGE_LINK_FILE").expect("bridge evidence path");
+        let mut evidence: serde_json::Value = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        evidence[phase] = serde_json::json!(engine);
+        std::fs::write(path, serde_json::to_vec(&evidence).unwrap()).unwrap();
+        if phase == "launch" {
+            let forwarded = arguments[1..].iter().filter(|arg| {
+                !matches!(
+                    arg.as_str(),
+                    "--adapter-bridge-fixture" | "--adapter-engine" | "--adapter-no-health-auth"
+                )
+            });
+            let status = std::process::Command::new(&engine[0])
+                .args(&engine[1..])
+                .args(forwarded)
+                .status()
+                .expect("spawn synthetic bridge engine");
+            assert!(status.success(), "synthetic bridge engine failed");
+        }
+    }
     if let Some(index) = arguments.iter().position(|arg| arg == "--adapter-probe") {
         let engine = arguments.get(index + 1).expect("adapter engine ID");
         let runtime = arguments.get(index + 2).expect("adapter runtime ID");

@@ -45,6 +45,11 @@ name = "runtime_entrypoint_wizard"
 path = "tests/runtime_entrypoint_wizard.rs"
 required-features = ["test-fixtures"]
 
+[[test]]
+name = "runtime_bridge_journey"
+path = "tests/runtime_bridge_journey.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "aiolm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

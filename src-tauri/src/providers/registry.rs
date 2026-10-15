@@ -83,6 +83,10 @@ pub struct RuntimeManifest {
     /// field retain their previous template interpretation and serialization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_bindings: Option<LaunchBindings>,
+    /// Explicit bridge linkage, passed as literal JSON argv after template
+    /// expansion. The bridge, not help parsing, defines how it drives this command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge_command: Option<BridgeCommand>,
     #[serde(default)]
     pub options: Vec<ExternalOption>,
     pub model_formats: Vec<String>,
@@ -93,6 +97,51 @@ pub struct RuntimeManifest {
     pub health_path: String,
     #[serde(default)]
     pub health_authenticated: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BridgeCommand {
+    pub version: u32,
+    pub environment_variable: String,
+    pub argv: Vec<String>,
+}
+
+/// Literal data: never expand engine paths or tokens as launch templates.
+pub fn bridge_environment(m: &RuntimeManifest) -> Result<Option<(String, String)>, String> {
+    let Some(link) = &m.bridge_command else {
+        return Ok(None);
+    };
+    let name = &link.environment_variable;
+    let canonical_name = name.to_ascii_uppercase();
+    if link.version != 1
+        || !valid_text(name, 128)
+        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        || canonical_name.starts_with("AIOLM_")
+        || canonical_name.starts_with("LLAMA_BOARD_")
+        || m.launch.env.len() >= 64
+        || m.probe.env.len() >= 64
+        || m.launch
+            .env
+            .keys()
+            .chain(m.probe.env.keys())
+            .any(|key| key.eq_ignore_ascii_case(name))
+        || link.argv.is_empty()
+        || link.argv.len() > 129
+        || link
+            .argv
+            .iter()
+            .any(|arg| arg.len() > 32768 || arg.contains('\0'))
+        || !Path::new(&link.argv[0]).is_absolute()
+        || !m.artifacts.contains(&link.argv[0])
+    {
+        return Err("invalid or conflicting bridge engine argv contract".into());
+    }
+    let json = serde_json::to_string(&link.argv).map_err(|e| e.to_string())?;
+    if json.len() > 32768 {
+        return Err("bridge engine argv exceeds environment limits".into());
+    }
+    Ok(Some((name.clone(), json)))
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -367,6 +416,7 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     }
     validate_process(&m.launch)?;
     validate_process(&m.probe)?;
+    bridge_environment(m)?;
     if let Some(bindings) = &m.launch_bindings {
         validate_launch_bindings(bindings, &m.launch.args)?;
     }
@@ -702,6 +752,9 @@ fn run_probe(
                 &super::launch::served_model_name(&cfg.active_model),
             )?,
         );
+    }
+    if let Some((name, value)) = bridge_environment(m)? {
+        command.env(name, value);
     }
     if let Some(cwd) = &m.probe.working_directory {
         command.current_dir(cwd);
@@ -1104,7 +1157,7 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
         cfg,
         &options(cfg),
     )?);
-    let env = m
+    let mut env = m
         .launch
         .env
         .iter()
@@ -1116,6 +1169,9 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
+    if let Some((name, value)) = bridge_environment(&m)? {
+        env.push((name.into(), value.into()));
+    }
     Ok(EngineCommand {
         program: m.launch.program.into(),
         args,
@@ -1216,6 +1272,9 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
     if let Some(launch_bindings) = &manifest.launch_bindings {
         binding["launch_bindings"] =
             serde_json::to_value(launch_bindings).expect("serializable bindings");
+    }
+    if let Some(bridge) = &manifest.bridge_command {
+        binding["bridge_command"] = serde_json::to_value(bridge).expect("serializable bridge");
     }
     format!("{:x}", Sha256::digest(binding.to_string().as_bytes()))
 }
@@ -1417,6 +1476,10 @@ pub enum ServingProtocol {
         program: String,
         #[serde(default)]
         prefix: Vec<String>,
+        /// Name consumed by this bridge for a JSON array [engine, ...prefix].
+        /// Legacy bridge drafts with no prefix may omit this explicit link.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine_argv_env: Option<String>,
     },
 }
 
@@ -1496,13 +1559,20 @@ fn binding_tokens(binding: &ArgBinding, placeholder: &str) -> Result<Vec<String>
 
 /// Launch program, prefix and declared artifacts of an entry point. A bridge
 /// serves HTTP and drives the engine, which stays a hash-checked artifact.
+struct EntryLaunch {
+    program: String,
+    prefix: Vec<String>,
+    artifacts: Vec<String>,
+    bridge_command: Option<BridgeCommand>,
+}
+
 fn entry_launch(
     program: &str,
     prefix: &[String],
     artifacts: &[String],
     environment: &BTreeMap<String, String>,
     protocol: &ServingProtocol,
-) -> Result<(String, Vec<String>, Vec<String>), String> {
+) -> Result<EntryLaunch, String> {
     if prefix
         .iter()
         .chain(environment.values())
@@ -1511,22 +1581,38 @@ fn entry_launch(
         return Err("entry prefix and literal environment cannot contain {bindings}".into());
     }
     let mut artifacts = artifacts.to_vec();
-    let (launch_program, launch_prefix) = match protocol {
-        ServingProtocol::OpenaiHttp => (program.to_owned(), prefix.to_vec()),
+    let (launch_program, launch_prefix, bridge_command) = match protocol {
+        ServingProtocol::OpenaiHttp => (program.to_owned(), prefix.to_vec(), None),
         ServingProtocol::Bridge {
             program: bridge,
             prefix: bridge_prefix,
+            engine_argv_env,
         } => {
             if bridge_prefix.iter().any(|token| token.contains('{')) {
                 return Err("bridge prefix cannot contain {bindings}".into());
             }
             artifacts.push(program.to_owned());
-            (bridge.clone(), bridge_prefix.clone())
+            if engine_argv_env.is_none() && !prefix.is_empty() {
+                return Err("bridge must explicitly receive the engine entry point through a JSON argv environment variable".into());
+            }
+            let link = engine_argv_env.as_ref().map(|name| BridgeCommand {
+                version: 1,
+                environment_variable: name.clone(),
+                argv: std::iter::once(program.to_owned())
+                    .chain(prefix.iter().cloned())
+                    .collect(),
+            });
+            (bridge.clone(), bridge_prefix.clone(), link)
         }
     };
     artifacts.sort();
     artifacts.dedup();
-    Ok((launch_program, launch_prefix, artifacts))
+    Ok(EntryLaunch {
+        program: launch_program,
+        prefix: launch_prefix,
+        artifacts,
+        bridge_command,
+    })
 }
 
 /// The part of an entry point help discovery depends on, before any binding
@@ -1555,7 +1641,12 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         return Err("entry-point registration requires a custom.* engine ID".into());
     }
     path(entry.engine_id, &entry.runtime_id)?;
-    let (program, mut args, artifacts) = entry_launch(
+    let EntryLaunch {
+        program,
+        prefix: mut args,
+        artifacts,
+        bridge_command,
+    } = entry_launch(
         &entry.program,
         &entry.prefix,
         &entry.artifacts,
@@ -1591,6 +1682,7 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         probe: process.clone(),
         launch: process,
         launch_bindings: Some(launch_bindings),
+        bridge_command,
         options: Vec::new(),
         model_formats: Vec::new(),
         models: Vec::new(),
@@ -1607,7 +1699,12 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
     if !draft.engine_id.is_custom() {
         return Err("entry-point registration requires a custom.* engine ID".into());
     }
-    let (program, mut args, artifacts) = entry_launch(
+    let EntryLaunch {
+        program,
+        prefix: mut args,
+        artifacts,
+        bridge_command,
+    } = entry_launch(
         &draft.program,
         &draft.prefix,
         &draft.artifacts,
@@ -1670,6 +1767,7 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         options: Vec::new(),
         model_formats: draft.model_formats.clone(),
         launch_bindings: Some(launch_bindings),
+        bridge_command,
         models: Vec::new(),
         artifacts,
         health_path: draft.health_path.clone(),
@@ -1818,6 +1916,106 @@ mod tests {
             assert!(positional);
             assert_eq!(flags, [("--listen".into(), "port".into())]);
         }
+    }
+
+    #[test]
+    fn bridge_keeps_engine_argv_literal_and_requires_an_explicit_link() {
+        let mut draft = positional_draft();
+        let engine = draft.program.clone();
+        draft.prefix = vec![
+            "-m".into(),
+            "synthetic.engine".into(),
+            "한글 path ; &".into(),
+            "".into(),
+        ];
+        let bridge = example().probe.program;
+        draft.protocol = ServingProtocol::Bridge {
+            program: bridge.clone(),
+            prefix: vec!["--http".into()],
+            engine_argv_env: None,
+        };
+        assert!(manifest_from_draft(&draft)
+            .unwrap_err()
+            .contains("explicitly receive"));
+        draft.protocol = ServingProtocol::Bridge {
+            program: bridge.clone(),
+            prefix: vec!["--http".into()],
+            engine_argv_env: Some("BRIDGE_ENGINE_ARGV".into()),
+        };
+        let manifest = manifest_from_draft(&draft).unwrap();
+        assert_eq!(manifest.launch.program, bridge);
+        assert_eq!(launch_prefix(&manifest), ["--http"]);
+        let (name, json) = bridge_environment(&manifest).unwrap().unwrap();
+        assert_eq!(name, "BRIDGE_ENGINE_ARGV");
+        let expected = std::iter::once(engine)
+            .chain(draft.prefix.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&json).unwrap(),
+            expected
+        );
+        let request = super::super::runtime_schema::HelpRequest {
+            program: None,
+            args: vec!["--http".into(), "--help".into()],
+            scope: vec![],
+        };
+        let help =
+            super::super::runtime_schema::manifest_help_command(&manifest, &request).unwrap();
+        assert_eq!(help.environment.get(&name), Some(&json));
+        assert_eq!(help.args, request.args);
+        assert!(manifest.artifacts.contains(&draft.program));
+
+        let mut changed = manifest.clone();
+        changed
+            .bridge_command
+            .as_mut()
+            .unwrap()
+            .argv
+            .push("changed".into());
+        assert_ne!(
+            launch_fingerprint(&manifest, &AppConfig::default()),
+            launch_fingerprint(&changed, &AppConfig::default())
+        );
+        for invalid in [
+            "AIOLM_HOME",
+            "aiolm_home",
+            "LLAMA_BOARD_HOME",
+            "llama_board_home",
+            "bad-name",
+            "",
+        ] {
+            let mut changed = manifest.clone();
+            changed
+                .bridge_command
+                .as_mut()
+                .unwrap()
+                .environment_variable = invalid.into();
+            assert!(validate_manifest(&changed).is_err());
+        }
+        for probe in [true, false] {
+            let mut changed = manifest.clone();
+            let env = if probe {
+                &mut changed.probe.env
+            } else {
+                &mut changed.launch.env
+            };
+            env.insert("bridge_engine_argv".into(), "collision".into());
+            assert!(validate_manifest(&changed).is_err());
+        }
+        let mut changed = manifest.clone();
+        changed.bridge_command.as_mut().unwrap().version = 2;
+        assert!(validate_manifest(&changed).is_err());
+        let mut changed = manifest.clone();
+        changed.bridge_command.as_mut().unwrap().argv[0] = "undeclared".into();
+        assert!(validate_manifest(&changed).is_err());
+        let mut changed = manifest;
+        changed.bridge_command.as_mut().unwrap().argv[1] = "\0".into();
+        assert!(validate_manifest(&changed).is_err());
+        // Legacy direct manifests keep their old JSON contract.
+        assert!(serde_json::to_value(example())
+            .unwrap()
+            .get("bridge_command")
+            .is_none());
     }
 
     #[test]

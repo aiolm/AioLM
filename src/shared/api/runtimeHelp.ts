@@ -289,7 +289,13 @@ export interface LaunchBindings {
   bindings: Array<{ name: 'model' | 'host' | 'port' | 'model_alias'; argument: ArgBinding }>;
 }
 export type AuthBinding = { kind: 'none' } | { kind: 'env'; name: string };
-export type ServingProtocol = { kind: 'openai_http' } | { kind: 'bridge'; program: string; prefix: string[] };
+export type ServingProtocol = { kind: 'openai_http' } | { kind: 'bridge'; program: string; prefix: string[]; engine_argv_env?: string | null };
+
+export interface BridgeCommand {
+  version: 1;
+  environment_variable: string;
+  argv: string[];
+}
 
 export interface ProcessSpec {
   program: string;
@@ -331,6 +337,7 @@ export interface RegisteredManifest {
   launch: ProcessSpec;
   probe: ProcessSpec;
   launch_bindings?: LaunchBindings | null;
+  bridge_command?: BridgeCommand | null;
   [field: string]: unknown;
 }
 

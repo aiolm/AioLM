@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
@@ -24,6 +24,26 @@ beforeEach(() => {
   vi.mocked(api.entrypointManifestPreview).mockResolvedValue(registered);
   vi.mocked(api.runtimeEntrypointRegister).mockResolvedValue(registered);
   vi.mocked(api.pickRuntimePath).mockResolvedValue('/synthetic path/한글 engine.py');
+});
+
+it('discovers the HTTP bridge entry point instead of attaching engine arguments to the bridge program', async () => {
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.bridge' } });
+  fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'bridge-1' } });
+  fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/engine' } });
+  fireEvent.click(screen.getByRole('radio', { name: 'A separate bridge program serves HTTP' }));
+  fireEvent.change(screen.getByLabelText('Bridge program'), { target: { value: '/synthetic/python' } });
+  fireEvent.click(within(screen.getByRole('group', { name: 'Bridge arguments' })).getByRole('button', { name: 'Add argument' }));
+  fireEvent.change(screen.getByLabelText('Bridge arguments Argument 1'), { target: { value: '/synthetic/bridge.py' } });
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Bridge variable for engine JSON argv'), { target: { value: 'BRIDGE_ENGINE_ARGV' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(api.entrypointHelpDiscover).toHaveBeenCalledWith(expect.objectContaining({
+    program: '/synthetic/engine', protocol: { kind: 'bridge', program: '/synthetic/python', prefix: ['/synthetic/bridge.py'], engine_argv_env: 'BRIDGE_ENGINE_ARGV' },
+  }), {
+    program: null, args: ['/synthetic/bridge.py', '--help'], scope: [],
+  }));
 });
 
 async function enter() {

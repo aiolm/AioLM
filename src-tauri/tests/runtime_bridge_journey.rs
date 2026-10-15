@@ -1,0 +1,263 @@
+//! Synthetic bridge contract: bridge help configures bridge options; a
+//! separate engine receives explicit JSON argv and forwarded options. No
+//! inference or platform support claim is made by this fixture.
+use aiolm_lib::{
+    providers::{
+        self,
+        registry::*,
+        runtime_help::HelpService,
+        runtime_help_store::{self, Baseline},
+        runtime_schema::{self, HelpRequest, HelpState},
+    },
+    server, AppConfig, ErrBuf,
+};
+use serde_json::{json, Value};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+struct TestHome {
+    path: PathBuf,
+    previous: Option<std::ffi::OsString>,
+}
+impl TestHome {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!("aiolm-bridge-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&path).unwrap();
+        let previous = std::env::var_os("AIOLM_HOME");
+        // This integration binary has one test, so no concurrent env readers.
+        std::env::set_var("AIOLM_HOME", &path);
+        Self { path, previous }
+    }
+}
+impl Drop for TestHome {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var("AIOLM_HOME", value),
+            None => std::env::remove_var("AIOLM_HOME"),
+        }
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[tokio::test]
+async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
+    let area = TestHome::new();
+    let bridge = env!("CARGO_BIN_EXE_fake-llama-server").to_string();
+    let engine_file = area
+        .path
+        .join(format!("별도 engine{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(&bridge, &engine_file).unwrap();
+    let engine = engine_file.to_string_lossy().into_owned();
+    let model = area.path.join("synthetic model.bin");
+    fs::write(&model, b"synthetic model").unwrap();
+    let prefix = vec![
+        "--bridge-engine-argv-fixture".into(),
+        "한글 path ; &".into(),
+        "".into(),
+    ];
+    let bridge_prefix = vec![
+        "--adapter-bridge-fixture".into(),
+        "--adapter-engine".into(),
+        "--adapter-no-health-auth".into(),
+    ];
+    let link_file = area.path.join("bridge-link.json");
+    let child_argv = area.path.join("engine-argv.json");
+    let bridge_argv = area.path.join("bridge-argv.json");
+    let environment = BTreeMap::from([
+        (
+            "FAKE_BRIDGE_LINK_FILE".into(),
+            link_file.to_string_lossy().into_owned(),
+        ),
+        (
+            "FAKE_BRIDGE_CHILD_ARGV_FILE".into(),
+            child_argv.to_string_lossy().into_owned(),
+        ),
+        (
+            "FAKE_ENGINE_ARGV_FILE".into(),
+            bridge_argv.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let id = providers::ProviderId::parse("custom.bridgefixture").unwrap();
+    let protocol = ServingProtocol::Bridge {
+        program: bridge.clone(),
+        prefix: bridge_prefix.clone(),
+        engine_argv_env: Some("SYNTHETIC_ENGINE_ARGV".into()),
+    };
+    let entry = EntrypointHelp {
+        engine_id: id,
+        runtime_id: "bridge-1".into(),
+        program: engine.clone(),
+        prefix: prefix.clone(),
+        working_directory: Some(area.path.to_string_lossy().into_owned()),
+        artifacts: vec![],
+        environment: environment.clone(),
+        protocol: protocol.clone(),
+    };
+    let mut args = bridge_prefix.clone();
+    args.extend(["--adapter-help-fixture".into(), "--help".into()]);
+    let request = HelpRequest {
+        program: None,
+        args,
+        scope: vec![],
+    };
+    let provisional = provisional_manifest(&entry).unwrap();
+    let command = runtime_schema::manifest_help_command(&provisional, &request).unwrap();
+    assert_eq!(command.program, PathBuf::from(&bridge));
+    let root = providers::registry::root();
+    let (report, descriptor) = runtime_help_store::discover_against(
+        &HelpService::default(),
+        &root,
+        "bridge-owner",
+        id.as_str(),
+        "bridge-1",
+        &command,
+        &[],
+        Baseline::Latest,
+    )
+    .unwrap();
+    assert!(report.complete());
+    let mut probe_args = bridge_prefix.clone();
+    probe_args.extend([
+        "--adapter-probe".into(),
+        id.as_str().into(),
+        "bridge-1".into(),
+        "{model}".into(),
+    ]);
+    let draft = EntrypointDraft {
+        engine_id: id,
+        runtime_id: entry.runtime_id.clone(),
+        display_name: "Synthetic explicit bridge".into(),
+        program: engine.clone(),
+        prefix: prefix.clone(),
+        working_directory: entry.working_directory.clone(),
+        artifacts: vec![],
+        environment: environment.clone(),
+        model: ArgBinding::Flag {
+            flag: "--model".into(),
+            equals: false,
+        },
+        port: ArgBinding::Flag {
+            flag: "--port".into(),
+            equals: false,
+        },
+        host: None,
+        served_model: None,
+        auth: AuthBinding::None,
+        protocol,
+        probe: ProcessSpec {
+            program: bridge.clone(),
+            args: probe_args,
+            env: environment,
+            working_directory: None,
+        },
+        health_path: "/health".into(),
+        health_authenticated: false,
+        model_formats: vec!["unknown".into()],
+        help: Some(DraftHelp {
+            fingerprint: descriptor.fingerprint,
+            request: request.clone(),
+        }),
+    };
+    let manifest = manifest_from_draft(&draft).unwrap();
+    // An artifact's help remains available for inspection. It cannot become
+    // the bridge's launch schema, even with a cached complete snapshot.
+    let inspection = HelpRequest {
+        program: Some(engine.clone()),
+        args: vec!["--adapter-help-fixture".into(), "--help".into()],
+        scope: vec![],
+    };
+    let inspect_command = runtime_schema::manifest_help_command(&manifest, &inspection).unwrap();
+    let (_, inspect_descriptor) = runtime_help_store::discover_against(
+        &HelpService::default(),
+        &root,
+        "engine-inspection",
+        id.as_str(),
+        "bridge-1",
+        &inspect_command,
+        &[],
+        Baseline::Latest,
+    )
+    .unwrap();
+    let mut wrong = draft.clone();
+    wrong.help = Some(DraftHelp {
+        fingerprint: inspect_descriptor.fingerprint.clone(),
+        request: inspection.clone(),
+    });
+    assert!(runtime_schema::draft_acceptance(&root, &wrong, &manifest)
+        .unwrap_err()
+        .contains("inspection only"));
+    runtime_schema::register_entrypoint(&root, &draft, None)
+        .await
+        .unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut cfg = AppConfig {
+        active_provider: id.as_str().into(),
+        active_runtime: "bridge-1".into(),
+        active_model: model.to_string_lossy().into_owned(),
+        port,
+        ..Default::default()
+    };
+    cfg.normalize();
+    assert!(
+        runtime_schema::accept(&root, &cfg, &inspect_descriptor.fingerprint, &inspection)
+            .unwrap_err()
+            .contains("inspection only")
+    );
+    assert_eq!(
+        runtime_schema::effective(&root, &cfg, true)
+            .unwrap()
+            .help_state,
+        HelpState::Current
+    );
+    cfg.provider_options.insert(
+        id.as_str().into(),
+        json!({"fresh_label":"눈길 ; & \"quoted\"", "fresh_count":"0"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    providers::adapter::refresh(&cfg, None).await.unwrap();
+    let planned = providers::registry::command(&cfg, port, "").unwrap();
+    let tail = vec![
+        "--fresh-count".to_string(),
+        "0".into(),
+        "--fresh-label".into(),
+        "눈길 ; & \"quoted\"".into(),
+    ];
+    assert!(planned.args.ends_with(&tail));
+    let err = Arc::new(ErrBuf::default());
+    let (child, url, _) = server::spawn(&cfg, "", &err, &Default::default()).unwrap();
+    let state = Arc::new(Mutex::new(server::ServerState::new()));
+    {
+        let mut shared = state.lock().unwrap();
+        shared.child = Some(child);
+        shared.engine = Some(providers::execution::info(&cfg).unwrap());
+    }
+    let ready = server::wait_ready(state.clone(), &url, "", 5, &err).await;
+    // Stop the exact owned process even if readiness fails.
+    {
+        server::kill(&mut state.lock().unwrap().child, Some(err.clone()));
+    }
+    ready.unwrap();
+    let actual: Vec<String> = serde_json::from_slice(&fs::read(child_argv).unwrap()).unwrap();
+    assert!(actual.starts_with(&prefix), "{actual:?}");
+    assert!(actual.ends_with(&tail), "{actual:?}");
+    assert!(actual
+        .windows(2)
+        .any(|pair| pair == ["--model", cfg.active_model.as_str()]));
+    let link: Value = serde_json::from_slice(&fs::read(link_file).unwrap()).unwrap();
+    let expected = std::iter::once(engine).chain(prefix).collect::<Vec<_>>();
+    for phase in ["help", "probe", "launch"] {
+        assert_eq!(link[phase], json!(expected), "{phase}");
+    }
+    let actual_bridge: Vec<String> =
+        serde_json::from_slice(&fs::read(bridge_argv).unwrap()).unwrap();
+    assert!(actual_bridge.starts_with(&bridge_prefix));
+    assert!(actual_bridge.ends_with(&tail));
+}

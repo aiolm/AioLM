@@ -109,6 +109,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const [protocol, setProtocol] = useState<'openai_http' | 'bridge'>('openai_http');
   const [bridgeProgram, setBridgeProgram] = useState('');
   const [bridgePrefix, setBridgePrefix] = useState<string[]>([]);
+  const [bridgeArgvEnv, setBridgeArgvEnv] = useState('');
   const [helpArgs, setHelpArgs] = useState<string[]>(['--help']);
   const [found, setFound] = useState<{ entry: string; request: HelpRequest; result: [HelpReport, RuntimeDescriptor] } | null>(null);
   const [skipHelp, setSkipHelp] = useState(false);
@@ -143,8 +144,8 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     engine_id: engine.trim(), runtime_id: runtime.trim(), program: program.trim(), prefix,
     working_directory: workingDir.trim() || null, artifacts,
     environment: Object.fromEntries(env.filter(([name]) => name.trim())),
-    protocol: protocol === 'bridge' ? { kind: 'bridge', program: bridgeProgram.trim(), prefix: bridgePrefix } : { kind: 'openai_http' },
-  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix]);
+    protocol: protocol === 'bridge' ? { kind: 'bridge', program: bridgeProgram.trim(), prefix: bridgePrefix, engine_argv_env: bridgeArgvEnv.trim() } : { kind: 'openai_http' },
+  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv]);
   const entryKey = JSON.stringify(entry);
   const current = found && found.entry === entryKey ? found : null;
   const schema = current?.result[1].schema;
@@ -157,7 +158,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     if (busy) return;
     const ownGeneration = ++generation.current;
     cancelled.current = false; pendingHelp.current = entry;
-    const request: HelpRequest = { program: null, args: [...prefix, ...helpArgs], scope: [] };
+    const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: [] };
     setBusy(true); setError(''); setSkipHelp(false);
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => { cancelled.current = true; void entrypointHelpCancel(entry); } });
     try {
@@ -236,7 +237,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const disabled = locked || busy;
   const steps = [copy.stepEntry, copy.stepHelp, copy.stepBindings, copy.stepReview];
   const canContinue = [
-    !!engine.trim() && !!runtime.trim() && !!program.trim() && (protocol === 'openai_http' || !!bridgeProgram.trim()),
+    !!engine.trim() && !!runtime.trim() && !!program.trim() && (protocol === 'openai_http' || (!!bridgeProgram.trim() && !!bridgeArgvEnv.trim())),
     helpChecked || skipHelp,
     true,
     true,
@@ -290,7 +291,13 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
               {protocol === 'bridge' && (
                 <>
                   <PathField label={copy.bridgeProgram} value={bridgeProgram} kind="file" disabled={disabled} required copy={copy} onChange={setBridgeProgram} />
-                  <RuntimeArgumentList label={copy.bridgePrefix} tokens={bridgePrefix} disabled={disabled} onChange={setBridgePrefix} />
+                  <RuntimeArgumentList label={copy.bridgePrefix} tokens={bridgePrefix} disabled={disabled} onChange={setBridgePrefix} onError={setError}
+                    onFile={path => setArtifacts(current => (current.includes(path) ? current : [...current, path]))} />
+                  <label htmlFor={`${id}-bridge-argv-env`}>{copy.bridgeArgvEnv}
+                    <input id={`${id}-bridge-argv-env`} className="app-input" value={bridgeArgvEnv} disabled={disabled} required
+                      autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => setBridgeArgvEnv(event.target.value)} />
+                  </label>
+                  <p className="app-section-hint">{copy.bridgeContract}</p>
                 </>
               )}
             </fieldset>
@@ -298,6 +305,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
         )}
         {step === 1 && (
           <div className="model-settings-fields">
+            {protocol === 'bridge' && <p className="app-section-hint">{copy.bridgeHelp}</p>}
             <RuntimeArgumentList label={copy.helpArgs} tokens={helpArgs} disabled={disabled} onChange={next => { setHelpArgs(next); setFound(null); setSkipHelp(false); }} />
             <div className="app-page-actions">
               <button type="button" className="app-button app-button--primary" disabled={disabled} onClick={() => void discover()}>{copy.discover}</button>

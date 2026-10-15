@@ -278,6 +278,14 @@ fn same_program(left: &str, right: &str) -> bool {
 /// The adapter-owned parts of a help request for the selected runtime.
 pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
     let selected = Selected::from_config(cfg)?;
+    help_target_for(root, cfg, &selected)
+}
+
+fn help_target_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+) -> Result<HelpTarget, String> {
     let key = &selected.key;
     let accepted = load_accepted(root, &key.engine, &key.runtime)?;
     let (program, fixed, prefix, default) = match key.provider {
@@ -438,6 +446,9 @@ pub fn manifest_help_command(
             environment.insert(name.clone(), value.clone());
         }
     }
+    if let Some((name, value)) = registry::bridge_environment(manifest)? {
+        environment.insert(name, value);
+    }
     let mut command = HelpCommand {
         program: PathBuf::from(program),
         args: request.args.clone(),
@@ -460,6 +471,23 @@ pub fn manifest_help_command(
     Ok(command)
 }
 
+fn require_launch_help(command: HelpCommand, launch_program: &str) -> Result<HelpCommand, String> {
+    if !same_program(&command.program.to_string_lossy(), launch_program) {
+        return Err("artifact help is inspection only; discover the HTTP launch entry point's help to configure its options".into());
+    }
+    Ok(command)
+}
+
+fn option_help_command_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    request: &HelpRequest,
+) -> Result<HelpCommand, String> {
+    let target = help_target_for(root, cfg, selected)?;
+    require_launch_help(help_command_for(cfg, selected, request)?, &target.program)
+}
+
 /// Check a draft's help evidence before registration: the discovery must
 /// describe exactly the engine the draft registers (same command identity)
 /// and document every binding flag. Returns the acceptance to record once
@@ -472,6 +500,10 @@ pub fn draft_acceptance(
     let Some(help) = &draft.help else {
         return Ok(None);
     };
+    let command = require_launch_help(
+        manifest_help_command(manifest, &help.request)?,
+        &manifest.launch.program,
+    )?;
     let snapshot = runtime_help_store::load_snapshot(
         root,
         manifest.engine_id.as_str(),
@@ -480,8 +512,7 @@ pub fn draft_acceptance(
     )?
     .ok_or("discover the entry point's help again; the reviewed discovery is missing")?;
     registry::check_draft_against_help(draft, &snapshot.schema)?;
-    let identity =
-        manifest_help_command(manifest, &help.request)?.identity(&AtomicBool::new(false))?;
+    let identity = command.identity(&AtomicBool::new(false))?;
     if identity.fingerprint != help.fingerprint {
         return Err(
             "the entry point changed since its help was discovered; discover its help again".into(),
@@ -560,7 +591,9 @@ pub fn accept(
     request: &HelpRequest,
 ) -> Result<AcceptedHelp, String> {
     let key = runtime_key(cfg)?;
-    let identity = help_command(cfg, request)?.identity(&AtomicBool::new(false))?;
+    let selected = Selected::from_config(cfg)?;
+    let identity = option_help_command_for(root, cfg, &selected, request)?
+        .identity(&AtomicBool::new(false))?;
     if identity.fingerprint != fingerprint {
         return Err(
             "the runtime or its help command changed since this discovery; discover again".into(),
@@ -892,12 +925,13 @@ fn compat_fingerprint(engine: &str, runtime: &str, options: &[OptionDefinition])
 }
 
 fn current_identity(
+    root: &Path,
     cfg: &AppConfig,
     selected: &Selected,
     accepted: &AcceptedHelp,
 ) -> Result<(), String> {
-    let identity =
-        help_command_for(cfg, selected, &accepted.request)?.identity(&AtomicBool::new(false))?;
+    let identity = option_help_command_for(root, cfg, selected, &accepted.request)?
+        .identity(&AtomicBool::new(false))?;
     if identity.fingerprint == accepted.fingerprint {
         Ok(())
     } else {
@@ -946,10 +980,12 @@ fn build_effective(
             HelpState::Stale,
             "the accepted help snapshot is missing; discover this runtime's help again".into(),
         ),
-        (Some(accepted), Some(_)) if verify => match current_identity(cfg, selected, accepted) {
-            Ok(()) => (HelpState::Current, String::new()),
-            Err(error) => (HelpState::Stale, error),
-        },
+        (Some(accepted), Some(_)) if verify => {
+            match current_identity(root, cfg, selected, accepted) {
+                Ok(()) => (HelpState::Current, String::new()),
+                Err(error) => (HelpState::Stale, error),
+            }
+        }
         (Some(_), Some(_)) => (HelpState::Unchecked, String::new()),
     };
     protect_binding_aliases(
