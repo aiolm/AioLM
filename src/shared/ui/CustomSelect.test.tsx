@@ -161,6 +161,49 @@ describe("CustomSelect", () => {
     fireEvent.click(trigger);
     expect(screen.getByRole("option").textContent).toBe(label);
   });
+  describe("in a 360px window with a narrow trigger at the right edge", () => {
+    const RUNTIMES = ["private-000000000001", "private-000000000002"].map(id => ({ value: id, label: `synthetic-dynamic-v1 (${id}) · cpu · external` }));
+    const box = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, width, height, right: x + width, bottom: y + height, toJSON: () => undefined }) as DOMRect;
+    /** Stands in for layout: the listbox reports the width its options would give it. */
+    function layout(renderedWidth: { current: number }, run: () => void) {
+      const innerWidth = window.innerWidth;
+      window.innerWidth = 360;
+      const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+        if (this.getAttribute("role") === "combobox") return box(242, 100, 110, 30);
+        if (this.getAttribute("role") === "listbox") return box(parseFloat(this.style.left), 134, renderedWidth.current, 200);
+        return box(0, 0, 0, 0);
+      });
+      try { run(); } finally { rect.mockRestore(); window.innerWidth = innerWidth; }
+    }
+
+    it.each([
+      // Long runtime labels lay the menu out wider than its trigger.
+      { renderedWidth: 344, left: 8 },
+      // A menu that fits beside its trigger stays aligned with it.
+      { renderedWidth: 110, left: 242 },
+    ])("keeps a $renderedWidth px menu inside the viewport", ({ renderedWidth, left }) => layout({ current: renderedWidth }, () => {
+      render(<CustomSelect value={RUNTIMES[0].value} options={RUNTIMES} onChange={vi.fn()} ariaLabel="Runtime" />);
+      fireEvent.click(screen.getByRole("combobox", { name: "Runtime" }));
+      const menu = screen.getByRole("listbox").getBoundingClientRect();
+      expect(menu.left).toBe(left);
+      expect(menu.right).toBeLessThanOrEqual(360 - 8);
+      expect(screen.getByRole("listbox").style.minWidth).toBe("110px");
+    }));
+
+    it("re-fits the open menu when longer options arrive", () => {
+      const renderedWidth = { current: 110 };
+      layout(renderedWidth, () => {
+        const choose = [{ value: "", label: "Choose a runtime" }];
+        const { rerender } = render(<CustomSelect value="" options={choose} onChange={vi.fn()} ariaLabel="Runtime" />);
+        fireEvent.click(screen.getByRole("combobox", { name: "Runtime" }));
+        expect(screen.getByRole("listbox").getBoundingClientRect().left).toBe(242);
+        renderedWidth.current = 344;
+        rerender(<CustomSelect value="" options={[...choose, ...RUNTIMES]} onChange={vi.fn()} ariaLabel="Runtime" />);
+        expect(screen.getByRole("listbox").getBoundingClientRect().right).toBeLessThanOrEqual(360 - 8);
+      });
+    });
+  });
+
   it("links the trigger to the listbox and to the highlighted option", () => {
     const { trigger } = renderSelect();
     expect(trigger).not.toHaveAttribute("aria-activedescendant");

@@ -39,10 +39,15 @@ export interface CustomSelectProps<T extends string | number = string> {
 interface DropdownPosition {
   top: number;
   left: number;
-  width: number;
+  minWidth: number;
+  maxWidth: string;
   maxHeight: number;
   opensAbove: boolean;
 }
+
+const MENU_EDGE = 8;
+/** Longest line a menu grows to for options wider than their trigger. */
+const MENU_READABLE_WIDTH = "30rem";
 
 export function CustomSelect<T extends string | number = string>({
   id,
@@ -121,24 +126,39 @@ export function CustomSelect<T extends string | number = string>({
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const edge = 8;
+    const edge = MENU_EDGE;
     const gap = 4;
     const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - edge - gap);
     const spaceAbove = Math.max(0, rect.top - edge - gap);
     const opensAbove = spaceBelow < 160 && spaceAbove > spaceBelow;
     const availableSpace = opensAbove ? spaceAbove : spaceBelow;
     const maxHeight = Math.max(64, Math.min(240, availableSpace || 64));
-    const width = Math.min(rect.width, Math.max(0, window.innerWidth - edge * 2));
-    const maxLeft = Math.max(edge, window.innerWidth - edge - width);
+    const viewportWidth = Math.max(0, window.innerWidth - edge * 2);
+    const minWidth = Math.min(rect.width, viewportWidth);
 
     setMenuPosition({
       top: opensAbove ? rect.top - gap : rect.bottom + gap,
-      left: Math.min(Math.max(edge, rect.left), maxLeft),
-      width,
+      // Aligned with the trigger until the rendered width is known (see below).
+      left: Math.max(edge, rect.left),
+      // A narrow trigger must not squeeze long options into a column a few
+      // characters wide: the menu grows to its longest option, up to a readable
+      // line length and never beyond the viewport.
+      minWidth,
+      maxWidth: `max(${minWidth}px, min(${viewportWidth}px, ${MENU_READABLE_WIDTH}))`,
       maxHeight,
       opensAbove,
     });
   }, []);
+
+  // The menu's width follows its options, so its far edge is only known once it
+  // is rendered: shift it toward the start just enough to stay inside the viewport.
+  // This runs after every render because options can arrive while it is open.
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu || !menuPosition) return;
+    const left = Math.max(MENU_EDGE, Math.min(menuPosition.left, window.innerWidth - MENU_EDGE - menu.getBoundingClientRect().width));
+    if (left !== menuPosition.left) setMenuPosition({ ...menuPosition, left });
+  });
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -333,7 +353,7 @@ export function CustomSelect<T extends string | number = string>({
           aria-label={effectiveAriaLabel ?? (effectiveAriaLabelledBy ? undefined : labelName)}
           aria-labelledby={effectiveAriaLabelledBy}
           className={[`app-custom-dropdown-menu ${menuClassName}`, (menuPosition.opensAbove ? "ui-transform-translateY-100" : "")].filter(Boolean).join(" ")}
-          style={{ top: menuPosition.top, left: menuPosition.left, width: menuPosition.width, maxHeight: menuPosition.maxHeight }}
+          style={{ top: menuPosition.top, left: menuPosition.left, width: "max-content", minWidth: menuPosition.minWidth, maxWidth: menuPosition.maxWidth, maxHeight: menuPosition.maxHeight }}
         >
           {visibleOptions.map((opt, index) => {
             const isSelected = opt.value === value;
