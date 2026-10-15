@@ -36,6 +36,22 @@ describe("Project configuration snapshots", () => {
     });
   };
 
+  it('imports a same-name copy and preserves the active project and its document bindings', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    const store = createTestStore();
+    const original = projectFromConfig('Research', 'Keep citations', store.cfg!, [{ name: 'notes.md', path: '/synthetic/notes.md' }], ['local:lookup'], '', 100);
+    writeProjects([original]); setActiveProjectId(original.id);
+    mockedApi.projectImportJson.mockResolvedValueOnce(exportProject(original));
+    render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Import JSON' }));
+    await screen.findByText('Imported “Research (2)”.');
+    expect(readProjects()).toHaveLength(2);
+    expect(readProjects().find(item => item.id === original.id)).toEqual(original);
+    expect(activeProjectId()).toBe(original.id);
+    expect(screen.getByLabelText('Project name')).toHaveValue('Research (2)');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
   it.each([PROJECTS_KEY, ACTIVE_PROJECT_KEY])('keeps the edited project and reports failed persistence of %s before a successful retry', key => {
     const store = createTestStore();
     const project = projectFromConfig('Research', 'Keep citations', store.cfg!, [], [], '', 100);

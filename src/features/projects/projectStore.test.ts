@@ -1,10 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EXECUTION_KEYS, executionSettings } from '../../shared/config/executionSettings';
 import { testConfig } from '../../testing/appStore';
-import { ACTIVE_PROJECT_KEY, PROJECTS_CHANGED_EVENT, PROJECTS_KEY, activeProjectId, exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, setActiveProjectId, writeProjects } from './projectStore';
+import { ACTIVE_PROJECT_KEY, MAX_PROJECTS, PROJECTS_CHANGED_EVENT, PROJECTS_KEY, activeProjectId, exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, setActiveProjectId, upsertProject, writeProjects } from './projectStore';
 import { materializeProfileApplication, captureProfile } from '../../shared/config/settingsProfiles';
 
 describe('project settings snapshots', () => {
+  it('imports same-name copies without replacing the active project or its referenced identity', () => {
+    const { store } = memoryStorage();
+    const original = projectFromConfig('Research', 'Keep citations', testConfig, [{ name: 'notes.md', path: '/synthetic/notes.md' }], ['local:lookup'], '', 100);
+    writeProjects([original], store, original.id);
+    const first = importProject(exportProject(original), readProjects(store));
+    writeProjects(upsertProject(first, readProjects(store)), store);
+    const second = importProject(exportProject(original), readProjects(store));
+    writeProjects(upsertProject(second, readProjects(store)), store);
+    expect(first.name).toBe('Research (2)');
+    expect(second.name).toBe('Research (3)');
+    expect(new Set([first.id, second.id, original.id]).size).toBe(3);
+    expect(readProjects(store).find(item => item.id === original.id)).toEqual(original);
+    expect(activeProjectId(store)).toBe(original.id);
+    expect(second.documentBindings).toEqual(original.documentBindings);
+    expect(second.toolIds).toEqual(original.toolIds);
+    expect(() => upsertProject({ ...first, name: 'RESEARCH' }, readProjects(store))).toThrow('Choose another name');
+    expect(readProjects(store)).toHaveLength(3);
+  });
+
+  it('keeps the project library when a new project exceeds capacity and still allows an update', () => {
+    const projects = Array.from({ length: MAX_PROJECTS }, (_, index) => projectFromConfig(`Project ${index}`, '', testConfig, [], [], '', index));
+    const extra = projectFromConfig('Extra', '', testConfig, [], [], '', 200);
+    expect(() => upsertProject(extra, projects)).toThrow('library is full');
+    expect(projects).toHaveLength(MAX_PROJECTS);
+    expect(upsertProject({ ...projects[0], description: 'Updated' }, projects)).toHaveLength(MAX_PROJECTS);
+  });
+
   function memoryStorage() {
     const values = new Map<string, string>();
     const store = { getItem: (key: string) => values.get(key) ?? null,

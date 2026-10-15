@@ -282,8 +282,14 @@ export function projectFromConfig(
 export function upsertProject(project: ProjectPreset, projects = readProjects()): ProjectPreset[] {
   const normalized = normalizeProject(project);
   if (!normalized) throw new Error("Invalid project preset.");
-  const byId = projects.filter((item) => item.id !== normalized.id && item.name.toLocaleLowerCase() !== normalized.name.toLocaleLowerCase());
-  return [normalized, ...byId].slice(0, MAX_PROJECTS);
+  const byId = projects.filter((item) => item.id !== normalized.id);
+  if (byId.some(item => item.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
+    throw new Error('A project with this name already exists. Choose another name.');
+  }
+  if (byId.length >= MAX_PROJECTS) {
+    throw new Error('The project library is full. Export and remove a project before adding another.');
+  }
+  return [normalized, ...byId];
 }
 
 export function deleteProject(id: string, projects = readProjects()): ProjectPreset[] {
@@ -345,12 +351,20 @@ export function exportProject(project: ProjectPreset): string {
   return JSON.stringify({ schema: "aiolm.project.v1", project: redactExportValue(project) }, null, 2);
 }
 
-export function importProject(raw: string): ProjectPreset {
+export function importProject(raw: string, projects = readProjects()): ProjectPreset {
   const parsed: unknown = JSON.parse(raw);
   const source = parsed && typeof parsed === "object" && "project" in parsed ? (parsed as { project: unknown }).project : parsed;
   const project = normalizeProject(source);
   if (!project) throw new Error("The selected file is not a valid aiolm project preset.");
-  return { ...project, id: `project-${Date.now().toString(36)}`, updatedAt: Date.now() };
+  // Imports are independent copies. Never replace an existing identity (which
+  // may still be referenced by the active workspace or conversation history).
+  const names = new Set(projects.map(item => item.name.toLocaleLowerCase()));
+  let name = project.name;
+  for (let copy = 2; names.has(name.toLocaleLowerCase()); copy += 1) {
+    const suffix = ` (${copy})`;
+    name = `${project.name.slice(0, 128 - suffix.length)}${suffix}`;
+  }
+  return { ...project, name, id: `project-${crypto.randomUUID()}`, updatedAt: Date.now() };
 }
 
 export function projectConfigPatch(project: ProjectPreset): Partial<AppConfig> {

@@ -346,9 +346,10 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
     try {
       const contents = file ? await file.text() : await api.projectImportJson();
       if (contents === null) return;
-      const project = importProject(contents);
       switchEditor(() => {
-        const next = upsertProject(project, readProjects());
+        const current = readProjects();
+        const project = importProject(contents, current);
+        const next = upsertProject(project, current);
         writeProjects(next);
         setProjects(next);
         loadProject(project);
