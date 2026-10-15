@@ -34,6 +34,36 @@ pub trait InferenceRuntimeAdapter: Send + Sync {
 struct BuiltinAdapter(ProviderId);
 struct ProcessAdapter;
 
+/// Native engine selectors and presets can replace the selected model (and
+/// some presets also the owned port). Keep them out of legacy typed-argument
+/// migration: retain old settings for review and refuse them at launch.
+pub(super) const NATIVE_MODEL_SOURCE_FLAGS: &[&str] = &[
+    "-hf",
+    "-hfr",
+    "--hf-repo",
+    "-hff",
+    "--hf-file",
+    "-mu",
+    "--model-url",
+    "-dr",
+    "--docker-repo",
+    "--spec-draft-hf",
+    "-hfd",
+    "-hfrd",
+    "--hf-repo-draft",
+    "--embd-gemma-default",
+    "--fim-qwen-1.5b-default",
+    "--fim-qwen-3b-default",
+    "--fim-qwen-7b-default",
+    "--fim-qwen-7b-spec",
+    "--fim-qwen-14b-spec",
+    "--fim-qwen-30b-default",
+    "--gpt-oss-20b-default",
+    "--gpt-oss-120b-default",
+    "--vision-gemma-4b-default",
+    "--vision-gemma-12b-default",
+];
+
 /// Native typed settings and reviewed runtime options share the actual argv.
 /// Existing profiles without generic options retain their exact launch plan.
 pub(super) fn native_arguments(
@@ -41,6 +71,12 @@ pub(super) fn native_arguments(
     key: &str,
     gpu: &ResolvedGpu,
 ) -> Result<Vec<String>, String> {
+    for argument in &cfg.server_args {
+        let name = argument.trim().split('=').next().unwrap_or_default().trim();
+        if NATIVE_MODEL_SOURCE_FLAGS.contains(&name) {
+            return Err(format!("native model source argument {name} is app-managed; select the model in its execution setup"));
+        }
+    }
     let mut args = crate::server::build_args_with_gpu(cfg, key, gpu);
     let values = super::launch::provider_options(cfg, ProviderId::Llama);
     if !values.is_empty() {

@@ -602,7 +602,18 @@ pub fn app_managed_flags(provider: ProviderId) -> &'static [&'static str] {
             "--api-key",
             "--served-model-name",
         ],
-        ProviderId::Llama => crate::config::APP_MANAGED_SERVER_ARGS,
+        ProviderId::Llama => {
+            static FLAGS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+            FLAGS
+                .get_or_init(|| {
+                    crate::config::APP_MANAGED_SERVER_ARGS
+                        .iter()
+                        .chain(super::adapter::NATIVE_MODEL_SOURCE_FLAGS)
+                        .copied()
+                        .collect()
+                })
+                .as_slice()
+        }
         ProviderId::Vllm => &[
             "--model",
             "--host",

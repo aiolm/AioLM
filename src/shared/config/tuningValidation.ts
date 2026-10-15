@@ -63,7 +63,9 @@ export const MIROSTAT_OPTIONS = [
  * control by spelling the same option differently.
  */
 export const APP_MANAGED_SERVER_OPTION_ALIASES = {
-  "--model": ["--model", "-m"],
+  "--model": ["--model", "-m", "-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-mu", "--model-url", "-dr", "--docker-repo",
+    "--embd-gemma-default", "--fim-qwen-1.5b-default", "--fim-qwen-3b-default", "--fim-qwen-7b-default", "--fim-qwen-7b-spec",
+    "--fim-qwen-14b-spec", "--fim-qwen-30b-default", "--gpt-oss-20b-default", "--gpt-oss-120b-default", "--vision-gemma-4b-default", "--vision-gemma-12b-default"],
   "--host": ["--host"],
   "--port": ["--port", "-p"],
   "--api-key": ["--api-key", "--api-key-file", "--no-api-key"],
@@ -93,7 +95,7 @@ export const APP_MANAGED_SERVER_OPTION_ALIASES = {
   "--spec-draft-p-split": ["--spec-draft-p-split", "--draft-p-split"],
   "--spec-draft-ngl": ["--spec-draft-ngl", "--gpu-layers-draft", "--n-gpu-layers-draft", "-ngld"],
   "--spec-draft-device": ["--spec-draft-device", "-devd", "--device-draft"],
-  "--spec-draft-model": ["--spec-draft-model", "-md", "--model-draft"],
+  "--spec-draft-model": ["--spec-draft-model", "-md", "--model-draft", "--spec-draft-hf", "-hfd", "-hfrd", "--hf-repo-draft"],
   "--reasoning": ["--reasoning", "-rea"],
   "--reasoning-format": ["--reasoning-format"],
   "--reasoning-effort": ["--reasoning-effort"],

@@ -25,8 +25,9 @@ const CACHE_TYPES: &[&str] = &[
     "f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "iq4_nl",
 ];
 
-// Keep this list in sync with tuningValidation.ts.  These are all spellings
-// of options whose value is owned by AppConfig or by the server lifecycle;
+// Together with adapter::NATIVE_MODEL_SOURCE_FLAGS this matches the native
+// ownership metadata in tuningValidation.ts. These typed/config spellings
+// are owned by AppConfig or by the server lifecycle;
 // accepting an alias here would let raw server_args silently win over a
 // dedicated control.  The canonical names are used in the error text where
 // useful, while validation accepts every upstream spelling.
@@ -1958,6 +1959,24 @@ mod tests {
         let migrated = migrate_value(explicit).expect("explicit typed values win");
         assert_eq!(migrated.batch_size, 2048);
         assert_eq!(migrated.keep, 12);
+    }
+
+    #[test]
+    fn model_source_arguments_survive_migration_for_explicit_runtime_review() {
+        let args = serde_json::json!(["--hf-repo", "synthetic/old-source", "--fim-qwen-7b-spec"]);
+        for version in [7, CURRENT_CONFIG_VERSION] {
+            let migrated = migrate_value(serde_json::json!({
+                "config_version": version,
+                "active_model": "/synthetic/selected.model",
+                "server_args": args
+            }))
+            .unwrap();
+            assert_eq!(serde_json::to_value(&migrated.server_args).unwrap(), args);
+            assert_eq!(migrated.active_model, "/synthetic/selected.model");
+            // Ownership belongs to launch validation, so opening old settings
+            // never strips these arguments or replaces the user's selection.
+            migrated.validate().unwrap();
+        }
     }
 
     #[test]

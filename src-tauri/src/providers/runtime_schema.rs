@@ -1759,6 +1759,138 @@ mod tests {
         assert!(schema.resolve(&[], &Default::default()).is_ok());
     }
 
+    #[test]
+    fn accepted_native_model_source_options_cannot_replace_app_bindings() {
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let root = temporary.join(format!("aiolm-model-source-help-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let presets = [
+            "--embd-gemma-default",
+            "--fim-qwen-1.5b-default",
+            "--fim-qwen-3b-default",
+            "--fim-qwen-7b-default",
+            "--fim-qwen-7b-spec",
+            "--fim-qwen-14b-spec",
+            "--fim-qwen-30b-default",
+            "--gpt-oss-20b-default",
+            "--gpt-oss-120b-default",
+            "--vision-gemma-4b-default",
+            "--vision-gemma-12b-default",
+        ];
+        let text = format!("Options:\n  -hf, -hfr, --hf-repo REPO           model source\n  -hff, --hf-file FILE               model file\n  -mu, --model-url URL               model source URL\n  -dr, --docker-repo REPO            model source\n  --spec-draft-hf, -hfd, -hfrd, --hf-repo-draft REPO   draft source\n{}", presets.iter().map(|flag|format!("  {flag}  replaces model and port")).collect::<Vec<_>>().join("\n"));
+        let fingerprint = "a".repeat(64);
+        let output = |text: &str| json!({"text":text,"clean_text":text,"encoding":"utf-8","decoding_loss":false,"truncated":false,"read_error":null});
+        let report: super::super::runtime_help::HelpReport = serde_json::from_value(json!({
+            "identity":{"fingerprint":fingerprint,"executable_sha256":"b".repeat(64),"artifacts_sha256":{},"parser_version":super::super::runtime_help::PARSER_VERSION},
+            "scope":[],"stdout":output(&text),"stderr":output(""),"exit_code":0,"success":true,"cancelled":false,"timed_out":false,"error":null,"elapsed_ms":1
+        })).unwrap();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: "llama.cpp".into(),
+                runtime: "cpu-source-test".into(),
+                fingerprint: fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        runtime_help_store::save_snapshot(
+            &root,
+            "llama.cpp",
+            "cpu-source-test",
+            &HelpSnapshot { report, schema },
+        )
+        .unwrap();
+        write_accepted(
+            &root,
+            "llama.cpp",
+            "cpu-source-test",
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                fingerprint,
+                request: HelpRequest {
+                    program: None,
+                    args: vec!["--help".into()],
+                    scope: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            active_build: "source-test".into(),
+            ..Default::default()
+        };
+        // Test the effective schema composition without pretending that a
+        // synthetic help report proves an installed engine's identity.
+        let effective = effective(&root, &cfg, false).unwrap();
+        for flag in [
+            "-hf",
+            "-hfr",
+            "--hf-repo",
+            "-hff",
+            "--hf-file",
+            "-mu",
+            "--model-url",
+            "-dr",
+            "--docker-repo",
+            "--spec-draft-hf",
+            "-hfd",
+            "-hfrd",
+            "--hf-repo-draft",
+        ]
+        .into_iter()
+        .chain(presets)
+        {
+            let option = effective
+                .schema
+                .options
+                .iter()
+                .find(|option| {
+                    option
+                        .spellings
+                        .iter()
+                        .any(|spelling| spelling.flag == flag)
+                })
+                .expect(flag);
+            let value = if option.kind.supported() == Some(&ValueKind::Boolean) {
+                json!(true)
+            } else {
+                json!("synthetic/other-model")
+            };
+            let overrides = BTreeMap::from([(
+                option.key.clone(),
+                super::super::runtime_options::Override {
+                    spelling: Some(flag.into()),
+                    occurrences: vec![vec![value]],
+                },
+            )]);
+            let issues = effective.schema.resolve(&[], &overrides).unwrap_err();
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.key == option.key
+                        && issue.message.contains("managed by the app")),
+                "{flag}: {issues:?}"
+            );
+            let raw = AppConfig {
+                server_args: vec![flag.into()],
+                ..Default::default()
+            };
+            assert!(
+                super::super::adapter::native_arguments(
+                    &raw,
+                    "",
+                    &crate::gpu::ResolvedGpu::default()
+                )
+                .unwrap_err()
+                .contains("app-managed"),
+                "raw argv must not bypass {flag}"
+            );
+        }
+        assert_eq!(root.parent(), Some(temporary.as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn help_schema() -> OptionSchema {
         let help = Source::Help {
             document: "stdout".into(),
