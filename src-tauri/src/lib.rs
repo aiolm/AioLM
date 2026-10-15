@@ -64,6 +64,9 @@ pub(crate) fn shutdown_managed_processes(state: &AppState) {
     state.runtime_cancel.store(true, Ordering::Release);
     state.discover_cancel.store(true, Ordering::Release);
     state.verify_cancel.store(true, Ordering::Release);
+    // Help discoveries publish nothing after this; their children are owned
+    // transient trees and are terminated below.
+    let _ = commands::runtime_help_cmd::cancel_all_discoveries();
     state.sessions.cancel_all_pending_starts();
     // A window close can end the async build future before it observes
     // runtime_cancel. Kill the tracked CMake process trees while the app is

@@ -118,6 +118,18 @@ struct PendingOption {
     metavar: String,
     is_boolean: bool,
     negative_only: bool,
+    /// Aliases spell different value counts, so no single arity is observed.
+    /// Arity and choices stay unknown until explicit metadata reconciles them.
+    alias_conflict: bool,
+}
+
+/// Bound a string without panicking on a multibyte boundary. Korean/emoji
+/// descriptions are truncated at the last whole character; raw evidence stays
+/// intact in `raw_help`.
+fn truncate_text(value: &mut String, max: usize) {
+    if value.len() > max {
+        value.truncate(value.floor_char_boundary(max));
+    }
 }
 
 fn parse_choices(metavar: &str) -> Option<Vec<serde_json::Value>> {
@@ -216,8 +228,13 @@ fn arity_for_metavar(metavar: &str) -> Option<Arity> {
 }
 
 fn split_spec_help(line: &str) -> (String, String) {
-    // Help separates the flag spec from prose with two or more spaces.
+    // Help separates the flag spec from prose with two or more spaces, but the
+    // same gap also separates aliases (`-t,    --threads N`). The boundary is
+    // the first gap whose left side is a complete explicit option spec: an
+    // alias-list prefix (`-t,`) never qualifies, so the split cannot cut
+    // inside the spec.
     let bytes = line.as_bytes();
+    let mut gaps: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b' ' || bytes[i] == b'\t' {
@@ -226,13 +243,25 @@ fn split_spec_help(line: &str) -> (String, String) {
                 j += 1;
             }
             if j - i >= 2 {
-                return (line[..i].trim_end().into(), line[j..].trim().into());
+                gaps.push((i, j));
             }
             i = j;
         } else {
             i += 1;
         }
     }
+    for (start, end) in gaps {
+        let left = line[..start].trim_end();
+        if left.is_empty() || left.len() > 1024 {
+            continue;
+        }
+        if parse_option_spec(left, "", 0).is_some() {
+            return (left.into(), line[end..].trim().into());
+        }
+    }
+    // No gap completes a spec: either a spec-only line whose description
+    // lives on the next line (long argparse flags), or prose that no spec
+    // candidate accepts. Callers treat an unparsable spec as unconfirmed.
     (line.trim().into(), String::new())
 }
 
@@ -264,7 +293,7 @@ fn split_aliases(spec: &str) -> Vec<String> {
 fn parse_option_spec(spec: &str, group: &str, start_line: u32) -> Option<PendingOption> {
     // Commas separate aliases: `-h, --help`, `-t VALUE, --temperature FLOAT`.
     let mut spellings: Vec<Spelling> = Vec::new();
-    let mut metavar_parts: Vec<String> = Vec::new();
+    let mut alias_metavars: Vec<String> = Vec::new();
     let mut equals_style = false;
     for alias in split_aliases(spec) {
         let alias = alias.trim();
@@ -283,7 +312,7 @@ fn parse_option_spec(spec: &str, group: &str, start_line: u32) -> Option<Pending
                 polarity: None,
             });
             equals_style = true;
-            metavar_parts.push(value.trim().into());
+            alias_metavars.push(value.trim().into());
             continue;
         }
         let mut tokens = alias.split_whitespace();
@@ -298,14 +327,28 @@ fn parse_option_spec(spec: &str, group: &str, start_line: u32) -> Option<Pending
             style: ValueStyle::Separate,
             polarity: None,
         });
-        for token in tokens {
-            metavar_parts.push(token.into());
-        }
+        alias_metavars.push(tokens.collect::<Vec<_>>().join(" "));
     }
     if spellings.is_empty() || spellings.len() > 8 {
         return None;
     }
-    let metavar = metavar_parts.join(" ");
+    // Each alias independently observes the same value count (`-t VALUE,
+    // --threads VALUE` is one value, not two). An alias that omits the
+    // metavar (`-t, --threads N`) adopts the unanimous spelling; only aliases
+    // that spell different counts keep arity unknown until metadata decides.
+    let nonempty: Vec<&str> = alias_metavars
+        .iter()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .collect();
+    let unanimous = nonempty
+        .first()
+        .is_some_and(|first| nonempty.iter().all(|m| **m == **first));
+    let (metavar, alias_conflict) = match (nonempty.first(), unanimous) {
+        (Some(value), true) => ((*value).to_string(), false),
+        (None, _) => (String::new(), false),
+        (Some(_), false) => (alias_metavars.join(" "), true),
+    };
     if metavar.len() > 1024 {
         return None;
     }
@@ -336,6 +379,7 @@ fn parse_option_spec(spec: &str, group: &str, start_line: u32) -> Option<Pending
         metavar,
         is_boolean,
         negative_only: has_negative && !has_positive && is_boolean,
+        alias_conflict,
     };
     if has_negative && has_positive && is_boolean {
         for spelling in &mut pending.spellings {
@@ -374,6 +418,11 @@ fn parse_positional(
     if spec.contains('\0') || help.contains('\0') {
         return None;
     }
+    // Wrapped usage fragments (`[--port PORT] [--alias ALIAS]`) carry flags,
+    // never a positional name; callers skip usage wraps before trying this.
+    if spec.contains("--") {
+        return None;
+    }
     let name = spec
         .trim()
         .trim_start_matches('[')
@@ -399,6 +448,7 @@ fn parse_positional(
         metavar: spec,
         is_boolean: false,
         negative_only: false,
+        alias_conflict: false,
     })
 }
 
@@ -432,21 +482,25 @@ pub fn parse_help_report(
     if binding.fingerprint != report.identity.fingerprint {
         return Err("schema binding must match the discovered help fingerprint".into());
     }
-    let text = report.stdout.clean_text.clone();
+    let stdout_text = report.stdout.clean_text.as_str();
+    let stderr_text = report.stderr.clean_text.as_str();
+    // Complete help may live on either stream: some CLIs print `--help` to
+    // stderr with an empty stdout. An empty stream never shadows a documented
+    // one. Truncated/lossy/failed reports were rejected above, so the chosen
+    // text is exact and every span below names its real source stream.
+    let (document, text) = if stdout_text.trim().is_empty() && !stderr_text.trim().is_empty() {
+        ("stderr", report.stderr.clean_text.clone())
+    } else {
+        ("stdout", report.stdout.clean_text.clone())
+    };
     if text.len() > 2 * 1024 * 1024 {
         return Err("help output exceeds its schema limit".into());
     }
     let lines: Vec<&str> = text.lines().collect();
-    let raw_stdout = RawHelp {
-        id: "stdout".into(),
-        scope: report.scope.clone(),
-        stream: HelpStream::Stdout,
-        text: report.stdout.clean_text.clone(),
-        truncated: false,
-    };
-    let _ = &raw_stdout;
     let mut options: Vec<PendingOption> = Vec::new();
     let mut current_group = "runtime".to_string();
+    let mut positional_section = false;
+    let mut in_usage_wrap = false;
     let mut positional_slot: u16 = 0;
     let mut last_option: Option<usize> = None;
     let mut end_of_options = Fact::default();
@@ -455,54 +509,69 @@ pub fn parse_help_report(
         let line_no = u32::try_from(index + 1).unwrap_or(u32::MAX);
         // A bare `--` line documents an explicitly supported delimiter.
         if line.trim() == "--" {
-            end_of_options = verified(true, "stdout", line_no, line_no);
+            end_of_options = verified(true, document, line_no, line_no);
             last_option = None;
             continue;
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            in_usage_wrap = false;
             last_option = None;
             continue;
         }
         // Usage lines name subcommands but never become options themselves.
         if trimmed.to_lowercase().starts_with("usage:") {
+            in_usage_wrap = true;
             last_option = None;
             continue;
         }
         if is_section_header(trimmed) {
             current_group = normalize_group(trimmed);
+            positional_section = current_group.contains("positional")
+                || current_group.contains("operand")
+                || current_group == "arguments";
+            in_usage_wrap = false;
             last_option = None;
             continue;
         }
-        let indented = line.starts_with(' ') || line.starts_with('\t');
-        if !indented {
-            // Unindented prose is retained in raw help, not parsed as flags.
-            last_option = None;
-            continue;
-        }
-        // Continuation of the previous option's description.
-        if let Some(idx) = last_option {
-            let looks_new = trimmed.starts_with('-')
-                || trimmed.starts_with('/')
-                || trimmed.starts_with('<')
-                || (trimmed
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_uppercase())
-                    && split_spec_help(trimmed).0.len() <= 64);
-            if !looks_new {
-                let entry = &mut options[idx];
-                if !entry.help.is_empty() {
-                    entry.help.push(' ');
-                }
-                entry.help.push_str(trimmed);
-                entry.end_line = line_no;
-                if entry.help.len() > 32_768 {
-                    entry.help.truncate(32_768);
-                }
+        // Wrapped usage fragments (`[--port PORT]`) are usage, not options.
+        if in_usage_wrap {
+            if trimmed.starts_with('[') || trimmed.starts_with('(') {
                 continue;
             }
+            in_usage_wrap = false;
         }
+        let indented = line.starts_with(' ') || line.starts_with('\t');
+        // Continuation of the previous option's description. Only indented
+        // lines continue: COLUMN0 prose ends the previous option so it stays
+        // inspectable instead of being absorbed into help text.
+        if indented {
+            if let Some(idx) = last_option {
+                let looks_new = trimmed.starts_with('-')
+                    || trimmed.starts_with('/')
+                    || trimmed.starts_with('<')
+                    || (trimmed
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_uppercase())
+                        && split_spec_help(trimmed).0.len() <= 64);
+                if !looks_new {
+                    let entry = &mut options[idx];
+                    if !entry.help.is_empty() {
+                        entry.help.push(' ');
+                    }
+                    entry.help.push_str(trimmed);
+                    entry.end_line = line_no;
+                    if entry.help.len() > 32_768 {
+                        truncate_text(&mut entry.help, 32_768);
+                    }
+                    continue;
+                }
+            }
+        }
+        // Explicit option syntax parses at any indent: real help (llama.cpp)
+        // spells flags at COLUMN0, so an indent requirement yields zero
+        // options. Anything unparsable stays raw, never an option.
         if trimmed.starts_with('-') || trimmed.starts_with('/') {
             let (spec, help) = split_spec_help(trimmed);
             if spec.is_empty() || spec.len() > 1024 {
@@ -523,15 +592,21 @@ pub fn parse_help_report(
             last_option = None;
             continue;
         }
-        if let Some(pending) = parse_positional(trimmed, &current_group, line_no, positional_slot) {
-            positional_slot = positional_slot.saturating_add(1);
-            if options.len() < 4096 {
-                options.push(pending);
-                last_option = Some(options.len() - 1);
-            } else {
-                last_option = None;
+        // Positional facts need a positional section or explicit `<name>` /
+        // `[name]` syntax. Bare uppercase prose and usage fragments stay raw.
+        if positional_section || trimmed.starts_with('<') || trimmed.starts_with('[') {
+            if let Some(pending) =
+                parse_positional(trimmed, &current_group, line_no, positional_slot)
+            {
+                positional_slot = positional_slot.saturating_add(1);
+                if options.len() < 4096 {
+                    options.push(pending);
+                    last_option = Some(options.len() - 1);
+                } else {
+                    last_option = None;
+                }
+                continue;
             }
-            continue;
         }
         last_option = None;
     }
@@ -636,9 +711,7 @@ pub fn parse_help_report(
     let mut seen_positions: BTreeSet<(Vec<String>, u16)> = BTreeSet::new();
     let scope = report.scope.clone();
     for mut pending in merged {
-        if pending.help.len() > 32_768 {
-            pending.help.truncate(32_768);
-        }
+        truncate_text(&mut pending.help, 32_768);
         // Same flag text in the same scope must not define two options.
         let mut duplicate = false;
         for spelling in &pending.spellings {
@@ -662,7 +735,6 @@ pub fn parse_help_report(
         if key.len() > 128 {
             continue;
         }
-        let document = "stdout";
         let (kind, arity) = if pending.positional.is_some() {
             let arity = arity_for_metavar(&pending.metavar);
             (
@@ -689,6 +761,10 @@ pub fn parse_help_report(
                     pending.end_line,
                 ),
             )
+        } else if pending.alias_conflict {
+            // Aliases disagree on the value count: no single arity was
+            // observed, so argv waits for explicit metadata.
+            (Fact::default(), Fact::default())
         } else {
             let arity = arity_for_metavar(&pending.metavar);
             let choices = parse_choices(&pending.metavar);
@@ -700,14 +776,15 @@ pub fn parse_help_report(
                     .unwrap_or_default(),
             )
         };
-        // Choices only from explicit `{a,b}` / `[a|b]` in the spec.
-        let choices = if pending.positional.is_none() && !pending.is_boolean {
-            parse_choices(&pending.metavar)
-                .map(|values| verified(values, document, pending.start_line, pending.end_line))
-                .unwrap_or_default()
-        } else {
-            Fact::default()
-        };
+        // Choices only from explicit `{a,b}` / `[a|b]` in an agreed spec.
+        let choices =
+            if pending.positional.is_none() && !pending.is_boolean && !pending.alias_conflict {
+                parse_choices(&pending.metavar)
+                    .map(|values| verified(values, document, pending.start_line, pending.end_line))
+                    .unwrap_or_default()
+            } else {
+                Fact::default()
+            };
         if pending.positional.is_some() {
             if let Some(slot) = pending.positional {
                 if !seen_positions.insert((scope.clone(), slot)) {
@@ -762,6 +839,13 @@ pub fn parse_help_report(
         });
     }
 
+    // An empty schema verifies nothing: help with no explicit option syntax
+    // cannot count as a supported engine, so callers rediscover instead of
+    // caching an unverified absence of options.
+    if definitions.is_empty() {
+        return Err("help contains no explicit option syntax; nothing verified".into());
+    }
+
     let mut raw_help = vec![RawHelp {
         id: "stdout".into(),
         scope: report.scope.clone(),
@@ -790,6 +874,29 @@ pub fn parse_help_report(
         .validate()
         .map_err(|e| format!("parsed help schema is invalid: {e}"))?;
     Ok(schema)
+}
+
+/// Adapter metadata carries adapter sources; help observations and bare
+/// overlays do not. App-owned bindings are only claimed with explicit adapter
+/// intent, never from prose-level overlay values.
+fn has_adapter_provenance(option: &OptionDefinition) -> bool {
+    macro_rules! adapter_sourced {
+        ($fact:expr) => {
+            $fact.certainty != Certainty::Unknown
+                && matches!($fact.source, Some(Source::Adapter { .. }))
+        };
+    }
+    adapter_sourced!(option.kind)
+        || adapter_sourced!(option.arity)
+        || adapter_sourced!(option.repeatable)
+        || adapter_sourced!(option.choices)
+        || adapter_sourced!(option.range)
+        || adapter_sourced!(option.unit)
+        || adapter_sourced!(option.runtime_default)
+        || adapter_sourced!(option.request_field)
+        || adapter_sourced!(option.restart_required)
+        || adapter_sourced!(option.sensitive)
+        || adapter_sourced!(option.local_path)
 }
 
 /// Apply explicit adapter metadata over parsed help.
@@ -919,19 +1026,17 @@ pub fn apply_overlay(
                     help: format!("{:?}", current.managed),
                     overlay: format!("{:?}", incoming.managed),
                 });
-            } else if current.managed.is_none() {
-                if !matches!(
-                    incoming.request_field.source,
-                    Some(Source::Adapter { .. }) | None
-                ) {
-                    // Managed bindings still require explicit adapter intent;
-                    // a bare overlay value without provenance does not qualify.
-                }
+            } else if current.managed.is_none() && incoming.managed.is_some() {
                 // Only explicit adapter metadata may claim app-owned bindings.
-                if incoming.managed.is_some() {
-                    // The overlay schema was already validated, so its managed
-                    // claim carries a source; help never invents one.
+                if has_adapter_provenance(&incoming) {
                     current.managed = incoming.managed;
+                } else {
+                    conflicts.push(OverlayConflict {
+                        key: current.key.clone(),
+                        field: "managed".into(),
+                        help: "none".into(),
+                        overlay: format!("{:?}", incoming.managed),
+                    });
                 }
             }
         }
@@ -946,7 +1051,18 @@ pub fn apply_overlay(
             current.group = incoming.group.clone();
         }
         if !incoming.raw_spans.is_empty() {
-            current.raw_spans.extend(incoming.raw_spans.clone());
+            // Observed spans must name a document this schema actually holds;
+            // foreign documents are not silently stitched into validation.
+            let known: BTreeSet<&str> = base.raw_help.iter().map(|h| h.id.as_str()).collect();
+            for span in &incoming.raw_spans {
+                let observed = match span {
+                    Source::Help { document, .. } => known.contains(document.as_str()),
+                    _ => true,
+                };
+                if observed && !current.raw_spans.contains(span) {
+                    current.raw_spans.push(span.clone());
+                }
+            }
         }
         if current.target != incoming.target {
             conflicts.push(OverlayConflict {
@@ -957,9 +1073,13 @@ pub fn apply_overlay(
             });
         }
     }
-    // Constraints supplement; they never weaken observed arity.
+    // Constraints supplement; they never weaken observed arity. Like request
+    // fields and managed bindings, constraints require adapter provenance;
+    // help alone never provides them.
     for constraint in overlay.constraints {
-        if constraint.certainty != Certainty::Unknown {
+        if constraint.certainty != Certainty::Unknown
+            && matches!(constraint.source, Some(Source::Adapter { .. }))
+        {
             base.constraints.push(constraint);
         }
     }
@@ -1351,5 +1471,310 @@ mod tests {
     #[test]
     fn encoding_variants_are_distinct_for_future_help_reports() {
         assert_ne!(Encoding::Auto, Encoding::Utf8);
+    }
+
+    /// External raw acceptance against root-owned help captures. Opt-in only:
+    /// set `AIOLM_REAL_HELP_DIR` to a directory holding `llama-b11617.stdout`,
+    /// `argparse-v1.stdout` and `argparse-v2-1000.stdout`. Never commits those
+    /// files (they carry local paths) and never logs their text; only counts,
+    /// keys and arities are asserted. Run with
+    /// `AIOLM_REAL_HELP_DIR=<dir> cargo test --locked --lib -- --ignored
+    /// real_help_acceptance_opt_in`.
+    #[test]
+    #[ignore]
+    fn real_help_acceptance_opt_in() {
+        let dir = std::env::var("AIOLM_REAL_HELP_DIR")
+            .expect("AIOLM_REAL_HELP_DIR must point at the real capture dir");
+        let load = |name: &str| {
+            let text = std::fs::read_to_string(std::path::Path::new(&dir).join(name))
+                .unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
+            let fingerprint = format!("{:064x}", text.len() * 31 + 7);
+            let mut full = report(&text);
+            full.identity.fingerprint = fingerprint.clone();
+            parse_help_report(&full, binding(&fingerprint))
+                .unwrap_or_else(|e| panic!("{name} ({} bytes) failed to parse: {e}", text.len()))
+        };
+        // Pinned llama help: COLUMN0 with multi-space alias gaps.
+        let llama = load("llama-b11617.stdout");
+        assert!(
+            llama.options.len() >= 200,
+            "llama options: {}",
+            llama.options.len()
+        );
+        for key in ["help", "version", "threads", "ctx_size"] {
+            assert!(llama.options.iter().any(|o| o.key == key), "missing {key}");
+        }
+        let threads = llama.options.iter().find(|o| o.key == "threads").unwrap();
+        assert_eq!(
+            threads.arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        // Argparse v1: exact small shapes incl. paired toggle, fixed pair,
+        // variadic items, optional value and explicit choices.
+        let v1 = load("argparse-v1.stdout");
+        for key in ["probe", "model", "host", "port", "alias", "trace"] {
+            assert!(v1.options.iter().any(|o| o.key == key), "v1 missing {key}");
+        }
+        let by_suffix = |suffix: &str| {
+            v1.options
+                .iter()
+                .find(|o| o.key.ends_with(suffix))
+                .unwrap_or_else(|| panic!("v1 missing *{suffix}"))
+        };
+        assert_eq!(
+            by_suffix("_count").arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        assert_eq!(
+            by_suffix("_pair").arity.supported(),
+            Some(&Arity {
+                min: 2,
+                max: Some(2)
+            })
+        );
+        assert_eq!(
+            by_suffix("_items").arity.supported(),
+            Some(&Arity { min: 1, max: None })
+        );
+        assert_eq!(
+            by_suffix("_optional").arity.supported(),
+            Some(&Arity {
+                min: 0,
+                max: Some(1)
+            })
+        );
+        let toggle = by_suffix("_toggle");
+        assert!(toggle.spellings.iter().any(|s| s.polarity == Some(true)));
+        assert!(toggle.spellings.iter().any(|s| s.polarity == Some(false)));
+        // Argparse v2: 1000 bulk flags plus an arity widening on count.
+        let v2 = load("argparse-v2-1000.stdout");
+        assert!(v2.options.len() >= 1000, "v2 options: {}", v2.options.len());
+        assert_eq!(
+            by_suffix_v2(&v2, "_count").arity.supported(),
+            Some(&Arity {
+                min: 2,
+                max: Some(2)
+            })
+        );
+    }
+
+    fn by_suffix_v2<'a>(schema: &'a OptionSchema, suffix: &str) -> &'a OptionDefinition {
+        schema
+            .options
+            .iter()
+            .find(|o| o.key.ends_with(suffix))
+            .unwrap_or_else(|| panic!("v2 missing *{suffix}"))
+    }
+
+    #[test]
+    fn column0_llama_syntax_with_alias_gaps_parses_without_indent() {
+        // Exact upstream shapes from real captures: COLUMN0, multi-space
+        // alias gaps, a three-alias boolean and a bare long boolean.
+        let schema = parse(
+            "-h,    --help, --usage                  print usage and exit\n-t,    --threads N                      number of CPU threads\n--version                               show version and build info\n",
+        );
+        assert!(
+            schema.options.len() >= 3,
+            "got {:?}",
+            schema
+                .options
+                .iter()
+                .map(|o| o.key.clone())
+                .collect::<Vec<_>>()
+        );
+        let help = schema.options.iter().find(|o| o.key == "help").unwrap();
+        assert_eq!(help.spellings.len(), 3);
+        assert_eq!(help.kind.supported(), Some(&ValueKind::Boolean));
+        let threads = schema.options.iter().find(|o| o.key == "threads").unwrap();
+        assert_eq!(
+            threads.arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        let version = schema.options.iter().find(|o| o.key == "version").unwrap();
+        assert_eq!(version.kind.supported(), Some(&ValueKind::Boolean));
+    }
+
+    #[test]
+    fn independent_alias_metavars_reconcile_instead_of_summing() {
+        // Indented so the only defect under test is arity: each alias spells
+        // one value, so the option takes exactly one value, not two.
+        let schema =
+            parse("Options:\n  -t VALUE, --threads VALUE              spelled on both aliases\n");
+        let threads = schema.options.iter().find(|o| o.key == "threads").unwrap();
+        assert_eq!(
+            threads.arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        // Aliases that disagree on the value count keep arity unknown so argv
+        // waits for explicit metadata instead of emitting summed values.
+        let conflicted =
+            parse("Options:\n  -x A, --ex A B              aliases disagree on value count\n");
+        let ex = conflicted.options.iter().find(|o| o.key == "ex").unwrap();
+        assert_eq!(ex.arity.certainty, Certainty::Unknown);
+    }
+
+    #[test]
+    fn complete_stderr_help_parses_with_stderr_provenance() {
+        let mut stderr_report = report("");
+        stderr_report.stdout.clean_text = String::new();
+        stderr_report.stdout.text = String::new();
+        let help = "Options:\n  --from-stderr VALUE   documented on stderr\n";
+        stderr_report.stderr.clean_text = help.into();
+        stderr_report.stderr.text = help.into();
+        let schema =
+            parse_help_report(&stderr_report, binding(&stderr_report.identity.fingerprint))
+                .unwrap();
+        let option = schema
+            .options
+            .iter()
+            .find(|o| o.key == "from_stderr")
+            .expect("stderr option is parsed");
+        assert_eq!(
+            option.arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        for span in &option.raw_spans {
+            match span {
+                Source::Help { document, .. } => assert_eq!(document, "stderr"),
+                other => panic!("stderr option keeps an unexpected source {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn long_korean_help_truncates_at_a_char_boundary_without_panicking() {
+        // "가" is 3 bytes in UTF-8; 11_000 of them (33_000 bytes) straddle the
+        // 32_768 truncation bound at a non-boundary offset.
+        let description = "가".repeat(11_000);
+        let schema = parse(&format!(
+            "Options:\n  --big WORD            {description}\n"
+        ));
+        let big = schema.options.iter().find(|o| o.key == "big").unwrap();
+        assert!(big.help.len() <= 32_768);
+        assert!(big.help.is_char_boundary(big.help.len()));
+    }
+
+    #[test]
+    fn uppercase_prose_and_wrapped_usage_never_become_positionals() {
+        let schema = parse(
+            "usage: engine [--port PORT]\n  [--port PORT] [--alias ALIAS]\n\nOptions:\n  --port PORT           listen port\n  SOMEPROSE             stray uppercase line\n",
+        );
+        assert!(schema.options.iter().any(|o| o.key == "port"));
+        assert!(
+            schema.options.iter().all(|o| o.position.is_none()),
+            "got {:?}",
+            schema
+                .options
+                .iter()
+                .map(|o| (o.key.clone(), o.position))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn four_alias_boolean_keeps_observed_polarity_only() {
+        let schema =
+            parse("-kvo, --kv-offload, -nkvo, --no-kv-offload            offload control\n");
+        let kv = schema
+            .options
+            .iter()
+            .find(|o| o.key == "kv_offload")
+            .unwrap();
+        assert_eq!(kv.spellings.len(), 4);
+        assert_eq!(kv.kind.supported(), Some(&ValueKind::Boolean));
+        // Polarity records observed spellings; request semantics stay unknown.
+        assert_eq!(kv.request_field.certainty, Certainty::Unknown);
+    }
+
+    #[test]
+    fn empty_help_is_not_a_supported_schema() {
+        let prose = report("Prose without flags stays raw.\n");
+        assert!(parse_help_report(&prose, binding(&prose.identity.fingerprint)).is_err());
+    }
+
+    #[test]
+    fn next_line_argparse_description_does_not_become_metavar() {
+        let schema = parse("options:\n  --trace PATH\n          synthetic log path\n");
+        let trace = schema.options.iter().find(|o| o.key == "trace").unwrap();
+        assert_eq!(
+            trace.arity.supported(),
+            Some(&Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        assert!(trace.help.contains("synthetic log path"));
+    }
+
+    #[test]
+    fn overlay_managed_bindings_need_adapter_provenance() {
+        let base = parse("Options:\n  --threads N           thread count\n");
+        let fingerprint = base.binding.fingerprint.clone();
+        let mut overlay = base.clone();
+        overlay.options.clear();
+        let mut threads = base
+            .options
+            .iter()
+            .find(|o| o.key == "threads")
+            .unwrap()
+            .clone();
+        threads.managed = Some(ManagedBinding::Port);
+        // No adapter-sourced fact: help text alone must not claim app ownership.
+        overlay.options.push(threads);
+        overlay.binding = binding(&fingerprint);
+        let applied = apply_overlay(base.clone(), overlay).unwrap();
+        let kept = applied
+            .schema
+            .options
+            .iter()
+            .find(|o| o.key == "threads")
+            .unwrap();
+        assert_eq!(kept.managed, None);
+        assert!(applied
+            .conflicts
+            .iter()
+            .any(|c| c.key == "threads" && c.field == "managed"));
+    }
+
+    #[test]
+    fn overlay_constraints_need_adapter_provenance() {
+        use super::super::runtime_options::{Predicate, Relation};
+        let base = parse("Options:\n  --threads N           x\n  --mode VALUE          y\n");
+        let mut overlay = base.clone();
+        overlay.constraints.push(Fact {
+            value: Some(Relation::Requires {
+                when: Predicate {
+                    key: "threads".into(),
+                    equals: None,
+                },
+                other: Predicate {
+                    key: "mode".into(),
+                    equals: None,
+                },
+            }),
+            certainty: Certainty::Verified,
+            source: Some(Source::Help {
+                document: "stdout".into(),
+                start_line: 1,
+                end_line: 1,
+            }),
+        });
+        let applied = apply_overlay(base, overlay).unwrap();
+        assert!(applied.schema.constraints.is_empty());
     }
 }

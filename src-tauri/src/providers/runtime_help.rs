@@ -427,6 +427,36 @@ impl HelpService {
         }
     }
 
+    /// Cancel every in-flight discovery without removing owner slots. Slots
+    /// stay so each `finish` still reports `cancelled` (not `superseded`) and
+    /// `failed` still frees its own owner; other owners are never touched
+    /// beyond their own flag. This is the shared stop path the
+    /// `runtime_help_cancel_all` IPC wires to; runtime lifecycle flags stay
+    /// with the caller and are not changed here.
+    pub fn cancel_all(&self) -> Result<usize, String> {
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| "help discovery lock was poisoned")?;
+        let count = state.active.len();
+        for ticket in state.active.values() {
+            ticket.cancel.store(true, Ordering::Release);
+        }
+        Ok(count)
+    }
+
+    /// Whether this ticket still owns its slot. Checked under lock before any
+    /// persistent publication so a superseded predecessor can never publish;
+    /// never cancels or removes another owner's ticket.
+    pub fn is_current(&self, ticket: &DiscoveryTicket) -> bool {
+        self.0.lock().is_ok_and(|state| {
+            state
+                .active
+                .get(&ticket.owner)
+                .is_some_and(|t| t.id == ticket.id)
+        })
+    }
+
     pub fn cached(
         &self,
         command: &HelpCommand,
@@ -441,6 +471,20 @@ impl HelpService {
     }
 
     pub fn finish(&self, ticket: &DiscoveryTicket, report: &HelpReport) -> Result<(), String> {
+        self.publish(ticket, report, || Ok(()))
+    }
+
+    /// Linearizable publication: the ownership/cancellation check, the
+    /// caller's persistent write and the cache update happen under one lock.
+    /// `cancel`, `cancel_owner`, `cancel_all` and `begin` take the same lock,
+    /// so a ticket either publishes completely before a competing call or not
+    /// at all; nothing is written and later rolled back.
+    pub fn publish(
+        &self,
+        ticket: &DiscoveryTicket,
+        report: &HelpReport,
+        persist: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut state = self
             .0
             .lock()
@@ -452,10 +496,15 @@ impl HelpService {
         {
             return Err("help discovery superseded; late result discarded".into());
         }
-        state.active.remove(&ticket.owner);
         if ticket.cancel.load(Ordering::Acquire) {
+            state.active.remove(&ticket.owner);
             return Err("help discovery cancelled".into());
         }
+        if let Err(error) = persist() {
+            state.active.remove(&ticket.owner);
+            return Err(error);
+        }
+        state.active.remove(&ticket.owner);
         if report.complete() {
             if state.cache.len() >= CACHE_ENTRIES {
                 if let Some(key) = state.cache.keys().next().cloned() {
@@ -549,6 +598,16 @@ mod tests {
             "normal" => {
                 println!("\u{1b}[32m  --new-flag VALUE\u{1b}[0m   freshly installed\n한글 help");
                 eprintln!("  --stderr-option ARG   separate stream");
+            }
+            "bulk" => {
+                // Larger than the real 1000-flag argparse capture (203342 B).
+                let mut text = String::from("usage: synthetic [options]\n\noptions:\n");
+                for index in 0..1500 {
+                    text.push_str(&format!(
+                        "  --bulk-option-{index:04} VALUE\n                        synthetic bulk option {index} with a wrapped description line\n                        continued on the next line for capacity coverage\n"
+                    ));
+                }
+                std::io::stdout().write_all(text.as_bytes()).unwrap();
             }
             "overflow" => {
                 std::io::stdout().write_all(&vec![b'x'; 65536]).unwrap();
@@ -897,6 +956,94 @@ mod tests {
             .cached(&command("normal"), &AtomicBool::new(false))
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn cancel_all_cancels_every_owner_without_removing_slots() {
+        let service = HelpService::default();
+        let first = service.begin("a").unwrap();
+        let other = service.begin("b").unwrap();
+        assert_eq!(service.cancel_all().unwrap(), 2);
+        assert!(first.cancel.load(Ordering::Acquire));
+        assert!(other.cancel.load(Ordering::Acquire));
+        // Slots are retained so finish still reports cancellation per owner.
+        let report = discover(&command("normal"), &AtomicBool::new(false)).unwrap();
+        assert!(service
+            .finish(&first, &report)
+            .unwrap_err()
+            .contains("cancelled"));
+        assert_eq!(service.cancel_all().unwrap(), 1);
+        service.failed(&other);
+        assert_eq!(service.cancel_all().unwrap(), 0);
+    }
+
+    #[test]
+    fn publication_is_linearized_with_cancellation_and_supersession() {
+        let service = Arc::new(HelpService::default());
+        let report = discover(&command("normal"), &AtomicBool::new(false)).unwrap();
+        // A cancel issued while the persistent write is in progress waits for
+        // the lock: the write completes and the ticket is no longer active.
+        let ticket = service.begin("linear").unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let worker = service.clone();
+        let worker_report = report.clone();
+        let written = Arc::new(AtomicBool::new(false));
+        let worker_written = written.clone();
+        let handle = std::thread::spawn(move || {
+            worker.publish(&ticket, &worker_report, || {
+                entered_tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+                worker_written.store(true, Ordering::Release);
+                Ok(())
+            })
+        });
+        entered_rx.recv().unwrap();
+        assert!(!service.cancel_owner("linear").unwrap());
+        assert!(written.load(Ordering::Acquire));
+        handle.join().unwrap().unwrap();
+        // A superseded or cancelled ticket never runs its write at all.
+        let old = service.begin("linear").unwrap();
+        let _fresh = service.begin("linear").unwrap();
+        let ran = AtomicBool::new(false);
+        assert!(service
+            .publish(&old, &report, || {
+                ran.store(true, Ordering::Release);
+                Ok(())
+            })
+            .unwrap_err()
+            .contains("superseded"));
+        let cancelled = service.begin("other").unwrap();
+        service.cancel_all().unwrap();
+        assert!(service
+            .publish(&cancelled, &report, || {
+                ran.store(true, Ordering::Release);
+                Ok(())
+            })
+            .unwrap_err()
+            .contains("cancelled"));
+        assert!(!ran.load(Ordering::Acquire));
+        // A failed write frees the owner for an immediate retry.
+        let failing = service.begin("retry").unwrap();
+        assert_eq!(
+            service.publish(&failing, &report, || Err("disk full".into())),
+            Err("disk full".to_string())
+        );
+        assert!(!service.cancel_owner("retry").unwrap());
+    }
+
+    #[test]
+    fn is_current_tracks_supersession_without_touching_other_owners() {
+        let service = HelpService::default();
+        let old = service.begin("same").unwrap();
+        let unrelated = service.begin("other").unwrap();
+        assert!(service.is_current(&old));
+        let latest = service.begin("same").unwrap();
+        assert!(!service.is_current(&old));
+        assert!(service.is_current(&latest));
+        assert!(service.is_current(&unrelated));
+        service.failed(&old);
+        service.failed(&latest);
+        service.failed(&unrelated);
     }
 
     #[test]

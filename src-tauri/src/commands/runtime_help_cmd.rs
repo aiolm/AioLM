@@ -4,18 +4,13 @@
 //! for display and only runs an owned child on an explicit Discover action.
 //! Help success never implies protocol readiness; registration still runs a
 //! fresh model probe before reporting Ready.
-use crate::{
-    providers::{
-        runtime_help::{HelpCommand, HelpReport, HelpService},
-        runtime_help_parse::{AppliedOverlay, SchemaDiff},
-        runtime_help_store::{self, HelpSnapshot, RuntimeDescriptor},
-        runtime_options::{OptionIssue, OptionSchema, ResolvedOptions},
-    },
-    state::AppState,
+use crate::providers::{
+    runtime_help::{HelpCommand, HelpReport, HelpService},
+    runtime_help_parse::{AppliedOverlay, SchemaDiff},
+    runtime_help_store::{self, HelpSnapshot, RuntimeDescriptor},
+    runtime_options::{OptionIssue, OptionSchema, ResolvedOptions},
 };
 use serde_json::{Map, Value};
-use std::sync::atomic::Ordering;
-use tauri::State;
 
 static HELP_SERVICE: std::sync::OnceLock<HelpService> = std::sync::OnceLock::new();
 
@@ -32,18 +27,14 @@ fn adapters_root() -> std::path::PathBuf {
 /// deleted; absent keys are reported as retained.
 #[tauri::command]
 pub(crate) async fn runtime_help_discover(
-    state: State<'_, AppState>,
     owner: String,
     engine: String,
     runtime: String,
     command: HelpCommand,
     saved_keys: Vec<String>,
 ) -> Result<(HelpReport, RuntimeDescriptor), String> {
-    if super::runtimes::runtime_resources_in_use(&state)? {
-        // Discovery itself does not start a model server, so live sessions do
-        // not block it. Sessions only gate registration, which owns probes.
-        let _ = &state;
-    }
+    // Discovery never starts a model server, so live sessions do not block it;
+    // sessions only gate registration, which owns probes.
     let root = adapters_root();
     let owner = owner.clone();
     let engine = engine.clone();
@@ -91,11 +82,17 @@ pub(crate) async fn runtime_help_cancel_owner(owner: String) -> Result<bool, Str
     service().cancel_owner(&owner)
 }
 
-/// Shared stop path for long help runs.
+/// Shared stop path for long help runs. Only help discoveries are cancelled;
+/// runtime installs, builds and probes keep their own cancellation flag.
 #[tauri::command]
-pub(crate) async fn runtime_help_cancel_all(state: State<'_, AppState>) -> Result<(), String> {
-    state.runtime_cancel.store(true, Ordering::Release);
-    Ok(())
+pub(crate) async fn runtime_help_cancel_all() -> Result<usize, String> {
+    cancel_all_discoveries()
+}
+
+/// Cancels every in-flight help discovery. Their owned children are reaped by
+/// the capture loop; app shutdown additionally terminates transient trees.
+pub(crate) fn cancel_all_discoveries() -> Result<usize, String> {
+    service().cancel_all()
 }
 
 /// Authoritative argv/request resolution for a help-derived schema.

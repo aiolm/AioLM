@@ -12,7 +12,7 @@
 //! and no config migration is required. Stored profile values keep both
 //! legacy scalar shapes and new override objects; unknown keys are retained
 //! and block launch until reviewed.
-use super::runtime_help::{HelpCommand, HelpReport, HelpService};
+use super::runtime_help::{DiscoveryTicket, HelpCommand, HelpReport, HelpService};
 use super::runtime_help_parse::{diff_with_saved, SchemaDiff};
 use super::runtime_options::{OptionIssue, OptionSchema, Override, ResolvedOptions};
 use serde::{Deserialize, Serialize};
@@ -20,8 +20,14 @@ use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
+    sync::atomic::Ordering,
 };
+
+/// Disk snapshots stay small and explicit: size is checked from metadata
+/// before any file is read into memory.
+const MAX_SNAPSHOT_BYTES: usize = 12 * 1024 * 1024;
+/// Bounds a directory scan so a bloated snapshot directory cannot stall reads.
+const MAX_SNAPSHOT_FILES: usize = 4096;
 
 /// A complete discovery result: the owned help run plus its parsed schema.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,10 +107,15 @@ pub fn save_snapshot(
     if snapshot.schema.binding.fingerprint != snapshot.report.identity.fingerprint {
         return Err("snapshot schema must match its help fingerprint".into());
     }
+    // The schema binding pins the exact engine/runtime the snapshot was
+    // discovered for; a foreign binding must never be filed under this path.
+    if snapshot.schema.binding.engine != engine || snapshot.schema.binding.runtime != runtime {
+        return Err("snapshot schema binding must match its engine and runtime".into());
+    }
     let path = snapshot_path_for(root, engine, runtime, &snapshot.report.identity.fingerprint)?;
     let bytes = serde_json::to_vec_pretty(snapshot).map_err(|e| e.to_string())?;
-    if bytes.len() > 3 * 1024 * 1024 {
-        return Err("help snapshot exceeds 3 MiB".into());
+    if bytes.len() > MAX_SNAPSHOT_BYTES {
+        return Err("help snapshot exceeds 12 MiB".into());
     }
     crate::config::atomic_write(&path, &bytes)?;
     Ok(path)
@@ -119,12 +130,25 @@ pub fn load_snapshot(
     fingerprint: &str,
 ) -> Result<Option<HelpSnapshot>, String> {
     let path = snapshot_path_for(root, engine, runtime, fingerprint)?;
-    if !path.is_file() {
+    // Never follow a reparse link to a snapshot, and never allocate a file
+    // before its metadata proves it is a bounded regular file.
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err("help snapshot must not be a symbolic link".into());
+    }
+    if !metadata.file_type().is_file() {
         return Ok(None);
     }
+    if metadata.len() > MAX_SNAPSHOT_BYTES as u64 {
+        return Err("help snapshot exceeds 12 MiB".into());
+    }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    if bytes.len() > 3 * 1024 * 1024 {
-        return Err("help snapshot exceeds 3 MiB".into());
+    if bytes.len() > MAX_SNAPSHOT_BYTES {
+        return Err("help snapshot exceeds 12 MiB".into());
     }
     let snapshot: HelpSnapshot =
         serde_json::from_slice(&bytes).map_err(|e| format!("invalid help snapshot: {e}"))?;
@@ -134,6 +158,8 @@ pub fn load_snapshot(
     snapshot.schema.validate()?;
     if snapshot.report.identity.fingerprint != fingerprint
         || snapshot.schema.binding.fingerprint != fingerprint
+        || snapshot.schema.binding.engine != engine
+        || snapshot.schema.binding.runtime != runtime
     {
         return Ok(None);
     }
@@ -141,13 +167,18 @@ pub fn load_snapshot(
 }
 
 /// The most recently saved snapshot for a runtime, if any.
+///
+/// Selection is deterministic and bounded: only files named `<SHA-256>.json`
+/// that are bounded regular files (never reparse links) and whose
+/// report/schema fingerprints and engine/runtime bindings agree are
+/// candidates; the newest by (mtime, fingerprint) wins. Stale or foreign files
+/// are skipped, never promoted, and old raw data is left untouched on disk.
 pub fn latest_snapshot(
     root: &Path,
     engine: &str,
     runtime: &str,
 ) -> Result<Option<HelpSnapshot>, String> {
     let dir = snapshot_root(root, engine, runtime)?;
-    let mut best: Option<(std::time::SystemTime, HelpSnapshot)> = None;
     let entries = std::fs::read_dir(&dir).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             return "no help snapshot for this runtime".to_string();
@@ -159,14 +190,45 @@ pub fn latest_snapshot(
         Err(message) if message.contains("no help snapshot") => return Ok(None),
         Err(message) => return Err(message),
     };
-    for entry in entries.flatten().take(64) {
+    let mut candidates: Vec<(std::time::SystemTime, String, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        if candidates.len() >= MAX_SNAPSHOT_FILES {
+            break;
+        }
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if stem.len() != 64 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
+        // Metadata first: reject reparse links and oversize files before any
+        // allocation, without following the link.
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || metadata.len() > MAX_SNAPSHOT_BYTES as u64
+        {
+            continue;
+        }
+        let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+        candidates.push((modified, stem.to_string(), path));
+    }
+    // Newest first; the fingerprint stem breaks mtime ties deterministically.
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    for (_, stem, path) in candidates.into_iter().rev() {
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
+        if bytes.len() > MAX_SNAPSHOT_BYTES {
+            continue;
+        }
         let Ok(snapshot): Result<HelpSnapshot, _> = serde_json::from_slice(&bytes) else {
             continue;
         };
@@ -176,15 +238,16 @@ pub fn latest_snapshot(
         if snapshot.schema.validate().is_err() {
             continue;
         }
-        let modified = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        if best.as_ref().is_none_or(|(time, _)| modified >= *time) {
-            best = Some((modified, snapshot));
+        if snapshot.report.identity.fingerprint != stem
+            || snapshot.schema.binding.fingerprint != stem
+            || snapshot.schema.binding.engine != engine
+            || snapshot.schema.binding.runtime != runtime
+        {
+            continue;
         }
+        return Ok(Some(snapshot));
     }
-    Ok(best.map(|(_, snapshot)| snapshot))
+    Ok(None)
 }
 
 /// Describe the current discovery against the latest saved snapshot.
@@ -277,6 +340,44 @@ pub fn resolve_stored(
     schema.resolve(scope, &overrides_from_map(stored))
 }
 
+/// Where a guarded publication may write: the snapshot directory identity
+/// plus whether a fresh schema needs persisting (identical rediscovery only
+/// refreshes the in-memory cache entry).
+struct PublishScope<'a> {
+    root: &'a Path,
+    engine: &'a str,
+    runtime: &'a str,
+    persist: bool,
+}
+
+/// Guarded publication for one discovery ticket: only the ticket that still
+/// owns its slot publishes, and only while it is not cancelled. The check and
+/// the atomic snapshot write run under the service lock, so a superseded or
+/// cancelled predecessor never writes disk/latest and nothing is rolled back.
+/// Never touches another owner's slot.
+fn publish_current(
+    service: &HelpService,
+    ticket: &DiscoveryTicket,
+    report: &HelpReport,
+    schema: &OptionSchema,
+    scope: PublishScope<'_>,
+) -> Result<(), String> {
+    service.publish(ticket, report, || {
+        if scope.persist && report.complete() {
+            save_snapshot(
+                scope.root,
+                scope.engine,
+                scope.runtime,
+                &HelpSnapshot {
+                    report: report.clone(),
+                    schema: schema.clone(),
+                },
+            )?;
+        }
+        Ok(())
+    })
+}
+
 /// Run shell-free discovery for one owner, parse, persist and describe.
 /// The in-memory service cancels a previous discovery by the same owner; a
 /// late predecessor can never publish. A changed executable or artifact
@@ -294,11 +395,18 @@ pub fn discover_persist_describe(
         return Err("invalid engine or runtime identity for help snapshots".into());
     }
     let ticket = service.begin(owner)?;
-    let cancel: AtomicBool = AtomicBool::new(false);
-    // Link ticket cancellation to this run.
-    let report = super::runtime_help::discover(command, &ticket.cancel)
-        .inspect_err(|_| service.failed(&ticket))?;
-    if cancel.load(std::sync::atomic::Ordering::Acquire) {
+    // The owned capture runs under this ticket's flag; a spawn failure frees
+    // the owner slot immediately so the owner can retry.
+    let report = match super::runtime_help::discover(command, &ticket.cancel) {
+        Ok(report) => report,
+        Err(error) => {
+            service.failed(&ticket);
+            return Err(error);
+        }
+    };
+    // Cancellation after capture still wins over persistence: a cancelled
+    // ticket publishes nothing and frees its owner for an immediate retry.
+    if ticket.cancel.load(Ordering::Acquire) {
         service.failed(&ticket);
         return Err("help discovery cancelled".into());
     }
@@ -307,46 +415,84 @@ pub fn discover_persist_describe(
         runtime: runtime.into(),
         fingerprint: report.identity.fingerprint.clone(),
     };
-    let schema = super::runtime_help_parse::parse_help_report(&report, binding)?;
-    let previous = latest_snapshot(root, engine, runtime)?;
+    // Every fallible step below frees this ticket's slot on error; a
+    // superseded or cancelled ticket additionally never reaches publication.
+    let schema = match super::runtime_help_parse::parse_help_report(&report, binding) {
+        Ok(schema) => schema,
+        Err(error) => {
+            service.failed(&ticket);
+            return Err(error);
+        }
+    };
+    let previous = match latest_snapshot(root, engine, runtime) {
+        Ok(previous) => previous,
+        Err(error) => {
+            service.failed(&ticket);
+            return Err(error);
+        }
+    };
     // A saved snapshot from another fingerprint is never reused; the diff
     // shows what changed and saved values stay retained.
     if let Some(old) = &previous {
         if old.report.identity.fingerprint == report.identity.fingerprint {
             // Identical rediscovery returns the stored schema to keep field
-            // order and overlay supplements stable.
-            let descriptor = describe(
+            // order and overlay supplements stable; the snapshot is already
+            // on disk, so only the guarded in-memory publication runs.
+            let descriptor = match describe(
                 engine,
                 runtime,
                 &report,
                 &old.schema,
                 previous.as_ref(),
                 saved_keys,
+            ) {
+                Ok(descriptor) => descriptor,
+                Err(error) => {
+                    service.failed(&ticket);
+                    return Err(error);
+                }
+            };
+            publish_current(
+                service,
+                &ticket,
+                &report,
+                &old.schema,
+                PublishScope {
+                    root,
+                    engine,
+                    runtime,
+                    persist: false,
+                },
             )?;
-            service.finish(&ticket, &report)?;
             return Ok((report, descriptor));
         }
     }
-    let descriptor = describe(
+    let descriptor = match describe(
         engine,
         runtime,
         &report,
         &schema,
         previous.as_ref(),
         saved_keys,
-    )?;
-    if report.complete() {
-        let snapshot = HelpSnapshot {
-            report: report.clone(),
-            schema: schema.clone(),
-        };
-        // Failure to persist never promotes a result to verified.
-        if let Err(error) = save_snapshot(root, engine, runtime, &snapshot) {
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
             service.failed(&ticket);
             return Err(error);
         }
-    }
-    service.finish(&ticket, &report)?;
+    };
+    publish_current(
+        service,
+        &ticket,
+        &report,
+        &schema,
+        PublishScope {
+            root,
+            engine,
+            runtime,
+            persist: true,
+        },
+    )?;
     Ok((report, descriptor))
 }
 
@@ -358,9 +504,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn test_report(text: &str) -> HelpReport {
+        test_report_with_fp(text, &"a".repeat(64))
+    }
+
+    fn test_report_with_fp(text: &str, fingerprint: &str) -> HelpReport {
         HelpReport {
             identity: Identity {
-                fingerprint: "a".repeat(64),
+                fingerprint: fingerprint.into(),
                 executable_sha256: "b".repeat(64),
                 artifacts_sha256: BTreeMap::new(),
                 parser_version: PARSER_VERSION,
@@ -590,5 +740,512 @@ mod tests {
     #[test]
     fn schema_version_constant_matches_options_contract() {
         assert_eq!(SCHEMA_VERSION, 1);
+    }
+
+    const CHILD_ENV: &str = "AIOLM_HELP_TEST_CHILD";
+    const CHILD_FILTER: &str = "providers::runtime_help::tests::discovery_child";
+
+    /// Real owned child processes: the test binary replays synthetic help when
+    /// the child marker env is set, mirroring the runtime_help fixtures.
+    fn help_command(mode: &str, timeout_ms: u64) -> HelpCommand {
+        let mut environment = BTreeMap::new();
+        environment.insert(CHILD_ENV.into(), mode.into());
+        environment.insert("LC_ALL".into(), "C".into());
+        HelpCommand {
+            program: std::env::current_exe().unwrap(),
+            args: vec!["--exact".into(), CHILD_FILTER.into(), "--nocapture".into()],
+            environment,
+            working_directory: Some(std::env::temp_dir()),
+            artifacts: vec![],
+            runtime_version: "test-store-r1".into(),
+            scope: vec![],
+            encoding: Encoding::Auto,
+            timeout_ms,
+            output_limit: 4096,
+        }
+    }
+
+    fn write_snapshot_bytes(root: &Path, engine: &str, runtime: &str, stem: &str, bytes: &[u8]) {
+        let dir = root.join(engine).join(runtime).join("help");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{stem}.json")), bytes).unwrap();
+    }
+
+    #[test]
+    fn save_rejects_schema_binding_mismatch() {
+        let root = temp_root();
+        let report = test_report("Options:\n  --threads N           threads\n");
+        let mut schema = test_schema(&report.identity.fingerprint);
+        schema.binding.engine = "custom.other".into();
+        let error = save_snapshot(
+            &root,
+            "custom.example",
+            "build-a",
+            &HelpSnapshot { report, schema },
+        )
+        .unwrap_err();
+        assert!(error.contains("binding"), "unexpected error: {error}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn latest_snapshot_ignores_filename_fingerprint_mismatch() {
+        let root = temp_root();
+        let report = test_report("Options:\n  --threads N           threads\n");
+        let schema = test_schema(&report.identity.fingerprint);
+        let bytes = serde_json::to_vec_pretty(&HelpSnapshot { report, schema }).unwrap();
+        // Valid snapshot bytes filed under a fingerprint that matches neither
+        // the report nor the schema binding must never be promoted.
+        write_snapshot_bytes(&root, "custom.example", "build-a", &"d".repeat(64), &bytes);
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn oversize_snapshot_files_are_rejected_before_full_trust() {
+        let root = temp_root();
+        let stem = "f".repeat(64);
+        let big = vec![b'x'; MAX_SNAPSHOT_BYTES + 1];
+        write_snapshot_bytes(&root, "custom.example", "build-a", &stem, &big);
+        let error = load_snapshot(&root, "custom.example", "build-a", &stem).unwrap_err();
+        assert!(error.contains("exceeds"), "unexpected error: {error}");
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshots_reject_symlinked_files() {
+        let root = temp_root();
+        let report = test_report("Options:\n  --threads N           threads\n");
+        let schema = test_schema(&report.identity.fingerprint);
+        let real_fp = report.identity.fingerprint.clone();
+        save_snapshot(
+            &root,
+            "custom.example",
+            "build-a",
+            &HelpSnapshot {
+                report: report.clone(),
+                schema: schema.clone(),
+            },
+        )
+        .unwrap();
+        let target = root.join("outside-target.json");
+        std::fs::write(
+            &target,
+            serde_json::to_vec_pretty(&HelpSnapshot { report, schema }).unwrap(),
+        )
+        .unwrap();
+        let link_stem = "e".repeat(64);
+        std::os::unix::fs::symlink(
+            &target,
+            root.join("custom.example")
+                .join("build-a")
+                .join("help")
+                .join(format!("{link_stem}.json")),
+        )
+        .unwrap();
+        let error = load_snapshot(&root, "custom.example", "build-a", &link_stem).unwrap_err();
+        assert!(error.contains("symbolic"), "unexpected error: {error}");
+        // The reparse link is skipped; the real snapshot still wins.
+        let latest = latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.report.identity.fingerprint, real_fp);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn snapshots_reject_symlinked_files() {
+        let root = temp_root();
+        let report = test_report("Options:\n  --threads N           threads\n");
+        let schema = test_schema(&report.identity.fingerprint);
+        let real_fp = report.identity.fingerprint.clone();
+        save_snapshot(
+            &root,
+            "custom.example",
+            "build-a",
+            &HelpSnapshot {
+                report: report.clone(),
+                schema: schema.clone(),
+            },
+        )
+        .unwrap();
+        let target = root.join("outside-target.json");
+        std::fs::write(
+            &target,
+            serde_json::to_vec_pretty(&HelpSnapshot { report, schema }).unwrap(),
+        )
+        .unwrap();
+        let link = root
+            .join("custom.example")
+            .join("build-a")
+            .join("help")
+            .join(format!("{}.json", "e".repeat(64)));
+        match std::os::windows::fs::symlink_file(&target, &link) {
+            Ok(()) => {
+                let error =
+                    load_snapshot(&root, "custom.example", "build-a", &"e".repeat(64)).unwrap_err();
+                assert!(error.contains("symbolic"), "unexpected error: {error}");
+                let latest = latest_snapshot(&root, "custom.example", "build-a")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(latest.report.identity.fingerprint, real_fp);
+            }
+            Err(error) => {
+                // Creating symlinks needs a privilege most dev shells lack; the
+                // size/binding checks below still verify on this machine.
+                eprintln!("SKIP symlinked-file assertions, cannot create link: {error}");
+                assert!(latest_snapshot(&root, "custom.example", "build-a")
+                    .unwrap()
+                    .is_some());
+            }
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn latest_snapshot_is_deterministic_beyond_sixty_four_entries() {
+        let root = temp_root();
+        let mut last = String::new();
+        for index in 0..70_u32 {
+            let fingerprint = format!("{index:064x}");
+            let report =
+                test_report_with_fp("Options:\n  --threads N           threads\n", &fingerprint);
+            let schema = super::super::runtime_help_parse::parse_help_report(
+                &report,
+                SchemaBinding {
+                    engine: "custom.example".into(),
+                    runtime: "build-a".into(),
+                    fingerprint: fingerprint.clone(),
+                },
+            )
+            .unwrap();
+            save_snapshot(
+                &root,
+                "custom.example",
+                "build-a",
+                &HelpSnapshot { report, schema },
+            )
+            .unwrap();
+            last = fingerprint;
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let latest = latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.report.identity.fingerprint, last);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn failed_discovery_frees_its_owner_for_immediate_retry() {
+        let root = temp_root();
+        let service = HelpService::default();
+        // The synthetic child stalls, so the short timeout yields a truncated
+        // report that can never become a snapshot.
+        let slow = help_command("wait", 500);
+        let error = discover_persist_describe(
+            &service,
+            &root,
+            "owner-x",
+            "custom.example",
+            "build-a",
+            &slow,
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("incomplete"), "unexpected error: {error}");
+        // No stale active ticket may survive the failure path.
+        assert!(!service.cancel_owner("owner-x").unwrap());
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        // The same owner retries immediately with a fresh complete discovery.
+        let fresh = help_command("normal", 10_000);
+        let (report, _) = discover_persist_describe(
+            &service,
+            &root,
+            "owner-x",
+            "custom.example",
+            "build-a",
+            &fresh,
+            &[],
+        )
+        .unwrap();
+        assert!(report.complete());
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_some());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn explicit_repeat_without_metadata_blocks_argv_but_keeps_values() {
+        let root = temp_root();
+        let report = test_report(
+            "Options:\n  --item VALUE            repeatable per occurrence (repeatable)\n",
+        );
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            SchemaBinding {
+                engine: "custom.example".into(),
+                runtime: "build-a".into(),
+                fingerprint: report.identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        let item = schema.options.iter().find(|o| o.key == "item").unwrap();
+        // Help prose never becomes repeat permission.
+        assert_eq!(
+            item.repeatable,
+            super::super::runtime_options::Fact::default()
+        );
+        let mut stored = Map::new();
+        stored.insert(
+            "item".into(),
+            serde_json::json!({"occurrences": [["a"], ["b"]]}),
+        );
+        // Stored values are retained and reported, never silently dropped.
+        let before = stored.clone();
+        let issues = resolve_stored(&schema, &[], &stored).unwrap_err();
+        assert!(issues.iter().any(|i| i.key == "item"));
+        assert_eq!(stored, before);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn complete_report_and_schema(mode: &str) -> (HelpReport, OptionSchema) {
+        let command = help_command(mode, 10_000);
+        let report = super::super::runtime_help::discover(
+            &command,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(report.complete());
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            SchemaBinding {
+                engine: "custom.example".into(),
+                runtime: "build-a".into(),
+                fingerprint: report.identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        (report, schema)
+    }
+
+    #[test]
+    fn bulk_help_beyond_sixty_four_kib_persists_and_reloads() {
+        let root = temp_root();
+        let service = HelpService::default();
+        let mut command = help_command("bulk", 30_000);
+        command.output_limit = 1024 * 1024;
+        let (report, descriptor) = discover_persist_describe(
+            &service,
+            &root,
+            "owner-bulk",
+            "custom.example",
+            "build-bulk",
+            &command,
+            &[],
+        )
+        .unwrap();
+        assert!(report.complete());
+        assert!(
+            report.stdout.text.len() > 203_342,
+            "{}",
+            report.stdout.text.len()
+        );
+        assert!(descriptor.schema.options.len() >= 1500);
+        let loaded = load_snapshot(
+            &root,
+            "custom.example",
+            "build-bulk",
+            &report.identity.fingerprint,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(loaded.schema, descriptor.schema);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn guarded_publication_rejects_cancelled_and_superseded_tickets() {
+        let root = temp_root();
+        let service = HelpService::default();
+        let (report, schema) = complete_report_and_schema("normal");
+        // A complete report on a cancelled ticket never reaches disk, and the
+        // owner slot is freed for an immediate retry.
+        let cancelled = service.begin("owner-c").unwrap();
+        service.cancel_owner("owner-c").unwrap();
+        let error = publish_current(
+            &service,
+            &cancelled,
+            &report,
+            &schema,
+            PublishScope {
+                root: &root,
+                engine: "custom.example",
+                runtime: "build-a",
+                persist: true,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"), "unexpected: {error}");
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        assert!(!service.cancel_owner("owner-c").unwrap());
+        // A superseded predecessor publishes nothing and never disturbs the
+        // successor's slot or other owners.
+        let old = service.begin("owner-s").unwrap();
+        let unrelated = service.begin("owner-other").unwrap();
+        let fresh = service.begin("owner-s").unwrap();
+        let error = publish_current(
+            &service,
+            &old,
+            &report,
+            &schema,
+            PublishScope {
+                root: &root,
+                engine: "custom.example",
+                runtime: "build-a",
+                persist: true,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("superseded"), "unexpected: {error}");
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        assert!(service.is_current(&fresh));
+        assert!(!unrelated.cancel.load(std::sync::atomic::Ordering::Acquire));
+        // The current successor publishes normally.
+        publish_current(
+            &service,
+            &fresh,
+            &report,
+            &schema,
+            PublishScope {
+                root: &root,
+                engine: "custom.example",
+                runtime: "build-a",
+                persist: true,
+            },
+        )
+        .unwrap();
+        let latest = latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            latest.report.identity.fingerprint,
+            report.identity.fingerprint
+        );
+        service.failed(&fresh);
+        service.failed(&unrelated);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cancelled_discovery_after_capture_publishes_nothing() {
+        let root = temp_root();
+        let service = std::sync::Arc::new(HelpService::default());
+        let unrelated = service.begin("owner-other").unwrap();
+        let worker = service.clone();
+        let root_clone = root.clone();
+        let slow = help_command("wait", 10_000);
+        let handle = std::thread::spawn(move || {
+            discover_persist_describe(
+                &worker,
+                &root_clone,
+                "owner-race",
+                "custom.example",
+                "build-race",
+                &slow,
+                &[],
+            )
+        });
+        // Capture is in flight (the synthetic child stalls); cancel mid-run,
+        // after capture started but before any parse or persistence.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(service.cancel_owner("owner-race").unwrap());
+        let error = handle.join().unwrap().unwrap_err();
+        assert!(error.contains("cancel"), "unexpected: {error}");
+        assert!(latest_snapshot(&root, "custom.example", "build-race")
+            .unwrap()
+            .is_none());
+        // Another owner running alongside is unaffected.
+        assert!(!unrelated.cancel.load(std::sync::atomic::Ordering::Acquire));
+        service.failed(&unrelated);
+        // The cancelled owner retries cleanly with a fresh complete run.
+        let fresh = help_command("normal", 10_000);
+        let (report, _) = discover_persist_describe(
+            &service,
+            &root,
+            "owner-race",
+            "custom.example",
+            "build-race",
+            &fresh,
+            &[],
+        )
+        .unwrap();
+        assert!(report.complete());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn superseding_owner_leaves_no_stale_snapshot() {
+        let root = temp_root();
+        let service = std::sync::Arc::new(HelpService::default());
+        let worker = service.clone();
+        let root_clone = root.clone();
+        let slow = help_command("wait", 10_000);
+        let handle = std::thread::spawn(move || {
+            discover_persist_describe(
+                &worker,
+                &root_clone,
+                "owner-sup",
+                "custom.example",
+                "build-sup",
+                &slow,
+                &[],
+            )
+        });
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        // A newer discovery by the same owner supersedes the slow predecessor.
+        let _successor = service.begin("owner-sup").unwrap();
+        let error = handle.join().unwrap().unwrap_err();
+        assert!(
+            error.contains("cancelled") || error.contains("superseded"),
+            "unexpected: {error}"
+        );
+        assert!(latest_snapshot(&root, "custom.example", "build-sup")
+            .unwrap()
+            .is_none());
+        // The successor publishes the only snapshot under this runtime.
+        let fresh = help_command("normal", 10_000);
+        let (report, _) = discover_persist_describe(
+            &service,
+            &root,
+            "owner-sup",
+            "custom.example",
+            "build-sup",
+            &fresh,
+            &[],
+        )
+        .unwrap();
+        let latest = latest_snapshot(&root, "custom.example", "build-sup")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            latest.report.identity.fingerprint,
+            report.identity.fingerprint
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }
