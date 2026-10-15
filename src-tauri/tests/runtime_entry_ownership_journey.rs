@@ -88,6 +88,8 @@ fn entry(area: &Path, runtime: &str, metadata: Option<Value>) -> (EntrypointHelp
     (
         entry,
         HelpRequest {
+            encoding: None,
+            locale: None,
             working_directory: None,
             program: None,
             args,

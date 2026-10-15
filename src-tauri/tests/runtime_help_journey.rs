@@ -191,6 +191,8 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     );
     assert_eq!(target.program, v1.launch.program);
     let request = HelpRequest {
+        encoding: None,
+        locale: None,
         working_directory: None,
         program: None,
         args: vec![

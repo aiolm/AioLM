@@ -137,6 +137,8 @@ fn issues(cfg: &AppConfig) -> Vec<String> {
 
 fn request() -> runtime_schema::HelpRequest {
     runtime_schema::HelpRequest {
+        encoding: None,
+        locale: None,
         working_directory: None,
         program: None,
         args: vec![

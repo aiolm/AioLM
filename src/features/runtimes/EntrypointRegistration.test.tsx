@@ -57,6 +57,27 @@ async function enter() {
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 }
 
+it('discovers with explicit help encoding and locale and clears that review when either changes', async () => {
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Korean (Windows CP949)' }));
+  const locale = screen.getByLabelText('Help locale (optional)');
+  fireEvent.change(locale, { target: { value: 'ko_KR.UTF-8' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  expect(api.entrypointHelpDiscover).toHaveBeenLastCalledWith(expect.any(Object), {
+    program: null, args: ['/synthetic path/한글 engine.py', '--help'], scope: [], encoding: 'cp949', locale: 'ko_KR.UTF-8',
+  });
+  fireEvent.change(locale, { target: { value: 'C' } });
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Auto (BOM or UTF-8)' }));
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+});
+
 it('takes adapter setup through fresh help and preserves probe environment, model bindings and owned resources for review', async () => {
   const recipe: api.AdapterSetupRecipe = { version: 1, id: 'any.adapter', title: 'Arbitrary adapter', description: 'Explicit connection',
     fields: [{ key: 'installation', label: 'Installation folder', kind: 'folder', required: false, default: '/synthetic/sdk' }],
@@ -101,11 +122,14 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
   expect(api.entrypointHelpDiscover).not.toHaveBeenCalled();
   expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   await enter();
+  fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Korean (Windows CP949)' }));
+  fireEvent.change(screen.getByLabelText('Help locale (optional)'), { target: { value: 'ko_KR.UTF-8' } });
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
   expect(api.entrypointHelpDiscover).toHaveBeenCalledWith(expect.objectContaining({
     prefix: ['/synthetic path/한글 engine.py'], artifacts: ['/synthetic path/한글 engine.py'],
-  }), { program: null, args: ['/synthetic path/한글 engine.py', '--help'], scope: [] });
+  }), { program: null, args: ['/synthetic path/한글 engine.py', '--help'], scope: [], encoding: 'cp949', locale: 'ko_KR.UTF-8' });
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
   fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
   expect(await screen.findByText('Fill in the required fields.')).toBeVisible();
@@ -125,7 +149,7 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
   expect(draft).toMatchObject({ model: { kind: 'flag', flag: '--model', equals: false }, port: { kind: 'flag', flag: '--port', equals: false },
     auth: { kind: 'none' }, protocol: { kind: 'openai_http' }, health_path: '/health', model_formats: ['gguf'],
     probe: { program: '/synthetic/probe', args: ['{model}', '{options_json}'] },
-    help: { fingerprint: report.identity.fingerprint } });
+    help: { fingerprint: report.identity.fingerprint, request: { encoding: 'cp949', locale: 'ko_KR.UTF-8' } } });
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Register' }));
   await waitFor(() => expect(onRegistered).toHaveBeenCalledWith('custom.synthetic'));

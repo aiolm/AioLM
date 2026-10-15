@@ -588,6 +588,7 @@ mod tests {
                 decoding_loss: false,
                 truncated: false,
                 read_error: None,
+                raw_bytes_base64: None,
             },
             stderr: TextOutput {
                 text: String::new(),
@@ -596,6 +597,7 @@ mod tests {
                 decoding_loss: false,
                 truncated: false,
                 read_error: None,
+                raw_bytes_base64: None,
             },
             exit_code: Some(0),
             success: true,

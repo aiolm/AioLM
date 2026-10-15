@@ -486,6 +486,9 @@ pub fn parse_help_report(
     report: &HelpReport,
     binding: SchemaBinding,
 ) -> Result<OptionSchema, String> {
+    if report.stdout.decoding_loss || report.stderr.decoding_loss {
+        return Err("help output is incomplete because decoding lost bytes; choose the engine's help encoding and discover again".into());
+    }
     if !report.success
         || report.error.is_some()
         || report.cancelled
@@ -1254,6 +1257,7 @@ mod tests {
                 decoding_loss: false,
                 truncated: false,
                 read_error: None,
+                raw_bytes_base64: None,
             },
             stderr: TextOutput {
                 text: String::new(),
@@ -1262,6 +1266,7 @@ mod tests {
                 decoding_loss: false,
                 truncated: false,
                 read_error: None,
+                raw_bytes_base64: None,
             },
             exit_code: Some(0),
             success: true,

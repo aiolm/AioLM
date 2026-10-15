@@ -2148,6 +2148,8 @@ mod tests {
             expected
         );
         let request = super::super::runtime_schema::HelpRequest {
+            encoding: None,
+            locale: None,
             working_directory: None,
             program: None,
             args: vec!["--http".into(), "--help".into()],

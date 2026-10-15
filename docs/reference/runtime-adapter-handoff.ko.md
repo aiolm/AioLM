@@ -268,3 +268,14 @@ Manifest 옵션은 선택적 `scope`로 위치를 명시할 수 있다. `[]`는 
 등록된 엔진의 명령 import는 선택한 runtime의 entry(program, prefix, layout, 구분자, 적용 중인 위치 역할)를 함께 사용한다. 붙여 넣은 명령이 등록한 program(정확한 문자열 또는 같은 파일 이름, Windows는 대소문자·`.exe` 무시)으로 시작하면 바로 뒤에 entry head가 정확히 이어져야 하며, 다르면 차이 위치를 알려 주고 거부한다. head만으로 시작하면 head를 건너뛰고, 둘 다 아니면 옵션만 붙여 넣은 것으로 본다. 선언한 subcommand 뒤의 리터럴과 entry의 `--` 구분자는 그 자리에 정확히 있을 때만 건너뛴다. 맨 단어는 자리 역할을 따른다. entry token 자리는 그 token일 때만 소비하고, binding·미지정 자리는 앱 소유 검토로, 사용자 자리는 문서화된 값 개수만큼 계획에 넣는다. Built-in runtime의 기존 import 동작은 바뀌지 않는다.
 
 도움말 parser version 3은 위치 인자 행의 설명을 값 이름으로 세지 않는다(첫 두 칸 이상의 공백에서 이름이 끝난다). 또한 위치 인자 section 안에서는 그 section의 첫 행과 같은 들여쓰기에 있는 소문자 이름 행(argparse 기본 출력)도 위치 인자로 읽는다. 더 깊이 들여쓴 행은 설명의 이어짐이나 subcommand 목록이며 위치 인자가 아니다. section 밖의 소문자 문장은 그대로 위치 인자가 되지 않는다. 이전 parser로 수락한 도움말은 stale로 표시되어 다시 탐색해야 하며 저장 값은 유지된다. 실제 Python interpreter와 argparse script를 쓰는 검사는 `AIOLM_TEST_PYTHON`을 지정하고 `cargo test --test runtime_interpreter_command_journey -- --ignored`로 실행한다. 이 검사는 argv와 parser 수락만 확인하며 추론이나 특정 엔진 지원을 입증하지 않는다.
+
+
+## 명시적인 도움말 인코딩과 locale
+
+엔진 추가의 도움말 단계와 등록된 runtime의 도움말 화면은 같은 텍스트 설정을 사용한다. Auto는 기존처럼 BOM 또는 UTF-8을 읽으며 시스템 code page를 추측하지 않는다. UTF-8, UTF-16 LE/BE, 한국어 Windows CP949, 일본어 Windows CP932, Windows 1252를 명시적으로 선택할 수 있다. locale은 엔진이 지원하는 값을 입력하며 비우면 기존 C를 사용한다. 설정은 해당 도움말 child의 디코딩과 LC_ALL에만 적용되며 추론 HTTP/SSE와 OS 설정을 변경하지 않는다.
+
+선택은 선택적 HelpRequest.encoding·locale로 등록/수락 request에 저장된다. 생략된 기존 request의 wire 표현은 유지한다. 명시적 선택은 도움말 fingerprint에 포함되며, 다른 설정으로 탐색한 결과를 이전 fingerprint로 수락할 수 없다. 새로 수락하면 이전 model probe를 재사용하지 않고 새 probe를 요구한다. GUI에서 선택을 바꾸면 이전 탐색 결과는 수락/등록에 사용하지 않으며 저장된 프로필 값은 유지한다.
+
+명시적 code page는 [encoding_rs 0.8.35의 BOM 탐색 없는 decoder](https://docs.rs/encoding_rs/0.8.35/encoding_rs/struct.Encoding.html#method.decode_without_bom_handling)를 사용한다. CP949는 [Encoding Standard의 EUC-KR decoder](https://encoding.spec.whatwg.org/#euc-kr-decoder), CP932는 Shift_JIS, Windows 1252는 해당 decoder에 연결한다. 잘못된 byte는 decoding_loss로 표시하고 schema 수락을 거부하며 다른 인코딩으로 재탐색하도록 안내한다. 명시적 선택 또는 손실이 있는 캡처의 제한된 원래 byte는 선택적 raw_bytes_base64로 보존한다. 이전 정상 Auto 출력에는 이 필드가 추가되지 않으며 이전 snapshot도 읽을 수 있다.
+
+근거는 실제 합성 child의 CP949 stdout/stderr, Auto 손실과 명시적 선택의 복구, 손상 byte 거부, locale 전달, 등록/재탐색·수락·설정 저장/재로드·model probe·정확한 subprocess argv 및 두 GUI의 요청/저장 검사다. 합성 엔진/모델 검사이며 실제 엔진 추론 또는 최종 production native GUI 성공으로 계산하지 않는다. Linux/Mac에서는 사용 가능한 locale과 실제 설치 엔진의 인코딩을 해당 OS에서 다시 검증한다.

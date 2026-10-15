@@ -66,6 +66,8 @@ async fn accepted_execution_context_survives_a_different_app_launcher_directory(
     cfg.normalize();
     let root = providers::registry::root();
     let request = HelpRequest {
+        encoding: None,
+        locale: None,
         working_directory: None,
         program: None,
         args: vec![

@@ -21,6 +21,7 @@ import { helpSummary } from './helpSummary';
 import RuntimeArgumentList from './RuntimeArgumentList';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
+import HelpTextSettings, { type HelpTextChoice } from './HelpTextSettings';
 
 /** Discover, review and accept the selected runtime's help. Help runs only on
  * the explicit button; acceptance pins this exact runtime build. */
@@ -37,6 +38,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const [target, setTarget] = useState<HelpTarget | null>(null);
   const [extra, setExtra] = useState<string[]>([]);
   const [workingDirectory, setWorkingDirectory] = useState('');
+  const [textChoice, setTextChoice] = useState<HelpTextChoice>({});
   const [busy, setBusy] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState('');
@@ -53,6 +55,8 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       setTarget(next);
       setExtra(next.request.args.slice(next.prefix.length));
       setWorkingDirectory(next.request.working_directory ?? next.accepted?.working_directory ?? '');
+      setTextChoice({ ...(next.request.encoding ? { encoding: next.request.encoding } : {}),
+        ...(next.request.locale ? { locale: next.request.locale } : {}) });
     }).catch(cause => { if (active) setError(String(cause)); });
     return () => {
       active = false;
@@ -74,6 +78,8 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       args: [...target.prefix, ...extra],
       scope: target.request.scope,
     };
+    delete next.encoding; delete next.locale;
+    Object.assign(next, textChoice);
     if (workingDirectory.trim()) next.working_directory = workingDirectory.trim();
     else delete next.working_directory;
     const ownGeneration = ++generation.current;
@@ -149,6 +155,10 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
         </div>
         <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
       </div>}
+      {target && <HelpTextSettings value={textChoice} disabled={disabled || busy || accepting} onChange={next => {
+        generation.current += 1;
+        setTextChoice(next); setFound(null); setRequest(null); setError('');
+      }} />}
       <div className="app-page-actions mt-3">
         <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting || !target} onClick={() => void discover()}>{copy.discover}</button>
         {busy && (

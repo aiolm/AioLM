@@ -1,6 +1,8 @@
 import { invoke } from './transport.ts';
 import type { AppConfig } from './types.ts';
 
+export type HelpEncoding = 'auto' | 'utf8' | 'utf16_le' | 'utf16_be' | 'utf16le' | 'utf16be' | 'cp949' | 'cp932' | 'windows-1252';
+
 export interface HelpCommand {
   program: string;
   args: string[];
@@ -9,12 +11,13 @@ export interface HelpCommand {
   artifacts: string[];
   runtime_version: string;
   scope: string[];
-  encoding: 'auto' | 'utf8' | 'utf16le' | 'utf16be';
+  encoding: HelpEncoding;
   timeout_ms: number;
   output_limit: number;
 }
 
 export interface HelpTextOutput {
+  raw_bytes_base64?: string | null;
   text: string;
   clean_text: string;
   encoding: string;
@@ -234,6 +237,8 @@ export const runtimeHelpImport = (
 
 /** The help command a user chose; the adapter decides environment and artifacts. */
 export interface HelpRequest {
+  encoding?: HelpEncoding | null;
+  locale?: string | null;
   working_directory?: string | null;
   program?: string | null;
   args: string[];

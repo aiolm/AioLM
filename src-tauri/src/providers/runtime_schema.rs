@@ -61,6 +61,12 @@ const RESERVED_KEYS: &[&str] = &[
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HelpRequest {
+    /// Explicit decoding for help bytes only; omitted requests keep Auto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<Encoding>,
+    /// Child-local locale, never an operating system setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
     /// Explicit execution context. Declared adapter directories stay fixed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
@@ -321,6 +327,8 @@ fn help_target_for(
             let mut args = prefix.clone();
             args.push("--help".into());
             let request = HelpRequest {
+                encoding: None,
+                locale: None,
                 working_directory: None,
                 program: None,
                 args,
@@ -335,6 +343,8 @@ fn help_target_for(
             true,
             Vec::new(),
             HelpRequest {
+                encoding: None,
+                locale: None,
                 working_directory: None,
                 program: None,
                 args: vec!["--help".into()],
@@ -349,6 +359,8 @@ fn help_target_for(
                 true,
                 Vec::new(),
                 HelpRequest {
+                    encoding: None,
+                    locale: None,
                     working_directory: None,
                     program: None,
                     args,
@@ -445,7 +457,7 @@ fn help_command_for(
     };
     // A fixed locale keeps help text comparable across sessions; it is part
     // of the fingerprint like every other environment value.
-    command.environment.insert("LC_ALL".into(), "C".into());
+    apply_help_text_settings(&mut command, request)?;
     command.working_directory =
         super::execution_context::directory(cfg, command.working_directory)?;
     Ok(command)
@@ -534,8 +546,29 @@ pub fn manifest_help_command(
             Sha256::digest(serde_json::to_vec(layout).map_err(|error| error.to_string())?)
         ));
     }
-    command.environment.insert("LC_ALL".into(), "C".into());
+    apply_help_text_settings(&mut command, request)?;
     Ok(command)
+}
+
+/// Apply after adapter environment resolution so the explicitly chosen
+/// locale cannot be replaced by the old deterministic default. Neither
+/// setting changes inference HTTP/SSE decoding or the global environment.
+fn apply_help_text_settings(
+    command: &mut HelpCommand,
+    request: &HelpRequest,
+) -> Result<(), String> {
+    let locale = request.locale.as_deref().unwrap_or("C");
+    if locale.is_empty()
+        || locale.len() > 64
+        || !locale
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-@".contains(&byte))
+    {
+        return Err("help locale must be 1..64 ASCII letters, digits, _, ., - or @; choose a locale the engine supports".into());
+    }
+    command.encoding = request.encoding.unwrap_or_default();
+    command.environment.insert("LC_ALL".into(), locale.into());
+    Ok(())
 }
 
 fn require_launch_help(command: HelpCommand, launch_program: &str) -> Result<HelpCommand, String> {
@@ -2868,6 +2901,8 @@ mod tests {
                 working_directory: None,
                 fingerprint,
                 request: HelpRequest {
+                    encoding: None,
+                    locale: None,
                     working_directory: None,
                     program: None,
                     args: vec!["--help".into()],
@@ -2989,6 +3024,8 @@ mod tests {
                 working_directory: None,
                 fingerprint,
                 request: HelpRequest {
+                    encoding: None,
+                    locale: None,
                     working_directory: None,
                     program: None,
                     args: vec!["--help".into()],

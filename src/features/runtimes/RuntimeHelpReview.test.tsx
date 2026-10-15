@@ -41,6 +41,33 @@ function view(config = cfg, onAccepted = vi.fn()) {
   return <I18nProvider initialLocale="en"><RuntimeHelpReview cfg={config} effective={effective} disabled={false} onAccepted={onAccepted} /></I18nProvider>;
 }
 
+it('reloads help text choices, invalidates a review on edit and can return to the omitted defaults', async () => {
+  vi.mocked(api.runtimeHelpTarget).mockResolvedValueOnce({
+    engine: cfg.active_provider, runtime: cfg.active_runtime, program: '/synthetic/engine', fixed: true,
+    prefix: [], request: { args: ['--help'], scope: [], encoding: 'cp949', locale: 'ko_KR.UTF-8' },
+  });
+  render(view());
+  expect(await screen.findByRole('combobox', { name: 'Help encoding' })).toHaveTextContent('Korean (Windows CP949)');
+  const locale = screen.getByLabelText('Help locale (optional)');
+  expect(locale).toHaveValue('ko_KR.UTF-8');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  fireEvent.change(locale, { target: { value: 'C' } });
+  expect(screen.queryByRole('button', { name: 'Accept this help' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, { args: ['--help'], scope: [], encoding: 'cp949', locale: 'C' });
+  fireEvent.click(screen.getByRole('button', { name: 'Accept this help' }));
+  await waitFor(() => expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint,
+    { args: ['--help'], scope: [], encoding: 'cp949', locale: 'C' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Auto (BOM or UTF-8)' }));
+  fireEvent.change(locale, { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, { args: ['--help'], scope: [] });
+});
+
 it('reviews an explicit execution directory, clears stale review on edit and retains the backend-pinned context', async () => {
   const onAccepted = vi.fn();
   render(view(cfg, onAccepted));

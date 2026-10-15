@@ -375,6 +375,32 @@ fn main() {
         // Synthetic help for the help-to-launch journey. Option names are
         // fresh so no catalog or app code can know them in advance.
         let mode = std::env::var("FAKE_ENGINE_HELP").unwrap_or_default();
+        if mode == "cp949" || mode == "cp949-broken" {
+            // A localized Windows build writing help in code page 949
+            // ("모델 이름 표시"), and the locale this child actually received.
+            use std::io::Write;
+            let mut out = std::io::stdout();
+            out.write_all(b"usage: fake-engine [options]\n\noptions:\n  --model MODEL         model path\n  -p, --port PORT       bind port\n  --fresh-label TEXT    ").unwrap();
+            out.write_all(&[
+                0xb8, 0xf0, 0xb5, 0xa8, 0x20, 0xc0, 0xcc, 0xb8, 0xa7, 0x20, 0xc7, 0xa5, 0xbd, 0xc3,
+            ])
+            .unwrap();
+            let locale = std::env::var("LC_ALL").unwrap_or_default();
+            out.write_all(
+                format!("\n  --fresh-locale VALUE  received LC_ALL={locale}\n").as_bytes(),
+            )
+            .unwrap();
+            if mode == "cp949-broken" {
+                out.write_all(&[0x81]).unwrap(); // unfinished CP949 lead byte
+            }
+            std::io::stderr()
+                .write_all(&[
+                    0xb8, 0xf0, 0xb5, 0xa8, 0x20, 0xc0, 0xcc, 0xb8, 0xa7, 0x20, 0xc7, 0xa5, 0xbd,
+                    0xc3, b'\n',
+                ])
+                .unwrap();
+            return;
+        }
         let extra = match mode.as_str() {
             "v2" => "  --fresh-extra VALUE   synthetic option added by build two\n",
             // An alias for per-occurrence spelling, and aliases that disagree

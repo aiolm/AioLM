@@ -1,6 +1,7 @@
 //! Shell-free help discovery. This reports command syntax only; protocol/model
 //! readiness stays with the adapter's independent fresh probe.
 use crate::procutil;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -25,14 +26,39 @@ pub const PARSER_VERSION: u32 = 3;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 
+/// How help bytes are decoded. Auto reads a BOM or UTF-8; a Windows build
+/// writing in its localized code page needs that code page chosen
+/// explicitly, never guessed from bytes that happen to decode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Encoding {
     #[default]
     Auto,
     Utf8,
+    #[serde(alias = "utf16le")]
     Utf16Le,
+    #[serde(alias = "utf16be")]
     Utf16Be,
+    /// Korean Windows code page 949 (Unified Hangul Code). The WHATWG
+    /// Encoding Standard's `euc-kr` decoder is exactly windows-949.
+    Cp949,
+    /// Japanese Windows code page 932; WHATWG `shift_jis` is windows-31j.
+    Cp932,
+    /// Western European Windows code page 1252.
+    #[serde(rename = "windows-1252")]
+    Windows1252,
+}
+
+impl Encoding {
+    /// The single-byte/multibyte Windows code page decoder, when this is one.
+    fn code_page(self) -> Option<(&'static encoding_rs::Encoding, &'static str)> {
+        match self {
+            Self::Cp949 => Some((encoding_rs::EUC_KR, "windows-949")),
+            Self::Cp932 => Some((encoding_rs::SHIFT_JIS, "windows-932")),
+            Self::Windows1252 => Some((encoding_rs::WINDOWS_1252, "windows-1252")),
+            _ => None,
+        }
+    }
 }
 
 /// The adapter resolves the complete child environment. Clearing inherited env
@@ -191,6 +217,10 @@ pub struct TextOutput {
     pub decoding_loss: bool,
     pub truncated: bool,
     pub read_error: Option<String>,
+    /// Bounded original bytes for explicit decoding or a lossy diagnostic.
+    /// Omitted for the old successful Auto path and old stored reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_bytes_base64: Option<String>,
 }
 
 fn without_ansi(text: &str) -> String {
@@ -239,6 +269,14 @@ fn decode(stream: procutil::CapturedStream, requested: Encoding) -> TextOutput {
         other => (other, bytes),
     };
     let (text, decoding_loss, name) = match encoding {
+        // An explicit code page decodes exactly as chosen (no BOM sniffing);
+        // any malformed sequence is replaced and reported as loss, so the
+        // capture stays diagnostic and never becomes an accepted schema.
+        _ if encoding.code_page().is_some() => {
+            let (codec, name) = encoding.code_page().expect("code page");
+            let (text, loss) = codec.decode_without_bom_handling(bytes);
+            (text.into_owned(), loss, name)
+        }
         Encoding::Utf16Le | Encoding::Utf16Be => {
             let words = bytes
                 .as_chunks::<2>()
@@ -279,6 +317,8 @@ fn decode(stream: procutil::CapturedStream, requested: Encoding) -> TextOutput {
         }
     };
     TextOutput {
+        raw_bytes_base64: (requested != Encoding::Auto || decoding_loss)
+            .then(|| base64::engine::general_purpose::STANDARD.encode(&stream.bytes)),
         clean_text: without_ansi(&text),
         text,
         encoding: name.into(),
@@ -1077,5 +1117,81 @@ mod tests {
         assert!(invalid.decoding_loss);
         assert!(invalid.encoding.contains("unrecognized"));
         assert_eq!(without_ansi("a\u{1b}]0;synthetic title\u{7}b\u{1b}]8;;https://example.invalid\u{1b}\\link\u{1b}]8;;\u{1b}\\"),"ablink");
+    }
+
+    #[test]
+    fn explicit_windows_code_pages_preserve_bytes_and_reject_malformed_sequences() {
+        // Includes an extended Hangul syllable outside the KS X 1001 subset;
+        // Python cp949 encodes 똠 as 8c63 and cp932 日本語 as 93fa967b8cea.
+        for (encoding, bytes, expected) in [
+            (Encoding::Cp949, vec![0x8c, 0x63], "똠"),
+            (
+                Encoding::Cp932,
+                vec![0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea],
+                "日本語",
+            ),
+            (Encoding::Windows1252, vec![0x80], "€"),
+        ] {
+            let decoded = decode(
+                procutil::CapturedStream {
+                    bytes: bytes.clone(),
+                    ..Default::default()
+                },
+                encoding,
+            );
+            assert_eq!(decoded.text, expected);
+            assert!(!decoded.decoding_loss);
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(decoded.raw_bytes_base64.unwrap())
+                    .unwrap(),
+                bytes
+            );
+        }
+        for encoding in [Encoding::Cp949, Encoding::Cp932] {
+            let decoded = decode(
+                procutil::CapturedStream {
+                    bytes: vec![0x81],
+                    ..Default::default()
+                },
+                encoding,
+            );
+            assert!(decoded.decoding_loss);
+        }
+        // Explicit choices never switch to a different decoder for a BOM.
+        let decoded = decode(
+            procutil::CapturedStream {
+                bytes: vec![0xff, 0xfe, b'a', 0],
+                ..Default::default()
+            },
+            Encoding::Cp949,
+        );
+        assert!(decoded.decoding_loss);
+        assert_eq!(decoded.encoding, "windows-949");
+        assert_ne!(decoded.text, "a");
+        let old = decode(
+            procutil::CapturedStream {
+                bytes: b"old help".to_vec(),
+                ..Default::default()
+            },
+            Encoding::Auto,
+        );
+        let old_json = serde_json::to_value(&old).unwrap();
+        assert!(old_json.get("raw_bytes_base64").is_none());
+        assert_eq!(serde_json::from_value::<TextOutput>(old_json).unwrap(), old);
+        for (encoding, canonical) in [
+            (Encoding::Utf16Le, "utf16_le"),
+            (Encoding::Utf16Be, "utf16_be"),
+        ] {
+            assert_eq!(serde_json::to_value(encoding).unwrap(), canonical);
+        }
+        assert_eq!(
+            serde_json::from_str::<Encoding>(r#""utf16le""#).unwrap(),
+            Encoding::Utf16Le
+        );
+        assert_eq!(
+            serde_json::from_str::<Encoding>(r#""utf16be""#).unwrap(),
+            Encoding::Utf16Be
+        );
     }
 }

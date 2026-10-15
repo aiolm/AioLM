@@ -114,6 +114,8 @@ async fn register(area: &Path, runtime: &str, streams: &str) -> Result<(), Strin
     let mut args = bridge_prefix();
     args.push("--help".into());
     let request = HelpRequest {
+        encoding: None,
+        locale: None,
         working_directory: None,
         program: None,
         args,

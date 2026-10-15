@@ -85,6 +85,8 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     let mut help_args = prefix.clone();
     help_args.extend(["--adapter-help-fixture".to_string(), "--help".to_string()]);
     let request = HelpRequest {
+        encoding: None,
+        locale: None,
         working_directory: None,
         program: None,
         args: help_args,
@@ -262,6 +264,8 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     assert!(runtime_schema::help_command(
         &cfg,
         &HelpRequest {
+            encoding: None,
+            locale: None,
             working_directory: None,
             program: None,
             args: other_args,

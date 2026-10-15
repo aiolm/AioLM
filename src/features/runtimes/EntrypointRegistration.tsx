@@ -27,6 +27,7 @@ import RuntimeArgumentList from './RuntimeArgumentList';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 import AdapterSetupPanel from './AdapterSetupPanel';
 import RuntimeCommandLayout from './RuntimeCommandLayout';
+import HelpTextSettings, { type HelpTextChoice } from './HelpTextSettings';
 
 type Copy = (typeof entrypointCopy)['en'];
 type Step = 0 | 1 | 2 | 3;
@@ -119,6 +120,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const [metadataText, setMetadataText] = useState('');
   const [commandLayout, setCommandLayout] = useState<EntrypointHelp['command_layout']>();
   const [helpArgs, setHelpArgs] = useState<string[]>(['--help']);
+  const [textChoice, setTextChoice] = useState<HelpTextChoice>({});
   const [found, setFound] = useState<{ entry: string; request: HelpRequest; result: [HelpReport, RuntimeDescriptor] } | null>(null);
   const [skipHelp, setSkipHelp] = useState(false);
   const [model, setModel] = useState<BindingState>({ ...noBinding, mode: 'flag' });
@@ -184,7 +186,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     if (busy) return;
     const ownGeneration = ++generation.current;
     cancelled.current = false; pendingHelp.current = entry;
-    const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: commandLayout?.subcommands.map(index => (protocol === 'bridge' ? bridgePrefix : prefix)[index] ?? '') ?? [] };
+    const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: commandLayout?.subcommands.map(index => (protocol === 'bridge' ? bridgePrefix : prefix)[index] ?? '') ?? [], ...textChoice };
     setBusy(true); setError(''); setSkipHelp(false);
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => { cancelled.current = true; void entrypointHelpCancel(entry); } });
     try {
@@ -376,6 +378,10 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
           <div className="model-settings-fields">
             {protocol === 'bridge' && <p className="app-section-hint">{copy.bridgeHelp}</p>}
             <RuntimeArgumentList label={copy.helpArgs} tokens={helpArgs} disabled={disabled} onChange={next => { setHelpArgs(next); setFound(null); setSkipHelp(false); }} />
+            <HelpTextSettings value={textChoice} disabled={disabled} onChange={next => {
+              generation.current += 1;
+              setTextChoice(next); setFound(null); setSkipHelp(false); setError('');
+            }} />
             <div className="app-page-actions">
               <button type="button" className="app-button app-button--primary" disabled={disabled} onClick={() => void discover()}>{copy.discover}</button>
               {busy && (
