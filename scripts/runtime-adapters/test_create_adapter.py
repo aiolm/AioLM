@@ -135,7 +135,9 @@ class LoaderProbeTests(unittest.TestCase):
             self.assertEqual(facts.get("engine_id"), args.engine_id)
             self.assertEqual(facts.get("adapter", {}).get("revision"), args.revision)
             reserved = {row["flag"]: row.get("reserved") for row in facts.get("options", [])}
-            self.assertEqual(set(reserved), {"--lazy", "--idle-unload", "--before-load", "--mcp-config"})
+            # The pinned server reads --tokenizer whenever the deployment has
+            # no "tokenizer" key, so it could replace the one validated here.
+            self.assertEqual(set(reserved), {"--lazy", "--idle-unload", "--before-load", "--mcp-config", "--tokenizer"})
             self.assertTrue(all(reserved.values()), "each ownership refusal explains its reason")
 
     def test_strata_model_binding_cannot_replace_the_registered_native_build(self):

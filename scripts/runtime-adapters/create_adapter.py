@@ -225,6 +225,9 @@ def build_manifest(args):
                 {"flag": "--idle-unload", "reserved": "AioLM owns model unloading"},
                 {"flag": "--before-load", "reserved": "AioLM owns commands run around model loading"},
                 {"flag": "--mcp-config", "reserved": "AioLM owns MCP discovery and tool approval"},
+                # main() uses --tokenizer when the deployment has no
+                # "tokenizer"; strata_config validated the deployment's one.
+                {"flag": "--tokenizer", "reserved": "The selected deployment owns its validated tokenizer"},
             ],
         }
         common["models"] = [{"path":str(config),"name":installed.get("model_name") or "qwen3.8-flash-next"}]

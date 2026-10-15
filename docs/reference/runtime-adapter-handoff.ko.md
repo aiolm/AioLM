@@ -170,7 +170,7 @@ npm run test:runtime-adapters -- --cli $AdapterCli `
 
 harness는 새 작업용 홈에서 등록·선택·fresh probe·실제 `2+3` 응답과 authoritative usage·내용을 받은 뒤 취소·재시작·종료·제거 후 선택 유지/실행 거부·재등록을 검사한다. 마지막에는 소유 PID와 port 종료 및 provenance 파일 보존을 확인한다. 실패해도 원본 로그를 남긴다. `results.json`에는 실제 OS/arch, source commit·dirty 여부·tracked diff hash·CLI/manifest hash와 A01–A09 판정이 있다. 테스트는 설치/다운로드/공개 업로드를 하지 않는다. 다른 실제 엔진을 중지하고 이 검사만 실행한다. 메모리·성능 비교는 이 harness의 범위가 아니다.
 
-등록한 entry point의 고정 옵션(예: `--engine strata`, `--flag=value`)은 같은 옵션의 도움말 별칭을 포함해 일반 설정으로 덮어쓸 수 없다. 바꾸려면 다른 entry point를 명시적으로 등록한다. 어댑터는 `option_metadata.options`에 `reserved: "이유"`를 선언해 모델 수명·도구 서버 등 앱 소유 동작을 예약할 수 있다. 이유는 짧은 비어 있지 않은 문자열이며 새 옵션이나 request field를 만들지 않고 기존 옵션을 잠그기만 한다. GUI는 고정 entry point·예약 옵션·model/port binding을 구분해 안내하며, 기존 저장값은 삭제하지 않고 실행을 거부한다. 예를 들어 고정 revision의 Strata 어댑터는 `--lazy`·`--idle-unload`·`--before-load`·`--mcp-config`를 명시적으로 예약한다. 다른 엔진의 같은 이름은 어댑터의 선언 없이 예약하지 않는다.
+등록한 entry point의 고정 옵션(예: `--engine strata`, `--flag=value`)은 같은 옵션의 도움말 별칭을 포함해 일반 설정으로 덮어쓸 수 없다. 바꾸려면 다른 entry point를 명시적으로 등록한다. 어댑터는 `option_metadata.options`에 `reserved: "이유"`를 선언해 모델 수명·도구 서버 등 앱 소유 동작을 예약할 수 있다. 이유는 짧은 비어 있지 않은 문자열이며 새 옵션이나 request field를 만들지 않고 기존 옵션을 잠그기만 한다. GUI는 고정 entry point·예약 옵션·model/port binding을 구분해 안내하며, 기존 저장값은 삭제하지 않고 실행을 거부한다. 예를 들어 고정 revision의 Strata 어댑터는 `--lazy`·`--idle-unload`·`--before-load`·`--mcp-config`를 명시적으로 예약한다. 고정 `serve/server.py`는 deployment에 `tokenizer`가 없으면 `--tokenizer`를 사용하므로, helper가 검사한 tokenizer를 바꾸지 못하도록 `--tokenizer`도 예약한다. 다른 엔진의 같은 이름은 어댑터의 선언 없이 예약하지 않는다.
 
 ## 원본 Strata 및 개인 엔진
 
@@ -225,9 +225,9 @@ Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 �
 
 제공 helper는 production 앱에 포함하며 표준 앱 runtime 경로의 내용 해시별 폴더에 배치한다. 개발 checkout의 절대 경로가 필요하지 않는다. 기존 helper가 달라졌으면 덮어쓰지 않고 오류를 반환한다. 설정 파일이나 helper 변경은 새 명령 identity와 명시적 재등록을 필요로 한다. 예전 draft에서 생략한 `models`, `launch_resources`, `options_separator`는 자동으로 채우지 않는다.
 
-제공 Strata 설정은 검토한 source revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 설치된 Python·SDK 폴더·전용 deployment JSON을 사용한다. 명시적 bridge가 선택한 **native 실행 파일의 실제 `--help`**와 자기 `--aiolm-model/host/port` binding을 보여 준다. 네이티브 옵션은 별도 `--` 경계 뒤에 전달되어 원본 deployment의 `args` 뒤에 정확한 token으로 붙는다. 고정 source의 scalar parser는 뒤의 값을 적용하며, 반복 옵션의 의미와 검증은 엔진에 남긴다. 도움말에서 확인하지 못한 타입·제약·API 능력을 확정하지 않는다.
+제공 Strata 설정은 검토한 source revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 설치된 Python·SDK 폴더·전용 deployment JSON을 사용한다. 명시적 bridge가 선택한 **native 실행 파일의 실제 `--help`**와 자기 `--aiolm-model/host/port` binding을 보여 준다. 고정 native build는 도움말을 stderr에만 쓰고 AioLM은 비어 있지 않은 stdout만 해석하므로, bridge는 native stdout·stderr를 한 pipe로 받아 binding 행 뒤의 하나의 stdout 문서로 전달한다. 네이티브 옵션은 별도 `--` 경계 뒤에 전달되어 원본 deployment의 `args` 뒤에 정확한 token으로 붙는다. 고정 source의 scalar parser는 뒤의 값을 적용하며, 반복 옵션의 의미와 검증은 엔진에 남긴다. 도움말에서 확인하지 못한 타입·제약·API 능력을 확정하지 않는다.
 
-bridge는 `launch_resources`의 앱 소유 폴더에만 파생 deployment와 로그를 만들고, 설치된 HTTP 서버에는 고정 `--engine strata`, 파생 config, 앱 host/port만 전달한다. 원본 deployment·weight·tokenizer를 바꾸지 않는다. 모델 소스·입력·resident protocol은 명시 metadata로 예약하며, flag처럼 생긴 **값**을 별도 옵션으로 다시 해석하지 않는다. HTTP 서버와 native CLI의 인자를 섞지 않는다. 모델·tokenizer·source revision·build 검사는 별도 기존 probe가 담당한다. 도움말·producer 성공은 모델 로드나 추론 성공의 증거가 아니다. 다른 revision은 검토한 어댑터 설정/bridge가 필요하며, 다른 엔진의 설정 파일 추가는 앱의 공통 기능에 engine ID 분기를 요구하지 않는다.
+bridge는 `launch_resources`의 앱 소유 폴더에만 파생 deployment와 로그를 만들고, 설치된 HTTP 서버에는 고정 `--engine strata`, 파생 config, 앱 host/port만 전달한다. 원본 deployment·weight·tokenizer를 바꾸지 않는다. 모델 소스·입력·resident protocol은 명시 metadata로 예약하며, 서버가 deployment의 `gpu`·`backend`로 설정한 표시 장치를 덮어쓰는 native `--gpu`도 예약한다. 장치를 바꾸려면 다른 전용 deployment를 선택한다. flag처럼 생긴 **값**을 별도 옵션으로 다시 해석하지 않는다. HTTP 서버와 native CLI의 인자를 섞지 않는다. 모델·tokenizer·source revision·build 검사는 별도 기존 probe가 담당한다. 도움말·producer 성공은 모델 로드나 추론 성공의 증거가 아니다. 다른 revision은 검토한 어댑터 설정/bridge가 필요하며, 다른 엔진의 설정 파일 추가는 앱의 공통 기능에 engine ID 분기를 요구하지 않는다.
 
 
 ## 검토한 실행 디렉터리

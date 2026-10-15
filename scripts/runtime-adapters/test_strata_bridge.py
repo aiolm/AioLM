@@ -49,8 +49,43 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(result["model"]["flag"], "--aiolm-model")
             self.assertEqual(result["launch_resources"]["directory_env"], bridge.DIRECTORY_ENV)
             self.assertNotIn("capabilities", result)
-            self.assertTrue(any(item["flag"] == "--native" and item["reserved"]
-                                for item in result["option_metadata"]["options"]))
+            reserved = {item["flag"] for item in result["option_metadata"]["options"] if item.get("reserved")}
+            self.assertIn("--native", reserved)
+            # The pinned native --gpu rewrites the device visibility the server
+            # set from the deployment's gpu/backend; the deployment owns it.
+            self.assertIn("--gpu", reserved)
+
+    def test_native_help_on_stderr_reaches_the_one_parsed_help_document(self):
+        # The pinned native build prints --help on stderr only. AioLM parses a
+        # non-empty stdout alone, so the bridge must put its binding rows and
+        # the native rows into that single stdout document.
+        with tempfile.TemporaryDirectory(prefix="aiolm bridge help 눈길 ") as area:
+            root = Path(area)
+            tokenizer = root / "tokenizer"; tokenizer.mkdir()
+            for name in ("vocab.json", "merges.txt", "token_type.json"):
+                (tokenizer / name).write_text("synthetic")
+            config = root / "deployment.json"
+            config.write_text(json.dumps({"exe": sys.executable, "args": [], "tokenizer": str(tokenizer),
+                                          "cwd": str(root)}))
+            native = ("import sys; sys.stderr.write('  --fresh-native N   synthetic native option\\n'); "
+                      "sys.stderr.flush()")
+            # Only the command is synthetic; the bridge's own pipe settings
+            # reach the real child process unchanged.
+            bootstrap = ("import subprocess, sys, strata_bridge as b; b.adapter.capture=lambda *a,**k:b.REVISION; "
+                         "real=subprocess.Popen; "
+                         f"b.subprocess.Popen=lambda command, **kw: real([sys.executable, '-c', {native!r}], **kw); "
+                         "raise SystemExit(b.main())")
+            environment = dict(os.environ, PYTHONPATH=str(Path(bridge.__file__).parent), PYTHONDONTWRITEBYTECODE="1")
+            environment[bridge.ENGINE_ENV] = json.dumps([sys.executable])
+            result = subprocess.run([sys.executable, "-c", bootstrap, "--root", str(root), "--base-config", str(config),
+                                     "--revision", bridge.REVISION, "--help"],
+                                    env=environment, cwd=root, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            stdout = result.stdout.decode()
+            self.assertIn("--aiolm-model PATH", stdout)
+            self.assertIn("--fresh-native N", stdout)
+            self.assertLess(stdout.index("--aiolm-model"), stdout.index("--fresh-native"))
+            self.assertEqual(result.stderr, b"")
 
     def test_actual_bridge_process_writes_owned_copy_and_only_http_bindings_reach_server(self):
         with tempfile.TemporaryDirectory(prefix="aiolm bridge 눈길 ") as area:

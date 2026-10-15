@@ -36,6 +36,9 @@ RESERVED = {
     "--help": "AioLM runs help separately from inference",
     "--version": "AioLM probes the selected build separately",
     "--vision": "Image support requires a separately verified deployment adapter",
+    # serve/server.py child_env sets HIP/CUDA_VISIBLE_DEVICES from the
+    # deployment's "gpu"/"backend"; native --gpu (generate.cpp) overrides it.
+    "--gpu": "The selected deployment's gpu and backend own the visible devices",
 }
 
 
@@ -82,8 +85,11 @@ def forward_help(executable, root, config):
     # Windows GUI parents do not have a console. Give the native child real
     # pipe handles explicitly: inherited defaults with CREATE_NO_WINDOW can
     # yield exit 0 but lose both streams. Pump without an unbounded buffer.
+    # The pinned native build prints --help on stderr only, while AioLM
+    # parses a non-empty stdout alone; one pipe for both native streams keeps
+    # the binding rows and the native rows in that single document.
     with subprocess.Popen([str(executable), "--help"], cwd=config.get("cwd") or root,
-                          env=adapter.strata_engine_env(config), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          env=adapter.strata_engine_env(config), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0) as process:
         errors = []
         def pump(source, destination):
@@ -93,10 +99,8 @@ def forward_help(executable, root, config):
                     destination.buffer.flush()
             except (OSError, ValueError) as error:
                 errors.append(error)
-        readers = [threading.Thread(target=pump, args=(process.stdout, sys.stdout), daemon=True),
-                   threading.Thread(target=pump, args=(process.stderr, sys.stderr), daemon=True)]
-        for reader in readers:
-            reader.start()
+        reader = threading.Thread(target=pump, args=(process.stdout, sys.stdout), daemon=True)
+        reader.start()
         try:
             code = process.wait(timeout=15)
         except subprocess.TimeoutExpired:
@@ -104,8 +108,7 @@ def forward_help(executable, root, config):
             process.wait()
             raise
         finally:
-            for reader in readers:
-                reader.join()
+            reader.join()
         if errors:
             raise ValueError("native help output could not be forwarded") from errors[0]
         return code
@@ -133,8 +136,8 @@ def main(argv=None):
               "  --aiolm-host HOST    owned HTTP bind address\n"
               "  --aiolm-port PORT    owned HTTP bind port\n\n"
               "Native engine options (forwarded to deployment args):", flush=True)
-        # Stream both original channels; the outer owned help service bounds
-        # output and records failure/cancellation instead of parsing a slice.
+        # Stream the native output after these rows; the outer owned help
+        # service bounds it and records failure/cancellation.
         return forward_help(executable, root, config)
     if not args.aiolm_model or not args.aiolm_port or not 1 <= args.aiolm_port <= 65535:
         raise ValueError("launch needs the app-owned model and port bindings")

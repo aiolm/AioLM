@@ -264,6 +264,15 @@ fn main() {
     }
     if arguments
         .iter()
+        .any(|arg| arg == "--native-stderr-help-fixture")
+    {
+        // A native build that, like the pinned Strata engine, documents its
+        // options on stderr only and exits 0.
+        eprint!("native-engine generate [options]\n\n  --fresh-native N      synthetic native setting\n  --fresh-device LIST   synthetic device selection a deployment owns\n");
+        return;
+    }
+    if arguments
+        .iter()
         .any(|arg| arg == "--bridge-engine-argv-fixture")
     {
         // A separate, short-lived synthetic engine receives exact tokens
@@ -297,6 +306,23 @@ fn main() {
             .unwrap_or_else(|| serde_json::json!({}));
         evidence[phase] = serde_json::json!(engine);
         std::fs::write(path, serde_json::to_vec(&evidence).unwrap()).unwrap();
+        if let Ok(streams) = std::env::var("FAKE_BRIDGE_NATIVE_HELP") {
+            if phase == "help" {
+                // The bridge documents its own bindings on stdout, then the
+                // native help: "merged" gives the native child the same
+                // stdout pipe for both streams, "separate" leaves its stderr.
+                use std::io::Write;
+                print!("bridge bindings:\n  --model MODEL   selected model\n  --port PORT     owned bind port\n\nnative engine options:\n");
+                std::io::stdout().flush().unwrap();
+                let mut native = std::process::Command::new(&engine[0]);
+                native.arg("--native-stderr-help-fixture");
+                if streams == "merged" {
+                    native.stderr(std::io::stdout());
+                }
+                assert!(native.status().expect("native help").success());
+                return;
+            }
+        }
         if phase == "launch" {
             let forwarded = arguments[1..].iter().filter(|arg| {
                 !matches!(
