@@ -259,7 +259,7 @@ pub struct OptionIssue {
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResolvedOptions {
     pub argv: Vec<String>,
     pub request: Map<String, Value>,

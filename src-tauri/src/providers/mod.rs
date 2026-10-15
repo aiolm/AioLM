@@ -32,6 +32,8 @@ pub mod protocol;
 pub mod python_env;
 pub mod registry;
 pub mod runtime_help;
+pub mod runtime_help_parse;
+pub mod runtime_help_store;
 pub mod runtime_options;
 pub use resolve_python_runtime as selected_python_runtime;
 

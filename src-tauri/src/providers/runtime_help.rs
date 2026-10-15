@@ -414,6 +414,19 @@ impl HelpService {
         }
     }
 
+    pub fn cancel_owner(&self, owner: &str) -> Result<bool, String> {
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| "help discovery lock was poisoned")?;
+        if let Some(ticket) = state.active.get(owner) {
+            ticket.cancel.store(true, Ordering::Release);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     pub fn cached(
         &self,
         command: &HelpCommand,

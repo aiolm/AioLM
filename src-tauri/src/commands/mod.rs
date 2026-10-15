@@ -16,6 +16,7 @@ pub(crate) mod models;
 pub(crate) mod personalization;
 pub(crate) mod projects;
 pub(crate) mod providers;
+pub(crate) mod runtime_help_cmd;
 pub(crate) mod runtimes;
 pub(crate) mod server;
 pub(crate) mod sessions;
