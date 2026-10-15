@@ -26,9 +26,12 @@ def prepare(args):
     # exposes native help and only these namespaced HTTP bindings.
     metadata["adapter"]["id"] = "strata.native-openai-bridge"
     metadata["options"] = [{"flag": flag, "reserved": reason} for flag, reason in bridge.RESERVED.items()]
-    for flag in ("--spec", "--max-context", "--kv-resident"):
+    # Units as the pinned generate.cpp uses them: --spec proposes tokens,
+    # --max-context is checked against prompt token counts, and
+    # --kv-resident is resident KV cells of each QSA layer (layer.cpp).
+    for flag, unit in (("--spec", "tokens"), ("--max-context", "tokens"), ("--kv-resident", "cells per QSA layer")):
         metadata["options"].append({"flag": flag, "kind": "integer", "arity": {"min": 1, "max": 1},
-                                    "unit": "tokens", "restart_required": True})
+                                    "unit": unit, "restart_required": True})
     artifacts = list(dict.fromkeys(common["artifacts"] + [str(script), str(config_path)]))
     return {
         "engine_id": args.engine_id, "runtime_id": args.runtime_id,

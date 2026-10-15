@@ -54,6 +54,13 @@ class BridgeTests(unittest.TestCase):
             # The pinned native --gpu rewrites the device visibility the server
             # set from the deployment's gpu/backend; the deployment owns it.
             self.assertIn("--gpu", reserved)
+            # Units are the pinned source's own: --spec proposes tokens and
+            # --max-context is checked against token counts, while
+            # --kv-resident counts resident KV cells of each QSA layer.
+            units = {item["flag"]: item.get("unit") for item in result["option_metadata"]["options"]}
+            self.assertEqual(units["--spec"], "tokens")
+            self.assertEqual(units["--max-context"], "tokens")
+            self.assertEqual(units["--kv-resident"], "cells per QSA layer")
 
     def test_native_help_on_stderr_reaches_the_one_parsed_help_document(self):
         # The pinned native build prints --help on stderr only. AioLM parses a
