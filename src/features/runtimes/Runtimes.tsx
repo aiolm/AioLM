@@ -22,7 +22,7 @@ import { runtimeReferences } from "./runtimeReferences";
 import { useDeepVerification } from "./useDeepVerification";
 import ProviderEnvironments from './ProviderEnvironments';
 import AdapterCatalogList from './AdapterCatalogList';
-import HelpDiscoveryPanel from './HelpDiscoveryPanel';
+import EntrypointRegistration from './EntrypointRegistration';
 import { providerCatalog, providerRuntimes, type ProviderDescription, type RuntimeInstance } from '../../shared/api/providers';
 import { providerOf } from '../../shared/api/providers';
 import DeepVerificationControls from './DeepVerificationControls';
@@ -90,7 +90,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
 
       <div className="runtimes-main">
       <AdapterCatalogList catalog={catalog} runtimes={instances} />
-      <HelpDiscoveryPanel locked={rt.serverRunning || rt.runtimeBusy || providerBusy} />
+      <EntrypointRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy} onRegistered={(next) => { setProvider(next); setProviderRevision(value => value + 1); }} onBusyChange={setAdapterBusy} />
       <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy} onRegistered={(next) => { setProvider(next); setProviderRevision(value => value + 1); }} onBusyChange={setAdapterBusy} />
       <div hidden={llama}><ProviderEnvironments active={active && !llama} provider={llama ? undefined : provider} revision={providerRevision} resourcesInUse={rt.serverRunning || adapterBusy} onBusyChange={setProviderBusy} /></div>
       {provider === providerOf(store.cfg ?? {}) && <section className="app-card mb-4">

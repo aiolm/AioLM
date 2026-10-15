@@ -1,4 +1,5 @@
 import { invoke } from './transport.ts';
+import type { AppConfig } from './types.ts';
 
 export interface HelpCommand {
   program: string;
@@ -174,17 +175,6 @@ export interface ImportedPlan {
   unrecognized: string[];
 }
 
-export interface EntrypointSuggestion {
-  engine_id: string;
-  runtime_id: string;
-  display_name: string;
-  program: string;
-  help_args: string[];
-  working_directory?: string | null;
-  health_path: string;
-  health_authenticated: boolean;
-}
-
 /** Order-preserving resolution: flags follow plan order within each scope depth. */
 export const runtimeHelpResolvePlan = (
   schema: OptionSchema,
@@ -201,9 +191,117 @@ export const runtimeHelpImport = (
 ): Promise<ImportedPlan> =>
   invoke<ImportedPlan>('runtime_help_import', { schema, scope, text });
 
-/** Suggest a manifest v1 from an entry-point plus its verified help schema. */
-export const runtimeHelpSuggestManifest = (
-  entry: EntrypointSuggestion,
-  schema: OptionSchema,
-): Promise<unknown> =>
-  invoke<unknown>('runtime_help_suggest_manifest', { entry, schema });
+/** The help command a user chose; the adapter decides environment and artifacts. */
+export interface HelpRequest {
+  program?: string | null;
+  args: string[];
+  scope: string[];
+}
+
+export interface AcceptedHelp {
+  version: number;
+  fingerprint: string;
+  request: HelpRequest;
+}
+
+/** The selected runtime's adapter-owned help command. */
+export interface HelpTarget {
+  engine: string;
+  runtime: string;
+  program: string;
+  fixed: boolean;
+  prefix: string[];
+  request: HelpRequest;
+  accepted?: AcceptedHelp | null;
+}
+
+export type HelpState = 'none' | 'current' | 'stale' | 'unchecked';
+
+/** The one schema the settings UI renders and launch resolves. */
+export interface EffectiveSchema {
+  schema: OptionSchema;
+  scope: string[];
+  help_state: HelpState;
+  help_detail: string;
+  accepted_fingerprint?: string | null;
+  compat_keys: string[];
+  help_keys: string[];
+  shadowed: string[];
+}
+
+export const providerOptionSchema = (cfg: AppConfig): Promise<EffectiveSchema> =>
+  invoke<EffectiveSchema>('provider_option_schema', { cfg });
+
+export const runtimeHelpTarget = (cfg: AppConfig): Promise<HelpTarget> =>
+  invoke<HelpTarget>('runtime_help_target', { cfg });
+
+/** Explicit discovery for the selected runtime. Never call on render. */
+export const runtimeHelpDiscoverSelected = (cfg: AppConfig, request: HelpRequest): Promise<[HelpReport, RuntimeDescriptor]> =>
+  invoke<[HelpReport, RuntimeDescriptor]>('runtime_help_discover_selected', { cfg, request });
+
+export const runtimeHelpCancelSelected = (cfg: AppConfig): Promise<boolean> =>
+  invoke<boolean>('runtime_help_cancel_selected', { cfg });
+
+export const runtimeHelpAccept = (cfg: AppConfig, fingerprint: string, request: HelpRequest): Promise<AcceptedHelp> =>
+  invoke<AcceptedHelp>('runtime_help_accept', { cfg, fingerprint, request });
+
+export type ArgBinding = { kind: 'flag'; flag: string; equals?: boolean } | { kind: 'positional' };
+export type AuthBinding = { kind: 'none' } | { kind: 'env'; name: string };
+export type ServingProtocol = { kind: 'openai_http' } | { kind: 'bridge'; program: string; prefix: string[] };
+
+export interface ProcessSpec {
+  program: string;
+  args: string[];
+  env: Record<string, string>;
+  working_directory?: string | null;
+}
+
+/** An entry point before any binding is chosen; enough to derive its help. */
+export interface EntrypointHelp {
+  engine_id: string;
+  runtime_id: string;
+  program: string;
+  prefix: string[];
+  working_directory?: string | null;
+  artifacts: string[];
+  environment: Record<string, string>;
+  protocol: ServingProtocol;
+}
+
+export interface EntrypointDraft extends EntrypointHelp {
+  display_name: string;
+  model: ArgBinding;
+  port: ArgBinding;
+  host?: ArgBinding | null;
+  served_model?: ArgBinding | null;
+  auth: AuthBinding;
+  probe: ProcessSpec;
+  health_path: string;
+  health_authenticated: boolean;
+  model_formats: string[];
+  help?: { fingerprint: string; request: HelpRequest } | null;
+}
+
+export interface RegisteredManifest {
+  engine_id: string;
+  runtime_id: string;
+  display_name: string;
+  launch: ProcessSpec;
+  probe: ProcessSpec;
+  [field: string]: unknown;
+}
+
+export const entrypointHelpDiscover = (entry: EntrypointHelp, request: HelpRequest): Promise<[HelpReport, RuntimeDescriptor]> =>
+  invoke<[HelpReport, RuntimeDescriptor]>('entrypoint_help_discover', { entry, request });
+
+export const entrypointHelpCancel = (entry: EntrypointHelp): Promise<boolean> =>
+  invoke<boolean>('entrypoint_help_cancel', { entry });
+
+export const entrypointManifestPreview = (draft: EntrypointDraft): Promise<RegisteredManifest> =>
+  invoke<RegisteredManifest>('entrypoint_manifest_preview', { draft });
+
+export const runtimeEntrypointRegister = (draft: EntrypointDraft): Promise<RegisteredManifest> =>
+  invoke<RegisteredManifest>('runtime_entrypoint_register', { draft });
+
+export const pickRuntimePath = (kind: 'file' | 'folder'): Promise<string | null> =>
+  invoke<string | null>('pick_runtime_path', { kind });

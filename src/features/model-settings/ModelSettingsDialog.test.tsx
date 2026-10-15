@@ -11,9 +11,13 @@ import { appliedProfile, mergeProfileEditor, profileLibraryConfigPatch, Settings
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { resetProfileSettings } from './profileResetState';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
+import { effectiveSchema } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
+  providerRuntimeOptions: vi.fn(async () => []),
+  providerOptionSchema: vi.fn(async () => effectiveSchema([])),
+  runtimeHelpTarget: vi.fn(() => new Promise(() => undefined)),
   providerCatalog: async () => [{ id: 'llama.cpp', engine: 'llama.cpp', server: 'llama-server', availability: { supported: true, detail: '' }, options: [] }],
   providerRuntimes: async () => [{ id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', version: 'b123', accelerator: 'cpu', installation: 'managed', location: 'runtime', available: true, problems: [] }],
   listModels: vi.fn(async () => ({ models: [

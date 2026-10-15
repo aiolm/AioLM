@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
@@ -6,6 +6,9 @@ import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import EngineSelect from '../../shared/ui/EngineSelect';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
+import type { EffectiveSchema } from '../../shared/api/runtimeHelp';
+import RuntimeOptionSchemaForm, { applyPlan, maskPreview } from '../runtimes/RuntimeOptionSchemaForm';
+import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -52,6 +55,17 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const provider = api.providerOf(cfg);
+  // The selected runtime's effective schema (catalog/manifest + accepted
+  // help) drives the common renderer; the catalog list is only the preview
+  // before a runtime exists. Typed settings keep their dedicated controls;
+  // help adds options the installed build supplies without an app release.
+  const [effective, setEffective] = useState<EffectiveSchema | null>(null);
+  const [effectiveRevision, setEffectiveRevision] = useState(0);
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
+  const importRequest = useRef(0);
+  const previewRequest = useRef(0);
+  useEffect(() => () => { importRequest.current += 1; previewRequest.current += 1; }, []);
   const [schema, setSchema] = useState<api.ProviderOption[]>([]);
   const [loadingSchema, setLoadingSchema] = useState(true);
   const [schemaKnown, setSchemaKnown] = useState(false);
@@ -60,10 +74,13 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [validating, setValidating] = useState(true);
   const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
+  useEffect(() => { setPreview(''); }, [cfg]);
   const values = cfg.provider_options?.[provider] ?? {};
   // An external engine's options come from the runtime's manifest, so there is
   // nothing to validate (or preview) until a runtime is chosen above.
-  const runtimeNeeded = api.isExternalProvider(provider) && !cfg.active_runtime;
+  const selectedRuntime = provider === 'llama.cpp'
+    ? (cfg.active_backend && cfg.active_build ? `${cfg.active_build}-${cfg.active_backend}` : '') : cfg.active_runtime;
+  const runtimeNeeded = (api.isExternalProvider(provider) || provider === 'llama.cpp') && !selectedRuntime;
   useEffect(() => {
     let active = true; setValidating(true); setError('');
     if (runtimeNeeded) { setIssues([]); setValidating(false); return; }
@@ -73,26 +90,34 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     }, 150);
     return () => { active = false; clearTimeout(timer); };
   }, [cfg, runtimeNeeded]);
+  const usesEffective = !!selectedRuntime;
   useEffect(() => {
-    let active = true; setSchema([]); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError('');
-    void Promise.all([api.providerCatalog(), api.providerRuntimes(), cfg.active_runtime ? api.providerRuntimeOptions(provider, cfg.active_runtime) : Promise.resolve(undefined)]).then(([catalog, runtimes, runtimeOptions]) => {
+    let active = true; setSchema([]); setEffective(null); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError('');
+    importRequest.current += 1; previewRequest.current += 1;
+    void Promise.all([
+      api.providerCatalog(), api.providerRuntimes(),
+      provider !== 'llama.cpp' && cfgRef.current.active_runtime ? api.providerRuntimeOptions(provider, cfgRef.current.active_runtime) : Promise.resolve(undefined),
+      usesEffective ? api.providerOptionSchema(cfgRef.current) : Promise.resolve(null),
+    ]).then(([catalog, runtimes, runtimeOptions, schemaView]) => {
       if (active) {
         setSchema(runtimeOptions ?? catalog.find(item => item.id === provider)?.options ?? []);
-        setRuntimeFlags(runtimes.find(item => item.provider === provider && item.id === cfg.active_runtime)?.server_flags);
+        setEffective(schemaView);
+        setRuntimeFlags(runtimes.find(item => item.provider === provider && item.id === selectedRuntime)?.server_flags);
         setSchemaKnown(true);
         setLoadingSchema(false);
       }
     }).catch(cause => { if (active) { setSchemaError(String(cause)); setLoadingSchema(false); } });
     return () => { active = false; };
-  }, [provider, cfg.active_runtime]);
+  }, [provider, cfg.active_runtime, cfg.active_backend, cfg.active_build, selectedRuntime, usesEffective, effectiveRevision]);
   // Until the schema answers, absence from this list is not evidence that a
   // saved option is unsupported. Do not offer destructive resets while probing.
-  const unknown = schemaKnown ? Object.keys(values).filter(key => !schema.some(option => option.key === key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model'].includes(key)
+  const known = (key: string) => effective ? effective.schema.options.some(option => option.key === key) : schema.some(option => option.key === key);
+  const unknown = schemaKnown ? Object.keys(values).filter(key => !known(key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model'].includes(key)
     && !(key === 'trust_remote_code' && values[key] === false)) : [];
   const supports = (...flags: string[]) => !runtimeFlags || flags.every(flag => runtimeFlags.includes(flag));
-  const showLora = !api.isExternalProvider(provider) && (supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined);
+  const showLora = provider !== 'llama.cpp' && !api.isExternalProvider(provider) && (supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined);
   const bindingKey = provider === 'vllm' ? 'request_lora' : 'draft_model';
-  const showBinding = !api.isExternalProvider(provider) && ((provider === 'vllm' ? supports('--enable-lora', '--lora-modules') : supports('--draft-model')) || values[bindingKey] !== undefined);
+  const showBinding = provider !== 'llama.cpp' && !api.isExternalProvider(provider) && ((provider === 'vllm' ? supports('--enable-lora', '--lora-modules') : supports('--draft-model')) || values[bindingKey] !== undefined);
   const unknownCount = unknown.length;
   const checking = validating || loadingSchema;
   useEffect(() => {
@@ -106,9 +131,32 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
   };
   const groups: Record<string, readonly string[]> = { runtime: ['parallel', 'multimodal'], tuning: ['model', 'context', 'memory'], sampling: ['sampling'], reasoning: ['reasoning'], adapters: ['lora', 'speculative', 'adapters'] };
-  const inSection = (option: api.ProviderOption) => !section || (section === 'advanced'
-    ? !Object.values(groups).flat().includes(option.group) : groups[section]?.includes(option.group));
-  const visible = schema.filter(option => inSection(option) && (option.target === 'request' || !option.flag || !runtimeFlags || runtimeFlags.includes(option.flag) || values[option.key] !== undefined));
+  const inGroupSection = (group: string) => !section || (section === 'advanced'
+    ? !Object.values(groups).flat().includes(group) : groups[section]?.includes(group));
+  const inSection = (option: api.ProviderOption) => inGroupSection(option.group);
+  const visible = effective ? [] : schema.filter(option => inSection(option) && (option.target === 'request' || !option.flag || !runtimeFlags || runtimeFlags.includes(option.flag) || values[option.key] !== undefined));
+  const schemaVisible = effective ? effective.schema.options.filter(option => inGroupSection(option.group)).length : visible.length;
+  const importCommand = () => {
+    const source = cfg;
+    const request = ++importRequest.current;
+    const current = () => cfgRef.current === source && importRequest.current === request;
+    if (effective) {
+      // Registered engines import through their effective schema; managed and
+      // unrecognized words are reported, never applied.
+      void api.runtimeHelpImport(effective.schema, effective.scope, paste).then(result => {
+        if (!current()) return;
+        const review = [...result.managed, ...result.unrecognized];
+        setError(review.length ? review.join(' ') : '');
+        onChange({ provider_options: { ...cfg.provider_options, [provider]: applyPlan(effective.schema, values, result) } });
+      }).catch(cause => { if (current()) setError(String(cause)); });
+      return;
+    }
+    void api.providerImportCommand(provider, paste).then(result => {
+      if (!current()) return;
+      if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }
+      setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
+    }).catch(cause => { if (current()) setError(String(cause)); });
+  };
   const adapters = !section || section === 'adapters';
   const advanced = !section || section === 'advanced';
   return <div className="model-settings-fields">
@@ -117,21 +165,35 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
+    {effective && <RuntimeOptionSchemaForm compact schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
+      onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })}
+      filter={option => inGroupSection(option.group) && (option.target === 'request' || !runtimeFlags || !effective.compat_keys.includes(option.key)
+        || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined)}
+      inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
+      hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
+      onInvalid={onInvalid} />}
     {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
     {advanced && <>
-    {!api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
-    <label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => setPaste(event.target.value)} /></label>
-    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim()} onClick={() => void api.providerImportCommand(provider, paste).then(result => {
-      if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }
-      setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
-    }).catch(cause => setError(String(cause)))}>{copy.import}</button>
-    <button type="button" className="app-button app-button--secondary" disabled={disabled || runtimeNeeded} onClick={() => void api.providerCommandPreview(cfg).then(args => { setError(''); setPreview(args.map(arg => JSON.stringify(arg)).join(' ')); }).catch(cause => setError(String(cause)))}>{copy.preview}</button>
+    {provider !== 'llama.cpp' && !api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
+    <label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
+    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim()} onClick={importCommand}>{copy.import}</button>
+    <button type="button" className="app-button app-button--secondary" disabled={disabled || runtimeNeeded} onClick={() => {
+      const source = cfg;
+      const request = ++previewRequest.current;
+      const current = () => cfgRef.current === source && previewRequest.current === request;
+      void api.providerCommandPreview(source).then(args => {
+        if (!current()) return;
+        setError('');
+        setPreview((effective ? maskPreview(args, effective.schema, values) : args).map(arg => JSON.stringify(arg)).join(' '));
+      }).catch(cause => { if (current()) setError(String(cause)); });
+    }}>{copy.preview}</button>
     {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
+    {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
     </>}
-    {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !visible.length && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
+    {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
     {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </div>;

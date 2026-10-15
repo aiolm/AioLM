@@ -5,11 +5,19 @@ import { testConfig } from '../../testing/appStore';
 import * as api from '../../shared/api';
 import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerTelemetryCopy } from './providerTelemetry';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
   providerCatalog: vi.fn(), providerRuntimes: vi.fn(), providerOptionIssues: vi.fn(), providerRuntimeOptions: vi.fn(),
+  providerOptionSchema: vi.fn(), runtimeHelpTarget: vi.fn(),
 }));
+
+// The effective schema is the runtime's catalog mapping, as the backend builds it.
+beforeEach(() => {
+  vi.mocked(api.runtimeHelpTarget).mockReturnValue(new Promise(() => undefined));
+  vi.mocked(api.providerOptionSchema).mockImplementation(async cfg => effectiveSchema(await api.providerRuntimeOptions(api.providerOf(cfg), cfg.active_runtime ?? '')));
+});
 
 describe('runtime inventory readiness', () => {
   it('withdraws cached readiness while refreshing and keeps a failed inventory unconfirmed', async () => {
@@ -34,6 +42,17 @@ describe('runtime inventory readiness', () => {
 });
 
 describe('runtime-specific option controls', () => {
+  it('renders an installed native build option through the same schema and retains other engine values', async () => {
+    const extra = schemaOption({ key: 'fresh-native', flag: '--fresh-native', target: 'launch', group: 'runtime', kind: { type: 'integer' } });
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [extra]));
+    const onChange = vi.fn();
+    const native = { ...testConfig, active_provider: 'llama.cpp' as const, active_backend: 'cpu', active_build: 'b1', provider_options: { vllm: { temperature: 0.5 } } };
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={native} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    const field = await screen.findByLabelText(/^--fresh-native/);
+    fireEvent.change(field, { target: { value: '0' } });
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { vllm: { temperature: 0.5 }, 'llama.cpp': { 'fresh-native': 0 } } });
+    expect(api.providerOptionSchema).toHaveBeenCalledWith(native);
+  });
   it('keeps saved options intact while their runtime schema is being checked', async () => {
     let resolveSchema!: (options: api.ProviderOption[]) => void;
     vi.mocked(api.providerRuntimeOptions).mockReturnValueOnce(new Promise(resolve => { resolveSchema = resolve; }));
@@ -243,5 +262,68 @@ describe('custom engine before a runtime is chosen (U1)', () => {
     await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledOnce());
     expect(vi.mocked(api.providerOptionIssues).mock.calls[0][0]).toMatchObject({ active_provider: 'custom.synthetic', active_runtime: 'syn-1' });
     expect(screen.getByRole('button', { name: 'Command preview' })).toBeEnabled();
+  });
+});
+
+describe('registered engine options from accepted help (G04)', () => {
+  const fresh = { ...schemaOption({ key: 'fresh_pair', flag: '--fresh-pair', target: 'launch', group: 'options', kind: { type: 'text' } }),
+    kind: { value: null, certainty: 'unknown' as const }, arity: { value: { min: 2, max: 2 }, certainty: 'verified' as const, source: { kind: 'help', document: 'stdout', start_line: 1, end_line: 1 } } };
+  const config = { ...testConfig, active_provider: 'custom.synthetic' as const, active_runtime: 'syn-1' };
+  beforeEach(() => {
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'custom.synthetic', engine: 'Synthetic', server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([{ key: 'workers', flag: '--workers', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 8 } }]);
+  });
+
+  it('discards an imported command that finishes after a different runtime is selected', async () => {
+    let finish!: (value: api.ImportedPlan) => void;
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const onChange = vi.fn();
+    const view = (cfg: api.AppConfig) => <I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>;
+    const rendered = render(view(config));
+    await screen.findByLabelText(/^--workers/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--workers 4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    rendered.rerender(view({ ...config, active_runtime: 'syn-2' }));
+    await act(async () => { finish({ plan: [{ key: 'workers', values: [4] }], managed: [], unrecognized: [] }); });
+    expect(onChange).not.toHaveBeenCalled();
+    imported.mockRestore();
+  });
+
+  it('masks a schema-sensitive value in the launch preview', async () => {
+    const sensitive = schemaOption({ key: 'secret', flag: '--secret', target: 'launch', group: 'options', kind: { type: 'text' } });
+    sensitive.sensitive = { value: true, certainty: 'verified' };
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [sensitive]));
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue(['/synthetic/engine', '--secret', 'synthetic-credential']);
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { secret: 'synthetic-credential' } } }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--secret/);
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    expect(await screen.findByText(/•••/)).toBeVisible();
+    expect(screen.queryByText(/synthetic-credential/)).not.toBeInTheDocument();
+    preview.mockRestore();
+  });
+
+  it('renders manifest and help options with one renderer and saves into the profile', async () => {
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema(
+      [{ key: 'workers', flag: '--workers', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 8 } }], [fresh]));
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    expect(await screen.findByLabelText(/^--workers/)).toHaveValue('2');
+    fireEvent.click(screen.getByRole('button', { name: 'Add occurrence' }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { 'custom.synthetic': { workers: 2, fresh_pair: { spelling: null, occurrences: [['', '']] } } } });
+    expect(screen.getByText('The accepted help matches this runtime.')).toBeVisible();
+  });
+
+  it('keeps saved help values when the runtime changed and says why launch is blocked', async () => {
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [], {
+      help_state: 'stale', help_detail: 'the runtime, its declared artifacts or its help command changed since its options were reviewed',
+      accepted_fingerprint: 'b'.repeat(64),
+    }));
+    const onInvalid = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { fresh_pair: { spelling: null, occurrences: [['a', 'b']] } } } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} /></I18nProvider>);
+    expect(await screen.findByText(/changed since its options were reviewed/)).toBeVisible();
+    expect(screen.getByText('fresh_pair')).toBeVisible();
+    await waitFor(() => expect(onInvalid).toHaveBeenCalledWith('provider-options', true));
   });
 });

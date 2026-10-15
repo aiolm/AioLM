@@ -393,6 +393,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             </div>
             <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
             {!llama && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(section) && <ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
+            {llama && section === 'advanced' && <ProviderOptions key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </SettingsProfileControl>
             </div>
           </div>
