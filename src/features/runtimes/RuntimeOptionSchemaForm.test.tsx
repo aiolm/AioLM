@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import RuntimeOptionSchemaForm from './RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm, { maskImportReview } from './RuntimeOptionSchemaForm';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
 import type { OptionSchema } from '../../shared/api/runtimeHelp';
@@ -302,5 +302,42 @@ describe('saved command-line order and confirmed syntax in the form', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Can repeat' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save confirmed syntax' }));
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ key: 'items' }), { arity: { min: 2, max: null }, repeatable: true });
+  });
+  it('masks sensitive words in import review buckets while keeping the pasted command available', async () => {
+    const secret = 'synthetic-amber-6281';
+    const current = schema([textOption('amber', { sensitive: { value: true, certainty: 'verified' }, managed: 'entry_point' })]);
+    vi.mocked(runtimeHelp.runtimeHelpImport).mockResolvedValueOnce({ plan: [], managed: ['--amber', secret], unrecognized: [`--unknown=${secret}`] });
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{}} scope={[]} onChange={vi.fn()} /></I18nProvider>);
+    fireEvent.click(screen.getByText('Import a pasted command line'));
+    const text = `--amber ${secret} --unknown=${secret}`;
+    const input = screen.getByRole('textbox', { name: /Pasted command/ });
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: 'Split into ordered plan' }));
+    const review = await screen.findByText(/--amber/, { selector: '.app-feedback-message' });
+    expect(review).not.toHaveTextContent(secret);
+    expect(review).toHaveTextContent('•••');
+    expect(screen.getByText(/--unknown=/, { selector: '.app-feedback-message' })).not.toHaveTextContent(secret);
+    expect(input).toHaveValue(text);
+  });
+
+});
+
+
+describe('command review projections', () => {
+  it('masks tuple values and inline aliases without mutating plans or stored values', () => {
+    const current = schema([textOption('amber', { spellings: [{flag:'--amber'},{flag:'-a'}], sensitive: {value:true,certainty:'verified'}, arity: {value:{min:2,max:2},certainty:'verified'} })]);
+    const values = { amber: 'previous-synthetic-value' };
+    const imported = { plan: [{key:'amber',values:['incoming-synthetic-value']}], managed: ['--amber','first','second','--public','kept','-a=third'], unrecognized: ['--copy=first','--copy=third','--copy=previous-synthetic-value','--copy=incoming-synthetic-value'] };
+    const before = structuredClone({values,imported});
+    const review=maskImportReview(imported,current,values);
+    expect(review.managed).toEqual(['--amber','•••','•••','--public','kept','-a=•••']);
+    expect(review.unrecognized).toEqual(['--copy=•••','--copy=•••','--copy=•••','--copy=•••']);
+    expect({values,imported}).toEqual(before);
+  });
+  it('hides the remaining review words when sensitive value arity is unconfirmed', () => {
+    const option = textOption('amber', { sensitive: {value:true,certainty:'verified'}, arity: {value:null,certainty:'unknown'} });
+    const imported = {plan:[],managed:['--amber','synthetic-one','--public','synthetic-two'],unrecognized:[]};
+    expect(maskImportReview(imported,schema([option]),{}).managed).toEqual(['--amber','•••','•••','•••']);
+    expect(maskImportReview(imported,schema([{...option,sensitive:{value:true,certainty:'unknown'}}]),{}).managed).toEqual(imported.managed);
   });
 });

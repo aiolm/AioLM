@@ -8,7 +8,7 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import EngineSelect from '../../shared/ui/EngineSelect';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
 import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
-import RuntimeOptionSchemaForm, { applyPlan, maskPreview, OccurrenceOrder } from '../runtimes/RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, OccurrenceOrder } from '../runtimes/RuntimeOptionSchemaForm';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
 import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
@@ -157,10 +157,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       // unrecognized words are reported, never applied.
       void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax).then(result => {
         if (!current()) return;
-        const review = [...result.managed, ...result.unrecognized];
         let next: Record<string, unknown>;
         try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(String(cause)); return; }
-        setError(review.length ? review.join(' ') : '');
+        const review = maskImportReview(result, effective.schema, values);
+        setError([...review.managed, ...review.unrecognized].join(' '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
       }).catch(cause => { if (current()) setError(String(cause)); });
       return;

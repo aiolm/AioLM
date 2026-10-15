@@ -490,6 +490,33 @@ export function maskPreview(argv: string[], schema: OptionSchema, values: Record
   });
 }
 
+/** Mask review projections only. The pasted command, plan and stored values
+ * keep their exact bytes. A sensitive flag with uncertain arity hides every
+ * following review word instead of guessing where its value ends. */
+export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, values: Record<string, unknown>): Pick<ImportedPlan, 'managed' | 'unrecognized'> {
+  const reviewValues: Record<string, unknown> = { ...values };
+  for (const option of schema.options) {
+    if (supported(option.sensitive) !== true) continue;
+    const rows = [...(readStored(values[option.key])?.rows ?? []), ...imported.plan.filter(item => item.key === option.key).map(item => [...item.values])];
+    for (const words of [imported.managed, imported.unrecognized]) {
+      for (let index = 0; index < words.length; index += 1) {
+        const token = words[index];
+        const equals = token.indexOf('=');
+        const name = equals < 0 ? token : token.slice(0, equals);
+        if (!option.spellings.some(spelling => spelling.flag === name)) continue;
+        if (equals >= 0) rows.push([token.slice(equals + 1)]);
+        else {
+          const arity = supported(option.arity);
+          const count = arity && arity.max === arity.min ? arity.min : words.length - index - 1;
+          rows.push(words.slice(index + 1, index + 1 + count));
+        }
+      }
+    }
+    reviewValues[option.key] = { occurrences: rows };
+  }
+  return { managed: maskPreview(imported.managed, schema, reviewValues), unrecognized: maskPreview(imported.unrecognized, schema, reviewValues) };
+}
+
 function isApplicable(option: OptionSchemaDefinition, scope: string[]): boolean {
   return option.scope.length <= scope.length && option.scope.every((segment, index) => scope[index] === segment);
 }
@@ -571,6 +598,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
     return byKey;
   }, [order, schema, values]);
   const masked = useMemo(() => (preview ? maskPreview(preview, schema, values) : null), [preview, schema, values]);
+  const reviewedImport = useMemo(() => imported ? maskImportReview(imported, schema, values) : null, [imported, schema, values]);
   const unknownKeys = useMemo(() => Object.keys(values).filter(key => key !== ORDER_KEY && !schema.options.some(option => option.key === key)), [schema, values]);
 
   const fields = visible.slice(0, limit).map((option, index) => (
@@ -635,12 +663,12 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
           )}
         </div>
         {importError && <FeedbackBanner tone="error">{importError}</FeedbackBanner>}
-        {imported && (
+        {imported && reviewedImport && (
           <div>
             <p className="app-section-hint">{copy.planOrder}: {imported.plan.map(item => item.key).join(', ') || '—'}</p>
             <p className="app-section-hint">{copy.groupedNote}</p>
-            {imported.managed.length > 0 && <FeedbackBanner tone="warning">{copy.importManaged}: {imported.managed.join(' ')}</FeedbackBanner>}
-            {imported.unrecognized.length > 0 && <FeedbackBanner tone="warning">{copy.importUnknown}: {imported.unrecognized.join(' ')}</FeedbackBanner>}
+            {reviewedImport.managed.length > 0 && <FeedbackBanner tone="warning">{copy.importManaged}: {reviewedImport.managed.join(' ')}</FeedbackBanner>}
+            {reviewedImport.unrecognized.length > 0 && <FeedbackBanner tone="warning">{copy.importUnknown}: {reviewedImport.unrecognized.join(' ')}</FeedbackBanner>}
           </div>
         )}
       </details>

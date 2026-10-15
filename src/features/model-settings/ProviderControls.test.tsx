@@ -330,6 +330,49 @@ describe('registered engine options from accepted help (G04)', () => {
     imported.mockRestore();
   });
 
+  it('masks newly pasted schema-sensitive managed values in import review without changing the input', async () => {
+    const secret = 'synthetic-amber-4972';
+    const option = schemaOption({ key: 'amber', flag: '--amber', target: 'launch', group: 'options', kind: { type: 'text' } });
+    option.sensitive = { value: true, certainty: 'verified' };
+    option.managed = 'entry_point';
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [option]));
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [], managed: ['--amber', secret], unrecognized: [`--unknown=${secret}`] });
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByText('--amber', { exact: true });
+    const text = `--amber ${secret} --unknown=${secret}`;
+    const input = screen.getByRole('textbox', { name: 'Import command' });
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    const review = await screen.findByRole('alert');
+    expect(review).not.toHaveTextContent(secret);
+    expect(review).toHaveTextContent('•••');
+    expect(input).toHaveValue(text);
+    imported.mockRestore();
+  });
+
+  it('masks both previous and incoming sensitive values while preserving the imported value', async () => {
+    const previous = 'synthetic-amber-before';
+    const incoming = 'synthetic-amber-after';
+    const option = schemaOption({ key: 'amber', flag: '--amber', target: 'launch', group: 'options', kind: { type: 'text' } });
+    option.sensitive = { value: true, certainty: 'verified' };
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [option]));
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [{ key: 'amber', values: [incoming] }], managed: [], unrecognized: [`--unknown=${previous}`, `--unknown=${incoming}`] });
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { amber: previous } } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--amber/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: `--amber ${incoming}` } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    const review = await screen.findByRole('alert');
+    expect(review).not.toHaveTextContent(previous);
+    expect(review).not.toHaveTextContent(incoming);
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ provider_options: expect.objectContaining({ 'custom.synthetic': expect.objectContaining({ amber: incoming }) }) }));
+    imported.mockRestore();
+  });
+
   it('masks a schema-sensitive value in the launch preview', async () => {
     const sensitive = schemaOption({ key: 'secret', flag: '--secret', target: 'launch', group: 'options', kind: { type: 'text' } });
     sensitive.sensitive = { value: true, certainty: 'verified' };
