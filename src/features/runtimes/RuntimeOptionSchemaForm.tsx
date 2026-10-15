@@ -245,7 +245,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   if (option.managed) {
     return (
       <div className="schema-option">
-        <p>{name} <small>· {option.managed === 'entry_point' ? copy.managedEntryPoint : option.managed === 'reserved' ? copy.managedReserved : copy.managed}</small></p>
+        <p>{name} <small>· {option.managed === 'entry_point' ? copy.managedEntryPoint : option.managed === 'reserved' ? copy.managedReserved
+          : option.managed === 'discovery' && option.position !== null && option.position !== undefined ? copy.managedPositional : copy.managed}</small></p>
         {help}
       </div>
     );

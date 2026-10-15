@@ -1272,11 +1272,7 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
     if m.command_layout.is_some() {
         args = super::runtime_schema::assemble_registered_arguments(&root(), cfg, &m, &args)?;
     } else {
-        args.extend(super::runtime_schema::launch_arguments(
-            &root(),
-            cfg,
-            &options(cfg),
-        )?);
+        args = super::runtime_schema::registered_arguments(&root(), cfg, &m, &args)?;
     }
     let mut env = m
         .launch

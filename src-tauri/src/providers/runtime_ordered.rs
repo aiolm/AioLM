@@ -24,6 +24,7 @@ use super::runtime_options::{
     Occurrence, OptionDefinition, OptionIssue, OptionSchema, Override, Overrides, ResolvedOptions,
     Target,
 };
+use super::runtime_positional::CommandEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -397,7 +398,97 @@ pub fn import_plan_text_with_syntax(
     text: &str,
     syntax: super::options::CommandSyntax,
 ) -> Result<ImportedPlan, String> {
+    import_plan_for_entry(schema, selected_scope, None, text, syntax)
+}
+
+/// Whether a pasted program word names the registered program: the exact
+/// text, or the same file name (on Windows, case-insensitively and with or
+/// without `.exe`). The literal entry prefix that must follow is checked
+/// separately; nothing else about the word is guessed.
+fn same_program(word: &str, program: &str) -> bool {
+    let name = |text: &str| {
+        let base = text.rsplit(['/', '\\']).next().unwrap_or(text).to_owned();
+        if cfg!(windows) {
+            let lower = base.to_ascii_lowercase();
+            lower
+                .strip_suffix(".exe")
+                .map(str::to_owned)
+                .unwrap_or(lower)
+        } else {
+            base
+        }
+    };
+    word == program || (!word.is_empty() && name(word) == name(program))
+}
+
+/// The registered entry's literal tokens, split at its declared subcommands:
+/// the head before the first one, then the tokens after each.
+fn entry_segments(entry: &CommandEntry) -> Vec<&[String]> {
+    let subcommands = entry
+        .layout
+        .as_ref()
+        .map_or(&[][..], |layout| layout.subcommands.as_slice());
+    let mut bounds = vec![0];
+    for index in subcommands {
+        bounds.push(*index);
+        bounds.push(index + 1);
+    }
+    bounds.push(entry.prefix.len());
+    bounds
+        .chunks(2)
+        .map(|pair| &entry.prefix[pair[0]..pair[1]])
+        .collect()
+}
+
+/// Where the options start in a pasted command for this entry. A command
+/// starting with the registered program must continue with the exact entry
+/// head; one starting with the head alone skips it; anything else is taken
+/// as options only.
+fn entry_start(entry: &CommandEntry, words: &[String]) -> Result<usize, String> {
+    let head = entry_segments(entry)[0];
+    let program = words
+        .first()
+        .is_some_and(|word| same_program(word, &entry.program));
+    let after = usize::from(program);
+    if words[after..].starts_with(head) {
+        return Ok(after + head.len());
+    }
+    if program {
+        let differs = head
+            .iter()
+            .zip(&words[after..])
+            .position(|(expected, word)| expected != word)
+            .unwrap_or(words.len() - after);
+        return Err(format!(
+            "the pasted command runs this runtime's program with other entry arguments (argument {} differs from the registered entry); paste only the options after the entry, or register that entry point",
+            after + differs + 1
+        ));
+    }
+    Ok(0)
+}
+
+/// Import a pasted command. With the selected runtime's registered entry,
+/// its program and literal prefix tokens are skipped exactly (never guessed),
+/// declared subcommands delimit scopes, the entry's own option separator is
+/// accepted, and positional words follow the slots' confirmed roles: entry
+/// tokens are skipped, app-owned and unmapped slots go to review, and user
+/// slots take their documented value count.
+pub fn import_plan_for_entry(
+    schema: &OptionSchema,
+    selected_scope: &[String],
+    entry: Option<&CommandEntry>,
+    text: &str,
+    syntax: super::options::CommandSyntax,
+) -> Result<ImportedPlan, String> {
     schema.validate()?;
+    if let Some(entry) = entry {
+        entry.validate()?;
+        if super::runtime_command::scope(entry.layout.as_ref(), &entry.prefix)? != selected_scope {
+            return Err(
+                "the selected scope does not match the registered entry's subcommands".into(),
+            );
+        }
+    }
     let words = super::options::split_command_with_syntax(text, syntax)?;
     let mut plan: OrderedPlan = Vec::new();
     let mut managed = Vec::new();
@@ -414,19 +505,34 @@ pub fn import_plan_text_with_syntax(
     positional_slots.sort_by_key(|o| o.position.unwrap_or(u16::MAX));
     let mut positional_index = 0usize;
     let mut index = 0usize;
-    // Skip a leading program word only when it looks like a path or file name
-    // (bare positional values must never be eaten). Scope subcommands are
-    // skipped by the scope cursor below, so pasted full lines import cleanly.
-    let first_is_scope = selected_scope
-        .first()
-        .is_some_and(|s| Some(s.as_str()) == words.first().map(|w| w.as_str()));
-    let looks_like_program = !words.is_empty()
-        && !words[0].starts_with('-')
-        && !first_is_scope
-        && (words[0].contains('/') || words[0].contains('\\') || words[0].contains('.'));
-    if looks_like_program {
-        index = 1;
+    let segments = entry.map(entry_segments);
+    if let Some(entry) = entry {
+        index = entry_start(entry, &words)?;
+    } else {
+        // Skip a leading program word only when it looks like a path or file
+        // name (bare positional values must never be eaten). Scope subcommands
+        // are skipped by the scope cursor below, so pasted full lines import.
+        let first_is_scope = selected_scope
+            .first()
+            .is_some_and(|s| Some(s.as_str()) == words.first().map(|w| w.as_str()));
+        let looks_like_program = !words.is_empty()
+            && !words[0].starts_with('-')
+            && !first_is_scope
+            && (words[0].contains('/') || words[0].contains('\\') || words[0].contains('.'));
+        if looks_like_program {
+            index = 1;
+        }
     }
+    let mut separator = entry.and_then(|entry| entry.separator.as_deref());
+    // After a declared subcommand, the entry's literal tokens that follow it
+    // are skipped when they appear exactly there.
+    let skip_segment = |cursor: usize, index: usize| -> usize {
+        segments
+            .as_ref()
+            .and_then(|segments| segments.get(cursor))
+            .filter(|segment| words[index..].starts_with(segment))
+            .map_or(0, |segment| segment.len())
+    };
     let mut scope_cursor = 0usize;
     while index < words.len()
         && scope_cursor < selected_scope.len()
@@ -434,6 +540,7 @@ pub fn import_plan_text_with_syntax(
     {
         scope_cursor += 1;
         index += 1;
+        index += skip_segment(scope_cursor, index);
     }
     while index < words.len() {
         // Only a token reached outside an option's consumed values may be
@@ -441,10 +548,15 @@ pub fn import_plan_text_with_syntax(
         if scope_cursor < selected_scope.len() && words[index] == selected_scope[scope_cursor] {
             scope_cursor += 1;
             index += 1;
+            index += skip_segment(scope_cursor, index);
             continue;
         }
         let word = words[index].clone();
         index += 1;
+        if word == "--" && separator.take().is_some() {
+            // The registered entry's own boundary after its bindings.
+            continue;
+        }
         if word == "--" {
             return Err("a bare -- would turn every later argument into a positional value".into());
         }
@@ -598,7 +710,66 @@ pub fn import_plan_text_with_syntax(
             continue;
         }
         // Bare words fill positional slots in order.
-        if positional_index < positional_slots.len() {
+        if let Some(entry) = entry {
+            // A slot an entry literal fills takes exactly that literal; when
+            // the pasted command does not repeat it there, the slot is the
+            // entry's and the word belongs to the next slot.
+            let mut entry_token = false;
+            while let Some(slot) = positional_slots.get(positional_index) {
+                let Some(super::runtime_positional::PositionalRole::Static { index: token }) =
+                    entry.positional_roles.get(&slot.key)
+                else {
+                    break;
+                };
+                positional_index += 1;
+                if entry.prefix.get(*token) == Some(&word) {
+                    entry_token = true;
+                    break;
+                }
+            }
+            if entry_token {
+                continue;
+            }
+            let Some(slot) = positional_slots.get(positional_index).copied() else {
+                unrecognized.push(word);
+                continue;
+            };
+            positional_index += 1;
+            if slot.managed.is_some() {
+                // A template binding's value, or a slot whose role is unmapped.
+                managed.push(word);
+                continue;
+            }
+            let (min, max) = slot
+                .arity
+                .supported()
+                .map_or((1, Some(1)), |a| (a.min.max(1), a.max));
+            let mut values = vec![Value::String(word)];
+            while max.is_none_or(|max| values.len() < usize::from(max))
+                && values.len() < 256
+                && words.get(index).is_some_and(|next| {
+                    !next.starts_with('-')
+                        && !(scope_cursor < selected_scope.len()
+                            && *next == selected_scope[scope_cursor])
+                })
+            {
+                values.push(Value::String(words[index].clone()));
+                index += 1;
+            }
+            if values.len() < usize::from(min) {
+                unrecognized.extend(
+                    values
+                        .into_iter()
+                        .map(|v| v.as_str().unwrap_or_default().to_owned()),
+                );
+                continue;
+            }
+            plan.push(PlannedOccurrence {
+                key: slot.key.clone(),
+                spelling: None,
+                values,
+            });
+        } else if positional_index < positional_slots.len() {
             let slot = positional_slots[positional_index];
             positional_index += 1;
             plan.push(PlannedOccurrence {
@@ -1200,7 +1371,7 @@ mod tests {
         template.extend(["--model", "synthetic.bin", "--port", "8080"].map(String::from));
         assert_eq!(
             layout
-                .assemble(&prefix, &template, &resolved.sections(&scope).unwrap())
+                .assemble(&prefix, &template, &resolved.sections(&scope).unwrap(), &[])
                 .unwrap(),
             vec![
                 "-I",
@@ -1280,5 +1451,268 @@ mod tests {
         assert!(import_plan_text(&optional, &[], "--model serve")
             .unwrap_err()
             .contains("confirm"));
+    }
+
+    fn positional(key: &str, position: u16, min: u16, max: Option<u16>) -> OptionDefinition {
+        let mut slot = option(key, "--unused", min, max);
+        slot.spellings.clear();
+        slot.position = Some(position);
+        slot.scope = vec!["serve".into(), "api".into()];
+        slot
+    }
+
+    /// An interpreter entry with a fixed global option, nested subcommands,
+    /// a model positional binding, a static `--port` flag binding, a user
+    /// positional and a variadic user positional.
+    fn interpreter_entry() -> (OptionSchema, CommandEntry, Vec<String>) {
+        let prefix = ["-I", "engine.py", "--label", "serve", "serve", "api"]
+            .map(String::from)
+            .to_vec();
+        let entry = CommandEntry {
+            version: 1,
+            program: r"C:\Tools\Python 3\python.exe".into(),
+            prefix,
+            layout: Some(super::super::runtime_command::CommandLayout {
+                version: 1,
+                subcommands: vec![4, 5],
+                options: vec![
+                    super::super::runtime_command::PrefixOption {
+                        index: 0,
+                        values: 0,
+                    },
+                    super::super::runtime_command::PrefixOption {
+                        index: 2,
+                        values: 1,
+                    },
+                ],
+            }),
+            separator: None,
+            positional_bindings: Some(vec!["model".into()]),
+            positional_roles: [
+                (
+                    "model",
+                    super::super::runtime_positional::PositionalRole::Binding {
+                        name: "model".into(),
+                    },
+                ),
+                (
+                    "output",
+                    super::super::runtime_positional::PositionalRole::User,
+                ),
+                (
+                    "extras",
+                    super::super::runtime_positional::PositionalRole::User,
+                ),
+            ]
+            .into_iter()
+            .map(|(key, role)| (key.to_owned(), role))
+            .collect(),
+        };
+        let mut label = option("label", "--label", 1, Some(1));
+        label.managed = Some(super::super::runtime_options::ManagedBinding::EntryPoint);
+        let mut worker = option("worker", "--worker", 1, Some(1));
+        worker.scope = vec!["serve".into()];
+        let mut pair = option("pair", "--pair", 2, Some(2));
+        pair.scope = vec!["serve".into(), "api".into()];
+        pair.repeatable = known(true);
+        let mut port = option("port", "--port", 1, Some(1));
+        port.scope = pair.scope.clone();
+        port.managed = Some(super::super::runtime_options::ManagedBinding::Port);
+        let mut model = positional("model", 0, 1, Some(1));
+        model.managed = Some(super::super::runtime_options::ManagedBinding::Model);
+        let output = positional("output", 1, 1, Some(1));
+        let extras = positional("extras", 2, 0, None);
+        let schema = schema(vec![
+            label,
+            option("global", "--global", 1, Some(1)),
+            worker,
+            pair,
+            port,
+            model,
+            output,
+            extras,
+        ]);
+        (schema, entry, vec!["serve".into(), "api".into()])
+    }
+
+    #[test]
+    fn a_full_interpreter_command_skips_exactly_the_registered_entry() {
+        let (schema, entry, scope) = interpreter_entry();
+        let text = r#""C:\Tools\Python 3\python.exe" -I engine.py --label serve --global serve serve --worker api api C:\m\model.bin --port 9 --pair a b out.txt x1 x2"#;
+        let imported = import_plan_for_entry(
+            &schema,
+            &scope,
+            Some(&entry),
+            text,
+            super::super::options::CommandSyntax::Windows,
+        )
+        .unwrap();
+        assert!(
+            imported.unrecognized.is_empty(),
+            "{:?}",
+            imported.unrecognized
+        );
+        assert_eq!(imported.managed, vec![r"C:\m\model.bin", "--port", "9"]);
+        let plan: Vec<(&str, Vec<Value>)> = imported
+            .plan
+            .iter()
+            .map(|row| (row.key.as_str(), row.values.clone()))
+            .collect();
+        assert_eq!(
+            plan,
+            vec![
+                ("global", vec![json!("serve")]),
+                ("worker", vec![json!("api")]),
+                ("pair", vec![json!("a"), json!("b")]),
+                ("output", vec![json!("out.txt")]),
+                ("extras", vec![json!("x1"), json!("x2")]),
+            ]
+        );
+        // The same line through the legacy path reviews interpreter tokens.
+        let legacy = import_plan_text_with_syntax(
+            &schema,
+            &scope,
+            text,
+            super::super::options::CommandSyntax::Windows,
+        )
+        .unwrap();
+        assert!(
+            legacy.unrecognized.contains(&"-I".to_string()),
+            "{legacy:?}"
+        );
+        // Options alone (no entry) still import, positionals by role.
+        let tail = import_plan_for_entry(
+            &schema,
+            &scope,
+            Some(&entry),
+            "--global x serve api C:/m.bin out.txt",
+            super::super::options::CommandSyntax::Posix,
+        )
+        .unwrap();
+        assert_eq!(tail.managed, vec!["C:/m.bin"]);
+        assert_eq!(tail.plan.last().unwrap().key, "output");
+    }
+
+    #[test]
+    fn a_different_entry_or_scope_is_refused_instead_of_guessed() {
+        let (schema, entry, scope) = interpreter_entry();
+        // Same interpreter, another script: never import its words as options.
+        let error = import_plan_for_entry(
+            &schema,
+            &scope,
+            Some(&entry),
+            "python -I other.py --label serve serve api",
+            super::super::options::CommandSyntax::Posix,
+        )
+        .unwrap_err();
+        assert!(error.contains("argument 3"), "{error}");
+        let mut forged = scope.clone();
+        forged.pop();
+        assert!(import_plan_for_entry(
+            &schema,
+            &forged,
+            Some(&entry),
+            "--global x",
+            super::super::options::CommandSyntax::Posix
+        )
+        .is_err());
+        let mut future = entry.clone();
+        future.version = 2;
+        assert!(import_plan_for_entry(
+            &schema,
+            &scope,
+            Some(&future),
+            "--global x",
+            super::super::options::CommandSyntax::Posix
+        )
+        .unwrap_err()
+        .contains("version"));
+        // A bare -- is accepted only as the entry's own declared boundary.
+        assert!(import_plan_for_entry(
+            &schema,
+            &scope,
+            Some(&entry),
+            "serve api -- out.txt",
+            super::super::options::CommandSyntax::Posix
+        )
+        .is_err());
+        let mut bridged = entry.clone();
+        bridged.separator = Some("--".into());
+        let separated = import_plan_for_entry(
+            &schema,
+            &scope,
+            Some(&bridged),
+            "serve api C:/m.bin -- --pair a b",
+            super::super::options::CommandSyntax::Posix,
+        )
+        .unwrap();
+        assert_eq!(separated.plan[0].key, "pair");
+    }
+
+    #[test]
+    fn an_entry_literal_between_user_slots_is_matched_at_its_own_slot() {
+        // [user input, fixed marker, user output] after `serve`.
+        let mut input = positional("input", 0, 1, Some(1));
+        input.scope = vec!["serve".into()];
+        let mut marker = positional("marker", 1, 1, Some(1));
+        marker.scope = input.scope.clone();
+        marker.managed = Some(super::super::runtime_options::ManagedBinding::EntryPoint);
+        let mut output = positional("output", 2, 1, Some(1));
+        output.scope = input.scope.clone();
+        let schema = schema(vec![input, marker, output]);
+        let entry = CommandEntry {
+            version: 1,
+            program: "engine".into(),
+            prefix: ["serve", "MARKER"].map(String::from).to_vec(),
+            layout: Some(super::super::runtime_command::CommandLayout {
+                version: 1,
+                subcommands: vec![0],
+                options: vec![],
+            }),
+            separator: None,
+            positional_bindings: Some(vec![]),
+            positional_roles: [
+                (
+                    "input",
+                    super::super::runtime_positional::PositionalRole::User,
+                ),
+                (
+                    "marker",
+                    super::super::runtime_positional::PositionalRole::Static { index: 1 },
+                ),
+                (
+                    "output",
+                    super::super::runtime_positional::PositionalRole::User,
+                ),
+            ]
+            .into_iter()
+            .map(|(key, role)| (key.to_owned(), role))
+            .collect(),
+        };
+        let scope = vec!["serve".to_string()];
+        for text in ["engine serve in.txt MARKER out.txt", "in.txt out.txt"] {
+            let imported = import_plan_for_entry(
+                &schema,
+                &scope,
+                Some(&entry),
+                text,
+                super::super::options::CommandSyntax::Posix,
+            )
+            .unwrap();
+            let plan: Vec<(&str, Vec<Value>)> = imported
+                .plan
+                .iter()
+                .map(|row| (row.key.as_str(), row.values.clone()))
+                .collect();
+            assert_eq!(
+                plan,
+                vec![
+                    ("input", vec![json!("in.txt")]),
+                    ("output", vec![json!("out.txt")])
+                ],
+                "{text}"
+            );
+            assert!(imported.managed.is_empty() && imported.unrecognized.is_empty());
+        }
     }
 }

@@ -309,10 +309,14 @@ pub(crate) fn runtime_help_import(
     scope: Vec<String>,
     text: String,
     syntax: Option<crate::providers::options::CommandSyntax>,
+    entry: Option<crate::providers::runtime_positional::CommandEntry>,
 ) -> Result<crate::providers::runtime_ordered::ImportedPlan, String> {
-    crate::providers::runtime_ordered::import_plan_text_with_syntax(
+    // The selected runtime's registered entry, when the caller has one,
+    // lets a pasted full command skip exactly that program and prefix.
+    crate::providers::runtime_ordered::import_plan_for_entry(
         &schema,
         &scope,
+        entry.as_ref(),
         &text,
         syntax.unwrap_or_default(),
     )

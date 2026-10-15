@@ -27,6 +27,7 @@ use super::{
         ValueStyle, SCHEMA_VERSION,
     },
     runtime_ordered::{self, ORDER_KEY},
+    runtime_positional::{self, CommandEntry, PositionalRole},
     ProviderId,
 };
 use crate::config::AppConfig;
@@ -136,9 +137,17 @@ pub struct EffectiveSchema {
     /// A saved confirmation file this app refuses to read (malformed, newer,
     /// oversized); nothing from it applies and help options needing it block.
     pub supplement_error: Option<String>,
+    /// The registered command head (program, prefix, layout, bindings) a
+    /// pasted command and positional roles are judged against. Absent for
+    /// built-in runtimes, whose commands the app builds itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<CommandEntry>,
 }
 
 pub const SUPPLEMENT_VERSION: u32 = 1;
+/// Written only when a positional role is confirmed, so files without one
+/// stay readable by earlier versions and newer roles are refused by them.
+pub const SUPPLEMENT_POSITIONAL_VERSION: u32 = 2;
 const SUPPLEMENT_FILE: &str = "supplement.json";
 const SUPPLEMENT_LIMIT: u64 = 262_144;
 
@@ -152,6 +161,9 @@ pub struct ConfirmedSyntax {
     pub arity: Option<Arity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeatable: Option<bool>,
+    /// Who fills a help positional slot; only with supplement version 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positional: Option<PositionalRole>,
 }
 
 /// Confirmations pinned to the accepted help they were made for. Another
@@ -916,6 +928,8 @@ struct Compat {
     managed_flags: BTreeMap<String, ManagedBinding>,
     /// Explicit option metadata and whether the app ships it (built-in).
     metadata: Option<(OptionMetadata, bool)>,
+    /// A registered runtime's command head; built-in runtimes have none.
+    entry: Option<CommandEntry>,
 }
 
 /// The selected runtime's explicit option metadata, as its effective schema
@@ -1219,9 +1233,11 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
             .collect();
     let mut explicit_scopes = BTreeMap::new();
     let mut metadata = runtime_metadata::builtin(key.provider).map(|metadata| (metadata, true));
+    let mut entry = None;
     let options = match key.provider {
         ProviderId::Custom(_) => {
             let manifest = registry::manifest(key.provider, &key.runtime)?;
+            entry = Some(CommandEntry::from_manifest(&manifest));
             metadata = manifest
                 .option_metadata
                 .clone()
@@ -1277,6 +1293,7 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
         options,
         managed_flags,
         metadata,
+        entry,
     })
 }
 
@@ -1363,6 +1380,7 @@ fn build_effective(
         }
     }
     let compat_metadata = compat.metadata.take();
+    let entry = compat.entry.take();
     let compat_len = compat.options.len();
     let mut options = compat.options;
     let mut help_keys = Vec::new();
@@ -1479,12 +1497,29 @@ fn build_effective(
                     .as_ref()
                     .is_some_and(|accepted| accepted.fingerprint == saved.fingerprint);
             (
-                Some(apply_supplement(&mut schema, &help_keys, saved, current)),
+                Some(apply_supplement(
+                    &mut schema,
+                    &help_keys,
+                    entry.as_ref(),
+                    saved,
+                    current,
+                )),
                 None,
             )
         }
         Err(error) => (None, Some(error)),
     };
+    let mut entry = entry;
+    if let (Some(entry), Some(view)) = (entry.as_mut(), supplement.as_ref()) {
+        if view.current && !view.conflicts.iter().any(|c| c.field == "positional") {
+            entry.positional_roles = view
+                .options
+                .iter()
+                .filter(|(key, _)| view.applied.contains(key))
+                .filter_map(|(key, syntax)| syntax.positional.clone().map(|r| (key.clone(), r)))
+                .collect();
+        }
+    }
     schema.validate()?;
     Ok(EffectiveSchema {
         schema,
@@ -1499,6 +1534,7 @@ fn build_effective(
         metadata,
         supplement,
         supplement_error,
+        entry,
     })
 }
 
@@ -1507,7 +1543,12 @@ fn supplement_path(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, 
 }
 
 fn valid_confirmation(syntax: &ConfirmedSyntax) -> bool {
-    (syntax.arity.is_some() || syntax.repeatable.is_some())
+    (syntax.arity.is_some() || syntax.repeatable.is_some() || syntax.positional.is_some())
+        && match &syntax.positional {
+            Some(PositionalRole::Binding { name }) => !name.is_empty() && name.len() <= 64,
+            Some(PositionalRole::Static { index }) => *index < 128,
+            _ => true,
+        }
         && syntax
             .arity
             .is_none_or(|a| a.min <= 256 && a.max.is_none_or(|max| max >= a.min && max <= 256))
@@ -1533,7 +1574,9 @@ pub fn load_supplement(
     let raw: Value = serde_json::from_slice(&bytes)
         .map_err(|e| format!("confirmed option syntax is malformed: {e}"))?;
     match raw.get("version").and_then(Value::as_u64) {
-        Some(version) if version == u64::from(SUPPLEMENT_VERSION) => {}
+        Some(version)
+            if version == u64::from(SUPPLEMENT_VERSION)
+                || version == u64::from(SUPPLEMENT_POSITIONAL_VERSION) => {}
         Some(version) => {
             return Err(format!(
                 "confirmed option syntax version {version} is not supported by this app"
@@ -1553,7 +1596,141 @@ pub fn load_supplement(
     {
         return Err("confirmed option syntax is invalid".into());
     }
+    if saved.version == SUPPLEMENT_VERSION
+        && saved
+            .options
+            .values()
+            .any(|syntax| syntax.positional.is_some())
+    {
+        return Err("confirmed option syntax version 1 cannot hold positional roles".into());
+    }
     Ok(Some(saved))
+}
+
+/// The help scope's positional slots: (key, help position).
+fn help_slots(schema: &OptionSchema, help_keys: &[String]) -> Vec<(String, u16)> {
+    schema
+        .options
+        .iter()
+        .filter(|o| o.target == Target::Launch && help_keys.contains(&o.key))
+        .filter_map(|o| o.position.map(|position| (o.key.clone(), position)))
+        .collect()
+}
+
+/// The ownership a confirmed role gives its slot: none for a user value.
+fn role_binding(role: &PositionalRole) -> Option<ManagedBinding> {
+    match role {
+        PositionalRole::User => None,
+        PositionalRole::Binding { name } => Some(binding_for(name)),
+        PositionalRole::Static { .. } => Some(ManagedBinding::EntryPoint),
+    }
+}
+
+/// A slot key and the one template token a confirmed role places there.
+type SlotToken = (String, String);
+
+/// Slots the confirmed positional layout gives to template tokens, with the
+/// token each holds: an entry literal, or a binding's placeholder (expanded
+/// by the caller that knows the launch values).
+fn template_slot_tokens(effective: &EffectiveSchema) -> Vec<SlotToken> {
+    let Some(entry) = &effective.entry else {
+        return Vec::new();
+    };
+    entry
+        .positional_roles
+        .iter()
+        .filter_map(|(key, role)| match role {
+            PositionalRole::User => None,
+            PositionalRole::Binding { name } => Some((key.clone(), format!("{{{name}}}"))),
+            PositionalRole::Static { index } => entry
+                .prefix
+                .get(*index)
+                .map(|token| (key.clone(), token.clone())),
+        })
+        .collect()
+}
+
+/// Template indices the confirmed positional layout lifts out of the launch
+/// template, and each slot's actual token from the expanded template. A
+/// binding is found by its exact placeholder token after the entry prefix,
+/// never by searching argument values.
+fn lifted_template_slots(
+    effective: &EffectiveSchema,
+    manifest: &registry::RuntimeManifest,
+    expanded: &[String],
+) -> Result<(Vec<usize>, Vec<SlotToken>), String> {
+    let mut lift = Vec::new();
+    let mut tokens = Vec::new();
+    let Some(entry) = &effective.entry else {
+        return Ok((lift, tokens));
+    };
+    let prefix_len = entry.prefix.len();
+    for (key, role) in &entry.positional_roles {
+        let index = match role {
+            PositionalRole::User => continue,
+            PositionalRole::Static { index } => *index,
+            PositionalRole::Binding { name } => {
+                let placeholder = format!("{{{name}}}");
+                manifest
+                    .launch
+                    .args
+                    .iter()
+                    .enumerate()
+                    .skip(prefix_len)
+                    .find(|(_, arg)| **arg == placeholder)
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| {
+                        format!("{key}: the launch template has no positional {name} binding; review its positional roles")
+                    })?
+            }
+        };
+        let token = expanded
+            .get(index)
+            .ok_or("the launch template changed; review its positional roles")?;
+        lift.push(index);
+        tokens.push((key.clone(), token.clone()));
+    }
+    Ok((lift, tokens))
+}
+
+/// The schema and values one resolution sees when template tokens fill
+/// slots: each such slot holds exactly its one token, so user slots before,
+/// between and after it resolve in declared slot order. A value the user
+/// saved for such a slot is not replaced; it stays refused as app-owned.
+fn with_template_slots(
+    schema: &OptionSchema,
+    mut values: Map<String, Value>,
+    tokens: &[SlotToken],
+) -> (OptionSchema, Map<String, Value>) {
+    if tokens.is_empty() {
+        return (schema.clone(), values);
+    }
+    let mut schema = schema.clone();
+    for (key, token) in tokens {
+        if values.contains_key(key) {
+            continue;
+        }
+        let Some(option) = schema.options.iter_mut().find(|o| o.key == *key) else {
+            continue;
+        };
+        option.managed = None;
+        // The confirmed role places exactly one template token here. A value
+        // count help documents stays authoritative (a mismatch is refused).
+        if option.arity.supported().is_none() {
+            option.arity = Fact {
+                value: Some(Arity {
+                    min: 1,
+                    max: Some(1),
+                }),
+                certainty: Certainty::UserConfirmed,
+                source: Some(Source::User {
+                    note: "one launch template token, by its confirmed positional role".into(),
+                }),
+            };
+        }
+        values.insert(key.clone(), Value::String(token.clone()));
+    }
+    (schema, values)
 }
 
 /// Establish confirmed facts on help options whose help left them unknown.
@@ -1562,11 +1739,33 @@ pub fn load_supplement(
 fn apply_supplement(
     schema: &mut OptionSchema,
     help_keys: &[String],
+    entry: Option<&CommandEntry>,
     saved: Supplement,
     current: bool,
 ) -> SupplementView {
     let mut applied = Vec::new();
     let mut conflicts = Vec::new();
+    // Positional roles are one layout: all of them apply, or none does.
+    let roles: BTreeMap<String, PositionalRole> = saved
+        .options
+        .iter()
+        .filter_map(|(key, syntax)| syntax.positional.clone().map(|role| (key.clone(), role)))
+        .collect();
+    let layout = if current {
+        runtime_positional::validate_roles(entry, &help_slots(schema, help_keys), &roles)
+    } else {
+        Ok(())
+    };
+    if let Err(message) = &layout {
+        for (key, role) in &roles {
+            conflicts.push(SupplementConflict {
+                key: key.clone(),
+                field: "positional".into(),
+                confirmed: serde_json::to_value(role).unwrap_or(Value::Null),
+                help: Value::from(message.clone()),
+            });
+        }
+    }
     let source = Source::User {
         note: format!(
             "confirmed in AioLM for reviewed help {}",
@@ -1574,6 +1773,35 @@ fn apply_supplement(
         ),
     };
     for (key, syntax) in &saved.options {
+        let mut placed = false;
+        if let Some(role) = &syntax.positional {
+            let slot = schema.options.iter_mut().find(|o| {
+                o.key == *key
+                    && help_keys.contains(key)
+                    && o.position.is_some()
+                    && o.target == Target::Launch
+                    && o.managed == Some(ManagedBinding::Discovery)
+            });
+            let Some(slot) = slot else {
+                conflicts.push(SupplementConflict {
+                    key: key.clone(),
+                    field: "option".into(),
+                    confirmed: serde_json::to_value(syntax).unwrap_or(Value::Null),
+                    help: Value::Null,
+                });
+                continue;
+            };
+            if current && layout.is_ok() {
+                slot.managed = role_binding(role);
+                placed = true;
+            }
+            if syntax.arity.is_none() && syntax.repeatable.is_none() {
+                if placed {
+                    applied.push(key.clone());
+                }
+                continue;
+            }
+        }
         let option = schema
             .options
             .iter_mut()
@@ -1588,7 +1816,7 @@ fn apply_supplement(
             });
             continue;
         };
-        let mut established = false;
+        let mut established = placed;
         if let Some(arity) = syntax.arity {
             match option.arity.supported() {
                 None if current => {
@@ -1678,10 +1906,30 @@ pub fn save_supplement(
             .iter()
             .find(|option| option.key == *name && base.help_keys.contains(name))
             .ok_or_else(|| format!("{name} is not an option of this runtime's reviewed help"))?;
-        if option.managed.is_some() || option.target != Target::Launch {
-            return Err(format!(
-                "{name} is managed by the app and cannot be confirmed"
-            ));
+        let unmapped_slot = option.position.is_some()
+            && option.target == Target::Launch
+            && option.managed == Some(ManagedBinding::Discovery);
+        match &syntax.positional {
+            Some(_) if !unmapped_slot => {
+                return Err(format!(
+                    "{name} is not a positional whose role the reviewed help leaves open"
+                ))
+            }
+            Some(role)
+                if *role != PositionalRole::User
+                    && (syntax.arity.is_some() || syntax.repeatable.is_some()) =>
+            {
+                return Err(format!(
+                    "{name}: confirm a value count only for a positional you supply"
+                ))
+            }
+            Some(_) => {}
+            None if option.managed.is_some() || option.target != Target::Launch => {
+                return Err(format!(
+                    "{name} is managed by the app and cannot be confirmed"
+                ));
+            }
+            None => {}
         }
         if !valid_confirmation(syntax) {
             return Err(format!("{name}: confirm a valid value count or repetition"));
@@ -1694,8 +1942,21 @@ pub fn save_supplement(
             ));
         }
     }
+    let roles: BTreeMap<String, PositionalRole> = options
+        .iter()
+        .filter_map(|(key, syntax)| syntax.positional.clone().map(|role| (key.clone(), role)))
+        .collect();
+    runtime_positional::validate_roles(
+        base.entry.as_ref(),
+        &help_slots(&base.schema, &base.help_keys),
+        &roles,
+    )?;
     let saved = Supplement {
-        version: SUPPLEMENT_VERSION,
+        version: if roles.is_empty() {
+            SUPPLEMENT_VERSION
+        } else {
+            SUPPLEMENT_POSITIONAL_VERSION
+        },
         fingerprint: fingerprint.into(),
         options,
     };
@@ -1901,9 +2162,12 @@ pub fn saved_issues_for(
             }
         }
     }
-    if let Err(found) =
-        runtime_ordered::resolve_saved(&effective.schema, &effective.scope, &describable)
-    {
+    let (schema, describable) = with_template_slots(
+        &effective.schema,
+        describable,
+        &template_slot_tokens(&effective),
+    );
+    if let Err(found) = runtime_ordered::resolve_saved(&schema, &effective.scope, &describable) {
         issues.extend(found.into_iter().map(|found: OptionIssue| {
             let code = if effective.compat_keys.contains(&found.key) {
                 "type"
@@ -1925,8 +2189,9 @@ fn resolve_launch_plan(
     selected: &Selected,
     mut values: Map<String, Value>,
     order: Option<&Value>,
+    slot_tokens: &[SlotToken],
 ) -> Result<(ResolvedOptions, Vec<String>), String> {
-    if values.is_empty() && order.is_none() {
+    if values.is_empty() && order.is_none() && slot_tokens.is_empty() {
         return Ok((
             ResolvedOptions {
                 argv: Vec::new(),
@@ -1937,10 +2202,15 @@ fn resolve_launch_plan(
         ));
     }
     let mut effective = effective_for(root, cfg, selected, false)?;
+    // Template tokens a confirmed positional role relocates are judged by
+    // the same reviewed help as saved values: it must still be current.
     let help_keys = values
         .keys()
+        .chain(slot_tokens.iter().map(|(key, _)| key))
         .filter(|key| !effective.compat_keys.contains(key))
         .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
     if !help_keys.is_empty() {
         let keys = help_keys.join(", ");
@@ -1968,8 +2238,9 @@ fn resolve_launch_plan(
     if let Some(order) = order {
         values.insert(ORDER_KEY.into(), order.clone());
     }
-    let resolved = runtime_ordered::resolve_saved(&effective.schema, &effective.scope, &values)
-        .map_err(|issues| {
+    let (schema, values) = with_template_slots(&effective.schema, values, slot_tokens);
+    let resolved =
+        runtime_ordered::resolve_saved(&schema, &effective.scope, &values).map_err(|issues| {
             issues
                 .iter()
                 .map(|issue| format!("{}: {}", issue.key, issue.message))
@@ -1989,8 +2260,44 @@ fn resolve_launch(
     values: Map<String, Value>,
     order: Option<&Value>,
 ) -> Result<Vec<String>, String> {
-    let (resolved, scope) = resolve_launch_plan(root, cfg, selected, values, order)?;
+    let (resolved, scope) = resolve_launch_plan(root, cfg, selected, values, order, &[])?;
     strip_scope(resolved.argv, &scope)
+}
+
+/// The full argv of a registered entry without a command layout: the
+/// expanded template, minus binding tokens a confirmed positional layout
+/// moves into slot order, then every saved option through one resolver.
+pub fn registered_arguments(
+    root: &Path,
+    cfg: &AppConfig,
+    manifest: &registry::RuntimeManifest,
+    template: &[String],
+) -> Result<Vec<String>, String> {
+    let selected = Selected::from_config(cfg)?;
+    let effective = effective_for(root, cfg, &selected, false)?;
+    let (lift, tokens) = lifted_template_slots(&effective, manifest, template)?;
+    let all = super::launch::provider_options(cfg, selected.key.provider);
+    let values: Map<String, Value> = generic_values(&all)
+        .into_iter()
+        .filter(|(key, _)| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.key == *key)
+                .is_none_or(|option| option.target == Target::Launch)
+        })
+        .collect();
+    let (resolved, scope) =
+        resolve_launch_plan(root, cfg, &selected, values, all.get(ORDER_KEY), &tokens)?;
+    let mut argv: Vec<String> = template
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !lift.contains(index))
+        .map(|(_, token)| token.clone())
+        .collect();
+    argv.extend(strip_scope(resolved.argv, &scope)?);
+    Ok(argv)
 }
 
 /// A registered layout assembles the exact same resolver output used by
@@ -2019,15 +2326,17 @@ pub fn assemble_registered_arguments(
                 .is_none_or(|option| option.target == Target::Launch)
         })
         .collect();
-    if values.is_empty() && !all.contains_key(ORDER_KEY) {
+    let (lift, tokens) = lifted_template_slots(&effective, manifest, template)?;
+    if values.is_empty() && !all.contains_key(ORDER_KEY) && tokens.is_empty() {
         return Ok(template.to_vec());
     }
-    let (resolved, scope) = resolve_launch_plan(root, cfg, &selected, values, all.get(ORDER_KEY))?;
+    let (resolved, scope) =
+        resolve_launch_plan(root, cfg, &selected, values, all.get(ORDER_KEY), &tokens)?;
     let prefix = registry::launch_prefix(manifest);
     if layout.scope(&prefix)? != scope {
         return Err("review help for the declared subcommands before using scoped options; saved values were retained".into());
     }
-    layout.assemble(&prefix, template, &resolved.sections(&scope)?)
+    layout.assemble(&prefix, template, &resolved.sections(&scope)?, &lift)
 }
 
 /// Launch arguments for every saved generic option of a registered engine:
@@ -2488,6 +2797,7 @@ mod tests {
             options: vec![option],
             managed_flags: BTreeMap::from([("--weights".into(), ManagedBinding::Model)]),
             metadata: None,
+            entry: None,
         };
         protect_binding_aliases(&mut compat, &[help]);
         let mut schema = help_schema();
@@ -2844,6 +3154,127 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mapped_template_tokens_move_into_declared_slot_order() {
+        // [user input, app model, fixed marker, user output] behind
+        // `-I engine.py --label serve serve api MARKER {model} --port {port}`.
+        let mut schema = help_schema();
+        let scope = vec!["serve".to_string(), "api".to_string()];
+        for (position, key, managed) in [
+            (0, "input", None),
+            (1, "model", Some(ManagedBinding::Model)),
+            (2, "marker", Some(ManagedBinding::EntryPoint)),
+            (3, "output", None),
+        ] {
+            let mut slot = blank(key, "", Target::Launch);
+            slot.position = Some(position);
+            slot.scope = scope.clone();
+            slot.managed = managed;
+            if managed.is_none() {
+                slot.arity = Fact {
+                    value: Some(Arity {
+                        min: 1,
+                        max: Some(1),
+                    }),
+                    certainty: Certainty::Verified,
+                    source: Some(Source::Help {
+                        document: "stdout".into(),
+                        start_line: 1,
+                        end_line: 1,
+                    }),
+                };
+            }
+            schema.options.push(slot);
+        }
+        for option in &mut schema.options {
+            option.scope = scope.clone();
+        }
+        let tokens = vec![
+            ("model".to_string(), "/m/model.bin".to_string()),
+            ("marker".to_string(), "MARKER".to_string()),
+        ];
+        let values: Map<String, Value> = serde_json::from_value(json!({
+            "output": "out.txt", "input": "in.txt",
+            "fresh_pair": {"occurrences": [["a", "b"]]}
+        }))
+        .unwrap();
+        let (with_slots, values) = with_template_slots(&schema, values, &tokens);
+        let resolved = runtime_ordered::resolve_saved(&with_slots, &scope, &values).unwrap();
+        let prefix: Vec<String> = [
+            "-I",
+            "engine.py",
+            "--label",
+            "serve",
+            "serve",
+            "api",
+            "MARKER",
+        ]
+        .map(String::from)
+        .to_vec();
+        let mut template = prefix.clone();
+        template.extend(["/m/model.bin", "--port", "9"].map(String::from));
+        let layout = super::super::runtime_command::CommandLayout {
+            version: 1,
+            subcommands: vec![4, 5],
+            options: vec![
+                super::super::runtime_command::PrefixOption {
+                    index: 0,
+                    values: 0,
+                },
+                super::super::runtime_command::PrefixOption {
+                    index: 2,
+                    values: 1,
+                },
+            ],
+        };
+        let argv = layout
+            .assemble(
+                &prefix,
+                &template,
+                &resolved.sections(&scope).unwrap(),
+                &[6, 7],
+            )
+            .unwrap();
+        assert_eq!(
+            argv,
+            [
+                "-I",
+                "engine.py",
+                "--label",
+                "serve",
+                "serve",
+                "api",
+                "--port",
+                "9",
+                "--fresh-pair",
+                "a",
+                "b",
+                "in.txt",
+                "/m/model.bin",
+                "MARKER",
+                "out.txt"
+            ]
+        );
+        // Tokens before the leaf command never move.
+        assert!(layout
+            .assemble(
+                &prefix,
+                &template,
+                &resolved.sections(&scope).unwrap(),
+                &[1]
+            )
+            .is_err());
+        // A value saved for an app-filled slot is kept and refused.
+        let mut forged: Map<String, Value> =
+            serde_json::from_value(json!({"model": "/other.bin", "input": "in.txt"})).unwrap();
+        forged.insert("output".into(), json!("out.txt"));
+        let (with_slots, forged) = with_template_slots(&schema, forged, &tokens);
+        assert!(runtime_ordered::resolve_saved(&with_slots, &scope, &forged)
+            .unwrap_err()
+            .iter()
+            .any(|issue| issue.key == "model"));
+    }
+
     fn confirmations(entries: Value) -> BTreeMap<String, ConfirmedSyntax> {
         serde_json::from_value(entries).unwrap()
     }
@@ -2866,7 +3297,7 @@ mod tests {
             })),
         };
         let mut schema = help_schema();
-        let view = apply_supplement(&mut schema, &keys, saved.clone(), true);
+        let view = apply_supplement(&mut schema, &keys, None, saved.clone(), true);
         schema.validate().unwrap();
         let find = |schema: &OptionSchema, key: &str| {
             schema
@@ -2912,7 +3343,7 @@ mod tests {
         // Confirmations for another help fingerprint never apply, but their
         // differences from the current help are still shown for review.
         let mut stale = help_schema();
-        let view = apply_supplement(&mut stale, &keys, saved, false);
+        let view = apply_supplement(&mut stale, &keys, None, saved, false);
         assert!(!view.current && view.applied.is_empty());
         assert!(find(&stale, "fresh_items").arity.supported().is_none());
         assert!(view.conflicts.iter().any(|c| c.field == "arity"));
@@ -2935,10 +3366,28 @@ mod tests {
         let good = json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"fresh_items": {"arity": {"min": 1, "max": null}}}});
         std::fs::write(&path, good.to_string()).unwrap();
         assert_eq!(load().unwrap().unwrap().options.len(), 1);
+        let roles = json!({"version": 2, "fingerprint": "a".repeat(64), "options": {
+            "model": {"positional": {"role": "binding", "name": "model"}},
+            "output": {"positional": {"role": "user"}, "arity": {"min": 1, "max": 1}}}});
+        std::fs::write(&path, roles.to_string()).unwrap();
+        assert_eq!(
+            load().unwrap().unwrap().options["output"].positional,
+            Some(PositionalRole::User)
+        );
         for (bad, needle) in [
             (
-                json!({"version": 2, "fingerprint": "a".repeat(64), "options": {}}),
-                "version 2",
+                json!({"version": 3, "fingerprint": "a".repeat(64), "options": {}}),
+                "version 3",
+            ),
+            // Positional roles exist only from version 2, so version-1
+            // readers never meet one they would misread.
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {"positional": {"role": "user"}}}}),
+                "cannot hold positional",
+            ),
+            (
+                json!({"version": 2, "fingerprint": "a".repeat(64), "options": {"x": {"positional": {"role": "later"}}}}),
+                "malformed",
             ),
             (
                 json!({"version": 1, "fingerprint": "a".repeat(64), "options": {}, "auto": true}),

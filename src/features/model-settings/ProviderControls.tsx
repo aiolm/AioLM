@@ -12,6 +12,7 @@ import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, Occu
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
 import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
+import PositionalLayout from '../runtimes/PositionalLayout';
 import { ORDER_KEY } from '../runtimes/optionOrder';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
@@ -159,7 +160,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     if (effective) {
       // Registered engines import through their effective schema; managed and
       // unrecognized words are reported, never applied.
-      void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax).then(result => {
+      void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax, effective.entry).then(result => {
         if (!current()) return;
         let next: Record<string, unknown>;
         try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(String(cause)); return; }
@@ -239,6 +240,8 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {effective && <ConfirmedSyntaxReview effective={effective} disabled={disabled || syntaxBusy}
       onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}
       onDiscard={() => saveSyntax(() => api.runtimeHelpClearConfirmedSyntax(cfg))} />}
+    {effective && <PositionalLayout effective={effective} disabled={disabled || syntaxBusy}
+      onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }} />}
     {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} schema={effective.schema} />}
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
     </>}

@@ -619,6 +619,7 @@ impl OptionSchema {
                 issues.push(issue(match binding {
                     ManagedBinding::EntryPoint => "this option is fixed by the registered entry point; its saved value was retained. Register another entry point to change it".into(),
                     ManagedBinding::Reserved => "the engine's adapter reserves this option for the app; its saved value was retained".into(),
+                    ManagedBinding::Discovery if option.position.is_some() => "this positional's place in the launch command is not mapped; confirm its role in the reviewed help first. Its saved value was retained".into(),
                     _ => "this option is managed by the app; use its binding control".into(),
                 }));
                 continue;
@@ -691,9 +692,13 @@ impl OptionSchema {
             positional.sort_by_key(|(position, _, _)| *position);
             // Omitting an earlier positional would silently bind a later saved
             // value to the wrong slot. Defaults do not prove that argv may skip it.
+            // A slot whose confirmed role gives it to the launch template (a
+            // binding or an entry token) is filled before user values.
             if let Some((last, _, _)) = positional.last() {
                 for earlier in self.options.iter().filter(|o| {
-                    o.scope == selected_scope[..depth] && o.position.is_some_and(|p| p < *last)
+                    o.scope == selected_scope[..depth]
+                        && o.position.is_some_and(|p| p < *last)
+                        && o.managed.is_none_or(|m| m == ManagedBinding::Discovery)
                 }) {
                     if !positional
                         .iter()
@@ -706,6 +711,23 @@ impl OptionSchema {
                                     .into(),
                         });
                     }
+                }
+            }
+            // Only the last supplied positional may take a varying number of
+            // values; otherwise the parser could not tell where it ends.
+            let varying = |key: &str| {
+                self.options.iter().any(|o| {
+                    o.key == key
+                        && (o.repeatable.supported() == Some(&true)
+                            || o.arity.supported().is_none_or(|a| a.max != Some(a.min)))
+                })
+            };
+            if let Some((_, earlier)) = positional.split_last() {
+                if let Some((_, key, _)) = earlier.iter().find(|(_, key, _)| varying(key)) {
+                    issues.push(OptionIssue {
+                        key: (*key).clone(),
+                        message: "a positional with a varying value count must be the last positional supplied".into(),
+                    });
                 }
             }
             if positional
@@ -1210,6 +1232,62 @@ mod tests {
             .unwrap_err()[0]
             .message
             .contains("earlier positional"));
+    }
+
+    #[test]
+    fn template_filled_slots_precede_user_positionals_and_unmapped_ones_do_not() {
+        let mut model = option("model", ValueKind::Text, 1, Some(1));
+        model.spellings.clear();
+        model.position = Some(0);
+        let mut output = model.clone();
+        output.key = "output".into();
+        output.position = Some(1);
+        let mut extras = model.clone();
+        extras.key = "extras".into();
+        extras.position = Some(2);
+        extras.arity.value = Some(Arity { min: 0, max: None });
+        let values = selected(&[
+            ("output", vec![vec![json!("out.txt")]]),
+            ("extras", vec![vec![json!("x1"), json!("x2")]]),
+        ]);
+        // Unmapped (help-discovered) slot: still a gap, with a mapping hint.
+        model.managed = Some(ManagedBinding::Discovery);
+        let refused = schema(vec![model.clone(), output.clone(), extras.clone()])
+            .resolve(&[], &values)
+            .unwrap_err();
+        assert!(refused
+            .iter()
+            .any(|i| i.message.contains("earlier positional")));
+        let mut own = values.clone();
+        own.insert(
+            "model".into(),
+            serde_json::from_value(json!({"occurrences":[["x"]]})).unwrap(),
+        );
+        assert!(schema(vec![model.clone(), output.clone(), extras.clone()])
+            .resolve(&[], &own)
+            .unwrap_err()
+            .iter()
+            .any(|i| i.key == "model" && i.message.contains("not mapped")));
+        // A slot the launch template's model binding fills is occupied.
+        model.managed = Some(ManagedBinding::Model);
+        let resolved = schema(vec![model.clone(), output.clone(), extras.clone()])
+            .resolve(&[], &values)
+            .unwrap();
+        assert_eq!(resolved.argv, ["out.txt", "x1", "x2"]);
+        // Only the last supplied positional may take a varying value count.
+        let mut first = extras.clone();
+        first.position = Some(1);
+        let mut last = output.clone();
+        last.position = Some(2);
+        let varying = selected(&[
+            ("extras", vec![vec![json!("x1")]]),
+            ("output", vec![vec![json!("out.txt")]]),
+        ]);
+        assert!(schema(vec![model, first, last])
+            .resolve(&[], &varying)
+            .unwrap_err()
+            .iter()
+            .any(|i| i.key == "extras" && i.message.contains("last positional")));
     }
 
     #[test]

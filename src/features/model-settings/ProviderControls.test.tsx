@@ -309,9 +309,31 @@ describe('registered engine options from accepted help (G04)', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
     fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
-    await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], text, 'windows'));
+    await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], text, 'windows', undefined));
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ provider_options: expect.objectContaining({ 'custom.synthetic': expect.objectContaining({ template: path }) }) })));
     imported.mockRestore();
+  });
+
+  it('imports through the registered entry and saves the positional layout as one confirmation', async () => {
+    const output: api.OptionSchemaDefinition = { ...schemaOption({ key: 'output', target: 'launch', group: 'options', kind: { type: 'text' } }), position: 0, managed: 'discovery' };
+    const entry: api.CommandEntry = { version: 1, program: '/opt/python', prefix: ['-I', 'engine.py'], positional_bindings: [] };
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [output], { entry }));
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [], managed: [], unrecognized: [] });
+    const confirm = vi.spyOn(api, 'runtimeHelpConfirmSyntax').mockReturnValue(new Promise(() => undefined));
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByRole('heading', { name: 'Positional layout' });
+    const text = '/opt/python -I engine.py out.txt';
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: text } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], text, 'posix', entry));
+    fireEvent.click(screen.getByRole('combobox', { name: 'output Positional layout' }));
+    fireEvent.click(screen.getByRole('option', { name: 'You supply it' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
+    expect(confirm).toHaveBeenCalledWith(expect.any(Object), 'a'.repeat(64), { output: { positional: { role: 'user' } } });
+    imported.mockRestore();
+    confirm.mockRestore();
   });
 
   it('discards an import result after the quoting rules change', async () => {

@@ -228,8 +228,9 @@ export const runtimeHelpImport = (
   scope: string[],
   text: string,
   syntax?: CommandSyntax,
+  entry?: CommandEntry | null,
 ): Promise<ImportedPlan> =>
-  invoke<ImportedPlan>('runtime_help_import', { schema, scope, text, ...(syntax ? { syntax } : {}) });
+  invoke<ImportedPlan>('runtime_help_import', { schema, scope, text, ...(syntax ? { syntax } : {}), ...(entry ? { entry } : {}) });
 
 /** The help command a user chose; the adapter decides environment and artifacts. */
 export interface HelpRequest {
@@ -277,17 +278,53 @@ export interface EffectiveSchema {
   supplement?: SupplementView | null;
   /** A confirmation file this app refuses to read; nothing from it applies. */
   supplement_error?: string | null;
+  /** The registered command head a pasted command and positional roles are
+   * judged against; absent for built-in runtimes. */
+  entry?: CommandEntry | null;
+}
+
+/** Who fills one help positional slot. */
+export type PositionalRole =
+  | { role: 'user' }
+  | { role: 'binding'; name: string }
+  | { role: 'static'; index: number };
+
+/** A registered runtime's command head, from its adapter/entry data. */
+export interface CommandEntry {
+  version: 1;
+  program: string;
+  prefix: string[];
+  layout?: CommandLayout | null;
+  separator?: string | null;
+  /** Positional bindings the launch template fills, in order; absent when
+   * the manifest does not declare its bindings. */
+  positional_bindings?: string[] | null;
+  /** Positional roles in effect for the reviewed help. */
+  positional_roles?: Record<string, PositionalRole>;
+}
+
+/** Literal prefix tokens that are positional to the help scope: with a
+ * declared layout, those after the last subcommand that are not fixed
+ * options or their values. Without a layout no token's role is known. */
+export function staticCandidates(entry: CommandEntry): number[] {
+  const layout = entry.layout;
+  if (!layout) return [];
+  const owned = new Set(layout.options.flatMap(option => Array.from({ length: option.values + 1 }, (_, i) => option.index + i)));
+  const start = layout.subcommands.length ? layout.subcommands[layout.subcommands.length - 1] + 1 : 0;
+  return entry.prefix.map((_, index) => index).filter(index => index >= start && !owned.has(index));
 }
 
 /** Syntax a user confirmed where the reviewed help left it unknown. */
 export interface ConfirmedSyntax {
   arity?: { min: number; max: number | null };
   repeatable?: boolean;
+  /** Who fills this help positional slot. */
+  positional?: PositionalRole;
 }
 
 export interface SupplementConflict {
   key: string;
-  field: 'option' | 'arity' | 'repeatable';
+  field: 'option' | 'arity' | 'repeatable' | 'positional';
   confirmed: unknown;
   help: unknown;
 }

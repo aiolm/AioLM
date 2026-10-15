@@ -56,6 +56,11 @@ path = "tests/runtime_bridge_help_streams.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "runtime_interpreter_command_journey"
+path = "tests/runtime_interpreter_command_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "runtime_metadata_journey"
 path = "tests/runtime_metadata_journey.rs"
 required-features = ["test-fixtures"]

@@ -410,6 +410,11 @@ fn main() {
                     stage += 1;
                     continue;
                 }
+                // The leaf scope's documented TARGET positional, once.
+                if stage == 2 && !token.starts_with('-') && parsed.get("target").is_none() {
+                    parsed["target"] = token.clone().into();
+                    continue;
+                }
                 let key = match (stage, token.as_str()) {
                     (0, "--label") => "label",
                     (0, "--global-name") => "global",

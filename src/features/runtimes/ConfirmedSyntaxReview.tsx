@@ -7,6 +7,8 @@ function describe(syntax: ConfirmedSyntax): string {
   const parts: string[] = [];
   if (syntax.arity) parts.push(`${syntax.arity.min}..${syntax.arity.max ?? '∞'}`);
   if (syntax.repeatable !== undefined) parts.push(syntax.repeatable ? '×N' : '×1');
+  const role = syntax.positional;
+  if (role) parts.push(role.role === 'user' ? '@user' : role.role === 'binding' ? `@{${role.name}}` : `@entry[${role.index + 1}]`);
   return parts.join(' ');
 }
 

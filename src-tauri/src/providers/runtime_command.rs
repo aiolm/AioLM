@@ -89,15 +89,25 @@ impl CommandLayout {
     /// Insert each resolved scope section before its next declared subcommand.
     /// The final section follows the app-owned bindings. Prefix bytes and
     /// equal-looking option values are never searched or reconstructed.
+    /// `lift` names template indices after the last subcommand whose tokens
+    /// a confirmed positional layout places in the final section instead.
     pub fn assemble(
         &self,
         prefix: &[String],
         template: &[String],
         sections: &[Vec<String>],
+        lift: &[usize],
     ) -> Result<Vec<String>, String> {
         self.validate(prefix)?;
         if !template.starts_with(prefix) || sections.len() != self.subcommands.len() + 1 {
             return Err("the resolved options do not match the declared command layout".into());
+        }
+        let leaf = self.subcommands.last().map_or(0, |last| last + 1);
+        if lift
+            .iter()
+            .any(|index| *index < leaf || *index >= template.len())
+        {
+            return Err("only the leaf command's own tokens can move to positional slots".into());
         }
         let mut argv = Vec::new();
         let mut start = 0;
@@ -107,7 +117,13 @@ impl CommandLayout {
             argv.push(template[index].clone());
             start = index + 1;
         }
-        argv.extend_from_slice(&template[start..]);
+        argv.extend(
+            template[start..]
+                .iter()
+                .enumerate()
+                .filter(|(offset, _)| !lift.contains(&(start + offset)))
+                .map(|(_, token)| token.clone()),
+        );
         argv.extend_from_slice(sections.last().expect("one section per scope"));
         if argv.len() > 4096 || argv.iter().map(String::len).sum::<usize>() > 512 * 1024 {
             return Err("assembled command exceeds its argument limit".into());

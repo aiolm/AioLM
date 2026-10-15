@@ -415,7 +415,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
         .join("supplement.json");
     let original = fs::read(&supplement).unwrap();
     let mut future: Value = serde_json::from_slice(&original).unwrap();
-    future["version"] = json!(2);
+    future["version"] = json!(3);
     fs::write(&supplement, future.to_string()).unwrap();
     let refused = runtime_schema::effective(&root, &loaded, true).unwrap();
     assert!(refused.supplement.is_none());
@@ -423,14 +423,14 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
         .supplement_error
         .as_deref()
         .unwrap()
-        .contains("version 2"));
+        .contains("version 3"));
     assert!(issues(&loaded, &v1)
         .iter()
         .any(|i| i.starts_with("@confirmed_syntax")));
     providers::adapter::refresh(&loaded, None).await.unwrap();
     assert!(providers::registry::command(&loaded, port, "synthetic-key")
         .unwrap_err()
-        .contains("version 2"));
+        .contains("version 3"));
     let cleared = runtime_schema::clear_supplement(&root, &loaded).unwrap();
     assert!(cleared.supplement.is_none() && cleared.supplement_error.is_none());
     assert!(!supplement.exists());

@@ -3,15 +3,17 @@
 use aiolm_lib::{
     providers::{
         self,
+        options::CommandSyntax,
         runtime_help::HelpService,
         runtime_help_store,
+        runtime_options::ManagedBinding,
         runtime_ordered::{self, OrderEntry, SavedOrder, ORDER_KEY},
-        runtime_schema,
+        runtime_schema::{self, ConfirmedSyntax},
     },
     AppConfig,
 };
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, process::Command};
+use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 struct Home {
     path: PathBuf,
     previous: Option<std::ffi::OsString>,
@@ -222,4 +224,147 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
         .identity(&Default::default())
         .unwrap();
     assert_ne!(before.fingerprint,after.fingerprint,"changing explicit option scope must invalidate reviewed help even when prefix bytes stay the same");
+
+    // The help's TARGET positional: unmapped until its role is confirmed;
+    // a saved value is retained and refused with that reason.
+    let effective = runtime_schema::effective(&root, &cfg, true).unwrap();
+    let target = effective
+        .schema
+        .options
+        .iter()
+        .find(|o| o.key == "target")
+        .unwrap();
+    assert_eq!(target.managed, Some(ManagedBinding::Discovery));
+    let entry = effective.entry.clone().unwrap();
+    assert_eq!(entry.positional_bindings, Some(vec![]));
+    let mut unmapped = cfg.clone();
+    unmapped
+        .provider_options
+        .get_mut(&cfg.active_provider)
+        .unwrap()
+        .insert("target".into(), json!("entry-one"));
+    assert!(providers::registry::saved_option_issues(
+        &unmapped,
+        &registered,
+        &unmapped.provider_options[&cfg.active_provider]
+    )
+    .iter()
+    .any(|issue| issue.key == "target" && issue.message.contains("not mapped")));
+    let roles = |role: Value| -> BTreeMap<String, ConfirmedSyntax> {
+        serde_json::from_value(json!({ "target": { "positional": role } })).unwrap()
+    };
+    // `--model` is a flag binding; it fills no positional slot.
+    assert!(runtime_schema::save_supplement(
+        &root,
+        &cfg,
+        &descriptor.fingerprint,
+        roles(json!({"role": "binding", "name": "model"}))
+    )
+    .unwrap_err()
+    .contains("not a positional binding"));
+    let identity =
+        |cfg: &AppConfig| runtime_schema::launch_identity(&root, cfg, &effective.compat_keys);
+    let unmapped_identity = identity(&cfg);
+    runtime_schema::save_supplement(
+        &root,
+        &cfg,
+        &descriptor.fingerprint,
+        roles(json!({"role": "user"})),
+    )
+    .unwrap();
+    assert_ne!(
+        identity(&cfg),
+        unmapped_identity,
+        "a positional role is part of what launches"
+    );
+    let effective = runtime_schema::effective(&root, &cfg, true).unwrap();
+    assert_eq!(
+        effective
+            .schema
+            .options
+            .iter()
+            .find(|o| o.key == "target")
+            .unwrap()
+            .managed,
+        None
+    );
+
+    // A full pasted command for this registered entry imports cleanly: the
+    // program and literal entry tokens are skipped exactly, app bindings go
+    // to review and the bare word fills the mapped user slot.
+    let quote = |text: &str| format!("'{text}'");
+    let pasted = format!(
+        "{} {} {} --label serve --global-name serve serve --worker-mode api api --model {} --port 1 --fresh-count 9 entry-two",
+        quote(program),
+        quote(&prefix[0]),
+        quote(&prefix[1]),
+        quote(&cfg.active_model)
+    );
+    let imported = runtime_ordered::import_plan_for_entry(
+        &effective.schema,
+        &effective.scope,
+        Some(&entry),
+        &pasted,
+        CommandSyntax::Posix,
+    )
+    .unwrap();
+    assert!(
+        imported.unrecognized.is_empty(),
+        "{:?}",
+        imported.unrecognized
+    );
+    assert_eq!(
+        imported.managed,
+        vec![
+            "--model".to_string(),
+            cfg.active_model.clone(),
+            "--port".into(),
+            "1".into()
+        ]
+    );
+    let values = serde_json::to_value(runtime_ordered::overrides_from_plan(&imported.plan))
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+    assert_eq!(values["target"]["occurrences"], json!([["entry-two"]]));
+    cfg.provider_options
+        .insert(cfg.active_provider.clone(), values.clone());
+    aiolm_lib::config::save(&cfg).unwrap();
+    cfg = aiolm_lib::config::load_result().unwrap();
+    assert_eq!(cfg.provider_options[&cfg.active_provider], values);
+    providers::adapter::refresh(&cfg, None).await.unwrap();
+    let launch = providers::registry::command(&cfg, cfg.port, "").unwrap();
+    assert_eq!(launch.args.last().map(String::as_str), Some("entry-two"));
+    let mut actual = Command::new(&launch.program);
+    actual
+        .args(&launch.args)
+        .env_clear()
+        .envs(launch.env.iter().map(|(key, value)| (key, value)))
+        .current_dir(launch.working_directory.clone().unwrap());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        actual.creation_flags(0x08000000);
+    }
+    let output = actual.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let observed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(observed["argv"], json!(launch.args));
+    assert_eq!(observed["parsed"]["target"], "entry-two");
+    assert_eq!(observed["parsed"]["global"], "serve");
+    assert_eq!(observed["parsed"]["count"], 9);
+
+    // Without its confirmed role the saved value is kept, not launched.
+    runtime_schema::clear_supplement(&root, &cfg).unwrap();
+    assert!(providers::registry::command(&cfg, cfg.port, "").is_err());
+    assert_eq!(
+        aiolm_lib::config::load_result().unwrap().provider_options[&cfg.active_provider]["target"]
+            ["occurrences"],
+        json!([["entry-two"]])
+    );
 }
