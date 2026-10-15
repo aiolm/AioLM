@@ -940,8 +940,11 @@ fn declared_differences(
             ));
         }
     }
+    // A type, choice list or range the help observes also limits which saved
+    // values the runtime accepts: those differences refuse a saved value
+    // outside the observed facts. Repetition and defaults stay informational.
     macro_rules! compare {
-        ($field:ident, $name:literal) => {
+        ($field:ident, $name:literal, $values:literal) => {
             if let (Some(seen), Some(said)) =
                 (observed.$field.supported(), declared.$field.supported())
             {
@@ -950,26 +953,105 @@ fn declared_differences(
                         $name,
                         serde_json::json!(seen),
                         serde_json::json!(said),
-                        false,
+                        $values,
                     ));
                 }
             }
         };
     }
-    compare!(kind, "kind");
-    compare!(repeatable, "repeatable");
-    compare!(runtime_default, "runtime_default");
+    compare!(kind, "kind", true);
+    compare!(range, "range", true);
+    compare!(repeatable, "repeatable", false);
+    compare!(runtime_default, "runtime_default", false);
     if let (Some(seen), Some(said)) = (observed.choices.supported(), declared.choices.supported()) {
         if seen.len() != said.len() || seen.iter().any(|value| !said.contains(value)) {
             found.push(conflict(
                 "choices",
                 Value::from(seen.clone()),
                 Value::from(said.clone()),
-                false,
+                true,
             ));
         }
     }
     found
+}
+
+/// The argv text of a saved scalar, as observed choices spell it.
+fn argv_text(value: &Value) -> String {
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
+}
+
+/// Whether one saved scalar is outside the facts the help observed.
+fn outside_observed(conflict: &FactConflict, value: &Value) -> bool {
+    match conflict.field.as_str() {
+        "choices" => conflict.observed.as_array().is_some_and(|choices| {
+            !choices
+                .iter()
+                .any(|choice| choice == value || choice.as_str() == Some(&argv_text(value)))
+        }),
+        "kind" => serde_json::from_value::<ValueKind>(conflict.observed.clone())
+            .is_ok_and(|kind| !runtime_metadata::typed(kind, value)),
+        "range" => value.as_f64().is_none_or(|number| {
+            conflict.observed["min"]
+                .as_f64()
+                .is_some_and(|min| number < min)
+                || conflict.observed["max"]
+                    .as_f64()
+                    .is_some_and(|max| number > max)
+        }),
+        _ => true,
+    }
+}
+
+/// The reason a blocking difference refuses this saved value, if it does.
+fn blocking_issue(conflict: &FactConflict, saved: &Value) -> Option<String> {
+    let recovery = "remove the saved value, or correct that declaration and register the runtime again (or select a runtime whose help matches it)";
+    match conflict.field.as_str() {
+        "arity" => Some(format!(
+            "{}: the reviewed help shows {} value(s) for this option but {} declares {}; the saved value was retained because launching it would misplace arguments. Remove the saved value, or correct that option declaration and register the runtime again (or select a runtime whose help matches it)",
+            conflict.flag,
+            value_count(&conflict.observed),
+            conflict.declared_by,
+            value_count(&conflict.declared)
+        )),
+        "choices" | "kind" | "range" => {
+            let rows = runtime_help_store::overrides_from_map(&Map::from_iter([(
+                conflict.key.clone(),
+                saved.clone(),
+            )]));
+            let outside = rows
+                .get(&conflict.key)
+                .into_iter()
+                .flat_map(|row| row.occurrences.iter().flatten())
+                .find(|value| outside_observed(conflict, value))?;
+            let observed = match conflict.observed.as_array() {
+                Some(choices) => choices.iter().map(argv_text).collect::<Vec<_>>().join(", "),
+                None => argv_text(&conflict.observed),
+            };
+            Some(format!(
+                "{}: the reviewed help accepts {} {observed} but the saved value {} is outside it, although {} declares {}; the saved value was retained. Choose a value the help documents, {recovery}",
+                conflict.flag,
+                conflict.field,
+                argv_text(outside),
+                conflict.declared_by,
+                argv_text(&conflict.declared),
+            ))
+        }
+        "constraint" => Some(format!(
+            "{}: {} declares a constraint the reviewed help cannot honor ({}); the saved value was retained instead of launching without it. Correct the option metadata and register the runtime again, or remove the saved value",
+            conflict.flag,
+            conflict.declared_by,
+            argv_text(&conflict.declared)
+        )),
+        _ => Some(format!(
+            "{}: {} declares facts for this option that could not be applied ({}); the saved value was retained instead of launching without them. Correct the option metadata and register the runtime again, or remove the saved value",
+            conflict.flag,
+            conflict.declared_by,
+            argv_text(&conflict.observed)
+        )),
+    }
 }
 
 fn value_count(arity: &Value) -> String {
@@ -979,16 +1061,6 @@ fn value_count(arity: &Value) -> String {
         Some(max) => format!("{min} to {max}"),
         None => format!("{min} or more"),
     }
-}
-
-fn conflict_issue(conflict: &FactConflict) -> String {
-    format!(
-        "{}: the reviewed help shows {} value(s) for this option but {} declares {}; the saved value was retained because launching it would misplace arguments. Remove the saved value, or correct that option declaration and register the runtime again (or select a runtime whose help matches it)",
-        conflict.flag,
-        value_count(&conflict.observed),
-        conflict.declared_by,
-        value_count(&conflict.declared)
-    )
 }
 
 /// Saved keys for help review. Kept separate from discovery so catalog and
@@ -1640,12 +1712,14 @@ pub fn saved_issues_for(
         if reported.contains(&key) {
             continue;
         }
-        if let Some(conflict) = effective
+        let refusal = effective
             .conflicts
             .iter()
-            .find(|conflict| conflict.blocking && conflict.key == key)
-        {
-            issues.push(issue(&key, "conflict", conflict_issue(conflict)));
+            .chain(effective.metadata.iter().flat_map(|view| &view.conflicts))
+            .filter(|conflict| conflict.blocking && conflict.key == key)
+            .find_map(|conflict| blocking_issue(conflict, &value));
+        if let Some(message) = refusal {
+            issues.push(issue(&key, "conflict", message));
             blocked.insert(key);
             continue;
         }

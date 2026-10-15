@@ -361,7 +361,7 @@ describe('registered engine options from accepted help (G04)', () => {
     expect(row('--fresh-switch')).toHaveTextContent('value count');
     expect(row('--fresh-switch')).toHaveTextContent('reviewed help: {"min":0,"max":0}');
     expect(row('--fresh-switch')).toHaveTextContent('custom.synthetic manifest-v1: {"min":1,"max":1}');
-    expect(row('--fresh-switch')).toHaveTextContent('blocks launch of a saved value');
+    expect(row('--fresh-switch')).toHaveTextContent('a saved value the reviewed help does not accept blocks launch');
     expect(row('--fresh-label')).toHaveTextContent('saved key');
     expect(row('--fresh-label')).toHaveTextContent('declaration applies');
     expect(row('--fresh-mode')).toHaveTextContent('reviewed help applies');

@@ -171,7 +171,7 @@ fn valid_flag(flag: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_-.?".contains(&b))
 }
 
-fn typed(kind: ValueKind, value: &Value) -> bool {
+pub(crate) fn typed(kind: ValueKind, value: &Value) -> bool {
     match kind {
         ValueKind::Boolean => value.is_boolean(),
         ValueKind::Integer => value.as_i64().is_some(),
@@ -601,19 +601,60 @@ pub fn apply(
                     source: Some(source.clone()),
                 });
             }
-            _ => view.conflicts.push(conflict(
-                "",
-                &when.flag,
-                "constraint",
-                Value::Null,
-                serde_json::to_value(relation).unwrap_or(Value::Null),
-            )),
+            _ => {
+                // The adapter's relation cannot be checked against this help.
+                // Values of the option it governs are refused, not launched
+                // as if the relation did not exist.
+                let mut found = conflict(
+                    "",
+                    &when.flag,
+                    "constraint",
+                    Value::Null,
+                    serde_json::to_value(relation).unwrap_or(Value::Null),
+                );
+                if let Some(option) =
+                    launch_option(schema, &when.flag).filter(|option| option.managed.is_none())
+                {
+                    found.key = option.key.clone();
+                    found.blocking = true;
+                }
+                view.conflicts.push(found);
+            }
         }
     }
     if let Err(error) = schema.validate() {
         (schema.options, schema.constraints) = before;
         view.applied.clear();
         view.error = Some(format!("option metadata was not applied: {error}"));
+        // Nothing partial applies, but declared secrecy is never lost (it
+        // only hides values), and the options the metadata describes refuse
+        // saved values until it is corrected.
+        for entry in &metadata.options {
+            let Some(index) = schema.options.iter().position(|o| {
+                o.target == Target::Launch
+                    && o.managed.is_none()
+                    && o.spellings.iter().any(|s| s.flag == entry.flag)
+            }) else {
+                continue;
+            };
+            let option = &mut schema.options[index];
+            if entry.sensitive == Some(true) && option.sensitive.supported().is_none() {
+                option.sensitive = Fact {
+                    value: Some(true),
+                    certainty: Certainty::Documented,
+                    source: Some(source.clone()),
+                };
+            }
+            let mut found = conflict(
+                &option.key,
+                &entry.flag,
+                "metadata",
+                Value::from(error.clone()),
+                entry.declared(),
+            );
+            found.blocking = true;
+            view.conflicts.push(found);
+        }
     }
     view
 }
@@ -793,10 +834,24 @@ mod tests {
         ] {
             assert!(fields.contains(&expected), "{expected:?} in {fields:?}");
         }
-        assert!(view
+        // Help wins every fact difference; a relation that cannot be applied
+        // instead refuses values of the option it governs.
+        assert!(view.conflicts.iter().all(|c| c.applies == Applies::Observed
+            && c.blocking == (c.field == "constraint" && !c.key.is_empty())));
+        let unapplied = view
             .conflicts
             .iter()
-            .all(|c| c.applies == Applies::Observed && !c.blocking));
+            .filter(|c| c.field == "constraint")
+            .map(|c| (c.flag.as_str(), c.key.as_str(), c.blocking))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            unapplied,
+            [
+                ("--mode", "mode", true),
+                ("--switch", "switch", true),
+                ("--switch", "switch", true)
+            ]
+        );
         assert_eq!(view.applied, ["cache", "switch"]);
         // Only constraints between user options with valid operands apply.
         assert_eq!(schema.constraints.len(), 1);
@@ -925,6 +980,40 @@ mod tests {
         changed.adapter.revision = "r2".into();
         assert_eq!(good.digest(), good.clone().digest());
         assert_ne!(good.digest(), changed.digest());
+    }
+
+    #[test]
+    fn an_unappliable_combination_keeps_secrecy_and_refuses_described_values() {
+        // A schema this metadata cannot be combined with into a valid one
+        // (here: an equals spelling with no confirmed single value).
+        let mut schema = schema();
+        schema.options[3].spellings[0].style = ValueStyle::Equals;
+        let declared = metadata(
+            json!([
+                {"flag": "--loose", "sensitive": true, "unit": "s"},
+                {"flag": "--cache", "restart_required": true}
+            ]),
+            json!([]),
+        );
+        let view = apply(&mut schema, &declared, false, true);
+        assert!(view.error.as_deref().unwrap().contains("not applied"));
+        assert!(view.applied.is_empty());
+        let loose = find(&schema, "loose");
+        assert_eq!(loose.sensitive.supported(), Some(&true));
+        assert!(loose.unit.supported().is_none());
+        assert!(find(&schema, "cache")
+            .restart_required
+            .supported()
+            .is_none());
+        for key in ["loose", "cache"] {
+            assert!(
+                view.conflicts
+                    .iter()
+                    .any(|c| c.key == key && c.field == "metadata" && c.blocking),
+                "{key}: {:?}",
+                view.conflicts
+            );
+        }
     }
 
     #[test]

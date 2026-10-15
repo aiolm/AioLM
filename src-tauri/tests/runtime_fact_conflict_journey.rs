@@ -54,10 +54,14 @@ fn manifest(engine: &str, area: &Path, argv_file: &Path) -> Value {
             {"key": "fresh_switch", "flag": "--fresh-switch", "target": "launch", "kind": {"type": "text", "max_len": 64}},
             // An alias the help names fresh_label.
             {"key": "label", "flag": "--fresh-label", "target": "launch", "kind": {"type": "text", "max_len": 64}},
-            {"key": "fresh_mode", "flag": "--fresh-mode", "target": "launch", "kind": {"type": "choice", "choices": ["fast", "exact"]}},
+            // Stored under another key; declares a choice help does not list.
+            {"key": "speed", "flag": "--fresh-mode", "target": "launch", "kind": {"type": "choice", "choices": ["fast", "exact"]}},
             {"key": "workers", "flag": "--workers", "target": "launch", "kind": {"type": "integer", "min": 1, "max": 8}}
         ],
-        "model_formats": ["unknown"], "health_path": "/health"
+        "model_formats": ["unknown"], "health_path": "/health",
+        // A relation the reviewed help cannot honor (its other side is absent).
+        "option_metadata": {"version": 1, "engine_id": engine, "adapter": {"id": "synthetic.adapter", "revision": "r1"},
+            "constraints": [{"kind": "requires", "when": {"flag": "--fresh-count"}, "other": {"flag": "--gone-flag"}}]}
     })
 }
 
@@ -162,7 +166,10 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     let choices = find("--fresh-mode", "choices");
     assert_eq!(choices["observed"], json!(["fast", "safe"]));
     assert_eq!(choices["declared"], json!(["fast", "exact"]));
-    assert_eq!(choices["blocking"], false);
+    assert_eq!(choices["key"], "speed");
+    // A saved value the help does not list is refused; listed ones launch.
+    assert_eq!(choices["blocking"], true);
+    assert_eq!(find("--fresh-mode", "key")["blocking"], false);
     // The legacy key mapping stays in effect: help rows remain shadowed.
     assert!(effective["shadowed"]
         .as_array()
@@ -208,9 +215,52 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
         unsafe_values
     );
 
+    // A declared choice the reviewed help does not list is refused for save,
+    // import, preview and launch alike, under its legacy key, and retained.
+    let imported = providers::runtime_ordered::import_plan_text_with_syntax(
+        &runtime_schema::effective(&root, &cfg, false)
+            .unwrap()
+            .schema,
+        &[],
+        "--fresh-mode exact",
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(imported.plan[0].key, "speed");
+    assert_eq!(imported.plan[0].values, [json!("exact")]);
+    let outside = json!({"speed": "exact", "workers": 2});
+    saved(&mut cfg, engine.as_str(), outside.clone());
+    let found = issues(&cfg, engine);
+    let refused = found
+        .iter()
+        .find(|issue| issue.starts_with("speed:conflict:"))
+        .unwrap_or_else(|| panic!("{found:?}"));
+    assert!(
+        refused.contains("fast, safe") && refused.contains("retained"),
+        "{refused}"
+    );
+    providers::adapter::refresh(&cfg, None).await.unwrap();
+    let error = providers::registry::command(&cfg, port, "synthetic-key").unwrap_err();
+    assert!(error.contains("--fresh-mode"), "{error}");
+    assert_eq!(
+        cfg.provider_options[engine.as_str()],
+        *outside.as_object().unwrap()
+    );
+
+    // An adapter constraint the help cannot honor never silently stops
+    // applying: the value it governs is refused with the reason and kept.
+    saved(&mut cfg, engine.as_str(), json!({"fresh_count": "1"}));
+    let found = issues(&cfg, engine);
+    assert!(
+        found
+            .iter()
+            .any(|i| i.starts_with("fresh_count:conflict:") && i.contains("--gone-flag")),
+        "{found:?}"
+    );
+
     // Informational differences never break a valid launch: the alias key
     // and the declared choice keep their legacy serialization.
-    let values = json!({"label": "x y", "fresh_mode": "fast", "workers": 2});
+    let values = json!({"label": "x y", "speed": "fast", "workers": 2});
     saved(&mut cfg, engine.as_str(), values.clone());
     assert!(
         issues(&cfg, engine).is_empty(),
