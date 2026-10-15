@@ -1,7 +1,7 @@
 import { isProviderId } from '../../shared/api/providerIdentity.ts';
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
-import { profileSettingsSnapshot, type ProfileApplication } from "../../shared/config/settingsProfiles";
+import type { ProfileApplication } from "../../shared/config/settingsProfiles";
 import type { ExecutionKey, ExecutionSettings } from "../../shared/config/executionSettings";
 
 export const PROJECTS_KEY = "aiolm.projects.v1";
@@ -151,6 +151,26 @@ function normalizeConfig(value: unknown): ProjectConfig {
   };
 }
 
+/** What a linked profile owns of a project snapshot, as settings profiles
+ * capture it: never runtime selections; for llama.cpp its typed settings and
+ * its own option map; for other engines only their option map and server
+ * timeouts. (Kept local: this store also runs without the app bundler.) */
+function ownedProfileSettings(settings: Omit<ProjectConfig, "active_model">): Partial<ExecutionSettings> {
+  const provider = settings.active_provider ?? "llama.cpp";
+  const options = settings.provider_options?.[provider];
+  if (provider !== "llama.cpp") {
+    return {
+      provider_options: { [provider]: safeClone(options ?? {}) },
+      request_timeout_seconds: settings.request_timeout_seconds,
+      sleep_idle_seconds: settings.sleep_idle_seconds,
+    };
+  }
+  const owned: Record<string, unknown> = safeClone(settings);
+  for (const key of ["active_provider", "active_runtime", "active_backend", "active_build", "provider_options"]) delete owned[key];
+  if (options && Object.keys(options).length) owned.provider_options = { [provider]: safeClone(options) };
+  return owned as Partial<ExecutionSettings>;
+}
+
 function normalizeProject(value: unknown): ProjectPreset | null {
   if (!value || typeof value !== "object") return null;
   const source = value as Partial<ProjectPreset>;
@@ -174,7 +194,7 @@ function normalizeProject(value: unknown): ProjectPreset | null {
       model, profile_id: application.profile_id.trim().slice(0, 256),
       ...(typeof application.profile_name === 'string' ? { profile_name: application.profile_name.slice(0, 120) } : {}),
       ...(Number.isSafeInteger(application.profile_revision) && application.profile_revision! >= 0 ? { profile_revision: application.profile_revision } : {}),
-      settings: profileSettingsSnapshot(safeClone(settings)), system_prompt: systemPrompt,
+      settings: ownedProfileSettings(settings), system_prompt: systemPrompt,
     } : undefined;
   const documents = Array.isArray(source.documentBindings)
     ? source.documentBindings
