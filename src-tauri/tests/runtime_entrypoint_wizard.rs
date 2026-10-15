@@ -79,6 +79,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
             argv_file.to_string_lossy().into_owned(),
         )]),
         protocol: ServingProtocol::OpenaiHttp,
+        option_metadata: None,
     };
     let mut help_args = prefix.clone();
     help_args.extend(["--adapter-help-fixture".to_string(), "--help".to_string()]);
@@ -149,6 +150,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         health_authenticated: false,
         model_formats: vec!["unknown".into()],
         help: Some(help),
+        option_metadata: None,
     };
 
     // The manifest is exactly the user's choices: no invented credential

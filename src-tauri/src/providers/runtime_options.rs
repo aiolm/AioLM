@@ -227,7 +227,7 @@ pub struct Predicate {
     pub equals: Option<Value>,
 }
 
-fn explicit_operand<'de, D: serde::Deserializer<'de>>(
+pub(crate) fn explicit_operand<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Value>, D::Error> {
     match Value::deserialize(deserializer)? {
@@ -301,7 +301,7 @@ fn bounded_text(value: &str, max: usize) -> bool {
     value.len() <= max && !value.contains('\0')
 }
 
-fn identifier(value: &str) -> bool {
+pub(crate) fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -706,7 +706,7 @@ impl OptionSchema {
 }
 
 impl OptionDefinition {
-    fn scalar(&self, value: &Value) -> Result<String, String> {
+    pub(crate) fn scalar(&self, value: &Value) -> Result<String, String> {
         let valid = match self.kind.supported() {
             Some(ValueKind::Boolean) => value.is_boolean(),
             Some(ValueKind::Integer) => value.as_i64().is_some(),

@@ -96,6 +96,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         artifacts: vec![],
         environment: environment.clone(),
         protocol: protocol.clone(),
+        option_metadata: None,
     };
     let mut args = bridge_prefix.clone();
     args.extend(["--adapter-help-fixture".into(), "--help".into()]);
@@ -161,6 +162,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
             fingerprint: descriptor.fingerprint,
             request: request.clone(),
         }),
+        option_metadata: None,
     };
     let manifest = manifest_from_draft(&draft).unwrap();
     // An artifact's help remains available for inspection. It cannot become

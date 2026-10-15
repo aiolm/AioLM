@@ -50,6 +50,16 @@ name = "runtime_bridge_journey"
 path = "tests/runtime_bridge_journey.rs"
 required-features = ["test-fixtures"]
 
+[[test]]
+name = "runtime_metadata_journey"
+path = "tests/runtime_metadata_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
+name = "runtime_fact_conflict_journey"
+path = "tests/runtime_fact_conflict_journey.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "aiolm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

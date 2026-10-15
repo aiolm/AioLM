@@ -94,6 +94,41 @@ export interface SchemaDiff {
   retained_unknown: string[];
 }
 
+/** A declared fact that differs from what the reviewed help shows. */
+export interface FactConflict {
+  /** Effective option key; empty when no option has the flag. */
+  key: string;
+  flag: string;
+  field: string;
+  /** What reviewed help shows; null when it shows nothing. */
+  observed: unknown;
+  declared: unknown;
+  /** Adapter id and revision of the declaration. */
+  declared_by: string;
+  applies: 'observed' | 'declared';
+  /** A saved value is refused (and retained) instead of misplaced. */
+  blocking: boolean;
+}
+
+/** An engine's explicit option metadata and what it established. */
+export interface MetadataView {
+  adapter: string;
+  revision: string;
+  builtin: boolean;
+  applied: string[];
+  conflicts: FactConflict[];
+  error?: string | null;
+}
+
+/** Versioned adapter option metadata embedded in a manifest or entry. */
+export interface OptionMetadata {
+  version: number;
+  engine_id: string;
+  adapter: { id: string; revision: string };
+  options?: Array<{ flag: string } & Record<string, unknown>>;
+  constraints?: unknown[];
+}
+
 export interface RuntimeDescriptor {
   engine: string;
   runtime: string;
@@ -102,6 +137,8 @@ export interface RuntimeDescriptor {
   schema: OptionSchema;
   diff?: SchemaDiff | null;
   retained: string[];
+  /** Review of the engine's option metadata against this discovery. */
+  metadata?: MetadataView | null;
 }
 
 export interface HelpSnapshot {
@@ -230,6 +267,10 @@ export interface EffectiveSchema {
   compat_keys: string[];
   help_keys: string[];
   shadowed: string[];
+  /** Catalog/manifest facts that differ from the accepted help they shadow. */
+  conflicts?: FactConflict[];
+  /** The engine's explicit option metadata, when it has any. */
+  metadata?: MetadataView | null;
   /** Value counts and repetition the user confirmed for help options. */
   supplement?: SupplementView | null;
   /** A confirmation file this app refuses to read; nothing from it applies. */
@@ -314,6 +355,8 @@ export interface EntrypointHelp {
   artifacts: string[];
   environment: Record<string, string>;
   protocol: ServingProtocol;
+  /** Omitted unless the user supplies the adapter's option metadata. */
+  option_metadata?: OptionMetadata;
 }
 
 export interface EntrypointDraft extends EntrypointHelp {

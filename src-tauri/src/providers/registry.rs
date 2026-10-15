@@ -87,6 +87,12 @@ pub struct RuntimeManifest {
     /// expansion. The bridge, not help parsing, defines how it drives this command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge_command: Option<BridgeCommand>,
+    /// Optional explicit option facts from the adapter (secrecy, unit,
+    /// restart, types, constraints) for options its help shows. Manifests
+    /// without it keep their exact serialization, help identity and launch
+    /// fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_metadata: Option<super::runtime_metadata::OptionMetadata>,
     #[serde(default)]
     pub options: Vec<ExternalOption>,
     pub model_formats: Vec<String>,
@@ -316,6 +322,7 @@ fn registration_for_inventory(mut registered: Registration) -> Result<Registrati
     if let Err(error) = validate_manifest(&registered.manifest) {
         let mut base = registered.manifest.clone();
         base.options.clear();
+        base.option_metadata = None;
         validate_manifest(&base)?;
         registered.manifest = base;
         registered.error = Some(format!("runtime options need review: {error}"));
@@ -419,6 +426,9 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     bridge_environment(m)?;
     if let Some(bindings) = &m.launch_bindings {
         validate_launch_bindings(bindings, &m.launch.args)?;
+    }
+    if let Some(metadata) = &m.option_metadata {
+        metadata.validate(m.engine_id)?;
     }
     if m.artifacts.len() > 64
         || m.artifacts
@@ -1276,6 +1286,11 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
     if let Some(bridge) = &manifest.bridge_command {
         binding["bridge_command"] = serde_json::to_value(bridge).expect("serializable bridge");
     }
+    // Declared option facts change what saved values mean; a model probe
+    // made under other metadata is not reused.
+    if let Some(metadata) = &manifest.option_metadata {
+        binding["option_metadata"] = metadata.digest().into();
+    }
     format!("{:x}", Sha256::digest(binding.to_string().as_bytes()))
 }
 
@@ -1525,6 +1540,10 @@ pub struct EntrypointDraft {
     /// the help documents.
     #[serde(default)]
     pub help: Option<DraftHelp>,
+    /// Explicit adapter option facts, part of the help identity like the
+    /// entry itself; omitted from earlier drafts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_metadata: Option<super::runtime_metadata::OptionMetadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1632,6 +1651,8 @@ pub struct EntrypointHelp {
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     pub protocol: ServingProtocol,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_metadata: Option<super::runtime_metadata::OptionMetadata>,
 }
 
 /// A manifest-shaped description of an entry point before registration, used
@@ -1641,6 +1662,9 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         return Err("entry-point registration requires a custom.* engine ID".into());
     }
     path(entry.engine_id, &entry.runtime_id)?;
+    if let Some(metadata) = &entry.option_metadata {
+        metadata.validate(entry.engine_id)?;
+    }
     let EntryLaunch {
         program,
         prefix: mut args,
@@ -1683,6 +1707,7 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         launch: process,
         launch_bindings: Some(launch_bindings),
         bridge_command,
+        option_metadata: entry.option_metadata.clone(),
         options: Vec::new(),
         model_formats: Vec::new(),
         models: Vec::new(),
@@ -1768,6 +1793,7 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         model_formats: draft.model_formats.clone(),
         launch_bindings: Some(launch_bindings),
         bridge_command,
+        option_metadata: draft.option_metadata.clone(),
         models: Vec::new(),
         artifacts,
         health_path: draft.health_path.clone(),

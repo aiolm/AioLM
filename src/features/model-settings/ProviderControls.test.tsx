@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
 import * as api from '../../shared/api';
@@ -341,6 +341,31 @@ describe('registered engine options from accepted help (G04)', () => {
     expect(await screen.findByText(/•••/)).toBeVisible();
     expect(screen.queryByText(/synthetic-credential/)).not.toBeInTheDocument();
     preview.mockRestore();
+  });
+
+  it('lists declared facts that differ from reviewed help with provenance, the applied side and launch blocks', async () => {
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([{ key: 'workers', flag: '--workers', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 8 } }], [fresh], {
+      conflicts: [
+        { key: 'fresh_switch', flag: '--fresh-switch', field: 'arity', observed: { min: 0, max: 0 }, declared: { min: 1, max: 1 }, declared_by: 'custom.synthetic manifest-v1', applies: 'declared', blocking: true },
+        { key: 'label', flag: '--fresh-label', field: 'key', observed: 'fresh_label', declared: 'label', declared_by: 'custom.synthetic manifest-v1', applies: 'declared', blocking: false },
+      ],
+      metadata: { adapter: 'synthetic.adapter', revision: 'r1', builtin: false, applied: ['fresh_cache'], error: null, conflicts: [
+        { key: 'fresh_mode', flag: '--fresh-mode', field: 'choices', observed: ['fast', 'safe'], declared: ['fast', 'exact'], declared_by: 'synthetic.adapter r1', applies: 'observed', blocking: false },
+      ] },
+    }));
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    const region = await screen.findByRole('region', { name: 'Option fact differences' });
+    expect(within(region).getByText(/adapter synthetic\.adapter \(r1\)/)).toBeVisible();
+    const rows = within(region).getAllByRole('listitem');
+    const row = (flag: string) => rows.find(item => item.textContent?.includes(flag))!;
+    expect(row('--fresh-switch')).toHaveTextContent('value count');
+    expect(row('--fresh-switch')).toHaveTextContent('reviewed help: {"min":0,"max":0}');
+    expect(row('--fresh-switch')).toHaveTextContent('custom.synthetic manifest-v1: {"min":1,"max":1}');
+    expect(row('--fresh-switch')).toHaveTextContent('blocks launch of a saved value');
+    expect(row('--fresh-label')).toHaveTextContent('saved key');
+    expect(row('--fresh-label')).toHaveTextContent('declaration applies');
+    expect(row('--fresh-mode')).toHaveTextContent('reviewed help applies');
+    expect(row('--fresh-mode')).not.toHaveTextContent('blocks launch');
   });
 
   it('shows a failed command preview without blocking the valid draft from being saved or started', async () => {

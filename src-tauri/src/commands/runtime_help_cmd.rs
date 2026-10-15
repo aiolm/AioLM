@@ -8,6 +8,7 @@ use crate::providers::{
     runtime_help::{HelpCommand, HelpReport, HelpService},
     runtime_help_parse::{AppliedOverlay, SchemaDiff},
     runtime_help_store::{self, HelpSnapshot, RuntimeDescriptor},
+    runtime_metadata,
     runtime_options::{OptionIssue, OptionSchema, ResolvedOptions},
     runtime_schema,
 };
@@ -92,7 +93,7 @@ pub(crate) async fn runtime_help_discover_selected(
             &cfg,
             &runtime_schema::Selected::from_config(&cfg)?,
         )?;
-        runtime_help_store::discover_against(
+        let (report, mut descriptor) = runtime_help_store::discover_against(
             service(),
             &root,
             &format!("runtime:{}/{}", key.engine, key.runtime),
@@ -101,7 +102,16 @@ pub(crate) async fn runtime_help_discover_selected(
             &command,
             &saved_keys,
             runtime_help_store::Baseline::Accepted(baseline.map(Box::new)),
-        )
+        )?;
+        // Reviewed together with the help it will be applied to.
+        if let Some((metadata, builtin)) = runtime_schema::selected_metadata(&cfg)? {
+            descriptor.metadata = Some(runtime_metadata::review(
+                &descriptor.schema,
+                &metadata,
+                builtin,
+            ));
+        }
+        Ok((report, descriptor))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -296,7 +306,7 @@ pub(crate) async fn entrypoint_help_discover(
             entry.engine_id.as_str(),
             &entry.runtime_id,
         )?;
-        runtime_help_store::discover_against(
+        let (report, mut descriptor) = runtime_help_store::discover_against(
             service(),
             &adapters_root(),
             &entrypoint_owner(&entry),
@@ -305,7 +315,17 @@ pub(crate) async fn entrypoint_help_discover(
             &command,
             &saved_keys,
             baseline,
-        )
+        )?;
+        // The entry's explicit metadata is part of the help identity and is
+        // reviewed against this help before any binding is chosen.
+        if let Some(metadata) = &entry.option_metadata {
+            descriptor.metadata = Some(runtime_metadata::review(
+                &descriptor.schema,
+                metadata,
+                false,
+            ));
+        }
+        Ok((report, descriptor))
     })
     .await
     .map_err(|e| e.to_string())?

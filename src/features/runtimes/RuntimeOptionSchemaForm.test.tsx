@@ -192,6 +192,32 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Show value' }));
     expect(screen.getByLabelText(/^--token/)).toHaveAttribute('type', 'text');
   });
+
+  it('shows unit, restart and secrecy facts with the source that documents each one', () => {
+    const adapter = { kind: 'adapter', id: 'synthetic.adapter', revision: 'r1' };
+    const help = { kind: 'help', document: 'stdout', start_line: 3, end_line: 3 };
+    const observed = { value: { min: 1, max: 1 }, certainty: 'verified' as const, source: help };
+    const cache = textOption('fresh_cache', {
+      kind: { value: 'integer', certainty: 'documented', source: adapter }, arity: observed,
+      unit: { value: 'MiB', certainty: 'documented', source: adapter },
+      restart_required: { value: true, certainty: 'documented', source: adapter },
+    });
+    const secret = textOption('fresh_secret', { arity: observed, sensitive: { value: true, certainty: 'documented', source: adapter } });
+    const plain = textOption('fresh_plain', { arity: { value: null, certainty: 'unknown' } });
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([cache, secret, plain])} values={{ fresh_secret: 'synthetic-secret-value' }} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    const cacheHeader = screen.getByText('--fresh_cache').parentElement!;
+    expect(cacheHeader).toHaveTextContent('MiB');
+    expect(cacheHeader).toHaveTextContent('restart required');
+    expect(cacheHeader).toHaveTextContent('Documented by: reviewed help, adapter synthetic.adapter (r1)');
+    const secretHeader = screen.getByText('--fresh_secret').parentElement!;
+    expect(secretHeader).toHaveTextContent('secret value');
+    expect(screen.getByLabelText(/^--fresh_secret/)).toHaveAttribute('type', 'password');
+    expect(document.body).not.toHaveTextContent('synthetic-secret-value');
+    // Unknown facts are marked as such, not attributed to any source.
+    const plainHeader = screen.getByText('--fresh_plain').parentElement!;
+    expect(plainHeader).toHaveTextContent('value count unconfirmed');
+    expect(plainHeader).not.toHaveTextContent('Documented by');
+  });
 });
 
 describe('saved command-line order and confirmed syntax in the form', () => {

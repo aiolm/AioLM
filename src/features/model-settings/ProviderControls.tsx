@@ -10,6 +10,7 @@ import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTel
 import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
 import RuntimeOptionSchemaForm, { applyPlan, maskPreview, OccurrenceOrder } from '../runtimes/RuntimeOptionSchemaForm';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
+import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
 import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
 import { ORDER_KEY } from '../runtimes/optionOrder';
 
@@ -234,6 +235,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {effective && <ConfirmedSyntaxReview effective={effective} disabled={disabled || syntaxBusy}
       onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}
       onDiscard={() => saveSyntax(() => api.runtimeHelpClearConfirmedSyntax(cfg))} />}
+    {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} />}
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
     </>}
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}

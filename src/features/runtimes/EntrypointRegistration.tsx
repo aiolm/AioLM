@@ -11,6 +11,7 @@ import {
   type EntrypointHelp,
   type HelpReport,
   type HelpRequest,
+  type OptionMetadata,
   type RuntimeDescriptor,
 } from '../../shared/api/runtimeHelp';
 import type { ProviderId } from '../../shared/api/providers';
@@ -113,6 +114,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const [bridgeProgram, setBridgeProgram] = useState('');
   const [bridgePrefix, setBridgePrefix] = useState<string[]>([]);
   const [bridgeArgvEnv, setBridgeArgvEnv] = useState('');
+  const [metadataText, setMetadataText] = useState('');
   const [helpArgs, setHelpArgs] = useState<string[]>(['--help']);
   const [found, setFound] = useState<{ entry: string; request: HelpRequest; result: [HelpReport, RuntimeDescriptor] } | null>(null);
   const [skipHelp, setSkipHelp] = useState(false);
@@ -143,12 +145,24 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => onBusyChange?.(false), [onBusyChange]);
 
+  // Explicit adapter metadata is passed through as given; the backend checks
+  // its version, engine and provenance. Nothing is added when it is empty.
+  const metadata = useMemo((): { ok: boolean; value?: OptionMetadata } => {
+    if (!metadataText.trim()) return { ok: true };
+    try {
+      const value: unknown = JSON.parse(metadataText);
+      return value && typeof value === 'object' && !Array.isArray(value) ? { ok: true, value: value as OptionMetadata } : { ok: false };
+    } catch {
+      return { ok: false };
+    }
+  }, [metadataText]);
   const entry: EntrypointHelp = useMemo(() => ({
     engine_id: engine.trim(), runtime_id: runtime.trim(), program: program.trim(), prefix,
     working_directory: workingDir.trim() || null, artifacts,
     environment: Object.fromEntries(env.filter(([name]) => name.trim())),
     protocol: protocol === 'bridge' ? { kind: 'bridge', program: bridgeProgram.trim(), prefix: bridgePrefix, engine_argv_env: bridgeArgvEnv.trim() } : { kind: 'openai_http' },
-  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv]);
+    ...(metadata.value ? { option_metadata: metadata.value } : {}),
+  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv, metadata]);
   const entryKey = JSON.stringify(entry);
   const current = found && found.entry === entryKey ? found : null;
   const schema = current?.result[1].schema;
@@ -240,7 +254,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const disabled = locked || busy;
   const steps = [copy.stepEntry, copy.stepHelp, copy.stepBindings, copy.stepReview];
   const canContinue = [
-    !!engine.trim() && !!runtime.trim() && !!program.trim() && (protocol === 'openai_http' || (!!bridgeProgram.trim() && !!bridgeArgvEnv.trim())),
+    !!engine.trim() && !!runtime.trim() && !!program.trim() && (protocol === 'openai_http' || (!!bridgeProgram.trim() && !!bridgeArgvEnv.trim())) && metadata.ok,
     helpChecked || skipHelp,
     true,
     true,
@@ -304,6 +318,13 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
                 </>
               )}
             </fieldset>
+            <label htmlFor={`${id}-metadata`}>{copy.optionMetadata}</label>
+            <textarea id={`${id}-metadata`} name="option-metadata" className="app-textarea" value={metadataText} disabled={disabled}
+              autoCorrect="off" autoCapitalize="off" spellCheck={false}
+              aria-describedby={`${id}-metadata-hint${metadata.ok ? '' : ` ${id}-metadata-error`}`} aria-invalid={!metadata.ok || undefined}
+              onChange={event => setMetadataText(event.target.value)} />
+            <p id={`${id}-metadata-hint`} className="app-section-hint">{copy.optionMetadataHint}</p>
+            {!metadata.ok && <span id={`${id}-metadata-error`} role="alert">{copy.optionMetadataInvalid}</span>}
           </div>
         )}
         {step === 1 && (

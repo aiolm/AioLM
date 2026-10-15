@@ -271,6 +271,9 @@ fn main() {
             "order" => "  -t TAG, --fresh-tag TAG   synthetic tag with an alias\n  -i X, --fresh-items X Y   synthetic items whose aliases disagree\n",
             // A rebuilt engine that now documents the item count.
             "order2" => "  -t TAG, --fresh-tag TAG   synthetic tag with an alias\n  --fresh-items X Y   synthetic items, two per occurrence\n",
+            // Options whose type, unit, secrecy and choices only explicit
+            // adapter metadata can describe; help shows syntax alone.
+            "metadata" => "  --fresh-secret TOKEN  synthetic credential-like value\n  --fresh-cache N       synthetic cache size\n  --fresh-mode {fast,safe}  synthetic mode with documented choices\n",
             _ => "",
         };
         println!(

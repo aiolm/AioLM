@@ -57,6 +57,29 @@ function optionName(option: OptionSchemaDefinition) {
   return option.spellings[0]?.flag ?? option.key;
 }
 
+/** Where the option's established facts come from: observed help, an
+ * adapter's catalog or metadata (by id and revision), or the user. Unknown
+ * facts have no source and are marked separately. */
+function factSources(option: OptionSchemaDefinition, copy: Copy): string | undefined {
+  const facts = [option.kind, option.arity, option.repeatable, option.choices, option.range, option.unit,
+    option.runtime_default, option.request_field, option.restart_required, option.sensitive, option.local_path];
+  let help = false;
+  let user = false;
+  const adapters: string[] = [];
+  for (const fact of facts) {
+    if (!fact || fact.certainty === 'unknown' || !fact.source || typeof fact.source !== 'object') continue;
+    const source = fact.source as { kind?: string; id?: string; revision?: string };
+    if (source.kind === 'help') help = true;
+    else if (source.kind === 'user') user = true;
+    else if (source.kind === 'adapter') {
+      const label = `${copy.sourceAdapter} ${source.id} (${source.revision})`;
+      if (!adapters.includes(label)) adapters.push(label);
+    }
+  }
+  const labels = [...(help ? [copy.sourceHelp] : []), ...adapters, ...(user ? [copy.sourceUser] : [])];
+  return labels.length ? `${copy.documentedBy}: ${labels.join(', ')}` : undefined;
+}
+
 interface ValueInputProps {
   /** Set when a visible label element names this input. */
   inputId?: string;
@@ -196,9 +219,12 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
     option.target === 'request' ? copy.request : copy.launch,
     `${copy.inherit}: ${inheritLabel ?? (defaultValue ? display(defaultValue.literal) : copy.inherit)}`,
     supported(option.unit),
+    supported(option.restart_required) === true ? copy.restartRequired : undefined,
+    supported(option.sensitive) === true ? copy.secretValue : undefined,
     option.kind.certainty === 'unknown' && !isSwitch(option) ? copy.unverifiedType : undefined,
     option.arity.certainty === 'unknown' && option.target === 'launch' ? copy.unconfirmedArity : undefined,
     confirmed ? copy.confirmedByYou : undefined,
+    factSources(option, copy),
   ].filter(Boolean).join(' · ');
   const header = (
     <span className="schema-option__header">

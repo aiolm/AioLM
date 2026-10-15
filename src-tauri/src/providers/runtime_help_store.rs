@@ -51,6 +51,10 @@ pub struct RuntimeDescriptor {
     pub diff: Option<SchemaDiff>,
     /// Saved keys retained but absent from the new schema.
     pub retained: Vec<String>,
+    /// What the engine's explicit option metadata would establish on this
+    /// help, and which declarations the help contradicts, before acceptance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<super::runtime_metadata::MetadataView>,
 }
 
 pub(crate) fn valid_segment(value: &str) -> bool {
@@ -283,6 +287,7 @@ pub fn describe(
         schema: schema.clone(),
         diff,
         retained,
+        metadata: None,
     })
 }
 

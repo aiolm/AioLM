@@ -34,6 +34,7 @@ pub mod registry;
 pub mod runtime_help;
 pub mod runtime_help_parse;
 pub mod runtime_help_store;
+pub mod runtime_metadata;
 pub mod runtime_options;
 pub mod runtime_ordered;
 pub mod runtime_schema;

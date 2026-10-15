@@ -20,6 +20,7 @@ use super::{
     registry::{self, ExternalOption},
     runtime_help::{Encoding, HelpCommand, MAX_STREAM_BYTES},
     runtime_help_store::{self, HelpSnapshot},
+    runtime_metadata::{self, Applies, FactConflict, MetadataView, OptionMetadata},
     runtime_options::{
         Arity, Certainty, Fact, ManagedBinding, NumericRange, OptionDefinition, OptionIssue,
         OptionSchema, RuntimeDefault, Source, Spelling, Target, ValueKind, ValueStyle,
@@ -117,6 +118,13 @@ pub struct EffectiveSchema {
     pub help_keys: Vec<String>,
     /// Help options hidden because a catalog option already covers them.
     pub shadowed: Vec<String>,
+    /// Catalog/manifest facts that differ from the accepted help rows they
+    /// shadow, with provenance. The declaration keeps its legacy mapping;
+    /// a blocking difference refuses a saved value instead of misplacing it.
+    pub conflicts: Vec<FactConflict>,
+    /// The engine's explicit option metadata: provenance, the options it
+    /// described and the declarations observed help or bindings overrode.
+    pub metadata: Option<MetadataView>,
     /// Value counts and repetition the user confirmed for help options whose
     /// help left them unknown, shown apart from help and adapter facts.
     pub supplement: Option<SupplementView>,
@@ -456,12 +464,22 @@ pub fn manifest_help_command(
         working_directory: manifest.launch.working_directory.clone().map(PathBuf::from),
         artifacts: manifest.artifacts.iter().map(PathBuf::from).collect(),
         // Hashes identify the build; this names the registration so a
-        // discovery before registration matches the one after it.
-        runtime_version: format!(
-            "registered:{}/{}",
-            manifest.engine_id.as_str(),
-            manifest.runtime_id
-        ),
+        // discovery before registration matches the one after it. Declared
+        // option facts are part of what a review accepts, so changed
+        // metadata makes an earlier acceptance stale.
+        runtime_version: match &manifest.option_metadata {
+            None => format!(
+                "registered:{}/{}",
+                manifest.engine_id.as_str(),
+                manifest.runtime_id
+            ),
+            Some(metadata) => format!(
+                "registered:{}/{};option-metadata:{}",
+                manifest.engine_id.as_str(),
+                manifest.runtime_id,
+                metadata.digest()
+            ),
+        },
         scope: request.scope.clone(),
         encoding: Encoding::Auto,
         timeout_ms: HELP_TIMEOUT_MS,
@@ -842,6 +860,135 @@ struct Compat {
     options: Vec<OptionDefinition>,
     /// Flag spelling to the app-owned binding it carries.
     managed_flags: BTreeMap<String, ManagedBinding>,
+    /// Explicit option metadata and whether the app ships it (built-in).
+    metadata: Option<(OptionMetadata, bool)>,
+}
+
+/// The selected runtime's explicit option metadata, as its effective schema
+/// applies it, for reviewing a discovery before it is accepted.
+pub fn selected_metadata(cfg: &AppConfig) -> Result<Option<(OptionMetadata, bool)>, String> {
+    Ok(compat(&Selected::from_config(cfg)?)?.metadata)
+}
+
+fn adapter_label(option: &OptionDefinition) -> String {
+    [
+        &option.kind.source,
+        &option.arity.source,
+        &option.request_field.source,
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|source| match source {
+        Source::Adapter { id, revision } => Some(format!("{id} {revision}")),
+        _ => None,
+    })
+    .unwrap_or_default()
+}
+
+/// Differences between a catalog/manifest option and the accepted help row
+/// it shadows (matched by a shared spelling or key). The declaration stays
+/// in effect for its legacy key; only a value count it would serialize
+/// outside the observed one blocks a saved value.
+fn declared_differences(
+    declared: &OptionDefinition,
+    observed: &OptionDefinition,
+) -> Vec<FactConflict> {
+    let flag = declared
+        .spellings
+        .iter()
+        .find(|s| observed.spellings.iter().any(|o| o.flag == s.flag))
+        .or(observed.spellings.first())
+        .map(|s| s.flag.clone())
+        .unwrap_or_default();
+    let conflict = |field: &str, seen: Value, said: Value, blocking: bool| FactConflict {
+        key: declared.key.clone(),
+        flag: flag.clone(),
+        field: field.into(),
+        observed: seen,
+        declared: said,
+        declared_by: adapter_label(declared),
+        applies: Applies::Declared,
+        blocking,
+    };
+    let mut found = Vec::new();
+    if declared.key != observed.key {
+        found.push(conflict(
+            "key",
+            Value::from(observed.key.clone()),
+            Value::from(declared.key.clone()),
+            false,
+        ));
+    }
+    if declared.target != observed.target {
+        found.push(conflict(
+            "target",
+            serde_json::json!(observed.target),
+            serde_json::json!(declared.target),
+            false,
+        ));
+        return found;
+    }
+    if let (Some(seen), Some(said)) = (observed.arity.supported(), declared.arity.supported()) {
+        if seen != said {
+            let outside =
+                said.min < seen.min || seen.max.is_some_and(|max| said.max.is_none_or(|n| n > max));
+            found.push(conflict(
+                "arity",
+                serde_json::json!(seen),
+                serde_json::json!(said),
+                outside,
+            ));
+        }
+    }
+    macro_rules! compare {
+        ($field:ident, $name:literal) => {
+            if let (Some(seen), Some(said)) =
+                (observed.$field.supported(), declared.$field.supported())
+            {
+                if seen != said {
+                    found.push(conflict(
+                        $name,
+                        serde_json::json!(seen),
+                        serde_json::json!(said),
+                        false,
+                    ));
+                }
+            }
+        };
+    }
+    compare!(kind, "kind");
+    compare!(repeatable, "repeatable");
+    compare!(runtime_default, "runtime_default");
+    if let (Some(seen), Some(said)) = (observed.choices.supported(), declared.choices.supported()) {
+        if seen.len() != said.len() || seen.iter().any(|value| !said.contains(value)) {
+            found.push(conflict(
+                "choices",
+                Value::from(seen.clone()),
+                Value::from(said.clone()),
+                false,
+            ));
+        }
+    }
+    found
+}
+
+fn value_count(arity: &Value) -> String {
+    let min = arity["min"].as_u64().unwrap_or_default();
+    match arity["max"].as_u64() {
+        Some(max) if max == min => min.to_string(),
+        Some(max) => format!("{min} to {max}"),
+        None => format!("{min} or more"),
+    }
+}
+
+fn conflict_issue(conflict: &FactConflict) -> String {
+    format!(
+        "{}: the reviewed help shows {} value(s) for this option but {} declares {}; the saved value was retained because launching it would misplace arguments. Remove the saved value, or correct that option declaration and register the runtime again (or select a runtime whose help matches it)",
+        conflict.flag,
+        value_count(&conflict.observed),
+        conflict.declared_by,
+        value_count(&conflict.declared)
+    )
 }
 
 /// Saved keys for help review. Kept separate from discovery so catalog and
@@ -929,9 +1076,14 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
             .iter()
             .map(|flag| ((*flag).to_owned(), ManagedBinding::Discovery))
             .collect();
+    let mut metadata = runtime_metadata::builtin(key.provider).map(|metadata| (metadata, true));
     let options = match key.provider {
         ProviderId::Custom(_) => {
             let manifest = registry::manifest(key.provider, &key.runtime)?;
+            metadata = manifest
+                .option_metadata
+                .clone()
+                .map(|metadata| (metadata, false));
             let source = adapter_source(
                 &key.engine,
                 &format!("manifest-v{}", manifest.adapter_version),
@@ -959,6 +1111,7 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
     Ok(Compat {
         options,
         managed_flags,
+        metadata,
     })
 }
 
@@ -1044,9 +1197,12 @@ fn build_effective(
             compat_flags.insert(spelling.flag.clone());
         }
     }
+    let compat_metadata = compat.metadata.take();
+    let compat_len = compat.options.len();
     let mut options = compat.options;
     let mut help_keys = Vec::new();
     let mut shadowed = Vec::new();
+    let mut conflicts = Vec::new();
     let mut schema_extras = None;
     let mut scope = Vec::new();
     if let Some(snapshot) = &snapshot {
@@ -1062,6 +1218,15 @@ fn build_effective(
                 .iter()
                 .any(|spelling| compat_flags.contains(&spelling.flag));
             if covered || compat_keys.contains(&help.key) {
+                for declared in options[..compat_len].iter().filter(|declared| {
+                    declared.key == help.key
+                        || declared
+                            .spellings
+                            .iter()
+                            .any(|s| help.spellings.iter().any(|h| h.flag == s.flag))
+                }) {
+                    conflicts.extend(declared_differences(declared, help));
+                }
                 shadowed.push(help.key.clone());
                 continue;
             }
@@ -1121,6 +1286,17 @@ fn build_effective(
         raw_help,
         end_of_options,
     };
+    // Adapter facts fill what help and catalogs leave unknown before user
+    // confirmations do; declarations for absent options are only reported
+    // once reviewed help says which options exist.
+    let metadata = compat_metadata.map(|(metadata, builtin)| {
+        runtime_metadata::apply(
+            &mut schema,
+            &metadata,
+            builtin,
+            !builtin && snapshot.is_some(),
+        )
+    });
     let saved = if with_supplement {
         load_supplement(root, &key.engine, &key.runtime)
     } else {
@@ -1150,6 +1326,8 @@ fn build_effective(
         compat_keys,
         help_keys,
         shadowed,
+        conflicts,
+        metadata,
         supplement,
         supplement_error,
     })
@@ -1457,8 +1635,18 @@ pub fn saved_issues_for(
     };
     let mut issues = Vec::new();
     let mut describable = Map::new();
+    let mut blocked = BTreeSet::new();
     for (key, value) in all {
         if reported.contains(&key) {
+            continue;
+        }
+        if let Some(conflict) = effective
+            .conflicts
+            .iter()
+            .find(|conflict| conflict.blocking && conflict.key == key)
+        {
+            issues.push(issue(&key, "conflict", conflict_issue(conflict)));
+            blocked.insert(key);
             continue;
         }
         if effective
@@ -1516,7 +1704,12 @@ pub fn saved_issues_for(
                 values.get(ORDER_KEY).cloned().expect("order present"),
             );
         } else {
-            if outside.iter().any(|key| !reported.contains(key)) {
+            // A value refused for its own reason already says why; the order
+            // that includes it is not described as unknown as well.
+            if outside
+                .iter()
+                .any(|key| !reported.contains(key) && !blocked.contains(key))
+            {
                 issues.push(issue(
                     ORDER_KEY,
                     "order",
@@ -1840,6 +2033,7 @@ mod tests {
         let mut compat = Compat {
             options: vec![option],
             managed_flags: BTreeMap::from([("--weights".into(), ManagedBinding::Model)]),
+            metadata: None,
         };
         protect_binding_aliases(&mut compat, &[help]);
         let mut schema = help_schema();
@@ -1989,6 +2183,103 @@ mod tests {
             );
         }
         assert_eq!(root.parent(), Some(temporary.as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Accept synthetic llama-server help for an uninstalled test build so the
+    /// effective schema is composed exactly as the settings UI receives it.
+    fn accepted_llama_help(text: &str) -> (PathBuf, AppConfig) {
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let root = temporary.join(format!("aiolm-llama-metadata-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let fingerprint = "c".repeat(64);
+        let output = |text: &str| json!({"text":text,"clean_text":text,"encoding":"utf-8","decoding_loss":false,"truncated":false,"read_error":null});
+        let report: super::super::runtime_help::HelpReport = serde_json::from_value(json!({
+            "identity":{"fingerprint":fingerprint,"executable_sha256":"d".repeat(64),"artifacts_sha256":{},"parser_version":super::super::runtime_help::PARSER_VERSION},
+            "scope":[],"stdout":output(text),"stderr":output(""),"exit_code":0,"success":true,"cancelled":false,"timed_out":false,"error":null,"elapsed_ms":1
+        })).unwrap();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: "llama.cpp".into(),
+                runtime: "cpu-metadata-test".into(),
+                fingerprint: fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        runtime_help_store::save_snapshot(
+            &root,
+            "llama.cpp",
+            "cpu-metadata-test",
+            &HelpSnapshot { report, schema },
+        )
+        .unwrap();
+        write_accepted(
+            &root,
+            "llama.cpp",
+            "cpu-metadata-test",
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                fingerprint,
+                request: HelpRequest {
+                    program: None,
+                    args: vec!["--help".into()],
+                    scope: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let cfg = AppConfig {
+            active_backend: "cpu".into(),
+            active_build: "metadata-test".into(),
+            ..Default::default()
+        };
+        (root, cfg)
+    }
+
+    #[test]
+    fn reviewed_llama_help_marks_only_the_documented_access_token_sensitive() {
+        // The pinned llama.cpp source defines `-hft, --hf-token TOKEN` as the
+        // Hugging Face access token. Help prose alone never makes it secret,
+        // and an unrelated name containing "token" stays unknown.
+        let (root, cfg) = accepted_llama_help(
+            "Options:\n  -hft, --hf-token TOKEN   Hugging Face access token (default: value from HF_TOKEN environment variable)\n  --fresh-token-count N    synthetic count whose name mentions a token\n  -t, --threads N          number of threads\n",
+        );
+        let effective = effective(&root, &cfg, false).unwrap();
+        let by_flag = |flag: &str| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.spellings.iter().any(|s| s.flag == flag))
+                .unwrap_or_else(|| panic!("{flag}"))
+                .clone()
+        };
+        let token = by_flag("-hft");
+        assert_eq!(token.sensitive.supported(), Some(&true));
+        assert!(
+            matches!(&token.sensitive.source, Some(Source::Adapter { id, .. }) if id == "llama.cpp"),
+            "{:?}",
+            token.sensitive.source
+        );
+        assert!(token.managed.is_none(), "the token stays a user setting");
+        for flag in ["--fresh-token-count", "--threads"] {
+            assert!(by_flag(flag).sensitive.supported().is_none(), "{flag}");
+        }
+        // Masking needs no saved value to change: the syntax still comes from
+        // help and the value reaches argv unchanged.
+        let overrides = BTreeMap::from([(
+            token.key.clone(),
+            super::super::runtime_options::Override {
+                spelling: None,
+                occurrences: vec![vec![json!("synthetic-access-token")]],
+            },
+        )]);
+        let argv = effective.schema.resolve(&[], &overrides).unwrap().argv;
+        assert_eq!(
+            argv,
+            [token.spellings[0].flag.as_str(), "synthetic-access-token"]
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -130,3 +130,34 @@ it('cancels only the pending entry point when the registration panel unmounts', 
   rendered.unmount();
   expect(api.entrypointHelpCancel).toHaveBeenCalledWith(entry);
 });
+
+it('carries explicit option metadata in the entry so its help review and registration use the same metadata', async () => {
+  const metadata = { version: 1, engine_id: 'custom.synthetic', adapter: { id: 'synthetic.adapter', revision: 'r1' },
+    options: [{ flag: '--fresh-secret', sensitive: true }] };
+  vi.mocked(api.entrypointHelpDiscover).mockResolvedValueOnce([report, { ...result[1],
+    metadata: { adapter: 'synthetic.adapter', revision: 'r1', builtin: false, applied: ['fresh_secret'], error: null, conflicts: [
+      { key: '', flag: '--absent-flag', field: 'option', observed: null, declared: { sensitive: true }, declared_by: 'synthetic.adapter r1', applies: 'observed', blocking: false },
+    ] } }]);
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  const field = screen.getByLabelText('Option metadata (JSON, optional)');
+  fireEvent.change(field, { target: { value: '{"version":' } });
+  expect(screen.getByRole('alert')).toHaveTextContent('not valid JSON');
+  fireEvent.change(field, { target: { value: JSON.stringify(metadata) } });
+  expect(screen.queryByRole('alert')).toBeNull();
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[0][0]).toMatchObject({ option_metadata: metadata });
+  // The discovered help is reviewed against the metadata before binding.
+  const review = screen.getByRole('region', { name: 'Option fact differences' });
+  expect(review).toHaveTextContent('adapter synthetic.adapter (r1)');
+  expect(review).toHaveTextContent('--absent-flag');
+});
+
+it('omits option metadata from the entry when none is given', async () => {
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(api.entrypointHelpDiscover).toHaveBeenCalled());
+  expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[0][0]).not.toHaveProperty('option_metadata');
+});

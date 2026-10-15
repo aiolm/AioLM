@@ -74,6 +74,7 @@ fn manifest(
         adapter_version: 1,
         launch_bindings: None,
         bridge_command: None,
+        option_metadata: None,
         engine_id: engine,
         runtime_id: "build-1".into(),
         display_name: "Synthetic order engine".into(),
