@@ -122,7 +122,9 @@ describe("conversations in the data folder", () => {
       { role: 'assistant' as const, content: '', tool_calls: [{ id: 'call-1', type: 'function' as const, function: { name: 'catalog__lookup', arguments: '{}' } }] },
       { role: 'tool' as const, tool_call_id: 'call-1', name: 'catalog__lookup', content: 'Synthetic tool result' },
     ];
-    const retry = { version: 1 as const, text: 'Explain the chart', images: [image], documents: [{ name: 'notes.md', path: 'synthetic/notes.md', text: 'Synthetic notes' }], history: request };
+    const tools = [{ serverId: 'catalog', serverName: 'Synthetic catalog', toolName: 'lookup',
+      definition: { type: 'function' as const, function: { name: 'catalog__lookup', description: 'Synthetic lookup', parameters: { type: 'object', properties: { key: { type: 'string' } } } } } }];
+    const retry = { version: 1 as const, text: 'Explain the chart', images: [image], documents: [{ name: 'notes.md', path: 'synthetic/notes.md', text: 'Synthetic notes' }], history: request, tools };
     const conversation = thread('unfinished', 'Earlier question');
     conversation.messages.push(
       { role: 'assistant', content: 'Earlier partial', interrupted: true, retry: { version: 1, unavailable: 'too-large' } },
@@ -139,6 +141,9 @@ describe("conversations in the data folder", () => {
     const loaded = await (await freshHistory()).loadChatWorkspaceAsync();
     const last = loaded.threads.find(item => item.id === conversation.id)?.messages.at(-1);
     expect(history.savedRetry(last)).toEqual({ kind: 'ready', snapshot: retry });
+    // The same tool turn saved by an earlier version, without its tools, is never resent without them.
+    const { tools: _omitted, ...earlier } = retry;
+    expect(history.savedRetry({ ...last!, retry: earlier })).toEqual({ kind: 'unavailable', reason: 'tools-not-saved' });
   });
 
   it('keeps a reply whose saved retry snapshot is malformed or from an unknown format, without offering an exact retry', async () => {

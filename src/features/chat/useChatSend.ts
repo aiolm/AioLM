@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObj
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, estimateMessageTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
-import { CHAT_WORKSPACE_CLEAR_EVENT, chatRetrySnapshot, isChatWorkspaceClearing, savedRetry, type ChatHistoryMessage, type ChatThread, type ChatWorkspaceClearDetail } from "./chatHistory";
+import { CHAT_WORKSPACE_CLEAR_EVENT, chatRetrySnapshot, isChatWorkspaceClearing, savedRetry, toolTurn, type ChatHistoryMessage, type ChatThread, type ChatWorkspaceClearDetail } from "./chatHistory";
+import { matchRetryTools, retryTools } from "./chatRetryTools";
 import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
 import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
@@ -124,7 +125,14 @@ export function useChatSend({
   const supersededRef = useRef<Msg | null>(null);
   const savedForLast = useMemo(() => savedRetry(lastMessage), [lastMessage]);
   const saved = lastMessage === supersededRef.current ? null : savedForLast;
-  const canRetry = !!failedRef.current || saved?.kind === "ready";
+  // A turn that offered MCP tools, or already depends on one, is resent only
+  // with those same tools, checked against the selection now; otherwise Retry
+  // would silently drop them, even for a reply stopped before any tool call.
+  const retryRequest = failedRef.current ?? (saved?.kind === "ready" ? saved.snapshot : null);
+  const retryToolMatch = retryRequest && (retryRequest.tools !== undefined || toolTurn(lastMessage, retryRequest.history))
+    ? matchRetryTools(retryRequest.tools ?? [], mcpDefinitions, mcpEntryByFunctionName) : null;
+  const retryToolsMissing = retryToolMatch?.kind === "missing" ? retryToolMatch.missing : null;
+  const canRetry = (!!failedRef.current || saved?.kind === "ready") && !retryToolsMissing;
   const retryUnavailable = !failedRef.current && saved?.kind === "unavailable" ? saved.reason : null;
 
   useEffect(() => () => {
@@ -223,9 +231,12 @@ export function useChatSend({
     const generation = turnGeneration.current;
     const isCurrent = () => generation === turnGeneration.current;
     const toolFollowup = !!historyOverride;
+    const retryToolsReady = retry && !toolFollowup ? retryToolMatch : null;
+    // Nothing is consumed: the unfinished reply and its snapshot stay for when the tools are back.
+    if (retryToolsReady?.kind === "missing") return;
     const restored = retry && !failedRef.current && saved?.kind === "ready" ? saved.snapshot : null;
     const failed: FailedRequest | null = failedRef.current ?? (restored && structuredClone({
-      text: restored.text, images: restored.images, documents: restored.documents, history: restored.history, personalization: null,
+      text: restored.text, images: restored.images, documents: restored.documents, history: restored.history, personalization: null, tools: restored.tools,
     }));
     const text = toolFollowup ? "" : (retry ? failed?.text ?? "" : input).trim();
     let images = toolFollowup ? [] : (retry ? failed?.images ?? [] : attachments);
@@ -255,8 +266,8 @@ export function useChatSend({
         baseUrl: baseUrl!, apiKey, model, sessionId,
         systemPrompt: activeThread?.systemPrompt.trim() || profile?.system_prompt.trim() || (activeThread?.useDefaultSystemPrompt === false ? "" : "You are a helpful assistant."),
         mediaBeforeText: activeThread?.mediaBeforeText === true,
-        tools: structuredClone(mcpDefinitions),
-        toolEntries: new Map(mcpEntryByFunctionName),
+        tools: structuredClone(retryToolsReady?.kind === "ready" ? retryToolsReady.tools : mcpDefinitions),
+        toolEntries: new Map(retryToolsReady?.kind === "ready" ? retryToolsReady.entries : mcpEntryByFunctionName),
         personalization: null,
       };
     }
@@ -341,8 +352,8 @@ export function useChatSend({
       setContextWarning(warnings.length > 0 ? warnings.join(" ") : null);
       // A tool follow-up carries no user input of its own: keep the original request so Retry can still resend it.
       failedRef.current = toolFollowup && failed
-        ? { text: failed.text, images: failed.images, documents: failed.documents, history: bounded.messages, personalization: turn.personalization }
-        : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization };
+        ? { text: failed.text, images: failed.images, documents: failed.documents, history: bounded.messages, personalization: turn.personalization, tools: failed.tools }
+        : { text, images, documents: pendingDocuments, history: bounded.messages, personalization: turn.personalization, tools: retryTools(turn.tools, turn.toolEntries) };
       // Saved with the reply so Retry survives a restart or thread switch.
       const retrySnapshot = chatRetrySnapshot(failedRef.current, hasPersonalization(turn.personalization));
       if (!retry && !toolFollowup) setInput("");
@@ -566,7 +577,7 @@ export function useChatSend({
 
   return {
     error, setError, contextWarning, contextSources,
-    aborting, pendingToolCall, toolCallInProgress, streamingDraft, failedRef, canRetry, retryUnavailable,
+    aborting, pendingToolCall, toolCallInProgress, streamingDraft, failedRef, canRetry, retryUnavailable, retryToolsMissing,
     send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   };
 }

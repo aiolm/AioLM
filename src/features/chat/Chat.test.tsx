@@ -1059,14 +1059,16 @@ describe('ChatPanel recovery of replies without output and non-chat sessions', (
     expect(mocked.chatStream.mock.calls[0][3]).toEqual(savedRequest);
   });
 
-  it('restores a stopped MCP round reported without a tool_calls finish reason as incomplete and retryable', async () => {
+  it('restores a stopped MCP round reported without a tool_calls finish reason as incomplete, and never retries it without the tools an earlier version did not save', async () => {
     const thread = savedThread({ model: cfg.active_model, toolRound: 'cancelled', retry: snapshot });
     saveChatWorkspace({ activeThreadId: thread.id, threads: [thread] });
     renderPanel();
     await screen.findByRole('heading', { name: thread.title });
     expect(screen.getByText('The MCP tool call was stopped; its result was not used.')).toBeInTheDocument();
     expect(document.querySelector('.chat-composer-status')).toHaveTextContent('MCP response incomplete');
-    expect(await screen.findByRole('button', { name: 'Retry last message' })).toBeEnabled();
+    expect(await screen.findByText(/this reply depends on MCP tools, but an earlier version saved it without recording which ones/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry last message' })).not.toBeInTheDocument();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
     expect(mocked.mcpCallTool).not.toHaveBeenCalled();
     expect(loadChatWorkspace().threads[0].messages[1]).toMatchObject({ toolRound: 'cancelled' });
     expect(loadChatWorkspace().threads[0].messages[1].finishReason).toBeUndefined();

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   CHAT_WORKSPACE_KEY,
+  chatRetrySnapshot,
   createChatThread,
   defaultChatWorkspace,
   loadChatWorkspace,
@@ -8,6 +9,7 @@ import {
   mergeHydratedWorkspace,
   saveChatWorkspace,
   saveChatWorkspaceAsync,
+  savedRetry,
   threadMatchesQuery,
   titleFromMessage,
   type ChatHistoryMessage,
@@ -67,6 +69,25 @@ assert.deepEqual(loadChatWorkspace(store), saved);
 const priorPrompt = { ...saved, threads: [{ ...saved.threads[0], systemPrompt: "Keep this conversation instruction." }] };
 saveChatWorkspace(priorPrompt, store);
 assert.equal(loadChatWorkspace(store).threads[0].systemPrompt, "Keep this conversation instruction.");
+
+// A tool turn's Retry snapshot keeps which MCP tools it offered, and an
+// earlier snapshot without them is readable but never resent as complete.
+const retryTool = { serverId: "catalog", serverName: "Synthetic catalog", toolName: "lookup",
+  definition: { type: "function" as const, function: { name: "catalog__lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } } } };
+const toolRequest = { text: "Synthetic tool question", images: [], documents: [], history: [{ role: "user" as const, content: "Synthetic tool question" }] };
+const toolSnapshot = chatRetrySnapshot({ ...toolRequest, tools: [retryTool] }, false);
+assert.deepEqual(toolSnapshot, { version: 1, ...toolRequest, tools: [retryTool] });
+const toolReply: ChatHistoryMessage = { role: "assistant", content: "", finishReason: "tool_calls", toolRound: "cancelled", retry: toolSnapshot };
+const toolStore = storage();
+saveChatWorkspace({ activeThreadId: "thread-3000", threads: [{ ...createChatThread(3000), messages: [{ role: "user", content: "Synthetic tool question" }, toolReply] }] }, toolStore);
+const reloadedToolReply = loadChatWorkspace(toolStore).threads[0].messages.at(-1);
+assert.deepEqual(reloadedToolReply, toolReply);
+assert.deepEqual(savedRetry(reloadedToolReply), { kind: "ready", snapshot: toolSnapshot });
+const earlierToolSnapshot = { version: 1 as const, ...toolRequest };
+assert.deepEqual(savedRetry({ ...toolReply, retry: earlierToolSnapshot }), { kind: "unavailable", reason: "tools-not-saved" });
+assert.deepEqual(savedRetry({ role: "assistant", content: "Partial", interrupted: true, retry: earlierToolSnapshot }), { kind: "ready", snapshot: earlierToolSnapshot });
+assert.deepEqual(savedRetry({ ...toolReply, retry: { ...toolSnapshot, tools: [{ ...retryTool, definition: { type: "function", function: { name: 1 } } }] } as never }),
+  { kind: "unavailable", reason: "not-saved" });
 
 function workspaceWithMetrics(metrics: unknown) {
   return {

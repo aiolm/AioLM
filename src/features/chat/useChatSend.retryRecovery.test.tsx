@@ -107,7 +107,8 @@ describe("D09a: Retry for an interrupted reply survives a restart or conversatio
     const document = { name: "notes.md", path: "synthetic/notes.md", text: "Synthetic document context" };
     vi.mocked(api.embedText).mockRejectedValue(new Error("no embedding session"));
     streamsReasoningUntilStopped("Synthetic reasoning");
-    const first = setup({ images: [{ name: "pixel.png", dataUrl: PIXEL }], documents: [document] });
+    // This turn offered no MCP tools; one that did is covered by the D17 tests.
+    const first = setup({ images: [{ name: "pixel.png", dataUrl: PIXEL }], documents: [document], session: { baseUrl: "http://127.0.0.1:8080", apiKey: "original-session-key", tools: false } });
     let sending!: Promise<void>;
     act(() => { sending = first.result.current.send(); });
     await waitFor(() => expect(streamMock).toHaveBeenCalledOnce());
@@ -131,7 +132,7 @@ describe("D09a: Retry for an interrupted reply survives a restart or conversatio
     expect(history).toEqual(originalRequest);
     expect(JSON.stringify(history)).toContain(PIXEL);
     expect(JSON.stringify(history)).toContain("Synthetic document context");
-    // Auth and tools belong to the live session the retry runs on, never to the saved turn.
+    // Auth belongs to the live session the retry runs on, never to the saved turn; a turn that offered no tools is resent without any.
     expect([url, key]).toEqual(["http://127.0.0.1:9090", "current-session-key"]);
     expect(sampling.tools).toEqual([]);
     expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question"], ["assistant", "Recovered answer"]]);
@@ -341,12 +342,14 @@ describe("Recovery when an issued request produced no output", () => {
 
     const restored = reloaded(first.result.current.msgs);
     first.unmount();
-    const next = setup({ initial: restored, input: "", session: { baseUrl: "http://127.0.0.1:9090", apiKey: "current-session-key", tools: false } });
+    // The tools the turn offered are selected again; without them nothing is resent (D17).
+    const next = setup({ initial: restored, input: "", session: { baseUrl: "http://127.0.0.1:9090", apiKey: "current-session-key", tools: true } });
     expect(next.result.current.canRetry).toBe(true);
     answers("Answer after an empty stop");
     await act(async () => { await next.result.current.send(true); });
     expect(streamMock.mock.calls[1][3]).toEqual(originalRequest);
     expect(streamMock.mock.calls[1][1]).toBe("current-session-key");
+    expect(streamMock.mock.calls[1][4].tools).toEqual([lookupDefinition]);
     expect(next.result.current.msgs.map((message) => [message.role, message.content])).toEqual([["user", "Synthetic question"], ["assistant", "Answer after an empty stop"]]);
   });
 

@@ -42,7 +42,7 @@ describe('MCP catalog refresh selection', () => {
     await act(async () => { await result.current.refreshMcpTools(); });
     let loaded!: (value: api.McpTool[]) => void;
     vi.mocked(api.mcpListTools).mockImplementationOnce(() => new Promise(resolve => { loaded = resolve; }));
-    let refreshing!: Promise<void>;
+    let refreshing!: Promise<unknown>;
     act(() => { refreshing = result.current.refreshMcpTools(); });
     await waitFor(() => expect(api.mcpListTools).toHaveBeenCalledTimes(2));
     act(() => result.current.setSelectedMcpTools(['catalog:lookup']));
@@ -56,8 +56,8 @@ describe('MCP catalog refresh selection', () => {
     act(() => result.current.setSelectedMcpTools(['catalog:lookup']));
     let failed!: (cause: Error) => void;
     vi.mocked(api.mcpListServers).mockImplementationOnce(() => new Promise((_resolve, reject) => { failed = reject; }));
-    let first!: Promise<void>;
-    let second!: Promise<void>;
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
     act(() => { first = result.current.refreshMcpTools(); second = result.current.refreshMcpTools(); });
     expect(api.mcpListServers).toHaveBeenCalledTimes(2);
     await act(async () => { failed(new Error('Server unavailable')); await Promise.all([first, second]); });

@@ -23,7 +23,8 @@ import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import { titleFromMessage, unfinishedReply } from "./chatHistory";
-import { chatRetryCopy } from "./chatRetryCopy";
+import { chatRetryCopy, chatRetryToolsCopy } from "./chatRetryCopy";
+import { diagnoseRetryTools, restorableRetryTools } from "./chatRetryTools";
 import { useChatSkills } from "./useChatSkills";
 import ChatSkillPicker from "./ChatSkillPicker";
 import { chatPersonalizationText, type ChatPersonalizationTextKey } from "../../shared/i18n/chatPersonalizationText";
@@ -106,7 +107,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   const { attachments, documents, attachmentStatus, setAttachments, setDocuments, addAttachment, removeAttachment, removeDocument, clearComposerAttachments } = useChatAttachments({ visionReady, modalities,
     audioPreprocessAvailable: !!mediaOptions.audioSessionId, videoPreprocessAvailable: videoFrames && visionReady,
     setError: (message) => setError(message) });
-  const { mcpCatalog, selectedMcpTools, setSelectedMcpTools, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools();
+  const { mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, loadingMcpTools, mcpError, refreshMcpTools, toggleMcpTool, mcpEntryByFunctionName, mcpDefinitions } = useChatMcpTools();
 
   const skills = useChatSkills();
 
@@ -143,7 +144,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   const {
     setError, error, contextWarning, contextSources, aborting, pendingToolCall, toolCallInProgress, streamingDraft,
-    canRetry, retryUnavailable, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
+    canRetry, retryUnavailable, retryToolsMissing, send, approvePendingTool, rejectPendingTool, stop, resetChatState,
   } = useChatSend({
     store, effectiveConfig, engine: selectedStatus.engine, mediaPreprocessing: mediaOptions,
     embeddingTarget: embeddingChoice ? { model: embeddingChoice.engine!.embedding_model!, baseUrl: embeddingChoice.url!, apiKey: embeddingChoice.api_key ?? '',
@@ -270,6 +271,27 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     : lastMessage?.role === 'assistant' ? 'complete' : 'none';
   // Retry belongs to the conversation that owns the live buffer, once nothing is running or awaiting approval.
   const recoverable = viewingLiveThread && phase === 'idle' && !pendingToolCall && !toolCallInProgress && unfinishedReply(lastMessage);
+  const retryTools = retryToolsMissing ? diagnoseRetryTools(retryToolsMissing, mcpCatalog, selectedMcpTools, mcpCatalogLoaded) : null;
+  // The conversation and unfinished reply a pending restore must still belong to.
+  const retryScope = useRef({ threadId: workspace.activeThreadId, reply: msgs.at(-1) });
+  retryScope.current = { threadId: workspace.activeThreadId, reply: msgs.at(-1) };
+  // Discovers the MCP tools again and selects only the reply's tools found unchanged,
+  // keeping the user's other choices; any call the retry makes is approved again.
+  const restoreRetryTools = async () => {
+    const missing = retryToolsMissing;
+    if (!missing || !requireIdle()) return;
+    const scope = retryScope.current;
+    // This is an explicit choice, so a first discovery must not select every listed tool.
+    setSelectedMcpTools(current => current);
+    const revision = mcpSelectionRevision();
+    const catalog = await refreshMcpTools();
+    // Leaving the chat, another conversation or message, or a newer selection by
+    // the user or a project wins: this restore must not land in that context.
+    if (!catalog || retryScope.current.threadId !== scope.threadId || retryScope.current.reply !== scope.reply
+      || mcpSelectionRevision() !== revision) return;
+    const keys = restorableRetryTools(missing, catalog);
+    if (keys.length) setSelectedMcpTools(current => [...current, ...keys.filter(key => !current.includes(key))]);
+  };
 
   return (
     <div className="app-page-scroll chat-page">
@@ -360,6 +382,10 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             canRetry={viewingLiveThread && canRetry}
             recoverable={recoverable}
             retryNotice={retryUnavailable ? chatRetryCopy[locale][retryUnavailable] : null}
+            retryToolsAction={retryTools ? {
+              notice: chatRetryToolsCopy[locale][retryTools.state].replace('{tools}', retryTools.tools.map(tool => `${tool.serverName} · ${tool.toolName}`).join(', ')),
+              label: chatRetryToolsCopy[locale].reload, onClick: () => void restoreRetryTools(), disabled: loadingMcpTools,
+            } : null}
             onRetry={() => void send(true)}
             ct={ct}
             onOpenModels={modelSettings || onOpenModels ? openModelSettings : undefined}

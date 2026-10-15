@@ -32,6 +32,8 @@ interface ChatMessageLogProps {
   recoverable: boolean;
   /** Shown instead of Retry when the unfinished reply cannot be resent exactly. */
   retryNotice: string | null;
+  /** Shown instead of Retry while the MCP tools the reply depends on are not offered. */
+  retryToolsAction?: { notice: string; label: string; onClick: () => void; disabled: boolean } | null;
   onRetry: () => void;
   ct: (key: ChatTextKey) => string;
   onOpenModels?: () => void;
@@ -43,7 +45,7 @@ interface ChatMessageLogProps {
 
 export default function ChatMessageLog({
   scrollRef, onScrollAtBottomChange, disabled, status, model, serverOn, canGenerate, msgs, streamingDraft, phase,
-  copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, onRetry, ct,
+  copiedIndex, compactMessages, locale, onCopy, error, canRetry, recoverable, retryNotice, retryToolsAction, onRetry, ct,
   onOpenModels, modelSettingsLabel, onOpenDiagnostics, onStart, starting,
 }: ChatMessageLogProps) {
   const isFailed = status.state === "failed" || status.state === "crashed";
@@ -112,6 +114,12 @@ export default function ChatMessageLog({
         <button type="button" data-icon="refresh" onClick={onRetry} disabled={!serverOn || !canGenerate || phase !== "idle"} className="app-button app-button--secondary app-button--sm mt-2.5">{ct("retry")}</button>
       )}
       {!error && recoverable && !canRetry && retryNotice && <p role="status" className="mt-2.5 text-xs ui-color-muted">{retryNotice}</p>}
+      {recoverable && retryToolsAction && (
+        <div role="status" className="mt-2.5 text-xs ui-color-muted">
+          <p>{retryToolsAction.notice}</p>
+          <button type="button" data-icon="refresh" onClick={retryToolsAction.onClick} disabled={retryToolsAction.disabled} className="app-button app-button--secondary app-button--sm mt-1.5">{retryToolsAction.label}</button>
+        </div>
+      )}
     </div>
   );
 }

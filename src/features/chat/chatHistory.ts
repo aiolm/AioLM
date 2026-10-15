@@ -1,5 +1,5 @@
 import type { ChatCitation, DocumentAttachment, ImageAttachment } from "./chatTypes.ts";
-import type { ChatContentPart, ChatMessage as ChatRequestMessage } from "../../shared/api/types.ts";
+import type { ChatContentPart, ChatMessage as ChatRequestMessage, ChatToolDefinition } from "../../shared/api/types.ts";
 import { invoke, isNativeRuntimeAvailable } from "../../shared/api/transport.ts";
 import { storageAdapter } from "../../shared/storage/storageAdapter.ts";
 import { sanitizeResponseMetrics, type ResponseMetrics } from "../../shared/lib/metrics.ts";
@@ -47,19 +47,32 @@ export interface ChatHistoryMessage {
   retry?: ChatRetrySnapshot;
 }
 
-export type ChatRetryUnavailableReason = "not-saved" | "local-instructions" | "too-large";
+export type ChatRetryUnavailableReason = "not-saved" | "local-instructions" | "too-large" | "tools-not-saved";
+
+/**
+ * An MCP tool a turn offered the model: which server and tool it came from and
+ * the exact definition sent. It identifies the tool for Retry and grants
+ * nothing, so the tool must be discovered again and every call approved again.
+ */
+export interface ChatRetryTool {
+  serverId: string;
+  serverName: string;
+  toolName: string;
+  definition: ChatToolDefinition;
+}
 
 /**
  * The request an unfinished reply was generated from, exactly as first
  * prepared, so Retry never rebuilds a different prompt. Local instructions
  * and skills are never written into saved conversations, so a turn that used
  * them records only why it cannot be resent once this session forgets it.
- * Auth, tools and approvals are not part of it: a retry always uses the live
- * session and asks again before running any tool.
+ * Auth and approvals are not part of it: a retry always uses the live session
+ * and asks again before running any tool. `tools` names the MCP tools the
+ * request offered; snapshots saved before it existed have none.
  */
 export type ChatRetrySnapshot =
-  | { version: 1; text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[] }
-  | { version: 1; unavailable: Exclude<ChatRetryUnavailableReason, "not-saved"> };
+  | { version: 1; text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[]; tools?: ChatRetryTool[] }
+  | { version: 1; unavailable: Exclude<ChatRetryUnavailableReason, "not-saved" | "tools-not-saved"> };
 
 export type SavedChatRetry =
   | { kind: "ready"; snapshot: Extract<ChatRetrySnapshot, { history: ChatRequestMessage[] }> }
@@ -182,22 +195,31 @@ function validRequestMessage(value: unknown): value is ChatRequestMessage {
       && typeof call.function.name === "string" && typeof call.function.arguments === "string")));
 }
 
+function validRetryTool(value: unknown): value is ChatRetryTool {
+  if (!isRecord(value) || !isRecord(value.definition)) return false;
+  const definition = value.definition.function;
+  return typeof value.serverId === "string" && typeof value.serverName === "string" && typeof value.toolName === "string"
+    && value.definition.type === "function" && isRecord(definition) && typeof definition.name === "string"
+    && optionalString(definition.description) && isRecord(definition.parameters);
+}
+
 function validRetrySnapshot(value: unknown): value is ChatRetrySnapshot {
   if (!isRecord(value) || value.version !== 1) return false;
   if ("unavailable" in value) return value.unavailable === "local-instructions" || value.unavailable === "too-large";
   return typeof value.text === "string"
     && Array.isArray(value.images) && value.images.every(validImage)
     && Array.isArray(value.documents) && value.documents.every(validDocument)
-    && Array.isArray(value.history) && value.history.length > 0 && value.history.every(validRequestMessage);
+    && Array.isArray(value.history) && value.history.length > 0 && value.history.every(validRequestMessage)
+    && (value.tools === undefined || (Array.isArray(value.tools) && value.tools.every(validRetryTool)));
 }
 
 /** Records what Retry needs for a turn, or why it cannot be resent exactly after this session. */
 export function chatRetrySnapshot(
-  request: { text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[] },
+  request: { text: string; images: ImageAttachment[]; documents: DocumentAttachment[]; history: ChatRequestMessage[]; tools?: ChatRetryTool[] },
   usesLocalInstructions: boolean,
 ): ChatRetrySnapshot {
   if (usesLocalInstructions) return { version: 1, unavailable: "local-instructions" };
-  const snapshot = { version: 1 as const, text: request.text, images: request.images, documents: request.documents, history: request.history };
+  const snapshot = { version: 1 as const, text: request.text, images: request.images, documents: request.documents, history: request.history, tools: request.tools ?? [] };
   return JSON.stringify(snapshot).length > RETRY_SNAPSHOT_LIMIT ? { version: 1, unavailable: "too-large" } : snapshot;
 }
 
@@ -210,13 +232,22 @@ export function unfinishedReply(message: ChatHistoryMessage | undefined): boolea
   return message?.role === "assistant" && (!!message.interrupted || !!message.failed || message.finishReason === "tool_calls" || validToolRound(message.toolRound));
 }
 
+/** The reply asked for a tool, or its request already carries a tool call and result, so it depends on the tools it was offered. */
+export function toolTurn(message: ChatHistoryMessage | undefined, history: ChatRequestMessage[]): boolean {
+  return message?.finishReason === "tool_calls" || validToolRound(message?.toolRound)
+    || history.some((item) => item.role === "tool" || !!item.tool_calls?.length);
+}
+
 /** How Retry can recover the conversation's unfinished last reply from what was saved; null when nothing is unfinished. */
 export function savedRetry(message: ChatHistoryMessage | undefined): SavedChatRetry | null {
   if (!unfinishedReply(message)) return null;
   const snapshot = message?.retry;
   // Replies saved before snapshots existed, or by a format this version does not know.
   if (!validRetrySnapshot(snapshot)) return { kind: "unavailable", reason: "not-saved" };
-  return "unavailable" in snapshot ? { kind: "unavailable", reason: snapshot.unavailable } : { kind: "ready", snapshot };
+  if ("unavailable" in snapshot) return { kind: "unavailable", reason: snapshot.unavailable };
+  // An earlier version saved a tool turn without its tools; resending it would silently drop them.
+  if (!snapshot.tools && toolTurn(message, snapshot.history)) return { kind: "unavailable", reason: "tools-not-saved" };
+  return { kind: "ready", snapshot };
 }
 
 function validMessage(value: unknown): value is ChatHistoryMessage {

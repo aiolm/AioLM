@@ -1,5 +1,6 @@
 import type { Locale } from '../../shared/i18n/i18nCatalog';
 import type { ChatRetryUnavailableReason } from './chatHistory';
+import type { RetryToolsState } from './chatRetryTools';
 
 type ReplyState = 'stoppedEmpty' | 'failedEmpty' | 'toolCancelled' | 'toolFailed';
 
@@ -37,20 +38,59 @@ export const chatRetryCopy: Record<Locale, Record<ChatRetryUnavailableReason, st
     'not-saved': 'Retry is unavailable: this reply was saved without the exact original request (by an earlier version or in a format this version cannot read). Send the message again to continue.',
     'local-instructions': 'Retry is unavailable: this reply used local instructions or skills, which are not saved with conversations, so it can only be retried before switching conversations or restarting. Send the message again to use the current files.',
     'too-large': 'Retry is unavailable: the original request was too large to save with the conversation. Send the message again to continue.',
+    'tools-not-saved': 'Retry is unavailable: this reply depends on MCP tools, but an earlier version saved it without recording which ones, so Retry cannot offer the same tools. Send the message again to continue.',
   },
   ko: {
     'not-saved': '재시도할 수 없습니다: 이 응답은 원래 요청의 정확한 사본 없이 저장되었습니다(이전 버전에서 저장했거나 이 버전이 읽을 수 없는 형식). 계속하려면 메시지를 다시 보내세요.',
     'local-instructions': '재시도할 수 없습니다: 이 응답은 대화에 저장되지 않는 로컬 지침이나 스킬을 사용했기 때문에 대화를 전환하거나 앱을 다시 시작하기 전에만 재시도할 수 있습니다. 현재 파일로 계속하려면 메시지를 다시 보내세요.',
     'too-large': '재시도할 수 없습니다: 원래 요청이 너무 커서 대화와 함께 저장하지 못했습니다. 계속하려면 메시지를 다시 보내세요.',
+    'tools-not-saved': '재시도할 수 없습니다: 이 응답은 MCP 도구를 사용하지만 이전 버전이 어떤 도구였는지 기록하지 않고 저장해 같은 도구로 재시도할 수 없습니다. 계속하려면 메시지를 다시 보내세요.',
   },
   ja: {
     'not-saved': '再試行できません: この応答は元のリクエストの正確な写しなしで保存されました（以前のバージョン、またはこのバージョンが読めない形式）。続けるにはメッセージを再送信してください。',
     'local-instructions': '再試行できません: この応答は会話に保存されないローカル指示やスキルを使用したため、会話の切り替えや再起動の前にのみ再試行できます。現在のファイルで続けるにはメッセージを再送信してください。',
     'too-large': '再試行できません: 元のリクエストが大きすぎて会話と一緒に保存できませんでした。続けるにはメッセージを再送信してください。',
+    'tools-not-saved': '再試行できません: この応答はMCPツールを使用していますが、以前のバージョンがどのツールかを記録せずに保存したため、同じツールで再試行できません。続けるにはメッセージを再送信してください。',
   },
   zh: {
     'not-saved': '无法重试：此回复保存时未包含原始请求的精确副本（由早期版本保存，或格式无法被此版本读取）。请重新发送消息以继续。',
     'local-instructions': '无法重试：此回复使用了不会随对话保存的本地指令或技能，因此只能在切换对话或重启前重试。请重新发送消息以使用当前文件。',
     'too-large': '无法重试：原始请求过大，无法随对话保存。请重新发送消息以继续。',
+    'tools-not-saved': '无法重试：此回复依赖 MCP 工具，但早期版本保存时未记录是哪些工具，因此无法使用相同的工具重试。请重新发送消息以继续。',
+  },
+};
+
+/**
+ * Why a reply whose request offered MCP tools cannot be retried yet, and the action
+ * that rediscovers them. `{tools}` lists the server and tool names.
+ */
+export const chatRetryToolsCopy: Record<Locale, Record<RetryToolsState | 'reload', string>> = {
+  en: {
+    load: 'Retry needs the MCP tools offered with this reply ({tools}), and they are not loaded. Reload them to restore that selection; every tool call still asks for approval.',
+    select: 'Retry needs the MCP tools offered with this reply ({tools}), and they are not selected. Reload them to restore that selection; every tool call still asks for approval.',
+    removed: 'Retry is unavailable: MCP tools offered with this reply ({tools}) are no longer offered; the server was removed or disabled, or no longer lists them. Enable them in MCP settings and reload, or send the message again to continue without them.',
+    changed: 'Retry is unavailable: MCP tools offered with this reply ({tools}) changed since then, so Retry would not send the same request. Send the message again to use the current tools.',
+    reload: 'Reload MCP tools for Retry',
+  },
+  ko: {
+    load: '재시도하려면 이 응답에 제공된 MCP 도구({tools})가 필요하지만 불러오지 않았습니다. 다시 불러와 그 선택을 복원하세요. 도구 호출은 매번 승인을 요청합니다.',
+    select: '재시도하려면 이 응답에 제공된 MCP 도구({tools})가 필요하지만 선택되어 있지 않습니다. 다시 불러와 그 선택을 복원하세요. 도구 호출은 매번 승인을 요청합니다.',
+    removed: '재시도할 수 없습니다: 이 응답에 제공된 MCP 도구({tools})를 더 이상 사용할 수 없습니다. 서버가 제거되거나 비활성화되었거나 더 이상 해당 도구를 제공하지 않습니다. MCP 설정에서 활성화한 뒤 다시 불러오거나, 도구 없이 계속하려면 메시지를 다시 보내세요.',
+    changed: '재시도할 수 없습니다: 이 응답에 제공된 MCP 도구({tools})가 그 뒤 변경되어 재시도해도 같은 요청을 보낼 수 없습니다. 현재 도구를 사용하려면 메시지를 다시 보내세요.',
+    reload: '재시도용 MCP 도구 다시 불러오기',
+  },
+  ja: {
+    load: '再試行にはこの応答に提供されたMCPツール（{tools}）が必要ですが、読み込まれていません。再読み込みしてその選択を復元してください。ツール呼び出しは毎回承認を求めます。',
+    select: '再試行にはこの応答に提供されたMCPツール（{tools}）が必要ですが、選択されていません。再読み込みしてその選択を復元してください。ツール呼び出しは毎回承認を求めます。',
+    removed: '再試行できません: この応答に提供されたMCPツール（{tools}）は利用できなくなりました。サーバーが削除または無効化されたか、ツールが提供されなくなりました。MCP設定で有効にして再読み込みするか、ツールなしで続けるにはメッセージを再送信してください。',
+    changed: '再試行できません: この応答に提供されたMCPツール（{tools}）がその後変更されたため、再試行しても同じリクエストを送信できません。現在のツールを使うにはメッセージを再送信してください。',
+    reload: '再試行用にMCPツールを再読み込み',
+  },
+  zh: {
+    load: '重试需要此回复所提供的 MCP 工具（{tools}），但尚未加载。请重新加载以恢复该选择；每次工具调用仍需批准。',
+    select: '重试需要此回复所提供的 MCP 工具（{tools}），但未被选中。请重新加载以恢复该选择；每次工具调用仍需批准。',
+    removed: '无法重试：此回复所提供的 MCP 工具（{tools}）已不可用；服务器已被移除或停用，或不再提供这些工具。请在 MCP 设置中启用后重新加载，或重新发送消息以在没有这些工具的情况下继续。',
+    changed: '无法重试：此回复所提供的 MCP 工具（{tools}）此后已更改，重试将无法发送相同的请求。请重新发送消息以使用当前工具。',
+    reload: '为重试重新加载 MCP 工具',
   },
 };
