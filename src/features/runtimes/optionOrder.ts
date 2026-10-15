@@ -38,29 +38,73 @@ export function writeStored(rows: unknown[][], spelling: string | null): unknown
 export interface OrderEntry { key: string; spelling: string | null }
 export type SavedOrderState = { ok: true; order: OrderEntry[] | null } | { ok: false; error: string };
 
-/** The saved order record checked against the values it orders, mirroring
- * the backend: a newer, malformed or divergent record is refused. */
+// Bounds shared with `runtime_ordered::saved_order`.
+const MAX_ORDER_BYTES = 65_536;
+const MAX_ORDER_OCCURRENCES = 512;
+const MAX_NAME_BYTES = 128;
+const encoder = new TextEncoder();
+const utf8Bytes = (text: string) => encoder.encode(text).length;
+
+/** A key the backend accepts: ASCII letters, digits and `._-/`, at most 128 bytes. */
+function validOrderKey(key: string): boolean {
+  return key.length > 0 && key.length <= MAX_NAME_BYTES && /^[A-Za-z0-9._/-]+$/.test(key);
+}
+
+/** Saved occurrences as the backend reads them (`overrides_from_map`): an
+ * object with `occurrences` that is a valid override, or one scalar value. */
+function savedRows(value: unknown): { count: number; spelling: string | null } {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value) && 'occurrences' in value) {
+    const candidate = value as Record<string, unknown>;
+    if (Object.keys(candidate).every(key => key === 'occurrences' || key === 'spelling')
+      && Array.isArray(candidate.occurrences) && candidate.occurrences.every(row => Array.isArray(row))
+      && (candidate.spelling === undefined || candidate.spelling === null || typeof candidate.spelling === 'string')) {
+      return { count: candidate.occurrences.length, spelling: typeof candidate.spelling === 'string' ? candidate.spelling : null };
+    }
+  }
+  return { count: 1, spelling: null };
+}
+
+/** The saved order record checked against the values it orders, with the
+ * backend's refusals and bounds: a newer, malformed, oversized or divergent
+ * record is refused (and then kept untouched until explicitly discarded).
+ * Size and count are bounded before any per-entry work. */
 export function readOrder(values: Record<string, unknown>): SavedOrderState {
   const raw = values[ORDER_KEY];
   if (raw === undefined) return { ok: true, order: null };
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'malformed' };
+  let serialized: string | undefined;
+  try { serialized = JSON.stringify(raw); } catch { return { ok: false, error: 'malformed' }; }
+  if (serialized === undefined) return { ok: false, error: 'malformed' };
+  if (utf8Bytes(serialized) > MAX_ORDER_BYTES) return { ok: false, error: 'too large' };
+  const version = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>).version : undefined;
+  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 0) return { ok: false, error: 'no valid version' };
+  if (version !== ORDER_VERSION) return { ok: false, error: `version ${version}` };
   const record = raw as Record<string, unknown>;
-  if (record.version !== ORDER_VERSION) return { ok: false, error: typeof record.version === 'number' ? `version ${record.version}` : 'malformed' };
   if (Object.keys(record).some(key => key !== 'version' && key !== 'occurrences') || !Array.isArray(record.occurrences)) return { ok: false, error: 'malformed' };
+  const items = record.occurrences as unknown[];
+  if (items.length > MAX_ORDER_OCCURRENCES) return { ok: false, error: 'too many occurrences' };
   const order: OrderEntry[] = [];
-  for (const item of record.occurrences as unknown[]) {
+  for (const item of items) {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) return { ok: false, error: 'malformed' };
     const entry = item as Record<string, unknown>;
     if (Object.keys(entry).some(key => key !== 'key' && key !== 'spelling') || typeof entry.key !== 'string'
-      || !(entry.spelling === undefined || entry.spelling === null || (typeof entry.spelling === 'string' && entry.spelling !== ''))) {
+      || !(entry.spelling === undefined || entry.spelling === null || typeof entry.spelling === 'string')) {
       return { ok: false, error: 'malformed' };
     }
-    order.push({ key: entry.key, spelling: typeof entry.spelling === 'string' ? entry.spelling : null });
+    const spelling = typeof entry.spelling === 'string' ? entry.spelling : null;
+    if (!validOrderKey(entry.key) || (spelling !== null && (spelling === '' || utf8Bytes(spelling) > MAX_NAME_BYTES || spelling.includes('\u0000')))) {
+      return { ok: false, error: 'invalid entry' };
+    }
+    order.push({ key: entry.key, spelling });
   }
-  for (const key of new Set(order.map(entry => entry.key))) {
-    const stored = readStored(values[key]);
-    const listed = order.filter(entry => entry.key === key);
-    if (!stored || stored.rows.length !== listed.length || stored.spelling !== listed[0].spelling) return { ok: false, error: key };
+  const counts = new Map<string, { count: number; first: string | null }>();
+  for (const entry of order) {
+    const seen = counts.get(entry.key);
+    if (seen) seen.count += 1; else counts.set(entry.key, { count: 1, first: entry.spelling });
+  }
+  for (const [key, listed] of counts) {
+    if (!Object.prototype.hasOwnProperty.call(values, key) || key === ORDER_KEY) return { ok: false, error: key };
+    const saved = savedRows(values[key]);
+    if (saved.count !== listed.count || saved.spelling !== listed.first) return { ok: false, error: key };
   }
   return { ok: true, order };
 }
