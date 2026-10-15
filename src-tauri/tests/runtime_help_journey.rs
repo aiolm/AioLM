@@ -374,6 +374,21 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     )
     .unwrap();
     let command = runtime_schema::help_command(&loaded, &request).unwrap();
+    let mut review_cfg = loaded.clone();
+    review_cfg
+        .provider_options
+        .get_mut(engine.as_str())
+        .unwrap()
+        .insert("removed_only".into(), json!("preserved"));
+    let saved_keys = runtime_schema::discovery_saved_keys(
+        &review_cfg,
+        &runtime_schema::Selected::from_config(&review_cfg).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !saved_keys.contains(&"workers".into()),
+        "manifest option remains valid without a help row"
+    );
     let (_, review) = runtime_help_store::discover_against(
         &service,
         &root,
@@ -381,19 +396,38 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         engine.as_str(),
         "build-1",
         &command,
-        &loaded.provider_options[engine.as_str()]
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>(),
+        &saved_keys,
         Baseline::Accepted(old.map(Box::new)),
     )
     .unwrap();
+    assert_eq!(review.retained, ["removed_only"]);
+    assert_eq!(
+        review_cfg.provider_options[engine.as_str()]["removed_only"],
+        "preserved"
+    );
     assert!(review
         .diff
         .as_ref()
         .unwrap()
         .added
         .contains(&"fresh_extra".to_string()));
+    // Reopening registration after this unaccepted discovery still shows
+    // the changes from the reviewed build, rather than comparing v2 to v2.
+    let (_, reopened) = runtime_help_store::discover_against(
+        &service,
+        &root,
+        "entrypoint-reopen",
+        engine.as_str(),
+        "build-1",
+        &command,
+        &runtime_schema::entrypoint_saved_keys(&review_cfg, engine),
+        runtime_schema::entrypoint_baseline(&root, engine.as_str(), "build-1").unwrap(),
+    )
+    .unwrap();
+    assert!(reopened.diff.unwrap().added.contains(&"fresh_extra".into()));
+    // The new entry-point manifest does not carry the old manual option
+    // catalog. Its undocumented workers value really does need review.
+    assert_eq!(reopened.retained, ["removed_only", "workers"]);
     runtime_schema::accept(&root, &loaded, &review.fingerprint, &request).unwrap();
     // The reviewed help is part of the launch identity: a fresh model probe
     // is required before the changed runtime runs.

@@ -3,8 +3,9 @@ import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAd
 import { invoke } from './transport.ts';
 import type { GgufModel } from './types';
 import { providerImportCommand } from './providers';
-import { runtimeHelpImport } from './runtimeHelp';
+import { entrypointHelpDiscover, runtimeHelpImport, type EntrypointHelp } from './runtimeHelp';
 import { effectiveSchema } from '../../testing/effectiveSchema';
+import { testConfig } from '../../testing/appStore';
 
 vi.mock('./transport.ts', () => ({
   NATIVE_RUNTIME_ERROR: 'Native desktop runtime is unavailable.',
@@ -17,6 +18,15 @@ beforeEach(() => {
 });
 
 describe('additive command import syntax contract', () => {
+  it('preserves the old entry point help payload and adds explicit current settings only when supplied', async () => {
+    const entry: EntrypointHelp = { engine_id: 'custom.synthetic', runtime_id: 'build-1', program: '/synthetic/engine',
+      prefix: [], artifacts: [], environment: {}, protocol: { kind: 'openai_http' } };
+    const request = { args: ['--help'], scope: [] };
+    await entrypointHelpDiscover(entry, request);
+    expect(invoke).toHaveBeenLastCalledWith('entrypoint_help_discover', { entry, request });
+    await entrypointHelpDiscover(entry, request, testConfig);
+    expect(invoke).toHaveBeenLastCalledWith('entrypoint_help_discover', { entry, request, cfg: testConfig });
+  });
   it('normalizes the existing native import response into the issues contract used by the settings UI', async () => {
     const response = { options: { max_model_len: 4096 }, managed: [], unrecognized: [] };
     vi.mocked(invoke).mockResolvedValue(response);

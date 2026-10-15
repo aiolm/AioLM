@@ -14,6 +14,7 @@ import {
   type RuntimeDescriptor,
 } from '../../shared/api/runtimeHelp';
 import type { ProviderId } from '../../shared/api/providers';
+import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
@@ -22,6 +23,7 @@ import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
 import { helpSummary } from './helpSummary';
 import RuntimeArgumentList from './RuntimeArgumentList';
+import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 
 type Copy = (typeof entrypointCopy)['en'];
 type Step = 0 | 1 | 2 | 3;
@@ -90,8 +92,9 @@ function BindingField({ label, state, optional, documented, positionalDocumented
 /** Executable/entry point → help → explicit bindings, protocol and probe →
  * reviewed manifest → register. Nothing is inferred; a fresh model probe
  * after registration decides Ready. */
-export default function EntrypointRegistration({ locked, onRegistered, onBusyChange, titleRef }: {
+export default function EntrypointRegistration({ locked, onRegistered, onBusyChange, titleRef, cfg }: {
   locked: boolean; onRegistered: (engine: ProviderId) => void; onBusyChange?: (busy: boolean) => void; titleRef?: Ref<HTMLHeadingElement>;
+  cfg?: AppConfig;
 }) {
   const { locale } = useI18n();
   const copy = entrypointCopy[locale];
@@ -162,7 +165,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     setBusy(true); setError(''); setSkipHelp(false);
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => { cancelled.current = true; void entrypointHelpCancel(entry); } });
     try {
-      const result = await entrypointHelpDiscover(entry, request);
+      const result = await (cfg ? entrypointHelpDiscover(entry, request, cfg) : entrypointHelpDiscover(entry, request));
       if (generation.current !== ownGeneration) return;
       if (!cancelled.current) setFound({ entry: entryKey, request, result });
       finishTask(taskId, cancelled.current ? 'cancelled' : 'completed');
@@ -319,6 +322,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
             {current && summary && (
               <div role="status">
                 <p>{copy.discovered}: {summary.total} {copy.options}</p>
+                <RuntimeSchemaChanges descriptor={current.result[1]} />
                 {summary.uncertain.length > 0 && <p>{copy.uncertain}: {summary.uncertain.length} ({summary.uncertain.slice(0, 20).join(', ')}{summary.uncertain.length > 20 ? ', …' : ''})</p>}
                 {!current.result[1].help_complete && <FeedbackBanner tone="error">{copy.incomplete}</FeedbackBanner>}
                 <details>

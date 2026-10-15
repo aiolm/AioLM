@@ -85,6 +85,8 @@ bridge 등록 GUI에서는 bridge가 엔진의 JSON argv를 읽는 환경 변수
 
 옵션 GUI와 모델·포트 바인딩은 실제 HTTP launch 명령인 bridge의 도움말에서 확인한다. 원래 엔진의 옵션을 사용하려면 bridge가 그 옵션을 문서화하고 전달해야 한다. 선언한 artifact의 도움말은 검사 목적으로 탐색할 수 있지만 bridge 실행 옵션의 근거로 수락할 수 없다. 같은 인터프리터를 쓰는 다른 스크립트도 등록한 launch prefix 검사를 우회하지 못한다. 엔진 argv 변경은 help와 모델 probe의 identity를 무효화한다. 이 연결이나 도움말 성공은 HTTP·모델·API 능력의 검증을 대신하지 않는다.
 
+도움말 재탐색의 보존 값 경고는 현재 provider 설정을 기준으로 한다. 설치된 runtime의 catalog/manifest가 계속 설명하는 옵션과 전용 제어·순서 기록은 원시 도움말에 없다는 이유만으로 사라진 옵션으로 표시하지 않는다. 반면 새 entry point manifest에는 이전 수동 manifest의 옵션 정의가 없으므로 새 도움말에 없는 값은 검토 대상으로 남긴다. 재등록 화면도 추가·삭제·변경·보존 키를 표시하며, 수락된 도움말이 있다면 그 snapshot을 비교 기준으로 사용한다. 아직 수락하지 않은 탐색을 반복해도 비교 기준이 바뀌지 않는다. 이전 snapshot이 없어도 현재 도움말에 없는 저장 값은 표시한다. 경고·비교는 저장 값을 삭제하거나 재작성하지 않는다.
+
 `kind`는 `integer/number/flag/toggle/choice/text/path/json`이다. 범위·choices·길이와 request/launch 적용 위치를 선언한다. 지원하지 않는 옵션을 조용히 버리지 않는다. 제공자가 선언한 request 옵션만 canonical 요청에 추가한다.
 
 Probe는 30초 안에 stdout으로 **단일 JSON**을 출력한다. 진단은 stderr에 기록한다. 실제 version·accelerator·모델·task와 chat/tools 능력을 검사하며, 빈 모델은 설치 검사를 수행한다. 임의로 능력을 true로 채우지 않는다. 선택 모델이 미지원이면 `model_supported: false`를 반환한다. 예:

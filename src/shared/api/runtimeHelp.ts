@@ -341,8 +341,8 @@ export interface RegisteredManifest {
   [field: string]: unknown;
 }
 
-export const entrypointHelpDiscover = (entry: EntrypointHelp, request: HelpRequest): Promise<[HelpReport, RuntimeDescriptor]> =>
-  invoke<[HelpReport, RuntimeDescriptor]>('entrypoint_help_discover', { entry, request });
+export const entrypointHelpDiscover = (entry: EntrypointHelp, request: HelpRequest, cfg?: AppConfig): Promise<[HelpReport, RuntimeDescriptor]> =>
+  invoke<[HelpReport, RuntimeDescriptor]>('entrypoint_help_discover', { entry, request, ...(cfg ? { cfg } : {}) });
 
 export const entrypointHelpCancel = (entry: EntrypointHelp): Promise<boolean> =>
   invoke<boolean>('entrypoint_help_cancel', { entry });

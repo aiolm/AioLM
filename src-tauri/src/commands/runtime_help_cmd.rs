@@ -88,10 +88,10 @@ pub(crate) async fn runtime_help_discover_selected(
             )?,
             None => None,
         };
-        let saved_keys = crate::providers::launch::provider_options(&cfg, key.provider)
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+        let saved_keys = runtime_schema::discovery_saved_keys(
+            &cfg,
+            &runtime_schema::Selected::from_config(&cfg)?,
+        )?;
         runtime_help_store::discover_against(
             service(),
             &root,
@@ -281,10 +281,21 @@ pub(crate) fn runtime_help_import(
 pub(crate) async fn entrypoint_help_discover(
     entry: crate::providers::registry::EntrypointHelp,
     request: runtime_schema::HelpRequest,
+    cfg: Option<crate::config::AppConfig>,
 ) -> Result<(HelpReport, RuntimeDescriptor), String> {
     tokio::task::spawn_blocking(move || {
         let manifest = crate::providers::registry::provisional_manifest(&entry)?;
         let command = runtime_schema::manifest_help_command(&manifest, &request)?;
+        let cfg = match cfg {
+            Some(cfg) => cfg,
+            None => crate::config::load_result()?,
+        };
+        let saved_keys = runtime_schema::entrypoint_saved_keys(&cfg, entry.engine_id);
+        let baseline = runtime_schema::entrypoint_baseline(
+            &adapters_root(),
+            entry.engine_id.as_str(),
+            &entry.runtime_id,
+        )?;
         runtime_help_store::discover_against(
             service(),
             &adapters_root(),
@@ -292,8 +303,8 @@ pub(crate) async fn entrypoint_help_discover(
             entry.engine_id.as_str(),
             &entry.runtime_id,
             &command,
-            &[],
-            runtime_help_store::Baseline::Latest,
+            &saved_keys,
+            baseline,
         )
     })
     .await

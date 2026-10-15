@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import * as api from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { effectiveSchema } from '../../testing/effectiveSchema';
+import { testConfig } from '../../testing/appStore';
 import EntrypointRegistration from './EntrypointRegistration';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => ({
@@ -103,6 +104,21 @@ it('does not treat a cancelled late help result as a binding source and can retr
   expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+});
+
+it('shows changed options and retained values while reviewing a rebuilt entry point', async () => {
+  vi.mocked(api.entrypointHelpDiscover).mockResolvedValueOnce([report, { ...result[1],
+    diff: { added: ['new_option'], removed: ['removed_option'], changed: ['changed_option'], retained_unknown: ['removed_option'] },
+    retained: ['removed_option'],
+  }]);
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration cfg={testConfig} locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  expect(screen.getByText(/new_option/)).toBeVisible();
+  expect(screen.getByText(/changed_option/)).toBeVisible();
+  expect(screen.getByText(/^Saved values absent from the schema/)).toHaveTextContent('removed_option');
+  expect(api.entrypointHelpDiscover).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), testConfig);
 });
 
 it('cancels only the pending entry point when the registration panel unmounts', async () => {

@@ -19,6 +19,7 @@ import { finishTask, registerTask, updateTask } from '../../shared/state/taskReg
 import { helpSummary } from './helpSummary';
 import RuntimeArgumentList from './RuntimeArgumentList';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
+import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 
 /** Discover, review and accept the selected runtime's help. Help runs only on
  * the explicit button; acceptance pins this exact runtime build. */
@@ -134,14 +135,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
         <div className="mt-3">
           <p>{copy.discovered}: {summary.total} {copy.options}</p>
           {summary.uncertain.length > 0 && <p>{copy.uncertain}: {summary.uncertain.length} ({summary.uncertain.slice(0, 20).join(', ')}{summary.uncertain.length > 20 ? ', …' : ''})</p>}
-          {found[1].diff && (
-            <ul>
-              {found[1].diff.added.length > 0 && <li>{copy.added}: {found[1].diff.added.join(', ')}</li>}
-              {found[1].diff.removed.length > 0 && <li>{copy.removed}: {found[1].diff.removed.join(', ')}</li>}
-              {found[1].diff.changed.length > 0 && <li>{copy.changed}: {found[1].diff.changed.join(', ')}</li>}
-            </ul>
-          )}
-          {found[1].retained.length > 0 && <FeedbackBanner tone="warning">{copy.retained}: {found[1].retained.join(', ')}</FeedbackBanner>}
+          <RuntimeSchemaChanges descriptor={found[1]} />
           <details>
             <summary>{copy.rawHelp}</summary>
             <pre className="overflow-auto whitespace-pre-wrap">{[found[0].stdout.clean_text, found[0].stderr.clean_text].filter(Boolean).join('\n')}</pre>

@@ -844,6 +844,49 @@ struct Compat {
     managed_flags: BTreeMap<String, ManagedBinding>,
 }
 
+/// Saved keys for help review. Kept separate from discovery so catalog and
+/// dedicated settings can be compared against the effective option contract.
+pub fn discovery_saved_keys(cfg: &AppConfig, selected: &Selected) -> Result<Vec<String>, String> {
+    let values = super::launch::provider_options(cfg, selected.key.provider);
+    let catalog = compat(selected)?;
+    let known = catalog
+        .options
+        .iter()
+        .map(|option| option.key.as_str())
+        .collect::<BTreeSet<_>>();
+    Ok(generic_values(&values)
+        .keys()
+        .filter(|key| !known.contains(key.as_str()))
+        .cloned()
+        .collect())
+}
+
+/// A new entry point has no manifest option catalog. Its saved provider values
+/// must be reviewed against its new help, even before any help was accepted.
+pub fn entrypoint_saved_keys(cfg: &AppConfig, provider: ProviderId) -> Vec<String> {
+    generic_values(&super::launch::provider_options(cfg, provider))
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// Re-registration compares against reviewed help, not a newer exploratory
+/// discovery that has not been accepted. New registrations may use the latest
+/// snapshot solely to show changes between their own discovery attempts.
+pub fn entrypoint_baseline(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<runtime_help_store::Baseline, String> {
+    match load_accepted(root, engine, runtime)? {
+        Some(accepted) => Ok(runtime_help_store::Baseline::Accepted(
+            runtime_help_store::load_snapshot(root, engine, runtime, &accepted.fingerprint)?
+                .map(Box::new),
+        )),
+        None => Ok(runtime_help_store::Baseline::Latest),
+    }
+}
+
 /// A documented alias of an app binding remains app-owned even when a
 /// manifest/catalog option shadows that help row in the effective schema.
 fn protect_binding_aliases(compat: &mut Compat, help: &[OptionDefinition]) {
@@ -1751,6 +1794,28 @@ mod tests {
             &source
         )
         .is_none());
+    }
+
+    #[test]
+    fn help_review_does_not_report_valid_catalog_or_dedicated_settings_as_removed() {
+        let runtime = super::super::python_env::PythonRuntimeManifest {
+            format: 1,
+            provider: ProviderId::Vllm,
+            id: "synthetic-review".into(),
+            kind: super::super::python_env::InstallationKind::External,
+            python: "/synthetic/python".into(),
+            requested_version: None,
+            probe: None,
+        };
+        let selected = Selected::python(&runtime).unwrap();
+        let values = json!({"temperature":0.7,"extra_args":["--synthetic"],"@option_order":{"version":1,"occurrences":[]},"request_lora":"selected","removed":"retained"}).as_object().unwrap().clone();
+        let cfg = AppConfig {
+            provider_options: BTreeMap::from([("vllm".into(), values)]),
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(discovery_saved_keys(&cfg, &selected).unwrap(), ["removed"]);
+        assert_eq!(serde_json::to_value(&cfg).unwrap(), before);
     }
 
     #[test]

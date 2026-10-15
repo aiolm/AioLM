@@ -1151,6 +1151,7 @@ pub fn diff_with_saved(
         .cloned()
         .collect::<Vec<_>>();
     retained_unknown.sort();
+    retained_unknown.dedup();
     SchemaDiff {
         added,
         removed,

@@ -265,7 +265,10 @@ pub fn describe(
         return Err("descriptor schema must match its help report".into());
     }
     let (diff, retained) = match previous {
-        None => (None, Vec::new()),
+        None => (
+            None,
+            diff_with_saved(schema, schema, saved_keys).retained_unknown,
+        ),
         Some(old) => {
             let diff = diff_with_saved(&old.schema, schema, saved_keys);
             let retained = diff.retained_unknown.clone();
@@ -697,6 +700,18 @@ mod tests {
             runtime: "build-a".into(),
             fingerprint: "a".repeat(64),
         }
+    }
+
+    #[test]
+    fn first_discovery_reports_retained_saved_values_without_a_previous_snapshot() {
+        let report = test_report("Options:\n  --threads N           threads\n");
+        let schema = test_schema(&report.identity.fingerprint);
+        let saved = vec!["threads".into(), "removed".into(), "removed".into()];
+        let descriptor =
+            describe("custom.example", "build-a", &report, &schema, None, &saved).unwrap();
+        assert_eq!(descriptor.retained, ["removed"]);
+        assert!(descriptor.diff.is_none());
+        assert_eq!(saved.len(), 3, "review does not mutate stored values");
     }
 
     #[test]
