@@ -78,6 +78,7 @@ export const entrypointCopy = {
     optionMetadata: '옵션 메타데이터 (JSON, 선택)',
     optionMetadataHint: '엔진이나 어댑터가 제공한 버전 있는 옵션 메타데이터만 붙여 넣으세요. 도움말에서 보이는 옵션의 형식·단위·비밀 여부·재시작·제약을 설명하며, 도움말 검토와 등록에 함께 쓰입니다.',
     optionMetadataInvalid: '옵션 메타데이터가 올바른 JSON 객체가 아닙니다. 객체를 입력하거나 비워 두세요.',
+    bindingIncomplete: '옵션을 고르거나 사용 안 함을 선택하세요.',
   },
   en: {
     title: 'Register an executable or entry point',
@@ -155,6 +156,7 @@ export const entrypointCopy = {
     optionMetadata: 'Option metadata (JSON, optional)',
     optionMetadataHint: 'Paste only versioned option metadata the engine or its adapter provides. It describes types, units, secrecy, restarts and constraints of options the help shows, and is reviewed with the help and registered with the entry point.',
     optionMetadataInvalid: 'Option metadata is not valid JSON; enter a JSON object or leave it empty.',
+    bindingIncomplete: 'choose its option or select Not used.',
   },
   ja: {
     title: '実行ファイル・エントリーポイントの登録',
@@ -232,6 +234,7 @@ export const entrypointCopy = {
     optionMetadata: 'オプションメタデータ（JSON、任意）',
     optionMetadataHint: 'エンジンまたはアダプターが提供するバージョン付きのオプションメタデータだけを貼り付けてください。ヘルプに表示されるオプションの型・単位・秘密・再起動・制約を説明し、ヘルプのレビューと登録に使われます。',
     optionMetadataInvalid: 'オプションメタデータが有効な JSON オブジェクトではありません。オブジェクトを入力するか空にしてください。',
+    bindingIncomplete: 'オプションを選ぶか、使用しないを選択してください。',
   },
   zh: {
     title: '注册可执行文件或入口点',
@@ -309,5 +312,6 @@ export const entrypointCopy = {
     optionMetadata: '选项元数据（JSON，可选）',
     optionMetadataHint: '只粘贴引擎或其适配器提供的带版本选项元数据。它说明帮助中显示的选项的类型、单位、机密性、重启要求和约束，并与帮助一起审核、随入口点注册。',
     optionMetadataInvalid: '选项元数据不是有效的 JSON 对象。请输入对象或留空。',
+    bindingIncomplete: '请选择其选项，或选择不使用。',
   },
 } satisfies Record<Locale, Record<string, string>>;

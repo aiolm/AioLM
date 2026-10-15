@@ -215,8 +215,15 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     };
   };
 
+  // An optional binding the user switched on must name its argument; it is
+  // never registered as "Not used" behind their back.
+  const incompleteBinding = () => ([[copy.host, host], [copy.served, served]] as const)
+    .find(([, state]) => state.mode !== 'none' && !toBinding(state))?.[0];
+
   const review = async () => {
     if (busy || locked) return;
+    const incomplete = incompleteBinding();
+    if (incomplete) { setError(`${incomplete}: ${copy.bindingIncomplete}`); return; }
     const next = draft();
     if (!next) { setError(copy.required); return; }
     const ownGeneration = ++generation.current;
@@ -235,6 +242,8 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
 
   const register = async () => {
     if (busy || locked) return;
+    const incomplete = incompleteBinding();
+    if (incomplete) { setError(`${incomplete}: ${copy.bindingIncomplete}`); return; }
     const next = draft();
     if (!next) { setError(copy.required); return; }
     const ownGeneration = ++generation.current;

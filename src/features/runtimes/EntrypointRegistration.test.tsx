@@ -161,3 +161,33 @@ it('omits option metadata from the entry when none is given', async () => {
   await waitFor(() => expect(api.entrypointHelpDiscover).toHaveBeenCalled());
   expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[0][0]).not.toHaveProperty('option_metadata');
 });
+
+it('does not register an optional binding the user chose but left without its option', async () => {
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  for (const [label, flag] of [['Model binding', '--model'], ['Port binding', '--port']]) {
+    fireEvent.click(screen.getByRole('combobox', { name: `${label} Option from help` }));
+    fireEvent.click(screen.getByRole('option', { name: flag }));
+  }
+  // Host is switched to "Option from help" but no option is picked.
+  fireEvent.click(screen.getByRole('combobox', { name: 'Host binding (optional)' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Option from help' }));
+  fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Insert {model}' }));
+  fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  expect(await screen.findByText(/Host binding \(optional\).*choose its option or select Not used/)).toBeVisible();
+  expect(api.entrypointManifestPreview).not.toHaveBeenCalled();
+  expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
+  // The other choices stay as typed; choosing "Not used" registers no host.
+  expect(screen.getByLabelText('Probe program')).toHaveValue('/synthetic/probe');
+  fireEvent.click(screen.getByRole('combobox', { name: 'Host binding (optional)' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Not used' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  await screen.findByRole('button', { name: 'Register' });
+  expect(vi.mocked(api.entrypointManifestPreview).mock.calls[0][0]).toMatchObject({ host: null });
+});
