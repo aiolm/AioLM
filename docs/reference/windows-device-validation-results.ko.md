@@ -204,7 +204,7 @@ fixture 2-rich의 실제 native 관리 GUI에서 단일 text와 embedded resourc
 | D39 | GUI와 CLI의 시작 폴더가 다르면 수락한 옵션이 stale 처리됨 | 실제 독립 app/engine subprocess로 재현했다. `0fbbff9`는 수락한 canonical 실행 디렉터리를 저장해 help·launch·fallback probe에서 사용한다. 서로 다른 시작 폴더의 동일 identity/실제 argv/cwd, 변경 시 새 probe 요구, 폴더 삭제 후 명시적 복구, 기존 생략 wire·저장값 보존 검사 pass. 최종 production GUI/CLI 재검증은 unrun |
 | D40 | 첫 등록 probe가 명시적 launch 디렉터리를 상속하지 않음 | 같은 runtime ID를 제거/재등록하는 실제 probe subprocess에서 declared cwd 불일치를 재현했다. `0fbbff9`는 probe 명시 경로 → launch 명시 경로 → 현재 등록의 검토된 경로 순서를 적용한다. 선언 변경의 help stale·재검토·새 probe·실제 cwd와 원래 옵션 보존 pass. 최종 실제 엔진 재검증은 unrun |
 | D41 | 늦은 폴더 선택 결과가 이후 직접 입력한 실행 경로를 덮어씀 | component 검사에서 수정 전 fail을 확인했다. `0fbbff9`는 이후 수동 입력으로 이전 선택 응답을 무효화한다. 관련 29개 GUI 검사 pass. native production 재검증은 unrun |
-| D42 | 작은 창에서 실행 디렉터리 입력란이 카드 밖으로 넘침 | 실제 Chrome 360px에서 입력 우측 369px/카드 우측 336px를 재현했다. `0fbbff9`는 기존 반응형 경로 입력 레이아웃을 사용한다. 360/640/1280px 카드 경계·키보드 선택/수락·axe WCAG2A/AA·2.1AA pass 및 360px screenshot 시각 확인. 합성 IPC 렌더 검사이며 native production 성공은 unrun |
+| D42 | 작은 창 넘침 재현의 검사 설정 오류 정정 | 최초 Chrome fixture에 `styles/index.css`가 빠져 기본 box sizing·font가 적용되지 않았다. 해당 33px 넘침은 제품 결함 근거에서 제외한다. 실제 앱과 같은 index/app CSS 및 결과 파일의 HMR 재로드 방지를 적용한 수정 전·현재 레이아웃 비교는 모두 360/640/1280px 카드 경계·키보드·axe 검사 pass. 현재 360px screenshot을 확인했다. 이전 raw는 보존하며 native production 검증은 unrun |
 | U1–U3 | 미선택 외부 runtime의 raw ID 오류·오래된 inventory/probe 표시·사라진 Tuning 경로 안내 | 107 관련 검사/typecheck/lint pass; `c920bec`. package5 실제 Model & settings→Profiles 안내 pass, 선택/cache 경합 최종 GUI 검사는 남음 |
 
 수정 코드와 자동 검사 성공만 있는 항목은 실제 production 재검증 전까지 해결 완료로 판정하지 않는다. 이번 G07에는 재시작한 중단 응답·MCP 취소 후 Retry, 선택/cache 경합, 작은 창·접근성·대량 옵션 관찰을 포함한다. 기존 일반 생성 Retry의 성공과 다른 복구 동선의 문제를 구분한다.
