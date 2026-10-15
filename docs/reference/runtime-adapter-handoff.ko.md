@@ -75,7 +75,7 @@ JSON은 `schema_version: 1`, `adapter_version: 1`, `protocol: "openai-v1"`를 �
 | `model_formats` | `gguf/hf-safetensors/mlx/unknown` 선언. 선언만으로 모델 지원을 확정하지 않는다. |
 | `models` | 선택적 `{path,name}` 명시적인 외부 모델 binding 목록. 새로운 형식·Strata deployment JSON은 `unknown`으로 등록하고 실제 probe로 검사한다. |
 | `artifacts` | 선택적 adapter 스크립트·library·설정의 절대 경로. 등록 시 전체 SHA-256을 저장하고 변경을 거부한다. 종속 파일은 제공자가 빠짐없이 선언해야 한다. |
-| `health_path`, `health_authenticated` | loopback 상태 endpoint와 인증 필요 여부. 소유 listener 및 `/v1/models`의 예상 alias도 함께 확인한다. |
+| `health_path`, `health_authenticated` | loopback 상태 endpoint와 인증 필요 여부. 소유 listener 및 `/v1/models`의 예상 alias도 함께 확인한다. 소유 listener는 실행한 프로세스 트리 안에 있어야 한다. Windows에서는 실행 프로세스의 job 구성원(예: venv `python.exe` 리다이렉터가 시작한 인터프리터, bridge가 띄운 하위 서버)을 인정하고, 같은 응답을 하는 별개 프로세스의 listener는 이름과 관계없이 거부한다. background CLI도 준비 확인 동안 같은 job으로 소유하므로 시작 실패나 CLI 종료 시 트리 전체를 회수한다. 상태를 저장한 뒤에만 job의 종료 시 kill 제한을 해제해 서버를 넘기고, 이후 중지·재시작은 기존 `server stop/restart`가 담당한다. |
 | `options` | 옵션 `key`, `target: launch/request`, `kind`, 선택적 `flag/group/runtime_default`. launch 옵션은 flag와 probe의 `{options_json}` 전달이 필요하다. |
 | `option_metadata` | 선택적 명시 옵션 정보. `{version:1, engine_id, adapter:{id,revision}, options:[{flag, kind?, arity?, repeatable?, choices?, range?, unit?, runtime_default?, restart_required?, sensitive?, local_path?, reserved?}], constraints:[{kind:"requires"/"excludes", when:{flag,equals?}, other:{flag,equals?}}]}`. `engine_id`는 manifest의 엔진과 같아야 하며 각 항목은 도움말에 나타나는 flag 표기 하나를 가리킨다. 최대 256개 항목·제약이다. |
 

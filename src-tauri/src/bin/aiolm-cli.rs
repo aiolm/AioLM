@@ -811,14 +811,12 @@ async fn server_start_unlocked() -> Result<Value, String> {
         })?;
     drop(log_file);
     let (mut collector, collector_identity, stdout, stderr) = spawn_log_collector()?;
-    let child = {
+    let mut child = {
         let mut command = Command::new(&bin);
         command.env_clear().envs(environment);
         if let Some(cwd) = working_directory {
             command.current_dir(cwd);
         }
-        #[cfg(windows)]
-        command.creation_flags(HEADLESS_CREATION_FLAGS);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -828,14 +826,20 @@ async fn server_start_unlocked() -> Result<Value, String> {
             .args(&args)
             .stdin(Stdio::null())
             .stdout(stdout)
-            .stderr(stderr)
-            .spawn()
-            .map_err(|error| format!("failed to spawn {}: {error}", provider.server()))?
+            .stderr(stderr);
+        // On Windows a job owns the server until its state is persisted, so
+        // readiness accepts a listener its launcher started (an interpreter
+        // behind a venv redirector or bridge) and only such a listener.
+        #[cfg(windows)]
+        let spawned =
+            server::Child::spawn_with_creation_flags(&mut command, HEADLESS_CREATION_FLAGS);
+        #[cfg(not(windows))]
+        let spawned = command.spawn().map(server::Child::from);
+        spawned.map_err(|error| format!("failed to spawn {}: {error}", provider.server()))?
         // Drop Command's copies of the pipe writers before waiting on the
         // server; only the server should keep the collector's input open.
     };
     let pid = child.id();
-    let mut child: server::Child = child.into();
     child.attach_launch_resources(resources)?;
     let url = configured_server_url(cfg.port);
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
@@ -897,13 +901,17 @@ async fn server_start_unlocked() -> Result<Value, String> {
     }
     // Headless mode deliberately transfers ownership to its persisted state;
     // desktop and benchmark children retain their automatic teardown owner.
+    // If the job cannot hand the tree over, the failed release terminates it.
     if let Some(child) = shared
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .child
         .take()
     {
-        drop(child.release());
+        if let Err(error) = child.release() {
+            remove_state();
+            return Err(format!("cannot hand the headless server over: {error}"));
+        }
     }
     // The server now owns the log pipe. EOF terminates this independent
     // collector, and persisted identity lets stop/restart wait for its drain.

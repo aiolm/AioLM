@@ -100,6 +100,11 @@ name = "runtime_fact_conflict_journey"
 path = "tests/runtime_fact_conflict_journey.rs"
 required-features = ["test-fixtures"]
 
+[[test]]
+name = "headless_descendant_listener"
+path = "tests/headless_descendant_listener.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "aiolm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

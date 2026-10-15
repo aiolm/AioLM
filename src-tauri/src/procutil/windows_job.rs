@@ -50,6 +50,25 @@ impl ProcessJob {
         Ok(())
     }
 
+    /// Clear KILL_ON_JOB_CLOSE so closing this handle no longer terminates the
+    /// members. Microsoft documents that a job without that limit is destroyed
+    /// only after its last handle closes and all its processes have exited.
+    pub(super) fn persist(&self) -> io::Result<()> {
+        let limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe {
+            SetInformationJobObject(
+                self.handle(),
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of_val(&limits) as u32,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     pub(super) fn terminate(&self) {
         unsafe { TerminateJobObject(self.handle(), 1) };
     }

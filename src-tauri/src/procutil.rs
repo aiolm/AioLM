@@ -167,6 +167,25 @@ pub struct OwnedChild {
 
 impl OwnedChild {
     pub fn spawn(command: &mut std::process::Command) -> std::io::Result<Self> {
+        Self::spawn_with_flags(command, 0)
+    }
+
+    /// A headless CLI server is detached from the CLI's console, yet its job
+    /// owns it until `release`: readiness can authenticate a launcher's
+    /// descendant listener, and a failed or interrupted start reclaims the tree.
+    #[cfg(windows)]
+    pub fn spawn_with_creation_flags(
+        command: &mut std::process::Command,
+        creation_flags: u32,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_flags(command, creation_flags)
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn spawn_with_flags(
+        command: &mut std::process::Command,
+        creation_flags: u32,
+    ) -> std::io::Result<Self> {
         let mut active = transient_processes()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -178,7 +197,7 @@ impl OwnedChild {
         #[cfg(windows)]
         let job = {
             use std::os::windows::process::CommandExt;
-            command.creation_flags(CREATE_NO_WINDOW | 0x0000_0004);
+            command.creation_flags(creation_flags | CREATE_NO_WINDOW | 0x0000_0004);
             windows_job::ProcessJob::new()?
         };
         #[allow(unused_mut)]
@@ -282,9 +301,16 @@ impl OwnedChild {
     }
 
     /// Transfer a deliberately persistent headless process to its state file.
-    pub fn release(mut self) -> std::process::Child {
+    /// Its job first stops killing members on close, so the process and its
+    /// descendants outlive this owner. If that fails, dropping `self` still
+    /// terminates the tree.
+    pub fn release(mut self) -> std::io::Result<std::process::Child> {
+        #[cfg(windows)]
+        if let Some((_, tree)) = &self.registration {
+            tree.job.persist()?;
+        }
         self.unregister();
-        self.child.take().expect("owned child")
+        Ok(self.child.take().expect("owned child"))
     }
 }
 
@@ -955,6 +981,37 @@ mod tests {
             .unwrap()
             .trees
             .contains_key(&token));
+    }
+
+    #[test]
+    fn a_released_job_tree_outlives_its_closed_owner() {
+        use std::io::BufRead;
+        let mut command = std_command("powershell");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$child = Start-Process ping.exe -ArgumentList @('-n','60','127.0.0.1') -WindowStyle Hidden -PassThru; [Console]::Out.WriteLine($child.Id); Start-Sleep -Seconds 60"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        // CREATE_NEW_PROCESS_GROUP, as headless starts combine with the job.
+        let mut owned = OwnedChild::spawn_with_creation_flags(&mut command, 0x0000_0200).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(owned.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant_pid = line.trim().parse().unwrap();
+        let descendant = ProcessExitProbe::open(descendant_pid).unwrap();
+        let root = ProcessExitProbe::open(owned.id()).unwrap();
+        assert!(owned.process_handle().unwrap().contains(descendant_pid));
+        // Release drops the last job handle; members must keep running.
+        let mut released = owned.release().unwrap();
+        let survived = !root.wait(std::time::Duration::from_secs(1)) && !descendant.exited();
+        terminate_pid(released.id());
+        let _ = released.wait();
+        if !descendant.wait(std::time::Duration::from_secs(5)) {
+            terminate_pid(descendant_pid);
+        }
+        assert!(survived, "closing a released job terminated its members");
+        assert!(descendant.wait(std::time::Duration::from_secs(5)));
     }
 
     #[test]

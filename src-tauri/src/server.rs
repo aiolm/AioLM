@@ -42,13 +42,38 @@ impl std::ops::DerefMut for Child {
     }
 }
 impl Child {
-    pub fn release(mut self) -> std::process::Child {
+    /// A headless start: detached from the CLI's console, but owned by a job
+    /// until `release`, so readiness accepts a listener in the launched tree
+    /// (e.g. the interpreter a venv `python.exe` starts) and nothing else.
+    #[cfg(windows)]
+    pub fn spawn_with_creation_flags(
+        command: &mut std::process::Command,
+        creation_flags: u32,
+    ) -> std::io::Result<Self> {
+        let process =
+            crate::procutil::OwnedChild::spawn_with_creation_flags(command, creation_flags)?;
+        Ok(Self {
+            process: Some(process),
+            key_file: None,
+            output_readers: Vec::new(),
+            launch_resources: None,
+        })
+    }
+
+    pub fn release(mut self) -> std::io::Result<std::process::Child> {
         // Persistent CLI children do not use a temporary credential or this
         // reader; their stdout/stderr are managed by the headless log pump.
+        // A failed release terminates the process, and dropping `self` then
+        // removes its launch resources.
+        let child = self
+            .process
+            .take()
+            .expect("owned server process")
+            .release()?;
         if let Some(resources) = self.launch_resources.take() {
             resources.release();
         }
-        self.process.take().expect("owned server process").release()
+        Ok(child)
     }
 
     pub fn attach_launch_resources(

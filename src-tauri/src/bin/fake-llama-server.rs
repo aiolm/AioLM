@@ -190,6 +190,36 @@ fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments
         .iter()
+        .any(|arg| arg == "--adapter-launcher-fixture")
+    {
+        // Like a venv `python.exe` redirector: run the real server as a child
+        // with the remaining argv, wait for it and exit with its status, so
+        // the HTTP listener is a descendant rather than the launched process.
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(
+            arguments[1..]
+                .iter()
+                .filter(|arg| *arg != "--adapter-launcher-fixture"),
+        );
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let mut child = command.spawn().expect("spawn synthetic launcher child");
+        if let Ok(path) = std::env::var("FAKE_LAUNCHER_RECORD") {
+            std::fs::write(
+                path,
+                serde_json::json!({"launcher": std::process::id(), "server": child.id()})
+                    .to_string(),
+            )
+            .expect("record synthetic launcher identities");
+        }
+        let status = child.wait().expect("wait for synthetic launcher child");
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    if arguments
+        .iter()
         .any(|arg| arg == "--adapter-context-contract-fixture")
     {
         let result = (|| -> Result<serde_json::Value, String> {
@@ -534,6 +564,12 @@ fn main() {
         .unwrap();
         errors.flush().unwrap();
         std::process::exit(7);
+    }
+    if arguments.iter().any(|arg| arg == "--adapter-hold-fixture") {
+        // A live managed tree that never listens, so only an unrelated
+        // process can answer on the configured port. Bounded if leaked.
+        std::thread::sleep(std::time::Duration::from_secs(120));
+        return;
     }
     let port = port_arg();
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind fake llama-server port");
