@@ -17,6 +17,6 @@ export default function RuntimeSchemaChanges({ descriptor }: { descriptor: Runti
       {diff.changed.length > 0 && <li>{copy.changed}: {diff.changed.join(', ')}</li>}
     </ul>}
     {descriptor.retained.length > 0 && <FeedbackBanner tone="warning">{copy.retained}: {descriptor.retained.join(', ')}</FeedbackBanner>}
-    <RuntimeFactDifferences metadata={descriptor.metadata} />
+    <RuntimeFactDifferences metadata={descriptor.metadata} schema={descriptor.schema} />
   </>;
 }

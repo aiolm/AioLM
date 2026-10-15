@@ -656,7 +656,67 @@ pub fn apply(
             view.conflicts.push(found);
         }
     }
+    // Differences about a secret option never carry its value literals
+    // (defaults, choices), whether help or the entry itself says it is secret.
+    let secret_flags: BTreeSet<&str> = metadata
+        .options
+        .iter()
+        .filter(|entry| entry.sensitive == Some(true))
+        .map(|entry| entry.flag.as_str())
+        .collect();
+    for found in &mut view.conflicts {
+        let secret = secret_flags.contains(found.flag.as_str())
+            || launch_option(schema, &found.flag)
+                .is_some_and(|option| option.sensitive.supported() == Some(&true));
+        if secret && !VALUE_FREE.contains(&found.field.as_str()) {
+            found.observed = redacted(&found.observed);
+            found.declared = redacted(&found.declared);
+        }
+    }
     view
+}
+
+/// Facts that describe syntax or handling, never a value an option holds.
+const VALUE_FREE: [&str; 9] = [
+    "arity",
+    "kind",
+    "key",
+    "target",
+    "repeatable",
+    "unit",
+    "restart_required",
+    "sensitive",
+    "local_path",
+];
+
+/// A display copy of a declared value with literals an option may hold
+/// replaced; an entry's other facts stay readable.
+fn redacted(value: &Value) -> Value {
+    const HIDDEN: &str = "[REDACTED]";
+    match value {
+        Value::Null => Value::Null,
+        Value::Object(object) if object.contains_key("literal") => json!({"literal": HIDDEN}),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, item)| {
+                    let item = match key.as_str() {
+                        "runtime_default" | "choices" | "equals" => Value::from(HIDDEN),
+                        _ => redacted_nested(item),
+                    };
+                    (key.clone(), item)
+                })
+                .collect(),
+        ),
+        _ => Value::from(HIDDEN),
+    }
+}
+
+fn redacted_nested(value: &Value) -> Value {
+    match value {
+        Value::Object(_) => redacted(value),
+        other => other.clone(),
+    }
 }
 
 /// What applying `metadata` to a just-discovered help schema would establish
@@ -1013,6 +1073,24 @@ mod tests {
                 "{key}: {:?}",
                 view.conflicts
             );
+        }
+    }
+
+    #[test]
+    fn differences_of_a_secret_entry_never_carry_its_literals() {
+        let declared = metadata(
+            json!([
+                {"flag": "--mode", "sensitive": true, "runtime_default": {"literal": "hidden-default-synthetic"}},
+                {"flag": "--missing", "sensitive": true, "choices": ["hidden-choice-synthetic"]}
+            ]),
+            json!([]),
+        );
+        let view = review(&schema(), &declared, false);
+        let text = serde_json::to_string(&view.conflicts).unwrap();
+        assert!(view.conflicts.iter().any(|c| c.field == "runtime_default"));
+        assert!(view.conflicts.iter().any(|c| c.field == "option"));
+        for literal in ["hidden-default-synthetic", "hidden-choice-synthetic"] {
+            assert!(!text.contains(literal), "{text}");
         }
     }
 

@@ -50,6 +50,8 @@ impl Drop for TestHome {
 const ENGINE: &str = "custom.metadatafixture";
 /// A synthetic value of an option only metadata marks sensitive.
 const AMBER: &str = "amber-7Q-synthetic-value";
+/// A synthetic value of a manifest option another runtime marks sensitive.
+const LABEL: &str = "label-9K-synthetic-value";
 
 /// `aiolm-cli config get` against this test home, as a user would run it.
 fn cli_config(home: &Path) -> String {
@@ -436,4 +438,38 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
         serde_json::to_value(runtime_schema::effective(&root, &loaded, true).unwrap()).unwrap();
     assert_eq!(by_flag(&renewed, "--fresh-cache")["unit"]["value"], "GiB");
     assert_eq!(renewed["metadata"]["revision"], "r2");
+
+    // A second runtime of the same engine declares another option secret,
+    // through a manifest option it describes without any reviewed help.
+    let mut second = manifest(
+        &area.path,
+        &argv_file,
+        Some(json!({"version": 1, "engine_id": ENGINE,
+            "adapter": {"id": "synthetic.adapter", "revision": "r3"},
+            "options": [{"flag": "--fresh-label", "sensitive": true}]})),
+    );
+    second["runtime_id"] = json!("build-2");
+    second["probe"]["args"][2] = json!("build-2");
+    second["options"] = json!([{"key": "label_text", "flag": "--fresh-label", "target": "launch", "kind": {"type": "text", "max_len": 64}}]);
+    register(&area.path, &second).await.unwrap();
+    // Switching to another engine keeps this engine's values and profiles;
+    // public projections still hide every value its runtimes declare secret.
+    let mut away = loaded.clone();
+    let mut kept = values.as_object().unwrap().clone();
+    kept.insert("label_text".into(), json!(LABEL));
+    away.provider_options.insert(ENGINE.into(), kept.clone());
+    away.active_provider = "llama.cpp".into();
+    away.active_runtime.clear();
+    aiolm_lib::config::save(&away).unwrap();
+    let shown = cli_config(&area.path);
+    for secret in [AMBER, LABEL, "synthetic-secret-value"] {
+        assert!(!shown.contains(secret), "{secret}: {shown}");
+    }
+    assert!(shown.contains("fresh_amber") && shown.contains("label_text"));
+    assert!(shown.contains("\"fresh_cache\": 512"), "{shown}");
+    // Stored values are untouched.
+    assert_eq!(
+        aiolm_lib::config::load_result().unwrap().provider_options[ENGINE],
+        kept
+    );
 }

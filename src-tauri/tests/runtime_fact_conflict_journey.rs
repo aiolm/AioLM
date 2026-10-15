@@ -60,7 +60,9 @@ fn manifest(engine: &str, area: &Path, argv_file: &Path) -> Value {
         ],
         "model_formats": ["unknown"], "health_path": "/health",
         // A relation the reviewed help cannot honor (its other side is absent).
+        // The mode value is declared secret: diagnostics must not print it.
         "option_metadata": {"version": 1, "engine_id": engine, "adapter": {"id": "synthetic.adapter", "revision": "r1"},
+            "options": [{"flag": "--fresh-mode", "sensitive": true}],
             "constraints": [{"kind": "requires", "when": {"flag": "--fresh-count"}, "other": {"flag": "--gone-flag"}}]}
     })
 }
@@ -239,6 +241,9 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
         refused.contains("fast, safe") && refused.contains("retained"),
         "{refused}"
     );
+    // The option is declared secret, so neither the saved value nor the
+    // declared choices it came from are printed; the reason still is.
+    assert!(!refused.contains("exact"), "{refused}");
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let error = providers::registry::command(&cfg, port, "synthetic-key").unwrap_err();
     assert!(error.contains("--fresh-mode"), "{error}");

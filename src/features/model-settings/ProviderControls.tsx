@@ -235,7 +235,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {effective && <ConfirmedSyntaxReview effective={effective} disabled={disabled || syntaxBusy}
       onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}
       onDiscard={() => saveSyntax(() => api.runtimeHelpClearConfirmedSyntax(cfg))} />}
-    {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} />}
+    {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} schema={effective.schema} />}
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
     </>}
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}

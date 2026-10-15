@@ -1006,7 +1006,7 @@ fn outside_observed(conflict: &FactConflict, value: &Value) -> bool {
 }
 
 /// The reason a blocking difference refuses this saved value, if it does.
-fn blocking_issue(conflict: &FactConflict, saved: &Value) -> Option<String> {
+fn blocking_issue(conflict: &FactConflict, saved: &Value, sensitive: bool) -> Option<String> {
     let recovery = "remove the saved value, or correct that declaration and register the runtime again (or select a runtime whose help matches it)";
     match conflict.field.as_str() {
         "arity" => Some(format!(
@@ -1030,14 +1030,23 @@ fn blocking_issue(conflict: &FactConflict, saved: &Value) -> Option<String> {
                 Some(choices) => choices.iter().map(argv_text).collect::<Vec<_>>().join(", "),
                 None => argv_text(&conflict.observed),
             };
-            Some(format!(
-                "{}: the reviewed help accepts {} {observed} but the saved value {} is outside it, although {} declares {}; the saved value was retained. Choose a value the help documents, {recovery}",
-                conflict.flag,
-                conflict.field,
-                argv_text(outside),
-                conflict.declared_by,
-                argv_text(&conflict.declared),
-            ))
+            // A secret value, and the declared list it came from, are never
+            // repeated in a diagnostic; the reason and recovery suffice.
+            Some(if sensitive {
+                format!(
+                    "{}: the reviewed help accepts {} {observed} but the saved (hidden) value is outside it, although {} declares it; the saved value was retained. Choose a value the help documents, {recovery}",
+                    conflict.flag, conflict.field, conflict.declared_by,
+                )
+            } else {
+                format!(
+                    "{}: the reviewed help accepts {} {observed} but the saved value {} is outside it, although {} declares {}; the saved value was retained. Choose a value the help documents, {recovery}",
+                    conflict.flag,
+                    conflict.field,
+                    argv_text(outside),
+                    conflict.declared_by,
+                    argv_text(&conflict.declared),
+                )
+            })
         }
         "constraint" => Some(format!(
             "{}: {} declares a constraint the reviewed help cannot honor ({}); the saved value was retained instead of launching without it. Correct the option metadata and register the runtime again, or remove the saved value",
@@ -1712,12 +1721,17 @@ pub fn saved_issues_for(
         if reported.contains(&key) {
             continue;
         }
+        let sensitive = effective
+            .schema
+            .options
+            .iter()
+            .any(|option| option.key == key && option.sensitive.supported() == Some(&true));
         let refusal = effective
             .conflicts
             .iter()
             .chain(effective.metadata.iter().flat_map(|view| &view.conflicts))
             .filter(|conflict| conflict.blocking && conflict.key == key)
-            .find_map(|conflict| blocking_issue(conflict, &value));
+            .find_map(|conflict| blocking_issue(conflict, &value, sensitive));
         if let Some(message) = refusal {
             issues.push(issue(&key, "conflict", message));
             blocked.insert(key);
@@ -2043,43 +2057,142 @@ pub fn mask_argv(
         .collect()
 }
 
-/// Hide the selected runtime's secret option values in a serialized
-/// configuration: every `provider_options.<engine>.<key>`, including the
-/// copies saved profiles keep. Stored values stay.
+/// Secret keys one stored runtime declares, without selecting it: its
+/// accepted help (whatever parser wrote it) and, for a registered engine,
+/// its manifest options, with its option metadata or built-in facts applied.
+/// Only for hiding values; never for launch.
+fn stored_runtime_sensitive_keys(
+    root: &Path,
+    provider: ProviderId,
+    runtime: &str,
+) -> BTreeSet<String> {
+    let engine = provider.as_str();
+    let mut keys = BTreeSet::new();
+    let (declared, metadata) = match provider {
+        ProviderId::Custom(_) => match registry::manifest(provider, runtime) {
+            Ok(manifest) => {
+                let source =
+                    adapter_source(engine, &format!("manifest-v{}", manifest.adapter_version));
+                (
+                    manifest
+                        .options
+                        .iter()
+                        .filter_map(|option| from_external(option, &source))
+                        .collect::<Vec<_>>(),
+                    manifest.option_metadata,
+                )
+            }
+            Err(_) => (Vec::new(), None),
+        },
+        _ => (Vec::new(), runtime_metadata::builtin(provider)),
+    };
+    let help = load_accepted(root, engine, runtime)
+        .ok()
+        .flatten()
+        .and_then(|accepted| {
+            runtime_help_store::stored_schema(root, engine, runtime, &accepted.fingerprint)
+        });
+    let manifest_schema = (!declared.is_empty()).then(|| OptionSchema {
+        schema_version: SCHEMA_VERSION,
+        binding: super::runtime_options::SchemaBinding {
+            engine: engine.into(),
+            runtime: runtime.into(),
+            fingerprint: compat_fingerprint(engine, runtime, &declared),
+        },
+        options: declared,
+        constraints: Vec::new(),
+        raw_help: Vec::new(),
+        end_of_options: Fact::default(),
+    });
+    for mut schema in help.into_iter().chain(manifest_schema) {
+        if let Some(metadata) = &metadata {
+            runtime_metadata::apply(&mut schema, metadata, false, false);
+        }
+        secret_keys_of(&schema, &mut keys);
+    }
+    keys
+}
+
+/// Secret keys per engine for every runtime this app has stored facts for
+/// (registrations and reviewed help under `root`), plus the selected
+/// runtime's effective schema. Runtimes of one engine that declare
+/// different facts all count, so every saved copy of that engine's options
+/// stays hidden whichever runtime or provider is selected.
+pub fn stored_sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeMap<String, BTreeSet<String>> {
+    let mut all: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if let Ok(selected) = Selected::from_config(cfg) {
+        all.entry(selected.key.engine.clone())
+            .or_default()
+            .extend(sensitive_keys(root, cfg));
+    }
+    for engine in std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .take(128)
+    {
+        let Some(provider) = engine.file_name().to_str().and_then(ProviderId::parse) else {
+            continue;
+        };
+        for runtime in std::fs::read_dir(engine.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .take(128)
+        {
+            let Some(name) = runtime.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if runtime_help_store::valid_segment(&name) {
+                all.entry(provider.as_str().to_owned())
+                    .or_default()
+                    .extend(stored_runtime_sensitive_keys(root, provider, &name));
+            }
+        }
+    }
+    all.retain(|_, keys| !keys.is_empty());
+    all
+}
+
+/// Hide secret option values in a serialized configuration: every
+/// `provider_options.<engine>.<key>`, including the copies saved profiles
+/// and sessions keep, for every engine, not only the selected one. Stored
+/// values stay.
 pub fn mask_config(root: &Path, cfg: &AppConfig, projection: &mut Value, placeholder: &str) {
-    fn walk(value: &mut Value, engine: &str, keys: &BTreeSet<String>, placeholder: &str) {
+    fn walk(value: &mut Value, secrets: &BTreeMap<String, BTreeSet<String>>, placeholder: &str) {
         match value {
             Value::Object(object) => {
                 for (name, child) in object.iter_mut() {
                     if name == "provider_options" {
-                        if let Some(options) = child.get_mut(engine).and_then(Value::as_object_mut)
-                        {
-                            for (key, value) in options.iter_mut() {
-                                if keys.contains(key) {
-                                    *value = Value::from(placeholder);
+                        if let Some(engines) = child.as_object_mut() {
+                            for (engine, options) in engines.iter_mut() {
+                                let (Some(keys), Some(options)) =
+                                    (secrets.get(engine), options.as_object_mut())
+                                else {
+                                    continue;
+                                };
+                                for (key, value) in options.iter_mut() {
+                                    if keys.contains(key) {
+                                        *value = Value::from(placeholder);
+                                    }
                                 }
                             }
                         }
                     }
-                    walk(child, engine, keys, placeholder);
+                    walk(child, secrets, placeholder);
                 }
             }
             Value::Array(items) => {
                 for item in items {
-                    walk(item, engine, keys, placeholder);
+                    walk(item, secrets, placeholder);
                 }
             }
             _ => {}
         }
     }
-    let keys = sensitive_keys(root, cfg);
-    if !keys.is_empty() {
-        walk(
-            projection,
-            super::provider_of(cfg).as_str(),
-            &keys,
-            placeholder,
-        );
+    let secrets = stored_sensitive_keys(root, cfg);
+    if !secrets.is_empty() {
+        walk(projection, &secrets, placeholder);
     }
 }
 

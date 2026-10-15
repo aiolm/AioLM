@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { FactConflict, MetadataView } from '../../shared/api/runtimeHelp';
+import type { FactConflict, MetadataView, OptionSchema } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
@@ -16,12 +16,27 @@ function fieldLabel(field: string, copy: Copy): string {
   return label ?? field;
 }
 
+/** Facts that describe syntax or handling, never a value an option holds. */
+const VALUE_FREE = new Set(['arity', 'kind', 'key', 'target', 'repeatable', 'unit', 'restart_required', 'sensitive', 'local_path']);
+
+/** A difference about an option declared or documented secret. */
+function secret(conflict: FactConflict, schema?: OptionSchema): boolean {
+  const option = schema?.options.find(item => item.key === conflict.key);
+  const sensitive = option?.sensitive;
+  const declared = conflict.declared as { sensitive?: unknown } | null;
+  return (sensitive?.certainty !== 'unknown' && sensitive?.value === true)
+    || (typeof declared === 'object' && declared !== null && declared.sensitive === true);
+}
+
 /** Declared option facts that differ from the reviewed help, with the
  * declaration's provenance, which side the schema uses and whether a saved
- * value is refused. Shown at help review, registration and in settings. */
-export default function RuntimeFactDifferences({ conflicts = [], metadata }: {
+ * value is refused. Shown at help review, registration and in settings.
+ * Value literals of secret options (defaults, choices) are never shown. */
+export default function RuntimeFactDifferences({ conflicts = [], metadata, schema }: {
   conflicts?: FactConflict[];
   metadata?: MetadataView | null;
+  /** The schema the differences describe, for recognising secret options. */
+  schema?: OptionSchema;
 }) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
@@ -29,6 +44,8 @@ export default function RuntimeFactDifferences({ conflicts = [], metadata }: {
   const all = [...conflicts, ...(metadata?.conflicts ?? [])];
   const describe = metadata && (!metadata.builtin || metadata.error);
   if (!describe && all.length === 0) return null;
+  const value = (conflict: FactConflict, literal: unknown) =>
+    (secret(conflict, schema) && !VALUE_FREE.has(conflict.field) && literal !== null && literal !== undefined ? '•••' : shown(literal));
   return (
     <section className="mt-3" aria-labelledby={`${id}-title`}>
       <h4 id={`${id}-title`}>{copy.differencesTitle}</h4>
@@ -45,7 +62,7 @@ export default function RuntimeFactDifferences({ conflicts = [], metadata }: {
           {all.map((conflict, index) => (
             <li key={`${conflict.flag}:${conflict.field}:${index}`}>
               <code>{conflict.flag || conflict.key}</code>
-              {` · ${fieldLabel(conflict.field, copy)} · ${copy.sourceHelp}: ${shown(conflict.observed)} · ${conflict.declared_by}: ${shown(conflict.declared)} · `}
+              {` · ${fieldLabel(conflict.field, copy)} · ${copy.sourceHelp}: ${value(conflict, conflict.observed)} · ${conflict.declared_by}: ${value(conflict, conflict.declared)} · `}
               {conflict.applies === 'observed' ? copy.appliesObserved : copy.appliesDeclared}
               {conflict.blocking && ` · ${copy.blocksLaunch}`}
             </li>

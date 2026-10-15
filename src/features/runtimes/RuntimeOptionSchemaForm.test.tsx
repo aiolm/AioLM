@@ -193,6 +193,19 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     expect(screen.getByLabelText(/^--token/)).toHaveAttribute('type', 'text');
   });
 
+  it('never shows the documented default of a secret option', () => {
+    const adapter = { kind: 'adapter', id: 'synthetic.adapter', revision: 'r1' };
+    const amber = textOption('fresh_amber', {
+      sensitive: { value: true, certainty: 'documented', source: adapter },
+      runtime_default: { value: { literal: 'default-amber-synthetic' }, certainty: 'documented', source: adapter },
+    });
+    const plain = textOption('fresh_plain', { runtime_default: { value: { literal: 'visible-default' }, certainty: 'documented', source: adapter } });
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([amber, plain])} values={{}} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    expect(document.body).not.toHaveTextContent('default-amber-synthetic');
+    expect(screen.getByText('--fresh_amber').parentElement!).toHaveTextContent('•••');
+    expect(screen.getByText('--fresh_plain').parentElement!).toHaveTextContent('visible-default');
+  });
+
   it('shows unit, restart and secrecy facts with the source that documents each one', () => {
     const adapter = { kind: 'adapter', id: 'synthetic.adapter', revision: 'r1' };
     const help = { kind: 'help', document: 'stdout', start_line: 3, end_line: 3 };

@@ -217,7 +217,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   const confirmed = option.arity.certainty === 'user_confirmed' || option.repeatable.certainty === 'user_confirmed';
   const facts = [
     option.target === 'request' ? copy.request : copy.launch,
-    `${copy.inherit}: ${inheritLabel ?? (defaultValue ? display(defaultValue.literal) : copy.inherit)}`,
+    // A secret option's documented default is a secret too; it is never shown.
+    `${copy.inherit}: ${inheritLabel ?? (defaultValue ? (supported(option.sensitive) === true ? '•••' : display(defaultValue.literal)) : copy.inherit)}`,
     supported(option.unit),
     supported(option.restart_required) === true ? copy.restartRequired : undefined,
     supported(option.sensitive) === true ? copy.secretValue : undefined,
