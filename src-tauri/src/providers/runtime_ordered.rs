@@ -463,13 +463,18 @@ pub fn import_plan_text_with_syntax(
                 .options
                 .iter()
                 .find(|o| o.managed.is_some() && o.spellings.iter().any(|s| s.flag == name));
-            if managed_hit.is_some() {
+            if let Some(option) = managed_hit {
                 managed.push(word.clone());
                 if inline.is_none() {
-                    if let Some(next) = words.get(index).filter(|n| !n.starts_with('-')) {
-                        managed.push(next.clone());
-                        index += 1;
+                    let count = option.arity.supported().filter(|arity| arity.max == Some(arity.min)).map(|arity| usize::from(arity.min))
+                        .ok_or_else(|| format!("{name}: confirm its exact value count before importing a command; its saved values were retained"))?;
+                    if words.len().saturating_sub(index) < count {
+                        return Err(format!(
+                            "{name}: the pasted command is missing a managed option value"
+                        ));
                     }
+                    managed.extend_from_slice(&words[index..index + count]);
+                    index += count;
                 }
                 continue;
             }
@@ -1224,5 +1229,56 @@ mod tests {
             .unwrap()
             .get("scope_boundaries")
             .is_none());
+    }
+    #[test]
+    fn managed_boolean_does_not_consume_the_next_subcommand_as_a_value() {
+        let mut server = option("server", "--server", 0, Some(0));
+        server.kind = known(ValueKind::Boolean);
+        server.managed = Some(super::super::runtime_options::ManagedBinding::EntryPoint);
+        let mut local = option("local", "--local", 1, Some(1));
+        local.scope = vec!["serve".into(), "api".into()];
+        let schema = schema(vec![server, local]);
+        let imported = import_plan_text(
+            &schema,
+            &["serve".into(), "api".into()],
+            "--server serve api --local 7",
+        )
+        .unwrap();
+        assert_eq!(imported.managed, vec!["--server"]);
+        assert!(
+            imported.unrecognized.is_empty(),
+            "{:?}",
+            imported.unrecognized
+        );
+        assert_eq!(imported.plan.len(), 1);
+        assert_eq!(imported.plan[0].values, vec![json!("7")]);
+    }
+
+    #[test]
+    fn managed_value_boundaries_are_declared_and_never_guessed_from_a_dash() {
+        let mut model = option("model", "--model", 1, Some(1));
+        model.managed = Some(super::super::runtime_options::ManagedBinding::Model);
+        let schema = schema(vec![
+            model.clone(),
+            option("engine", "--engine", 1, Some(1)),
+        ]);
+        let imported = import_plan_text(&schema, &[], "--model --engine --engine mock").unwrap();
+        assert_eq!(imported.managed, vec!["--model", "--engine"]);
+        assert_eq!(imported.plan.len(), 1);
+        assert_eq!(imported.plan[0].values, vec![json!("mock")]);
+        assert!(import_plan_text(&schema, &[], "--model").is_err());
+        model.arity = Fact::default();
+        let unknown = super::tests::schema(vec![model.clone()]);
+        assert!(import_plan_text(&unknown, &[], "--model serve")
+            .unwrap_err()
+            .contains("confirm"));
+        model.arity = known(Arity {
+            min: 0,
+            max: Some(1),
+        });
+        let optional = super::tests::schema(vec![model]);
+        assert!(import_plan_text(&optional, &[], "--model serve")
+            .unwrap_err()
+            .contains("confirm"));
     }
 }
