@@ -10,6 +10,7 @@ vi.mock('../../shared/api/runtimeHelp', async origin => ({
   ...await origin<typeof import('../../shared/api/runtimeHelp')>(),
   entrypointHelpDiscover: vi.fn(), entrypointHelpCancel: vi.fn(async () => true),
   entrypointManifestPreview: vi.fn(), runtimeEntrypointRegister: vi.fn(), pickRuntimePath: vi.fn(),
+  adapterSetupList: vi.fn(), adapterSetupImport: vi.fn(), adapterSetupPrepare: vi.fn(), adapterSetupCancel: vi.fn(async () => true),
 }));
 const schema = effectiveSchema(['model', 'port'].map(key => ({ key, flag: `--${key}`, target: 'launch' as const, group: 'runtime', kind: { type: 'text' as const } }))).schema;
 const output = { text: 'synthetic help', clean_text: 'synthetic help', encoding: 'utf-8', decoding_loss: false, truncated: false };
@@ -55,6 +56,43 @@ async function enter() {
   await waitFor(() => expect(screen.getAllByDisplayValue('/synthetic path/한글 engine.py')).toHaveLength(2));
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 }
+
+it('takes adapter setup through fresh help and preserves probe environment, model bindings and owned resources for review', async () => {
+  const recipe: api.AdapterSetupRecipe = { version: 1, id: 'any.adapter', title: 'Arbitrary adapter', description: 'Explicit connection',
+    fields: [{ key: 'installation', label: 'Installation folder', kind: 'folder', required: false, default: '/synthetic/sdk' }],
+    prepare: { program: '/synthetic/prepare', args: [], env: {} } };
+  const prepared: api.EntrypointDraft = {
+    engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic', program: '/synthetic/engine',
+    prefix: [], artifacts: ['/synthetic/bridge.py'], environment: {}, protocol: { kind: 'openai_http' },
+    model: { kind: 'flag', flag: '--model' }, port: { kind: 'flag', flag: '--port' }, auth: { kind: 'none' },
+    probe: { program: '/synthetic/probe', args: ['{model}'], env: { INSTALLED_LOADER: 'synthetic' }, working_directory: '/synthetic/sdk' },
+    health_path: '/health', health_authenticated: false, model_formats: ['unknown'],
+    models: [{ path: '/synthetic/deployment.json', name: 'Synthetic deployment' }],
+    launch_resources: { version: 1, directory_env: 'SYNTHETIC_LAUNCH_DIRECTORY' },
+    options_separator: '--',
+  };
+  vi.mocked(api.adapterSetupList).mockResolvedValue([recipe]);
+  vi.mocked(api.adapterSetupPrepare).mockResolvedValue(prepared);
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  fireEvent.click(screen.getByRole('button', { name: 'Browse provided adapters' }));
+  fireEvent.submit((await screen.findByRole('button', { name: 'Check installation and continue' })).closest('form')!);
+  await screen.findByRole('button', { name: 'Discover help' });
+  fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+  expect(screen.getByLabelText('Installation folder')).toHaveValue('/synthetic/sdk');
+  expect(api.adapterSetupList).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  expect(api.entrypointHelpDiscover).not.toHaveBeenCalled();
+  expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  await screen.findByRole('button', { name: 'Register' });
+  expect(vi.mocked(api.entrypointManifestPreview).mock.calls.at(-1)?.[0]).toMatchObject({
+    probe: prepared.probe, models: prepared.models, launch_resources: prepared.launch_resources, options_separator: '--',
+    help: { fingerprint: report.identity.fingerprint },
+  });
+});
 
 it('keeps exact entry tokens and requires explicit model, port and probe bindings before registering', async () => {
   const onRegistered = vi.fn();

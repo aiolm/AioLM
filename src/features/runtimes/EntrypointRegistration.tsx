@@ -25,6 +25,7 @@ import { finishTask, registerTask, updateTask } from '../../shared/state/taskReg
 import { helpSummary } from './helpSummary';
 import RuntimeArgumentList from './RuntimeArgumentList';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
+import AdapterSetupPanel from './AdapterSetupPanel';
 
 type Copy = (typeof entrypointCopy)['en'];
 type Step = 0 | 1 | 2 | 3;
@@ -126,6 +127,11 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const [authName, setAuthName] = useState('');
   const [probeProgram, setProbeProgram] = useState('');
   const [probeArgs, setProbeArgs] = useState<string[]>([]);
+  const [probeEnvironment, setProbeEnvironment] = useState<Record<string, string>>({});
+  const [probeWorkingDir, setProbeWorkingDir] = useState<string | null>(null);
+  const [launchResources, setLaunchResources] = useState<EntrypointDraft['launch_resources']>();
+  const [optionsSeparator, setOptionsSeparator] = useState<EntrypointDraft['options_separator']>();
+  const [modelBindings, setModelBindings] = useState<EntrypointDraft['models']>();
   const [healthPath, setHealthPath] = useState('');
   const [healthAuth, setHealthAuth] = useState(false);
   const [formats, setFormats] = useState<string[]>([]);
@@ -207,7 +213,10 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
       host: toBinding(host),
       served_model: toBinding(served),
       auth: authBinding,
-      probe: { program: probeProgram.trim(), args: probeArgs, env: {}, working_directory: null },
+      probe: { program: probeProgram.trim(), args: probeArgs, env: probeEnvironment, working_directory: probeWorkingDir },
+      ...(launchResources ? { launch_resources: launchResources } : {}),
+      ...(optionsSeparator ? { options_separator: optionsSeparator } : {}),
+      ...(modelBindings?.length ? { models: modelBindings } : {}),
       health_path: healthPath.trim(),
       health_authenticated: healthAuth,
       model_formats: formats,
@@ -273,6 +282,28 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     <section className="app-card app-card--tight mb-4 entrypoint-registration" aria-labelledby={`${id}-title`}>
       <h3 id={`${id}-title`} ref={titleRef} tabIndex={-1} className="app-section-title">{copy.title}</h3>
       <p className="app-section-hint">{copy.hint}</p>
+      <div hidden={step !== 0}><AdapterSetupPanel disabled={locked || busy} onBusyChange={setBusy} onPrepared={prepared => {
+        const binding = (value: ArgBinding | null | undefined): BindingState => value?.kind === 'flag'
+          ? { mode: 'flag', flag: value.flag, equals: value.equals ?? false }
+          : value?.kind === 'positional' ? { mode: 'positional', flag: '', equals: false } : noBinding;
+        setEngine(prepared.engine_id); setRuntime(prepared.runtime_id); setDisplayName(prepared.display_name);
+        setProgram(prepared.program); setPrefix(prepared.prefix); setWorkingDir(prepared.working_directory ?? '');
+        setArtifacts(prepared.artifacts); setEnv(Object.entries(prepared.environment));
+        setProtocol(prepared.protocol.kind);
+        setBridgeProgram(prepared.protocol.kind === 'bridge' ? prepared.protocol.program : '');
+        setBridgePrefix(prepared.protocol.kind === 'bridge' ? prepared.protocol.prefix : []);
+        setBridgeArgvEnv(prepared.protocol.kind === 'bridge' ? prepared.protocol.engine_argv_env ?? '' : '');
+        setMetadataText(prepared.option_metadata ? JSON.stringify(prepared.option_metadata, null, 2) : '');
+        setModel(binding(prepared.model)); setPort(binding(prepared.port)); setHost(binding(prepared.host)); setServed(binding(prepared.served_model));
+        setAuth(prepared.auth.kind); setAuthName(prepared.auth.kind === 'env' ? prepared.auth.name : '');
+        setProbeProgram(prepared.probe.program); setProbeArgs(prepared.probe.args); setProbeEnvironment(prepared.probe.env);
+        setProbeWorkingDir(prepared.probe.working_directory ?? null);
+        setLaunchResources(prepared.launch_resources); setModelBindings(prepared.models);
+        setOptionsSeparator(prepared.options_separator);
+        setHealthPath(prepared.health_path); setHealthAuth(prepared.health_authenticated); setFormats(prepared.model_formats);
+        setHelpArgs(['--help']); setFound(null); setSkipHelp(false); setManifest(''); setDone(false); setError('');
+        setStep(1);
+      }} /></div>
       <nav aria-label={copy.steps}>
         <ol className="entrypoint-steps">
           {steps.map((label, index) => <li key={label} aria-current={index === step ? 'step' : undefined}>{label}</li>)}

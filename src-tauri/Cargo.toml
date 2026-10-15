@@ -66,6 +66,11 @@ path = "tests/runtime_registration_bounds.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "runtime_adapter_setup"
+path = "tests/runtime_adapter_setup.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "runtime_fact_conflict_journey"
 path = "tests/runtime_fact_conflict_journey.rs"
 required-features = ["test-fixtures"]

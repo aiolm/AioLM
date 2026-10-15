@@ -20,6 +20,40 @@ fn service() -> &'static HelpService {
     HELP_SERVICE.get_or_init(HelpService::default)
 }
 
+#[tauri::command]
+pub(crate) fn adapter_setup_list() -> Result<Vec<crate::providers::adapter_setup::Recipe>, String> {
+    crate::providers::adapter_setup::provided()
+}
+
+#[tauri::command]
+pub(crate) async fn adapter_setup_import(
+    path: String,
+) -> Result<crate::providers::adapter_setup::Recipe, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::providers::adapter_setup::import(std::path::Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn adapter_setup_prepare(
+    owner: String,
+    recipe: crate::providers::adapter_setup::Recipe,
+    inputs: std::collections::BTreeMap<String, String>,
+) -> Result<crate::providers::registry::EntrypointDraft, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::providers::adapter_setup::prepare(service(), &owner, &recipe, &inputs)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn adapter_setup_cancel(owner: String) -> Result<bool, String> {
+    service().cancel_owner(&format!("setup:{owner}"))
+}
+
 fn adapters_root() -> std::path::PathBuf {
     crate::providers::registry::root()
 }

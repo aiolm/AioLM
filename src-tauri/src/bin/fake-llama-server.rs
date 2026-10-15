@@ -188,6 +188,22 @@ fn handle(mut stream: TcpStream) {
 
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+    if let Some(index) = arguments
+        .iter()
+        .position(|arg| arg == "--adapter-setup-fixture")
+    {
+        let draft = arguments.get(index + 1).expect("synthetic draft file");
+        if let Some(index) = arguments
+            .iter()
+            .position(|arg| arg == "--adapter-setup-slow")
+        {
+            let marker = arguments.get(index + 1).expect("synthetic marker path");
+            std::fs::write(marker, std::process::id().to_string()).unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(20));
+        }
+        print!("{}", std::fs::read_to_string(draft).unwrap());
+        return;
+    }
     if arguments
         .iter()
         .any(|arg| arg == "--adapter-resource-fixture")

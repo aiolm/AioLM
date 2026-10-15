@@ -19,6 +19,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod adapter;
+pub mod adapter_setup;
 pub mod artifacts;
 pub mod catalog_data;
 pub mod compat;

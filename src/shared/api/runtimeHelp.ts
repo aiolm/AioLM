@@ -326,6 +326,7 @@ export const runtimeHelpAccept = (cfg: AppConfig, fingerprint: string, request: 
 export type ArgBinding = { kind: 'flag'; flag: string; equals?: boolean } | { kind: 'positional' };
 export interface LaunchBindings {
   version: 1;
+  options_separator?: '--' | null;
   prefix_len: number;
   bindings: Array<{ name: 'model' | 'host' | 'port' | 'model_alias'; argument: ArgBinding }>;
 }
@@ -360,6 +361,9 @@ export interface EntrypointHelp {
 }
 
 export interface EntrypointDraft extends EntrypointHelp {
+  options_separator?: '--' | null;
+  launch_resources?: { version: 1; directory_env: string } | null;
+  models?: Array<{ path: string; name: string }>;
   display_name: string;
   model: ArgBinding;
   port: ArgBinding;
@@ -398,3 +402,15 @@ export const runtimeEntrypointRegister = (draft: EntrypointDraft): Promise<Regis
 
 export const pickRuntimePath = (kind: 'file' | 'folder'): Promise<string | null> =>
   invoke<string | null>('pick_runtime_path', { kind });
+
+export interface AdapterSetupRecipe {
+  version: 1; id: string; title: string; description: string;
+  fields: Array<{ key: string; label: string; kind: 'file' | 'folder' | 'text'; required: boolean; default?: string }>;
+  prepare: ProcessSpec;
+  artifacts?: string[];
+}
+export const adapterSetupList = (): Promise<AdapterSetupRecipe[]> => invoke<AdapterSetupRecipe[]>('adapter_setup_list');
+export const adapterSetupImport = (path: string): Promise<AdapterSetupRecipe> => invoke<AdapterSetupRecipe>('adapter_setup_import', { path });
+export const adapterSetupPrepare = (owner: string, recipe: AdapterSetupRecipe, inputs: Record<string, string>): Promise<EntrypointDraft> =>
+  invoke<EntrypointDraft>('adapter_setup_prepare', { owner, recipe, inputs });
+export const adapterSetupCancel = (owner: string): Promise<boolean> => invoke<boolean>('adapter_setup_cancel', { owner });

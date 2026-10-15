@@ -69,7 +69,7 @@ JSON은 `schema_version: 1`, `adapter_version: 1`, `protocol: "openai-v1"`를 �
 | `runtime_id`, `display_name` | 해당 설치의 ID와 표시 이름. ID는 기존 runtime ID 규칙을 따른다. 같은 engine/runtime 등록을 덮어쓰지 않는다. |
 | `platforms` | 실제 지원 `{os,arch}` 목록. OS는 `windows/linux/macos`, architecture는 `x86_64/aarch64`. 지원하지 않는 기기의 값을 위조하지 않는다. |
 | `probe`, `launch` | 각각 절대 `program`, 문자열 `args` 배열, 선택적 `env`와 절대 `working_directory`. shell 문자열을 실행하지 않는다. |
-| `launch_bindings` | 선택적 entry point 선택 기록. `version: 1`, `launch.args` 앞부분 중 고정 entry point의 토큰 수 `prefix_len`과 순서 있는 `bindings: [{name,argument}]`. `name`은 `model/host/port/model_alias`, `argument`는 `{kind:"positional"}` 또는 `{kind:"flag",flag,equals?}`다. prefix 뒤에 binding을 펼친 결과가 `launch.args`와 정확히 일치해야 한다. |
+| `launch_bindings` | 선택적 entry point 선택 기록. `version: 1`, `launch.args` 앞부분 중 고정 entry point의 토큰 수 `prefix_len`과 순서 있는 `bindings: [{name,argument}]`. `name`은 `model/host/port/model_alias`, `argument`는 `{kind:"positional"}` 또는 `{kind:"flag",flag,equals?}`다. prefix 뒤에 binding을 펼친 결과가 `launch.args`와 정확히 일치해야 한다. 선택적 `options_separator: "--"`는 모든 앱 binding 뒤, 공통 GUI 옵션 앞에 명시적 wrapper 경계를 둔다. 이를 사용하는 wrapper가 두 영역을 따로 해석해야 한다. |
 | `bridge_command` | 선택적 명시적 bridge 연결. `{version:1,environment_variable,argv:[engineProgram,...enginePrefix]}`. 엔진 프로그램은 절대 경로이며 `artifacts`에 포함되어야 한다. argv는 템플릿 확장 없이 JSON 문자열로 지정한 환경 변수에 넣어 help·probe·launch에 전달한다. 변수 이름은 고정 env/인증 env와 충돌할 수 없으며 앱 소유 변수는 사용할 수 없다. |
 | `launch_resources` | 선택적 bridge 작업 디렉터리 요청. `{version:1,directory_env}`. AioLM이 launch마다 생성한 UUID 디렉터리의 절대 경로를 해당 환경 변수로 전달한다. 고정 env·bridge argv env·앱 소유 변수와 충돌하면 거부한다. bridge는 원본 배포 설정을 덮어쓰지 않고 여기에 파생 설정을 만든다. 일반 소유 프로세스의 종료·실패 시 정리하며, background CLI는 UUID와 PID를 상태에 보존하고 실제 중지 후 소유 표식을 확인해 정리한다. help·probe는 이 임시 디렉터리를 받지 않는다. |
 | `model_formats` | `gguf/hf-safetensors/mlx/unknown` 선언. 선언만으로 모델 지원을 확정하지 않는다. |
@@ -209,3 +209,22 @@ python scripts/runtime-adapters/create_adapter.py create --kind strata --engine-
 Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 호환 환경으로 수정했지만 SmolVLM·Gemma3n·일부 Gemma4·Qwen3 도구 후속 답변의 내용 실패를 유지했다. 모델 변경으로 기존 고정 모델의 실패를 삭제하지 않는다. `158f966`의 source에 대한 실제 Windows/Linux 검증·Strata serving·새 플랫폼 패키지는 여전히 unrun이다.
 
 [오디오 순서 재검증 §106](macos-device-validation-results.ko.md#106-gemma3n-원본-fp와-새-음성의-전사-대조)의 `f1049eb`/media14는 명시적 text/image/audio 순서 보존을 추가한다. 기존 media13의 선택 옵션·기본 정책을 유지한다. 지원 기기의 실제 런타임에서 확장된 `check_mlx_audio_history.py`를 실행하고 앱의 첨부 우선 선택·저장/재로드·서로 다른 음성의 이력을 검증한다. Mac 원본 FP 긴 관사와 새3개 전사는 여전히 fail이며 native float32 RoPE 버퍼를 유지하지 않은 BF16 실험의 성공도 채택하지 않았다. 이 결과를 다른 OS/런타임의 실제 성공으로 복사하지 않는다.
+
+### 공통 GUI의 어댑터 설정 파일
+
+실행 파일을 직접 선택하는 등록 여정에 더해, **어댑터로 간편 연결**에서 제공 설정을 보거나 외부 설정 파일을 가져올 수 있다. 엔진 목록은 닫힌 enum이 아니다. 어댑터 설정은 엔진별 화면 코드 대신 입력 항목과 producer 명령을 제공하고, 동일한 `EntrypointDraft`를 반환한다. 설정을 불러오는 것만으로 producer를 실행하거나 엔진을 등록하지 않는다. 사용자가 설치 정보를 입력하고 확인 명령을 실행한 뒤에도 도움말 탐색·binding 검토·등록·모델별 fresh probe가 필요하다.
+
+설정 파일은 최대 64 KiB UTF-8 JSON(선택적 BOM)이며 다음 계약을 사용한다.
+
+- `version: 1`, 자유로운 `id`, `title`, `description`.
+- `fields: [{key,label,kind,required,default?}]`: `kind`는 `file/folder/text`, 최대 32개. 기본값은 어댑터가 선언한 값이며 현재 기기의 경로나 설정을 복사하지 않는다.
+- `prepare: {program,args,env,working_directory?}`: 명시적으로 선택한 절대 실행 파일과 token 배열. 현재 v1의 `env`는 비어 있어야 한다. shell 문자열이나 비밀 입력은 사용하지 않는다.
+- `artifacts`: producer의 스크립트·종속 파일을 선언한다. 실행 파일과 함께 명령 전후 해시를 검사한다.
+- `{input:key}`와 `{resource:name}`는 **한 argv token 전체**를 대체한다. 공백·Unicode·빈 값·기호를 shell로 재해석하지 않는다. 부분 문자열 치환은 거부한다. `{resource:name}`는 제품에 포함된 helper 이름만 허용하며, 다른 어댑터는 선택한 외부 producer와 명시적 artifact를 쓸 수 있다.
+- producer는 stdout에 단일 `EntrypointDraft` JSON, 진단은 stderr에 쓴다. 공통 소유 프로세스의 출력 한도·15초 기한·취소·경합 publication을 적용하고, 반환 draft를 검증한다. 실패·취소는 등록이나 Ready를 만들지 않으며 입력을 보존해 재시도할 수 있다.
+
+제공 helper는 production 앱에 포함하며 표준 앱 runtime 경로의 내용 해시별 폴더에 배치한다. 개발 checkout의 절대 경로가 필요하지 않는다. 기존 helper가 달라졌으면 덮어쓰지 않고 오류를 반환한다. 설정 파일이나 helper 변경은 새 명령 identity와 명시적 재등록을 필요로 한다. 예전 draft에서 생략한 `models`, `launch_resources`, `options_separator`는 자동으로 채우지 않는다.
+
+제공 Strata 설정은 검토한 source revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 설치된 Python·SDK 폴더·전용 deployment JSON을 사용한다. 명시적 bridge가 선택한 **native 실행 파일의 실제 `--help`**와 자기 `--aiolm-model/host/port` binding을 보여 준다. 네이티브 옵션은 별도 `--` 경계 뒤에 전달되어 원본 deployment의 `args` 뒤에 정확한 token으로 붙는다. 고정 source의 scalar parser는 뒤의 값을 적용하며, 반복 옵션의 의미와 검증은 엔진에 남긴다. 도움말에서 확인하지 못한 타입·제약·API 능력을 확정하지 않는다.
+
+bridge는 `launch_resources`의 앱 소유 폴더에만 파생 deployment와 로그를 만들고, 설치된 HTTP 서버에는 고정 `--engine strata`, 파생 config, 앱 host/port만 전달한다. 원본 deployment·weight·tokenizer를 바꾸지 않는다. 모델 소스·입력·resident protocol은 명시 metadata로 예약하며, flag처럼 생긴 **값**을 별도 옵션으로 다시 해석하지 않는다. HTTP 서버와 native CLI의 인자를 섞지 않는다. 모델·tokenizer·source revision·build 검사는 별도 기존 probe가 담당한다. 도움말·producer 성공은 모델 로드나 추론 성공의 증거가 아니다. 다른 revision은 검토한 어댑터 설정/bridge가 필요하며, 다른 엔진의 설정 파일 추가는 앱의 공통 기능에 engine ID 분기를 요구하지 않는다.

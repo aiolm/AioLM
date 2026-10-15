@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "strata.native-openai-bridge",
+  "title": "Strata native engine → OpenAI HTTP bridge",
+  "description": "Select the installed Python environment, SDK checkout and dedicated deployment JSON. Native --help supplies option syntax; a separate model probe verifies the serving contract. The source revision is pinned by this adapter.",
+  "fields": [
+    {"key": "python", "label": "Installed Python executable", "kind": "file", "required": true},
+    {"key": "root", "label": "Installed SDK folder", "kind": "folder", "required": true},
+    {"key": "config", "label": "Dedicated deployment JSON", "kind": "file", "required": true},
+    {"key": "revision", "label": "Reviewed source revision", "kind": "text", "required": true, "default": "296b59d2f73c8f04a805df29c2fa97655adace78"},
+    {"key": "engine", "label": "Engine ID (custom.*)", "kind": "text", "required": true, "default": "custom.strata"},
+    {"key": "runtime", "label": "Runtime ID", "kind": "text", "required": true},
+    {"key": "name", "label": "Display name", "kind": "text", "required": true, "default": "Strata"}
+  ],
+  "prepare": {
+    "program": "{input:python}",
+    "args": ["{resource:strata_setup.py}", "--python", "{input:python}", "--root", "{input:root}", "--config", "{input:config}", "--revision", "{input:revision}", "--engine-id", "{input:engine}", "--runtime-id", "{input:runtime}", "--name", "{input:name}"],
+    "env": {},
+    "working_directory": "{input:root}"
+  },
+  "artifacts": ["{resource:create_adapter.py}", "{resource:strata_bridge.py}", "{resource:strata_setup.py}"]
+}

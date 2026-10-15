@@ -1461,6 +1461,9 @@ pub enum ArgBinding {
 #[serde(deny_unknown_fields)]
 pub struct LaunchBindings {
     pub version: u32,
+    /// An explicit wrapper boundary after all app-owned bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options_separator: Option<String>,
     /// Boundary in launch.args; the chosen prefix tokens are stored once.
     pub prefix_len: usize,
     pub bindings: Vec<BoundArgument>,
@@ -1508,6 +1511,12 @@ fn validate_launch_bindings(bindings: &LaunchBindings, args: &[String]) -> Resul
             &format!("{{{}}}", bound.name),
         )?);
     }
+    if let Some(separator) = &bindings.options_separator {
+        if separator != "--" {
+            return Err("entry-point option separator must be --".into());
+        }
+        expected.push(separator.clone());
+    }
     if expected != args {
         return Err("entry-point binding metadata does not match the launch template".into());
     }
@@ -1547,6 +1556,8 @@ pub enum ServingProtocol {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntrypointDraft {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options_separator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_resources: Option<super::launch_resources::Request>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1729,6 +1740,7 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
     // entry prefix derived from both is identical.
     let launch_bindings = LaunchBindings {
         version: 1,
+        options_separator: None,
         prefix_len: args.len(),
         bindings: vec![BoundArgument {
             name: "model".into(),
@@ -1787,6 +1799,7 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
     )?;
     let mut launch_bindings = LaunchBindings {
         version: 1,
+        options_separator: draft.options_separator.clone(),
         prefix_len: args.len(),
         bindings: vec![BoundArgument {
             name: "model".into(),
@@ -1812,6 +1825,9 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
             argument: alias.clone(),
         });
         args.extend(binding_tokens(alias, "{model_alias}")?);
+    }
+    if let Some(separator) = &draft.options_separator {
+        args.push(separator.clone());
     }
     let mut env = draft.environment.clone();
     if let AuthBinding::Env { name } = &draft.auth {

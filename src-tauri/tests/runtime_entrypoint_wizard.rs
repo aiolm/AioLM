@@ -110,6 +110,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         request: request.clone(),
     };
     let draft = EntrypointDraft {
+        options_separator: None,
         launch_resources: None,
         models: vec![],
         engine_id: engine,

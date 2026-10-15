@@ -182,7 +182,7 @@ def probe(args):
     print(json.dumps(result))
 
 
-def create(args):
+def build_manifest(args):
     if not re.fullmatch(r"custom\.[a-z0-9][a-z0-9._-]{0,56}", args.engine_id):
         raise ValueError("engine ID must use the custom.* namespace")
     helper, python = Path(__file__).absolute(), file_path(args.python or sys.executable)
@@ -249,6 +249,11 @@ def create(args):
         selected = file_path(args.model)
         common["models"] = [{"path":str(selected),"name":selected.name}]
     common["probe"] = {"program":str(python),"args":probe_args, **({"working_directory":str(root)} if args.kind == "strata" else {})}
+    return common
+
+
+def create(args):
+    common = build_manifest(args)
     output = Path(args.output).absolute()
     with output.open("x", encoding="utf-8") as stream:
         json.dump(common,stream,indent=2); stream.write("\n")

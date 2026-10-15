@@ -110,6 +110,7 @@ async fn register(area: &Path, runtime: &str, metadata: Option<Value>) -> Result
         Baseline::Latest,
     )?;
     let draft = EntrypointDraft {
+        options_separator: None,
         launch_resources: None,
         models: vec![],
         engine_id: entry.engine_id,

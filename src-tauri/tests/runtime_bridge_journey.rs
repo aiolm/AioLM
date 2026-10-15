@@ -187,6 +187,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         "{model}".into(),
     ]);
     let draft = EntrypointDraft {
+        options_separator: Some("--".into()),
         launch_resources: Some(resource_request),
         models: vec![ModelBinding {
             path: model.to_string_lossy().into_owned(),
@@ -228,6 +229,11 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         option_metadata: None,
     };
     let manifest = manifest_from_draft(&draft).unwrap();
+    assert_eq!(manifest.launch.args.last().unwrap(), "--");
+    assert_eq!(launch_prefix(&manifest), bridge_prefix);
+    let mut invalid_boundary = draft.clone();
+    invalid_boundary.options_separator = Some("--unknown-boundary".into());
+    assert!(manifest_from_draft(&invalid_boundary).is_err());
     assert_eq!(manifest.models, draft.models);
     let mut invalid_resources = manifest.clone();
     invalid_resources.launch_resources.as_mut().unwrap().version = 2;
@@ -328,6 +334,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     let actual: Vec<String> = serde_json::from_slice(&fs::read(child_argv).unwrap()).unwrap();
     assert!(actual.starts_with(&prefix), "{actual:?}");
     assert!(actual.ends_with(&tail), "{actual:?}");
+    assert_eq!(actual[actual.len() - tail.len() - 1], "--");
     assert!(actual
         .windows(2)
         .any(|pair| pair == ["--model", cfg.active_model.as_str()]));
@@ -340,6 +347,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         serde_json::from_slice(&fs::read(bridge_argv).unwrap()).unwrap();
     assert!(actual_bridge.starts_with(&bridge_prefix));
     assert!(actual_bridge.ends_with(&tail));
+    assert_eq!(actual_bridge[actual_bridge.len() - tail.len() - 1], "--");
 
     // A background CLI start outlives its command process. Its persisted
     // state retains the UUID; a later CLI stop cleans only that launch.
