@@ -452,6 +452,12 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
     second["probe"]["args"][2] = json!("build-2");
     second["options"] = json!([{"key": "label_text", "flag": "--fresh-label", "target": "launch", "kind": {"type": "text", "max_len": 64}}]);
     register(&area.path, &second).await.unwrap();
+    // Many unrelated stored directories never push this engine's facts out
+    // of the scan that decides what to hide.
+    for index in 0..140 {
+        fs::create_dir_all(root.join(format!("custom.inert{index:03}")).join("unused")).unwrap();
+        fs::create_dir_all(root.join(ENGINE).join(format!("inert-{index:03}"))).unwrap();
+    }
     // Switching to another engine keeps this engine's values and profiles;
     // public projections still hide every value its runtimes declare secret.
     let mut away = loaded.clone();

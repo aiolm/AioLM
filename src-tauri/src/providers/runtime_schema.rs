@@ -2117,7 +2117,9 @@ fn stored_runtime_sensitive_keys(
 /// (registrations and reviewed help under `root`), plus the selected
 /// runtime's effective schema. Runtimes of one engine that declare
 /// different facts all count, so every saved copy of that engine's options
-/// stays hidden whichever runtime or provider is selected.
+/// stays hidden whichever runtime or provider is selected. Every stored
+/// engine and runtime directory is read: a partial scan would show a secret
+/// as plain text.
 pub fn stored_sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeMap<String, BTreeSet<String>> {
     let mut all: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     if let Ok(selected) = Selected::from_config(cfg) {
@@ -2125,12 +2127,7 @@ pub fn stored_sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeMap<String, B
             .or_default()
             .extend(sensitive_keys(root, cfg));
     }
-    for engine in std::fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .take(128)
-    {
+    for engine in std::fs::read_dir(root).into_iter().flatten().flatten() {
         let Some(provider) = engine.file_name().to_str().and_then(ProviderId::parse) else {
             continue;
         };
@@ -2138,7 +2135,6 @@ pub fn stored_sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeMap<String, B
             .into_iter()
             .flatten()
             .flatten()
-            .take(128)
         {
             let Some(name) = runtime.file_name().to_str().map(str::to_owned) else {
                 continue;
