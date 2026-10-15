@@ -78,7 +78,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [validating, setValidating] = useState(true);
   const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
-  useEffect(() => { setPreview(''); }, [cfg]);
+  // A preview can fail for launch-time reasons (a model awaiting its fresh
+  // probe) while the options are valid; it informs but does not gate saving.
+  const [previewError, setPreviewError] = useState('');
+  useEffect(() => { setPreview(''); setPreviewError(''); }, [cfg]);
   const values = cfg.provider_options?.[provider] ?? {};
   // An external engine's options come from the runtime's manifest, so there is
   // nothing to validate (or preview) until a runtime is chosen above.
@@ -213,11 +216,12 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       const current = () => cfgRef.current === source && previewRequest.current === request;
       void api.providerCommandPreview(source).then(args => {
         if (!current()) return;
-        setError('');
+        setPreviewError('');
         setPreview((effective ? maskPreview(args, effective.schema, values) : args).map(arg => JSON.stringify(arg)).join(' '));
-      }).catch(cause => { if (current()) setError(String(cause)); });
+      }).catch(cause => { if (current()) { setPreview(''); setPreviewError(String(cause)); } });
     }}>{copy.preview}</button>
     {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
+    {previewError && <FeedbackBanner tone="error">{previewError}</FeedbackBanner>}
     {effective && <OccurrenceOrder schema={effective.schema} values={values} disabled={disabled}
       onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })} />}
     {effective && <ConfirmedSyntaxReview effective={effective} disabled={disabled || syntaxBusy}

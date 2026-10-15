@@ -304,6 +304,36 @@ describe('registered engine options from accepted help (G04)', () => {
     preview.mockRestore();
   });
 
+  it('shows a failed command preview without blocking the valid draft from being saved or started', async () => {
+    // D21: the runtime was registered without a model, so the exact launch
+    // command needs the fresh probe that start runs; the options stay valid.
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockRejectedValue('selected model requires a fresh adapter probe');
+    const onInvalid = vi.fn(); const onChecking = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={onChecking} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false);
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    expect(await screen.findByText('selected model requires a fresh adapter probe')).toBeVisible();
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false);
+    expect(onInvalid).not.toHaveBeenCalledWith('provider-options', true);
+    preview.mockRestore();
+  });
+
+  it('keeps a failed option check blocked and visible after a successful command preview', async () => {
+    vi.mocked(api.providerOptionIssues).mockRejectedValue('Synthetic option check failed');
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue(['/synthetic/engine', '--workers', '2']);
+    const onInvalid = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': { workers: 2 } } }} disabled={false} onChange={vi.fn()} onInvalid={onInvalid} onChecking={vi.fn()} /></I18nProvider>);
+    expect(await screen.findByText('Synthetic option check failed')).toBeVisible();
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true));
+    fireEvent.click(screen.getByRole('button', { name: 'Command preview' }));
+    expect(await screen.findByText(/"--workers" "2"/)).toBeVisible();
+    expect(screen.getByText('Synthetic option check failed')).toBeVisible();
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true);
+    preview.mockRestore();
+  });
+
   it('renders manifest and help options with one renderer and saves into the profile', async () => {
     vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema(
       [{ key: 'workers', flag: '--workers', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 8 } }], [fresh]));
