@@ -548,11 +548,12 @@ pub fn saved_option_issues(
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     let mut issues = option_issues(m, &declared);
-    issues.extend(super::runtime_schema::help_issues(
+    let reported = issues.iter().map(|issue| issue.key.clone()).collect();
+    issues.extend(super::runtime_schema::saved_issues(
         &root(),
         cfg,
         values,
-        &keys,
+        &reported,
     ));
     issues
 }
@@ -1057,49 +1058,13 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
         .iter()
         .map(|a| expand(a, cfg, port, key, &info.upstream_model))
         .collect::<Result<Vec<_>, _>>()?;
-    // Options the manifest does not describe resolve through the runtime's
-    // accepted help; unknown keys block launch with their values retained.
-    let saved = options(cfg);
-    for (name, value) in saved.clone() {
-        let Some(spec) = m.options.iter().find(|s| s.key == name) else {
-            continue;
-        };
-        if spec.target != "launch" {
-            continue;
-        }
-        let flag = spec
-            .flag
-            .as_ref()
-            .ok_or("launch option requires an explicit flag")?;
-        match spec.kind["type"].as_str() {
-            Some("flag") => {
-                if value == true {
-                    args.push(flag.clone());
-                }
-            }
-            Some("toggle") => {
-                args.push(if value == true {
-                    flag.clone()
-                } else {
-                    format!("--no-{}", flag.trim_start_matches("--"))
-                });
-            }
-            _ => {
-                args.push(flag.clone());
-                args.push(
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string()),
-                );
-            }
-        }
-    }
-    args.extend(super::runtime_schema::help_launch_args(
+    // Manifest options and options only the runtime's accepted help
+    // describes resolve together through the common schema; unknown keys block
+    // launch with their values retained.
+    args.extend(super::runtime_schema::launch_arguments(
         &root(),
         cfg,
-        &saved,
-        &manifest_keys(&m),
+        &options(cfg),
     )?);
     let env = m
         .launch
@@ -1236,17 +1201,27 @@ pub fn registered_models() -> Vec<super::artifacts::ModelArtifact> {
     models
 }
 
-/// Leading launch arguments that name the entry point (an interpreter's
-/// script, a subcommand) before the first option or app binding. Help for
-/// the launch program must be asked through the same prefix.
+/// The exact launch tokens before the first app-owned binding: interpreter
+/// flags (`-I`, `-u`), a script or `-m module`, a subcommand and any static
+/// options, kept verbatim. The boundary is the first binding placeholder (or
+/// the flag that introduces it), never a guess at the first dash. Help for
+/// the launch program must be asked through this same prefix.
 pub fn launch_prefix(manifest: &RuntimeManifest) -> Vec<String> {
-    manifest
-        .launch
-        .args
-        .iter()
-        .take_while(|arg| !arg.starts_with('-') && !arg.contains('{'))
-        .cloned()
-        .collect()
+    let args = &manifest.launch.args;
+    let Some(binding) = args.iter().position(|arg| arg.contains('{')) else {
+        return args.clone();
+    };
+    let boundary = match binding.checked_sub(1) {
+        Some(flag)
+            if !args[binding].starts_with('-')
+                && args[flag].starts_with('-')
+                && !args[flag].contains('{') =>
+        {
+            flag
+        }
+        _ => binding,
+    };
+    args[..boundary].to_vec()
 }
 
 /// Flags and positional slots the launch template fills from app-owned
@@ -1621,6 +1596,24 @@ mod tests {
             ]
         );
         assert!(positional);
+        // Interpreter flags, a module or script and static options before the
+        // first binding stay part of the exact entry prefix.
+        manifest.launch.args = vec![
+            "-I".into(),
+            "-u".into(),
+            "C:/synthetic/한글 dir/serve.py".into(),
+            "--static".into(),
+            "--model".into(),
+            "{model}".into(),
+        ];
+        assert_eq!(
+            launch_prefix(&manifest),
+            ["-I", "-u", "C:/synthetic/한글 dir/serve.py", "--static"]
+        );
+        manifest.launch.args = vec!["-m".into(), "synthetic.server".into(), "{model}".into()];
+        assert_eq!(launch_prefix(&manifest), ["-m", "synthetic.server"]);
+        manifest.launch.args = vec!["--model={model}".into()];
+        assert!(launch_prefix(&manifest).is_empty());
     }
     #[test]
     fn entrypoint_suggestion_keeps_explicit_bindings_and_skips_guesses() {

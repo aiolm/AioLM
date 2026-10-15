@@ -956,11 +956,13 @@ pub fn saved_option_issues(
         .into_iter()
         .filter(|issue| !(issue.code == "unknown" && !catalog.contains(&issue.key)))
         .collect();
-    issues.extend(super::runtime_schema::help_issues(
+    let reported = issues.iter().map(|issue| issue.key.clone()).collect();
+    issues.extend(super::runtime_schema::saved_issues_for(
         &super::registry::root(),
         cfg,
+        super::runtime_schema::Selected::python(runtime),
         options,
-        &catalog,
+        &reported,
     ));
     issues
 }
@@ -1262,6 +1264,7 @@ pub fn engine_command(
     args.extend(super::runtime_schema::help_launch_args(
         &super::registry::root(),
         cfg,
+        &super::runtime_schema::Selected::python(runtime)?,
         &options,
         &catalog,
     )?);

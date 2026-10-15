@@ -147,6 +147,48 @@ pub fn runtime_key(cfg: &AppConfig) -> Result<RuntimeKey, String> {
     })
 }
 
+/// The selected runtime as its adapter sees it. A caller that already
+/// resolved a Python runtime (launch, validation) passes it explicitly.
+pub struct Selected {
+    pub key: RuntimeKey,
+    python: Option<super::python_env::PythonRuntimeManifest>,
+}
+
+impl Selected {
+    pub fn from_config(cfg: &AppConfig) -> Result<Self, String> {
+        let key = runtime_key(cfg)?;
+        let python = if key.provider.is_python() {
+            Some(super::selected_python_runtime(cfg)?)
+        } else {
+            None
+        };
+        Ok(Self { key, python })
+    }
+
+    pub fn python(runtime: &super::python_env::PythonRuntimeManifest) -> Result<Self, String> {
+        let engine = runtime.provider.as_str().to_owned();
+        if !runtime_help_store::valid_segment(&engine)
+            || !runtime_help_store::valid_segment(&runtime.id)
+        {
+            return Err("this runtime's identity cannot hold a help snapshot".into());
+        }
+        Ok(Self {
+            key: RuntimeKey {
+                provider: runtime.provider,
+                engine,
+                runtime: runtime.id.clone(),
+            },
+            python: Some(runtime.clone()),
+        })
+    }
+
+    fn python_runtime(&self) -> Result<&super::python_env::PythonRuntimeManifest, String> {
+        self.python
+            .as_ref()
+            .ok_or_else(|| "this runtime has no Python entry point".into())
+    }
+}
+
 fn unicode_environment(
     pairs: Vec<(OsString, OsString)>,
 ) -> Result<BTreeMap<String, String>, String> {
@@ -179,7 +221,8 @@ fn same_program(left: &str, right: &str) -> bool {
 
 /// The adapter-owned parts of a help request for the selected runtime.
 pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
-    let key = runtime_key(cfg)?;
+    let selected = Selected::from_config(cfg)?;
+    let key = &selected.key;
     let accepted = load_accepted(root, &key.engine, &key.runtime)?;
     let (program, fixed, prefix, default) = match key.provider {
         ProviderId::Custom(_) => {
@@ -207,10 +250,10 @@ pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
             },
         ),
         _ => {
-            let runtime = super::selected_python_runtime(cfg)?;
-            let (args, scope) = super::launch::help_entry(&runtime)?;
+            let runtime = selected.python_runtime()?;
+            let (args, scope) = super::launch::help_entry(runtime)?;
             (
-                runtime.python,
+                runtime.python.clone(),
                 true,
                 Vec::new(),
                 HelpRequest {
@@ -226,8 +269,8 @@ pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
         .map(|accepted| accepted.request.clone())
         .unwrap_or(default);
     Ok(HelpTarget {
-        engine: key.engine,
-        runtime: key.runtime,
+        engine: key.engine.clone(),
+        runtime: key.runtime.clone(),
         program,
         fixed,
         prefix,
@@ -240,7 +283,15 @@ pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
 /// decides the environment, working directory and artifacts so the help
 /// describes the same process launch would start.
 pub fn help_command(cfg: &AppConfig, request: &HelpRequest) -> Result<HelpCommand, String> {
-    let key = runtime_key(cfg)?;
+    help_command_for(cfg, &Selected::from_config(cfg)?, request)
+}
+
+fn help_command_for(
+    cfg: &AppConfig,
+    selected: &Selected,
+    request: &HelpRequest,
+) -> Result<HelpCommand, String> {
+    let key = &selected.key;
     let mut command = match key.provider {
         ProviderId::Custom(_) => {
             let manifest = registry::manifest(key.provider, &key.runtime)?;
@@ -309,8 +360,8 @@ pub fn help_command(cfg: &AppConfig, request: &HelpRequest) -> Result<HelpComman
             }
         }
         _ => {
-            let runtime = super::selected_python_runtime(cfg)?;
-            let (args, scope) = super::launch::help_entry(&runtime)?;
+            let runtime = selected.python_runtime()?;
+            let (args, scope) = super::launch::help_entry(runtime)?;
             if request.args != args || request.program.is_some() || request.scope != scope {
                 return Err("built-in runtimes use their own help command".into());
             }
@@ -629,7 +680,8 @@ struct Compat {
     managed_flags: BTreeMap<String, ManagedBinding>,
 }
 
-fn compat(cfg: &AppConfig, key: &RuntimeKey) -> Result<Compat, String> {
+fn compat(selected: &Selected) -> Result<Compat, String> {
+    let key = &selected.key;
     // Built-in lists name app-owned flags without saying which binding each
     // one carries; Discovery marks them managed without guessing.
     let mut managed_flags: BTreeMap<String, ManagedBinding> =
@@ -656,9 +708,9 @@ fn compat(cfg: &AppConfig, key: &RuntimeKey) -> Result<Compat, String> {
         }
         ProviderId::Llama => Vec::new(),
         _ => {
-            let runtime = super::selected_python_runtime(cfg)?;
+            let runtime = selected.python_runtime()?;
             let source = adapter_source(&key.engine, "catalog-v1");
-            super::launch::option_schema(&runtime)
+            super::launch::option_schema(runtime)
                 .iter()
                 .map(|spec| from_spec(spec, &source))
                 .collect()
@@ -675,8 +727,13 @@ fn compat_fingerprint(engine: &str, runtime: &str, options: &[OptionDefinition])
     format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
 }
 
-fn current_identity(cfg: &AppConfig, accepted: &AcceptedHelp) -> Result<(), String> {
-    let identity = help_command(cfg, &accepted.request)?.identity(&AtomicBool::new(false))?;
+fn current_identity(
+    cfg: &AppConfig,
+    selected: &Selected,
+    accepted: &AcceptedHelp,
+) -> Result<(), String> {
+    let identity =
+        help_command_for(cfg, selected, &accepted.request)?.identity(&AtomicBool::new(false))?;
     if identity.fingerprint == accepted.fingerprint {
         Ok(())
     } else {
@@ -688,8 +745,17 @@ fn current_identity(cfg: &AppConfig, accepted: &AcceptedHelp) -> Result<(), Stri
 /// `verify` recomputes the accepted help identity (hashing the executable and
 /// artifacts); views that only display may skip it.
 pub fn effective(root: &Path, cfg: &AppConfig, verify: bool) -> Result<EffectiveSchema, String> {
-    let key = runtime_key(cfg)?;
-    let compat = compat(cfg, &key)?;
+    effective_for(root, cfg, &Selected::from_config(cfg)?, verify)
+}
+
+pub fn effective_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    verify: bool,
+) -> Result<EffectiveSchema, String> {
+    let key = &selected.key;
+    let compat = compat(selected)?;
     let accepted = load_accepted(root, &key.engine, &key.runtime)?;
     let snapshot: Option<HelpSnapshot> = match &accepted {
         Some(accepted) => runtime_help_store::load_snapshot(
@@ -706,7 +772,7 @@ pub fn effective(root: &Path, cfg: &AppConfig, verify: bool) -> Result<Effective
             HelpState::Stale,
             "the accepted help snapshot is missing; discover this runtime's help again".into(),
         ),
-        (Some(accepted), Some(_)) if verify => match current_identity(cfg, accepted) {
+        (Some(accepted), Some(_)) if verify => match current_identity(cfg, selected, accepted) {
             Ok(()) => (HelpState::Current, String::new()),
             Err(error) => (HelpState::Stale, error),
         },
@@ -726,6 +792,11 @@ pub fn effective(root: &Path, cfg: &AppConfig, verify: bool) -> Result<Effective
     let mut scope = Vec::new();
     if let Some(snapshot) = &snapshot {
         scope = snapshot.report.scope.clone();
+        // Catalog/manifest options apply to the same launch subcommand the
+        // help describes, so one resolution orders and validates them all.
+        for option in &mut options {
+            option.scope = scope.clone();
+        }
         for help in &snapshot.schema.options {
             let covered = help
                 .spellings
@@ -815,27 +886,45 @@ fn binding_for(placeholder: &str) -> ManagedBinding {
     }
 }
 
-/// Saved values only accepted help can describe.
-fn help_values(values: &Map<String, Value>, compat_keys: &[String]) -> Map<String, Value> {
+/// Saved values a generic option may hold (dedicated bindings excluded).
+fn generic_values(values: &Map<String, Value>) -> Map<String, Value> {
     values
         .iter()
-        .filter(|(key, _)| {
-            !RESERVED_KEYS.contains(&key.as_str()) && !compat_keys.iter().any(|k| k == *key)
-        })
+        .filter(|(key, _)| !RESERVED_KEYS.contains(&key.as_str()))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
 
-/// Problems with saved values the catalog/manifest does not describe. Keys
-/// the accepted help does not describe stay saved and are reported.
-pub fn help_issues(
+/// Saved values only accepted help can describe.
+fn help_values(values: &Map<String, Value>, compat_keys: &[String]) -> Map<String, Value> {
+    generic_values(values)
+        .into_iter()
+        .filter(|(key, _)| !compat_keys.iter().any(|k| k == key))
+        .collect()
+}
+
+/// Problems with saved values, resolved together against the effective
+/// schema so constraints spanning catalog and help options apply. Keys the
+/// caller's catalog check already reported (`reported`) are not repeated;
+/// keys no schema describes stay saved and are reported.
+pub fn saved_issues(
     root: &Path,
     cfg: &AppConfig,
     values: &Map<String, Value>,
-    compat_keys: &[String],
+    reported: &BTreeSet<String>,
 ) -> Vec<options::OptionIssue> {
-    let extra = help_values(values, compat_keys);
-    if extra.is_empty() {
+    saved_issues_for(root, cfg, Selected::from_config(cfg), values, reported)
+}
+
+pub fn saved_issues_for(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: Result<Selected, String>,
+    values: &Map<String, Value>,
+    reported: &BTreeSet<String>,
+) -> Vec<options::OptionIssue> {
+    let all = generic_values(values);
+    if all.is_empty() {
         return Vec::new();
     }
     let issue = |key: &str, code: &'static str, message: String| options::OptionIssue {
@@ -843,11 +932,12 @@ pub fn help_issues(
         code,
         message,
     };
-    let effective = match effective(root, cfg, false) {
+    let effective = match selected.and_then(|selected| effective_for(root, cfg, &selected, false)) {
         Ok(effective) => effective,
         Err(error) => {
-            return extra
+            return all
                 .keys()
+                .filter(|key| !reported.contains(*key))
                 .map(|key| {
                     issue(
                         key,
@@ -858,72 +948,90 @@ pub fn help_issues(
                 .collect()
         }
     };
-    if effective.accepted_fingerprint.is_none() {
-        return extra
-            .keys()
-            .map(|key| {
-                issue(
-                    key,
-                    "unknown",
-                    format!("{key} is not an option this runtime describes; discover and accept its help, or remove the retained value"),
-                )
-            })
-            .collect();
+    let mut issues = Vec::new();
+    let mut describable = Map::new();
+    for (key, value) in all {
+        if reported.contains(&key) {
+            continue;
+        }
+        if effective
+            .schema
+            .options
+            .iter()
+            .any(|option| option.key == key)
+        {
+            describable.insert(key, value);
+        } else if effective.accepted_fingerprint.is_none() {
+            issues.push(issue(
+                &key,
+                "unknown",
+                format!("{key} is not an option this runtime describes; discover and accept its help, or remove the retained value"),
+            ));
+        } else {
+            issues.push(issue(
+                &key,
+                "unknown",
+                format!("{key} is absent from this runtime's reviewed help; its saved value was retained"),
+            ));
+        }
     }
-    match effective.schema.resolve(
+    if let Err(found) = effective.schema.resolve(
         &effective.scope,
-        &runtime_help_store::overrides_from_map(&extra),
+        &runtime_help_store::overrides_from_map(&describable),
     ) {
-        Ok(_) => Vec::new(),
-        Err(issues) => issues
-            .into_iter()
-            .map(|found: OptionIssue| {
-                let code = if effective.help_keys.contains(&found.key) {
-                    "help"
-                } else {
-                    "unknown"
-                };
-                issue(&found.key, code, found.message)
-            })
-            .collect(),
+        issues.extend(found.into_iter().map(|found: OptionIssue| {
+            let code = if effective.compat_keys.contains(&found.key) {
+                "type"
+            } else {
+                "help"
+            };
+            issue(&found.key, code, found.message)
+        }));
     }
+    issues
 }
 
-/// Launch arguments for saved values only accepted help describes, appended
-/// after the catalog/manifest arguments. The accepted identity is recomputed
-/// first; a changed runtime or help command blocks launch with the values
-/// retained.
-pub fn help_launch_args(
+/// Resolve saved values for launch with the effective schema. Any value only
+/// accepted help describes requires that help to still describe the runtime
+/// exactly; a changed runtime blocks launch with the values retained.
+fn resolve_launch(
     root: &Path,
     cfg: &AppConfig,
-    values: &Map<String, Value>,
-    compat_keys: &[String],
+    selected: &Selected,
+    values: Map<String, Value>,
 ) -> Result<Vec<String>, String> {
-    let extra = help_values(values, compat_keys);
-    if extra.is_empty() {
+    if values.is_empty() {
         return Ok(Vec::new());
     }
-    let keys = extra.keys().cloned().collect::<Vec<_>>().join(", ");
-    let effective = effective(root, cfg, true)?;
-    match effective.help_state {
-        HelpState::Current => {}
-        HelpState::None => {
-            return Err(format!(
-                "saved options {keys} need this runtime's reviewed help; discover and accept it first (values are retained)"
-            ))
-        }
-        _ => {
-            return Err(format!(
-                "{} Saved options {keys} were retained.",
-                effective.help_detail
-            ))
+    let mut effective = effective_for(root, cfg, selected, false)?;
+    let help_keys = values
+        .keys()
+        .filter(|key| !effective.compat_keys.contains(key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !help_keys.is_empty() {
+        let keys = help_keys.join(", ");
+        effective = effective_for(root, cfg, selected, true)?;
+        match effective.help_state {
+            HelpState::Current => {}
+            HelpState::None => {
+                return Err(format!(
+                    "saved options {keys} need this runtime's reviewed help; discover and accept it first (values are retained)"
+                ))
+            }
+            _ => {
+                return Err(format!(
+                    "{} Saved options {keys} were retained.",
+                    effective.help_detail
+                ))
+            }
         }
     }
     let resolved = effective
         .schema
         .resolve(
             &effective.scope,
-            &runtime_help_store::overrides_from_map(&extra),
+            &runtime_help_store::overrides_from_map(&values),
         )
         .map_err(|issues| {
             issues
@@ -933,9 +1041,46 @@ pub fn help_launch_args(
                 .join("; ")
         })?;
     if !resolved.request.is_empty() {
-        return Err("help-derived request fields need adapter protocol metadata".into());
+        return Err("request fields are sent with requests, not launch arguments".into());
     }
     strip_scope(resolved.argv, &effective.scope)
+}
+
+/// Launch arguments for every saved generic option of a registered engine:
+/// manifest options and accepted help options through one resolver.
+/// Request-target manifest options are left for requests.
+pub fn launch_arguments(
+    root: &Path,
+    cfg: &AppConfig,
+    values: &Map<String, Value>,
+) -> Result<Vec<String>, String> {
+    let selected = Selected::from_config(cfg)?;
+    let effective = effective_for(root, cfg, &selected, false)?;
+    let launch = generic_values(values)
+        .into_iter()
+        .filter(|(key, _)| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.key == *key)
+                .is_none_or(|option| option.target == Target::Launch)
+        })
+        .collect();
+    resolve_launch(root, cfg, &selected, launch)
+}
+
+/// Launch arguments for saved values only accepted help describes, appended
+/// after a built-in catalog's own arguments (which the catalog mapping
+/// produces through the same resolver).
+pub fn help_launch_args(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    values: &Map<String, Value>,
+    compat_keys: &[String],
+) -> Result<Vec<String>, String> {
+    resolve_launch(root, cfg, selected, help_values(values, compat_keys))
 }
 
 /// The launch template already names the subcommand; drop the scope words

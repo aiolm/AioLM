@@ -83,6 +83,7 @@ fn manifest(
                 engine.as_str().into(),
                 "build-1".into(),
                 "{model}".into(),
+                "{options_json}".into(),
             ],
             ..process.clone()
         },
@@ -99,7 +100,11 @@ fn manifest(
             ],
             ..process
         },
-        options: vec![],
+        options: vec![serde_json::from_value(json!({
+            "key": "workers", "flag": "--workers", "target": "launch",
+            "kind": {"type": "integer", "min": 1, "max": 8}
+        }))
+        .unwrap()],
         artifacts: vec![],
         model_formats: vec!["unknown".into()],
         models: vec![],
@@ -173,11 +178,21 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     // literal adapter environment; never templated credentials or ports.
     let target = runtime_schema::help_target(&root, &cfg).unwrap();
     assert!(!target.fixed);
-    assert!(target.prefix.is_empty());
+    // The entry prefix is the exact launch token sequence before the first
+    // app-owned binding, not a guess at the first option.
+    assert_eq!(
+        target.prefix,
+        ["--adapter-engine", "--adapter-no-health-auth"]
+    );
     assert_eq!(target.program, v1.launch.program);
     let request = HelpRequest {
         program: None,
-        args: vec!["--adapter-help-fixture".into(), "--help".into()],
+        args: vec![
+            "--adapter-engine".into(),
+            "--adapter-no-health-auth".into(),
+            "--adapter-help-fixture".into(),
+            "--help".into(),
+        ],
         scope: vec![],
     };
     let command = runtime_schema::help_command(&cfg, &request).unwrap();
@@ -197,6 +212,13 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         ..request.clone()
     };
     assert!(runtime_schema::help_command(&cfg, &foreign).is_err());
+    let unprefixed = HelpRequest {
+        args: vec!["--adapter-help-fixture".into(), "--help".into()],
+        ..request.clone()
+    };
+    assert!(runtime_schema::help_command(&cfg, &unprefixed)
+        .unwrap_err()
+        .contains("entry point"));
 
     // Discovery alone changes nothing: help success is not acceptance and
     // establishes no protocol or capability.
@@ -248,6 +270,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     // Explicit zero, explicit empty text, a fixed tuple keeping spaces and
     // Unicode as single arguments, and a switch, in the stored profile shapes.
     let values = json!({
+        "workers": 2,
         "fresh_count": "0",
         "fresh_label": "",
         "fresh_pair": {"spelling": null, "occurrences": [["x y", "한글"]]},
@@ -262,7 +285,10 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         Value::Object(loaded.provider_options[engine.as_str()].clone()),
         values
     );
+    // Manifest and help options resolve together, in schema order.
     let expected_tail = [
+        "--workers",
+        "2",
         "--fresh-count",
         "0",
         "--fresh-label",
