@@ -411,24 +411,7 @@ pub(crate) fn provider_import_command(
 
 #[tauri::command]
 pub(crate) fn provider_command_preview(cfg: config::AppConfig) -> Result<Vec<String>, String> {
-    if providers::provider_of(&cfg) == ProviderId::Llama {
-        let plan = providers::adapter::resolve(&cfg).launch(
-            &cfg,
-            cfg.port,
-            "",
-            &crate::gpu::ResolvedGpu::default(),
-        )?;
-        return Ok(providers::launch::preview(&plan));
-    }
-    if providers::provider_of(&cfg).is_custom() {
-        return Ok(providers::launch::preview(&providers::registry::command(
-            &cfg, cfg.port, "",
-        )?));
-    }
-    let runtime = providers::selected_python_runtime(&cfg)?;
-    Ok(providers::launch::preview(
-        &providers::launch::engine_command(&cfg, &runtime, cfg.port, "")?,
-    ))
+    providers::command_preview(&cfg)
 }
 
 #[tauri::command]

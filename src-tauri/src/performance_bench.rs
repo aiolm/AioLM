@@ -638,6 +638,8 @@ pub async fn run(
             Some(runtime) => crate::providers::launch::preview(&crate::providers::launch::engine_command(&isolated, runtime, isolated.port, "")?),
             None => redacted_args(crate::providers::adapter::resolve(&isolated).launch(&isolated, isolated.port, "", &gpu)?.args),
         };
+        // Recorded with the result: schema-secret option values never are.
+        result.args = crate::providers::runtime_schema::mask_argv(&crate::providers::registry::root(), &isolated, std::mem::take(&mut result.args), "[redacted]");
         if let Some(provenance) = &mut result.provenance {
             provenance.execution_config = crate::benchmark::provenance::ExecutionConfig::from_args(&result.args);
         }

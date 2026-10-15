@@ -48,6 +48,19 @@ impl Drop for TestHome {
 }
 
 const ENGINE: &str = "custom.metadatafixture";
+/// A synthetic value of an option only metadata marks sensitive.
+const AMBER: &str = "amber-7Q-synthetic-value";
+
+/// `aiolm-cli config get` against this test home, as a user would run it.
+fn cli_config(home: &Path) -> String {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_aiolm-cli"))
+        .args(["config", "get"])
+        .env("AIOLM_HOME", home)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
 
 fn manifest(area: &Path, argv_file: &Path, metadata: Option<Value>) -> Value {
     let program = env!("CARGO_BIN_EXE_fake-llama-server");
@@ -79,7 +92,9 @@ fn metadata(revision: &str, unit: &str) -> Value {
             {"flag": "--fresh-count", "kind": "integer"},
             {"flag": "--fresh-mode", "choices": ["fast", "exact"]},
             {"flag": "--absent-flag", "sensitive": true},
-            {"flag": "--port", "sensitive": true}
+            {"flag": "--port", "sensitive": true},
+            // A name with no secret-like word: only the metadata says so.
+            {"flag": "--fresh-amber", "sensitive": true}
         ],
         "constraints": [
             {"kind": "requires", "when": {"flag": "--fresh-switch"}, "other": {"flag": "--fresh-cache"}}
@@ -320,7 +335,8 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
 
     let values = json!({
         "fresh_secret": "synthetic-secret-value", "fresh_cache": 512,
-        "fresh_switch": true, "fresh_mode": "safe", "fresh_count": 0
+        "fresh_switch": true, "fresh_mode": "safe", "fresh_count": 0,
+        "fresh_amber": AMBER
     });
     saved(&mut cfg, values.clone());
     assert!(issues(&cfg).is_empty(), "{:?}", issues(&cfg));
@@ -341,10 +357,33 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
         "512",
         "--fresh-mode",
         "safe",
+        "--fresh-amber",
+        AMBER,
     ]
     .map(String::from);
     let planned = providers::registry::command(&loaded, port, "synthetic-key").unwrap();
     assert!(planned.args.ends_with(&expected_tail), "{:?}", planned.args);
+    // Display and record projections hide schema-secret values; the launch
+    // argv above keeps them exactly.
+    let preview = providers::command_preview(&loaded).unwrap();
+    assert!(
+        !preview.iter().any(|arg| arg.contains(AMBER)),
+        "{preview:?}"
+    );
+    assert!(!preview
+        .iter()
+        .any(|arg| arg.contains("synthetic-secret-value")));
+    assert!(
+        preview.ends_with(&["--fresh-amber".into(), "[REDACTED]".into()]),
+        "{preview:?}"
+    );
+    assert!(
+        preview.contains(&"512".to_string()),
+        "other values stay readable"
+    );
+    let shown = cli_config(&area.path);
+    assert!(!shown.contains(AMBER), "{shown}");
+    assert!(shown.contains("fresh_amber"), "{shown}");
     let info = providers::execution::info(&loaded).unwrap();
     let err = Arc::new(ErrBuf::default());
     let (child, url, _) =
@@ -383,6 +422,9 @@ async fn manifest_option_metadata_reaches_the_schema_validation_profile_and_spaw
         Value::Object(aiolm_lib::config::load_result().unwrap().provider_options[ENGINE].clone()),
         values
     );
+    // While the reviewed help is stale the stored secret stays hidden.
+    let shown = cli_config(&area.path);
+    assert!(!shown.contains(AMBER), "{shown}");
     discover_and_accept(&root, &loaded);
     assert!(providers::registry::command(&loaded, port, "synthetic-key")
         .unwrap_err()

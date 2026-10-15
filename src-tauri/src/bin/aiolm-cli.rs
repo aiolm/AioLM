@@ -1025,10 +1025,22 @@ fn apply_config_override(
 }
 
 fn config_value() -> Result<Value, String> {
-    let cfg = config::load_result()?;
-    serde_json::to_value(cfg)
+    redact_config(&config::load_result()?)
+}
+
+/// Name-based redaction plus the option values the selected runtime's schema
+/// marks secret, whatever their names. The saved configuration is unchanged.
+fn redact_config(cfg: &config::AppConfig) -> Result<Value, String> {
+    let mut value = serde_json::to_value(cfg)
         .map(redact_json)
-        .map_err(|error| format!("cannot serialize config: {error}"))
+        .map_err(|error| format!("cannot serialize config: {error}"))?;
+    aiolm_lib::providers::runtime_schema::mask_config(
+        &aiolm_lib::providers::registry::root(),
+        cfg,
+        &mut value,
+        "[REDACTED]",
+    );
+    Ok(value)
 }
 
 /// `provider_options` replaces the whole provider-keyed map. Each provider's
@@ -1137,7 +1149,7 @@ fn config_set_value(key: &str, value: &str) -> Result<Value, String> {
     Ok(json!({
         "ok": true,
         "changed": key,
-        "config": redact_json(serde_json::to_value(saved).map_err(|error| error.to_string())?),
+        "config": redact_config(&saved)?,
     }))
 }
 
@@ -1169,7 +1181,7 @@ fn runtime_select_value(backend: &str, build: &str) -> Result<Value, String> {
     let saved = config::save(&cfg)?;
     Ok(json!({
         "ok": true,
-        "config": redact_json(serde_json::to_value(saved).map_err(|error| error.to_string())?),
+        "config": redact_config(&saved)?,
     }))
 }
 

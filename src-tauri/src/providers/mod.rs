@@ -292,6 +292,28 @@ pub fn provider_of(cfg: &crate::config::AppConfig) -> ProviderId {
     ProviderId::parse(&cfg.active_provider).unwrap_or(ProviderId::Llama)
 }
 
+/// The command line the selected runtime would launch with, for display.
+/// The app key is never included, and values the runtime's schema marks
+/// secret are replaced; the launch itself uses them unchanged.
+pub fn command_preview(cfg: &crate::config::AppConfig) -> Result<Vec<String>, String> {
+    let argv = if provider_of(cfg) == ProviderId::Llama {
+        let plan =
+            adapter::resolve(cfg).launch(cfg, cfg.port, "", &crate::gpu::ResolvedGpu::default())?;
+        launch::preview(&plan)
+    } else if provider_of(cfg).is_custom() {
+        launch::preview(&registry::command(cfg, cfg.port, "")?)
+    } else {
+        let runtime = selected_python_runtime(cfg)?;
+        launch::preview(&launch::engine_command(cfg, &runtime, cfg.port, "")?)
+    };
+    Ok(runtime_schema::mask_argv(
+        &registry::root(),
+        cfg,
+        argv,
+        runtime_schema::REDACTED,
+    ))
+}
+
 /// The runtime id a configuration selects for its provider.
 pub fn runtime_id_of(cfg: &crate::config::AppConfig) -> String {
     match provider_of(cfg) {

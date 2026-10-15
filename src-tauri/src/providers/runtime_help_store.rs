@@ -170,6 +170,25 @@ pub fn load_snapshot(
     Ok(Some(snapshot))
 }
 
+/// The schema of a stored snapshot whatever parser version wrote it, read
+/// with the same file bounds. Only for keeping values an earlier review
+/// marked secret hidden while help is rediscovered; never for launch.
+pub fn stored_schema(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+    fingerprint: &str,
+) -> Option<OptionSchema> {
+    let path = snapshot_path_for(root, engine, runtime, fingerprint).ok()?;
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_SNAPSHOT_BYTES as u64 {
+        return None;
+    }
+    let snapshot: HelpSnapshot = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    (snapshot.schema.binding.engine == engine && snapshot.schema.binding.runtime == runtime)
+        .then_some(snapshot.schema)
+}
+
 /// The most recently saved snapshot for a runtime, if any.
 ///
 /// Selection is deterministic and bounded: only files named `<SHA-256>.json`

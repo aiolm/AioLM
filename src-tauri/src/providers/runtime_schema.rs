@@ -1956,6 +1956,133 @@ pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> 
     identity
 }
 
+/// Written over a secret in display and record copies of argv or settings.
+pub const REDACTED: &str = "[REDACTED]";
+
+fn secret_keys_of(schema: &OptionSchema, keys: &mut BTreeSet<String>) {
+    keys.extend(
+        schema
+            .options
+            .iter()
+            .filter(|option| option.sensitive.supported() == Some(&true))
+            .map(|option| option.key.clone()),
+    );
+}
+
+/// Keys of the selected runtime's options its schema marks secret (adapter
+/// metadata, built-in facts). A stale accepted help still counts, and so
+/// does an accepted snapshot an earlier parser wrote, so stored secrets stay
+/// hidden while the user rediscovers. Names alone never make a key secret.
+pub fn sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    let Ok(selected) = Selected::from_config(cfg) else {
+        return keys;
+    };
+    if let Ok(effective) = effective_for(root, cfg, &selected, false) {
+        secret_keys_of(&effective.schema, &mut keys);
+    }
+    let key = &selected.key;
+    if let Ok(Some(accepted)) = load_accepted(root, &key.engine, &key.runtime) {
+        if let Some(mut schema) = runtime_help_store::stored_schema(
+            root,
+            &key.engine,
+            &key.runtime,
+            &accepted.fingerprint,
+        ) {
+            if let Some((metadata, builtin)) = compat(&selected).ok().and_then(|c| c.metadata) {
+                runtime_metadata::apply(&mut schema, &metadata, builtin, false);
+            }
+            secret_keys_of(&schema, &mut keys);
+        }
+    }
+    keys
+}
+
+/// The argv text of every saved value of the selected runtime's secret keys.
+fn secret_texts(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
+    let keys = sensitive_keys(root, cfg);
+    let values = super::launch::provider_options(cfg, super::provider_of(cfg));
+    let secret = values
+        .iter()
+        .filter(|(key, _)| keys.contains(*key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    runtime_help_store::overrides_from_map(&secret)
+        .values()
+        .flat_map(|row| row.occurrences.iter().flatten())
+        .map(argv_text)
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+/// A display or record copy of argv with the selected runtime's secret
+/// option values replaced, including `--flag=value` spellings. The launch
+/// argv itself is never changed.
+pub fn mask_argv(
+    root: &Path,
+    cfg: &AppConfig,
+    argv: Vec<String>,
+    placeholder: &str,
+) -> Vec<String> {
+    let secrets = secret_texts(root, cfg);
+    if secrets.is_empty() {
+        return argv;
+    }
+    argv.into_iter()
+        .map(|token| {
+            if secrets.contains(&token) {
+                return placeholder.to_owned();
+            }
+            match token.split_once('=') {
+                Some((flag, value)) if flag.starts_with('-') && secrets.contains(value) => {
+                    format!("{flag}={placeholder}")
+                }
+                _ => token,
+            }
+        })
+        .collect()
+}
+
+/// Hide the selected runtime's secret option values in a serialized
+/// configuration: every `provider_options.<engine>.<key>`, including the
+/// copies saved profiles keep. Stored values stay.
+pub fn mask_config(root: &Path, cfg: &AppConfig, projection: &mut Value, placeholder: &str) {
+    fn walk(value: &mut Value, engine: &str, keys: &BTreeSet<String>, placeholder: &str) {
+        match value {
+            Value::Object(object) => {
+                for (name, child) in object.iter_mut() {
+                    if name == "provider_options" {
+                        if let Some(options) = child.get_mut(engine).and_then(Value::as_object_mut)
+                        {
+                            for (key, value) in options.iter_mut() {
+                                if keys.contains(key) {
+                                    *value = Value::from(placeholder);
+                                }
+                            }
+                        }
+                    }
+                    walk(child, engine, keys, placeholder);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, engine, keys, placeholder);
+                }
+            }
+            _ => {}
+        }
+    }
+    let keys = sensitive_keys(root, cfg);
+    if !keys.is_empty() {
+        walk(
+            projection,
+            super::provider_of(cfg).as_str(),
+            &keys,
+            placeholder,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2360,7 +2487,7 @@ mod tests {
     #[test]
     fn help_parsed_by_an_earlier_parser_is_stale_and_its_values_are_kept() {
         let (root, mut cfg) = accepted_llama_help(
-            "--no-host   bypass host buffer allowing extra buffers to be used\n--host HOST   IP addresses to listen on\n",
+            "--no-host   bypass host buffer allowing extra buffers to be used\n--host HOST   IP addresses to listen on\n-hft, --hf-token TOKEN   Hugging Face access token\n",
         );
         // Rewrite the accepted snapshot as the earlier parser recorded it.
         let path = runtime_help_store::snapshot_root(&root, "llama.cpp", "cpu-metadata-test")
@@ -2385,6 +2512,28 @@ mod tests {
             );
         }
         assert_eq!(cfg.provider_options["llama.cpp"], values);
+        // The stale snapshot still says which stored value is secret, so it
+        // stays hidden in display copies while help is rediscovered.
+        let mut stored = values.clone();
+        stored.insert("hf_token".into(), json!("synthetic-hub-credential"));
+        cfg.provider_options.insert("llama.cpp".into(), stored);
+        assert!(sensitive_keys(&root, &cfg).contains("hf_token"));
+        assert_eq!(
+            mask_argv(
+                &root,
+                &cfg,
+                vec!["-hft".into(), "synthetic-hub-credential".into()],
+                REDACTED
+            ),
+            ["-hft", REDACTED]
+        );
+        let mut projection = serde_json::to_value(&cfg).unwrap();
+        mask_config(&root, &cfg, &mut projection, REDACTED);
+        assert_eq!(
+            projection["provider_options"]["llama.cpp"]["hf_token"],
+            REDACTED
+        );
+        assert_eq!(projection["provider_options"]["llama.cpp"]["no_host"], true);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -277,7 +277,7 @@ fn main() {
             "order2" => "  -t TAG, --fresh-tag TAG   synthetic tag with an alias\n  --fresh-items X Y   synthetic items, two per occurrence\n",
             // Options whose type, unit, secrecy and choices only explicit
             // adapter metadata can describe; help shows syntax alone.
-            "metadata" => "  --fresh-secret TOKEN  synthetic credential-like value\n  --fresh-cache N       synthetic cache size\n  --fresh-mode {fast,safe}  synthetic mode with documented choices\n",
+            "metadata" => "  --fresh-secret TOKEN  synthetic credential-like value\n  --fresh-cache N       synthetic cache size\n  --fresh-mode {fast,safe}  synthetic mode with documented choices\n  --fresh-amber VALUE   synthetic value only explicit metadata calls secret\n",
             _ => "",
         };
         println!(
