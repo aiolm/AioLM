@@ -210,6 +210,26 @@ fn main() {
         );
         return;
     }
+    if arguments.iter().any(|arg| arg == "--adapter-help-fixture") {
+        // Synthetic help for the help-to-launch journey. Option names are
+        // fresh so no catalog or app code can know them in advance.
+        let mode = std::env::var("FAKE_ENGINE_HELP").unwrap_or_default();
+        let extra = if mode == "v2" {
+            "  --fresh-extra VALUE   synthetic option added by build two\n"
+        } else {
+            ""
+        };
+        println!(
+            "usage: fake-engine [options] [TARGET]\n\npositional arguments:\n  TARGET                entry to serve\n\noptions:\n  -h, --help            show this help message and exit\n  --model MODEL         model path\n  --host HOST           bind address\n  -p, --port PORT       bind port\n  --fresh-count N       synthetic count, zero is meaningful\n  --fresh-label TEXT    synthetic label, empty is meaningful\n  --fresh-pair A B      synthetic fixed pair\n  --fresh-switch        synthetic switch\n{extra}"
+        );
+        return;
+    }
+    if arguments.iter().any(|arg| arg == "--adapter-engine") {
+        if let Ok(path) = std::env::var("FAKE_ENGINE_ARGV_FILE") {
+            std::fs::write(path, serde_json::to_vec(&arguments[1..]).unwrap())
+                .expect("record fixture argv");
+        }
+    }
     if std::env::args().any(|arg| arg == "--version" || arg == "--help") {
         println!("llama-server test fixture b1\n--model --port --api-key --api-key-file --ctx-size --threads --temp --top-p --top-k");
         return;

@@ -832,6 +832,20 @@ pub fn validate_runtime_identifiers(backend: &str, build: &str) -> Result<(), St
     Ok(())
 }
 
+/// The installed runtime's identity for help caching: what its own
+/// `--version` reported at install time, or the build directory when the
+/// runtime predates the version sidecar. The executable hash is separate.
+pub fn installed_version_label(backend: &str, build: &str) -> Result<String, String> {
+    let dir = runtime_dir(backend, build)?;
+    Ok(match read_version_manifest(&dir) {
+        Some(version) => format!(
+            "{backend}/{build}: {} (build {}, commit {})",
+            version.semver, version.build, version.commit
+        ),
+        None => format!("{backend}/{build}"),
+    })
+}
+
 pub fn runtime_dir(backend: &str, build: &str) -> Result<PathBuf, String> {
     validate_runtime_identifiers(backend, build)?;
     Ok(runtimes_root().join(format!("{build}-{backend}")))

@@ -53,7 +53,7 @@ pub struct RuntimeDescriptor {
     pub retained: Vec<String>,
 }
 
-fn valid_segment(value: &str) -> bool {
+pub(crate) fn valid_segment(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -62,7 +62,7 @@ fn valid_segment(value: &str) -> bool {
         && !value.starts_with(['-', '.'])
 }
 
-fn snapshot_root(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
+pub(crate) fn snapshot_root(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
     if !valid_segment(engine) || !valid_segment(runtime) {
         return Err("invalid engine or runtime identity for help snapshots".into());
     }
@@ -391,6 +391,36 @@ pub fn discover_persist_describe(
     command: &HelpCommand,
     saved_keys: &[String],
 ) -> Result<(HelpReport, RuntimeDescriptor), String> {
+    discover_against(
+        service,
+        root,
+        owner,
+        engine,
+        runtime,
+        command,
+        saved_keys,
+        Baseline::Latest,
+    )
+}
+
+/// What a new discovery is compared with: the latest saved snapshot, or the
+/// snapshot a user reviewed and accepted for launch (possibly none).
+pub enum Baseline {
+    Latest,
+    Accepted(Option<Box<HelpSnapshot>>),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn discover_against(
+    service: &HelpService,
+    root: &Path,
+    owner: &str,
+    engine: &str,
+    runtime: &str,
+    command: &HelpCommand,
+    saved_keys: &[String],
+    baseline: Baseline,
+) -> Result<(HelpReport, RuntimeDescriptor), String> {
     if !valid_segment(engine) || !valid_segment(runtime) {
         return Err("invalid engine or runtime identity for help snapshots".into());
     }
@@ -424,12 +454,15 @@ pub fn discover_persist_describe(
             return Err(error);
         }
     };
-    let previous = match latest_snapshot(root, engine, runtime) {
-        Ok(previous) => previous,
-        Err(error) => {
-            service.failed(&ticket);
-            return Err(error);
-        }
+    let previous = match baseline {
+        Baseline::Accepted(previous) => previous.map(|snapshot| *snapshot),
+        Baseline::Latest => match latest_snapshot(root, engine, runtime) {
+            Ok(previous) => previous,
+            Err(error) => {
+                service.failed(&ticket);
+                return Err(error);
+            }
+        },
     };
     // A saved snapshot from another fingerprint is never reused; the diff
     // shows what changed and saved values stay retained.

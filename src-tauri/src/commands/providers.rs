@@ -424,7 +424,8 @@ pub(crate) fn provider_option_issues(
     let selected = providers::provider_of(&cfg);
     let options = providers::launch::provider_options(&cfg, selected);
     if selected.is_custom() {
-        return Ok(providers::registry::option_issues(
+        return Ok(providers::registry::saved_option_issues(
+            &cfg,
             &providers::registry::manifest(selected, &cfg.active_runtime)?,
             &options,
         ));
@@ -433,7 +434,9 @@ pub(crate) fn provider_option_issues(
         return Ok(providers::launch::option_issues(selected, &options));
     }
     let runtime = providers::selected_python_runtime(&cfg)?;
-    Ok(providers::launch::runtime_option_issues(&runtime, &options))
+    Ok(providers::launch::saved_option_issues(
+        &cfg, &runtime, &options,
+    ))
 }
 
 /// Register a user-selected process adapter without installing or deleting its

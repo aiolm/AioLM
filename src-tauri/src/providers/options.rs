@@ -869,14 +869,6 @@ pub fn validate(provider: ProviderId, options: &Map<String, Value>) -> Vec<Optio
     issues
 }
 
-fn json_number_text(value: &Value) -> String {
-    match value {
-        Value::Number(number) => number.to_string(),
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
-}
-
 /// Launch arguments for valid options, in schema order so the command line is
 /// deterministic. Callers validate first; invalid values are not emitted.
 pub fn launch_args(provider: ProviderId, options: &Map<String, Value>) -> Vec<String> {
@@ -885,34 +877,15 @@ pub fn launch_args(provider: ProviderId, options: &Map<String, Value>) -> Vec<St
         .iter()
         .filter(|spec| spec.target == OptionTarget::Launch)
     {
-        let (Some(flag), Some(value)) = (spec.flag, options.get(spec.key)) else {
+        let (Some(_), Some(value)) = (spec.flag, options.get(spec.key)) else {
             continue;
         };
         if check_value(spec, value).is_some() {
             continue;
         }
-        match spec.kind {
-            OptionKind::Flag => {
-                if value.as_bool() == Some(true) {
-                    args.push(flag.to_owned());
-                }
-            }
-            OptionKind::Toggle => {
-                if value.as_bool() == Some(true) {
-                    args.push(flag.to_owned());
-                } else {
-                    args.push(format!("--no-{}", &flag[2..]));
-                }
-            }
-            OptionKind::Json => {
-                args.push(flag.to_owned());
-                args.push(value.to_string());
-            }
-            _ => {
-                args.push(flag.to_owned());
-                args.push(json_number_text(value));
-            }
-        }
+        // The catalog is a compatibility mapping onto the common option
+        // schema; its arguments come from the same resolver as help options.
+        args.extend(super::runtime_schema::spec_arguments(spec, value));
     }
     if let Some(extra) = options.get(EXTRA_ARGS_KEY).and_then(Value::as_array) {
         args.extend(extra.iter().filter_map(Value::as_str).map(str::to_owned));

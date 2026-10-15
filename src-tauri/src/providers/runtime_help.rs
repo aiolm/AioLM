@@ -16,7 +16,7 @@ use std::{
 };
 
 pub const PARSER_VERSION: u32 = 1;
-const MAX_STREAM_BYTES: usize = 1024 * 1024;
+pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

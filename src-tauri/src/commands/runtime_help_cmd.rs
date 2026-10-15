@@ -9,6 +9,7 @@ use crate::providers::{
     runtime_help_parse::{AppliedOverlay, SchemaDiff},
     runtime_help_store::{self, HelpSnapshot, RuntimeDescriptor},
     runtime_options::{OptionIssue, OptionSchema, ResolvedOptions},
+    runtime_schema,
 };
 use serde_json::{Map, Value};
 
@@ -52,6 +53,93 @@ pub(crate) async fn runtime_help_discover(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The adapter-owned help command for the selected runtime: program, entry
+/// prefix and the request that was accepted (or the adapter default).
+#[tauri::command]
+pub(crate) async fn runtime_help_target(
+    cfg: crate::config::AppConfig,
+) -> Result<runtime_schema::HelpTarget, String> {
+    tokio::task::spawn_blocking(move || runtime_schema::help_target(&adapters_root(), &cfg))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Discover the selected runtime's help through its adapter-derived command.
+/// One discovery per runtime runs at a time; a newer one supersedes it. The
+/// result is compared with the accepted help, never applied until accepted.
+#[tauri::command]
+pub(crate) async fn runtime_help_discover_selected(
+    cfg: crate::config::AppConfig,
+    request: runtime_schema::HelpRequest,
+) -> Result<(HelpReport, RuntimeDescriptor), String> {
+    tokio::task::spawn_blocking(move || {
+        let root = adapters_root();
+        let key = runtime_schema::runtime_key(&cfg)?;
+        let command = runtime_schema::help_command(&cfg, &request)?;
+        let accepted = runtime_schema::load_accepted(&root, &key.engine, &key.runtime)?;
+        let baseline = match accepted {
+            Some(accepted) => runtime_help_store::load_snapshot(
+                &root,
+                &key.engine,
+                &key.runtime,
+                &accepted.fingerprint,
+            )?,
+            None => None,
+        };
+        let saved_keys = crate::providers::launch::provider_options(&cfg, key.provider)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        runtime_help_store::discover_against(
+            service(),
+            &root,
+            &format!("runtime:{}/{}", key.engine, key.runtime),
+            &key.engine,
+            &key.runtime,
+            &command,
+            &saved_keys,
+            runtime_help_store::Baseline::Accepted(baseline.map(Box::new)),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Cancel the selected runtime's in-flight discovery.
+#[tauri::command]
+pub(crate) async fn runtime_help_cancel_selected(
+    cfg: crate::config::AppConfig,
+) -> Result<bool, String> {
+    let key = runtime_schema::runtime_key(&cfg)?;
+    service().cancel_owner(&format!("runtime:{}/{}", key.engine, key.runtime))
+}
+
+/// Accept a reviewed discovery for launch. The current command must still
+/// produce the same fingerprint.
+#[tauri::command]
+pub(crate) async fn runtime_help_accept(
+    cfg: crate::config::AppConfig,
+    fingerprint: String,
+    request: runtime_schema::HelpRequest,
+) -> Result<runtime_schema::AcceptedHelp, String> {
+    tokio::task::spawn_blocking(move || {
+        runtime_schema::accept(&adapters_root(), &cfg, &fingerprint, &request)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The one option schema the settings UI renders for the selected runtime:
+/// catalog/manifest options plus accepted help, with app-owned bindings.
+#[tauri::command]
+pub(crate) async fn provider_option_schema(
+    cfg: crate::config::AppConfig,
+) -> Result<runtime_schema::EffectiveSchema, String> {
+    tokio::task::spawn_blocking(move || runtime_schema::effective(&adapters_root(), &cfg, true))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Cached display path: never spawns a child. Returns the persistent snapshot

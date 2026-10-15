@@ -525,6 +525,38 @@ pub fn option_issues(
         })
         .collect()
 }
+fn manifest_keys(manifest: &RuntimeManifest) -> Vec<String> {
+    manifest
+        .options
+        .iter()
+        .map(|option| option.key.clone())
+        .collect()
+}
+
+/// Every problem with saved options: manifest options by their declared kind,
+/// everything else against the runtime's accepted help. Values are reported,
+/// never removed.
+pub fn saved_option_issues(
+    cfg: &AppConfig,
+    m: &RuntimeManifest,
+    values: &Map<String, Value>,
+) -> Vec<super::options::OptionIssue> {
+    let keys = manifest_keys(m);
+    let declared: Map<String, Value> = values
+        .iter()
+        .filter(|(key, _)| keys.contains(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let mut issues = option_issues(m, &declared);
+    issues.extend(super::runtime_schema::help_issues(
+        &root(),
+        cfg,
+        values,
+        &keys,
+    ));
+    issues
+}
+
 fn options(cfg: &AppConfig) -> Map<String, Value> {
     cfg.provider_options
         .get(&cfg.active_provider)
@@ -759,13 +791,30 @@ pub async fn register(
         return Err("runtime probe cancelled".into());
     }
     // Claim publication atomically after probe, so concurrent registrars cannot
-    // replace an already registered build. Failed publication owns no engines.
-    fs::create_dir_all(target.parent().unwrap().parent().unwrap()).map_err(|e| e.to_string())?;
-    fs::create_dir(target.parent().unwrap())
+    // replace an already registered build. The runtime directory may already
+    // hold this runtime's reviewed help from an earlier registration, which a
+    // re-registration keeps (and re-validates against the new build).
+    let directory = target.parent().unwrap().to_path_buf();
+    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    let claim = directory.join(".registering");
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&claim)
         .map_err(|e| format!("runtime registration collision: {e}"))?;
-    r.probe = Some(probe);
-    if let Err(error) = save(&r) {
-        let _ = fs::remove_dir(target.parent().unwrap());
+    let published = if target.exists() {
+        Err(
+            "runtime ID is already registered; remove its registration before replacing the build"
+                .into(),
+        )
+    } else {
+        r.probe = Some(probe);
+        save(&r)
+    };
+    let _ = fs::remove_file(&claim);
+    if let Err(error) = published {
+        // Removes the directory only when nothing else lives there.
+        let _ = fs::remove_dir(&directory);
         return Err(error);
     }
     Ok(r.manifest)
@@ -947,7 +996,7 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
         return Err("selected model requires a successful adapter probe".into());
     }
     let values = options(cfg);
-    let issues = option_issues(&r.manifest, &values);
+    let issues = saved_option_issues(cfg, &r.manifest, &values);
     if !issues.is_empty() {
         return Err(issues
             .iter()
@@ -1008,13 +1057,11 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
         .iter()
         .map(|a| expand(a, cfg, port, key, &info.upstream_model))
         .collect::<Result<Vec<_>, _>>()?;
-    // Help-derived options use the discovery schema; the manifest predates them
-    // but the sidecar records their verified syntax. Truly unknown keys still
-    // error below with retained values instead of launching.
-    let mut help_only: Map<String, Value> = Map::new();
-    for (name, value) in options(cfg) {
+    // Options the manifest does not describe resolve through the runtime's
+    // accepted help; unknown keys block launch with their values retained.
+    let saved = options(cfg);
+    for (name, value) in saved.clone() {
         let Some(spec) = m.options.iter().find(|s| s.key == name) else {
-            help_only.insert(name, value);
             continue;
         };
         if spec.target != "launch" {
@@ -1048,9 +1095,12 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
             }
         }
     }
-    if !help_only.is_empty() {
-        args.extend(help_launch_tail(&m, &help_only)?);
-    }
+    args.extend(super::runtime_schema::help_launch_args(
+        &root(),
+        cfg,
+        &saved,
+        &manifest_keys(&m),
+    )?);
     let env = m
         .launch
         .env
@@ -1158,7 +1208,8 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
         .cloned()
         .collect::<Vec<_>>()
         .join(" ");
-    let binding = serde_json::json!({"options":values,"context":templates.contains("{ctx_size}").then_some(cfg.ctx_size),"parallel":templates.contains("{parallel}").then_some(cfg.parallel)});
+    let help = super::runtime_schema::launch_identity(&root(), cfg, &manifest_keys(manifest));
+    let binding = serde_json::json!({"options":values,"help":help,"context":templates.contains("{ctx_size}").then_some(cfg.ctx_size),"parallel":templates.contains("{parallel}").then_some(cfg.parallel)});
     format!("{:x}", Sha256::digest(binding.to_string().as_bytes()))
 }
 
@@ -1185,17 +1236,56 @@ pub fn registered_models() -> Vec<super::artifacts::ModelArtifact> {
     models
 }
 
-/// Latest verified help schema for a registration, if discovery ran.
-/// The sidecar never replaces the manifest launch contract; it only adds
-/// options the manifest predates.
-pub fn help_schema_for(
-    engine: ProviderId,
-    runtime: &str,
-) -> Result<Option<super::runtime_options::OptionSchema>, String> {
-    Ok(
-        super::runtime_help_store::latest_snapshot(&root(), engine.as_str(), runtime)?
-            .map(|snapshot| snapshot.schema),
-    )
+/// Leading launch arguments that name the entry point (an interpreter's
+/// script, a subcommand) before the first option or app binding. Help for
+/// the launch program must be asked through the same prefix.
+pub fn launch_prefix(manifest: &RuntimeManifest) -> Vec<String> {
+    manifest
+        .launch
+        .args
+        .iter()
+        .take_while(|arg| !arg.starts_with('-') && !arg.contains('{'))
+        .cloned()
+        .collect()
+}
+
+/// Flags and positional slots the launch template fills from app-owned
+/// bindings (`{model}`, `{port}`, ...). Generic options must never set them,
+/// whatever spelling help documents for them.
+/// Returns (flag, binding name) pairs and whether any binding is positional.
+pub fn bound_launch_flags(manifest: &RuntimeManifest) -> (Vec<(String, String)>, bool) {
+    let args = &manifest.launch.args;
+    let mut flags = Vec::new();
+    let mut positional = false;
+    for (index, arg) in args.iter().enumerate() {
+        let Some(binding) = arg
+            .split_once('{')
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .map(|(name, _)| name.to_owned())
+        else {
+            continue;
+        };
+        if arg.starts_with('-') {
+            if let Some((flag, _)) = arg.split_once('=') {
+                flags.push((flag.to_owned(), binding));
+                continue;
+            }
+        }
+        match index.checked_sub(1).map(|i| &args[i]) {
+            Some(previous) if previous.starts_with('-') && !previous.contains('{') => {
+                flags.push((previous.clone(), binding));
+            }
+            _ => positional = true,
+        }
+    }
+    (flags, positional)
+}
+
+/// The version the registration's last successful probe reported.
+pub fn probe_version(engine: ProviderId, runtime: &str) -> Result<Option<String>, String> {
+    Ok(read_registration(engine, runtime)?
+        .probe
+        .map(|probe| probe.version))
 }
 
 /// Human-readable entry-point parameters for manifest suggestion.
@@ -1210,63 +1300,6 @@ pub struct EntrypointSuggestion {
     pub working_directory: Option<String>,
     pub health_path: String,
     pub health_authenticated: bool,
-}
-
-/// Resolve help-only stored values into launch argv tail.
-///
-/// Only keys absent from the manifest reach here. The snapshot must describe
-/// the currently registered executable; otherwise launch blocks until fresh
-/// discovery runs. Truly unknown keys error with retained values.
-fn help_launch_tail(
-    manifest: &RuntimeManifest,
-    help_only: &Map<String, Value>,
-) -> Result<Vec<String>, String> {
-    help_launch_tail_at(&root(), manifest, help_only)
-}
-
-fn help_launch_tail_at(
-    help_root: &Path,
-    manifest: &RuntimeManifest,
-    help_only: &Map<String, Value>,
-) -> Result<Vec<String>, String> {
-    let snapshot = super::runtime_help_store::latest_snapshot(
-        help_root,
-        manifest.engine_id.as_str(),
-        &manifest.runtime_id,
-    )?
-    .ok_or("saved options need verified help first; run help discovery for this runtime")?;
-    let registration = read_registration(manifest.engine_id, &manifest.runtime_id)?;
-    if snapshot.report.identity.executable_sha256 != registration.executable_sha256 {
-        return Err("help options describe another build; rediscover before launching".into());
-    }
-    if snapshot.schema.binding.fingerprint != snapshot.report.identity.fingerprint {
-        return Err("help snapshot schema does not match its report".into());
-    }
-    let scope = snapshot.report.scope.clone();
-    let resolved = super::runtime_help_store::resolve_stored(&snapshot.schema, &scope, help_only)
-        .map_err(|issues| {
-        issues
-            .iter()
-            .map(|issue| issue.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ")
-    })?;
-    let mut tail = resolved.argv;
-    // Discovery scope segments (for example `serve`) are part of the schema
-    // argv, but the manifest base already carries the entry-point command.
-    // Drop a duplicated leading scope so it is not emitted twice.
-    if !scope.is_empty()
-        && tail.len() >= scope.len()
-        && tail[..scope.len()].iter().zip(&scope).all(|(a, b)| a == b)
-    {
-        tail.drain(..scope.len());
-    }
-    if !resolved.request.is_empty() {
-        return Err(
-            "help-derived request fields need an explicit protocol overlay before launch".into(),
-        );
-    }
-    Ok(tail)
 }
 
 /// Suggest a manifest v1 from an entry-point plus its verified help schema.
@@ -1562,18 +1595,33 @@ mod tests {
         );
     }
     #[test]
-    fn help_only_values_block_launch_until_verified_discovery() {
+    fn launch_template_defines_entry_prefix_and_app_owned_bindings() {
         let mut manifest = example();
-        manifest.engine_id = ProviderId::parse("custom.help-tail-test").unwrap();
-        manifest.runtime_id = "synthetic-tail-1".into();
-        let mut stored = Map::new();
-        stored.insert("fresh_flag".into(), serde_json::json!("v"));
-        // No registration exists for this synthetic id on any machine, so the
-        // tail always reports missing verified help rather than launching.
-        let error = help_launch_tail(&manifest, &stored).unwrap_err();
-        assert!(error.contains("verified help"), "unexpected error: {error}");
+        manifest.launch.args = vec![
+            "C:/synthetic/server script.py".into(),
+            "serve".into(),
+            "--model".into(),
+            "{model}".into(),
+            "--listen={host}".into(),
+            "-p".into(),
+            "{port}".into(),
+            "{model_alias}".into(),
+        ];
+        assert_eq!(
+            launch_prefix(&manifest),
+            vec!["C:/synthetic/server script.py".to_string(), "serve".into()]
+        );
+        let (flags, positional) = bound_launch_flags(&manifest);
+        assert_eq!(
+            flags,
+            vec![
+                ("--model".to_string(), "model".to_string()),
+                ("--listen".into(), "host".into()),
+                ("-p".into(), "port".into())
+            ]
+        );
+        assert!(positional);
     }
-
     #[test]
     fn entrypoint_suggestion_keeps_explicit_bindings_and_skips_guesses() {
         use super::super::runtime_help::{Identity, TextOutput, PARSER_VERSION};

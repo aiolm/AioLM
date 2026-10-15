@@ -1,0 +1,1087 @@
+//! One effective option schema per selected runtime.
+//!
+//! Built-in option catalogs and manifest options are adapter-sourced facts.
+//! Help that a user discovered and accepted for the exact runtime adds the
+//! options those catalogs do not describe. The settings UI renders this one
+//! schema, saved values are validated against it and launch arguments come
+//! from the same resolver, for built-in and registered engines alike.
+//!
+//! Which help applies is pinned: acceptance records the fingerprint of the
+//! exact help command (executable and declared artifact hashes, argv, full
+//! environment, runtime version, scope and parser). Launch recomputes that
+//! identity and refuses saved help options when anything changed, keeping the
+//! values for review instead of reusing another script's or build's options.
+//!
+//! App-owned bindings come from the adapter, not from option names: built-in
+//! managed flags, and for registered engines every flag or positional slot its
+//! launch template fills from `{model}`, `{port}`, `{host}` and friends.
+use super::{
+    options::{self, OptionKind, OptionSpec, OptionTarget},
+    registry::{self, ExternalOption},
+    runtime_help::{Encoding, HelpCommand, MAX_STREAM_BYTES},
+    runtime_help_store::{self, HelpSnapshot},
+    runtime_options::{
+        Arity, Certainty, Fact, ManagedBinding, NumericRange, OptionDefinition, OptionIssue,
+        OptionSchema, RuntimeDefault, Source, Spelling, Target, ValueKind, ValueStyle,
+        SCHEMA_VERSION,
+    },
+    ProviderId,
+};
+use crate::config::AppConfig;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
+    path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+};
+
+pub const ACCEPTED_VERSION: u32 = 1;
+const ACCEPTED_FILE: &str = "accepted.json";
+const ACCEPTED_LIMIT: u64 = 65_536;
+const HELP_TIMEOUT_MS: u64 = 60_000;
+
+/// Saved provider values with dedicated controls; never generic options.
+const RESERVED_KEYS: &[&str] = &[
+    options::EXTRA_ARGS_KEY,
+    options::TRUST_REMOTE_CODE_KEY,
+    super::launch::LORA_ADAPTERS_KEY,
+    super::launch::REQUEST_LORA_KEY,
+    super::launch::DRAFT_MODEL_KEY,
+];
+
+/// The help command a user chose, minus everything the adapter decides
+/// (environment, working directory, artifacts, limits).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HelpRequest {
+    /// Registered engines default to their launch program; a bridge's engine
+    /// executable may be asked when it is a declared, hash-checked artifact.
+    #[serde(default)]
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub scope: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedHelp {
+    pub version: u32,
+    pub fingerprint: String,
+    pub request: HelpRequest,
+}
+
+/// What the settings UI may ask: the program and prefix are adapter-owned.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct HelpTarget {
+    pub engine: String,
+    pub runtime: String,
+    pub program: String,
+    /// Built-in engines always ask their own entry point.
+    pub fixed: bool,
+    /// Arguments every help request for the launch program starts with.
+    pub prefix: Vec<String>,
+    pub request: HelpRequest,
+    pub accepted: Option<AcceptedHelp>,
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HelpState {
+    /// No help was accepted; only catalog/manifest options apply.
+    None,
+    /// The accepted help still describes the runtime exactly.
+    Current,
+    /// The runtime, its artifacts or its help command changed since review.
+    Stale,
+    /// Accepted, but the identity was not recomputed for this view.
+    Unchecked,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct EffectiveSchema {
+    pub schema: OptionSchema,
+    /// Subcommand scope the accepted help describes.
+    pub scope: Vec<String>,
+    pub help_state: HelpState,
+    pub help_detail: String,
+    pub accepted_fingerprint: Option<String>,
+    /// Keys from the built-in catalog or manifest (compatibility mapping).
+    pub compat_keys: Vec<String>,
+    /// Keys only accepted help describes.
+    pub help_keys: Vec<String>,
+    /// Help options hidden because a catalog option already covers them.
+    pub shadowed: Vec<String>,
+}
+
+pub struct RuntimeKey {
+    pub provider: ProviderId,
+    pub engine: String,
+    pub runtime: String,
+}
+
+pub fn runtime_key(cfg: &AppConfig) -> Result<RuntimeKey, String> {
+    let provider = super::provider_of(cfg);
+    let runtime = if provider == ProviderId::Llama {
+        if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
+            return Err("select an installed llama.cpp runtime first".into());
+        }
+        format!("{}-{}", cfg.active_backend, cfg.active_build)
+    } else {
+        if cfg.active_runtime.is_empty() {
+            return Err("select an installed runtime first".into());
+        }
+        cfg.active_runtime.clone()
+    };
+    let engine = provider.as_str().to_owned();
+    if !runtime_help_store::valid_segment(&engine) || !runtime_help_store::valid_segment(&runtime) {
+        return Err("this runtime's identity cannot hold a help snapshot".into());
+    }
+    Ok(RuntimeKey {
+        provider,
+        engine,
+        runtime,
+    })
+}
+
+fn unicode_environment(
+    pairs: Vec<(OsString, OsString)>,
+) -> Result<BTreeMap<String, String>, String> {
+    pairs
+        .into_iter()
+        .map(|(key, value)| {
+            Ok((
+                key.into_string()
+                    .map_err(|_| "a runtime environment name is not Unicode".to_string())?,
+                value
+                    .into_string()
+                    .map_err(|_| "a runtime environment value is not Unicode".to_string())?,
+            ))
+        })
+        .collect()
+}
+
+fn same_program(left: &str, right: &str) -> bool {
+    if Path::new(left) == Path::new(right) {
+        return true;
+    }
+    match (
+        Path::new(left).canonicalize(),
+        Path::new(right).canonicalize(),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The adapter-owned parts of a help request for the selected runtime.
+pub fn help_target(root: &Path, cfg: &AppConfig) -> Result<HelpTarget, String> {
+    let key = runtime_key(cfg)?;
+    let accepted = load_accepted(root, &key.engine, &key.runtime)?;
+    let (program, fixed, prefix, default) = match key.provider {
+        ProviderId::Custom(_) => {
+            let manifest = registry::manifest(key.provider, &key.runtime)?;
+            let prefix = registry::launch_prefix(&manifest);
+            let mut args = prefix.clone();
+            args.push("--help".into());
+            let request = HelpRequest {
+                program: None,
+                args,
+                scope: Vec::new(),
+            };
+            (manifest.launch.program, false, prefix, request)
+        }
+        ProviderId::Llama => (
+            crate::runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?
+                .to_string_lossy()
+                .into_owned(),
+            true,
+            Vec::new(),
+            HelpRequest {
+                program: None,
+                args: vec!["--help".into()],
+                scope: Vec::new(),
+            },
+        ),
+        _ => {
+            let runtime = super::selected_python_runtime(cfg)?;
+            let (args, scope) = super::launch::help_entry(&runtime)?;
+            (
+                runtime.python,
+                true,
+                Vec::new(),
+                HelpRequest {
+                    program: None,
+                    args,
+                    scope,
+                },
+            )
+        }
+    };
+    let request = accepted
+        .as_ref()
+        .map(|accepted| accepted.request.clone())
+        .unwrap_or(default);
+    Ok(HelpTarget {
+        engine: key.engine,
+        runtime: key.runtime,
+        program,
+        fixed,
+        prefix,
+        request,
+        accepted,
+    })
+}
+
+/// The exact shell-free help command for the selected runtime. The adapter
+/// decides the environment, working directory and artifacts so the help
+/// describes the same process launch would start.
+pub fn help_command(cfg: &AppConfig, request: &HelpRequest) -> Result<HelpCommand, String> {
+    let key = runtime_key(cfg)?;
+    let mut command = match key.provider {
+        ProviderId::Custom(_) => {
+            let manifest = registry::manifest(key.provider, &key.runtime)?;
+            let program = request
+                .program
+                .clone()
+                .unwrap_or_else(|| manifest.launch.program.clone());
+            let launch_program = same_program(&program, &manifest.launch.program);
+            if !launch_program && !manifest.artifacts.iter().any(|a| same_program(a, &program)) {
+                return Err(
+                    "help must run the registered launch program or one of its declared artifacts"
+                        .into(),
+                );
+            }
+            let prefix = registry::launch_prefix(&manifest);
+            if launch_program && !request.args.starts_with(&prefix) {
+                return Err(format!(
+                    "help arguments must start with the registered entry point: {}",
+                    prefix.join(" ")
+                ));
+            }
+            let mut environment = unicode_environment(super::python_env::engine_environment())?;
+            // Literal adapter environment applies; templated values (model,
+            // port, credentials) only exist for an actual launch.
+            for (name, value) in &manifest.launch.env {
+                if !value.contains('{') {
+                    environment.insert(name.clone(), value.clone());
+                }
+            }
+            HelpCommand {
+                program: PathBuf::from(program),
+                args: request.args.clone(),
+                environment,
+                working_directory: manifest.launch.working_directory.map(PathBuf::from),
+                artifacts: manifest.artifacts.iter().map(PathBuf::from).collect(),
+                runtime_version: registry::probe_version(key.provider, &key.runtime)?
+                    .unwrap_or_else(|| "unprobed".into()),
+                scope: request.scope.clone(),
+                encoding: Encoding::Auto,
+                timeout_ms: HELP_TIMEOUT_MS,
+                output_limit: MAX_STREAM_BYTES,
+            }
+        }
+        ProviderId::Llama => {
+            if request.args != ["--help"] || request.program.is_some() || !request.scope.is_empty()
+            {
+                return Err("built-in runtimes use their own help command".into());
+            }
+            HelpCommand {
+                program: crate::runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?,
+                args: request.args.clone(),
+                environment: unicode_environment(crate::runtime::child_environment_for_runtime(
+                    &cfg.active_backend,
+                    &cfg.active_build,
+                )?)?,
+                working_directory: None,
+                artifacts: Vec::new(),
+                runtime_version: crate::runtime::installed_version_label(
+                    &cfg.active_backend,
+                    &cfg.active_build,
+                )?,
+                scope: Vec::new(),
+                encoding: Encoding::Auto,
+                timeout_ms: HELP_TIMEOUT_MS,
+                output_limit: MAX_STREAM_BYTES,
+            }
+        }
+        _ => {
+            let runtime = super::selected_python_runtime(cfg)?;
+            let (args, scope) = super::launch::help_entry(&runtime)?;
+            if request.args != args || request.program.is_some() || request.scope != scope {
+                return Err("built-in runtimes use their own help command".into());
+            }
+            HelpCommand {
+                program: PathBuf::from(&runtime.python),
+                args,
+                environment: unicode_environment(super::python_env::engine_environment())?,
+                working_directory: None,
+                artifacts: Vec::new(),
+                runtime_version: runtime
+                    .probe
+                    .as_ref()
+                    .map(|probe| probe.version.clone())
+                    .unwrap_or_else(|| "unprobed".into()),
+                scope,
+                encoding: Encoding::Auto,
+                timeout_ms: HELP_TIMEOUT_MS,
+                output_limit: MAX_STREAM_BYTES,
+            }
+        }
+    };
+    // A fixed locale keeps help text comparable across sessions; it is part
+    // of the fingerprint like every other environment value.
+    command.environment.insert("LC_ALL".into(), "C".into());
+    Ok(command)
+}
+
+fn accepted_path(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
+    Ok(runtime_help_store::snapshot_root(root, engine, runtime)?.join(ACCEPTED_FILE))
+}
+
+pub fn load_accepted(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<Option<AcceptedHelp>, String> {
+    let path = accepted_path(root, engine, runtime)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > ACCEPTED_LIMIT {
+        return Err("accepted help record is not a bounded regular file".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let accepted: AcceptedHelp =
+        serde_json::from_slice(&bytes).map_err(|e| format!("invalid accepted help: {e}"))?;
+    if accepted.version != ACCEPTED_VERSION {
+        return Err(format!(
+            "accepted help version {} is not supported by this app",
+            accepted.version
+        ));
+    }
+    Ok(Some(accepted))
+}
+
+/// Record that the user reviewed this exact discovery for launch. The current
+/// command must still produce the discovered fingerprint, and its complete
+/// snapshot must exist.
+pub fn accept(
+    root: &Path,
+    cfg: &AppConfig,
+    fingerprint: &str,
+    request: &HelpRequest,
+) -> Result<AcceptedHelp, String> {
+    let key = runtime_key(cfg)?;
+    let identity = help_command(cfg, request)?.identity(&AtomicBool::new(false))?;
+    if identity.fingerprint != fingerprint {
+        return Err(
+            "the runtime or its help command changed since this discovery; discover again".into(),
+        );
+    }
+    runtime_help_store::load_snapshot(root, &key.engine, &key.runtime, fingerprint)?
+        .ok_or("discover this runtime's help before accepting it")?;
+    let accepted = AcceptedHelp {
+        version: ACCEPTED_VERSION,
+        fingerprint: fingerprint.into(),
+        request: request.clone(),
+    };
+    write_accepted(root, &key.engine, &key.runtime, &accepted)?;
+    Ok(accepted)
+}
+
+pub(crate) fn write_accepted(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+    accepted: &AcceptedHelp,
+) -> Result<(), String> {
+    let path = accepted_path(root, engine, runtime)?;
+    std::fs::create_dir_all(path.parent().expect("accepted record has a directory"))
+        .map_err(|e| e.to_string())?;
+    let bytes = serde_json::to_vec_pretty(accepted).map_err(|e| e.to_string())?;
+    crate::config::atomic_write(&path, &bytes)
+}
+
+fn adapter_source(engine: &str, revision: &str) -> Source {
+    Source::Adapter {
+        id: engine.into(),
+        revision: revision.into(),
+    }
+}
+
+fn documented<T>(value: T, source: &Source) -> Fact<T> {
+    Fact {
+        value: Some(value),
+        certainty: Certainty::Documented,
+        source: Some(source.clone()),
+    }
+}
+
+fn blank(key: &str, group: &str, target: Target) -> OptionDefinition {
+    OptionDefinition {
+        key: key.into(),
+        scope: Vec::new(),
+        spellings: Vec::new(),
+        position: None,
+        kind: Fact::default(),
+        arity: Fact::default(),
+        repeatable: Fact::default(),
+        choices: Fact::default(),
+        range: Fact::default(),
+        unit: Fact::default(),
+        runtime_default: Fact::default(),
+        group: group.into(),
+        help: String::new(),
+        target,
+        request_field: Fact::default(),
+        restart_required: Fact::default(),
+        sensitive: Fact::default(),
+        local_path: Fact::default(),
+        managed: None,
+        raw_spans: Vec::new(),
+    }
+}
+
+/// Shared shape of catalog and manifest kinds.
+enum CompatKind {
+    Integer(f64, f64),
+    Number(f64, f64),
+    Flag,
+    Toggle,
+    Choice(Vec<String>),
+    Text,
+    Path,
+    Json,
+}
+
+fn compat_definition(
+    key: &str,
+    group: &str,
+    flag: Option<&str>,
+    request: bool,
+    kind: CompatKind,
+    runtime_default: Option<&str>,
+    source: &Source,
+) -> OptionDefinition {
+    let mut option = blank(
+        key,
+        group,
+        if request {
+            Target::Request
+        } else {
+            Target::Launch
+        },
+    );
+    if request {
+        option.request_field = documented(key.to_owned(), source);
+    } else if let Some(flag) = flag {
+        option.spellings.push(Spelling {
+            flag: flag.into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+    }
+    let one = Arity {
+        min: 1,
+        max: Some(1),
+    };
+    let (value_kind, arity) = match &kind {
+        CompatKind::Integer(..) => (ValueKind::Integer, one),
+        CompatKind::Number(..) => (ValueKind::Number, one),
+        CompatKind::Flag | CompatKind::Toggle => (
+            ValueKind::Boolean,
+            Arity {
+                min: 0,
+                max: Some(0),
+            },
+        ),
+        CompatKind::Json => (ValueKind::Json, one),
+        CompatKind::Choice(_) | CompatKind::Text | CompatKind::Path => (ValueKind::Text, one),
+    };
+    option.kind = documented(value_kind, source);
+    option.arity = documented(arity, source);
+    match kind {
+        CompatKind::Integer(min, max) | CompatKind::Number(min, max) => {
+            option.range = documented(
+                NumericRange {
+                    min: Some(min),
+                    max: Some(max),
+                },
+                source,
+            );
+        }
+        // The catalog documents that a false flag emits nothing.
+        CompatKind::Flag => {
+            option.runtime_default = documented(
+                RuntimeDefault {
+                    literal: Value::Bool(false),
+                },
+                source,
+            );
+        }
+        CompatKind::Toggle => {
+            if let Some(flag) = flag.filter(|_| !request) {
+                option.spellings = vec![
+                    Spelling {
+                        flag: flag.into(),
+                        style: ValueStyle::Separate,
+                        polarity: Some(true),
+                    },
+                    Spelling {
+                        flag: format!("--no-{}", flag.trim_start_matches('-')),
+                        style: ValueStyle::Separate,
+                        polarity: Some(false),
+                    },
+                ];
+            }
+        }
+        CompatKind::Choice(choices) => {
+            option.choices = documented(choices.into_iter().map(Value::String).collect(), source);
+        }
+        CompatKind::Path => option.local_path = documented(true, source),
+        CompatKind::Text | CompatKind::Json => {}
+    }
+    if let Some(text) = runtime_default.filter(|_| option.runtime_default.value.is_none()) {
+        option.runtime_default = documented(
+            RuntimeDefault {
+                literal: Value::String(text.into()),
+            },
+            source,
+        );
+    }
+    option
+}
+
+/// A built-in catalog option as a common schema option.
+pub fn from_spec(spec: &OptionSpec, source: &Source) -> OptionDefinition {
+    let kind = match spec.kind {
+        OptionKind::Integer { min, max } => CompatKind::Integer(min as f64, max as f64),
+        OptionKind::Number { min, max } => CompatKind::Number(min, max),
+        OptionKind::Flag => CompatKind::Flag,
+        OptionKind::Toggle => CompatKind::Toggle,
+        OptionKind::Choice { choices } => {
+            CompatKind::Choice(choices.iter().map(|c| (*c).to_owned()).collect())
+        }
+        OptionKind::Text { .. } => CompatKind::Text,
+        OptionKind::Path => CompatKind::Path,
+        OptionKind::Json => CompatKind::Json,
+    };
+    compat_definition(
+        spec.key,
+        spec.group,
+        spec.flag,
+        spec.target == OptionTarget::Request,
+        kind,
+        spec.runtime_default,
+        source,
+    )
+}
+
+/// A manifest v1 option as a common schema option.
+pub fn from_external(option: &ExternalOption, source: &Source) -> Option<OptionDefinition> {
+    let number = |name: &str| option.kind[name].as_f64();
+    let kind = match option.kind["type"].as_str()? {
+        "integer" => CompatKind::Integer(number("min")?, number("max")?),
+        "number" => CompatKind::Number(number("min")?, number("max")?),
+        "flag" => CompatKind::Flag,
+        "toggle" => CompatKind::Toggle,
+        "choice" => CompatKind::Choice(
+            option.kind["choices"]
+                .as_array()?
+                .iter()
+                .map(|v| v.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        "text" => CompatKind::Text,
+        "path" => CompatKind::Path,
+        "json" => CompatKind::Json,
+        _ => return None,
+    };
+    Some(compat_definition(
+        &option.key,
+        &option.group,
+        option.flag.as_deref(),
+        option.target == "request",
+        kind,
+        option.runtime_default.as_deref(),
+        source,
+    ))
+}
+
+/// The argv a valid built-in catalog value produces, through the common
+/// resolver. Invalid values produce nothing; callers validate first.
+pub fn spec_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {
+    let source = adapter_source("builtin.catalog", "1");
+    from_spec(spec, &source)
+        .resolve_one(&None, std::slice::from_ref(value))
+        .unwrap_or_default()
+}
+
+struct Compat {
+    options: Vec<OptionDefinition>,
+    /// Flag spelling to the app-owned binding it carries.
+    managed_flags: BTreeMap<String, ManagedBinding>,
+}
+
+fn compat(cfg: &AppConfig, key: &RuntimeKey) -> Result<Compat, String> {
+    // Built-in lists name app-owned flags without saying which binding each
+    // one carries; Discovery marks them managed without guessing.
+    let mut managed_flags: BTreeMap<String, ManagedBinding> =
+        options::app_managed_flags(key.provider)
+            .iter()
+            .map(|flag| ((*flag).to_owned(), ManagedBinding::Discovery))
+            .collect();
+    let options = match key.provider {
+        ProviderId::Custom(_) => {
+            let manifest = registry::manifest(key.provider, &key.runtime)?;
+            let source = adapter_source(
+                &key.engine,
+                &format!("manifest-v{}", manifest.adapter_version),
+            );
+            let (bound, _) = registry::bound_launch_flags(&manifest);
+            for (flag, binding) in bound {
+                managed_flags.insert(flag, binding_for(&binding));
+            }
+            manifest
+                .options
+                .iter()
+                .filter_map(|option| from_external(option, &source))
+                .collect()
+        }
+        ProviderId::Llama => Vec::new(),
+        _ => {
+            let runtime = super::selected_python_runtime(cfg)?;
+            let source = adapter_source(&key.engine, "catalog-v1");
+            super::launch::option_schema(&runtime)
+                .iter()
+                .map(|spec| from_spec(spec, &source))
+                .collect()
+        }
+    };
+    Ok(Compat {
+        options,
+        managed_flags,
+    })
+}
+
+fn compat_fingerprint(engine: &str, runtime: &str, options: &[OptionDefinition]) -> String {
+    let identity = serde_json::json!({"engine": engine, "runtime": runtime, "options": options});
+    format!("{:x}", Sha256::digest(identity.to_string().as_bytes()))
+}
+
+fn current_identity(cfg: &AppConfig, accepted: &AcceptedHelp) -> Result<(), String> {
+    let identity = help_command(cfg, &accepted.request)?.identity(&AtomicBool::new(false))?;
+    if identity.fingerprint == accepted.fingerprint {
+        Ok(())
+    } else {
+        Err("the runtime, its declared artifacts or its help command changed since its options were reviewed; discover its help again and review the changes".into())
+    }
+}
+
+/// The one schema the settings UI renders and launch resolves for `cfg`.
+/// `verify` recomputes the accepted help identity (hashing the executable and
+/// artifacts); views that only display may skip it.
+pub fn effective(root: &Path, cfg: &AppConfig, verify: bool) -> Result<EffectiveSchema, String> {
+    let key = runtime_key(cfg)?;
+    let compat = compat(cfg, &key)?;
+    let accepted = load_accepted(root, &key.engine, &key.runtime)?;
+    let snapshot: Option<HelpSnapshot> = match &accepted {
+        Some(accepted) => runtime_help_store::load_snapshot(
+            root,
+            &key.engine,
+            &key.runtime,
+            &accepted.fingerprint,
+        )?,
+        None => None,
+    };
+    let (help_state, help_detail) = match (&accepted, &snapshot) {
+        (None, _) => (HelpState::None, String::new()),
+        (Some(_), None) => (
+            HelpState::Stale,
+            "the accepted help snapshot is missing; discover this runtime's help again".into(),
+        ),
+        (Some(accepted), Some(_)) if verify => match current_identity(cfg, accepted) {
+            Ok(()) => (HelpState::Current, String::new()),
+            Err(error) => (HelpState::Stale, error),
+        },
+        (Some(_), Some(_)) => (HelpState::Unchecked, String::new()),
+    };
+    let compat_keys: Vec<String> = compat.options.iter().map(|o| o.key.clone()).collect();
+    let mut compat_flags: BTreeSet<String> = BTreeSet::new();
+    for option in &compat.options {
+        for spelling in &option.spellings {
+            compat_flags.insert(spelling.flag.clone());
+        }
+    }
+    let mut options = compat.options;
+    let mut help_keys = Vec::new();
+    let mut shadowed = Vec::new();
+    let mut schema_extras = None;
+    let mut scope = Vec::new();
+    if let Some(snapshot) = &snapshot {
+        scope = snapshot.report.scope.clone();
+        for help in &snapshot.schema.options {
+            let covered = help
+                .spellings
+                .iter()
+                .any(|spelling| compat_flags.contains(&spelling.flag));
+            if covered || compat_keys.contains(&help.key) {
+                shadowed.push(help.key.clone());
+                continue;
+            }
+            let mut help = help.clone();
+            if help.managed.is_none() {
+                if help.position.is_some() {
+                    // Positional slots follow the adapter's launch template;
+                    // their order relative to it cannot be proven from help.
+                    help.managed = Some(ManagedBinding::Discovery);
+                } else if let Some(binding) = help
+                    .spellings
+                    .iter()
+                    .find_map(|spelling| compat.managed_flags.get(&spelling.flag))
+                    .copied()
+                {
+                    help.managed = Some(binding);
+                }
+            }
+            help_keys.push(help.key.clone());
+            options.push(help);
+        }
+        let kept: BTreeSet<&str> = options.iter().map(|o| o.key.as_str()).collect();
+        let constraints = snapshot
+            .schema
+            .constraints
+            .iter()
+            .filter(|constraint| match constraint.supported() {
+                Some(
+                    super::runtime_options::Relation::Requires { when, other }
+                    | super::runtime_options::Relation::Excludes { when, other },
+                ) => kept.contains(when.key.as_str()) && kept.contains(other.key.as_str()),
+                None => false,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        schema_extras = Some((
+            constraints,
+            snapshot.schema.raw_help.clone(),
+            snapshot.schema.end_of_options.clone(),
+        ));
+    }
+    let fingerprint = accepted
+        .as_ref()
+        .filter(|_| snapshot.is_some())
+        .map(|accepted| accepted.fingerprint.clone())
+        .unwrap_or_else(|| compat_fingerprint(&key.engine, &key.runtime, &options));
+    let (constraints, raw_help, end_of_options) = schema_extras.unwrap_or_default();
+    let schema = OptionSchema {
+        schema_version: SCHEMA_VERSION,
+        binding: super::runtime_options::SchemaBinding {
+            engine: key.engine.clone(),
+            runtime: key.runtime.clone(),
+            fingerprint,
+        },
+        options,
+        constraints,
+        raw_help,
+        end_of_options,
+    };
+    schema.validate()?;
+    Ok(EffectiveSchema {
+        schema,
+        scope,
+        help_state,
+        help_detail,
+        accepted_fingerprint: accepted.map(|accepted| accepted.fingerprint),
+        compat_keys,
+        help_keys,
+        shadowed,
+    })
+}
+
+/// The binding a launch template placeholder carries.
+fn binding_for(placeholder: &str) -> ManagedBinding {
+    match placeholder {
+        "model" | "model_alias" => ManagedBinding::Model,
+        "host" => ManagedBinding::Host,
+        "port" => ManagedBinding::Port,
+        "api_key" => ManagedBinding::Authentication,
+        _ => ManagedBinding::Discovery,
+    }
+}
+
+/// Saved values only accepted help can describe.
+fn help_values(values: &Map<String, Value>, compat_keys: &[String]) -> Map<String, Value> {
+    values
+        .iter()
+        .filter(|(key, _)| {
+            !RESERVED_KEYS.contains(&key.as_str()) && !compat_keys.iter().any(|k| k == *key)
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Problems with saved values the catalog/manifest does not describe. Keys
+/// the accepted help does not describe stay saved and are reported.
+pub fn help_issues(
+    root: &Path,
+    cfg: &AppConfig,
+    values: &Map<String, Value>,
+    compat_keys: &[String],
+) -> Vec<options::OptionIssue> {
+    let extra = help_values(values, compat_keys);
+    if extra.is_empty() {
+        return Vec::new();
+    }
+    let issue = |key: &str, code: &'static str, message: String| options::OptionIssue {
+        key: key.into(),
+        code,
+        message,
+    };
+    let effective = match effective(root, cfg, false) {
+        Ok(effective) => effective,
+        Err(error) => {
+            return extra
+                .keys()
+                .map(|key| {
+                    issue(
+                        key,
+                        "unknown",
+                        format!("{key}: runtime options unavailable: {error}"),
+                    )
+                })
+                .collect()
+        }
+    };
+    if effective.accepted_fingerprint.is_none() {
+        return extra
+            .keys()
+            .map(|key| {
+                issue(
+                    key,
+                    "unknown",
+                    format!("{key} is not an option this runtime describes; discover and accept its help, or remove the retained value"),
+                )
+            })
+            .collect();
+    }
+    match effective.schema.resolve(
+        &effective.scope,
+        &runtime_help_store::overrides_from_map(&extra),
+    ) {
+        Ok(_) => Vec::new(),
+        Err(issues) => issues
+            .into_iter()
+            .map(|found: OptionIssue| {
+                let code = if effective.help_keys.contains(&found.key) {
+                    "help"
+                } else {
+                    "unknown"
+                };
+                issue(&found.key, code, found.message)
+            })
+            .collect(),
+    }
+}
+
+/// Launch arguments for saved values only accepted help describes, appended
+/// after the catalog/manifest arguments. The accepted identity is recomputed
+/// first; a changed runtime or help command blocks launch with the values
+/// retained.
+pub fn help_launch_args(
+    root: &Path,
+    cfg: &AppConfig,
+    values: &Map<String, Value>,
+    compat_keys: &[String],
+) -> Result<Vec<String>, String> {
+    let extra = help_values(values, compat_keys);
+    if extra.is_empty() {
+        return Ok(Vec::new());
+    }
+    let keys = extra.keys().cloned().collect::<Vec<_>>().join(", ");
+    let effective = effective(root, cfg, true)?;
+    match effective.help_state {
+        HelpState::Current => {}
+        HelpState::None => {
+            return Err(format!(
+                "saved options {keys} need this runtime's reviewed help; discover and accept it first (values are retained)"
+            ))
+        }
+        _ => {
+            return Err(format!(
+                "{} Saved options {keys} were retained.",
+                effective.help_detail
+            ))
+        }
+    }
+    let resolved = effective
+        .schema
+        .resolve(
+            &effective.scope,
+            &runtime_help_store::overrides_from_map(&extra),
+        )
+        .map_err(|issues| {
+            issues
+                .iter()
+                .map(|issue| format!("{}: {}", issue.key, issue.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+    if !resolved.request.is_empty() {
+        return Err("help-derived request fields need adapter protocol metadata".into());
+    }
+    strip_scope(resolved.argv, &effective.scope)
+}
+
+/// The launch template already names the subcommand; drop the scope words
+/// the resolver places before scoped options.
+fn strip_scope(argv: Vec<String>, scope: &[String]) -> Result<Vec<String>, String> {
+    if scope.is_empty() {
+        return Ok(argv);
+    }
+    if argv.len() >= scope.len() && argv[..scope.len()] == *scope {
+        return Ok(argv[scope.len()..].to_vec());
+    }
+    Err("saved options belong outside the launch subcommand and cannot be placed".into())
+}
+
+/// Identity of everything help-derived that changes the launched process.
+pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> Value {
+    let values = help_values(
+        &super::launch::provider_options(cfg, super::provider_of(cfg)),
+        compat_keys,
+    );
+    let accepted = runtime_key(cfg)
+        .ok()
+        .and_then(|key| {
+            load_accepted(root, &key.engine, &key.runtime)
+                .ok()
+                .flatten()
+        })
+        .map(|accepted| accepted.fingerprint);
+    serde_json::json!({"help": accepted, "values": values})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// What the catalog emitted before it was mapped onto the common schema.
+    fn legacy_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {
+        let flag = spec.flag.unwrap().to_owned();
+        match spec.kind {
+            OptionKind::Flag => {
+                if value.as_bool() == Some(true) {
+                    vec![flag]
+                } else {
+                    vec![]
+                }
+            }
+            OptionKind::Toggle => {
+                if value.as_bool() == Some(true) {
+                    vec![flag]
+                } else {
+                    vec![format!("--no-{}", &flag[2..])]
+                }
+            }
+            OptionKind::Json => vec![flag, value.to_string()],
+            _ => vec![
+                flag,
+                match value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                },
+            ],
+        }
+    }
+
+    fn samples(spec: &OptionSpec) -> Vec<Value> {
+        match spec.kind {
+            OptionKind::Integer { min, max } => vec![json!(min), json!(max)],
+            OptionKind::Number { min, max } => {
+                vec![json!(min), json!(max), json!((min + max) / 2.0)]
+            }
+            OptionKind::Flag | OptionKind::Toggle => vec![json!(true), json!(false)],
+            OptionKind::Choice { choices } => choices.iter().map(|c| json!(c)).collect(),
+            OptionKind::Text { .. } => vec![json!("synthetic text"), json!("한글 값")],
+            OptionKind::Path => vec![json!("/synthetic path/file")],
+            OptionKind::Json => vec![json!({"synthetic": {"nested": [1, 2.5]}})],
+        }
+    }
+
+    #[test]
+    fn builtin_catalogs_produce_identical_arguments_through_the_common_resolver() {
+        let mut checked = 0;
+        for provider in [ProviderId::Vllm, ProviderId::MlxVlm] {
+            for spec in options::schema(provider)
+                .iter()
+                .filter(|spec| spec.target == OptionTarget::Launch)
+            {
+                for value in samples(spec) {
+                    assert_eq!(
+                        spec_arguments(spec, &value),
+                        legacy_arguments(spec, &value),
+                        "{} {value}",
+                        spec.key
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50, "{checked}");
+    }
+
+    #[test]
+    fn catalog_and_manifest_options_keep_their_facts_as_adapter_metadata() {
+        let source = adapter_source("custom.example", "manifest-v1");
+        let toggle = from_external(
+            &serde_json::from_value(
+                json!({"key":"cache","flag":"--cache","target":"launch","kind":{"type":"toggle"}}),
+            )
+            .unwrap(),
+            &source,
+        )
+        .unwrap();
+        assert_eq!(toggle.spellings.len(), 2);
+        assert_eq!(toggle.spellings[1].flag, "--no-cache");
+        assert_eq!(toggle.spellings[1].polarity, Some(false));
+        let request = from_external(
+            &serde_json::from_value(json!({"key":"temperature","target":"request","kind":{"type":"number","min":0,"max":2}}))
+                .unwrap(),
+            &source,
+        )
+        .unwrap();
+        assert_eq!(request.target, Target::Request);
+        assert_eq!(
+            request.request_field.supported().map(String::as_str),
+            Some("temperature")
+        );
+        assert!(request.spellings.is_empty());
+        // A manifest kind this app does not know is not converted at all.
+        assert!(from_external(
+            &serde_json::from_value(
+                json!({"key":"x","flag":"--x","target":"launch","kind":{"type":"future"}})
+            )
+            .unwrap(),
+            &source
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn scope_words_are_stripped_only_from_the_front() {
+        let scope = vec!["serve".to_string()];
+        assert_eq!(
+            strip_scope(vec!["serve".into(), "--a".into(), "1".into()], &scope).unwrap(),
+            vec!["--a".to_string(), "1".into()]
+        );
+        assert!(strip_scope(vec!["--a".into(), "serve".into()], &scope).is_err());
+        assert_eq!(strip_scope(vec!["--a".into()], &[]).unwrap(), vec!["--a"]);
+    }
+}

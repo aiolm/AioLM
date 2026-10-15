@@ -30,6 +30,11 @@ name = "runtime_adapters"
 path = "tests/runtime_adapters.rs"
 required-features = ["test-fixtures"]
 
+[[test]]
+name = "runtime_help_journey"
+path = "tests/runtime_help_journey.rs"
+required-features = ["test-fixtures"]
+
 [lib]
 name = "aiolm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

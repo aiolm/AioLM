@@ -937,6 +937,34 @@ pub fn runtime_option_issues(
     issues
 }
 
+fn catalog_keys(runtime: &PythonRuntimeManifest) -> Vec<String> {
+    option_schema(runtime)
+        .iter()
+        .map(|spec| spec.key.to_owned())
+        .collect()
+}
+
+/// Catalog checks, plus checks against the runtime's accepted help for saved
+/// keys the catalog does not describe (those are retained, never dropped).
+pub fn saved_option_issues(
+    cfg: &AppConfig,
+    runtime: &PythonRuntimeManifest,
+    options: &Map<String, Value>,
+) -> Vec<OptionIssue> {
+    let catalog = catalog_keys(runtime);
+    let mut issues: Vec<OptionIssue> = runtime_option_issues(runtime, options)
+        .into_iter()
+        .filter(|issue| !(issue.code == "unknown" && !catalog.contains(&issue.key)))
+        .collect();
+    issues.extend(super::runtime_schema::help_issues(
+        &super::registry::root(),
+        cfg,
+        options,
+        &catalog,
+    ));
+    issues
+}
+
 /// Name the engine serves the model under. vLLM rejects names containing `/`
 /// for some clients, so the name is derived from the directory name.
 pub fn served_model_name(model: &str) -> String {
@@ -993,6 +1021,30 @@ fn interpreter_flags(kind: InstallationKind) -> Vec<String> {
     }
 }
 
+/// The exact interpreter arguments, help arguments and subcommand scope that
+/// describe this runtime's launch entry point. Help runs the same module the
+/// launch command runs, so its options are the launch options.
+pub fn help_entry(runtime: &PythonRuntimeManifest) -> Result<(Vec<String>, Vec<String>), String> {
+    let mut args = interpreter_flags(runtime.kind);
+    let scope = match runtime.provider {
+        ProviderId::Vllm => {
+            args.extend([
+                "-m".into(),
+                "vllm.entrypoints.cli.main".into(),
+                "serve".into(),
+                "--help=all".into(),
+            ]);
+            vec!["serve".into()]
+        }
+        ProviderId::MlxVlm => {
+            args.extend(["-m".into(), "mlx_vlm.server".into(), "--help".into()]);
+            Vec::new()
+        }
+        _ => return Err("this runtime has no Python entry point".into()),
+    };
+    Ok((args, scope))
+}
+
 /// Build the command for a validated configuration. Refuses any option issue
 /// rather than dropping the offending value.
 pub fn engine_command(
@@ -1003,7 +1055,8 @@ pub fn engine_command(
 ) -> Result<EngineCommand, String> {
     let provider = runtime.provider;
     let options = provider_options(cfg, provider);
-    let issues = runtime_option_issues(runtime, &options);
+    let catalog = catalog_keys(runtime);
+    let issues = saved_option_issues(cfg, runtime, &options);
     if !issues.is_empty() {
         return Err(format!(
             "{} settings need attention before starting: {}",
@@ -1204,6 +1257,14 @@ pub fn engine_command(
         ProviderId::Llama => return Err("llama.cpp is launched through server::spawn".into()),
         ProviderId::Custom(_) => return Err("external engines use their registered adapter".into()),
     };
+    // Options only the runtime's accepted help describes follow the catalog
+    // options, through the same resolver and only for unchanged help.
+    args.extend(super::runtime_schema::help_launch_args(
+        &super::registry::root(),
+        cfg,
+        &options,
+        &catalog,
+    )?);
     // Every flag the command carries, dedicated bindings included, must be one
     // the installed server reported; an older or newer engine would otherwise
     // exit at startup with an argument error.
