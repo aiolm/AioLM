@@ -39,7 +39,8 @@ export interface RuntimeInstance {
 export function runtimeLabel(runtime: RuntimeInstance): string {
   const version = runtime.version ?? runtime.id;
   const engine = runtime.variant === 'vllm-metal' ? `vllm-metal ${runtime.plugin_version || '?'} · vLLM ${version}` : version;
-  return `${engine} · ${runtime.accelerator} · ${runtime.installation}`;
+  const identity = runtime.version && runtime.version !== runtime.id ? `${engine} (${runtime.id})` : engine;
+  return `${identity} · ${runtime.accelerator} · ${runtime.installation}`;
 }
 export interface ProviderOption {
   key: string; flag?: string; group: string; target: 'launch' | 'request'; runtime_default?: string;

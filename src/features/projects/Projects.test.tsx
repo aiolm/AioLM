@@ -275,7 +275,7 @@ describe("Project configuration snapshots", () => {
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-metal', active_backend: 'vulkan', active_build: 'stale-build', ctx_size: 8192,
       provider_options: { vllm: { max_model_len: 512 } } });
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu · metal · managed')).toBeVisible();
+    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · managed')).toBeVisible();
     expect(screen.getByTestId('project-prompt-preview')).toHaveTextContent('512');
     expect(screen.getByTestId('project-prompt-preview')).not.toHaveTextContent('stale-build');
   });

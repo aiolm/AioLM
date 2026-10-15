@@ -400,7 +400,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('combobox', { name: 'Runtime' })).toHaveTextContent('Choose a runtime');
     fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
     const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
-    expect(options).toContain('b123 · cpu · managed');
+    expect(options).toContain('b123 (b123-cpu) · cpu · managed');
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
     // The disabled start says why, and offers the section that fixes it.

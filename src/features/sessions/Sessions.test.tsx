@@ -73,7 +73,7 @@ describe("session model settings", () => {
       engine: { provider: 'vllm', runtime_id: 'synthetic-metal', upstream_model: 'served-model', modalities: { text: true, image: false, audio: false, video: false }, tasks: ['generate'], request_fields: {} } }]);
     renderPanel();
     await selectWork();
-    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu · metal · managed')).toBeVisible();
+    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · managed')).toBeVisible();
     expect(sessionRow().queryByText(/test-build/)).not.toBeInTheDocument();
   });
   it("opens the loaded default target without overriding it with saved settings", () => {

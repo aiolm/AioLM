@@ -94,8 +94,18 @@ describe('runtime model selection', () => {
     const runtime: RuntimeInstance = { provider: 'vllm', id: 'synthetic-metal', engine: 'vllm', server: 'vllm',
       version: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0', accelerator: 'metal',
       installation: 'managed', location: '/synthetic/runtime', available: true, problems: [] };
-    expect(runtimeLabel(runtime)).toBe('vllm-metal 0.30.0 · vLLM 0.30.0 · metal · managed');
-    expect(runtimeLabel({ ...runtime, plugin_version: undefined })).toBe('vllm-metal ? · vLLM 0.30.0 · metal · managed');
+    expect(runtimeLabel(runtime)).toBe('vllm-metal 0.30.0 · vLLM 0.30.0 (synthetic-metal) · metal · managed');
+    expect(runtimeLabel({ ...runtime, plugin_version: undefined })).toBe('vllm-metal ? · vLLM 0.30.0 (synthetic-metal) · metal · managed');
+  });
+  it('distinguishes installed runtime identities that report the same version and accelerator', () => {
+    const runtime: RuntimeInstance = { provider: 'custom.synthetic', id: 'build-one', engine: 'Synthetic engine', server: 'engine',
+      version: '1.0', accelerator: 'cpu', installation: 'external', location: '/synthetic/one', available: true, problems: [] };
+    const other = { ...runtime, id: 'build-two', location: '/synthetic/two' };
+    expect(runtimeLabel(runtime)).not.toBe(runtimeLabel(other));
+    expect(runtimeLabel(runtime)).toContain('build-one');
+    expect(runtimeLabel(other)).toContain('build-two');
+    expect(runtimeLabel({ ...runtime, version: undefined })).toBe('build-one · cpu · external');
+    expect(runtimeLabel({ ...runtime, version: runtime.id })).toBe('build-one · cpu · external');
   });
   it('allows an embedding-only model to run while excluding it from generation workflows', () => {
     const embedding = model(compatibility(['embed']));

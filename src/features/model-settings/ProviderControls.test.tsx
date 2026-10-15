@@ -21,6 +21,20 @@ beforeEach(() => {
 });
 
 describe('runtime inventory readiness', () => {
+  it('lets the user choose between two external runtimes with the same reported version', async () => {
+    const provider = 'custom.synthetic';
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: provider, engine: 'Synthetic engine', server: 'engine', availability: { supported: true, detail: '' }, options: [] }]);
+    const runtime: api.RuntimeInstance = { provider, id: 'build-one', engine: 'Synthetic engine', server: 'engine', version: '1.0', accelerator: 'cpu', installation: 'external', location: '/synthetic/one', available: true, problems: [] };
+    vi.mocked(api.providerRuntimes).mockResolvedValue([runtime, { ...runtime, id: 'build-two', location: '/synthetic/two' }]);
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderRuntimeControl cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build-one' }} disabled={false} onProvider={vi.fn()} onChange={onChange} onReady={vi.fn()} /></I18nProvider>);
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
+    expect(screen.getByRole('option', { name: /build-one/ })).toBeVisible();
+    fireEvent.click(screen.getByRole('option', { name: /build-two/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ active_runtime: 'build-two' });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
   it('withdraws cached readiness while refreshing and keeps a failed inventory unconfirmed', async () => {
     vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'vllm', server: 'synthetic', availability: { supported: true, detail: '' }, options: [] }]);
     vi.mocked(api.providerRuntimes).mockResolvedValue([{ id: 'synthetic', provider: 'vllm', engine: 'vllm', server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
