@@ -1,0 +1,38 @@
+export const adapterCatalogCopy = {
+  ko: {
+    journey: '런타임 등록/설치 → 설정 → 모델 선택 → 실행',
+    hint: 'llama.cpp·vLLM·MLX는 기본 제공 어댑터입니다. 다른 엔진도 별도의 설정 화면 없이 여기에 등록합니다.',
+    search: '어댑터 검색',
+    builtin: '기본 제공',
+    custom: '사용자 등록',
+    empty: '이 검색과 일치하는 어댑터가 없습니다.',
+    runtimes: '런타임',
+  },
+  en: {
+    journey: 'Runtime registration/install → configuration → model selection → execution',
+    hint: 'llama.cpp, vLLM and MLX are built-in adapters. Any other engine registers here without its own settings screen.',
+    search: 'Search adapters',
+    builtin: 'Built-in',
+    custom: 'Custom',
+    empty: 'No adapters match this search.',
+    runtimes: 'runtimes',
+  },
+  ja: {
+    journey: 'ランタイム登録/インストール → 設定 → モデル選択 → 実行',
+    hint: 'llama.cpp・vLLM・MLXは標準アダプターです。他のエンジンも専用画面なしでここに登録します。',
+    search: 'アダプターを検索',
+    builtin: '標準',
+    custom: 'カスタム',
+    empty: 'この検索に一致するアダプターがありません。',
+    runtimes: 'ランタイム',
+  },
+  zh: {
+    journey: '运行时注册/安装 → 配置 → 模型选择 → 执行',
+    hint: 'llama.cpp、vLLM和MLX是内置适配器。其他引擎也在这里注册，无需单独的设置屏幕。',
+    search: '搜索适配器',
+    builtin: '内置',
+    custom: '自定义',
+    empty: '没有与此搜索匹配的适配器。',
+    runtimes: '运行时',
+  },
+};

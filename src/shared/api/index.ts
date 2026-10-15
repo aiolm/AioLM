@@ -4,6 +4,7 @@ export { isNativeRuntimeAvailable } from "./transport.ts";
 export { readBoundedResponseText } from "./http.ts";
 export * from "./commands.ts";
 export * from './providers.ts';
+export * from './runtimeHelp.ts';
 export * from "./models.ts";
 export * from "./chat.ts";
 export * from "./benchmarkSharing.ts";

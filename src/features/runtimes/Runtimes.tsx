@@ -21,6 +21,9 @@ import RuntimeRemovalNotice from "./RuntimeRemovalNotice";
 import { runtimeReferences } from "./runtimeReferences";
 import { useDeepVerification } from "./useDeepVerification";
 import ProviderEnvironments from './ProviderEnvironments';
+import AdapterCatalogList from './AdapterCatalogList';
+import HelpDiscoveryPanel from './HelpDiscoveryPanel';
+import { providerCatalog, providerRuntimes, type ProviderDescription, type RuntimeInstance } from '../../shared/api/providers';
 import { providerOf } from '../../shared/api/providers';
 import DeepVerificationControls from './DeepVerificationControls';
 import { useEffect, useState } from 'react';
@@ -46,6 +49,15 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const activePrProgress = rt.activePrBackend ? rt.rows.find((row) => row.backend === rt.activePrBackend)?.progress : null;
   const deviceSummary = deviceSummaryOf(locale, rt.device);
   const deepVerify = useDeepVerification(store, locale);
+  const [catalog, setCatalog] = useState<ProviderDescription[]>([]);
+  const [instances, setInstances] = useState<RuntimeInstance[]>([]);
+  useEffect(() => {
+    let active = true;
+    void Promise.all([providerCatalog(), providerRuntimes()]).then(([nextCatalog, nextRuntimes]) => {
+      if (active) { setCatalog(nextCatalog); setInstances(nextRuntimes); }
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [providerRevision]);
 
   return (
     <div className="app-page-scroll runtimes-page relative flex h-full min-h-0 flex-col">
@@ -77,7 +89,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       </aside>
 
       <div className="runtimes-main">
-      <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy} onRegistered={setProvider} onBusyChange={setAdapterBusy} />
+      <AdapterCatalogList catalog={catalog} runtimes={instances} />
+      <HelpDiscoveryPanel locked={rt.serverRunning || rt.runtimeBusy || providerBusy} />
+      <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy} onRegistered={(next) => { setProvider(next); setProviderRevision(value => value + 1); }} onBusyChange={setAdapterBusy} />
       <div hidden={llama}><ProviderEnvironments active={active && !llama} provider={llama ? undefined : provider} revision={providerRevision} resourcesInUse={rt.serverRunning || adapterBusy} onBusyChange={setProviderBusy} /></div>
       {provider === providerOf(store.cfg ?? {}) && <section className="app-card mb-4">
         <h2 className="app-section-title">{t('ui.deepVerify')}</h2>
