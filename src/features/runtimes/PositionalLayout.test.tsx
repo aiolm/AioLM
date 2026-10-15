@@ -99,6 +99,31 @@ describe('positional layout', () => {
     expect(document.body).not.toHaveTextContent(secret);
   });
 
+  it('protects a known sensitive entry token during stale review without applying its old role', () => {
+    const secret = 'synthetic-role-amber-8431';
+    const marker = { ...slot('marker', 0), sensitive: { value: true, certainty: 'documented' as const,
+      source: { kind: 'adapter' as const, id: 'synthetic.role', revision: '1' } } };
+    const effective = effectiveSchema([], [marker, slot('other', 1)], {
+      entry: { ...entry, prefix: ['-I', 'engine.py', 'serve', secret, 'plain-token'] },
+      accepted_fingerprint: 'b'.repeat(64),
+      supplement: { fingerprint: 'a'.repeat(64), current: false, applied: [], conflicts: [],
+        options: { marker: { positional: { role: 'static', index: 3 } } } },
+    });
+    const onSave = vi.fn();
+    render(<I18nProvider initialLocale="en"><PositionalLayout effective={effective} disabled={false} onSave={onSave} /></I18nProvider>);
+    // Display-only protection survives the new review; its roles do not.
+    expect(screen.getByRole('combobox', { name: 'marker Positional layout' })).toHaveTextContent('Not mapped');
+    fireEvent.click(screen.getByRole('combobox', { name: 'other Positional layout' }));
+    expect(screen.getByRole('option', { name: 'Entry token 4: •••' })).toBeVisible();
+    expect(screen.getByRole('option', { name: 'Entry token 5: plain-token' })).toBeVisible();
+    expect(document.body).not.toHaveTextContent(secret);
+    fireEvent.click(screen.getByRole('option', { name: 'Not mapped' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
+    expect(onSave).toHaveBeenCalledWith({});
+    expect(effective.entry?.prefix[3]).toBe(secret);
+    expect(effective.supplement?.options.marker.positional).toEqual({ role: 'static', index: 3 });
+  });
+
   it('explains a refused layout and offers no choice without a declared entry', () => {
     const slots = [slot('input', 0)];
     const refused = effectiveSchema([], slots, {

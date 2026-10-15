@@ -48,12 +48,13 @@ export default function PositionalLayout({ effective, disabled, onSave }: {
   const entry = effective.entry;
   const conflicts = (effective.supplement?.conflicts ?? []).filter(conflict => conflict.field === 'positional');
   const confirmable = effective.help_state === 'current' && !!effective.accepted_fingerprint && !!entry;
-  // An entry token a known-sensitive slot holds (saved or drafted) is that
-  // slot's secret value; no choice list prints it, only its position.
+  // A stale role cannot configure launch, but still identifies a token we
+  // already know to be sensitive. Keep that display-only protection while
+  // the new review starts with unmapped slots.
   const secretTokens = new Set<number>();
   for (const slot of slots) {
     if (slot.sensitive.certainty === 'unknown' || slot.sensitive.value !== true) continue;
-    for (const role of [saved[slot.key]?.positional, decode(draft[slot.key] ?? '')]) {
+    for (const role of [effective.supplement?.options[slot.key]?.positional, decode(draft[slot.key] ?? '')]) {
       if (role?.role === 'static') secretTokens.add(role.index);
     }
   }
