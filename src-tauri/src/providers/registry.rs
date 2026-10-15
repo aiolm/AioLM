@@ -79,6 +79,10 @@ pub struct RuntimeManifest {
     pub protocol: String,
     pub probe: ProcessSpec,
     pub launch: ProcessSpec,
+    /// Optional explicit entry-point choices. Legacy manifests without this
+    /// field retain their previous template interpretation and serialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_bindings: Option<LaunchBindings>,
     #[serde(default)]
     pub options: Vec<ExternalOption>,
     pub model_formats: Vec<String>,
@@ -363,6 +367,9 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     }
     validate_process(&m.launch)?;
     validate_process(&m.probe)?;
+    if let Some(bindings) = &m.launch_bindings {
+        validate_launch_bindings(bindings, &m.launch.args)?;
+    }
     if m.artifacts.len() > 64
         || m.artifacts
             .iter()
@@ -1205,7 +1212,11 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     let help = super::runtime_schema::launch_identity(&root(), cfg, &manifest_keys(manifest));
-    let binding = serde_json::json!({"options":values,"help":help,"context":templates.contains("{ctx_size}").then_some(cfg.ctx_size),"parallel":templates.contains("{parallel}").then_some(cfg.parallel)});
+    let mut binding = serde_json::json!({"options":values,"help":help,"context":templates.contains("{ctx_size}").then_some(cfg.ctx_size),"parallel":templates.contains("{parallel}").then_some(cfg.parallel)});
+    if let Some(launch_bindings) = &manifest.launch_bindings {
+        binding["launch_bindings"] =
+            serde_json::to_value(launch_bindings).expect("serializable bindings");
+    }
     format!("{:x}", Sha256::digest(binding.to_string().as_bytes()))
 }
 
@@ -1238,6 +1249,15 @@ pub fn registered_models() -> Vec<super::artifacts::ModelArtifact> {
 /// the flag that introduces it), never a guess at the first dash. Help for
 /// the launch program must be asked through this same prefix.
 pub fn launch_prefix(manifest: &RuntimeManifest) -> Vec<String> {
+    if let Some(bindings) = &manifest.launch_bindings {
+        return manifest
+            .launch
+            .args
+            .iter()
+            .take(bindings.prefix_len)
+            .cloned()
+            .collect();
+    }
     let args = &manifest.launch.args;
     let Some(binding) = args.iter().position(|arg| arg.contains('{')) else {
         return args.clone();
@@ -1260,6 +1280,23 @@ pub fn launch_prefix(manifest: &RuntimeManifest) -> Vec<String> {
 /// whatever spelling help documents for them.
 /// Returns (flag, binding name) pairs and whether any binding is positional.
 pub fn bound_launch_flags(manifest: &RuntimeManifest) -> (Vec<(String, String)>, bool) {
+    if let Some(bindings) = &manifest.launch_bindings {
+        let flags = bindings
+            .bindings
+            .iter()
+            .filter_map(|bound| match &bound.argument {
+                ArgBinding::Flag { flag, .. } => Some((flag.clone(), bound.name.clone())),
+                ArgBinding::Positional => None,
+            })
+            .collect();
+        return (
+            flags,
+            bindings
+                .bindings
+                .iter()
+                .any(|bound| matches!(bound.argument, ArgBinding::Positional)),
+        );
+    }
     let args = &manifest.launch.args;
     let mut flags = Vec::new();
     let mut positional = false;
@@ -1300,6 +1337,63 @@ pub enum ArgBinding {
     },
     /// A positional argument directly after the entry prefix.
     Positional,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchBindings {
+    pub version: u32,
+    /// Boundary in launch.args; the chosen prefix tokens are stored once.
+    pub prefix_len: usize,
+    pub bindings: Vec<BoundArgument>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoundArgument {
+    pub name: String,
+    pub argument: ArgBinding,
+}
+
+fn validate_launch_bindings(bindings: &LaunchBindings, args: &[String]) -> Result<(), String> {
+    if bindings.version != 1
+        || bindings.prefix_len > args.len()
+        || bindings.prefix_len > 128
+        || bindings.bindings.is_empty()
+        || bindings.bindings.len() > 4
+    {
+        return Err("invalid entry-point binding metadata version or bounds".into());
+    }
+    let prefix = &args[..bindings.prefix_len];
+    if prefix
+        .iter()
+        .any(|token| token.len() > 32768 || token.contains(['\0', '{']))
+    {
+        return Err("entry-point binding prefix must contain bounded literal arguments".into());
+    }
+    let mut expected = prefix.to_vec();
+    let mut names = std::collections::BTreeSet::new();
+    let mut flags = std::collections::BTreeSet::new();
+    for bound in &bindings.bindings {
+        if !["model", "host", "port", "model_alias"].contains(&bound.name.as_str())
+            || !names.insert(&bound.name)
+        {
+            return Err("invalid or duplicate entry-point binding name".into());
+        }
+        if let ArgBinding::Flag { flag, .. } = &bound.argument {
+            if !flags.insert(flag) {
+                return Err("entry-point bindings cannot share a flag".into());
+            }
+        }
+        expected.extend(binding_tokens(
+            &bound.argument,
+            &format!("{{{}}}", bound.name),
+        )?);
+    }
+    if expected != args {
+        return Err("entry-point binding metadata does not match the launch template".into());
+    }
+    Ok(())
 }
 
 /// Where the app's per-session credential goes. Credentials never travel
@@ -1470,6 +1564,14 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
     )?;
     // Bindings follow the prefix in the registered manifest as well, so the
     // entry prefix derived from both is identical.
+    let launch_bindings = LaunchBindings {
+        version: 1,
+        prefix_len: args.len(),
+        bindings: vec![BoundArgument {
+            name: "model".into(),
+            argument: ArgBinding::Positional,
+        }],
+    };
     args.push("{model}".into());
     let process = ProcessSpec {
         program,
@@ -1488,6 +1590,7 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         protocol: "openai-v1".into(),
         probe: process.clone(),
         launch: process,
+        launch_bindings: Some(launch_bindings),
         options: Vec::new(),
         model_formats: Vec::new(),
         models: Vec::new(),
@@ -1511,12 +1614,32 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         &draft.environment,
         &draft.protocol,
     )?;
+    let mut launch_bindings = LaunchBindings {
+        version: 1,
+        prefix_len: args.len(),
+        bindings: vec![BoundArgument {
+            name: "model".into(),
+            argument: draft.model.clone(),
+        }],
+    };
     args.extend(binding_tokens(&draft.model, "{model}")?);
     if let Some(host) = &draft.host {
+        launch_bindings.bindings.push(BoundArgument {
+            name: "host".into(),
+            argument: host.clone(),
+        });
         args.extend(binding_tokens(host, "{host}")?);
     }
+    launch_bindings.bindings.push(BoundArgument {
+        name: "port".into(),
+        argument: draft.port.clone(),
+    });
     args.extend(binding_tokens(&draft.port, "{port}")?);
     if let Some(alias) = &draft.served_model {
+        launch_bindings.bindings.push(BoundArgument {
+            name: "model_alias".into(),
+            argument: alias.clone(),
+        });
         args.extend(binding_tokens(alias, "{model_alias}")?);
     }
     let mut env = draft.environment.clone();
@@ -1546,6 +1669,7 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         },
         options: Vec::new(),
         model_formats: draft.model_formats.clone(),
+        launch_bindings: Some(launch_bindings),
         models: Vec::new(),
         artifacts,
         health_path: draft.health_path.clone(),
@@ -1605,6 +1729,10 @@ mod tests {
     fn manifest_rejects_unsupported_versions_bindings_and_managed_overrides() {
         let good = example();
         validate_manifest(&good).unwrap();
+        assert!(serde_json::to_value(&good)
+            .unwrap()
+            .get("launch_bindings")
+            .is_none());
         let mut bad = good.clone();
         bad.adapter_version = 2;
         assert!(validate_manifest(&bad).unwrap_err().contains("version"));
@@ -1664,6 +1792,92 @@ mod tests {
         let mut invalid = view;
         invalid.manifest.launch.args.clear();
         assert!(registration_for_inventory(invalid).is_err());
+    }
+    fn positional_draft() -> EntrypointDraft {
+        let base = example();
+        serde_json::from_value(serde_json::json!({
+            "engine_id":base.engine_id,"runtime_id":"positional-1","display_name":"Positional engine",
+            "program":base.launch.program,"prefix":["--server"],
+            "model":{"kind":"positional"},"port":{"kind":"flag","flag":"--listen"},
+            "auth":{"kind":"none"},"protocol":{"kind":"openai_http"},
+            "probe":base.probe,"health_path":"/health","model_formats":["unknown"]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn explicit_positional_model_keeps_the_static_boolean_entry_prefix() {
+        let draft = positional_draft();
+        let manifest = manifest_from_draft(&draft).unwrap();
+        for manifest in [
+            manifest.clone(),
+            serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap(),
+        ] {
+            assert_eq!(launch_prefix(&manifest), ["--server"]);
+            let (flags, positional) = bound_launch_flags(&manifest);
+            assert!(positional);
+            assert_eq!(flags, [("--listen".into(), "port".into())]);
+        }
+    }
+
+    #[test]
+    fn explicit_binding_metadata_must_match_the_template_and_reprobes_on_changed_choices() {
+        let manifest = manifest_from_draft(&positional_draft()).unwrap();
+        let mut changed = manifest.clone();
+        changed.launch_bindings.as_mut().unwrap().prefix_len = 0;
+        assert!(validate_manifest(&changed)
+            .unwrap_err()
+            .contains("launch template"));
+        let mut future = manifest.clone();
+        future.launch_bindings.as_mut().unwrap().version = 2;
+        assert!(validate_manifest(&future)
+            .unwrap_err()
+            .contains("metadata version"));
+        let mut renamed = manifest.clone();
+        renamed.launch_bindings.as_mut().unwrap().bindings[0].name = "guessed_model".into();
+        assert!(validate_manifest(&renamed)
+            .unwrap_err()
+            .contains("binding name"));
+        // The same argv can have two explicitly different meanings: static
+        // boolean + positional, or a flag binding. Changing the choice must
+        // invalidate readiness even though the executable/argv bytes match.
+        let mut other_choice = manifest.clone();
+        let bindings = other_choice.launch_bindings.as_mut().unwrap();
+        bindings.prefix_len = 0;
+        bindings.bindings[0].argument = ArgBinding::Flag {
+            flag: "--server".into(),
+            equals: false,
+        };
+        validate_manifest(&other_choice).unwrap();
+        assert_eq!(manifest.launch.args, other_choice.launch.args);
+        let mut duplicate = other_choice.clone();
+        duplicate.launch_bindings.as_mut().unwrap().bindings[1].argument = ArgBinding::Flag {
+            flag: "--server".into(),
+            equals: false,
+        };
+        duplicate.launch.args[2] = "--server".into();
+        assert!(validate_manifest(&duplicate)
+            .unwrap_err()
+            .contains("share a flag"));
+        let mut oversized = manifest.clone();
+        oversized.launch_bindings.as_mut().unwrap().prefix_len = 129;
+        assert!(validate_manifest(&oversized)
+            .unwrap_err()
+            .contains("bounds"));
+        let mut duplicate_name = manifest.clone();
+        duplicate_name.launch_bindings.as_mut().unwrap().bindings[1].name = "model".into();
+        assert!(validate_manifest(&duplicate_name)
+            .unwrap_err()
+            .contains("duplicate"));
+        let cfg = AppConfig {
+            active_provider: manifest.engine_id.as_str().into(),
+            active_runtime: manifest.runtime_id.clone(),
+            ..Default::default()
+        };
+        assert_ne!(
+            launch_fingerprint(&manifest, &cfg),
+            launch_fingerprint(&other_choice, &cfg)
+        );
     }
     #[test]
     fn external_ids_round_trip_without_promoting_unknown_engines_to_llama() {

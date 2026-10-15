@@ -283,6 +283,11 @@ export const runtimeHelpAccept = (cfg: AppConfig, fingerprint: string, request: 
   invoke<AcceptedHelp>('runtime_help_accept', { cfg, fingerprint, request });
 
 export type ArgBinding = { kind: 'flag'; flag: string; equals?: boolean } | { kind: 'positional' };
+export interface LaunchBindings {
+  version: 1;
+  prefix_len: number;
+  bindings: Array<{ name: 'model' | 'host' | 'port' | 'model_alias'; argument: ArgBinding }>;
+}
 export type AuthBinding = { kind: 'none' } | { kind: 'env'; name: string };
 export type ServingProtocol = { kind: 'openai_http' } | { kind: 'bridge'; program: string; prefix: string[] };
 
@@ -325,6 +330,7 @@ export interface RegisteredManifest {
   display_name: string;
   launch: ProcessSpec;
   probe: ProcessSpec;
+  launch_bindings?: LaunchBindings | null;
   [field: string]: unknown;
 }
 

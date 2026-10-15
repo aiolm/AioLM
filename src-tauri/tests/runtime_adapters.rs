@@ -58,6 +58,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
     let manifest = RuntimeManifest {
         schema_version: 1,
         adapter_version: 1,
+        launch_bindings: None,
         engine_id: engine,
         runtime_id: "fixture-1".into(),
         display_name: "Synthetic external engine".into(),

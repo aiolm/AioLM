@@ -72,6 +72,7 @@ fn manifest(
     RuntimeManifest {
         schema_version: 1,
         adapter_version: 1,
+        launch_bindings: None,
         engine_id: engine,
         runtime_id: "build-1".into(),
         display_name: "Synthetic order engine".into(),

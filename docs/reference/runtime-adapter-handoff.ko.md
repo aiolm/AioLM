@@ -69,6 +69,7 @@ JSON은 `schema_version: 1`, `adapter_version: 1`, `protocol: "openai-v1"`를 �
 | `runtime_id`, `display_name` | 해당 설치의 ID와 표시 이름. ID는 기존 runtime ID 규칙을 따른다. 같은 engine/runtime 등록을 덮어쓰지 않는다. |
 | `platforms` | 실제 지원 `{os,arch}` 목록. OS는 `windows/linux/macos`, architecture는 `x86_64/aarch64`. 지원하지 않는 기기의 값을 위조하지 않는다. |
 | `probe`, `launch` | 각각 절대 `program`, 문자열 `args` 배열, 선택적 `env`와 절대 `working_directory`. shell 문자열을 실행하지 않는다. |
+| `launch_bindings` | 선택적 entry point 선택 기록. `version: 1`, `launch.args` 앞부분 중 고정 entry point의 토큰 수 `prefix_len`과 순서 있는 `bindings: [{name,argument}]`. `name`은 `model/host/port/model_alias`, `argument`는 `{kind:"positional"}` 또는 `{kind:"flag",flag,equals?}`다. prefix 뒤에 binding을 펼친 결과가 `launch.args`와 정확히 일치해야 한다. |
 | `model_formats` | `gguf/hf-safetensors/mlx/unknown` 선언. 선언만으로 모델 지원을 확정하지 않는다. |
 | `models` | 선택적 `{path,name}` 명시적인 외부 모델 binding 목록. 새로운 형식·Strata deployment JSON은 `unknown`으로 등록하고 실제 probe로 검사한다. |
 | `artifacts` | 선택적 adapter 스크립트·library·설정의 절대 경로. 등록 시 전체 SHA-256을 저장하고 변경을 거부한다. 종속 파일은 제공자가 빠짐없이 선언해야 한다. |
@@ -76,6 +77,8 @@ JSON은 `schema_version: 1`, `adapter_version: 1`, `protocol: "openai-v1"`를 �
 | `options` | 옵션 `key`, `target: launch/request`, `kind`, 선택적 `flag/group/runtime_default`. launch 옵션은 flag와 probe의 `{options_json}` 전달이 필요하다. |
 
 Bindings는 `{model}`, `{model_alias}`, `{host}`, `{port}`, `{api_key}`, `{ctx_size}`, `{parallel}`, `{options_json}`이다. probe와 launch는 선택 모델을 받아야 하며 launch는 앱이 지정한 port를 사용한다. `{api_key}`는 env에서만 허용한다. 빈 credential binding은 env에 넣지 않는다. 모델·port·host·인증 및 canonical messages/stream/tools를 사용자 옵션으로 덮어쓸 수 없다. argv의 한 원소는 한 인자로 전달되므로 경로 공백·한글을 shell quoting으로 다시 감싸지 않는다.
+
+실행 파일/entry point 등록 GUI는 선택한 prefix와 위치/flag 바인딩을 `launch_bindings`에 기록한다. 예를 들어 `prefix: ["--server"]`와 positional 모델은 `--server`를 모델 flag로 다시 추정하지 않는다. 선택 기록의 변경도 모델 probe identity를 바꾼다. metadata가 없는 기존 v1 manifest는 이전 해석과 직렬화를 유지하며 자동으로 새 필드를 채우지 않는다. 알 수 없는 metadata version, 중복 이름/flag, launch 템플릿과 다른 기록은 거부한다. 선택 기록은 help나 API 능력의 검증을 대신하지 않는다.
 
 `kind`는 `integer/number/flag/toggle/choice/text/path/json`이다. 범위·choices·길이와 request/launch 적용 위치를 선언한다. 지원하지 않는 옵션을 조용히 버리지 않는다. 제공자가 선언한 request 옵션만 canonical 요청에 추가한다.
 
