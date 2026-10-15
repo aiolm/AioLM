@@ -401,4 +401,54 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     providers::adapter::refresh(&loaded, None).await.unwrap();
     let planned = providers::registry::command(&loaded, port, "synthetic-key").unwrap();
     assert!(planned.args.ends_with(&expected_tail.map(String::from)));
+
+    // The managed native adapter uses the same reviewed schema, and its
+    // profile snapshot keeps new options without copying another engine's map.
+    let native_dir = aiolm_lib::runtime::runtime_dir("cpu", "b1").unwrap();
+    fs::create_dir_all(&native_dir).unwrap();
+    let native_bin = native_dir.join(aiolm_lib::runtime::server_executable_name());
+    fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &native_bin).unwrap();
+    let mut native = AppConfig {
+        active_backend: "cpu".into(),
+        active_build: "b1".into(),
+        active_model: model.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let native_request = runtime_schema::help_target(&root, &native).unwrap().request;
+    let command = runtime_schema::help_command(&native, &native_request).unwrap();
+    let key = runtime_schema::runtime_key(&native).unwrap();
+    let (_, descriptor) = runtime_help_store::discover_against(
+        &service,
+        &root,
+        "native-test-owner",
+        &key.engine,
+        &key.runtime,
+        &command,
+        &[],
+        Baseline::Accepted(None),
+    )
+    .unwrap();
+    runtime_schema::accept(&root, &native, &descriptor.fingerprint, &native_request).unwrap();
+    saved(
+        &mut native,
+        "llama.cpp",
+        json!({"fixture_native_value":"한글 native value"}),
+    );
+    native.validate().unwrap();
+    let native_plan = providers::adapter::resolve(&native)
+        .launch(&native, port, "synthetic-key", &Default::default())
+        .unwrap();
+    assert!(native_plan
+        .args
+        .ends_with(&["--fixture-native-value".into(), "한글 native value".into()]));
+    let mut owned = native.clone();
+    saved(&mut owned, "llama.cpp", json!({"port":"9000"}));
+    assert!(providers::adapter::resolve(&owned)
+        .launch(&owned, port, "", &Default::default())
+        .is_err());
+    // Changing the selected build retains the saved map but cannot reuse acceptance.
+    native.active_build = "b2".into();
+    assert!(providers::adapter::resolve(&native)
+        .launch(&native, port, "", &Default::default())
+        .is_err());
 }

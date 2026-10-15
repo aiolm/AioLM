@@ -6,6 +6,14 @@ import {
 } from './settingsProfiles';
 
 describe('settings profiles', () => {
+  it('keeps native runtime options through profile capture and application without other engines or an empty legacy map', () => {
+    expect(captureProfile(testConfig, 'Legacy', 'global', '').settings.provider_options).toBeUndefined();
+    const cfg = { ...testConfig, provider_options: { 'llama.cpp': { fresh: '한글 value' }, vllm: { max_model_len: 8192 } } };
+    const profile = captureProfile(cfg, 'Native', 'global', '');
+    expect(profile.settings.provider_options).toEqual({ 'llama.cpp': { fresh: '한글 value' } });
+    const restored = applySettingsProfile(testConfig, profile);
+    expect(restored.provider_options).toEqual({ 'llama.cpp': { fresh: '한글 value' } });
+  });
   it.each(['llama.cpp', 'vllm', 'mlx-vlm'] as const)('promotes legacy %s model profiles without changing saved values or application revisions', provider => {
     const cfg = { ...testConfig, active_provider: provider, active_model: '/synthetic/old-model', active_runtime: 'runtime-current',
       provider_options: { [provider]: { temperature: 0.23 } } };

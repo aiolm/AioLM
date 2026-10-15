@@ -307,7 +307,16 @@ fn profile_snapshot(cfg: &AppConfig) -> Map<String, Value> {
     settings.remove("active_model");
     settings.retain(|key, _| !runtime_field(key));
     if crate::providers::provider_of(&cfg) == crate::providers::ProviderId::Llama {
-        settings.remove("provider_options");
+        let options =
+            crate::providers::launch::provider_options(&cfg, crate::providers::ProviderId::Llama);
+        if options.is_empty() {
+            settings.remove("provider_options");
+        } else {
+            settings.insert(
+                "provider_options".into(),
+                serde_json::json!({"llama.cpp": options}),
+            );
+        }
     } else {
         let options =
             crate::providers::launch::provider_options(&cfg, crate::providers::provider_of(&cfg));
@@ -1231,6 +1240,25 @@ pub fn forget_runtime(cfg: &mut AppConfig, backend: &str, build: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_profiles_keep_reviewed_options_without_importing_other_engine_settings() {
+        let mut cfg = AppConfig::default();
+        assert!(!profile_snapshot(&cfg).contains_key("provider_options"));
+        cfg.provider_options.insert(
+            "llama.cpp".into(),
+            serde_json::from_value(serde_json::json!({"fresh": "한글 value"})).unwrap(),
+        );
+        cfg.provider_options.insert(
+            "vllm".into(),
+            serde_json::from_value(serde_json::json!({"max_model_len": 8192})).unwrap(),
+        );
+        let settings = profile_snapshot(&cfg);
+        assert_eq!(
+            settings["provider_options"],
+            serde_json::json!({"llama.cpp": {"fresh": "한글 value"}})
+        );
+    }
     use serde_json::json;
 
     #[test]

@@ -636,7 +636,7 @@ pub async fn run(
         }
         result.args = match &python_runtime {
             Some(runtime) => crate::providers::launch::preview(&crate::providers::launch::engine_command(&isolated, runtime, isolated.port, "")?),
-            None => redacted_args(server::build_args_with_gpu(&isolated, "", &gpu)),
+            None => redacted_args(crate::providers::adapter::resolve(&isolated).launch(&isolated, isolated.port, "", &gpu)?.args),
         };
         if let Some(provenance) = &mut result.provenance {
             provenance.execution_config = crate::benchmark::provenance::ExecutionConfig::from_args(&result.args);

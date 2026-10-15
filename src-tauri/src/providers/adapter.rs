@@ -34,6 +34,25 @@ pub trait InferenceRuntimeAdapter: Send + Sync {
 struct BuiltinAdapter(ProviderId);
 struct ProcessAdapter;
 
+/// Native typed settings and reviewed runtime options share the actual argv.
+/// Existing profiles without generic options retain their exact launch plan.
+pub(super) fn native_arguments(
+    cfg: &AppConfig,
+    key: &str,
+    gpu: &ResolvedGpu,
+) -> Result<Vec<String>, String> {
+    let mut args = crate::server::build_args_with_gpu(cfg, key, gpu);
+    let values = super::launch::provider_options(cfg, ProviderId::Llama);
+    if !values.is_empty() {
+        args.extend(super::runtime_schema::launch_arguments(
+            &super::registry::root(),
+            cfg,
+            &values,
+        )?);
+    }
+    Ok(args)
+}
+
 impl InferenceRuntimeAdapter for BuiltinAdapter {
     fn kind(&self) -> RuntimeKind {
         if self.0.is_python() {
@@ -81,7 +100,7 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
         cfg.port = port;
         Ok(EngineCommand {
             program: PathBuf::from(self.executable(&cfg)?),
-            args: crate::server::build_args_with_gpu(&cfg, key, gpu),
+            args: native_arguments(&cfg, key, gpu)?,
             env: crate::runtime::child_environment_for_runtime(
                 &cfg.active_backend,
                 &cfg.active_build,

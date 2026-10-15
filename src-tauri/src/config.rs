@@ -856,9 +856,7 @@ pub(crate) fn validate_provider_selection(
     }
     for key in options.keys() {
         match ProviderId::parse(key) {
-            Some(ProviderId::Llama) | None => {
-                return Err(format!("provider options cannot be saved for '{key}'"))
-            }
+            None => return Err(format!("provider options cannot be saved for '{key}'")),
             Some(id) if id.as_str() == key => {}
             Some(_) => {
                 return Err(format!(

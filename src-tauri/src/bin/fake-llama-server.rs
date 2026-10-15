@@ -231,7 +231,7 @@ fn main() {
         }
     }
     if std::env::args().any(|arg| arg == "--version" || arg == "--help") {
-        println!("llama-server test fixture b1\n--model --port --api-key --api-key-file --ctx-size --threads --temp --top-p --top-k");
+        println!("llama-server test fixture b1\n--model MODEL   model path\n--port PORT   server port\n--api-key KEY   credential\n--api-key-file FILE   credential file\n--ctx-size N   context size\n--threads N   worker count\n--temp N   sampling temperature\n--top-p N   sampling probability\n--top-k N   sampling count\n--fixture-native-value TEXT   synthetic native option");
         return;
     }
     if std::env::args().any(|arg| arg == "--fake-startup-failure") {

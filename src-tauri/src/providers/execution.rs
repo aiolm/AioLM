@@ -91,7 +91,7 @@ pub async fn probed_info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     if info.provider != ProviderId::Llama {
         return Ok(info);
     }
-    let args = crate::server::build_args(cfg, "");
+    let args = super::adapter::native_arguments(cfg, "", &crate::gpu::ResolvedGpu::default())?;
     let mode = llama_mode(&args, None)?;
     if info.modalities.image || mode.is_none() {
         let probe = crate::runtime::probe(&cfg.active_backend, &cfg.active_build).await?;
@@ -133,6 +133,8 @@ pub fn validate(cfg: &AppConfig) -> Result<(), String> {
     if provider != ProviderId::Llama {
         let runtime = super::selected_python_runtime(cfg)?;
         launch::engine_command(cfg, &runtime, cfg.port, "")?;
+    } else {
+        super::adapter::native_arguments(cfg, "", &crate::gpu::ResolvedGpu::default())?;
     }
     Ok(())
 }
@@ -335,7 +337,10 @@ fn set_llama_mode(info: &mut EngineInfo, mode: LlamaMode, model: &str) -> Result
 fn llama_info(cfg: &AppConfig, modalities: artifacts::Modalities) -> Result<EngineInfo, String> {
     let mut info = EngineInfo::llama(&cfg.active_model, modalities);
     info.runtime_id = super::runtime_id_of(cfg);
-    match llama_mode(&crate::server::build_args(cfg, ""), None)? {
+    match llama_mode(
+        &super::adapter::native_arguments(cfg, "", &crate::gpu::ResolvedGpu::default())?,
+        None,
+    )? {
         Some(mode) => set_llama_mode(&mut info, mode, &cfg.active_model)?,
         // Provisional until `probed_info` reads the installed help at launch:
         // claim no task, so this value cannot route a request if it escapes.

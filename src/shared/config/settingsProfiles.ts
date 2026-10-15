@@ -262,7 +262,11 @@ export function profileSettingsSnapshot(cfg: Partial<AppConfig>): Partial<Execut
   const settings = settingsSnapshot(cfg);
   for (const key of RUNTIME_SELECTION_KEYS) delete settings[key];
   const provider = providerOf(cfg);
-  if (provider === 'llama.cpp') delete settings.provider_options;
+  if (provider === 'llama.cpp') {
+    const options = cfg.provider_options?.[provider];
+    if (options && Object.keys(options).length) settings.provider_options = { [provider]: structuredClone(options) };
+    else delete settings.provider_options;
+  }
   else {
     for (const key of Object.keys(settings)) if (!['provider_options', 'request_timeout_seconds', 'sleep_idle_seconds'].includes(key)) delete settings[key as ExecutionKey];
     settings.provider_options = { [provider]: structuredClone(cfg.provider_options?.[provider] ?? {}) };
@@ -341,7 +345,7 @@ export function applySettingsProfile(cfg: AppConfig, profile: SettingsProfile): 
   const patch: Partial<ExecutionSettings> = {};
   const inherited = new Set((cfg.runtime_defaults ?? []).filter(key => !keys.includes(key as ExecutionKey)));
   for (const key of keys) {
-    if (key === 'runtime_defaults') continue;
+    if (key === 'runtime_defaults' || key === 'provider_options') continue;
     let value: unknown = settings[key];
     if (value === undefined) {
       if (RUNTIME_DEFAULT_KEYS.includes(key)) value = defaults[key as keyof typeof defaults];
@@ -355,7 +359,10 @@ export function applySettingsProfile(cfg: AppConfig, profile: SettingsProfile): 
     Object.assign(patch, { [key]: structuredClone(value) });
   }
   patch.runtime_defaults = [...inherited].sort();
-  delete patch.provider_options;
+  if (keys.includes('provider_options') && (Object.keys(settings.provider_options?.['llama.cpp'] ?? {}).length
+    || Object.keys(cfg.provider_options?.['llama.cpp'] ?? {}).length)) patch.provider_options = {
+    ...cfg.provider_options, 'llama.cpp': structuredClone(settings.provider_options?.['llama.cpp'] ?? {}),
+  };
   return { ...cfg, ...patch };
 }
 
