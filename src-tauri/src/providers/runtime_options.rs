@@ -217,7 +217,34 @@ pub struct Predicate {
     pub key: String,
     /// None tests an explicit occurrence. A value tests a single-value
     /// occurrence, so a dependency can apply to true without applying to false.
+    /// An absent field means None; an explicit JSON `null` is refused while
+    /// parsing instead of silently becoming an occurrence test.
+    #[serde(
+        default,
+        deserialize_with = "explicit_operand",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub equals: Option<Value>,
+}
+
+fn explicit_operand<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::Null => Err(serde::de::Error::custom(
+            "a null constraint operand is not supported; omit `equals` to test an occurrence",
+        )),
+        value => Ok(Some(value)),
+    }
+}
+
+/// Operands compare by the option's documented type, so `1` and `1.0` are the
+/// same number while `"true"` never equals `true`.
+fn same_operand(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        _ => left == right,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -469,13 +496,25 @@ impl OptionSchema {
                 if !keys.contains(&when.key) || !keys.contains(&other.key) {
                     return Err("constraint refers to an unknown option".into());
                 }
-                // JSON null arrives as None (occurrence test), so an explicit
-                // null value constraint cannot round-trip through Option<Value>.
-                // v1 does not support null constraint operands; choices already exclude null.
-                if when.equals == Some(Value::Null) || other.equals == Some(Value::Null) {
-                    return Err(
-                        "null constraint values need an explicit representation before use".into(),
-                    );
+                // Parsing already refuses `"equals": null`; a constructed
+                // Some(Null) is refused here for the same reason. An operand
+                // must be a value the option could actually hold, otherwise
+                // the constraint could never fire and would mean nothing.
+                for predicate in [when, other] {
+                    let Some(expected) = &predicate.equals else {
+                        continue;
+                    };
+                    let option = self
+                        .options
+                        .iter()
+                        .find(|o| o.key == predicate.key)
+                        .expect("constraint keys were checked");
+                    if expected.is_null() || option.scalar(expected).is_err() {
+                        return Err(format!(
+                            "{}: constraint operand does not match the option's documented values",
+                            predicate.key
+                        ));
+                    }
                 }
             }
         }
@@ -560,7 +599,7 @@ impl OptionSchema {
                         value
                             .occurrences
                             .iter()
-                            .any(|row| row.len() == 1 && row[0] == *expected)
+                            .any(|row| row.len() == 1 && same_operand(&row[0], expected))
                     })
             })
         };
@@ -1283,6 +1322,66 @@ mod tests {
             .unwrap_err()
             .iter()
             .any(|e| e.message.contains("cannot be combined")));
+    }
+
+    #[test]
+    fn constraint_operands_round_trip_and_null_never_becomes_an_occurrence_test() {
+        let mut fast = option("fast", ValueKind::Boolean, 0, Some(0));
+        fast.runtime_default = known(RuntimeDefault {
+            literal: json!(false),
+        });
+        let ratio = option("ratio", ValueKind::Number, 1, Some(1));
+        let mut base = schema(vec![fast, ratio]);
+        base.constraints.push(known(Relation::Requires {
+            when: Predicate {
+                key: "fast".into(),
+                equals: Some(json!(true)),
+            },
+            other: Predicate {
+                key: "ratio".into(),
+                equals: None,
+            },
+        }));
+        // Serialization omits an absent operand, so the schema round-trips.
+        let bytes = serde_json::to_vec(&base).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("\"equals\":null"));
+        assert_eq!(OptionSchema::parse(&bytes).unwrap(), base);
+        // An explicit JSON null in a stored or adapter-provided schema is
+        // refused instead of turning "requires fast == null" into "requires
+        // fast to be present".
+        let mut value = serde_json::to_value(&base).unwrap();
+        value["constraints"][0]["value"]["when"]["equals"] = Value::Null;
+        let error = OptionSchema::parse(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+        assert!(error.contains("null constraint operand"), "{error}");
+        // Operands must be values the option can hold: a string "true" never
+        // equals a boolean, so it cannot silently disable the constraint.
+        let mut value = serde_json::to_value(&base).unwrap();
+        value["constraints"][0]["value"]["when"]["equals"] = json!("true");
+        assert!(OptionSchema::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+        // Numbers compare by value: a saved 1 matches a documented 1.0.
+        let mut numeric = base.clone();
+        numeric.constraints = vec![known(Relation::Excludes {
+            when: Predicate {
+                key: "ratio".into(),
+                equals: Some(json!(1.0)),
+            },
+            other: Predicate {
+                key: "fast".into(),
+                equals: Some(json!(true)),
+            },
+        })];
+        let issues = numeric
+            .resolve(
+                &[],
+                &selected(&[
+                    ("ratio", vec![vec![json!(1)]]),
+                    ("fast", vec![vec![json!(true)]]),
+                ]),
+            )
+            .unwrap_err();
+        assert!(issues
+            .iter()
+            .any(|i| i.message.contains("cannot be combined")));
     }
 
     #[test]

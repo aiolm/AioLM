@@ -522,12 +522,20 @@ mod tests {
 
     #[test]
     fn null_constraint_values_are_reviewed_not_silently_reinterpreted() {
-        // JSON null arrives as None (occurrence test); an explicit null value
-        // constraint cannot round-trip through Option<Value>.
-        let predicate: super::super::runtime_options::Predicate =
-            serde_json::from_value(json!({"key": "threads", "equals": null})).unwrap();
-        assert_eq!(predicate.equals, None);
-        // Value null is not a supported constraint operand in v1.
+        // An explicit JSON null is refused while parsing; it never becomes an
+        // occurrence test. An absent operand is the occurrence test.
+        let error = serde_json::from_value::<super::super::runtime_options::Predicate>(
+            json!({"key": "threads", "equals": null}),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("null constraint operand"),
+            "{error}"
+        );
+        let absent: super::super::runtime_options::Predicate =
+            serde_json::from_value(json!({"key": "threads"})).unwrap();
+        assert_eq!(absent.equals, None);
+        // A constructed null operand is refused by validation as well.
         let schema = schema(vec![option("threads", "--threads", 1, Some(1))]);
         let mut with_null = schema.clone();
         with_null
