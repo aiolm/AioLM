@@ -704,6 +704,34 @@ pub fn parse_help_report(
         }
         merged.push(pending);
     }
+    // A lone `--no-foo` is the false spelling of `foo` only while nothing
+    // else is named `foo`. Beside a valued `--foo VALUE` (llama.cpp's
+    // `--no-host` buffer switch and `--host HOST` address) it is an
+    // independent switch whose own spelling means true, so neither option is
+    // dropped as a duplicate and neither takes the other's meaning.
+    let taken: Vec<String> = merged
+        .iter()
+        .filter(|pending| !pending.negative_only)
+        .map(|pending| pending.key.clone())
+        .collect();
+    for pending in &mut merged {
+        if !pending.negative_only || !taken.contains(&pending.key) {
+            continue;
+        }
+        let Some(own) = pending
+            .spellings
+            .iter()
+            .find(|s| s.flag.starts_with("--no-"))
+            .map(|s| s.flag.trim_start_matches('-').replace('-', "_"))
+        else {
+            continue;
+        };
+        pending.key = own;
+        pending.negative_only = false;
+        for spelling in &mut pending.spellings {
+            spelling.polarity = None;
+        }
+    }
 
     let mut definitions: Vec<OptionDefinition> = Vec::new();
     let mut seen_keys: BTreeSet<String> = BTreeSet::new();
@@ -1257,6 +1285,105 @@ mod tests {
         let solo = parse("Options:\n  --no-cache            disable cache\n");
         let cache = solo.options.iter().find(|o| o.key == "cache").unwrap();
         assert_eq!(cache.spellings[0].polarity, Some(false));
+    }
+
+    /// The two lines of the private llama.cpp build's help that lost `--host`:
+    /// `--no-host` is an independent host-buffer switch, not the negation of
+    /// the HTTP address option.
+    const NO_HOST: &str = "--no-host                               bypass host buffer allowing extra buffers to be used\n";
+    const HOST: &str = "--host HOST                             IP addresses to listen on, comma-separated, or UNIX socket paths\n";
+
+    #[test]
+    fn an_independent_negative_switch_never_hides_a_value_option_of_the_same_name() {
+        for text in [format!("{NO_HOST}{HOST}"), format!("{HOST}{NO_HOST}")] {
+            let schema = parse(&text);
+            let by_flag = |flag: &str| {
+                schema
+                    .options
+                    .iter()
+                    .find(|o| o.spellings.iter().any(|s| s.flag == flag))
+                    .unwrap_or_else(|| panic!("{flag} missing in {text:?}"))
+            };
+            let host = by_flag("--host");
+            assert_eq!(host.key, "host");
+            assert_eq!(host.spellings.len(), 1);
+            assert_eq!(
+                host.arity.supported(),
+                Some(&Arity {
+                    min: 1,
+                    max: Some(1)
+                })
+            );
+            assert_eq!(host.managed, Some(ManagedBinding::Host));
+            // The switch keeps its own name and says true by being spelled.
+            let switch = by_flag("--no-host");
+            assert_eq!(switch.key, "no_host");
+            assert_eq!(switch.spellings.len(), 1);
+            assert_eq!(switch.spellings[0].polarity, None);
+            assert_eq!(switch.kind.supported(), Some(&ValueKind::Boolean));
+            assert!(switch.managed.is_none());
+            let overrides = BTreeMap::from([(
+                "no_host".to_string(),
+                serde_json::from_value(json!({"occurrences": [[true]]})).unwrap(),
+            )]);
+            assert_eq!(schema.resolve(&[], &overrides).unwrap().argv, ["--no-host"]);
+            // Its raw span is its own line, not the address option's.
+            let line = text
+                .lines()
+                .position(|l| l.starts_with("--no-host"))
+                .unwrap() as u32
+                + 1;
+            assert_eq!(
+                switch.raw_spans,
+                [Source::Help {
+                    document: "stdout".into(),
+                    start_line: line,
+                    end_line: line
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn documented_boolean_pairs_still_merge_in_either_order() {
+        for text in [
+            "--cache               enable cache\n--no-cache            disable cache\n",
+            "--no-cache            disable cache\n--cache               enable cache\n",
+            "-c, --cache, --no-cache   toggle cache\n",
+        ] {
+            let schema = parse(text);
+            assert_eq!(schema.options.len(), 1, "{text:?}");
+            let cache = &schema.options[0];
+            assert_eq!(cache.key, "cache");
+            assert!(cache
+                .spellings
+                .iter()
+                .any(|s| s.flag == "--cache" && s.polarity == Some(true)));
+            assert!(cache
+                .spellings
+                .iter()
+                .any(|s| s.flag == "--no-cache" && s.polarity == Some(false)));
+        }
+        // A solo negative with no same-named option keeps its earlier key and
+        // false meaning, so saved values do not change meaning.
+        let solo = parse("--no-mmap   do not memory-map model\n--threads N   threads\n");
+        let mmap = solo.options.iter().find(|o| o.key == "mmap").unwrap();
+        assert_eq!(mmap.spellings[0].polarity, Some(false));
+    }
+
+    #[test]
+    fn a_saved_value_under_the_old_switch_key_is_reported_not_moved() {
+        // Under the earlier parser `host: false` meant `--no-host`. The key now
+        // names the app-owned address binding: the value is refused and kept,
+        // never silently re-sent as `--no-host` or as an address.
+        let schema = parse(&format!("{NO_HOST}{HOST}"));
+        let overrides = BTreeMap::from([(
+            "host".to_string(),
+            serde_json::from_value(json!({"occurrences": [[false]]})).unwrap(),
+        )]);
+        let issues = schema.resolve(&[], &overrides).unwrap_err();
+        assert_eq!(issues[0].key, "host");
+        assert!(issues[0].message.contains("managed by the app"));
     }
 
     #[test]

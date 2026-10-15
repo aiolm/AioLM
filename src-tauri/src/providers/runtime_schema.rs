@@ -2283,6 +2283,37 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn help_parsed_by_an_earlier_parser_is_stale_and_its_values_are_kept() {
+        let (root, mut cfg) = accepted_llama_help(
+            "--no-host   bypass host buffer allowing extra buffers to be used\n--host HOST   IP addresses to listen on\n",
+        );
+        // Rewrite the accepted snapshot as the earlier parser recorded it.
+        let path = runtime_help_store::snapshot_root(&root, "llama.cpp", "cpu-metadata-test")
+            .unwrap()
+            .join(format!("{}.json", "c".repeat(64)));
+        let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["report"]["identity"]["parser_version"] =
+            json!(super::super::runtime_help::PARSER_VERSION - 1);
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+        let effective = effective(&root, &cfg, false).unwrap();
+        assert_eq!(effective.help_state, HelpState::Stale);
+        assert!(effective.help_keys.is_empty());
+        let values: Map<String, Value> =
+            serde_json::from_value(json!({"host": false, "no_host": true})).unwrap();
+        cfg.provider_options
+            .insert("llama.cpp".into(), values.clone());
+        let issues = saved_issues(&root, &cfg, &values, &BTreeSet::new());
+        for key in ["host", "no_host"] {
+            assert!(
+                issues.iter().any(|issue| issue.key == key),
+                "{key}: {issues:?}"
+            );
+        }
+        assert_eq!(cfg.provider_options["llama.cpp"], values);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn help_schema() -> OptionSchema {
         let help = Source::Help {
             document: "stdout".into(),

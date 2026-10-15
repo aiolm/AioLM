@@ -15,7 +15,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const PARSER_VERSION: u32 = 1;
+/// Part of every help identity. Version 2 keeps a lone `--no-foo` beside a
+/// valued `--foo VALUE` as its own switch, so schemas parsed by version 1
+/// (which dropped one of them) are stale rather than reused.
+pub const PARSER_VERSION: u32 = 2;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 
