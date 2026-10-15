@@ -17,6 +17,23 @@ beforeEach(() => {
 });
 
 describe('additive command import syntax contract', () => {
+  it('normalizes the existing native import response into the issues contract used by the settings UI', async () => {
+    const response = { options: { max_model_len: 4096 }, managed: [], unrecognized: [] };
+    vi.mocked(invoke).mockResolvedValue(response);
+    const result = await providerImportCommand('vllm', '--max-model-len 4096', 'windows');
+    expect(result).toMatchObject({ options: response.options, issues: [] });
+    expect(result).toMatchObject({ managed: [], unrecognized: [] });
+  });
+
+  it('keeps native managed and unknown arguments available as explicit review issues', async () => {
+    vi.mocked(invoke).mockResolvedValue({ options: {}, managed: ['--port 8000'], unrecognized: ['--fresh-value', 'kept'] });
+    const result = await providerImportCommand('vllm', '--port 8000 --fresh-value kept', 'posix');
+    expect(result.issues).toEqual([
+      expect.objectContaining({ key: 'managed', message: expect.stringContaining('--port 8000') }),
+      expect.objectContaining({ key: 'unrecognized', message: expect.stringContaining('--fresh-value kept') }),
+    ]);
+  });
+
   it('keeps the old provider payload when syntax is omitted and sends explicit Windows syntax when chosen', async () => {
     vi.mocked(invoke).mockResolvedValue({ options: {}, issues: [] });
     const command = String.raw`--template C:\tpl\x.jinja`;

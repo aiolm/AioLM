@@ -457,3 +457,30 @@ describe('registered engine options from accepted help (G04)', () => {
     await waitFor(() => expect(onInvalid).toHaveBeenCalledWith('provider-options', true));
   });
 });
+
+describe('catalog command import before runtime selection', () => {
+  it('applies recognized options and displays managed-argument issues without replacing the selected model', async () => {
+    const option: api.ProviderOption = { key: 'max_model_len', flag: '--max-model-len', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 65536 } };
+    vi.mocked(api.providerCatalog).mockResolvedValue([{ id: 'vllm', engine: 'vLLM', server: 'vllm serve', options: [option], availability: { supported: true, detail: '' } }]);
+    vi.mocked(api.providerRuntimes).mockResolvedValue([]);
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const imported = vi.spyOn(api, 'providerImportCommand').mockResolvedValue({ options: { max_model_len: 4096 }, issues: [], managed: [], unrecognized: [] });
+    const onChange = vi.fn();
+    const cfg = { ...testConfig, active_provider: 'vllm' as const, active_runtime: '', active_model: '/synthetic/selected.model' };
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--max-model-len/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--max-model-len 4096' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(imported).toHaveBeenCalledWith('vllm', '--max-model-len 4096', 'windows'));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ provider_options: { ...cfg.provider_options, vllm: { max_model_len: 4096 } } }));
+    onChange.mockClear();
+    imported.mockResolvedValue({ options: {}, issues: [{ key: 'managed', message: 'Review app-managed arguments: --port 8000' }] });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--port 8000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    expect(await screen.findByText('Review app-managed arguments: --port 8000')).toBeVisible();
+    expect(onChange).not.toHaveBeenCalled();
+    imported.mockRestore();
+  });
+});

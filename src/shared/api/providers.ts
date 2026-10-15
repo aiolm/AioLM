@@ -94,7 +94,26 @@ export const modelArtifact = (path: string) => invoke<ModelArtifact>('model_arti
 export const modelCompatibility = (cfg: AppConfig) => invoke<ModelCompatibility>('model_compatibility', { cfg });
 export const providerCommandPreview = (cfg: AppConfig) => invoke<string[]>('provider_command_preview', { cfg });
 export const providerOptionIssues = (cfg: AppConfig) => invoke<Array<{ key: string; code: string; message: string }>>('provider_option_issues', { cfg });
-export const providerImportCommand = (providerId: ProviderId, command: string, syntax?: CommandSyntax) => invoke<{ model?: string; options: Record<string, unknown>; issues: Array<{ key: string; message: string }> }>('provider_import_command', { providerId, command, ...(syntax ? { syntax } : {}) });
+export interface ImportedProviderCommand {
+  model?: string;
+  options: Record<string, unknown>;
+  issues: Array<{ key: string; message: string }>;
+  managed?: string[];
+  unrecognized?: string[];
+}
+
+/** Native v1 reports review buckets; the settings API also promises issues.
+ * Keep the wire response intact and normalize that promise at this boundary. */
+export async function providerImportCommand(providerId: ProviderId, command: string, syntax?: CommandSyntax): Promise<ImportedProviderCommand> {
+  const result = await invoke<Omit<ImportedProviderCommand, 'issues'> & { issues?: ImportedProviderCommand['issues'] }>(
+    'provider_import_command', { providerId, command, ...(syntax ? { syntax } : {}) },
+  );
+  const issues = result.issues ?? [
+    ...(result.managed?.length ? [{ key: 'managed', message: `Review app-managed arguments: ${result.managed.join(' ')}` }] : []),
+    ...(result.unrecognized?.length ? [{ key: 'unrecognized', message: `Review unrecognized arguments: ${result.unrecognized.join(' ')}` }] : []),
+  ];
+  return { ...result, issues };
+}
 export async function listModelArtifacts(modelsDir: string, scanId?: string, selection?: { provider: ProviderId; runtime: string }) {
   const catalog = await invoke<{ models: CatalogModel[]; truncated: boolean }>('list_model_artifacts', { modelsDir, scanId: scanId ?? null,
     providerId: selection?.provider ?? null, runtimeId: selection?.runtime ?? null });
