@@ -44,7 +44,8 @@ use std::{
 pub const ACCEPTED_VERSION: u32 = 1;
 const ACCEPTED_FILE: &str = "accepted.json";
 const ACCEPTED_LIMIT: u64 = 65_536;
-const HELP_TIMEOUT_MS: u64 = 60_000;
+use super::adapter::help::{Compat, HELP_TIMEOUT_MS};
+pub use super::adapter::help::{RuntimeKey, Selected};
 
 /// Saved provider values with dedicated controls; never generic options.
 const RESERVED_KEYS: &[&str] = &[
@@ -204,79 +205,12 @@ pub struct SupplementView {
     pub conflicts: Vec<SupplementConflict>,
 }
 
-pub struct RuntimeKey {
-    pub provider: ProviderId,
-    pub engine: String,
-    pub runtime: String,
-}
-
 pub fn runtime_key(cfg: &AppConfig) -> Result<RuntimeKey, String> {
-    let provider = super::provider_of(cfg);
-    let runtime = if provider == ProviderId::Llama {
-        if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
-            return Err("select an installed llama.cpp runtime first".into());
-        }
-        format!("{}-{}", cfg.active_backend, cfg.active_build)
-    } else {
-        if cfg.active_runtime.is_empty() {
-            return Err("select an installed runtime first".into());
-        }
-        cfg.active_runtime.clone()
-    };
-    let engine = provider.as_str().to_owned();
-    if !runtime_help_store::valid_segment(&engine) || !runtime_help_store::valid_segment(&runtime) {
-        return Err("this runtime's identity cannot hold a help snapshot".into());
-    }
-    Ok(RuntimeKey {
-        provider,
-        engine,
-        runtime,
-    })
+    super::adapter::help::runtime_key(cfg)
 }
 
-/// The selected runtime as its adapter sees it. A caller that already
-/// resolved a Python runtime (launch, validation) passes it explicitly.
-pub struct Selected {
-    pub key: RuntimeKey,
-    python: Option<super::python_env::PythonRuntimeManifest>,
-}
-
-impl Selected {
-    pub fn from_config(cfg: &AppConfig) -> Result<Self, String> {
-        let key = runtime_key(cfg)?;
-        let python = if key.provider.is_python() {
-            Some(super::selected_python_runtime(cfg)?)
-        } else {
-            None
-        };
-        Ok(Self { key, python })
-    }
-
-    pub fn python(runtime: &super::python_env::PythonRuntimeManifest) -> Result<Self, String> {
-        let engine = runtime.provider.as_str().to_owned();
-        if !runtime_help_store::valid_segment(&engine)
-            || !runtime_help_store::valid_segment(&runtime.id)
-        {
-            return Err("this runtime's identity cannot hold a help snapshot".into());
-        }
-        Ok(Self {
-            key: RuntimeKey {
-                provider: runtime.provider,
-                engine,
-                runtime: runtime.id.clone(),
-            },
-            python: Some(runtime.clone()),
-        })
-    }
-
-    fn python_runtime(&self) -> Result<&super::python_env::PythonRuntimeManifest, String> {
-        self.python
-            .as_ref()
-            .ok_or_else(|| "this runtime has no Python entry point".into())
-    }
-}
-
-fn unicode_environment(
+/// Preserve the exact adapter environment without lossy name conversion.
+pub(crate) fn unicode_environment(
     pairs: Vec<(OsString, OsString)>,
 ) -> Result<BTreeMap<String, String>, String> {
     pairs
@@ -317,71 +251,8 @@ fn help_target_for(
     cfg: &AppConfig,
     selected: &Selected,
 ) -> Result<HelpTarget, String> {
-    let key = &selected.key;
-    let accepted = load_accepted(root, &key.engine, &key.runtime)?;
-    let (program, fixed, prefix, default) = match key.provider {
-        ProviderId::Custom(_) => {
-            let manifest = registry::manifest(key.provider, &key.runtime)?;
-            let prefix = registry::launch_prefix(&manifest);
-            let scope = super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)?;
-            let mut args = prefix.clone();
-            args.push("--help".into());
-            let request = HelpRequest {
-                encoding: None,
-                locale: None,
-                working_directory: None,
-                program: None,
-                args,
-                scope,
-            };
-            (manifest.launch.program, false, prefix, request)
-        }
-        ProviderId::Llama => (
-            crate::runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?
-                .to_string_lossy()
-                .into_owned(),
-            true,
-            Vec::new(),
-            HelpRequest {
-                encoding: None,
-                locale: None,
-                working_directory: None,
-                program: None,
-                args: vec!["--help".into()],
-                scope: Vec::new(),
-            },
-        ),
-        _ => {
-            let runtime = selected.python_runtime()?;
-            let (args, scope) = super::launch::help_entry(runtime)?;
-            (
-                runtime.python.clone(),
-                true,
-                Vec::new(),
-                HelpRequest {
-                    encoding: None,
-                    locale: None,
-                    working_directory: None,
-                    program: None,
-                    args,
-                    scope,
-                },
-            )
-        }
-    };
-    let request = accepted
-        .as_ref()
-        .map(|accepted| accepted.request.clone())
-        .unwrap_or(default);
-    Ok(HelpTarget {
-        engine: key.engine.clone(),
-        runtime: key.runtime.clone(),
-        program,
-        fixed,
-        prefix,
-        request,
-        accepted,
-    })
+    let accepted = load_accepted(root, &selected.key.engine, &selected.key.runtime)?;
+    super::adapter::help::help_target(cfg, selected, accepted)
 }
 
 /// The exact shell-free help command for the selected runtime. The adapter
@@ -396,67 +267,7 @@ fn help_command_for(
     selected: &Selected,
     request: &HelpRequest,
 ) -> Result<HelpCommand, String> {
-    let key = &selected.key;
-    let mut command = match key.provider {
-        ProviderId::Custom(_) => {
-            manifest_help_command(&registry::manifest(key.provider, &key.runtime)?, request)?
-        }
-        ProviderId::Llama => {
-            if request.args != ["--help"] || request.program.is_some() || !request.scope.is_empty()
-            {
-                return Err("built-in runtimes use their own help command".into());
-            }
-            HelpCommand {
-                program: crate::runtime::server_bin_for(&cfg.active_backend, &cfg.active_build)?,
-                args: request.args.clone(),
-                environment: unicode_environment(crate::runtime::child_environment_for_runtime(
-                    &cfg.active_backend,
-                    &cfg.active_build,
-                )?)?,
-                working_directory: super::execution_context::requested(
-                    None,
-                    request.working_directory.as_deref(),
-                )?,
-                artifacts: Vec::new(),
-                runtime_version: crate::runtime::installed_version_label(
-                    &cfg.active_backend,
-                    &cfg.active_build,
-                )?,
-                scope: Vec::new(),
-                encoding: Encoding::Auto,
-                timeout_ms: HELP_TIMEOUT_MS,
-                output_limit: MAX_STREAM_BYTES,
-            }
-        }
-        _ => {
-            let runtime = selected.python_runtime()?;
-            let (args, scope) = super::launch::help_entry(runtime)?;
-            if request.args != args || request.program.is_some() || request.scope != scope {
-                return Err("built-in runtimes use their own help command".into());
-            }
-            HelpCommand {
-                program: PathBuf::from(&runtime.python),
-                args,
-                environment: unicode_environment(super::python_env::engine_environment())?,
-                working_directory: super::execution_context::requested(
-                    None,
-                    request.working_directory.as_deref(),
-                )?,
-                artifacts: Vec::new(),
-                runtime_version: runtime
-                    .probe
-                    .as_ref()
-                    .map(|probe| probe.version.clone())
-                    .unwrap_or_else(|| "unprobed".into()),
-                scope,
-                encoding: Encoding::Auto,
-                timeout_ms: HELP_TIMEOUT_MS,
-                output_limit: MAX_STREAM_BYTES,
-            }
-        }
-    };
-    // A fixed locale keeps help text comparable across sessions; it is part
-    // of the fingerprint like every other environment value.
+    let mut command = super::adapter::help::help_command(cfg, selected, request)?;
     apply_help_text_settings(&mut command, request)?;
     command.working_directory =
         super::execution_context::directory(cfg, command.working_directory)?;
@@ -735,7 +546,7 @@ fn write_accepted(
     crate::config::atomic_write(&path, &bytes)
 }
 
-fn adapter_source(engine: &str, revision: &str) -> Source {
+pub(crate) fn adapter_source(engine: &str, revision: &str) -> Source {
     Source::Adapter {
         id: engine.into(),
         revision: revision.into(),
@@ -952,17 +763,6 @@ pub fn spec_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {
     from_spec(spec, &source)
         .resolve_one(&None, std::slice::from_ref(value))
         .unwrap_or_default()
-}
-
-struct Compat {
-    explicit_scopes: BTreeMap<String, Vec<String>>,
-    options: Vec<OptionDefinition>,
-    /// Flag spelling to the app-owned binding it carries.
-    managed_flags: BTreeMap<String, ManagedBinding>,
-    /// Explicit option metadata and whether the app ships it (built-in).
-    metadata: Option<(OptionMetadata, bool)>,
-    /// A registered runtime's command head; built-in runtimes have none.
-    entry: Option<CommandEntry>,
 }
 
 /// The selected runtime's explicit option metadata, as its effective schema
@@ -1256,78 +1056,7 @@ fn protect_binding_aliases(compat: &mut Compat, help: &[OptionDefinition]) {
 }
 
 fn compat(selected: &Selected) -> Result<Compat, String> {
-    let key = &selected.key;
-    // Built-in lists name app-owned flags without saying which binding each
-    // one carries; Discovery marks them managed without guessing.
-    let mut managed_flags: BTreeMap<String, ManagedBinding> =
-        options::app_managed_flags(key.provider)
-            .iter()
-            .map(|flag| ((*flag).to_owned(), ManagedBinding::Discovery))
-            .collect();
-    let mut explicit_scopes = BTreeMap::new();
-    let mut metadata = runtime_metadata::builtin(key.provider).map(|metadata| (metadata, true));
-    let mut entry = None;
-    let options = match key.provider {
-        ProviderId::Custom(_) => {
-            let manifest = registry::manifest(key.provider, &key.runtime)?;
-            entry = Some(CommandEntry::from_manifest(&manifest));
-            metadata = manifest
-                .option_metadata
-                .clone()
-                .map(|metadata| (metadata, false));
-            let source = adapter_source(
-                &key.engine,
-                &format!("manifest-v{}", manifest.adapter_version),
-            );
-            let (bound, _) = registry::bound_launch_flags(&manifest);
-            for (flag, binding) in bound {
-                managed_flags.insert(flag, binding_for(&binding));
-            }
-            for option in &manifest.options {
-                if let Some(scope) = &option.scope {
-                    explicit_scopes.insert(option.key.clone(), scope.clone());
-                }
-            }
-            // Every option the fixed entry prefix spells (`--engine strata`,
-            // `--flag=value`) is part of what was registered and probed.
-            let prefix = registry::launch_prefix(&manifest);
-            let fixed = match &manifest.command_layout {
-                Some(layout) => layout.fixed_flags(&prefix)?,
-                None => prefix,
-            };
-            for token in fixed {
-                let flag = token
-                    .split_once('=')
-                    .map_or(token.as_str(), |(flag, _)| flag);
-                if flag.starts_with('-') && !flag.trim_start_matches('-').is_empty() {
-                    managed_flags
-                        .entry(flag.to_owned())
-                        .or_insert(ManagedBinding::EntryPoint);
-                }
-            }
-            manifest
-                .options
-                .iter()
-                .filter_map(|option| from_external(option, &source))
-                .collect()
-        }
-        ProviderId::Llama => Vec::new(),
-        _ => {
-            let runtime = selected.python_runtime()?;
-            let source = adapter_source(&key.engine, "catalog-v1");
-            super::launch::option_schema(runtime)
-                .iter()
-                .map(|spec| from_spec(spec, &source))
-                .collect()
-        }
-    };
-    Ok(Compat {
-        explicit_scopes,
-        options,
-        managed_flags,
-        metadata,
-        entry,
-    })
+    super::adapter::help::option_descriptor(selected)
 }
 
 fn compat_fingerprint(engine: &str, runtime: &str, options: &[OptionDefinition]) -> String {
@@ -2020,7 +1749,7 @@ pub fn clear_supplement(root: &Path, cfg: &AppConfig) -> Result<EffectiveSchema,
 }
 
 /// The binding a launch template placeholder carries.
-fn binding_for(placeholder: &str) -> ManagedBinding {
+pub(crate) fn binding_for(placeholder: &str) -> ManagedBinding {
     match placeholder {
         "model" | "model_alias" => ManagedBinding::Model,
         "host" => ManagedBinding::Host,
@@ -2553,24 +2282,7 @@ fn stored_runtime_sensitive_keys(
 ) -> BTreeSet<String> {
     let engine = provider.as_str();
     let mut keys = BTreeSet::new();
-    let (declared, metadata) = match provider {
-        ProviderId::Custom(_) => match registry::manifest(provider, runtime) {
-            Ok(manifest) => {
-                let source =
-                    adapter_source(engine, &format!("manifest-v{}", manifest.adapter_version));
-                (
-                    manifest
-                        .options
-                        .iter()
-                        .filter_map(|option| from_external(option, &source))
-                        .collect::<Vec<_>>(),
-                    manifest.option_metadata,
-                )
-            }
-            Err(_) => (Vec::new(), None),
-        },
-        _ => (Vec::new(), runtime_metadata::builtin(provider)),
-    };
+    let (declared, metadata) = super::adapter::help::stored_option_facts(provider, runtime);
     let help = load_accepted(root, engine, runtime)
         .ok()
         .flatten()

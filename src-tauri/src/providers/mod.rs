@@ -301,16 +301,9 @@ pub fn provider_of(cfg: &crate::config::AppConfig) -> ProviderId {
 /// The app key is never included, and values the runtime's schema marks
 /// secret are replaced; the launch itself uses them unchanged.
 pub fn command_preview(cfg: &crate::config::AppConfig) -> Result<Vec<String>, String> {
-    let argv = if provider_of(cfg) == ProviderId::Llama {
-        let plan =
-            adapter::resolve(cfg).launch(cfg, cfg.port, "", &crate::gpu::ResolvedGpu::default())?;
-        launch::preview(&plan)
-    } else if provider_of(cfg).is_custom() {
-        launch::preview(&registry::command(cfg, cfg.port, "")?)
-    } else {
-        let runtime = selected_python_runtime(cfg)?;
-        launch::preview(&launch::engine_command(cfg, &runtime, cfg.port, "")?)
-    };
+    let plan =
+        adapter::resolve(cfg).launch(cfg, cfg.port, "", &crate::gpu::ResolvedGpu::default())?;
+    let argv = launch::preview(&plan);
     Ok(runtime_schema::mask_argv(
         &registry::root(),
         cfg,
@@ -321,13 +314,7 @@ pub fn command_preview(cfg: &crate::config::AppConfig) -> Result<Vec<String>, St
 
 /// The runtime id a configuration selects for its provider.
 pub fn runtime_id_of(cfg: &crate::config::AppConfig) -> String {
-    match provider_of(cfg) {
-        ProviderId::Llama if !cfg.active_backend.is_empty() && !cfg.active_build.is_empty() => {
-            format!("{}-{}", cfg.active_build, cfg.active_backend)
-        }
-        ProviderId::Llama => String::new(),
-        _ => cfg.active_runtime.clone(),
-    }
+    adapter::resolve(cfg).runtime_id(cfg)
 }
 
 pub fn selection_of(cfg: &crate::config::AppConfig) -> ExecutionSelection {

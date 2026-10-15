@@ -1,5 +1,9 @@
 //! Runtime dispatch belongs here, rather than in Chat, sessions or gateway.
 //! Every adapter produces the same owned process plan and canonical EngineInfo.
+mod configuration;
+pub(crate) mod help;
+pub use configuration::parse_option_maps;
+
 use super::{
     launch::{EngineCommand, Readiness},
     protocol::EngineInfo,
@@ -19,6 +23,9 @@ pub enum RuntimeKind {
 }
 
 pub trait InferenceRuntimeAdapter: Send + Sync {
+    fn runtime_id(&self, cfg: &AppConfig) -> String {
+        cfg.active_runtime.clone()
+    }
     fn launch_resources(
         &self,
         _cfg: &AppConfig,
@@ -96,6 +103,19 @@ pub(super) fn native_arguments(
 }
 
 impl InferenceRuntimeAdapter for BuiltinAdapter {
+    fn runtime_id(&self, cfg: &AppConfig) -> String {
+        if self.kind() == RuntimeKind::Native {
+            if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
+                String::new()
+            } else {
+                // Preserve the established public display identity; help's
+                // on-disk key has its own legacy ordering.
+                format!("{}-{}", cfg.active_build, cfg.active_backend)
+            }
+        } else {
+            cfg.active_runtime.clone()
+        }
+    }
     fn kind(&self) -> RuntimeKind {
         if self.0.is_python() {
             RuntimeKind::Python

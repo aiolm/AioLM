@@ -386,26 +386,7 @@ impl OptionMetadata {
 /// Facts the app's built-in adapters take from their engines' own option
 /// definitions, never from option names or help prose.
 pub fn builtin(provider: ProviderId) -> Option<OptionMetadata> {
-    match provider {
-        // llama.cpp (source 14310190) common/arg.cpp defines `-hft, --hf-token
-        // TOKEN` as the Hugging Face access token, also read from HF_TOKEN.
-        // Benchmark logs already redact the same flag.
-        ProviderId::Llama => Some(OptionMetadata {
-            version: METADATA_VERSION,
-            engine_id: ProviderId::Llama,
-            adapter: Provenance {
-                id: "llama.cpp".into(),
-                revision: "aiolm-builtin-1".into(),
-            },
-            options: vec![MetadataOption {
-                flag: "--hf-token".into(),
-                sensitive: Some(true),
-                ..Default::default()
-            }],
-            constraints: Vec::new(),
-        }),
-        _ => None,
-    }
+    super::adapter::help::builtin_metadata(provider)
 }
 
 enum Merge {

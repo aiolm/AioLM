@@ -279,3 +279,12 @@ Manifest 옵션은 선택적 `scope`로 위치를 명시할 수 있다. `[]`는 
 명시적 code page는 [encoding_rs 0.8.35의 BOM 탐색 없는 decoder](https://docs.rs/encoding_rs/0.8.35/encoding_rs/struct.Encoding.html#method.decode_without_bom_handling)를 사용한다. CP949는 [Encoding Standard의 EUC-KR decoder](https://encoding.spec.whatwg.org/#euc-kr-decoder), CP932는 Shift_JIS, Windows 1252는 해당 decoder에 연결한다. 잘못된 byte는 decoding_loss로 표시하고 schema 수락을 거부하며 다른 인코딩으로 재탐색하도록 안내한다. 명시적 선택 또는 손실이 있는 캡처의 제한된 원래 byte는 선택적 raw_bytes_base64로 보존한다. 이전 정상 Auto 출력에는 이 필드가 추가되지 않으며 이전 snapshot도 읽을 수 있다.
 
 근거는 실제 합성 child의 CP949 stdout/stderr, Auto 손실과 명시적 선택의 복구, 손상 byte 거부, locale 전달, 등록/재탐색·수락·설정 저장/재로드·model probe·정확한 subprocess argv 및 두 GUI의 요청/저장 검사다. 합성 엔진/모델 검사이며 실제 엔진 추론 또는 최종 production native GUI 성공으로 계산하지 않는다. Linux/Mac에서는 사용 가능한 locale과 실제 설치 엔진의 인코딩을 해당 OS에서 다시 검증한다.
+
+
+## 어댑터 소유의 help·옵션 descriptor
+
+공통 runtime schema는 선택한 어댑터의 help entry point, option catalog, app-managed binding, 명시적 metadata와 command entry descriptor를 받아 조합한다. 기본 제공 native/Python 엔진의 실행 모듈·고정 help 인수·catalog·metadata 선택은 providers/adapter/help.rs가 소유한다. 새 등록 엔진은 같은 경로에서 manifest 데이터를 사용하며 공통 GUI·Chat·gateway에 엔진 ID 분기를 추가하지 않는다.
+
+GUI command preview는 실제 실행과 같은 InferenceRuntimeAdapter.launch 계획을 표시하고 기존 마스킹을 적용한다. CLI doctor는 어댑터의 refresh를 공통으로 호출하며 native의 기존 no-op 동작을 유지한다. CLI 옵션 저장 검증도 adapter/configuration.rs에 위임하며 선택한 runtime의 effective schema, 미선택 catalog·등록 설정의 기존 편집 정책과 오류를 보존한다. 공개 runtime 표시 ID와 help snapshot의 기존 native ID 순서가 다르므로 각각의 이전 표현을 유지한다. 기존 runtime_schema::RuntimeKey·Selected 및 runtime_metadata::builtin 공개 경로는 호환 wrapper/re-export로 유지한다. 저장 자료형·metadata digest·기본 help argv·protocol/readiness 계약은 변경하지 않는다.
+
+기본 제공 vLLM·MLX의 managed/external interpreter help argv·scope와 공통 effective schema를 기존 catalog와 대조하고 native help/metadata/ID를 확인한다. 이는 합성 command/schema 계약 검사이며 Windows에서 실제 vLLM·MLX 실행 성공으로 계산하지 않는다. 등록 엔진의 실제 subprocess·bridge·model probe·소유 인수 여정은 별도 검사로 유지하며 최종 production 실제 엔진 검증은 계속 필요하다.
