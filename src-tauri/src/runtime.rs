@@ -1346,6 +1346,53 @@ fn build_environment_overrides() -> Vec<(OsString, OsString)> {
     .collect()
 }
 
+/// A source archive has no `.git`, so llama.cpp's build-info step runs
+/// `git rev-parse`/`rev-list` and Git walks up the parent directories. When
+/// the AioLM home lives inside another checkout (a development tree, a user's
+/// own repository) that walk finds the enclosing repository and the built
+/// server reports its commit and build count as its own. A ceiling at the
+/// build workspace stops discovery there, so the engine reports no commit
+/// rather than a foreign one. Both the given and the resolved spelling are
+/// listed because Git compares ceilings after resolving drive aliases.
+fn with_git_ceiling(
+    mut environment: Vec<(OsString, OsString)>,
+    ceiling: &Path,
+) -> Result<Vec<(OsString, OsString)>, String> {
+    let mut entries = vec![ceiling.to_path_buf()];
+    if let Ok(resolved) = ceiling.canonicalize() {
+        let resolved = strip_verbatim_prefix(&resolved);
+        if resolved != ceiling {
+            entries.push(resolved);
+        }
+    }
+    let joined = std::env::join_paths(&entries)
+        .map_err(|error| format!("build workspace path cannot bound Git discovery: {error}"))?;
+    set_environment_value(&mut environment, "GIT_CEILING_DIRECTORIES", joined);
+    Ok(environment)
+}
+
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// A PR runtime's own `--version` must not name a commit other than the one
+/// the user reviewed. An empty or `unknown` commit is accepted (the archive
+/// carries none); the source manifest records the reviewed head.
+fn reported_commit_matches_source(version: &RuntimeVersion, reviewed: &str) -> Result<(), String> {
+    let reported = version.commit.trim().to_ascii_lowercase();
+    let reviewed = reviewed.trim().to_ascii_lowercase();
+    if reported.is_empty() || reported == "unknown" || reviewed.starts_with(&reported) {
+        return Ok(());
+    }
+    Err(format!(
+        "the built runtime reports commit {reported}, not the reviewed commit {reviewed}; the build read foreign Git metadata, so it was not activated"
+    ))
+}
+
 /// Names that must never reach a child, whatever list they are added to.
 ///
 /// The allowlists above already exclude everything by construction; this is
@@ -5070,6 +5117,7 @@ pub async fn install_pr_with(
             .map_err(|error| format!("runtime size task failed: {error}"))?;
         let version = preflight_staged_runtime(&staging, backend, progress, &cancel).await?;
         if let Some(version) = version.as_ref() {
+            reported_commit_matches_source(version, &origin.commit)?;
             write_version_manifest(&staging, version);
         }
         // Provenance is part of the safety contract for a PR runtime. If the
@@ -5865,6 +5913,8 @@ async fn run_cmake_command(
     })
     .await
     .map_err(|error| format!("failed to prepare CMake environment: {error}"))?;
+    // Each build runs in its private workspace; Git discovery stops there.
+    let environment = with_git_ceiling(environment, current_dir)?;
     if cancel.load(Ordering::Acquire) {
         return Err("runtime install cancelled".into());
     }
@@ -10097,6 +10147,87 @@ mod tests {
         .await
         .unwrap();
         println!("Verified ROCm bundle SHA-256: {}", exported.archive_sha256);
+    }
+
+    fn git_in(
+        dir: &Path,
+        environment: Option<&[(OsString, OsString)]>,
+        args: &[&str],
+    ) -> std::process::Output {
+        let git =
+            which::which("git").expect("git is required for the nested build-info regression");
+        let mut command = std::process::Command::new(git);
+        if let Some(environment) = environment {
+            command.env_clear().envs(environment.iter().cloned());
+        }
+        command
+            .args([
+                "-c",
+                "user.name=AioLM test",
+                "-c",
+                "user.email=test@example.invalid",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs")
+    }
+
+    #[test]
+    fn nested_source_build_cannot_read_an_enclosing_repository_commit() {
+        // Mirrors a PR workspace under an AioLM home that sits inside another
+        // checkout: <repo>/home/downloads/.<nonce>/source/<repo>-<sha>.
+        let root = std::env::temp_dir().join(format!("aiolm-nested-git-{}", Uuid::new_v4()));
+        let workspace = root.join("home").join("downloads").join(".n-pr1-cpu");
+        let source = workspace.join("source").join("llama.cpp-0123abc");
+        let build = workspace.join("build");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&build).unwrap();
+        assert!(git_in(&root, None, &["init", "-q"]).status.success());
+        assert!(git_in(
+            &root,
+            None,
+            &["commit", "-q", "--allow-empty", "-m", "enclosing"]
+        )
+        .status
+        .success());
+        let enclosing = git_in(&root, None, &["rev-parse", "--short", "HEAD"]);
+        assert!(enclosing.status.success());
+        // Without a ceiling the build-info commands report the enclosing
+        // repository, which is exactly the contamination being prevented.
+        let base = child_environment();
+        let leaked = git_in(&source, Some(&base), &["rev-parse", "--short", "HEAD"]);
+        assert!(leaked.status.success());
+        assert_eq!(leaked.stdout, enclosing.stdout);
+        // The build child's environment stops discovery at the workspace for
+        // both the source tree and the separate build tree.
+        let bounded = with_git_ceiling(base, &workspace).unwrap();
+        for dir in [&source, &build] {
+            let head = git_in(dir, Some(&bounded), &["rev-parse", "--short", "HEAD"]);
+            assert!(
+                !head.status.success(),
+                "{}",
+                String::from_utf8_lossy(&head.stdout)
+            );
+            let count = git_in(dir, Some(&bounded), &["rev-list", "--count", "HEAD"]);
+            assert!(!count.status.success());
+        }
+        let _ = remove_tree_bounded(&root);
+    }
+
+    #[test]
+    fn pr_runtime_version_must_not_name_a_foreign_commit() {
+        let version = |commit: &str| RuntimeVersion {
+            semver: "0.0.0-synthetic".into(),
+            build: 1,
+            commit: commit.into(),
+        };
+        let reviewed = "18dc7ef9d7424b387c672a7a94bc86ceab7fdede";
+        assert!(reported_commit_matches_source(&version("18dc7ef"), reviewed).is_ok());
+        assert!(reported_commit_matches_source(&version("unknown"), reviewed).is_ok());
+        assert!(reported_commit_matches_source(&version(""), reviewed).is_ok());
+        let error = reported_commit_matches_source(&version("ec0d5f6"), reviewed).unwrap_err();
+        assert!(error.contains("foreign Git metadata"), "{error}");
     }
 }
 #[cfg(all(test, windows))]
