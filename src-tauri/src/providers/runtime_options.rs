@@ -280,6 +280,11 @@ pub struct Override {
 
 pub type Overrides = BTreeMap<String, Override>;
 
+/// One occurrence with the alias it is spelled with (None: the default).
+/// Ordered plans validate each occurrence with its own alias; grouped
+/// overrides give every occurrence the shared one.
+pub(crate) type Occurrence = (Option<String>, Vec<Value>);
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OptionIssue {
     pub key: String,
@@ -529,6 +534,20 @@ impl OptionSchema {
         selected_scope: &[String],
         overrides: &Overrides,
     ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
+        let occurrences = overrides
+            .iter()
+            .map(|(key, value)| (key.clone(), value.rows()))
+            .collect();
+        self.resolve_occurrences(selected_scope, &occurrences)
+    }
+
+    /// Grouped resolution where each occurrence keeps its own alias. Order
+    /// across options follows the schema; `runtime_ordered` re-emits plans.
+    pub(crate) fn resolve_occurrences(
+        &self,
+        selected_scope: &[String],
+        overrides: &BTreeMap<String, Vec<Occurrence>>,
+    ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
         if let Err(message) = self.validate() {
             return Err(vec![OptionIssue {
                 key: String::new(),
@@ -573,17 +592,16 @@ impl OptionSchema {
                 ));
                 continue;
             }
-            match option.resolve(value) {
+            match option.resolve_rows(value) {
                 Ok(arguments) => {
                     if option.target == Target::Request {
-                        let rows = &value.occurrences;
                         let field = option.request_field.supported().expect("schema validated");
-                        if rows.len() != 1 || rows[0].len() != 1 {
+                        if value.len() != 1 || value[0].1.len() != 1 {
                             issues.push(issue(
                                 "request mapping needs exactly one explicit value".into(),
                             ));
                         } else {
-                            request.insert(field.clone(), rows[0][0].clone());
+                            request.insert(field.clone(), value[0].1[0].clone());
                         }
                     } else {
                         emitted.insert(key, arguments);
@@ -593,13 +611,11 @@ impl OptionSchema {
             }
         }
         let matches = |predicate: &Predicate| {
-            overrides.get(&predicate.key).is_some_and(|value| {
-                !value.occurrences.is_empty()
+            overrides.get(&predicate.key).is_some_and(|rows| {
+                !rows.is_empty()
                     && predicate.equals.as_ref().is_none_or(|expected| {
-                        value
-                            .occurrences
-                            .iter()
-                            .any(|row| row.len() == 1 && same_operand(&row[0], expected))
+                        rows.iter()
+                            .any(|(_, row)| row.len() == 1 && same_operand(&row[0], expected))
                     })
             })
         };
@@ -730,21 +746,12 @@ impl OptionDefinition {
         Ok(text)
     }
 
-    fn resolve(&self, value: &Override) -> Result<Vec<String>, String> {
-        if value.occurrences.len() > 128
-            || (value.occurrences.len() > 1 && self.repeatable.supported() != Some(&true))
-        {
+    /// Validate and serialize occurrences in the given order, each with its
+    /// own alias.
+    fn resolve_rows(&self, rows: &[Occurrence]) -> Result<Vec<String>, String> {
+        if rows.len() > 128 || (rows.len() > 1 && self.repeatable.supported() != Some(&true)) {
             return Err("repetition needs explicit supported metadata".into());
         }
-        let chosen = match &value.spelling {
-            Some(flag) => Some(
-                self.spellings
-                    .iter()
-                    .find(|s| s.flag == *flag)
-                    .ok_or("saved alias is absent from this schema")?,
-            ),
-            None => self.spellings.first(),
-        };
         let arity = if self.target == Target::Request {
             Arity {
                 min: 1,
@@ -754,7 +761,16 @@ impl OptionDefinition {
             *self.arity.supported().ok_or("arity is unknown; confirm the value count or provide adapter metadata before generating argv")?
         };
         let mut args = Vec::new();
-        for row in &value.occurrences {
+        for (saved_spelling, row) in rows {
+            let chosen = match saved_spelling {
+                Some(flag) => Some(
+                    self.spellings
+                        .iter()
+                        .find(|s| s.flag == *flag)
+                        .ok_or("saved alias is absent from this schema")?,
+                ),
+                None => self.spellings.first(),
+            };
             if row.len() > 256 {
                 return Err("too many option values".into());
             }
@@ -764,7 +780,7 @@ impl OptionDefinition {
                 }
                 self.scalar(&row[0])?;
                 let enabled = row[0].as_bool().expect("boolean validated");
-                let spelling = if value.spelling.is_some() {
+                let spelling = if saved_spelling.is_some() {
                     chosen.filter(|s| s.polarity.unwrap_or(true) == enabled)
                 } else {
                     self.spellings
@@ -778,7 +794,7 @@ impl OptionDefinition {
                         .runtime_default
                         .supported()
                         .is_some_and(|v| v.literal == Value::Bool(false))
-                    && value.spelling.is_none()
+                    && saved_spelling.is_none()
                 {
                     // Only a sourced false default proves omission is an opt-out.
                 } else {
@@ -829,10 +845,16 @@ impl OptionDefinition {
         spelling: &Option<String>,
         values: &[Value],
     ) -> Result<Vec<String>, String> {
-        self.resolve(&Override {
-            spelling: spelling.clone(),
-            occurrences: vec![values.to_vec()],
-        })
+        self.resolve_rows(&[(spelling.clone(), values.to_vec())])
+    }
+}
+
+impl Override {
+    pub(crate) fn rows(&self) -> Vec<Occurrence> {
+        self.occurrences
+            .iter()
+            .map(|row| (self.spelling.clone(), row.clone()))
+            .collect()
     }
 }
 

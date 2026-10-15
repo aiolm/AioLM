@@ -21,7 +21,8 @@
 //! repaired, and the saved values stay untouched.
 use super::runtime_help_store::overrides_from_map;
 use super::runtime_options::{
-    OptionDefinition, OptionIssue, OptionSchema, Override, Overrides, ResolvedOptions, Target,
+    Occurrence, OptionDefinition, OptionIssue, OptionSchema, Override, Overrides, ResolvedOptions,
+    Target,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -300,18 +301,16 @@ pub fn resolve_plan(
     // Canonical validation first for full parity with grouped profiles:
     // unknown keys, subcommand scope, managed bindings, constraints,
     // positional gaps, dash boundaries and size limits all apply equally.
-    // A key spelled differently per occurrence is validated without one
-    // shared alias; each occurrence's own alias is checked when emitted.
-    let mut grouped = overrides_from_plan(plan);
-    for (key, value) in grouped.iter_mut() {
-        if plan
-            .iter()
-            .any(|o| o.key == *key && o.spelling != value.spelling)
-        {
-            value.spelling = None;
-        }
+    // Every occurrence is checked with its own alias, so a documented
+    // equals alias keeps a dash-leading value and an unknown alias is refused.
+    let mut grouped: BTreeMap<String, Vec<Occurrence>> = BTreeMap::new();
+    for occurrence in plan {
+        grouped
+            .entry(occurrence.key.clone())
+            .or_default()
+            .push((occurrence.spelling.clone(), occurrence.values.clone()));
     }
-    let canonical = schema.resolve(selected_scope, &grouped)?;
+    let canonical = schema.resolve_occurrences(selected_scope, &grouped)?;
     // Re-emit flags in plan order within each scope depth. Positionals keep
     // slot order (never plan order) so reordered input cannot rebind a later
     // saved value into an earlier slot. Dash delimiters mirror the grouped
@@ -959,6 +958,140 @@ mod tests {
             ORDER_KEY: {"version": 1, "occurrences": [{"key": "fresh"}]}
         }));
         assert!(resolve_saved(&schema, &[], &unknown).unwrap_err()[0]
+            .message
+            .contains("arity is unknown"));
+    }
+
+    #[test]
+    fn saved_order_size_is_measured_in_utf8_bytes_like_the_settings_window() {
+        // Same record, overhead and boundary as optionOrder.test.ts.
+        let at = |bytes: usize| {
+            let filler = "한".repeat((bytes - 59) / 3) + &"x".repeat((bytes - 59) % 3);
+            saved(json!({
+                "alpha": "x",
+                ORDER_KEY: {"version": 1, "occurrences": [{"key": "alpha", "spelling": filler}]}
+            }))
+        };
+        let length =
+            |values: &Map<String, Value>| serde_json::to_vec(&values[ORDER_KEY]).unwrap().len();
+        assert_eq!(length(&at(65_536)), 65_536);
+        assert!(saved_order(&at(65_536))
+            .unwrap_err()
+            .contains("invalid entry"));
+        assert!(saved_order(&at(65_537)).unwrap_err().contains("64 KiB"));
+        // 43 three-byte characters exceed the 128-byte spelling bound; 42
+        // plus two ASCII characters fit it.
+        let spelled = |spelling: String| {
+            saved(json!({
+                "alpha": {"spelling": spelling, "occurrences": [["1"]]},
+                ORDER_KEY: {"version": 1, "occurrences": [{"key": "alpha", "spelling": spelling}]}
+            }))
+        };
+        assert!(saved_order(&spelled("한".repeat(43))).is_err());
+        assert!(saved_order(&spelled("한".repeat(42) + "xy"))
+            .unwrap()
+            .is_some());
+        // Explicit null and an absent spelling both mean the default.
+        for entry in [
+            json!({"key": "alpha", "spelling": null}),
+            json!({"key": "alpha"}),
+        ] {
+            let order = saved_order(&saved(
+                json!({"alpha": "x", ORDER_KEY: {"version": 1, "occurrences": [entry]}}),
+            ))
+            .unwrap()
+            .unwrap();
+            assert_eq!(order.occurrences[0].spelling, None);
+        }
+    }
+
+    fn label_with_equals_alias() -> OptionDefinition {
+        let mut label: OptionDefinition = serde_json::from_value(json!({
+            "key": "label", "spellings": [{"flag": "--label"}, {"flag": "-L", "style": "equals"}],
+            "kind": known(ValueKind::Text), "arity": known(Arity {min: 1, max: Some(1)}), "target": "launch"
+        }))
+        .unwrap();
+        label.repeatable = known(true);
+        label
+    }
+
+    #[test]
+    fn each_occurrence_is_validated_with_its_own_documented_alias() {
+        let schema = schema(vec![
+            label_with_equals_alias(),
+            option("beta", "--beta", 1, Some(1)),
+        ]);
+        // A dash-leading value is unambiguous only through the equals alias;
+        // the shared check must judge it by that alias, not the first one.
+        let plan = vec![
+            PlannedOccurrence {
+                key: "label".into(),
+                spelling: Some("--label".into()),
+                values: vec![json!("plain")],
+            },
+            PlannedOccurrence {
+                key: "beta".into(),
+                spelling: None,
+                values: vec![json!("2")],
+            },
+            PlannedOccurrence {
+                key: "label".into(),
+                spelling: Some("-L".into()),
+                values: vec![json!("-dash value")],
+            },
+        ];
+        assert_eq!(
+            resolve_plan(&schema, &[], &plan).unwrap().argv,
+            ["--label", "plain", "--beta", "2", "-L=-dash value"]
+        );
+        let values = saved(json!({
+            "label": {"spelling": null, "occurrences": [["plain"], ["-dash value"]]},
+            "beta": "2",
+            ORDER_KEY: {"version": 1, "occurrences": [{"key": "label"}, {"key": "beta"}, {"key": "label", "spelling": "-L"}]}
+        }));
+        assert_eq!(
+            resolve_saved(&schema, &[], &values).unwrap().argv,
+            ["--label", "plain", "--beta", "2", "-L=-dash value"]
+        );
+        // The same value through the separate alias stays refused, and an
+        // alias the schema does not document is refused, not normalized.
+        let mut separate = plan.clone();
+        separate[2].spelling = Some("--label".into());
+        assert!(resolve_plan(&schema, &[], &separate).unwrap_err()[0]
+            .message
+            .contains("equals spelling"));
+        let mut unknown = plan.clone();
+        unknown[2].spelling = Some("--labels".into());
+        assert!(resolve_plan(&schema, &[], &unknown).unwrap_err()[0]
+            .message
+            .contains("alias"));
+        // Per-occurrence aliases never unlock app-owned bindings, undocumented
+        // repetition or unknown arity.
+        let mut managed = label_with_equals_alias();
+        managed.managed = Some(super::super::runtime_options::ManagedBinding::Model);
+        assert!(resolve_plan(
+            &super::tests::schema(vec![managed]),
+            &[],
+            &plan[2..].to_vec()
+        )
+        .unwrap_err()[0]
+            .message
+            .contains("managed"));
+        let mut once = label_with_equals_alias();
+        once.repeatable = Fact::default();
+        let once = super::tests::schema(vec![once, option("beta", "--beta", 1, Some(1))]);
+        assert!(resolve_plan(&once, &[], &plan).unwrap_err()[0]
+            .message
+            .contains("repetition"));
+        let mut unknown_arity = label_with_equals_alias();
+        unknown_arity.arity = Fact::default();
+        unknown_arity.spellings[1].style = super::super::runtime_options::ValueStyle::Separate;
+        assert!(resolve_plan(
+            &super::tests::schema(vec![unknown_arity]),
+            &[],
+            &plan[2..].to_vec()
+        )
+        .unwrap_err()[0]
             .message
             .contains("arity is unknown"));
     }
