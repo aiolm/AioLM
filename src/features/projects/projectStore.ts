@@ -1,7 +1,7 @@
 import { isProviderId } from '../../shared/api/providerIdentity.ts';
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
 import type { JsonObject } from "../../shared/config/tuningValidation";
-import type { ProfileApplication } from "../../shared/config/settingsProfiles";
+import { profileSettingsSnapshot, type ProfileApplication } from "../../shared/config/settingsProfiles";
 import type { ExecutionKey, ExecutionSettings } from "../../shared/config/executionSettings";
 
 export const PROJECTS_KEY = "aiolm.projects.v1";
@@ -161,13 +161,20 @@ function normalizeProject(value: unknown): ProjectPreset | null {
   const systemPrompt = stringValue(source.systemPrompt, "You are a helpful assistant.").slice(0, 32_768);
   const application = source.profileApplication;
   const { active_model: model, ...settings } = config;
+  // A linked profile belongs to the project's engine. Its engine is kept
+  // (absent means llama.cpp, so a missing one is restored for other engines)
+  // and its settings are the project snapshot narrowed to what a profile of
+  // that engine owns, never runtime selections or another engine's fields.
+  const provider = config.active_provider;
   const profileApplication: ProfileApplication | undefined = application && typeof application === 'object'
     && application.model === model && typeof application.profile_id === 'string' && application.profile_id.trim()
+    && (application.provider === undefined || application.provider === provider)
     ? {
+      ...(application.provider !== undefined || provider !== 'llama.cpp' ? { provider } : {}),
       model, profile_id: application.profile_id.trim().slice(0, 256),
       ...(typeof application.profile_name === 'string' ? { profile_name: application.profile_name.slice(0, 120) } : {}),
       ...(Number.isSafeInteger(application.profile_revision) && application.profile_revision! >= 0 ? { profile_revision: application.profile_revision } : {}),
-      settings: safeClone(settings), system_prompt: systemPrompt,
+      settings: profileSettingsSnapshot(safeClone(settings)), system_prompt: systemPrompt,
     } : undefined;
   const documents = Array.isArray(source.documentBindings)
     ? source.documentBindings

@@ -137,6 +137,35 @@ describe('project settings snapshots', () => {
     expect(project.profileApplication?.profile_id).toBe(profile.id);
   });
 
+  it('keeps a registered engine profile link and its owned settings through storage, export and import', () => {
+    const cfg = {
+      ...structuredClone(testConfig), active_provider: 'custom.synthetic' as const, active_runtime: 'synthetic-1',
+      active_backend: 'vulkan', active_build: 'b1', active_model: '/synthetic/model.json',
+      provider_options: { 'custom.synthetic': { fresh_pair: { spelling: null, occurrences: [['a', 'b']] } }, 'llama.cpp': { other: 'kept apart' } },
+    };
+    const profile = { ...captureProfile(cfg, 'Tuned', 'model', ''), id: 'profile-tuned-synthetic' };
+    const application = materializeProfileApplication(cfg, '', profile);
+    const project = projectFromConfig('Synthetic', '', cfg, [], [], '', 100, application);
+    writeProjects([project], localStorage);
+    const stored = readProjects(localStorage)[0];
+    const restored = importProject(exportProject(stored));
+    for (const item of [project, stored, restored]) {
+      expect(item.profileApplication).toEqual({ ...application, system_prompt: '' });
+      expect(item.profileApplication?.provider).toBe('custom.synthetic');
+      for (const key of ['active_provider', 'active_runtime', 'active_backend', 'active_build', 'ctx_size']) {
+        expect(item.profileApplication?.settings).not.toHaveProperty(key);
+      }
+    }
+    // A link saved before the engine was kept regains it from the project.
+    const { provider: _lost, ...withoutProvider } = application;
+    expect(importProject(JSON.stringify({ ...project, profileApplication: withoutProvider })).profileApplication?.provider).toBe('custom.synthetic');
+    // A link to another engine's profile does not describe this project.
+    expect(importProject(JSON.stringify({ ...project, profileApplication: { ...application, provider: 'vllm' } })).profileApplication).toBeUndefined();
+    // Legacy llama.cpp links stay without an explicit engine.
+    const llama = projectFromConfig('Legacy', '', testConfig, [], [], '', 100, { model: testConfig.active_model, profile_id: 'profile-x', settings: {}, system_prompt: '' });
+    expect(llama.profileApplication).not.toHaveProperty('provider');
+  });
+
   it.each([
     { model: 'another-model.gguf', profile_id: 'profile-other' },
     { model: testConfig.active_model, profile_id: '' },
