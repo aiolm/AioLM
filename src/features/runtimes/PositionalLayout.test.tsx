@@ -67,6 +67,38 @@ describe('positional layout', () => {
     expect(value()).toHaveTextContent('Not mapped');
   });
 
+  it('never prints an entry token a known-sensitive slot holds, saved or drafted', () => {
+    const secret = 'synthetic-role-amber-8431';
+    const sensitiveEntry: CommandEntry = { ...entry, prefix: ['-I', 'engine.py', 'serve', secret, 'plain-token'] };
+    const marker = { ...slot('marker', 2), sensitive: { value: true, certainty: 'documented' as const, source: { kind: 'adapter' as const, id: 'synthetic.role', revision: '1' } } };
+    const slots = [slot('input', 0), slot('model', 1), marker, slot('output', 3), slot('extra', 4)];
+    const saved = effectiveSchema([], slots, {
+      entry: sensitiveEntry,
+      supplement: { fingerprint: 'a'.repeat(64), current: true, applied: [], conflicts: [], options: {
+        input: { positional: { role: 'user' } }, model: { positional: { role: 'binding', name: 'model' } },
+        marker: { positional: { role: 'static', index: 3 } }, output: { positional: { role: 'user' } } } },
+    });
+    const onSave = vi.fn();
+    const view = render(<I18nProvider initialLocale="en"><PositionalLayout effective={saved} disabled={false} onSave={onSave} /></I18nProvider>);
+    expect(document.body).not.toHaveTextContent(secret);
+    expect(screen.getByRole('combobox', { name: 'marker Positional layout' })).toHaveTextContent('Entry token 4: •••');
+    // Unselected choices in another slot's list are masked too.
+    fireEvent.click(screen.getByRole('combobox', { name: 'extra Positional layout' }));
+    expect(screen.getByRole('option', { name: 'Entry token 4: •••' })).toBeVisible();
+    expect(screen.getByRole('option', { name: 'Entry token 5: plain-token' })).toBeVisible();
+    expect(document.body).not.toHaveTextContent(secret);
+    fireEvent.click(screen.getByRole('option', { name: 'Not mapped' }));
+    // The exact saved role is unchanged by masking.
+    fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
+    expect(onSave.mock.calls[0][0].marker).toEqual({ positional: { role: 'static', index: 3 } });
+    view.unmount();
+    // A sensitive slot newly drafted onto a token masks it from then on.
+    const fresh = effectiveSchema([], slots, { entry: sensitiveEntry });
+    render(<I18nProvider initialLocale="en"><PositionalLayout effective={fresh} disabled={false} onSave={vi.fn()} /></I18nProvider>);
+    choose('marker', `Entry token 4: ${secret}`);
+    expect(document.body).not.toHaveTextContent(secret);
+  });
+
   it('explains a refused layout and offers no choice without a declared entry', () => {
     const slots = [slot('input', 0)];
     const refused = effectiveSchema([], slots, {

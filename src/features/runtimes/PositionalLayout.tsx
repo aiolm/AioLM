@@ -48,11 +48,21 @@ export default function PositionalLayout({ effective, disabled, onSave }: {
   const entry = effective.entry;
   const conflicts = (effective.supplement?.conflicts ?? []).filter(conflict => conflict.field === 'positional');
   const confirmable = effective.help_state === 'current' && !!effective.accepted_fingerprint && !!entry;
+  // An entry token a known-sensitive slot holds (saved or drafted) is that
+  // slot's secret value; no choice list prints it, only its position.
+  const secretTokens = new Set<number>();
+  for (const slot of slots) {
+    if (slot.sensitive.certainty === 'unknown' || slot.sensitive.value !== true) continue;
+    for (const role of [saved[slot.key]?.positional, decode(draft[slot.key] ?? '')]) {
+      if (role?.role === 'static') secretTokens.add(role.index);
+    }
+  }
   const choices = [
     { value: '', label: copy.positionalUnmapped },
     { value: 'user', label: copy.positionalUser },
     ...(entry?.positional_bindings ?? []).map(name => ({ value: `binding:${name}`, label: `${copy.positionalBinding}: ${name}` })),
-    ...(entry ? staticCandidates(entry) : []).map(index => ({ value: `static:${index}`, label: `${copy.positionalStatic} ${index + 1}: ${entry?.prefix[index]}` })),
+    ...(entry ? staticCandidates(entry) : []).map(index => ({ value: `static:${index}`,
+      label: `${copy.positionalStatic} ${index + 1}: ${secretTokens.has(index) ? '•••' : entry?.prefix[index]}` })),
   ];
   const save = () => {
     const options: Record<string, ConfirmedSyntax> = {};
