@@ -243,11 +243,29 @@ fn digest_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> Result<String
     }
     Ok(format!("{:x}", sha.finalize()))
 }
-fn read_registration(engine: ProviderId, runtime: &str) -> Result<Registration, String> {
+fn read_registration_record(engine: ProviderId, runtime: &str) -> Result<Registration, String> {
     let registered: Registration = bounded_json(&path(engine, runtime)?)?;
-    validate_manifest(&registered.manifest)?;
     if registered.manifest.engine_id != engine || registered.manifest.runtime_id != runtime {
         return Err("runtime registration identity mismatch".into());
+    }
+    Ok(registered)
+}
+fn read_registration(engine: ProviderId, runtime: &str) -> Result<Registration, String> {
+    let registered = read_registration_record(engine, runtime)?;
+    validate_manifest(&registered.manifest)?;
+    Ok(registered)
+}
+
+/// An older option contract can become invalid without making its stored
+/// registration disappear. Expose a non-runnable inventory entry for review
+/// or removal; executable/probe/launch reads still require the strict check.
+fn registration_for_inventory(mut registered: Registration) -> Result<Registration, String> {
+    if let Err(error) = validate_manifest(&registered.manifest) {
+        let mut base = registered.manifest.clone();
+        base.options.clear();
+        validate_manifest(&base)?;
+        registered.manifest = base;
+        registered.error = Some(format!("runtime options need review: {error}"));
     }
     Ok(registered)
 }
@@ -395,6 +413,7 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     if m.options.len() > 128 {
         return Err("too many adapter options".into());
     }
+    let (bound_flags, _) = bound_launch_flags(m);
     let mut keys = std::collections::BTreeSet::new();
     for option in &m.options {
         if !valid_text(&option.key, 128)
@@ -444,6 +463,7 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
         }
         if option.flag.as_ref().is_some_and(|flag| {
             super::options::app_managed_flags(m.engine_id).contains(&flag.as_str())
+                || bound_flags.iter().any(|(bound, _)| bound == flag)
         }) {
             return Err("adapter option flag overrides an app-owned binding".into());
         }
@@ -901,7 +921,9 @@ fn registrations() -> Vec<Registration> {
                 continue;
             }
             if let Some(name) = runtime.file_name().to_str() {
-                if let Ok(r) = read_registration(id, name) {
+                if let Ok(r) =
+                    read_registration_record(id, name).and_then(registration_for_inventory)
+                {
                     result.push(r);
                 }
             }
@@ -1601,6 +1623,47 @@ mod tests {
         let mut bad = good;
         bad.health_path = "//external.example/health".into();
         assert!(validate_manifest(&bad).is_err());
+    }
+    #[test]
+    fn manifest_options_cannot_replace_arbitrarily_named_template_bindings() {
+        for args in [
+            vec!["--weights", "{model}", "--listen", "{port}"],
+            vec!["--weights={model}", "--listen={port}"],
+        ] {
+            for flag in ["--weights", "--listen"] {
+                let mut manifest = example();
+                manifest.launch.args = args.iter().map(|arg| (*arg).into()).collect();
+                manifest.options[0].flag = Some(flag.into());
+                let error = validate_manifest(&manifest)
+                    .expect_err("generic options must not replace the selected model or app port");
+                assert!(error.contains("app-owned"), "{error}");
+            }
+        }
+        // The binding names do not prevent unrelated options in the same engine.
+        let mut manifest = example();
+        manifest.launch.args = vec!["--weights={model}".into(), "--listen={port}".into()];
+        validate_manifest(&manifest).unwrap();
+    }
+    #[test]
+    fn invalid_old_option_contracts_remain_visible_for_inventory_recovery() {
+        let mut manifest = example();
+        manifest.launch.args = vec!["--weights={model}".into(), "--listen={port}".into()];
+        manifest.options[0].flag = Some("--weights".into());
+        assert!(validate_manifest(&manifest).is_err());
+        let record: Registration = serde_json::from_value(serde_json::json!({
+            "manifest":manifest,"executable_sha256":"a".repeat(64),"probe_sha256":"b".repeat(64)
+        }))
+        .unwrap();
+        let view = registration_for_inventory(record).unwrap();
+        assert_eq!(view.manifest.engine_id, manifest.engine_id);
+        assert_eq!(view.manifest.runtime_id, manifest.runtime_id);
+        assert!(view.manifest.options.is_empty());
+        assert!(view.error.as_ref().unwrap().contains("app-owned"));
+        // A malformed launch contract is still rejected, not downgraded to
+        // a runnable or supported registration by the inventory fallback.
+        let mut invalid = view;
+        invalid.manifest.launch.args.clear();
+        assert!(registration_for_inventory(invalid).is_err());
     }
     #[test]
     fn external_ids_round_trip_without_promoting_unknown_engines_to_llama() {

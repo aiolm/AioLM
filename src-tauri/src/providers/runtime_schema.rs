@@ -811,6 +811,39 @@ struct Compat {
     managed_flags: BTreeMap<String, ManagedBinding>,
 }
 
+/// A documented alias of an app binding remains app-owned even when a
+/// manifest/catalog option shadows that help row in the effective schema.
+fn protect_binding_aliases(compat: &mut Compat, help: &[OptionDefinition]) {
+    for option in help {
+        let binding = option.managed.or_else(|| {
+            option
+                .spellings
+                .iter()
+                .find_map(|spelling| compat.managed_flags.get(&spelling.flag))
+                .copied()
+        });
+        if let Some(binding) = binding {
+            for spelling in &option.spellings {
+                compat
+                    .managed_flags
+                    .entry(spelling.flag.clone())
+                    .or_insert(binding);
+            }
+        }
+    }
+    for option in &mut compat.options {
+        if option.target == Target::Launch {
+            option.managed = option.managed.or_else(|| {
+                option
+                    .spellings
+                    .iter()
+                    .find_map(|spelling| compat.managed_flags.get(&spelling.flag))
+                    .copied()
+            });
+        }
+    }
+}
+
 fn compat(selected: &Selected) -> Result<Compat, String> {
     let key = &selected.key;
     // Built-in lists name app-owned flags without saying which binding each
@@ -896,7 +929,7 @@ fn build_effective(
     with_supplement: bool,
 ) -> Result<EffectiveSchema, String> {
     let key = &selected.key;
-    let compat = compat(selected)?;
+    let mut compat = compat(selected)?;
     let accepted = load_accepted(root, &key.engine, &key.runtime)?;
     let snapshot: Option<HelpSnapshot> = match &accepted {
         Some(accepted) => runtime_help_store::load_snapshot(
@@ -919,6 +952,12 @@ fn build_effective(
         },
         (Some(_), Some(_)) => (HelpState::Unchecked, String::new()),
     };
+    protect_binding_aliases(
+        &mut compat,
+        snapshot
+            .as_ref()
+            .map_or(&[], |snapshot| snapshot.schema.options.as_slice()),
+    );
     let compat_keys: Vec<String> = compat.options.iter().map(|o| o.key.clone()).collect();
     let mut compat_flags: BTreeSet<String> = BTreeSet::new();
     for option in &compat.options {
@@ -1676,6 +1715,48 @@ mod tests {
             &source
         )
         .is_none());
+    }
+
+    #[test]
+    fn a_shadowed_help_alias_cannot_override_the_selected_model() {
+        let source = adapter_source("custom.example", "manifest-v1");
+        let option = from_external(
+            &serde_json::from_value(json!({
+                "key":"checkpoint", "flag":"--checkpoint", "target":"launch",
+                "kind":{"type":"path"}
+            }))
+            .unwrap(),
+            &source,
+        )
+        .unwrap();
+        let mut help = option.clone();
+        help.key = "weights".into();
+        help.spellings.push(Spelling {
+            flag: "--weights".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+        let mut compat = Compat {
+            options: vec![option],
+            managed_flags: BTreeMap::from([("--weights".into(), ManagedBinding::Model)]),
+        };
+        protect_binding_aliases(&mut compat, &[help]);
+        let mut schema = help_schema();
+        schema.options = compat.options;
+        let saved: super::super::runtime_options::Overrides = serde_json::from_value(json!({
+            "checkpoint":{"occurrences":[["/synthetic/other.model"]]}
+        }))
+        .unwrap();
+        let original = saved.clone();
+        let issues = schema.resolve(&[], &saved).unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].key, "checkpoint");
+        assert!(issues[0].message.contains("managed by the app"));
+        assert_eq!(
+            saved, original,
+            "invalid stored values stay available for review"
+        );
+        assert!(schema.resolve(&[], &Default::default()).is_ok());
     }
 
     fn help_schema() -> OptionSchema {
