@@ -80,6 +80,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [validating, setValidating] = useState(true);
   const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
+  // Words a registered import ignored. Kept apart from `error`: revalidating
+  // the applied configuration must not erase why they were not applied.
+  const [importReview, setImportReview] = useState('');
   const [importSyntax, setImportSyntax] = useState<api.CommandSyntax | ''>('');
   // A preview can fail for launch-time reasons (a model awaiting its fresh
   // probe) while the options are valid; it informs but does not gate saving.
@@ -103,7 +106,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   }, [cfg, runtimeNeeded, effectiveRevision]);
   const usesEffective = !!selectedRuntime;
   useEffect(() => {
-    let active = true; setSchema([]); setEffective(null); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError('');
+    let active = true; setSchema([]); setEffective(null); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError(''); setImportReview('');
     importRequest.current += 1; previewRequest.current += 1; syntaxRequest.current += 1; setSyntaxBusy(false);
     void Promise.all([
       api.providerCatalog(), api.providerRuntimes(),
@@ -152,6 +155,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     const source = cfg;
     const request = ++importRequest.current;
     const current = () => cfgRef.current === source && importRequest.current === request;
+    setImportReview('');
     if (effective) {
       // Registered engines import through their effective schema; managed and
       // unrecognized words are reported, never applied.
@@ -160,7 +164,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
         let next: Record<string, unknown>;
         try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(String(cause)); return; }
         const review = maskImportReview(result, effective.schema, values);
-        setError([...review.managed, ...review.unrecognized].join(' '));
+        setError(''); setImportReview([...review.managed, ...review.unrecognized].join(' '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
       }).catch(cause => { if (current()) setError(String(cause)); });
       return;
@@ -241,6 +245,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
     {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+    {importReview && <FeedbackBanner tone="warning">{importReview}</FeedbackBanner>}
   </div>;
 }
 

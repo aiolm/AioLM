@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
@@ -345,7 +346,7 @@ describe('registered engine options from accepted help (G04)', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
     fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
-    const review = await screen.findByRole('alert');
+    const review = await screen.findByText(/--unknown=•••/);
     expect(review).not.toHaveTextContent(secret);
     expect(review).toHaveTextContent('•••');
     expect(input).toHaveValue(text);
@@ -366,10 +367,55 @@ describe('registered engine options from accepted help (G04)', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
     fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
-    const review = await screen.findByRole('alert');
+    const review = await screen.findByText(/--unknown=•••/);
     expect(review).not.toHaveTextContent(previous);
     expect(review).not.toHaveTextContent(incoming);
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ provider_options: expect.objectContaining({ 'custom.synthetic': expect.objectContaining({ amber: incoming }) }) }));
+    imported.mockRestore();
+  });
+
+  it('keeps the masked import review after the controlled configuration applies the plan', async () => {
+    const secret = 'synthetic-amber-controlled';
+    const amber = schemaOption({ key: 'amber', flag: '--amber', target: 'launch', group: 'options', kind: { type: 'text' } });
+    amber.sensitive = { value: true, certainty: 'verified' };
+    amber.managed = 'entry_point';
+    const workers = schemaOption({ key: 'workers', flag: '--workers', target: 'launch', group: 'options', kind: { type: 'integer' } });
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [amber, workers]));
+    vi.mocked(api.providerOptionIssues).mockClear();
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [{ key: 'workers', values: [4] }], managed: ['--amber', secret], unrecognized: [`--unknown=${secret}`] });
+    const onInvalid = vi.fn();
+    // The app applies each patch to its own configuration state, which
+    // re-renders this control with a new cfg (and so revalidates it).
+    function Controlled() {
+      const [cfg, setCfg] = useState<api.AppConfig>(config);
+      return <>
+        <button type="button" onClick={() => setCfg(old => ({ ...old, active_runtime: 'syn-2' }))}>Select another runtime</button>
+        <ProviderOptions cfg={cfg} disabled={false} onChange={patch => setCfg(old => ({ ...old, ...patch }))} onInvalid={onInvalid} />
+      </>;
+    }
+    render(<I18nProvider initialLocale="en"><Controlled /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledTimes(1));
+    const text = `--amber ${secret} --workers 4 --unknown=${secret}`;
+    const input = screen.getByRole('textbox', { name: 'Import command' });
+    fireEvent.change(input, { target: { value: text } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(screen.getByLabelText(/^--workers/)).toHaveValue('4'));
+    // The applied configuration is validated again; the review survives it.
+    await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledTimes(2));
+    const review = screen.getByText(/--unknown=•••/);
+    expect(review).toBeVisible();
+    expect(review).toHaveTextContent('--amber •••');
+    expect(review).not.toHaveTextContent(secret);
+    expect(input).toHaveValue(text);
+    // Ignored words were never applied, so the valid result stays savable.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false);
+    // Another runtime's options are not described by this review.
+    fireEvent.click(screen.getByRole('button', { name: 'Select another runtime' }));
+    await waitFor(() => expect(screen.queryByText(/--unknown=•••/)).not.toBeInTheDocument());
     imported.mockRestore();
   });
 
