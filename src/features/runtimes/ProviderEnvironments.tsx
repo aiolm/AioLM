@@ -104,10 +104,10 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
       {!runtimes.some(runtime => runtime.provider === provider.id) && <p className="app-section-hint">{copy.noRuntimes}</p>}
       </div>
     </div>)}
-    <div className="app-card app-card--tight">
+    {(!selectedProvider || !isExternalProvider(selectedProvider)) && <div className="app-card app-card--tight">
       <h4>{t('ui.importProviderRuntimeBundle')}</h4>
       <button type="button" className="app-button app-button--primary" disabled={busy || resourcesInUse} title={lockReason} onClick={() => runPortableImport(t('ui.importProviderRuntimeBundle'))}>{t('ui.importProviderRuntimeBundle')}</button>
-    </div>
+    </div>}
     {cancellable && <LocalTaskCancelButton taskId={TASK_ID} onClick={() => void cancelOperation()} className="app-button app-button--danger">{t('common.cancel')}</LocalTaskCancelButton>}
     {progress && <pre role="status" className="whitespace-pre-wrap">{progress}</pre>}{result && <p role="status" data-testid="portable-result">{result}</p>}{error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
   </section>;

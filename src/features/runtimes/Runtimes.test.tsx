@@ -706,6 +706,7 @@ describe('neutral inference engine inventory', () => {
     expect(within(runtimes).queryByText('Ready')).not.toBeInTheDocument();
     expect(within(runtimes).getByRole('button', { name: 'Remove' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Install isolated environment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Import Python runtime bundle' })).not.toBeInTheDocument();
     expect(mocked.rtList).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
     expect(screen.getByRole('button', { name: 'Synthetic' })).toHaveFocus();
