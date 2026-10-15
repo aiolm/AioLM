@@ -130,6 +130,13 @@ class LoaderProbeTests(unittest.TestCase):
             files = set(json.loads(output.read_text())["artifacts"])
             self.assertEqual(files, {str(Path(adapter.__file__).absolute()), str(exe), str(local_lib),
                                      str(vendor_lib), str(server), str(module), str(tokenizer_module)})
+            manifest = json.loads(output.read_text())
+            facts = manifest.get("option_metadata", {})
+            self.assertEqual(facts.get("engine_id"), args.engine_id)
+            self.assertEqual(facts.get("adapter", {}).get("revision"), args.revision)
+            reserved = {row["flag"]: row.get("reserved") for row in facts.get("options", [])}
+            self.assertEqual(set(reserved), {"--lazy", "--idle-unload", "--before-load", "--mcp-config"})
+            self.assertTrue(all(reserved.values()), "each ownership refusal explains its reason")
 
     def test_strata_model_binding_cannot_replace_the_registered_native_build(self):
         with tempfile.TemporaryDirectory() as area:

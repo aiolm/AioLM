@@ -118,6 +118,9 @@ export const runtimeOptionsCopy = {
     field_binding: '앱이 관리하는 연결',
     field_duplicate: '같은 옵션의 중복 항목',
     field_constraint: '적용하지 않은 제약',
+    managedEntryPoint: '등록한 entry point가 고정한 값입니다. 바꾸려면 다른 entry point를 등록하세요.',
+    managedReserved: '엔진 어댑터가 앱 소유로 예약한 옵션입니다. 이유는 옵션 정보 차이에서 확인하세요.',
+    field_reserved: '앱 소유 예약',
   },
   en: {
     legend: 'Runtime options',
@@ -235,6 +238,9 @@ export const runtimeOptionsCopy = {
     field_binding: 'app-owned binding',
     field_duplicate: 'duplicate entry for one option',
     field_constraint: 'constraint not applied',
+    managedEntryPoint: 'Fixed by the registered entry point; register another entry point to change it.',
+    managedReserved: 'Reserved for the app by the engine\'s adapter; see Option fact differences for the reason.',
+    field_reserved: 'reserved for the app',
   },
   ja: {
     legend: 'ランタイムのオプション',
@@ -352,6 +358,9 @@ export const runtimeOptionsCopy = {
     field_binding: 'アプリが管理する接続',
     field_duplicate: '同じオプションの重複項目',
     field_constraint: '適用しなかった制約',
+    managedEntryPoint: '登録したエントリーポイントが固定している値です。変更するには別のエントリーポイントを登録してください。',
+    managedReserved: 'エンジンのアダプターがアプリ用に予約したオプションです。理由はオプション情報の差異で確認してください。',
+    field_reserved: 'アプリ用に予約',
   },
   zh: {
     legend: '运行时选项',
@@ -469,5 +478,8 @@ export const runtimeOptionsCopy = {
     field_binding: '应用管理的绑定',
     field_duplicate: '同一选项的重复条目',
     field_constraint: '未应用的约束',
+    managedEntryPoint: '此值由已注册的入口点固定；如需更改，请注册另一个入口点。',
+    managedReserved: '引擎适配器已将此选项保留给应用；原因见选项信息差异。',
+    field_reserved: '保留给应用',
   },
 } satisfies Record<Locale, Record<string, string>>;

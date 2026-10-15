@@ -17,7 +17,7 @@ function fieldLabel(field: string, copy: Copy): string {
 }
 
 /** Facts that describe syntax or handling, never a value an option holds. */
-const VALUE_FREE = new Set(['arity', 'kind', 'key', 'target', 'repeatable', 'unit', 'restart_required', 'sensitive', 'local_path']);
+const VALUE_FREE = new Set(['reserved', 'arity', 'kind', 'key', 'target', 'repeatable', 'unit', 'restart_required', 'sensitive', 'local_path']);
 
 /** A difference about an option declared or documented secret. */
 function secret(conflict: FactConflict, schema?: OptionSchema): boolean {

@@ -1048,6 +1048,12 @@ fn blocking_issue(conflict: &FactConflict, saved: &Value, sensitive: bool) -> Op
                 )
             })
         }
+        "reserved" => Some(format!(
+            "{}: {} reserves this option because {}; the saved value was retained. Remove it — the app provides this behavior",
+            conflict.flag,
+            conflict.declared_by,
+            argv_text(&conflict.declared)
+        )),
         "constraint" => Some(format!(
             "{}: {} declares a constraint the reviewed help cannot honor ({}); the saved value was retained instead of launching without it. Correct the option metadata and register the runtime again, or remove the saved value",
             conflict.flag,
@@ -1172,6 +1178,18 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
             let (bound, _) = registry::bound_launch_flags(&manifest);
             for (flag, binding) in bound {
                 managed_flags.insert(flag, binding_for(&binding));
+            }
+            // Every option the fixed entry prefix spells (`--engine strata`,
+            // `--flag=value`) is part of what was registered and probed.
+            for token in registry::launch_prefix(&manifest) {
+                let flag = token
+                    .split_once('=')
+                    .map_or(token.as_str(), |(flag, _)| flag);
+                if flag.starts_with('-') && !flag.trim_start_matches('-').is_empty() {
+                    managed_flags
+                        .entry(flag.to_owned())
+                        .or_insert(ManagedBinding::EntryPoint);
+                }
             }
             manifest
                 .options

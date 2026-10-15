@@ -214,6 +214,19 @@ def create(args):
         if not re.fullmatch(r"[0-9a-f]{40}",args.revision or ""):
             raise ValueError("pin a full Strata source revision before registration")
         installed, executable = strata_config(root, config)
+        # The serving layer documents these switches, but AioLM owns their
+        # lifecycle and tool behavior. State this as adapter data; generic
+        # help discovery must not infer reservations from option names.
+        common["option_metadata"] = {
+            "version": 1, "engine_id": args.engine_id,
+            "adapter": {"id": "strata.openai", "revision": args.revision},
+            "options": [
+                {"flag": "--lazy", "reserved": "AioLM loads the model before reporting Ready"},
+                {"flag": "--idle-unload", "reserved": "AioLM owns model unloading"},
+                {"flag": "--before-load", "reserved": "AioLM owns commands run around model loading"},
+                {"flag": "--mcp-config", "reserved": "AioLM owns MCP discovery and tool approval"},
+            ],
+        }
         common["models"] = [{"path":str(config),"name":installed.get("model_name") or "qwen3.8-flash-next"}]
         modules = sorted(path for path in (root / "serve").glob("*.py") if not path.name.startswith("test_"))
         files = [helper, root / "serve/server.py", executable, *modules]

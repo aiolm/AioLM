@@ -277,6 +277,9 @@ fn main() {
             "order2" => "  -t TAG, --fresh-tag TAG   synthetic tag with an alias\n  --fresh-items X Y   synthetic items, two per occurrence\n",
             // Options whose type, unit, secrecy and choices only explicit
             // adapter metadata can describe; help shows syntax alone.
+            // The shapes a two-layer serving entry point documents (engine
+            // selector, config file, lifecycle and tool switches).
+            "server" => "  --engine {mock,strata}\n  --config CONFIG       engine config file\n  --api-key API_KEY     require this key\n  --mcp-config MCP_CONFIG  tool servers file\n  --lazy                start unloaded\n  --idle-unload SECONDS  unload when idle\n  --before-load BEFORE_LOAD  run before loading\n  --fit-max-tokens      clamp max tokens\n",
             "metadata" => "  --fresh-secret TOKEN  synthetic credential-like value\n  --fresh-cache N       synthetic cache size\n  --fresh-mode {fast,safe}  synthetic mode with documented choices\n  --fresh-amber VALUE   synthetic value only explicit metadata calls secret\n",
             _ => "",
         };

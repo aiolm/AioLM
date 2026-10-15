@@ -74,7 +74,7 @@ export interface OptionSchemaDefinition {
   restart_required: OptionSchemaFact<boolean>;
   sensitive: OptionSchemaFact<boolean>;
   local_path: OptionSchemaFact<boolean>;
-  managed?: 'model' | 'host' | 'port' | 'authentication' | 'discovery' | null;
+  managed?: 'model' | 'host' | 'port' | 'authentication' | 'discovery' | 'entry_point' | 'reserved' | null;
   raw_spans: unknown[];
 }
 

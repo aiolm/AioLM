@@ -193,6 +193,15 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     expect(screen.getByLabelText(/^--token/)).toHaveAttribute('type', 'text');
   });
 
+  it('says why an entry-point or adapter-owned option is locked', () => {
+    const engine = textOption('engine', { managed: 'entry_point' });
+    const lazy = textOption('lazy', { managed: 'reserved' });
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([engine, lazy])} values={{ engine: 'mock', lazy: true }} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    expect(screen.getByText(/Fixed by the registered entry point/)).toBeVisible();
+    expect(screen.getByText(/Reserved for the app by the engine's adapter/)).toBeVisible();
+    expect(screen.queryByRole('textbox')).toBeNull();
+  });
+
   it('never shows the documented default of a secret option', () => {
     const adapter = { kind: 'adapter', id: 'synthetic.adapter', revision: 'r1' };
     const amber = textOption('fresh_amber', {

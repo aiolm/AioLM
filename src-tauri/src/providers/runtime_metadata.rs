@@ -10,8 +10,9 @@
 //! they contradict, or that names no option, is reported instead of applied.
 use super::{
     runtime_options::{
-        explicit_operand, identifier, Arity, Certainty, Fact, NumericRange, OptionDefinition,
-        OptionSchema, Predicate, Relation, RuntimeDefault, Source, Target, ValueKind,
+        explicit_operand, identifier, Arity, Certainty, Fact, ManagedBinding, NumericRange,
+        OptionDefinition, OptionSchema, Predicate, Relation, RuntimeDefault, Source, Target,
+        ValueKind,
     },
     ProviderId,
 };
@@ -88,6 +89,10 @@ pub struct MetadataOption {
     pub sensitive: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_path: Option<bool>,
+    /// Why the app owns this option (model lifecycle, tool servers). The
+    /// option is locked and saved values are refused with this reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,8 +204,16 @@ impl MetadataOption {
             && self.restart_required.is_none()
             && self.sensitive.is_none()
             && self.local_path.is_none()
+            && self.reserved.is_none()
         {
             return Err("the entry declares no fact".into());
+        }
+        if self
+            .reserved
+            .as_ref()
+            .is_some_and(|reason| !bounded(reason, 256))
+        {
+            return Err("a reservation states its reason in short, non-empty text".into());
         }
         if self
             .arity
@@ -499,6 +512,22 @@ pub fn apply(
             ));
             continue;
         }
+        // A reservation only ever locks an option; it never unlocks one.
+        if let Some(reason) = &entry.reserved {
+            option.managed = Some(ManagedBinding::Reserved);
+            let mut found = conflict(
+                &option.key,
+                &entry.flag,
+                "reserved",
+                Value::Null,
+                Value::from(reason.clone()),
+            );
+            found.applies = Applies::Declared;
+            found.blocking = true;
+            view.conflicts.push(found);
+            view.applied.push(option.key.clone());
+            continue;
+        }
         let mut applied = false;
         let key = option.key.clone();
         let mut differs = |field: &str, observed: Value, declared: Value| {
@@ -677,7 +706,8 @@ pub fn apply(
 }
 
 /// Facts that describe syntax or handling, never a value an option holds.
-const VALUE_FREE: [&str; 9] = [
+const VALUE_FREE: [&str; 10] = [
+    "reserved",
     "arity",
     "kind",
     "key",

@@ -148,6 +148,13 @@ pub enum ManagedBinding {
     Port,
     Authentication,
     Discovery,
+    /// Spelled by the registered entry point's fixed prefix (for example a
+    /// serving layer's `--engine strata`); re-setting it would launch
+    /// something other than what was registered and probed.
+    EntryPoint,
+    /// Reserved by the engine's adapter metadata because the app owns that
+    /// behavior (model lifecycle, tool servers).
+    Reserved,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -586,10 +593,12 @@ impl OptionSchema {
                 ));
                 continue;
             }
-            if option.managed.is_some() {
-                issues.push(issue(
-                    "this option is managed by the app; use its binding control".into(),
-                ));
+            if let Some(binding) = option.managed {
+                issues.push(issue(match binding {
+                    ManagedBinding::EntryPoint => "this option is fixed by the registered entry point; its saved value was retained. Register another entry point to change it".into(),
+                    ManagedBinding::Reserved => "the engine's adapter reserves this option for the app; its saved value was retained".into(),
+                    _ => "this option is managed by the app; use its binding control".into(),
+                }));
                 continue;
             }
             match option.resolve_rows(value) {
@@ -1235,17 +1244,26 @@ mod tests {
             ManagedBinding::Port,
             ManagedBinding::Authentication,
             ManagedBinding::Discovery,
+            ManagedBinding::EntryPoint,
+            ManagedBinding::Reserved,
         ] {
             let mut option = option("binding", ValueKind::Text, 1, Some(1));
             option.managed = Some(managed);
-            assert!(schema(vec![option])
+            let message = schema(vec![option])
                 .resolve(
                     &[],
-                    &selected(&[("binding", vec![vec![json!("replacement")]])])
+                    &selected(&[("binding", vec![vec![json!("replacement")]])]),
                 )
                 .unwrap_err()[0]
                 .message
-                .contains("managed by the app"));
+                .clone();
+            // Each ownership says why; none accepts the replacement.
+            let reason = match managed {
+                ManagedBinding::EntryPoint => "fixed by the registered entry point",
+                ManagedBinding::Reserved => "reserves this option for the app",
+                _ => "managed by the app",
+            };
+            assert!(message.contains(reason), "{managed:?}: {message}");
         }
     }
 
