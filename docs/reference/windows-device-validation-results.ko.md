@@ -6,8 +6,8 @@
 
 - 시작 source: `df3264bad99deb0144b947f96300e8625f7a2da5`, `origin/codex/windows-runtime-adapter-handoff`의 필수 인계 commit 포함을 확인했다.
 - 작업 branch: `codex/windows-runtime-adapter-validation`. 기존 변경과 사용자 설치·데이터를 보존했으며 원격 push는 수행하지 않았다.
-- 현재 수정 checkpoint: `0cfbbb5083becf9281df7e47c320bdbb9e61f5b1`. G01–G07은 아직 구현되지 않았다.
-- 실제 GUI의 최근 완료 검사는 `0cfbbb5`의 package6에서 D14 설명/레이아웃과 D12 실제 BGE gateway 라우팅이다. 나머지 실제 흐름의 재검증은 진행 중이며 실행 전 항목을 pass로 계산하지 않는다. 별도 Python adapter helper는 `4d57c11`의 파일을 명시적으로 재등록한다.
+- 현재 구현 checkpoint: `981821262fbcc35484145e7a65ab1ab011a6b270`. G01의 공통 옵션 스키마·검증·argv 기반과 21개 회귀 검사를 추가했다. 실제 GUI/프로필 연결과 G02–G07 구현은 진행 중이며 전체 완료가 아니다.
+- 실제 GUI의 최근 검사는 `0cfbbb5`의 package6를 기준으로 한다. 이후 source의 기능에 소급 적용하지 않는다. 나머지 실제 흐름의 재검증은 진행 중이며 실행 전 항목을 pass로 계산하지 않는다. 별도 Python adapter helper는 `4d57c11`의 파일을 명시적으로 재등록한다.
 - raw: 저장소의 `tmp/windows-acceptance/`. 지속적인 재개 기록은 그 아래 `progress.md`다. raw·모델·개인 경로·프로필·토큰·build 산출물은 Git에 포함하지 않는다.
 
 결과는 `pass`, `fail`, `unsupported`, `unrun`, `blocked`로 구분한다. 표의 `unrun`은 해당 묶음의 필수 검사가 남았다는 뜻이며 그 안의 이미 실행한 결과는 별도로 남긴다. 실패를 미지원으로 바꾸거나 다른 모델의 성공으로 덮지 않는다.
@@ -37,6 +37,17 @@ package6/source `0cfbbb5`의 네 target도 Windows native 빌드 exit0이다. �
 
 W03 실제 GUI의 느린 probe 취소→즉시 새 등록→이전 응답 대기 후 상태 보존·이전 child 정리도 pass다(`w03/gui-probe/44–46`). 일반 모델 선택 probe 경합, W07 나머지 실패/취소, W08 OS 통합과 별도 계정 설치, G 구현 및 최종 전체 재검증은 계속 남아 있다.
 
+### package6 추가 실제 검사
+
+- **D09 부분/빈 생성 복구 pass:** 같은 Qwen0.5B와 개인 b11617 CPU에서 생성 중 Stop으로 7,732자 부분 응답을 저장했다. 정상 Quit 후 재시작하여 저장된 Retry를 누르면 같은 입력으로 새 생성이 시작됐고 앞선 세 메시지와 재시도 입력이 그대로 보존됐다. 별도 3,232 prompt token 요청은 첫 토큰 전에 취소되어 빈 assistant 메시지와 Retry 입력을 저장했다. 재시작 후 Retry는 같은 두 메시지에서 674자/150 completion token의 실제 완료 응답을 반환했다. 취소 전에 끝난 첫 요청과 자동화 오류로 취소하지 못한 요청을 취소 성공으로 계산하지 않는다. raw `gui/82–99`; tool-round 취소/오류 복구는 아직 남아 있다.
+- **실제 Korean IME composition pass:** 이미 설치된 한국어 입력 모드에서 물리 키 입력으로 `한글`을 조합했다. 첫 Return은 조합을 확정하고 전송하지 않았으며 두 번째 Return이 전송했다. 같은 문자열과 두 메시지의 저장/대화 재로드를 확인했다. 원래 Latin 입력 모드로 되돌린 뒤 실제 `g` 입력/삭제를 확인했고 OS 언어 설정은 바꾸지 않았다. 모델 답변의 한국어 의미 품질 검사가 아닌 입력 조합·전송 검사다. raw `gui/100–109`.
+- **tray pass / 알림 표시 unrun:** 격리 설정에서 Close to tray를 켜고 창을 닫자 앱과 소유 엔진은 살아 있고 메인 창만 숨었다. 실제 Windows 숨겨진 아이콘 메뉴의 AioLM 아이콘으로 같은 창/엔진을 복원했다. 설정을 원래 false로 되돌리고 정상 Quit하여 앱·소유 엔진·port 정리를 확인했다. 알림 plugin의 제출 성공은 확인했으나 실제 OS toast를 관찰하지 못했으므로 알림 표시 통과로 기록하지 않는다. raw `gui/114–120`.
+- **runtime import 취소/실패/복구 pass:** 원래 ROCm ZIP의 실제 GUI import 중 Cancel로 staging이 제거됐다. 기존 runtime의 manifest/server/주요 DLL 여섯 hash와 원본 ZIP은 그대로였다. manifest가 없는 작은 합성 ZIP은 구체적 오류로 거부하고 staging을 정리했다. 원래 올바른 ZIP으로 다시 import하여 복구했다. 별도 소유 세션의 실제 CPU 서버/health가 이 과정과 GUI 정상 Quit 뒤에도 유지돼 다른 프로세스 보호를 확인한 뒤 해당 세션도 정상 stop했다. raw `gui/128–143`, `w07/140–142,160`.
+- **같은 ROCm의 최신 GUI 재검증 pass:** package6를 SDK 환경 변수가 없고 PATH에 Windows 디렉터리만 있는 격리 홈에서 실행했다. 위 TheRock bundle을 실제 GUI로 import하고 별도 profile에서 같은 Qwen0.5B, 두 GPU, `ngl=99`, layer split `1,1`을 명시했다. 새 startup canary gate median KLD 0.001908/한도 0.038160, overrides 없음이었다. 실제 응답 `51`/usage, 생성 중 취소·Retry의 새 토큰, 정상 종료의 소유 프로세스/port 정리와 재시작 후 profile/부분 이력 보존을 확인했다. 같은 profile의 새 실행은 `Tokyo`/usage를 반환했다. full-model deep gate나 이전 HIP7.2 실패의 통과를 뜻하지 않는다. raw `gui/148–166`.
+- **실제 benchmark 취소/완료와 XLSX pass:** 같은 ROCm/Qwen0.5B로 단일 client의 1K prompt/1,024 output/10회 요청을 시작해 9개 완료 trial 뒤 GUI Cancel했다. 최종 상태는 cancelled/9개 보존이며 소유 benchmark child/port가 사라졌다. 별도 1K/128 output/1회는 completed였다. 실제 값은 prompt 1,024/completion 128/cache 0, client timing, TTFT 24.9765ms, TG 271.3751755tok/s, end-to-end 493.1392ms, process RAM 747,761,664 bytes다. PP 40,990.00468tok/s는 **estimated** 표기를 유지했다. GUI가 만든 XLSX(SHA256 `fe8e29c690539c2fb8e495baa2ba21afce774faf0baab22dcc601ac6f7797d59`)의 18열/한 trial을 실제 JSONL과 대조해 수치·단위·상태·빈 편차/속도비를 확인했다. native 파일 대화상자의 기본 목적지에 생성된 결과이며 자동화가 의도한 다른 경로 저장은 통과하지 않았다. CSV·의도적 benchmark 실패·build 취소/실패는 남아 있다. raw `gui/168–182`, `w07/verify-real-workbook.mjs`.
+
+후속 GUI 조작 중 다른 Windows 앱의 색상 선택기가 입력을 가로채는 상태를 확인했다. 해당 앱을 임의로 조작하지 않고 사용자에게 닫기를 요청했으며 독립 구현/파일 검증을 계속한다. 이 일시적 GUI 조건과 별도 설치 OS 세션 대기는 서로 다른 차단 항목이다.
+
 ## 기기와 격리
 
 | 항목 | 실제 기록 |
@@ -65,8 +76,8 @@ GUI/CLI 검사는 `AIOLM_HOME`뿐 아니라 HOME/USERPROFILE/APPDATA/LOCALAPPDAT
 | W04 | unrun | CPU/Vulkan·고정 Strata GUI의 실제 응답/usage·취소/Retry·재시작/Quit pass. 별도 고정 SDK 조합의 ROCm 실제 두 GPU gate/응답 pass, 기존 SDK 실패 보존. 개인 build 및 최종 source의 전체 GUI 흐름 재검증 필요 |
 | W05 | unrun | MCP 승인/거부/호출 취소/입력과 다른 반환값 후속·rich/error/call ID pass. 이미지 복합 질문의 내용 누락 fail 유지, 도형 후속·설정/이미지/이력 재로드 pass. 실제 다른 지원 미디어와 새 Retry 복구 재검증 필요 |
 | W06 | unrun | 실제 vector RAG·STT 전처리/답변/이력·멀티 세션·gateway 인증/라우팅 pass 조건은 위 checkpoint 참조. 최종 source task 거부·프로젝트 적용/내보내기·기존 CSV/XLSX 등 보존 재검증 필요 |
-| W07 | unrun | Unicode/공백 경로와 hostile 값의 단일 argv, runtime 설치 취소의 staging 정리, load/stream 취소 및 normal Quit의 소유 job/port 정리 pass. import/build/tool/benchmark 실패·취소, 다른 프로세스 보호의 남은 실제 흐름 필요 |
-| W08 | blocked | production GUI/CLI·NSIS/MSI 빌드, Smol CPU 새 홈 portable 후 실제 추론과 GUI import pass. ROCm portable 실제 조건은 위 checkpoint 참조. 설치/업그레이드/제거는 별도 OS 세션 대기. IME composition·tray/알림·최종 재검증은 남음 |
+| W07 | unrun | Unicode/공백 argv, runtime 설치/import 취소·의도적 import 실패/복구의 staging 정리, load/stream/benchmark 취소와 정상 종료의 소유 job/port 정리·다른 세션 보호 pass. build 취소/실패·benchmark 실패와 최종 source 반복 필요 |
+| W08 | blocked | production 네 target 빌드, CPU/ROCm portable의 실제 import/추론, Korean IME composition·tray 복원 pass 조건은 위 checkpoint 참조. 설치/업그레이드/제거는 별도 OS 세션 대기. 실제 알림 표시·전체 접근성·최종 재검증은 남음 |
 
 Windows native의 MLX·표준 vLLM·Metal 실제 추론은 현재 local runtime 플랫폼 계약상 `unsupported`다. 값 보존·명시적인 거부는 별도의 Windows 공통 검사이며 Linux vLLM과 Mac MLX/Metal의 실제 추론 성공으로 기록하지 않는다. WSL 실행은 이번 Windows native 성공 근거가 아니다.
 
@@ -106,7 +117,7 @@ actual production GUI → venv launcher → native interpreter → strata.exe에
 
 고정 Strata 모델과 작업 전용 synthetic stdio MCP 서버를 실제 production GUI에서 연결했다. discovery 이후 자식 프로세스가 종료됐고, 승인 전과 거부 뒤에는 `tools/call`이 없었다. GUI 검토와 native 일회 승인 후 `indigo-912` 입력의 실제 반환값 `synthetic result: amber-7319`를 모델이 그대로 후속 답변으로 사용했다. 요청·반환의 JSON-RPC ID가 일치했고 결과/usage/2개 메시지를 저장했으며 stdio 프로세스가 정리됐다. 모델 추론은 실제 엔진이며 도구의 업무 데이터는 합성이다.
 
-별도 45초 slow 도구 호출을 실제로 시작한 뒤 GUI Stop을 눌렀다. launcher와 interpreter 두 MCP 프로세스가 사라졌고 늦은 응답/모델 후속 요청이 없었으며 Strata의 세 소유 프로세스는 유지됐다. 취소 뒤 UI는 `MCP response incomplete` 상태였다. 이 상태에서 Retry가 보이지 않는 복구 문제는 수정 대상으로 남아 있다.
+별도 45초 slow 도구 호출을 실제로 시작한 뒤 GUI Stop을 눌렀다. launcher와 interpreter 두 MCP 프로세스가 사라졌고 늦은 응답/모델 후속 요청이 없었으며 Strata의 세 소유 프로세스는 유지됐다. 취소 뒤 UI는 `MCP response incomplete` 상태였다. 이 상태에서 Retry가 보이지 않는 복구 문제의 D09 코드는 수정했으며 같은 tool-round의 production 실제 재검증이 남아 있다.
 
 명시적으로 raw 도구 이름을 지시한 첫 lookup 요청에서는 모델이 제공된 function ID 대신 `synthetic_lookup`를 반환했다. 앱은 unapproved tool로 거부했고 호출은 없었다. 이 모델 응답 실패를 삭제하지 않고 별도 자연어 요청의 승인/후속 성공과 구분한다. 검사 중 처음 자동 선택된 lookup을 해제한 선택 오류도 raw에 기록했으며 제품 ID 매핑 결함으로 계산하지 않았다. raw `strata-native/logs/24–27`, `w05-mcp-native.jsonl`이 근거다.
 
@@ -125,7 +136,7 @@ fixture 2-rich의 실제 native 관리 GUI에서 단일 text와 embedded resourc
 | D06 | Strata native version probe에 deployment library paths 누락 | host env를 보존한 child env, 6 helper tests 및 동일 native probe pass; `21f56ae` |
 | D07 | reasoning/tool 토큰을 생성 중에도 composer가 첫 토큰 대기로 표시 | 실제 GUI 재현, 수정 전 2 regression fail, 수정 후 관련 29 tests/typecheck/lint pass; `eb3b2bf`. 새 production의 같은 Strata reasoning stream에서 Generating·취소/저장 pass |
 | D08 | Strata의 DLL/tokenizer 보호 누락과 upstream test 개수에 따른 artifact 한도 | 7 helper tests, 실제 native CLI engine 사본의 수정 전 변조 허용 fail→수정 후 probe/start 거부 pass, 원본 보존; `4d57c11` |
-| D09 | 저장된 중단/빈 응답과 tool round에서 Retry 경로 유실 | 정확한 재시도 입력의 backward-compatible 저장·기존 부분 응답 보존, 관련 자동 검사 pass; `d98029b`, `e96c700`. 최종 production 실제 복구 여정은 unrun |
+| D09 | 저장된 중단/빈 응답과 tool round에서 Retry 경로 유실 | 정확한 재시도 입력의 backward-compatible 저장·기존 부분 응답 보존, 관련 자동 검사 pass; `d98029b`, `e96c700`. package6 실제 부분/첫 토큰 전 중단의 저장·재시작·Retry pass. tool-round 취소/오류의 실제 복구는 unrun |
 | D10 | MCP `isError:true`를 완료/성공으로 표시 | full 반환을 보존하고 failed 상태로 표시. 36 관련 검사와 package4 native 승인→실제 error 반환→Failed 표시 pass; `a17c758` |
 | D11 | CPU에서 기존 GPU 배치를 해제할 조작 부재 | GPU 미감지 시 명시적 Clear GPU assignment 제공, 자동 초기화 없음. 93 관련 검사 및 실제 BGE CPU 시작/벡터 연결 pass; `c437380` |
 | D12 | help/argv만으로 실제 실행 task를 확정하여 BGE chat 500 전달 | help arity 구분과 Ready 이후 실제 API task 확인. backend 전체 검사·실제 세 모드 CLI 및 package6 GUI gateway의 embedding/잘못된 chat task 거부 pass; `140fef0`, `876231f`, `8b4c5ea` |
@@ -139,7 +150,7 @@ fixture 2-rich의 실제 native 관리 GUI에서 단일 text와 embedded resourc
 
 | ID | 상태 | 남은 실행 |
 | --- | --- | --- |
-| G01 | unrun | versioned 공통 option schema와 호환 계약 구현 |
+| G01 | unrun | `9818212`의 versioned sourced schema·검증/argv 기반 21개 회귀 및 전체 clippy pass. descriptor·실제 GUI/profile 연결과 기존 계약 통합이 남음 |
 | G02 | unrun | 실제 help 실행 수명·cache identity·diff·취소/경합 구현 및 검사 |
 | G03 | unrun | deterministic help parser와 검증된 보강 metadata 구현 |
 | G04 | unrun | 공통 renderer/validator/profile/argv serializer 통합 |
