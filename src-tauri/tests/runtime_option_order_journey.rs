@@ -500,6 +500,47 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
         "{argv:?}"
     );
 
+    // The public CLI validates the selected runtime's map with the same
+    // effective schema, record and confirmations instead of a closed catalog.
+    let cli = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_aiolm-cli"))
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        )
+    };
+    let fixed_map = json!({engine.as_str(): fixed.provider_options[engine.as_str()]});
+    let (ok, output) = cli(&["config", "set", "provider_options", &fixed_map.to_string()]);
+    assert!(ok, "{output}");
+    let saved_map = || {
+        Value::Object(
+            aiolm_lib::config::load_result().unwrap().provider_options[engine.as_str()].clone(),
+        )
+    };
+    assert_eq!(saved_map(), fixed_map[engine.as_str()]);
+    let mut tampered = fixed_map.clone();
+    tampered[engine.as_str()]["@option_order"]["occurrences"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    let mut unknown = fixed_map.clone();
+    unknown[engine.as_str()]["fresh_unknown"] = json!("1");
+    for (map, needle) in [
+        (tampered, "1 occurrence(s) of fresh_pair"),
+        (unknown, "fresh_unknown"),
+        (
+            json!({"llama.cpp": {"fixture_native_value": "x"}}),
+            "until a llama.cpp runtime is selected",
+        ),
+    ] {
+        let (ok, output) = cli(&["config", "set", "provider_options", &map.to_string()]);
+        assert!(!ok && output.contains(needle), "{output}");
+        assert_eq!(saved_map(), fixed_map[engine.as_str()]);
+    }
+
     // The managed native adapter honors the same record and confirmations.
     let native_dir = aiolm_lib::runtime::runtime_dir("cpu", "b1").unwrap();
     fs::create_dir_all(&native_dir).unwrap();

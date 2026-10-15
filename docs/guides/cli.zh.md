@@ -51,4 +51,6 @@
 
 `config set provider_options '<JSON>'` 会替换整个引擎选项映射。先用 `config get` 读取现有值并保留其他引擎的条目，再将 `{"vllm":{"max_model_len":8192},"mlx-vlm":{"temperature":0.7}}` 等对象作为一个 shell 参数传入。无效或未知选项不会更改已保存的配置；`{}` 会清空整个映射。模型和已安装运行时的检查在启动前执行。
 
+所选运行时的条目（包括已选择构建的 `llama.cpp` 和已注册的 `custom.*` 引擎）会使用与设置窗口相同的选项模式进行检查：内置或 manifest 选项、该运行时已审阅帮助中的选项、用户针对该帮助确认的值数量与可否重复，以及保留命令行顺序和每项写法的 `@option_order` 记录。由更新版本应用生成的记录或与已保存值不一致的记录会被拒绝。
+
 vLLM 在 Linux 或通过 vllm-metal 在 Apple Silicon macOS 15+ 上运行，mlx-vlm 在 Apple Silicon macOS 上运行。在支持的 Mac 上，`runtime install vllm` 使用匹配的 vLLM/vllm-metal 0.30.0 wheel 和原生 arm64 Python 3.12。`runtime list` 也显示 Python 运行时。使用 `runtime install <vllm|mlx-vlm> [Python可执行文件]` 安装隔离环境，或使用 `runtime register <vllm|mlx-vlm> <Python可执行文件>` 注册现有环境，然后通过 `runtime select <vllm|mlx-vlm> <运行时ID>` 选择。`runtime probe` 和 `runtime remove` 使用相同的引擎名称和ID。删除注册不会删除原有Python及其包，安装过程中Ctrl-C会清理未完成的隔离环境。详情见[推理运行时](../reference/inference-runtimes.md)。

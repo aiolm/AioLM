@@ -48,6 +48,8 @@ See [SECURITY.md](../SECURITY.md) for auth and process boundaries.
 
 `config set provider_options '<json>'` replaces the complete engine option map. Read it with `config get`, keep the other engine entries, then submit an object such as `{"vllm":{"max_model_len":8192},"mlx-vlm":{"temperature":0.7}}` as one shell argument. Invalid or unknown options leave the saved configuration unchanged; `{}` clears the map. Model-specific and installed-runtime checks run before launch.
 
+The selected runtime's entry, including `llama.cpp` once a build is selected and a registered `custom.*` engine, is checked against the same option schema as the settings window: catalog or manifest options, options from that runtime's reviewed help, value counts and repetition you confirmed for that help, and the saved `@option_order` record that keeps command-line order and a separate alias per occurrence. A record from a newer app or one that disagrees with the saved values is refused.
+
 vLLM runs on Linux or Apple Silicon macOS 15+ via vllm-metal; mlx-vlm runs on Apple Silicon macOS. On a supported Mac, `runtime install vllm` uses matched vLLM/vllm-metal 0.30.0 wheels and native arm64 Python 3.12. `runtime list` includes native and registered Python installations. Install a pinned engine or register an existing interpreter, then select the returned runtime ID before choosing a complete local model snapshot. External environment removal preserves the interpreter and packages; Ctrl-C cancels a managed installation and removes its unfinished environment.
 
 ```text

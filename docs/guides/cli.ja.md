@@ -51,4 +51,6 @@
 
 `config set provider_options '<JSON>'` はエンジン別のオプションマップ全体を置き換えます。`config get` で既存値を読み、他のエンジンの項目を保持してから、`{"vllm":{"max_model_len":8192},"mlx-vlm":{"temperature":0.7}}` のようなオブジェクトをシェルの引数1つとして渡してください。不正または未知のオプションでは保存済み設定は変わらず、`{}` はマップ全体を消去します。モデルとインストール済みランタイムの検査は起動前に行われます。
 
+選択中のランタイムの項目(ビルドを選択した `llama.cpp` と登録済みの `custom.*` エンジンを含む)は、設定画面と同じオプションスキーマで検査されます。組み込み・manifest のオプション、そのランタイムのレビュー済みヘルプのオプション、そのヘルプについてユーザーが確認した値の数と繰り返し可否、そしてコマンドラインの順序と項目ごとの表記を保持する `@option_order` 記録が対象です。より新しいアプリが作った記録や保存値と一致しない記録は拒否されます。
+
 vLLM は Linux または vllm-metal 経由で Apple Silicon macOS 15+、mlx-vlm は Apple Silicon macOS で実行します。対応する Mac の `runtime install vllm` は vLLM/vllm-metal 0.30.0 の対応するホイールとネイティブ arm64 Python 3.12 を使用します。`runtime list` は Python ランタイムも表示します。`runtime install <vllm|mlx-vlm> [Python実行ファイル]` で分離環境にインストールするか、`runtime register <vllm|mlx-vlm> <Python実行ファイル>` で既存環境を登録し、`runtime select <vllm|mlx-vlm> <ランタイムID>` で選択します。`runtime probe` と `runtime remove` も同じエンジン名とIDを使います。既存環境の削除ではPythonとパッケージを保持し、インストール中のCtrl-Cは未完了の分離環境を片付けます。[推論ランタイム](../reference/inference-runtimes.md)も参照してください。

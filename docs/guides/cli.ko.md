@@ -52,4 +52,6 @@
 
 `config set provider_options '<JSON>'`은 엔진별 옵션 맵 전체를 교체합니다. `config get`으로 기존 값을 읽어 다른 엔진의 항목을 보존한 뒤, `{"vllm":{"max_model_len":8192},"mlx-vlm":{"temperature":0.7}}` 같은 객체를 셸 인수 하나로 전달하세요. 잘못된 옵션이나 알 수 없는 옵션은 저장된 설정을 변경하지 않으며, `{}`는 전체 맵을 지웁니다. 모델과 설치된 런타임에 대한 검사는 실행 전에 진행됩니다.
 
+선택된 런타임의 항목(빌드를 선택한 `llama.cpp`와 등록된 `custom.*` 엔진 포함)은 설정 창과 같은 옵션 스키마로 검사합니다. 기본 제공·manifest 옵션, 해당 런타임의 검토된 도움말 옵션, 그 도움말에 대해 사용자가 확인한 값 개수와 반복 여부, 그리고 명령줄 순서와 항목별 표기를 보존하는 `@option_order` 기록이 포함됩니다. 더 새로운 앱이 만든 기록이나 저장값과 맞지 않는 기록은 거부됩니다.
+
 vLLM은 Linux 또는 vllm-metal을 통해 Apple Silicon macOS 15+에서, mlx-vlm은 Apple Silicon macOS에서 실행합니다. 지원되는 Mac에서 `runtime install vllm`은 vLLM/vllm-metal 0.30.0 휠과 네이티브 arm64 Python 3.12를 사용합니다. `runtime list`에 Python 런타임도 표시됩니다. `runtime install <vllm|mlx-vlm> [Python 실행 파일]`로 격리 설치하거나 `runtime register <vllm|mlx-vlm> <Python 실행 파일>`로 기존 환경을 등록한 뒤, `runtime select <vllm|mlx-vlm> <런타임 ID>`로 선택합니다. `runtime probe`와 `runtime remove`에도 같은 엔진명과 ID를 사용합니다. 기존 환경 제거는 Python과 패키지를 보존하며, 설치 중 Ctrl-C는 미완료 격리 환경을 정리합니다. 모델 형식과 옵션은 [추론 런타임](../reference/inference-runtimes.md)을 참고하세요.

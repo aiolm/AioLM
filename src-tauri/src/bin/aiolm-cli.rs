@@ -1016,7 +1016,7 @@ fn apply_config_override(
             cfg.lora_adapters = serde_json::from_str(value)
                 .map_err(|error| format!("lora_adapters must be a JSON array: {error}"))?;
         }
-        "provider_options" => cfg.provider_options = parse_provider_options(value)?,
+        "provider_options" => cfg.provider_options = parse_provider_options(cfg, value)?,
         _ => return Err(format!("unsupported config field: {key}")),
     }
     cfg.runtime_defaults.retain(|field| field != key);
@@ -1033,26 +1033,69 @@ fn config_value() -> Result<Value, String> {
 
 /// `provider_options` replaces the whole provider-keyed map. Each provider's
 /// options must pass the shared schema and binding validation before anything
-/// is saved. That validation reads no engine or file, so options for an engine
-/// this host cannot run stay editable.
+/// is saved. The selected runtime's map is checked against the same effective
+/// schema the settings window and launch use (catalog or manifest options,
+/// accepted help options, confirmed syntax and a saved order record). Other
+/// built-in maps are checked against their catalog without reading any engine
+/// or file, so options for an engine this host cannot run stay editable.
 fn parse_provider_options(
+    cfg: &config::AppConfig,
     value: &str,
 ) -> Result<std::collections::BTreeMap<String, serde_json::Map<String, Value>>, String> {
-    use aiolm_lib::providers::ProviderId;
+    use aiolm_lib::providers::{self, runtime_ordered, ProviderId};
     let options: std::collections::BTreeMap<String, serde_json::Map<String, Value>> =
         serde_json::from_str(value).map_err(|error| {
             format!("provider_options must be a JSON object of provider option objects: {error}")
         })?;
     for (key, values) in &options {
         let provider = ProviderId::parse(key)
-            .filter(|provider| *provider != ProviderId::Llama && provider.as_str() == key)
+            .filter(|provider| provider.as_str() == key)
             .ok_or_else(|| format!("provider options cannot be saved for '{key}'"))?;
-        // External schemas depend on the selected registered instance. Preserve
-        // their typed JSON here; launch/request application validate that schema.
-        let issues = if provider.is_custom() {
-            Vec::new()
+        let mut selected = cfg.clone();
+        selected.active_provider = key.clone();
+        selected
+            .provider_options
+            .insert(key.clone(), values.clone());
+        let issues = if provider == ProviderId::Llama {
+            // Native generic options exist only as the installed build's
+            // reviewed help describes them.
+            if cfg.active_backend.is_empty() || cfg.active_build.is_empty() {
+                return Err(format!("provider options cannot be saved for '{key}' until a llama.cpp runtime is selected; typed llama.cpp settings use their own config fields"));
+            }
+            providers::runtime_schema::saved_issues(
+                &providers::registry::root(),
+                &selected,
+                values,
+                &Default::default(),
+            )
+        } else if provider.is_custom() {
+            // External schemas depend on the selected registered instance;
+            // other instances keep their typed JSON for launch to validate.
+            let manifest = (cfg.active_provider == *key && !cfg.active_runtime.is_empty())
+                .then(|| providers::registry::manifest(provider, &cfg.active_runtime).ok())
+                .flatten();
+            match manifest {
+                Some(manifest) => {
+                    providers::registry::saved_option_issues(&selected, &manifest, values)
+                }
+                None => order_issues(values),
+            }
         } else {
-            aiolm_lib::providers::launch::option_issues(provider, values)
+            let runtime = (cfg.active_provider == *key && !cfg.active_runtime.is_empty())
+                .then(|| providers::selected_python_runtime(&selected).ok())
+                .flatten();
+            match runtime {
+                Some(runtime) => {
+                    providers::launch::saved_option_issues(&selected, &runtime, values)
+                }
+                None => {
+                    let mut catalog = values.clone();
+                    catalog.remove(runtime_ordered::ORDER_KEY);
+                    let mut issues = providers::launch::option_issues(provider, &catalog);
+                    issues.extend(order_issues(values));
+                    issues
+                }
+            }
         };
         if !issues.is_empty() {
             let messages = issues
@@ -1063,6 +1106,21 @@ fn parse_provider_options(
         }
     }
     Ok(options)
+}
+
+/// A saved order record must at least agree with the values it orders.
+fn order_issues(
+    values: &serde_json::Map<String, Value>,
+) -> Vec<aiolm_lib::providers::options::OptionIssue> {
+    use aiolm_lib::providers::runtime_ordered;
+    match runtime_ordered::saved_order(values) {
+        Err(message) => vec![aiolm_lib::providers::options::OptionIssue {
+            key: runtime_ordered::ORDER_KEY.into(),
+            code: "order",
+            message,
+        }],
+        Ok(_) => Vec::new(),
+    }
 }
 
 fn config_set_value(key: &str, value: &str) -> Result<Value, String> {
@@ -1292,7 +1350,7 @@ fn help_value() -> Value {
         "commands":{
             "config get":"print persisted configuration",
             "config set <field> <value>":"change a non-secret typed configuration field",
-            "config set provider_options <json>":"replace the vllm/mlx-vlm option map; every value must pass the engine option schema",
+            "config set provider_options <json>":"replace the provider-keyed option map; the selected runtime's map (llama.cpp, registered or Python engine) must pass its effective option schema, including reviewed help options, confirmed syntax and a saved @option_order record; other vllm/mlx-vlm maps must pass their catalog",
             "models list":"scan model files and snapshots with engine compatibility",
             "models delete <path>":"delete a non-active GGUF/mmproj file, or an app-downloaded snapshot folder (only the files its manifest lists; other files stay)",
             "runtime list":"list built-in and registered external engine installations",
