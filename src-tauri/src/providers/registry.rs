@@ -87,6 +87,9 @@ pub struct RuntimeManifest {
     /// expansion. The bridge, not help parsing, defines how it drives this command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge_command: Option<BridgeCommand>,
+    /// A bridge may create model/config copies only in this owned launch directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_resources: Option<super::launch_resources::Request>,
     /// Optional explicit option facts from the adapter (secrecy, unit,
     /// restart, types, constraints) for options its help shows. Manifests
     /// without it keep their exact serialization, help identity and launch
@@ -392,6 +395,21 @@ fn validate_process(process: &ProcessSpec) -> Result<(), String> {
     Ok(())
 }
 pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
+    if let Some(resources) = &m.launch_resources {
+        resources.validate()?;
+        if m.launch
+            .env
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(&resources.directory_env))
+            || m.bridge_command.as_ref().is_some_and(|bridge| {
+                bridge
+                    .environment_variable
+                    .eq_ignore_ascii_case(&resources.directory_env)
+            })
+        {
+            return Err("launch resource variable conflicts with adapter environment".into());
+        }
+    }
     if m.schema_version != VERSION || m.adapter_version != VERSION {
         return Err("unsupported runtime manifest or adapter version".into());
     }
@@ -1308,6 +1326,10 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
     if let Some(bridge) = &manifest.bridge_command {
         binding["bridge_command"] = serde_json::to_value(bridge).expect("serializable bridge");
     }
+    if let Some(resources) = &manifest.launch_resources {
+        binding["launch_resources"] =
+            serde_json::to_value(resources).expect("serializable resources");
+    }
     // Declared option facts change what saved values mean; a model probe
     // made under other metadata is not reused.
     if let Some(metadata) = &manifest.option_metadata {
@@ -1525,6 +1547,10 @@ pub enum ServingProtocol {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntrypointDraft {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_resources: Option<super::launch_resources::Request>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelBinding>,
     pub engine_id: ProviderId,
     pub runtime_id: String,
     pub display_name: String,
@@ -1730,6 +1756,7 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         launch_bindings: Some(launch_bindings),
         bridge_command,
         option_metadata: entry.option_metadata.clone(),
+        launch_resources: None,
         options: Vec::new(),
         model_formats: Vec::new(),
         models: Vec::new(),
@@ -1816,7 +1843,8 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         launch_bindings: Some(launch_bindings),
         bridge_command,
         option_metadata: draft.option_metadata.clone(),
-        models: Vec::new(),
+        launch_resources: draft.launch_resources.clone(),
+        models: draft.models.clone(),
         artifacts,
         health_path: draft.health_path.clone(),
         health_authenticated: draft.health_authenticated,

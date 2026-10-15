@@ -25,6 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct HeadlessState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    launch_resources: Option<String>,
     pid: u32,
     url: String,
     model: String,
@@ -757,6 +759,9 @@ async fn server_start_unlocked() -> Result<Value, String> {
             return Err("an unmanaged llama-server process matches the headless state PID; refusing to replace it".into());
         }
         wait_for_log_collector(&existing).await?;
+        if let Some(id) = &existing.launch_resources {
+            aiolm_lib::providers::launch_resources::cleanup(id, existing.pid)?;
+        }
         remove_state();
     }
     let mut cfg = config::load_result()?;
@@ -775,7 +780,12 @@ async fn server_start_unlocked() -> Result<Value, String> {
     let plan =
         aiolm_lib::providers::adapter::resolve(&cfg).launch(&cfg, cfg.port, "", &resolved_gpu)?;
     let args = plan.args;
-    let environment = plan.env;
+    let mut environment = plan.env;
+    let resources = aiolm_lib::providers::launch_resources::prepare(
+        aiolm_lib::providers::adapter::resolve(&cfg).launch_resources(&cfg)?,
+        &mut environment,
+    )?;
+    let resource_id = resources.as_ref().map(|value| value.id().to_owned());
     let working_directory = plan.working_directory;
     let engine_info = aiolm_lib::providers::execution::probed_info(&cfg).await?;
     let log_file_path = log_path();
@@ -825,10 +835,12 @@ async fn server_start_unlocked() -> Result<Value, String> {
         // server; only the server should keep the collector's input open.
     };
     let pid = child.id();
+    let mut child: server::Child = child.into();
+    child.attach_launch_resources(resources)?;
     let url = configured_server_url(cfg.port);
     let shared = Arc::new(Mutex::new(server::ServerState::new()));
     if let Ok(mut state) = shared.lock() {
-        state.child = Some(child.into());
+        state.child = Some(child);
         state.url = url.clone();
         state.model = cfg.active_model.clone();
         state.lifecycle = server::Lifecycle::Starting;
@@ -866,6 +878,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         return Err("headless log collector exited during server startup".into());
     }
     let state = HeadlessState {
+        launch_resources: resource_id,
         pid,
         url: url.clone(),
         model: cfg.active_model.clone(),
@@ -934,6 +947,9 @@ async fn server_stop_unlocked() -> Result<Value, String> {
         .await?;
     }
     wait_for_log_collector(&state).await?;
+    if let Some(id) = &state.launch_resources {
+        aiolm_lib::providers::launch_resources::cleanup(id, state.pid)?;
+    }
     remove_state();
     Ok(json!({"state":"stopped","pid":state.pid,"model":state.model}))
 }
@@ -2226,6 +2242,7 @@ mod tests {
         let current = root.join("home").join("cli").join("headless-state.json");
         let previous = root.join("Local").join("aiolm").join("headless-state.json");
         let state = |pid| HeadlessState {
+            launch_resources: None,
             pid,
             url: "http://127.0.0.1:8080/v1".into(),
             model: "model.gguf".into(),

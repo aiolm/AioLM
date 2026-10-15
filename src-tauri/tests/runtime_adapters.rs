@@ -56,6 +56,7 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         working_directory: Some(area.path.to_string_lossy().into_owned()),
     };
     let manifest = RuntimeManifest {
+        launch_resources: None,
         schema_version: 1,
         adapter_version: 1,
         launch_bindings: None,

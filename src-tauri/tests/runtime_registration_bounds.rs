@@ -60,6 +60,8 @@ fn metadata(entry: Value, constraints: Value) -> Value {
 fn draft(area: &Path, marker: &Path, metadata: Value) -> EntrypointDraft {
     let program = env!("CARGO_BIN_EXE_fake-llama-server").to_string();
     EntrypointDraft {
+        launch_resources: None,
+        models: vec![],
         engine_id: engine(),
         runtime_id: "build-1".into(),
         display_name: "Synthetic bounds engine".into(),

@@ -190,6 +190,26 @@ fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
     if arguments
         .iter()
+        .any(|arg| arg == "--adapter-resource-fixture")
+        && !arguments
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "--help" | "--adapter-probe"))
+    {
+        let directory = std::env::var_os("SYNTHETIC_LAUNCH_DIRECTORY").expect("owned directory");
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::write(
+            directory.join("effective-config.json"),
+            b"synthetic configuration",
+        )
+        .unwrap();
+        std::fs::write(
+            std::env::var_os("FAKE_RESOURCE_RECORD").expect("resource evidence"),
+            directory.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+    }
+    if arguments
+        .iter()
         .any(|arg| arg == "--bridge-engine-argv-fixture")
     {
         // A separate, short-lived synthetic engine receives exact tokens

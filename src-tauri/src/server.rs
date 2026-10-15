@@ -16,6 +16,7 @@ pub struct Child {
     process: Option<crate::procutil::OwnedChild>,
     key_file: Option<ApiKeyFile>,
     output_readers: Vec<OutputReader>,
+    launch_resources: Option<crate::providers::launch_resources::Directory>,
 }
 
 impl From<std::process::Child> for Child {
@@ -24,6 +25,7 @@ impl From<std::process::Child> for Child {
             process: Some(child.into()),
             key_file: None,
             output_readers: Vec::new(),
+            launch_resources: None,
         }
     }
 }
@@ -43,7 +45,21 @@ impl Child {
     pub fn release(mut self) -> std::process::Child {
         // Persistent CLI children do not use a temporary credential or this
         // reader; their stdout/stderr are managed by the headless log pump.
+        if let Some(resources) = self.launch_resources.take() {
+            resources.release();
+        }
         self.process.take().expect("owned server process").release()
+    }
+
+    pub fn attach_launch_resources(
+        &mut self,
+        mut resources: Option<crate::providers::launch_resources::Directory>,
+    ) -> Result<(), String> {
+        if let Some(resources) = resources.as_mut() {
+            resources.bind(self.id())?;
+        }
+        self.launch_resources = resources;
+        Ok(())
     }
 }
 impl Drop for Child {
@@ -53,6 +69,7 @@ impl Drop for Child {
         }
         self.output_readers.clear();
         self.key_file.take();
+        self.launch_resources.take();
     }
 }
 
@@ -897,7 +914,11 @@ pub fn spawn(
         None
     };
     let key_guard = api_key_file.clone().map(ApiKeyFile);
-    let environment = plan.env;
+    let mut environment = plan.env;
+    let resources = crate::providers::launch_resources::prepare(
+        adapter.launch_resources(cfg)?,
+        &mut environment,
+    )?;
     let working_directory = plan.working_directory;
     let mut args = plan.args;
     if let Some(path) = api_key_file.as_ref() {
@@ -922,7 +943,9 @@ pub fn spawn(
         process: Some(process),
         key_file: key_guard,
         output_readers: Vec::new(),
+        launch_resources: None,
     };
+    child.attach_launch_resources(resources)?;
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
@@ -2321,6 +2344,7 @@ mod tests {
                 process: Some(process),
                 key_file: Some(ApiKeyFile(path.clone())),
                 output_readers: vec![reader],
+                launch_resources: None,
             };
             let started = Instant::now();
             drop(owner);

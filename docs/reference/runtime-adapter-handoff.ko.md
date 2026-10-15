@@ -71,6 +71,7 @@ JSON은 `schema_version: 1`, `adapter_version: 1`, `protocol: "openai-v1"`를 �
 | `probe`, `launch` | 각각 절대 `program`, 문자열 `args` 배열, 선택적 `env`와 절대 `working_directory`. shell 문자열을 실행하지 않는다. |
 | `launch_bindings` | 선택적 entry point 선택 기록. `version: 1`, `launch.args` 앞부분 중 고정 entry point의 토큰 수 `prefix_len`과 순서 있는 `bindings: [{name,argument}]`. `name`은 `model/host/port/model_alias`, `argument`는 `{kind:"positional"}` 또는 `{kind:"flag",flag,equals?}`다. prefix 뒤에 binding을 펼친 결과가 `launch.args`와 정확히 일치해야 한다. |
 | `bridge_command` | 선택적 명시적 bridge 연결. `{version:1,environment_variable,argv:[engineProgram,...enginePrefix]}`. 엔진 프로그램은 절대 경로이며 `artifacts`에 포함되어야 한다. argv는 템플릿 확장 없이 JSON 문자열로 지정한 환경 변수에 넣어 help·probe·launch에 전달한다. 변수 이름은 고정 env/인증 env와 충돌할 수 없으며 앱 소유 변수는 사용할 수 없다. |
+| `launch_resources` | 선택적 bridge 작업 디렉터리 요청. `{version:1,directory_env}`. AioLM이 launch마다 생성한 UUID 디렉터리의 절대 경로를 해당 환경 변수로 전달한다. 고정 env·bridge argv env·앱 소유 변수와 충돌하면 거부한다. bridge는 원본 배포 설정을 덮어쓰지 않고 여기에 파생 설정을 만든다. 일반 소유 프로세스의 종료·실패 시 정리하며, background CLI는 UUID와 PID를 상태에 보존하고 실제 중지 후 소유 표식을 확인해 정리한다. help·probe는 이 임시 디렉터리를 받지 않는다. |
 | `model_formats` | `gguf/hf-safetensors/mlx/unknown` 선언. 선언만으로 모델 지원을 확정하지 않는다. |
 | `models` | 선택적 `{path,name}` 명시적인 외부 모델 binding 목록. 새로운 형식·Strata deployment JSON은 `unknown`으로 등록하고 실제 probe로 검사한다. |
 | `artifacts` | 선택적 adapter 스크립트·library·설정의 절대 경로. 등록 시 전체 SHA-256을 저장하고 변경을 거부한다. 종속 파일은 제공자가 빠짐없이 선언해야 한다. |

@@ -24,6 +24,7 @@ pub mod catalog_data;
 pub mod compat;
 pub mod execution;
 pub mod launch;
+pub mod launch_resources;
 pub mod metal_env;
 pub mod metal_media;
 pub mod options;

@@ -110,6 +110,8 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         request: request.clone(),
     };
     let draft = EntrypointDraft {
+        launch_resources: None,
+        models: vec![],
         engine_id: engine,
         runtime_id: "local-1".into(),
         display_name: "Synthetic entry point".into(),

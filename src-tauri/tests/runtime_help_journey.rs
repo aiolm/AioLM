@@ -67,6 +67,7 @@ fn manifest(
         working_directory: Some(area.to_string_lossy().into_owned()),
     };
     RuntimeManifest {
+        launch_resources: None,
         schema_version: 1,
         adapter_version: 1,
         launch_bindings: None,

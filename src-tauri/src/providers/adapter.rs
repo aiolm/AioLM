@@ -19,6 +19,12 @@ pub enum RuntimeKind {
 }
 
 pub trait InferenceRuntimeAdapter: Send + Sync {
+    fn launch_resources(
+        &self,
+        _cfg: &AppConfig,
+    ) -> Result<Option<super::launch_resources::Request>, String> {
+        Ok(None)
+    }
     fn kind(&self) -> RuntimeKind;
     fn executable(&self, cfg: &AppConfig) -> Result<String, String>;
     fn launch(
@@ -155,6 +161,15 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
     }
 }
 impl InferenceRuntimeAdapter for ProcessAdapter {
+    fn launch_resources(
+        &self,
+        cfg: &AppConfig,
+    ) -> Result<Option<super::launch_resources::Request>, String> {
+        Ok(
+            super::registry::manifest(super::provider_of(cfg), &cfg.active_runtime)?
+                .launch_resources,
+        )
+    }
     fn kind(&self) -> RuntimeKind {
         RuntimeKind::ExternalProcess
     }

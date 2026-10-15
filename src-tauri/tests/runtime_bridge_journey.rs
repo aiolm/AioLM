@@ -46,6 +46,58 @@ impl Drop for TestHome {
 #[tokio::test]
 async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     let area = TestHome::new();
+    // Preparation failures leave the selected installation untouched. This
+    // test binary is the sole owner of AIOLM_HOME and these generated paths.
+    use providers::launch_resources::{self, Request};
+    let request = Request {
+        version: 1,
+        directory_env: "SYNTHETIC_LAUNCH_DIRECTORY".into(),
+    };
+    assert!(Request {
+        version: 2,
+        ..request.clone()
+    }
+    .validate()
+    .is_err());
+    assert!(Request {
+        directory_env: "BAD-NAME".into(),
+        ..request.clone()
+    }
+    .validate()
+    .is_err());
+    assert!(Request {
+        directory_env: "aiolm_home".into(),
+        ..request.clone()
+    }
+    .validate()
+    .is_err());
+    let mut collision = vec![("synthetic_launch_directory".into(), "existing".into())];
+    assert!(launch_resources::prepare(Some(request.clone()), &mut collision).is_err());
+    assert!(launch_resources::cleanup("../selected-engine", 1).is_err());
+    let mut temporary_env = vec![];
+    let mut guard = launch_resources::prepare(Some(request.clone()), &mut temporary_env)
+        .unwrap()
+        .unwrap();
+    let directory = PathBuf::from(&temporary_env[0].1);
+    let guard_id = guard.id().to_owned();
+    guard.bind(9123).unwrap();
+    fs::write(directory.join("effective-config.json"), b"synthetic").unwrap();
+    assert!(launch_resources::cleanup(&guard_id, 9124).is_err());
+    assert!(directory.join("effective-config.json").is_file());
+    guard.release();
+    assert!(directory.exists(), "headless release retains its resources");
+    launch_resources::cleanup(&guard_id, 9123).unwrap();
+    assert!(!directory.exists());
+    launch_resources::cleanup(&guard_id, 9123).unwrap();
+    let mut temporary_env = vec![];
+    let guard = launch_resources::prepare(Some(request.clone()), &mut temporary_env).unwrap();
+    let aborted = PathBuf::from(&temporary_env[0].1);
+    drop(guard);
+    assert!(
+        !aborted.exists(),
+        "an aborted launch cleans its unbound directory"
+    );
+    let resource_request = request;
     let bridge = env!("CARGO_BIN_EXE_fake-llama-server").to_string();
     let engine_file = area
         .path
@@ -61,13 +113,19 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     ];
     let bridge_prefix = vec![
         "--adapter-bridge-fixture".into(),
+        "--adapter-resource-fixture".into(),
         "--adapter-engine".into(),
         "--adapter-no-health-auth".into(),
     ];
     let link_file = area.path.join("bridge-link.json");
     let child_argv = area.path.join("engine-argv.json");
     let bridge_argv = area.path.join("bridge-argv.json");
+    let resource_record = area.path.join("launch-directory.txt");
     let environment = BTreeMap::from([
+        (
+            "FAKE_RESOURCE_RECORD".into(),
+            resource_record.to_string_lossy().into_owned(),
+        ),
         (
             "FAKE_BRIDGE_LINK_FILE".into(),
             link_file.to_string_lossy().into_owned(),
@@ -129,6 +187,11 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         "{model}".into(),
     ]);
     let draft = EntrypointDraft {
+        launch_resources: Some(resource_request),
+        models: vec![ModelBinding {
+            path: model.to_string_lossy().into_owned(),
+            name: "Synthetic bridge model".into(),
+        }],
         engine_id: id,
         runtime_id: entry.runtime_id.clone(),
         display_name: "Synthetic explicit bridge".into(),
@@ -165,6 +228,16 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         option_metadata: None,
     };
     let manifest = manifest_from_draft(&draft).unwrap();
+    assert_eq!(manifest.models, draft.models);
+    let mut invalid_resources = manifest.clone();
+    invalid_resources.launch_resources.as_mut().unwrap().version = 2;
+    assert!(validate_manifest(&invalid_resources).is_err());
+    let mut collision = manifest.clone();
+    collision
+        .launch
+        .env
+        .insert("synthetic_launch_directory".into(), "existing".into());
+    assert!(validate_manifest(&collision).is_err());
     // An artifact's help remains available for inspection. It cannot become
     // the bridge's launch schema, even with a cached complete snapshot.
     let inspection = HelpRequest {
@@ -247,6 +320,11 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         server::kill(&mut state.lock().unwrap().child, Some(err.clone()));
     }
     ready.unwrap();
+    let launched_directory = PathBuf::from(fs::read_to_string(&resource_record).unwrap());
+    assert!(
+        !launched_directory.exists(),
+        "stopping the owned bridge removes its effective config"
+    );
     let actual: Vec<String> = serde_json::from_slice(&fs::read(child_argv).unwrap()).unwrap();
     assert!(actual.starts_with(&prefix), "{actual:?}");
     assert!(actual.ends_with(&tail), "{actual:?}");
@@ -262,4 +340,32 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         serde_json::from_slice(&fs::read(bridge_argv).unwrap()).unwrap();
     assert!(actual_bridge.starts_with(&bridge_prefix));
     assert!(actual_bridge.ends_with(&tail));
+
+    // A background CLI start outlives its command process. Its persisted
+    // state retains the UUID; a later CLI stop cleans only that launch.
+    aiolm_lib::config::save(&cfg).unwrap();
+    let cli = |action: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_aiolm-cli"))
+            .args(["server", action])
+            .env("AIOLM_HOME", &area.path)
+            .output()
+            .unwrap()
+    };
+    let started = cli("start");
+    if !started.status.success() {
+        let _ = cli("stop");
+        panic!("headless start failed: {started:?}");
+    }
+    let background_directory = PathBuf::from(fs::read_to_string(&resource_record).unwrap());
+    let retained = background_directory.join("effective-config.json").is_file();
+    let stopped = cli("stop");
+    assert!(
+        stopped.status.success(),
+        "headless stop failed: {stopped:?}"
+    );
+    assert!(
+        retained,
+        "the live background process retains its effective config"
+    );
+    assert!(!background_directory.exists());
 }
