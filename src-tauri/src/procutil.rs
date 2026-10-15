@@ -363,7 +363,84 @@ fn capture_helper_cancellable(
     cancel: Option<&std::sync::atomic::AtomicBool>,
     diagnostics: bool,
 ) -> std::io::Result<std::process::Output> {
-    use std::io::Read;
+    let captured = capture_detailed(command, limit, cap, cancel, diagnostics, false)?;
+    Ok(std::process::Output {
+        status: captured.status?,
+        stdout: captured.stdout.bytes,
+        stderr: captured.stderr.bytes,
+    })
+}
+
+/// Help discovery must retain diagnostics even on cancellation or timeout and
+/// distinguish an exact-size output from a truncated one. Legacy callers keep
+/// their existing Output/error API above.
+#[derive(Default)]
+pub struct CapturedStream {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+    pub read_error: Option<String>,
+}
+
+pub struct CaptureReport {
+    pub status: std::io::Result<std::process::ExitStatus>,
+    pub stdout: CapturedStream,
+    pub stderr: CapturedStream,
+}
+
+pub fn capture_help_cancellable(
+    command: &mut std::process::Command,
+    limit: std::time::Duration,
+    cap: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> std::io::Result<CaptureReport> {
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Ok(CaptureReport {
+            status: Err(std::io::ErrorKind::Interrupted.into()),
+            stdout: CapturedStream::default(),
+            stderr: CapturedStream::default(),
+        });
+    }
+    capture_detailed(command, limit, cap, cancel, true, true)
+}
+
+fn read_captured<R: std::io::Read>(
+    mut reader: R,
+    cap: usize,
+    retain: crate::process_output::Retain,
+) -> CapturedStream {
+    let mut output = crate::process_output::OutputBuffer::new(cap, retain);
+    let mut buffer = [0_u8; 8192];
+    let mut count = 0_usize;
+    let mut read_error = None;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(size) => {
+                count = count.saturating_add(size);
+                output.push(&buffer[..size]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                read_error = Some(error.to_string());
+                break;
+            }
+        }
+    }
+    CapturedStream {
+        bytes: output.snapshot(),
+        truncated: count > cap,
+        read_error,
+    }
+}
+
+fn capture_detailed(
+    command: &mut std::process::Command,
+    limit: std::time::Duration,
+    cap: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    diagnostics: bool,
+    help_head: bool,
+) -> std::io::Result<CaptureReport> {
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -373,38 +450,21 @@ fn capture_helper_cancellable(
             std::process::Stdio::null()
         });
     let mut child = OwnedChild::spawn(command)?;
-    let mut stdout = child.stdout.take().expect("captured helper stdout");
+    let stdout = child.stdout.take().expect("captured helper stdout");
     let reader = std::thread::Builder::new()
         .name("helper-stdout".into())
-        .spawn(move || {
-            let mut output =
-                crate::process_output::OutputBuffer::new(cap, crate::process_output::Retain::Head);
-            let mut buffer = [0_u8; 8192];
-            loop {
-                match stdout.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(size) => output.push(&buffer[..size]),
-                }
-            }
-            output.snapshot()
-        })?;
-    let errors = if let Some(mut stderr) = child.stderr.take() {
+        .spawn(move || read_captured(stdout, cap, crate::process_output::Retain::Head))?;
+    let errors = if let Some(stderr) = child.stderr.take() {
         Some(
             std::thread::Builder::new()
                 .name("helper-stderr".into())
                 .spawn(move || {
-                    let mut output = crate::process_output::OutputBuffer::new(
-                        cap,
-                        crate::process_output::Retain::Tail,
-                    );
-                    let mut buffer = [0_u8; 8192];
-                    loop {
-                        match stderr.read(&mut buffer) {
-                            Ok(0) | Err(_) => break,
-                            Ok(size) => output.push(&buffer[..size]),
-                        }
-                    }
-                    output.snapshot()
+                    let retain = if help_head {
+                        crate::process_output::Retain::Head
+                    } else {
+                        crate::process_output::Retain::Tail
+                    };
+                    read_captured(stderr, cap, retain)
                 })?,
         )
     } else {
@@ -433,10 +493,10 @@ fn capture_helper_cancellable(
         Some(reader) => reader
             .join()
             .map_err(|_| std::io::Error::other("helper diagnostic reader failed"))?,
-        None => Vec::new(),
+        None => CapturedStream::default(),
     };
-    Ok(std::process::Output {
-        status: status?,
+    Ok(CaptureReport {
+        status,
         stdout,
         stderr,
     })
@@ -692,6 +752,15 @@ impl ProcessExitProbe {
 
     pub(crate) fn exited(&self) -> bool {
         unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(self.0, 0) == 0 }
+    }
+
+    pub(crate) fn wait(&self, timeout: std::time::Duration) -> bool {
+        unsafe {
+            windows_sys::Win32::System::Threading::WaitForSingleObject(
+                self.0,
+                timeout.as_millis().min(u128::from(u32::MAX - 1)) as u32,
+            ) == 0
+        }
     }
 }
 
