@@ -17,8 +17,11 @@ use std::{
 
 /// Part of every help identity. Version 2 keeps a lone `--no-foo` beside a
 /// valued `--foo VALUE` as its own switch, so schemas parsed by version 1
-/// (which dropped one of them) are stale rather than reused.
-pub const PARSER_VERSION: u32 = 2;
+/// (which dropped one of them) are stale rather than reused. Version 3 ends a
+/// positional row's spec at its column gap, so a description is no longer
+/// counted as value names, and reads lowercase rows at a positional section's
+/// own indent (argparse's default), now that user positionals can launch.
+pub const PARSER_VERSION: u32 = 3;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 

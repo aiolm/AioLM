@@ -400,8 +400,11 @@ fn parse_positional(
     group: &str,
     start_line: u32,
     slot: u16,
+    section_row: bool,
 ) -> Option<PendingOption> {
-    // `<name>`, `[name]`, `MODEL`, `[FILE ...]` on its own line.
+    // `<name>`, `[name]`, `MODEL`, `[FILE ...]` on its own line; inside a
+    // positional section, also a lowercase name (argparse's default) on a row
+    // at that section's own indent.
     if trimmed.is_empty() || trimmed.starts_with('-') || trimmed.len() > 256 {
         return None;
     }
@@ -410,11 +413,31 @@ fn parse_positional(
         || trimmed
             .chars()
             .next()
-            .is_some_and(|c| c.is_ascii_uppercase());
+            .is_some_and(|c| c.is_ascii_uppercase())
+        || (section_row
+            && trimmed
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
+            && trimmed
+                .split(|c: char| c.is_whitespace())
+                .next()
+                .is_some_and(|name| {
+                    name.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                }));
     if !looks_positional {
         return None;
     }
-    let (spec, help) = split_spec_help(trimmed);
+    // A positional row is its name (single-spaced `FILE ...` allowed), a
+    // column gap of two or more spaces, then its description.
+    let (spec, help) = match trimmed.find("  ").or_else(|| trimmed.find('\t')) {
+        Some(gap) => (
+            trimmed[..gap].trim_end().to_owned(),
+            trimmed[gap..].trim().to_owned(),
+        ),
+        None => (trimmed.to_owned(), String::new()),
+    };
     if spec.contains('\0') || help.contains('\0') {
         return None;
     }
@@ -500,6 +523,9 @@ pub fn parse_help_report(
     let mut options: Vec<PendingOption> = Vec::new();
     let mut current_group = "runtime".to_string();
     let mut positional_section = false;
+    // The indent of the first row in the current section: argparse lists its
+    // rows there and wraps descriptions or nests subcommands deeper.
+    let mut section_indent: Option<usize> = None;
     let mut in_usage_wrap = false;
     let mut positional_slot: u16 = 0;
     let mut last_option: Option<usize> = None;
@@ -530,6 +556,7 @@ pub fn parse_help_report(
             positional_section = current_group.contains("positional")
                 || current_group.contains("operand")
                 || current_group == "arguments";
+            section_indent = None;
             in_usage_wrap = false;
             last_option = None;
             continue;
@@ -542,6 +569,8 @@ pub fn parse_help_report(
             in_usage_wrap = false;
         }
         let indented = line.starts_with(' ') || line.starts_with('\t');
+        let indent = line.len() - line.trim_start().len();
+        let section_row = positional_section && *section_indent.get_or_insert(indent) == indent;
         // Continuation of the previous option's description. Only indented
         // lines continue: COLUMN0 prose ends the previous option so it stays
         // inspectable instead of being absorbed into help text.
@@ -550,6 +579,7 @@ pub fn parse_help_report(
                 let looks_new = trimmed.starts_with('-')
                     || trimmed.starts_with('/')
                     || trimmed.starts_with('<')
+                    || section_row
                     || (trimmed
                         .chars()
                         .next()
@@ -595,9 +625,13 @@ pub fn parse_help_report(
         // Positional facts need a positional section or explicit `<name>` /
         // `[name]` syntax. Bare uppercase prose and usage fragments stay raw.
         if positional_section || trimmed.starts_with('<') || trimmed.starts_with('[') {
-            if let Some(pending) =
-                parse_positional(trimmed, &current_group, line_no, positional_slot)
-            {
+            if let Some(pending) = parse_positional(
+                trimmed,
+                &current_group,
+                line_no,
+                positional_slot,
+                section_row,
+            ) {
                 positional_slot = positional_slot.saturating_add(1);
                 if options.len() < 4096 {
                     options.push(pending);
@@ -1431,6 +1465,71 @@ mod tests {
             .unwrap();
         assert!(positional.spellings.is_empty());
         assert_eq!(positional.scope, vec!["serve".to_string()]);
+    }
+
+    #[test]
+    fn argparse_lowercase_positionals_are_rows_at_the_section_indent_only() {
+        // Verbatim Python 3.12 argparse layout: a subcommand choice list,
+        // its deeper-indented commands, a wrapped description.
+        let schema = parse("usage: engine [-h] [--port PORT] {serve,bench} ... input model_path\n\npositional arguments:\n  {serve,bench}\n    serve        start the server\n    bench        run a benchmark\n  input          input file to read, with a long description that argparse\n                 wraps onto a second line of help text\n  model_path     model path\n\noptions:\n  -h, --help     show this help message and exit\n  --port PORT\n");
+        let positionals: Vec<(&str, Option<u16>)> = schema
+            .options
+            .iter()
+            .filter(|o| o.position.is_some())
+            .map(|o| (o.key.as_str(), o.position))
+            .collect();
+        assert_eq!(
+            positionals,
+            vec![("input", Some(0)), ("model_path", Some(1))]
+        );
+        let input = schema.options.iter().find(|o| o.key == "input").unwrap();
+        assert!(
+            input.help.ends_with("second line of help text"),
+            "{}",
+            input.help
+        );
+        assert_eq!(
+            input.arity.value,
+            Some(Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        assert!(schema.options.iter().any(|o| o.key == "port"));
+        // Outside a positional section lowercase prose never becomes one.
+        let prose =
+            parse("Options:\n  --port PORT   port\n\nnotes:\n  model files are read lazily\n");
+        assert!(prose.options.iter().all(|o| o.position.is_none()));
+    }
+
+    #[test]
+    fn a_positional_row_description_is_not_part_of_its_value_count() {
+        let schema = parse("positional arguments:\n  TARGET                entry to serve\nOptions:\n  --flag                switch\n");
+        let arity = |key: &str| {
+            schema
+                .options
+                .iter()
+                .find(|o| o.key == key)
+                .unwrap()
+                .arity
+                .value
+        };
+        assert_eq!(
+            arity("target"),
+            Some(Arity {
+                min: 1,
+                max: Some(1)
+            })
+        );
+        assert_eq!(
+            schema
+                .options
+                .iter()
+                .find(|o| o.key == "target")
+                .unwrap()
+                .help,
+            "entry to serve"
+        );
     }
 
     #[test]
