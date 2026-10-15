@@ -1228,16 +1228,32 @@ fn replace_atomically(temp: &Path, target: &Path) -> Result<(), String> {
         fn MoveFileExW(existing: *const u16, replacement: *const u16, flags: u32) -> i32;
     }
 
-    let existing = temp
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let replacement = target
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
+    // std::fs adds the extended-length prefix to long paths itself; this
+    // direct call must too, or a long home fails after the temp file exists.
+    // Microsoft "Naming Files, Paths, and Namespaces": `\\?\` lifts MAX_PATH
+    // for Unicode file APIs but disables normalization, so the path is made
+    // absolute and normalized first (GetFullPathNameW).
+    let extended = |path: &Path| -> Result<Vec<u16>, String> {
+        let absolute = std::path::absolute(path).map_err(|error| error.to_string())?;
+        let wide: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+        let utf16 = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+        let mut out = if wide.starts_with(&utf16(r"\\?\")) || wide.starts_with(&utf16(r"\\.\")) {
+            Vec::new()
+        } else if wide.starts_with(&utf16(r"\\")) {
+            // \\server\share\... becomes \\?\UNC\server\share\...
+            let mut unc = utf16(r"\\?\UNC");
+            unc.extend_from_slice(&wide[1..]);
+            unc.push(0);
+            return Ok(unc);
+        } else {
+            utf16(r"\\?\")
+        };
+        out.extend(wide);
+        out.push(0);
+        Ok(out)
+    };
+    let existing = extended(temp)?;
+    let replacement = extended(target)?;
     let ok = unsafe {
         MoveFileExW(
             existing.as_ptr(),
@@ -1866,6 +1882,38 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&path).expect("read config"),
             "{\"version\":2,\"safe\":true}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_replaces_files_beyond_the_legacy_windows_path_limit() {
+        use std::os::windows::ffi::OsStrExt;
+        // A Unicode/space home plus ordinary engine/runtime IDs and a
+        // help-snapshot file name passes 260 UTF-16 units. Every write and
+        // replace must reach the file, not only the std::fs calls.
+        let root =
+            std::env::temp_dir().join(format!("aiolm long home 눈길 長い {}", Uuid::new_v4()));
+        let dir = root
+            .join("runtimes")
+            .join("adapters")
+            .join("custom.interpreterfixture")
+            .join("simple-layout")
+            .join("help")
+            .join("x".repeat(40));
+        let path = dir.join(format!("{}.json", "e".repeat(64)));
+        assert!(path.as_os_str().encode_wide().count() > 260, "{path:?}");
+        atomic_write(&path, br#"{"version":1}"#).expect("first long-path write");
+        atomic_write(&path, br#"{"version":2}"#).expect("long-path replace");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read long path"),
+            "{\"version\":2}"
+        );
+        assert_eq!(
+            fs::read_dir(&dir).expect("list long path").count(),
+            1,
+            "no temporary file is left behind"
         );
         let _ = fs::remove_dir_all(root);
     }

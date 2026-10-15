@@ -210,6 +210,25 @@ async fn a_real_interpreter_command_interleaves_mapped_positionals_in_slot_order
         "{stale}"
     );
     fs::write(&script, SCRIPT).unwrap();
+    // Isolated: the accepted review's help command no longer matches what
+    // would run (its stored request differs; no artifact changed, no user
+    // value is saved, the confirmed roles stay pinned). The template tokens
+    // the roles would relocate are refused instead of launched.
+    let accepted = root
+        .join(ENGINE)
+        .join("r1")
+        .join("help")
+        .join("accepted.json");
+    let reviewed = fs::read(&accepted).unwrap();
+    let mut record: Value = serde_json::from_slice(&reviewed).unwrap();
+    record["request"]["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("--help"));
+    fs::write(&accepted, serde_json::to_vec(&record).unwrap()).unwrap();
+    let stale = providers::registry::command(&cfg, cfg.port, "synthetic-key").unwrap_err();
+    assert!(stale.contains("changed since"), "{stale}");
+    fs::write(&accepted, &reviewed).unwrap();
 
     // A full pasted Windows-syntax command for this registered entry.
     let pasted = format!(
@@ -365,7 +384,7 @@ async fn a_real_interpreter_command_interleaves_mapped_positionals_in_slot_order
     // place and only the script's own positionals are mapped.
     let tool = home.path.join("tool 눈길.py");
     fs::write(&tool, TOOL).unwrap();
-    for (runtime, layout) in [("s1", true), ("s2", false)] {
+    for (runtime, layout) in [("simple-layout", true), ("simple-plain", false)] {
         simple_entry(&python, &home.path, &tool, &mut cfg, runtime, layout).await;
     }
 }
