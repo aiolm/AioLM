@@ -76,6 +76,7 @@ JSON은 `schema_version: 1`, `adapter_version: 1`, `protocol: "openai-v1"`를 �
 | `artifacts` | 선택적 adapter 스크립트·library·설정의 절대 경로. 등록 시 전체 SHA-256을 저장하고 변경을 거부한다. 종속 파일은 제공자가 빠짐없이 선언해야 한다. |
 | `health_path`, `health_authenticated` | loopback 상태 endpoint와 인증 필요 여부. 소유 listener 및 `/v1/models`의 예상 alias도 함께 확인한다. |
 | `options` | 옵션 `key`, `target: launch/request`, `kind`, 선택적 `flag/group/runtime_default`. launch 옵션은 flag와 probe의 `{options_json}` 전달이 필요하다. |
+| `option_metadata` | 선택적 명시 옵션 정보. `{version:1, engine_id, adapter:{id,revision}, options:[{flag, kind?, arity?, repeatable?, choices?, range?, unit?, runtime_default?, restart_required?, sensitive?, local_path?}], constraints:[{kind:"requires"/"excludes", when:{flag,equals?}, other:{flag,equals?}}]}`. `engine_id`는 manifest의 엔진과 같아야 하며 각 항목은 도움말에 나타나는 flag 표기 하나를 가리킨다. 최대 256개 항목·제약이다. |
 
 Bindings는 `{model}`, `{model_alias}`, `{host}`, `{port}`, `{api_key}`, `{ctx_size}`, `{parallel}`, `{options_json}`이다. probe와 launch는 선택 모델을 받아야 하며 launch는 앱이 지정한 port를 사용한다. `{api_key}`는 env에서만 허용한다. 빈 credential binding은 env에 넣지 않는다. 모델·port·host·인증 및 canonical messages/stream/tools를 사용자 옵션으로 덮어쓸 수 없다. argv의 한 원소는 한 인자로 전달되므로 경로 공백·한글을 shell quoting으로 다시 감싸지 않는다.
 
@@ -86,6 +87,12 @@ bridge 등록 GUI에서는 bridge가 엔진의 JSON argv를 읽는 환경 변수
 옵션 GUI와 모델·포트 바인딩은 실제 HTTP launch 명령인 bridge의 도움말에서 확인한다. 원래 엔진의 옵션을 사용하려면 bridge가 그 옵션을 문서화하고 전달해야 한다. 선언한 artifact의 도움말은 검사 목적으로 탐색할 수 있지만 bridge 실행 옵션의 근거로 수락할 수 없다. 같은 인터프리터를 쓰는 다른 스크립트도 등록한 launch prefix 검사를 우회하지 못한다. 엔진 argv 변경은 help와 모델 probe의 identity를 무효화한다. 이 연결이나 도움말 성공은 HTTP·모델·API 능력의 검증을 대신하지 않는다.
 
 도움말 재탐색의 보존 값 경고는 현재 provider 설정을 기준으로 한다. 설치된 runtime의 catalog/manifest가 계속 설명하는 옵션과 전용 제어·순서 기록은 원시 도움말에 없다는 이유만으로 사라진 옵션으로 표시하지 않는다. 반면 새 entry point manifest에는 이전 수동 manifest의 옵션 정의가 없으므로 새 도움말에 없는 값은 검토 대상으로 남긴다. 재등록 화면도 추가·삭제·변경·보존 키를 표시하며, 수락된 도움말이 있다면 그 snapshot을 비교 기준으로 사용한다. 아직 수락하지 않은 탐색을 반복해도 비교 기준이 바뀌지 않는다. 이전 snapshot이 없어도 현재 도움말에 없는 저장 값은 표시한다. 경고·비교는 저장 값을 삭제하거나 재작성하지 않는다.
+
+도움말은 구문만 보여 준다. 값이 비밀인지, 숫자의 단위, 재시작 필요 여부, 형식·범위·선택지·기본값과 옵션 사이의 의존/배타는 엔진이나 어댑터 제공자가 `option_metadata`로 명시한다. 등록 GUI는 같은 JSON을 선택 입력으로 받아 entry point와 함께 도움말 탐색·등록에 사용하며 엔진별 화면을 만들지 않는다. 알 수 없는 version·필드, 다른 엔진의 `engine_id`, 빈 `adapter.id/revision`, 형식과 맞지 않는 선택지·범위·기본값, 사실이 없는 항목은 등록 전에 거부한다. 정보는 수락한 도움말이나 manifest 옵션 중 같은 flag 표기를 가진 launch 옵션에서 아직 미확정인 사실만 `Documented`·`Adapter{id,revision}` 출처로 채운다. 새 옵션, request field, app-owned binding은 만들지 않는다. 도움말이 이미 보여 준 구문과 앱 binding이 항상 우선하며, 다른 선언·도움말에 없는 flag·binding 대상 항목·적용하지 못한 제약은 덮어쓰지 않고 차이로 표시한다. 결과는 설정 renderer·검증·저장 profile·실제 argv가 함께 쓰는 하나의 effective schema다. 비밀 값은 기본적으로 가린 입력, 순서 목록, 명령 미리보기에서 표시하지 않는다. `option_metadata`가 있는 manifest만 그 digest가 도움말 identity와 launch fingerprint에 들어가므로, 정보를 바꿔 다시 등록하면 이전 도움말 수락과 모델 probe를 재사용하지 않고 저장 값을 유지한 채 다시 검토하게 한다. 필드가 없는 기존 manifest·draft·payload의 직렬화와 identity는 그대로다.
+
+내장 llama.cpp는 고정 소스 `14310190` `common/arg.cpp`가 Hugging Face access token으로 정의한 `-hft, --hf-token`만 비밀 값으로 표시한다. 이름이나 설명 문구의 패턴으로 비밀·단위·제약을 추정하지 않는다.
+
+catalog·manifest 옵션이 수락한 도움말의 같은 표기(다른 key의 alias 포함)나 같은 key를 가리키면 기존 key mapping과 직렬화를 유지하고 key·값 개수·형식·선택지·기본값·반복·적용 위치 차이를 출처와 적용 쪽과 함께 표시한다. 정보 차이만으로 유효한 실행을 막지 않는다. 선언대로 직렬화하면 도움말이 보여 준 값 개수를 벗어나는 경우에만 해당 저장 값의 검증·실행을 거부하고 값은 보존하며, 저장 값 제거나 선언 수정 후 재등록(또는 도움말이 맞는 runtime 선택)을 안내한다.
 
 `kind`는 `integer/number/flag/toggle/choice/text/path/json`이다. 범위·choices·길이와 request/launch 적용 위치를 선언한다. 지원하지 않는 옵션을 조용히 버리지 않는다. 제공자가 선언한 request 옵션만 canonical 요청에 추가한다.
 
