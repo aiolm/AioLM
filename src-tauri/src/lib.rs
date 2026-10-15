@@ -173,6 +173,8 @@ pub fn run() {
             commands::runtime_help_cmd::runtime_help_discover_selected,
             commands::runtime_help_cmd::runtime_help_cancel_selected,
             commands::runtime_help_cmd::runtime_help_accept,
+            commands::runtime_help_cmd::runtime_help_confirm_syntax,
+            commands::runtime_help_cmd::runtime_help_clear_confirmed_syntax,
             commands::runtime_help_cmd::provider_option_schema,
             commands::runtime_help_cmd::runtime_help_import,
             commands::runtime_help_cmd::entrypoint_help_discover,

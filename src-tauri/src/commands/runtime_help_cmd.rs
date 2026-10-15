@@ -131,6 +131,32 @@ pub(crate) async fn runtime_help_accept(
     .map_err(|e| e.to_string())?
 }
 
+/// Save the value counts and repetition the user confirmed for options the
+/// selected runtime's accepted help leaves unknown, pinned to that help.
+#[tauri::command]
+pub(crate) async fn runtime_help_confirm_syntax(
+    cfg: crate::config::AppConfig,
+    fingerprint: String,
+    options: std::collections::BTreeMap<String, runtime_schema::ConfirmedSyntax>,
+) -> Result<runtime_schema::EffectiveSchema, String> {
+    tokio::task::spawn_blocking(move || {
+        runtime_schema::save_supplement(&adapters_root(), &cfg, &fingerprint, options)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Discard every confirmation for the selected runtime, including a file
+/// this app refuses to read. Saved option values are untouched.
+#[tauri::command]
+pub(crate) async fn runtime_help_clear_confirmed_syntax(
+    cfg: crate::config::AppConfig,
+) -> Result<runtime_schema::EffectiveSchema, String> {
+    tokio::task::spawn_blocking(move || runtime_schema::clear_supplement(&adapters_root(), &cfg))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// The one option schema the settings UI renders for the selected runtime:
 /// catalog/manifest options plus accepted help, with app-owned bindings.
 #[tauri::command]

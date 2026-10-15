@@ -214,10 +214,14 @@ fn main() {
         // Synthetic help for the help-to-launch journey. Option names are
         // fresh so no catalog or app code can know them in advance.
         let mode = std::env::var("FAKE_ENGINE_HELP").unwrap_or_default();
-        let extra = if mode == "v2" {
-            "  --fresh-extra VALUE   synthetic option added by build two\n"
-        } else {
-            ""
+        let extra = match mode.as_str() {
+            "v2" => "  --fresh-extra VALUE   synthetic option added by build two\n",
+            // An alias for per-occurrence spelling, and aliases that disagree
+            // on the value count so help leaves that count unknown.
+            "order" => "  -t TAG, --fresh-tag TAG   synthetic tag with an alias\n  -i X, --fresh-items X Y   synthetic items whose aliases disagree\n",
+            // A rebuilt engine that now documents the item count.
+            "order2" => "  -t TAG, --fresh-tag TAG   synthetic tag with an alias\n  --fresh-items X Y   synthetic items, two per occurrence\n",
+            _ => "",
         };
         println!(
             "usage: fake-engine [options] [TARGET]\n\npositional arguments:\n  TARGET                entry to serve\n\noptions:\n  -h, --help            show this help message and exit\n  --model MODEL         model path\n  --host HOST           bind address\n  -p, --port PORT       bind port\n  --fresh-count N       synthetic count, zero is meaningful\n  --fresh-label TEXT    synthetic label, empty is meaningful\n  --fresh-pair A B      synthetic fixed pair\n  --fresh-switch        synthetic switch\n{extra}"

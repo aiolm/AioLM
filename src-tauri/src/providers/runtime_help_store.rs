@@ -288,10 +288,14 @@ pub fn describe(
 /// Legacy scalar values (`4`, `true`, `"text"`) become a single occurrence
 /// with a single value so existing profiles keep working. Values already
 /// saved as `{occurrences, spelling}` pass through unchanged. Unknown keys
-/// are preserved here and reported by `resolve`, never dropped.
+/// are preserved here and reported by `resolve`, never dropped. The saved
+/// order record is not an option and is read by `runtime_ordered`.
 pub fn overrides_from_map(map: &Map<String, Value>) -> BTreeMap<String, Override> {
     let mut out = BTreeMap::new();
     for (key, value) in map {
+        if key == super::runtime_ordered::ORDER_KEY {
+            continue;
+        }
         if let Some(obj) = value.as_object() {
             if obj.contains_key("occurrences") {
                 if let Ok(parsed) = serde_json::from_value::<Override>(value.clone()) {
@@ -331,13 +335,14 @@ pub fn map_from_overrides(overrides: &BTreeMap<String, Override>) -> Map<String,
 
 /// Authoritative argv/request resolution for help-derived schemas.
 /// Managed bindings stay rejected here; launch fills them from app-owned
-/// selections, never from stored overrides, aliases or metadata.
+/// selections, never from stored overrides, aliases or metadata. A saved
+/// order record decides occurrence order and per-occurrence aliases.
 pub fn resolve_stored(
     schema: &OptionSchema,
     scope: &[String],
     stored: &Map<String, Value>,
 ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
-    schema.resolve(scope, &overrides_from_map(stored))
+    super::runtime_ordered::resolve_saved(schema, scope, stored)
 }
 
 /// Where a guarded publication may write: the snapshot directory identity

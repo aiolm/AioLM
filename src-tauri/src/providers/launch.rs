@@ -46,6 +46,18 @@ fn schema_view(options: &Map<String, Value>) -> Map<String, Value> {
         .collect()
 }
 
+/// Catalog values without a saved command-line position.
+fn unordered(
+    options: &Map<String, Value>,
+    recorded: &std::collections::BTreeSet<String>,
+) -> Map<String, Value> {
+    options
+        .iter()
+        .filter(|(key, _)| !recorded.contains(*key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 fn valid_adapter_name(name: &str) -> bool {
     name.len() <= 64
         && name.starts_with(|value: char| value.is_ascii_alphanumeric())
@@ -1105,6 +1117,9 @@ pub fn engine_command(
     }
     let mut args = interpreter_flags(runtime.kind);
     let mut env = Vec::new();
+    // Values a saved order record positions are emitted after the catalog's
+    // own arguments, in that order, by the common resolver.
+    let recorded = super::runtime_ordered::recorded_keys(&options);
     let (upstream_model, readiness) = match provider {
         ProviderId::Vllm => {
             let served = served_model_name(model);
@@ -1175,10 +1190,16 @@ pub fn engine_command(
                             .into(),
                     );
                 }
+                if recorded.contains("runner") {
+                    return Err("this model is served for embeddings only; remove runner from the saved option order so the pooling runner can be selected".into());
+                }
                 launch_options.remove("runner");
                 args.extend(["--runner".into(), "pooling".into()]);
             }
-            args.extend(options::launch_args(provider, &launch_options));
+            args.extend(options::launch_args(
+                provider,
+                &unordered(&launch_options, &recorded),
+            ));
             if !api_key.is_empty() {
                 env.push(("VLLM_API_KEY".into(), api_key.into()));
             }
@@ -1234,7 +1255,10 @@ pub fn engine_command(
                     "select the embedding model as the primary model or companion, not both".into(),
                 );
             }
-            args.extend(options::launch_args(provider, &schema_view(&options)));
+            args.extend(options::launch_args(
+                provider,
+                &unordered(&schema_view(&options), &recorded),
+            ));
             // mlx-vlm 0.7.6 constructs RuntimeConfig while importing the
             // server package, before its CLI sets MAX_KV_SIZE. Seed the same
             // validated budget before import so /v1/settings and generation
@@ -1601,6 +1625,63 @@ mod tests {
             options.as_object().unwrap().clone(),
         );
         cfg
+    }
+
+    #[test]
+    fn saved_option_order_reaches_python_engine_argv_without_duplicates() {
+        let order = json!({"version": 1, "occurrences": [
+            {"key": "enable_prefix_caching"}, {"key": "max_model_len"}
+        ]});
+        let cfg = config(
+            ProviderId::Vllm,
+            json!({"max_model_len": 8192, "enable_prefix_caching": false, "temperature": 0.3,
+                "@option_order": order}),
+        );
+        let command = engine_command(&cfg, &runtime(ProviderId::Vllm), 41000, "").unwrap();
+        assert!(
+            command.args.ends_with(&[
+                "Qwen2.5-VL-7B".into(),
+                "--no-enable-prefix-caching".into(),
+                "--max-model-len".into(),
+                "8192".into(),
+            ]),
+            "{:?}",
+            command.args
+        );
+        assert_eq!(
+            command
+                .args
+                .iter()
+                .filter(|arg| *arg == "--max-model-len")
+                .count(),
+            1
+        );
+        // Without the record the same values keep their catalog order.
+        let mut plain = cfg.clone();
+        plain
+            .provider_options
+            .get_mut("vllm")
+            .unwrap()
+            .remove("@option_order");
+        assert!(
+            engine_command(&plain, &runtime(ProviderId::Vllm), 41000, "")
+                .unwrap()
+                .args
+                .ends_with(&[
+                    "--max-model-len".into(),
+                    "8192".into(),
+                    "--no-enable-prefix-caching".into(),
+                ])
+        );
+        // A record from a newer app blocks the launch; values stay saved.
+        let mut future = cfg.clone();
+        future.provider_options.get_mut("vllm").unwrap()["@option_order"]["version"] = json!(2);
+        let error = engine_command(&future, &runtime(ProviderId::Vllm), 41000, "").unwrap_err();
+        assert!(error.contains("version 2"), "{error}");
+        assert_eq!(
+            future.provider_options["vllm"]["max_model_len"],
+            json!(8192)
+        );
     }
 
     #[test]

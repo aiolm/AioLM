@@ -25,6 +25,7 @@ use super::{
         OptionSchema, RuntimeDefault, Source, Spelling, Target, ValueKind, ValueStyle,
         SCHEMA_VERSION,
     },
+    runtime_ordered::{self, ORDER_KEY},
     ProviderId,
 };
 use crate::config::AppConfig;
@@ -50,6 +51,7 @@ const RESERVED_KEYS: &[&str] = &[
     super::launch::LORA_ADAPTERS_KEY,
     super::launch::REQUEST_LORA_KEY,
     super::launch::DRAFT_MODEL_KEY,
+    ORDER_KEY,
 ];
 
 /// The help command a user chose, minus everything the adapter decides
@@ -115,6 +117,60 @@ pub struct EffectiveSchema {
     pub help_keys: Vec<String>,
     /// Help options hidden because a catalog option already covers them.
     pub shadowed: Vec<String>,
+    /// Value counts and repetition the user confirmed for help options whose
+    /// help left them unknown, shown apart from help and adapter facts.
+    pub supplement: Option<SupplementView>,
+    /// A saved confirmation file this app refuses to read (malformed, newer,
+    /// oversized); nothing from it applies and help options needing it block.
+    pub supplement_error: Option<String>,
+}
+
+pub const SUPPLEMENT_VERSION: u32 = 1;
+const SUPPLEMENT_FILE: &str = "supplement.json";
+const SUPPLEMENT_LIMIT: u64 = 262_144;
+
+/// Syntax a user confirmed for one help option. Only facts the help left
+/// unknown can be confirmed; this never describes protocol abilities, types,
+/// ranges, defaults, constraints or app-owned bindings.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmedSyntax {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arity: Option<Arity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeatable: Option<bool>,
+}
+
+/// Confirmations pinned to the accepted help they were made for. Another
+/// help fingerprint (a rebuilt runtime or a newer review) never inherits them.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Supplement {
+    pub version: u32,
+    pub fingerprint: String,
+    pub options: BTreeMap<String, ConfirmedSyntax>,
+}
+
+/// A confirmation the current help contradicts or no longer covers.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SupplementConflict {
+    pub key: String,
+    /// `option` (absent or app-owned now), `arity` or `repeatable`.
+    pub field: String,
+    pub confirmed: Value,
+    /// What the current help documents; null when it has no such option.
+    pub help: Value,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SupplementView {
+    pub fingerprint: String,
+    pub options: BTreeMap<String, ConfirmedSyntax>,
+    /// The confirmations describe the accepted help and are in effect.
+    pub current: bool,
+    /// Keys whose unknown facts the confirmations established.
+    pub applied: Vec<String>,
+    pub conflicts: Vec<SupplementConflict>,
 }
 
 pub struct RuntimeKey {
@@ -829,6 +885,16 @@ pub fn effective_for(
     selected: &Selected,
     verify: bool,
 ) -> Result<EffectiveSchema, String> {
+    build_effective(root, cfg, selected, verify, true)
+}
+
+fn build_effective(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    verify: bool,
+    with_supplement: bool,
+) -> Result<EffectiveSchema, String> {
     let key = &selected.key;
     let compat = compat(selected)?;
     let accepted = load_accepted(root, &key.engine, &key.runtime)?;
@@ -925,7 +991,7 @@ pub fn effective_for(
         .map(|accepted| accepted.fingerprint.clone())
         .unwrap_or_else(|| compat_fingerprint(&key.engine, &key.runtime, &options));
     let (constraints, raw_help, end_of_options) = schema_extras.unwrap_or_default();
-    let schema = OptionSchema {
+    let mut schema = OptionSchema {
         schema_version: SCHEMA_VERSION,
         binding: super::runtime_options::SchemaBinding {
             engine: key.engine.clone(),
@@ -937,6 +1003,25 @@ pub fn effective_for(
         raw_help,
         end_of_options,
     };
+    let saved = if with_supplement {
+        load_supplement(root, &key.engine, &key.runtime)
+    } else {
+        Ok(None)
+    };
+    let (supplement, supplement_error) = match saved {
+        Ok(None) => (None, None),
+        Ok(Some(saved)) => {
+            let current = snapshot.is_some()
+                && accepted
+                    .as_ref()
+                    .is_some_and(|accepted| accepted.fingerprint == saved.fingerprint);
+            (
+                Some(apply_supplement(&mut schema, &help_keys, saved, current)),
+                None,
+            )
+        }
+        Err(error) => (None, Some(error)),
+    };
     schema.validate()?;
     Ok(EffectiveSchema {
         schema,
@@ -947,7 +1032,232 @@ pub fn effective_for(
         compat_keys,
         help_keys,
         shadowed,
+        supplement,
+        supplement_error,
     })
+}
+
+fn supplement_path(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
+    Ok(runtime_help_store::snapshot_root(root, engine, runtime)?.join(SUPPLEMENT_FILE))
+}
+
+fn valid_confirmation(syntax: &ConfirmedSyntax) -> bool {
+    (syntax.arity.is_some() || syntax.repeatable.is_some())
+        && syntax
+            .arity
+            .is_none_or(|a| a.min <= 256 && a.max.is_none_or(|max| max >= a.min && max <= 256))
+}
+
+/// The saved confirmations, refused (never repaired) when malformed, newer
+/// than this app, oversized or not a regular file.
+pub fn load_supplement(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+) -> Result<Option<Supplement>, String> {
+    let path = supplement_path(root, engine, runtime)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > SUPPLEMENT_LIMIT {
+        return Err("confirmed option syntax is not a bounded regular file".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let raw: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("confirmed option syntax is malformed: {e}"))?;
+    match raw.get("version").and_then(Value::as_u64) {
+        Some(version) if version == u64::from(SUPPLEMENT_VERSION) => {}
+        Some(version) => {
+            return Err(format!(
+                "confirmed option syntax version {version} is not supported by this app"
+            ))
+        }
+        None => return Err("confirmed option syntax has no valid version".into()),
+    }
+    let saved: Supplement = serde_json::from_value(raw)
+        .map_err(|e| format!("confirmed option syntax is malformed: {e}"))?;
+    if saved.fingerprint.len() != 64
+        || !saved.fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+        || saved.options.len() > 4096
+        || saved
+            .options
+            .iter()
+            .any(|(key, syntax)| key.is_empty() || key.len() > 128 || !valid_confirmation(syntax))
+    {
+        return Err("confirmed option syntax is invalid".into());
+    }
+    Ok(Some(saved))
+}
+
+/// Establish confirmed facts on help options whose help left them unknown.
+/// Help observations, adapter facts and app-owned bindings always win; a
+/// confirmation they contradict is reported, not applied.
+fn apply_supplement(
+    schema: &mut OptionSchema,
+    help_keys: &[String],
+    saved: Supplement,
+    current: bool,
+) -> SupplementView {
+    let mut applied = Vec::new();
+    let mut conflicts = Vec::new();
+    let source = Source::User {
+        note: format!(
+            "confirmed in AioLM for reviewed help {}",
+            &saved.fingerprint[..12]
+        ),
+    };
+    for (key, syntax) in &saved.options {
+        let option = schema
+            .options
+            .iter_mut()
+            .find(|option| option.key == *key && help_keys.contains(key));
+        let Some(option) = option.filter(|o| o.managed.is_none() && o.target == Target::Launch)
+        else {
+            conflicts.push(SupplementConflict {
+                key: key.clone(),
+                field: "option".into(),
+                confirmed: serde_json::to_value(syntax).unwrap_or(Value::Null),
+                help: Value::Null,
+            });
+            continue;
+        };
+        let mut established = false;
+        if let Some(arity) = syntax.arity {
+            match option.arity.supported() {
+                None if current => {
+                    option.arity = Fact {
+                        value: Some(arity),
+                        certainty: Certainty::UserConfirmed,
+                        source: Some(source.clone()),
+                    };
+                    established = true;
+                }
+                Some(documented) if *documented != arity => conflicts.push(SupplementConflict {
+                    key: key.clone(),
+                    field: "arity".into(),
+                    confirmed: serde_json::to_value(arity).unwrap_or(Value::Null),
+                    help: serde_json::to_value(documented).unwrap_or(Value::Null),
+                }),
+                _ => {}
+            }
+        }
+        if let Some(repeatable) = syntax.repeatable {
+            match option.repeatable.supported() {
+                None if current => {
+                    option.repeatable = Fact {
+                        value: Some(repeatable),
+                        certainty: Certainty::UserConfirmed,
+                        source: Some(source.clone()),
+                    };
+                    established = true;
+                }
+                Some(documented) if *documented != repeatable => {
+                    conflicts.push(SupplementConflict {
+                        key: key.clone(),
+                        field: "repeatable".into(),
+                        confirmed: Value::Bool(repeatable),
+                        help: Value::Bool(*documented),
+                    })
+                }
+                _ => {}
+            }
+        }
+        if established {
+            applied.push(key.clone());
+        }
+    }
+    SupplementView {
+        fingerprint: saved.fingerprint,
+        options: saved.options,
+        current,
+        applied,
+        conflicts,
+    }
+}
+
+/// Save the user's confirmations for the accepted help of the selected
+/// runtime, replacing earlier ones. Each must name a help option whose help
+/// leaves that fact unknown; the runtime must still match its reviewed help.
+/// An empty set removes the file.
+pub fn save_supplement(
+    root: &Path,
+    cfg: &AppConfig,
+    fingerprint: &str,
+    options: BTreeMap<String, ConfirmedSyntax>,
+) -> Result<EffectiveSchema, String> {
+    let selected = Selected::from_config(cfg)?;
+    let key = &selected.key;
+    let path = supplement_path(root, &key.engine, &key.runtime)?;
+    if options.is_empty() {
+        return clear_supplement(root, cfg);
+    }
+    if options.len() > 4096 {
+        return Err("too many confirmed options".into());
+    }
+    let mut base = effective_for(root, cfg, &selected, true)?;
+    if base.help_state != HelpState::Current
+        || base.accepted_fingerprint.as_deref() != Some(fingerprint)
+    {
+        return Err("confirm option syntax for the runtime's current reviewed help; discover and accept its help again".into());
+    }
+    // Confirmations are judged against the help itself, not earlier ones.
+    if base.supplement.is_some() {
+        base = build_effective(root, cfg, &selected, false, false)?;
+    }
+    for (name, syntax) in &options {
+        let option = base
+            .schema
+            .options
+            .iter()
+            .find(|option| option.key == *name && base.help_keys.contains(name))
+            .ok_or_else(|| format!("{name} is not an option of this runtime's reviewed help"))?;
+        if option.managed.is_some() || option.target != Target::Launch {
+            return Err(format!(
+                "{name} is managed by the app and cannot be confirmed"
+            ));
+        }
+        if !valid_confirmation(syntax) {
+            return Err(format!("{name}: confirm a valid value count or repetition"));
+        }
+        if (syntax.arity.is_some() && option.arity.supported().is_some())
+            || (syntax.repeatable.is_some() && option.repeatable.supported().is_some())
+        {
+            return Err(format!(
+                "{name}: the reviewed help already documents this; confirmations cannot replace it"
+            ));
+        }
+    }
+    let saved = Supplement {
+        version: SUPPLEMENT_VERSION,
+        fingerprint: fingerprint.into(),
+        options,
+    };
+    let bytes = serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > SUPPLEMENT_LIMIT {
+        return Err("confirmed option syntax exceeds 256 KiB".into());
+    }
+    std::fs::create_dir_all(path.parent().expect("supplement has a directory"))
+        .map_err(|e| e.to_string())?;
+    crate::config::atomic_write(&path, &bytes)?;
+    effective_for(root, cfg, &selected, true)
+}
+
+/// Remove every confirmation for the selected runtime, including a file this
+/// app refuses to read. Saved option values are untouched.
+pub fn clear_supplement(root: &Path, cfg: &AppConfig) -> Result<EffectiveSchema, String> {
+    let selected = Selected::from_config(cfg)?;
+    let path = supplement_path(root, &selected.key.engine, &selected.key.runtime)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            return Err("confirmed option syntax path is a directory".into())
+        }
+        Ok(_) => std::fs::remove_file(&path).map_err(|e| e.to_string())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    effective_for(root, cfg, &selected, true)
 }
 
 /// The binding a launch template placeholder carries.
@@ -999,14 +1309,18 @@ pub fn saved_issues_for(
     reported: &BTreeSet<String>,
 ) -> Vec<options::OptionIssue> {
     let all = generic_values(values);
-    if all.is_empty() {
-        return Vec::new();
-    }
     let issue = |key: &str, code: &'static str, message: String| options::OptionIssue {
         key: key.into(),
         code,
         message,
     };
+    if all.is_empty() {
+        // A record ordering nothing still names values that do not exist.
+        return match runtime_ordered::saved_order(values) {
+            Err(message) => vec![issue(ORDER_KEY, "order", message)],
+            Ok(_) => Vec::new(),
+        };
+    }
     let effective = match selected.and_then(|selected| effective_for(root, cfg, &selected, false)) {
         Ok(effective) => effective,
         Err(error) => {
@@ -1050,10 +1364,59 @@ pub fn saved_issues_for(
             ));
         }
     }
-    if let Err(found) = effective.schema.resolve(
-        &effective.scope,
-        &runtime_help_store::overrides_from_map(&describable),
-    ) {
+    if let Some(error) = &effective.supplement_error {
+        if describable
+            .keys()
+            .any(|key| effective.help_keys.contains(key))
+        {
+            issues.push(issue(
+                "@confirmed_syntax",
+                "help",
+                format!("{error}; discard the confirmations and confirm again"),
+            ));
+        }
+    }
+    // The order record is checked against every saved value; it may only
+    // order values this runtime describes and that passed earlier checks.
+    let order = match runtime_ordered::saved_order(values) {
+        Ok(order) => order,
+        Err(message) => {
+            issues.push(issue(ORDER_KEY, "order", message));
+            None
+        }
+    };
+    if let Some(order) = &order {
+        let outside = order
+            .keys()
+            .into_iter()
+            .filter(|key| !describable.contains_key(*key))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if outside.is_empty() {
+            describable.insert(
+                ORDER_KEY.into(),
+                values.get(ORDER_KEY).cloned().expect("order present"),
+            );
+        } else {
+            if outside.iter().any(|key| !reported.contains(key)) {
+                issues.push(issue(
+                    ORDER_KEY,
+                    "order",
+                    format!(
+                        "the saved option order includes {} that this runtime does not describe; the order was retained",
+                        outside.join(", ")
+                    ),
+                ));
+            }
+            // Values the order covers cannot be checked out of order.
+            for key in order.keys() {
+                describable.remove(key);
+            }
+        }
+    }
+    if let Err(found) =
+        runtime_ordered::resolve_saved(&effective.schema, &effective.scope, &describable)
+    {
         issues.extend(found.into_iter().map(|found: OptionIssue| {
             let code = if effective.compat_keys.contains(&found.key) {
                 "type"
@@ -1073,9 +1436,10 @@ fn resolve_launch(
     root: &Path,
     cfg: &AppConfig,
     selected: &Selected,
-    values: Map<String, Value>,
+    mut values: Map<String, Value>,
+    order: Option<&Value>,
 ) -> Result<Vec<String>, String> {
-    if values.is_empty() {
+    if values.is_empty() && order.is_none() {
         return Ok(Vec::new());
     }
     let mut effective = effective_for(root, cfg, selected, false)?;
@@ -1101,13 +1465,16 @@ fn resolve_launch(
                 ))
             }
         }
+        if let Some(error) = &effective.supplement_error {
+            return Err(format!(
+                "{error}; saved options {keys} were retained until the confirmations are discarded or saved again"
+            ));
+        }
     }
-    let resolved = effective
-        .schema
-        .resolve(
-            &effective.scope,
-            &runtime_help_store::overrides_from_map(&values),
-        )
+    if let Some(order) = order {
+        values.insert(ORDER_KEY.into(), order.clone());
+    }
+    let resolved = runtime_ordered::resolve_saved(&effective.schema, &effective.scope, &values)
         .map_err(|issues| {
             issues
                 .iter()
@@ -1142,12 +1509,14 @@ pub fn launch_arguments(
                 .is_none_or(|option| option.target == Target::Launch)
         })
         .collect();
-    resolve_launch(root, cfg, &selected, launch)
+    resolve_launch(root, cfg, &selected, launch, values.get(ORDER_KEY))
 }
 
 /// Launch arguments for saved values only accepted help describes, appended
 /// after a built-in catalog's own arguments (which the catalog mapping
-/// produces through the same resolver).
+/// produces through the same resolver). Catalog values a saved order record
+/// positions are resolved here in that order; the catalog skips them
+/// (`runtime_ordered::recorded_keys`).
 pub fn help_launch_args(
     root: &Path,
     cfg: &AppConfig,
@@ -1155,7 +1524,14 @@ pub fn help_launch_args(
     values: &Map<String, Value>,
     compat_keys: &[String],
 ) -> Result<Vec<String>, String> {
-    resolve_launch(root, cfg, selected, help_values(values, compat_keys))
+    let mut launch = help_values(values, compat_keys);
+    let generic = generic_values(values);
+    for key in runtime_ordered::recorded_keys(values) {
+        if let Some(value) = generic.get(&key) {
+            launch.insert(key, value.clone());
+        }
+    }
+    resolve_launch(root, cfg, selected, launch, values.get(ORDER_KEY))
 }
 
 /// The launch template already names the subcommand; drop the scope words
@@ -1172,10 +1548,8 @@ fn strip_scope(argv: Vec<String>, scope: &[String]) -> Result<Vec<String>, Strin
 
 /// Identity of everything help-derived that changes the launched process.
 pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> Value {
-    let values = help_values(
-        &super::launch::provider_options(cfg, super::provider_of(cfg)),
-        compat_keys,
-    );
+    let saved = super::launch::provider_options(cfg, super::provider_of(cfg));
+    let values = help_values(&saved, compat_keys);
     let accepted = runtime_key(cfg)
         .ok()
         .and_then(|key| {
@@ -1184,7 +1558,17 @@ pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> 
                 .flatten()
         })
         .map(|accepted| accepted.fingerprint);
-    serde_json::json!({"help": accepted, "values": values})
+    let mut identity = serde_json::json!({"help": accepted, "values": values});
+    // Profiles without the newer records keep their exact earlier identity.
+    if let Some(order) = saved.get(ORDER_KEY) {
+        identity["order"] = order.clone();
+    }
+    if let Ok(key) = runtime_key(cfg) {
+        if let Ok(Some(supplement)) = load_supplement(root, &key.engine, &key.runtime) {
+            identity["confirmed"] = serde_json::to_value(supplement).unwrap_or(Value::Null);
+        }
+    }
+    identity
 }
 
 #[cfg(test)]
@@ -1292,6 +1676,182 @@ mod tests {
             &source
         )
         .is_none());
+    }
+
+    fn help_schema() -> OptionSchema {
+        let help = Source::Help {
+            document: "stdout".into(),
+            start_line: 1,
+            end_line: 1,
+        };
+        let mut pair = blank("fresh_pair", "", Target::Launch);
+        pair.spellings.push(Spelling {
+            flag: "--fresh-pair".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+        pair.arity = Fact {
+            value: Some(Arity {
+                min: 2,
+                max: Some(2),
+            }),
+            certainty: Certainty::Verified,
+            source: Some(help.clone()),
+        };
+        let mut items = blank("fresh_items", "", Target::Launch);
+        items.spellings.push(Spelling {
+            flag: "--fresh-items".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        });
+        let mut port = items.clone();
+        port.key = "port".into();
+        port.spellings[0].flag = "--port".into();
+        port.managed = Some(ManagedBinding::Port);
+        OptionSchema {
+            schema_version: SCHEMA_VERSION,
+            binding: super::super::runtime_options::SchemaBinding {
+                engine: "custom.example".into(),
+                runtime: "build-1".into(),
+                fingerprint: "a".repeat(64),
+            },
+            options: vec![pair, items, port],
+            constraints: vec![],
+            raw_help: vec![super::super::runtime_options::RawHelp {
+                id: "stdout".into(),
+                scope: vec![],
+                stream: super::super::runtime_options::HelpStream::Stdout,
+                text: "--fresh-pair A B\n".into(),
+                truncated: false,
+            }],
+            end_of_options: Fact::default(),
+        }
+    }
+
+    fn confirmations(entries: Value) -> BTreeMap<String, ConfirmedSyntax> {
+        serde_json::from_value(entries).unwrap()
+    }
+
+    #[test]
+    fn confirmed_syntax_fills_only_unknown_help_facts_and_stays_user_sourced() {
+        let keys = vec![
+            "fresh_pair".to_string(),
+            "fresh_items".into(),
+            "port".into(),
+        ];
+        let saved = Supplement {
+            version: SUPPLEMENT_VERSION,
+            fingerprint: "a".repeat(64),
+            options: confirmations(json!({
+                "fresh_pair": {"arity": {"min": 1, "max": 1}, "repeatable": true},
+                "fresh_items": {"arity": {"min": 0, "max": null}},
+                "port": {"repeatable": true},
+                "removed": {"repeatable": true}
+            })),
+        };
+        let mut schema = help_schema();
+        let view = apply_supplement(&mut schema, &keys, saved.clone(), true);
+        schema.validate().unwrap();
+        let find = |schema: &OptionSchema, key: &str| {
+            schema
+                .options
+                .iter()
+                .find(|o| o.key == key)
+                .unwrap()
+                .clone()
+        };
+        // Repetition was unknown and is now user-confirmed, never verified.
+        let pair = find(&schema, "fresh_pair");
+        assert_eq!(pair.repeatable.certainty, Certainty::UserConfirmed);
+        assert!(matches!(pair.repeatable.source, Some(Source::User { .. })));
+        // The observed arity wins; the contradicting confirmation is shown.
+        assert_eq!(pair.arity.certainty, Certainty::Verified);
+        assert_eq!(pair.arity.value.unwrap().min, 2);
+        assert!(view.conflicts.iter().any(|c| c.key == "fresh_pair"
+            && c.field == "arity"
+            && c.help == json!({"min": 2, "max": 2})));
+        // A variadic count the help left unknown now generates argv.
+        let items = find(&schema, "fresh_items");
+        assert_eq!(items.arity.certainty, Certainty::UserConfirmed);
+        let overrides = runtime_help_store::overrides_from_map(
+            &serde_json::from_value(
+                json!({"fresh_items": {"spelling": null, "occurrences": [["a", "b c"]]}}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            schema.resolve(&[], &overrides).unwrap().argv,
+            ["--fresh-items", "a", "b c"]
+        );
+        // App-owned bindings and vanished options are never supplemented.
+        assert!(find(&schema, "port").repeatable.supported().is_none());
+        for key in ["port", "removed"] {
+            assert!(view
+                .conflicts
+                .iter()
+                .any(|c| c.key == key && c.field == "option"));
+        }
+        assert_eq!(view.applied, ["fresh_items", "fresh_pair"]);
+
+        // Confirmations for another help fingerprint never apply, but their
+        // differences from the current help are still shown for review.
+        let mut stale = help_schema();
+        let view = apply_supplement(&mut stale, &keys, saved, false);
+        assert!(!view.current && view.applied.is_empty());
+        assert!(find(&stale, "fresh_items").arity.supported().is_none());
+        assert!(view.conflicts.iter().any(|c| c.field == "arity"));
+        let unknown = runtime_help_store::overrides_from_map(
+            &serde_json::from_value(json!({"fresh_items": "kept"})).unwrap(),
+        );
+        assert!(stale.resolve(&[], &unknown).unwrap_err()[0]
+            .message
+            .contains("arity is unknown"));
+    }
+
+    #[test]
+    fn saved_confirmations_refuse_future_malformed_and_oversized_files() {
+        let root = std::env::temp_dir().join(format!("aiolm-supplement-{}", uuid::Uuid::new_v4()));
+        let dir = runtime_help_store::snapshot_root(&root, "custom.example", "build-1").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SUPPLEMENT_FILE);
+        let load = || load_supplement(&root, "custom.example", "build-1");
+        assert_eq!(load().unwrap(), None);
+        let good = json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"fresh_items": {"arity": {"min": 1, "max": null}}}});
+        std::fs::write(&path, good.to_string()).unwrap();
+        assert_eq!(load().unwrap().unwrap().options.len(), 1);
+        for (bad, needle) in [
+            (
+                json!({"version": 2, "fingerprint": "a".repeat(64), "options": {}}),
+                "version 2",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {}, "auto": true}),
+                "malformed",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "short", "options": {}}),
+                "invalid",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {}}}),
+                "invalid",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {"arity": {"min": 3, "max": 2}}}}),
+                "invalid",
+            ),
+            (
+                json!({"version": 1, "fingerprint": "a".repeat(64), "options": {"x": {"kind": "integer"}}}),
+                "malformed",
+            ),
+        ] {
+            std::fs::write(&path, bad.to_string()).unwrap();
+            let error = load().unwrap_err();
+            assert!(error.contains(needle), "{error}");
+        }
+        std::fs::write(&path, vec![b' '; SUPPLEMENT_LIMIT as usize + 1]).unwrap();
+        assert!(load().unwrap_err().contains("bounded"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

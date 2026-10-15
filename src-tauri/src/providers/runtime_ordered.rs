@@ -9,12 +9,209 @@
 //! slots still refuse gaps. All value semantics stay with
 //! `runtime_options`: unknown arity still blocks argv, managed bindings stay
 //! rejected, and explicit false/zero/empty remain distinct from absent.
+//!
+//! Saved profiles keep their grouped values as the authority for values, so
+//! every existing reader keeps working. When grouped values cannot express
+//! the command line (interleaved options, a different alias per occurrence),
+//! the profile also holds a versioned order record under `ORDER_KEY`. That
+//! record is the authority for occurrence order and per-occurrence spelling
+//! only: its n-th entry for a key is that key's n-th saved occurrence. A
+//! record that names missing values, disagrees with an occurrence count or
+//! with the grouped spelling, or comes from a newer app is refused, never
+//! repaired, and the saved values stay untouched.
+use super::runtime_help_store::overrides_from_map;
 use super::runtime_options::{
-    OptionDefinition, OptionIssue, OptionSchema, Override, Overrides, ResolvedOptions,
+    OptionDefinition, OptionIssue, OptionSchema, Override, Overrides, ResolvedOptions, Target,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use std::collections::BTreeMap;
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Saved key of the order record. `@` never starts an option key, so the
+/// record cannot collide with an option a runtime describes.
+pub const ORDER_KEY: &str = "@option_order";
+pub const ORDER_VERSION: u32 = 1;
+const MAX_ORDER_BYTES: usize = 65_536;
+const MAX_PLAN: usize = 512;
+
+/// One saved occurrence position. `spelling: None` means the option's
+/// default spelling, exactly as in grouped values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrderEntry {
+    pub key: String,
+    #[serde(default)]
+    pub spelling: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedOrder {
+    pub version: u32,
+    pub occurrences: Vec<OrderEntry>,
+}
+
+impl SavedOrder {
+    pub fn keys(&self) -> BTreeSet<&str> {
+        self.occurrences.iter().map(|e| e.key.as_str()).collect()
+    }
+}
+
+fn order_key_valid(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b))
+}
+
+/// The saved order record, checked against the grouped values it orders.
+/// `Ok(None)` means the profile has no record and resolves canonically.
+pub fn saved_order(values: &Map<String, Value>) -> Result<Option<SavedOrder>, String> {
+    let Some(raw) = values.get(ORDER_KEY) else {
+        return Ok(None);
+    };
+    if serde_json::to_vec(raw).map_err(|e| e.to_string())?.len() > MAX_ORDER_BYTES {
+        return Err("the saved option order exceeds 64 KiB; the saved values were retained".into());
+    }
+    // A newer record may carry meaning this app cannot honor; refuse it
+    // before reading anything else.
+    match raw.get("version").and_then(Value::as_u64) {
+        Some(version) if version == u64::from(ORDER_VERSION) => {}
+        Some(version) => {
+            return Err(format!(
+                "the saved option order uses version {version}, which this app does not support; the saved values were retained"
+            ))
+        }
+        None => return Err("the saved option order has no valid version".into()),
+    }
+    let order: SavedOrder = serde_json::from_value(raw.clone())
+        .map_err(|e| format!("the saved option order is malformed: {e}"))?;
+    if order.occurrences.len() > MAX_PLAN {
+        return Err("the saved option order has too many occurrences".into());
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for entry in &order.occurrences {
+        if !order_key_valid(&entry.key)
+            || entry
+                .spelling
+                .as_deref()
+                .is_some_and(|s| s.is_empty() || s.len() > 128 || s.contains('\0'))
+        {
+            return Err("the saved option order has an invalid entry".into());
+        }
+        *counts.entry(&entry.key).or_default() += 1;
+    }
+    let grouped = overrides_from_map(values);
+    for (key, count) in counts {
+        let Some(value) = grouped.get(key) else {
+            return Err(format!(
+                "the saved option order names {key}, which has no saved value"
+            ));
+        };
+        if value.occurrences.len() != count {
+            return Err(format!(
+                "the saved option order lists {count} occurrence(s) of {key}, but {} are saved",
+                value.occurrences.len()
+            ));
+        }
+        let first = order
+            .occurrences
+            .iter()
+            .find(|e| e.key == key)
+            .expect("counted key");
+        if first.spelling != value.spelling {
+            return Err(format!(
+                "the saved option order spells {key} differently from its saved value"
+            ));
+        }
+    }
+    Ok(Some(order))
+}
+
+/// Keys whose position the saved order decides. Empty without a valid record.
+pub fn recorded_keys(values: &Map<String, Value>) -> BTreeSet<String> {
+    saved_order(values)
+        .ok()
+        .flatten()
+        .map(|order| order.keys().into_iter().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// Every saved occurrence as one plan: values the record does not order keep
+/// their canonical schema order and come first, then the recorded
+/// occurrences in saved order with their own spelling.
+pub fn saved_plan(
+    schema: &OptionSchema,
+    values: &Map<String, Value>,
+    order: &SavedOrder,
+) -> OrderedPlan {
+    let grouped = overrides_from_map(values);
+    let recorded = order.keys();
+    let mut plan = Vec::new();
+    let mut push_all = |key: &str, value: &Override| {
+        for row in &value.occurrences {
+            plan.push(PlannedOccurrence {
+                key: key.to_owned(),
+                spelling: value.spelling.clone(),
+                values: row.clone(),
+            });
+        }
+    };
+    for option in &schema.options {
+        if let Some(value) = grouped.get(&option.key) {
+            if !recorded.contains(option.key.as_str()) {
+                push_all(&option.key, value);
+            }
+        }
+    }
+    for (key, value) in &grouped {
+        if !recorded.contains(key.as_str()) && !schema.options.iter().any(|o| o.key == *key) {
+            push_all(key, value);
+        }
+    }
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    for entry in &order.occurrences {
+        let index = seen.entry(&entry.key).or_default();
+        plan.push(PlannedOccurrence {
+            key: entry.key.clone(),
+            spelling: entry.spelling.clone(),
+            values: grouped[&entry.key].occurrences[*index].clone(),
+        });
+        *index += 1;
+    }
+    plan
+}
+
+/// Authoritative resolution of saved values, honoring a saved order record.
+/// Without a record this is exactly the grouped resolution.
+pub fn resolve_saved(
+    schema: &OptionSchema,
+    selected_scope: &[String],
+    values: &Map<String, Value>,
+) -> Result<ResolvedOptions, Vec<OptionIssue>> {
+    let issue = |message: String| {
+        vec![OptionIssue {
+            key: ORDER_KEY.into(),
+            message,
+        }]
+    };
+    let Some(order) = saved_order(values).map_err(issue)? else {
+        return schema.resolve(selected_scope, &overrides_from_map(values));
+    };
+    for key in order.keys() {
+        if schema
+            .options
+            .iter()
+            .any(|o| o.key == key && o.target == Target::Request)
+        {
+            return Err(issue(format!(
+                "{key} is sent with requests and has no command-line position; remove it from the saved order"
+            )));
+        }
+    }
+    resolve_plan(schema, selected_scope, &saved_plan(schema, values, &order))
+}
 
 /// One planned occurrence in input order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,7 +291,7 @@ pub fn resolve_plan(
             message,
         }]);
     }
-    if plan.len() > 512 {
+    if plan.len() > MAX_PLAN {
         return Err(vec![OptionIssue {
             key: String::new(),
             message: "too many planned option occurrences".into(),
@@ -103,7 +300,17 @@ pub fn resolve_plan(
     // Canonical validation first for full parity with grouped profiles:
     // unknown keys, subcommand scope, managed bindings, constraints,
     // positional gaps, dash boundaries and size limits all apply equally.
-    let grouped = overrides_from_plan(plan);
+    // A key spelled differently per occurrence is validated without one
+    // shared alias; each occurrence's own alias is checked when emitted.
+    let mut grouped = overrides_from_plan(plan);
+    for (key, value) in grouped.iter_mut() {
+        if plan
+            .iter()
+            .any(|o| o.key == *key && o.spelling != value.spelling)
+        {
+            value.spelling = None;
+        }
+    }
     let canonical = schema.resolve(selected_scope, &grouped)?;
     // Re-emit flags in plan order within each scope depth. Positionals keep
     // slot order (never plan order) so reordered input cannot rebind a later
@@ -551,6 +758,209 @@ mod tests {
                 },
             }));
         assert!(with_null.validate().is_err());
+    }
+
+    fn saved(value: Value) -> Map<String, Value> {
+        let Value::Object(map) = value else {
+            unreachable!()
+        };
+        map
+    }
+
+    fn interleaving_schema() -> OptionSchema {
+        let mut alpha: OptionDefinition = serde_json::from_value(json!({
+            "key": "alpha", "spellings": [{"flag": "--alpha"}, {"flag": "-a"}],
+            "kind": known(ValueKind::Text), "arity": known(Arity {min: 1, max: Some(1)}), "target": "launch"
+        }))
+        .unwrap();
+        alpha.repeatable = known(true);
+        let mut cache: OptionDefinition = serde_json::from_value(json!({
+            "key": "cache", "spellings": [{"flag": "--cache", "polarity": true}, {"flag": "--no-cache", "polarity": false}],
+            "kind": known(ValueKind::Boolean), "arity": known(Arity {min: 0, max: Some(0)}), "target": "launch"
+        }))
+        .unwrap();
+        cache.repeatable = known(true);
+        let mut empty = option("label", "--label", 1, Some(1));
+        empty.spellings[0].style = super::super::runtime_options::ValueStyle::Equals;
+        schema(vec![
+            alpha,
+            option("beta", "--beta", 1, Some(1)),
+            cache,
+            empty,
+        ])
+    }
+
+    #[test]
+    fn saved_order_keeps_interleaving_and_per_occurrence_aliases() {
+        let schema = interleaving_schema();
+        // A1 B2 A3 with a different equivalent alias per occurrence, a
+        // negative then positive switch, and an explicit empty value.
+        let values = saved(json!({
+            "alpha": {"spelling": null, "occurrences": [["1"], ["3"]]},
+            "beta": "2",
+            "cache": {"spelling": "--no-cache", "occurrences": [[false], [true]]},
+            "label": "",
+            ORDER_KEY: {"version": 1, "occurrences": [
+                {"key": "cache", "spelling": "--no-cache"},
+                {"key": "alpha"}, {"key": "beta"}, {"key": "alpha", "spelling": "-a"},
+                {"key": "cache", "spelling": "--cache"}
+            ]}
+        }));
+        let resolved = resolve_saved(&schema, &[], &values).unwrap();
+        assert_eq!(
+            resolved.argv,
+            [
+                "--label=",
+                "--no-cache",
+                "--alpha",
+                "1",
+                "--beta",
+                "2",
+                "-a",
+                "3",
+                "--cache"
+            ]
+        );
+        // The grouped values alone still resolve canonically for old readers.
+        let mut grouped = values.clone();
+        grouped.remove(ORDER_KEY);
+        grouped.insert(
+            "cache".into(),
+            json!({"spelling": null, "occurrences": [[false], [true]]}),
+        );
+        assert_eq!(
+            resolve_saved(&schema, &[], &grouped).unwrap().argv,
+            [
+                "--alpha",
+                "1",
+                "--alpha",
+                "3",
+                "--beta",
+                "2",
+                "--no-cache",
+                "--cache",
+                "--label="
+            ]
+        );
+        // Without a record the result is exactly the grouped resolution.
+        assert_eq!(
+            resolve_saved(&schema, &[], &grouped).unwrap(),
+            schema.resolve(&[], &overrides_from_map(&grouped)).unwrap()
+        );
+    }
+
+    #[test]
+    fn saved_order_refuses_future_malformed_divergent_and_oversized_records() {
+        let schema = interleaving_schema();
+        let base = json!({
+            "alpha": {"spelling": null, "occurrences": [["1"], ["3"]]},
+            "beta": "2",
+        });
+        let with = |order: Value| {
+            let mut values = saved(base.clone());
+            values.insert(ORDER_KEY.into(), order);
+            values
+        };
+        let refused = |order: Value, needle: &str| {
+            let values = with(order);
+            let before = values.clone();
+            let issues = resolve_saved(&schema, &[], &values).unwrap_err();
+            assert_eq!(issues[0].key, ORDER_KEY);
+            assert!(issues[0].message.contains(needle), "{}", issues[0].message);
+            // Refusal never edits the saved values.
+            assert_eq!(values, before);
+        };
+        let entries = json!([{"key": "alpha"}, {"key": "beta"}, {"key": "alpha"}]);
+        refused(json!({"version": 2, "occurrences": entries}), "version 2");
+        refused(json!({"occurrences": entries}), "no valid version");
+        refused(
+            json!({"version": 1, "occurrences": entries, "later": true}),
+            "malformed",
+        );
+        refused(
+            json!({"version": 1, "occurrences": [{"key": "alpha"}, {"key": "beta"}]}),
+            "1 occurrence(s) of alpha",
+        );
+        refused(
+            json!({"version": 1, "occurrences": [{"key": "alpha"}, {"key": "alpha"}, {"key": "gamma"}]}),
+            "gamma",
+        );
+        refused(
+            json!({"version": 1, "occurrences": [{"key": "alpha", "spelling": "-a"}, {"key": "beta"}, {"key": "alpha"}]}),
+            "spells alpha differently",
+        );
+        refused(
+            json!({"version": 1, "occurrences": [{"key": "alpha", "spelling": ""}]}),
+            "invalid entry",
+        );
+        refused(
+            json!({"version": 1, "occurrences": vec![json!({"key": "x".repeat(120)}); 600]}),
+            "64 KiB",
+        );
+        // An alias the schema does not have is refused at resolution.
+        let mut values = with(
+            json!({"version": 1, "occurrences": [{"key": "alpha"}, {"key": "beta"}, {"key": "alpha", "spelling": "--gone"}]}),
+        );
+        assert!(resolve_saved(&schema, &[], &values).unwrap_err()[0]
+            .message
+            .contains("alias"));
+        // A request field has no command-line position.
+        let mut request = option("temperature", "--temperature", 1, Some(1));
+        request.target = Target::Request;
+        request.spellings.clear();
+        request.request_field = known("temperature".into());
+        let mut with_request = schema.clone();
+        with_request.options.push(request);
+        values.insert("temperature".into(), json!("0.5"));
+        values.insert(
+            ORDER_KEY.into(),
+            json!({"version": 1, "occurrences": [{"key": "temperature"}]}),
+        );
+        assert!(resolve_saved(&with_request, &[], &values).unwrap_err()[0]
+            .message
+            .contains("requests"));
+    }
+
+    #[test]
+    fn unordered_values_keep_canonical_order_before_the_saved_sequence() {
+        let schema = interleaving_schema();
+        let values = saved(json!({
+            "alpha": {"spelling": null, "occurrences": [["1"], ["3"]]},
+            "beta": "2",
+            "label": "x",
+            ORDER_KEY: {"version": 1, "occurrences": [{"key": "beta"}, {"key": "alpha"}, {"key": "alpha"}]}
+        }));
+        assert_eq!(
+            resolve_saved(&schema, &[], &values).unwrap().argv,
+            ["--label=x", "--beta", "2", "--alpha", "1", "--alpha", "3"]
+        );
+        assert_eq!(
+            recorded_keys(&values),
+            BTreeSet::from(["alpha".to_string(), "beta".into()])
+        );
+    }
+
+    #[test]
+    fn saved_order_does_not_bypass_managed_bindings_or_unknown_arity() {
+        let mut port = option("port", "--port", 1, Some(1));
+        port.managed = Some(super::super::runtime_options::ManagedBinding::Port);
+        let mut fresh = option("fresh", "--fresh", 1, Some(1));
+        fresh.arity = Fact::default();
+        let schema = schema(vec![port, fresh]);
+        let managed = saved(json!({
+            "port": {"spelling": "--port", "occurrences": [["9"]]},
+            ORDER_KEY: {"version": 1, "occurrences": [{"key": "port", "spelling": "--port"}]}
+        }));
+        assert!(resolve_saved(&schema, &[], &managed).unwrap_err()[0]
+            .message
+            .contains("managed"));
+        let unknown = saved(json!({
+            "fresh": "kept",
+            ORDER_KEY: {"version": 1, "occurrences": [{"key": "fresh"}]}
+        }));
+        assert!(resolve_saved(&schema, &[], &unknown).unwrap_err()[0]
+            .message
+            .contains("arity is unknown"));
     }
 
     #[test]
