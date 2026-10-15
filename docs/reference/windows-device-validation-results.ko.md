@@ -6,7 +6,7 @@
 
 - 시작 source: `df3264bad99deb0144b947f96300e8625f7a2da5`, `origin/codex/windows-runtime-adapter-handoff`의 필수 인계 commit 포함을 확인했다.
 - 작업 branch: `codex/windows-runtime-adapter-validation`. 기존 변경과 사용자 설치·데이터를 보존했으며 원격 push는 수행하지 않았다.
-- 현재 구현 checkpoint: `981821262fbcc35484145e7a65ab1ab011a6b270`. G01의 공통 옵션 스키마·검증·argv 기반과 21개 회귀 검사를 추가했다. 실제 GUI/프로필 연결과 G02–G07 구현은 진행 중이며 전체 완료가 아니다.
+- 현재 기반 구현 checkpoint: `fd579cacf64e82f933e06d9e2c1e030a8ea370f9`. G01의 공통 옵션 스키마·검증·argv 기반 21개 회귀 검사와 G02의 소유 help 프로세스·fingerprint·취소 기반 16개 검사, 기존 process 검사 10개 및 clippy를 통과했다. 실제 GUI/프로필/실행 연결과 G03–G07 구현은 진행 중이며 전체 완료가 아니다.
 - 실제 GUI의 최근 검사는 `0cfbbb5`의 package6를 기준으로 한다. 이후 source의 기능에 소급 적용하지 않는다. 나머지 실제 흐름의 재검증은 진행 중이며 실행 전 항목을 pass로 계산하지 않는다. 별도 Python adapter helper는 `4d57c11`의 파일을 명시적으로 재등록한다.
 - raw: 저장소의 `tmp/windows-acceptance/`. 지속적인 재개 기록은 그 아래 `progress.md`다. raw·모델·개인 경로·프로필·토큰·build 산출물은 Git에 포함하지 않는다.
 
@@ -46,7 +46,11 @@ W03 실제 GUI의 느린 probe 취소→즉시 새 등록→이전 응답 대기
 - **같은 ROCm의 최신 GUI 재검증 pass:** package6를 SDK 환경 변수가 없고 PATH에 Windows 디렉터리만 있는 격리 홈에서 실행했다. 위 TheRock bundle을 실제 GUI로 import하고 별도 profile에서 같은 Qwen0.5B, 두 GPU, `ngl=99`, layer split `1,1`을 명시했다. 새 startup canary gate median KLD 0.001908/한도 0.038160, overrides 없음이었다. 실제 응답 `51`/usage, 생성 중 취소·Retry의 새 토큰, 정상 종료의 소유 프로세스/port 정리와 재시작 후 profile/부분 이력 보존을 확인했다. 같은 profile의 새 실행은 `Tokyo`/usage를 반환했다. full-model deep gate나 이전 HIP7.2 실패의 통과를 뜻하지 않는다. raw `gui/148–166`.
 - **실제 benchmark 취소/완료와 XLSX pass:** 같은 ROCm/Qwen0.5B로 단일 client의 1K prompt/1,024 output/10회 요청을 시작해 9개 완료 trial 뒤 GUI Cancel했다. 최종 상태는 cancelled/9개 보존이며 소유 benchmark child/port가 사라졌다. 별도 1K/128 output/1회는 completed였다. 실제 값은 prompt 1,024/completion 128/cache 0, client timing, TTFT 24.9765ms, TG 271.3751755tok/s, end-to-end 493.1392ms, process RAM 747,761,664 bytes다. PP 40,990.00468tok/s는 **estimated** 표기를 유지했다. GUI가 만든 XLSX(SHA256 `fe8e29c690539c2fb8e495baa2ba21afce774faf0baab22dcc601ac6f7797d59`)의 18열/한 trial을 실제 JSONL과 대조해 수치·단위·상태·빈 편차/속도비를 확인했다. native 파일 대화상자의 기본 목적지에 생성된 결과이며 자동화가 의도한 다른 경로 저장은 통과하지 않았다. CSV·의도적 benchmark 실패·build 취소/실패는 남아 있다. raw `gui/168–182`, `w07/verify-real-workbook.mjs`.
 
-후속 GUI 조작 중 다른 Windows 앱의 색상 선택기가 입력을 가로채는 상태를 확인했다. 해당 앱을 임의로 조작하지 않고 사용자에게 닫기를 요청했으며 독립 구현/파일 검증을 계속한다. 이 일시적 GUI 조건과 별도 설치 OS 세션 대기는 서로 다른 차단 항목이다.
+후속 GUI 조작 중 다른 Windows 앱의 색상 선택기가 입력을 가로채는 상태를 확인했다. 사용자가 닫았다고 알린 뒤 검증 창의 실제 포커스를 확인하고 아래 검사를 이어갔다. 이후 OS가 검증 창의 포커스 전환을 다시 거부해 사용자에게 해당 창을 전면으로 가져오도록 요청했다. 이 일시적 GUI 조건과 별도 설치 OS 세션 대기는 서로 다른 차단 항목이며 독립 구현/파일 검증은 계속한다.
+
+- **실제 CSV pass:** 같은 completed trial을 GUI에서 CSV로 내보냈다. native 저장 대화상자의 기본 목적지에 생성된 648 bytes 파일의 SHA256은 `48b3ae74516e581be309758db02d80e0dcb0df8e6164d1e92bd639e7675c4dbf`다. UTF-8 BOM·18열/한 trial·위 XLSX와 같은 실측 값/단위·estimated PP·빈 편차/속도비·경로/비밀값 부재를 실제 JSONL과 대조했다. 다른 목적지 입력은 자동화의 포커스 검사에서 차단돼 통과로 계산하지 않았다. raw `gui/183–202`, `w07/verify-real-csv.mjs`.
+- **의도적 benchmark 실패와 복구 pass:** 원래 14개 profile의 entry hash를 고정한 뒤 없는 template 파일을 가리키는 별도 profile을 GUI로 만들었다. 처음에는 기본 실행 설정만 바꿔 benchmark의 독립 target이 그대로였으므로 해당 completed 실행을 실패 검사로 계산하지 않았다. benchmark target을 명시적으로 바꾼 실제 실행은 같은 ROCm/Qwen0.5B에서 Ready 전 exit1, failed 상태와 원래 오류/argv를 저장했다. native 기록은 start/finish 두 event뿐이고 trial/usage가 없으며 key는 redacted다(SHA256 `a511145b57059805911dc64db3b324d166e2f7716681f36632f9c8b929b98866`). 소유 child/listener가 모두 정리됐다. Use default execution settings로 원래 profile에 복귀한 실행은 같은 모델/runtime에서 실제 1,024/128 token 한 trial을 완료했다(TTFT 23.9693ms, TG 270.1887939tok/s, 기록 SHA256 `bef5cfdaf70724ee9e4b12ed7f7d943a13d573858ba99e46517db1634362dfb1`). 기존 14개 profile은 모두 hash가 같고 실패 이력도 남았다. raw `gui/205–223`, `w07/verify-benchmark-failure.mjs`, `w07/verify-benchmark-recovery.mjs`.
+- **D15 fail, 수정 진행:** 실제 실패 화면에서 전체 engine usage가 주 오류와 Tasks에 중복 노출되어 작업 공간을 과도하게 차지했다. full 오류 보존과 별도로 간결한 원인·펼칠 수 있는 상세·높이 제한·키보드 접근을 제공하도록 구현 담당자에게 재현 근거를 전달했다. 수정/관련 검사/새 production GUI 재현을 마칠 때까지 해결로 판정하지 않는다. raw `gui/218`.
 
 ## 기기와 격리
 
@@ -66,6 +70,8 @@ W03 실제 GUI의 느린 probe 취소→즉시 새 등록→이전 응답 대기
 
 GUI/CLI 검사는 `AIOLM_HOME`뿐 아니라 HOME/USERPROFILE/APPDATA/LOCALAPPDATA/XDG/WebView2 profile도 임시 디렉터리로 분리한다. 최초 harness의 OS profile 격리 누락으로 실제 legacy 설정이 임시 홈에 복사된 실행은 무효화했다. 원본 데이터의 이동·수정은 없었으며 해당 임시 복사본만 정리하고 격리된 새 실행으로 다시 검사했다. 실제 최초 OS 실행·설치·업그레이드·제거·Credential Manager 검사는 기존 설치를 보호할 별도 테스트 OS 세션이 필요하다.
 
+사용자는 현재 별도 Windows 테스트 계정/VM 세션을 제공할 수 없다고 확인했다. 해당 실제 설치/OS 자격 증명 검사는 `blocked`로 유지하고 기존 계정에 설치하거나 사용자 자격 증명을 변경하지 않는다. 독립적인 G 구현과 나머지 검증은 계속 진행한다.
+
 ## W01–W08 checkpoint
 
 | ID | 상태 | 실행 근거와 다음 필수 작업 |
@@ -76,7 +82,7 @@ GUI/CLI 검사는 `AIOLM_HOME`뿐 아니라 HOME/USERPROFILE/APPDATA/LOCALAPPDAT
 | W04 | unrun | CPU/Vulkan·고정 Strata GUI의 실제 응답/usage·취소/Retry·재시작/Quit pass. 별도 고정 SDK 조합의 ROCm 실제 두 GPU gate/응답 pass, 기존 SDK 실패 보존. 개인 build 및 최종 source의 전체 GUI 흐름 재검증 필요 |
 | W05 | unrun | MCP 승인/거부/호출 취소/입력과 다른 반환값 후속·rich/error/call ID pass. 이미지 복합 질문의 내용 누락 fail 유지, 도형 후속·설정/이미지/이력 재로드 pass. 실제 다른 지원 미디어와 새 Retry 복구 재검증 필요 |
 | W06 | unrun | 실제 vector RAG·STT 전처리/답변/이력·멀티 세션·gateway 인증/라우팅 pass 조건은 위 checkpoint 참조. 최종 source task 거부·프로젝트 적용/내보내기·기존 CSV/XLSX 등 보존 재검증 필요 |
-| W07 | unrun | Unicode/공백 argv, runtime 설치/import 취소·의도적 import 실패/복구의 staging 정리, load/stream/benchmark 취소와 정상 종료의 소유 job/port 정리·다른 세션 보호 pass. build 취소/실패·benchmark 실패와 최종 source 반복 필요 |
+| W07 | unrun | Unicode/공백 argv, runtime 설치/import 취소·의도적 import 실패/복구의 staging 정리, load/stream/benchmark 취소·의도적 benchmark 실패 후 같은 모델 복구, 정상 종료의 소유 job/port 정리·다른 세션 보호 pass. build 취소/실패와 최종 source 반복 필요 |
 | W08 | blocked | production 네 target 빌드, CPU/ROCm portable의 실제 import/추론, Korean IME composition·tray 복원 pass 조건은 위 checkpoint 참조. 설치/업그레이드/제거는 별도 OS 세션 대기. 실제 알림 표시·전체 접근성·최종 재검증은 남음 |
 
 Windows native의 MLX·표준 vLLM·Metal 실제 추론은 현재 local runtime 플랫폼 계약상 `unsupported`다. 값 보존·명시적인 거부는 별도의 Windows 공통 검사이며 Linux vLLM과 Mac MLX/Metal의 실제 추론 성공으로 기록하지 않는다. WSL 실행은 이번 Windows native 성공 근거가 아니다.
@@ -142,6 +148,7 @@ fixture 2-rich의 실제 native 관리 GUI에서 단일 text와 embedded resourc
 | D12 | help/argv만으로 실제 실행 task를 확정하여 BGE chat 500 전달 | help arity 구분과 Ready 이후 실제 API task 확인. backend 전체 검사·실제 세 모드 CLI 및 package6 GUI gateway의 embedding/잘못된 chat task 거부 pass; `140fef0`, `876231f`, `8b4c5ea` |
 | D13 | 프로젝트 기본값 재적용이 사용자의 대화 지침·도구 선택을 덮어씀 | binding/version별 기본값 적용과 저장 marker, 관련 384 tests 및 history round trip pass. 실제 지침·이미지 순서의 응답/재로드/재시작 보존 pass; `1f97170` |
 | D14 | 호환성 reason 원시 키와 긴 오류 때문에 runtime 행 설명 붕괴 | 4개 언어 설명/미확인 사유 안내·유연한 열 배분/줄바꿈, 관련 52 tests/typecheck/lint/i18n pass. package6 실제 큰/좁은 창 표시 재검증 pass; `0cfbbb5` |
+| D15 | 실제 benchmark 실패의 긴 usage가 주 오류와 Tasks 공간을 과도하게 차지 | source `0cfbbb5` 실제 재현 fail, raw `gui/218`; 수정/관련 검사/production 재검증 진행 중 |
 | U1–U3 | 미선택 외부 runtime의 raw ID 오류·오래된 inventory/probe 표시·사라진 Tuning 경로 안내 | 107 관련 검사/typecheck/lint pass; `c920bec`. package5 실제 Model & settings→Profiles 안내 pass, 선택/cache 경합 최종 GUI 검사는 남음 |
 
 수정 코드와 자동 검사 성공만 있는 항목은 실제 production 재검증 전까지 해결 완료로 판정하지 않는다. 이번 G07에는 재시작한 중단 응답·MCP 취소 후 Retry, 선택/cache 경합, 작은 창·접근성·대량 옵션 관찰을 포함한다. 기존 일반 생성 Retry의 성공과 다른 복구 동선의 문제를 구분한다.
@@ -151,7 +158,7 @@ fixture 2-rich의 실제 native 관리 GUI에서 단일 text와 embedded resourc
 | ID | 상태 | 남은 실행 |
 | --- | --- | --- |
 | G01 | unrun | `9818212`의 versioned sourced schema·검증/argv 기반 21개 회귀 및 전체 clippy pass. descriptor·실제 GUI/profile 연결과 기존 계약 통합이 남음 |
-| G02 | unrun | 실제 help 실행 수명·cache identity·diff·취소/경합 구현 및 검사 |
+| G02 | unrun | `fd579ca`의 shell 없는 소유 help 실행·fingerprint/cache·부분 출력·취소 기반 16개 검사와 기존 process 10개/clippy pass. 취소 descendant 검사는 정확한 handle의 OS 종료를 확인해 10/10 반복 pass. descriptor·영속 cache/IPC·기존 Python help/실행 통합은 남음 |
 | G03 | unrun | deterministic help parser와 검증된 보강 metadata 구현 |
 | G04 | unrun | 공통 renderer/validator/profile/argv serializer 통합 |
 | G05 | unrun | executable/entry point→help→binding/protocol→Ready 여정 구현 |
