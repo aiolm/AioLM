@@ -294,46 +294,7 @@ fn help_command_for(
     let key = &selected.key;
     let mut command = match key.provider {
         ProviderId::Custom(_) => {
-            let manifest = registry::manifest(key.provider, &key.runtime)?;
-            let program = request
-                .program
-                .clone()
-                .unwrap_or_else(|| manifest.launch.program.clone());
-            let launch_program = same_program(&program, &manifest.launch.program);
-            if !launch_program && !manifest.artifacts.iter().any(|a| same_program(a, &program)) {
-                return Err(
-                    "help must run the registered launch program or one of its declared artifacts"
-                        .into(),
-                );
-            }
-            let prefix = registry::launch_prefix(&manifest);
-            if launch_program && !request.args.starts_with(&prefix) {
-                return Err(format!(
-                    "help arguments must start with the registered entry point: {}",
-                    prefix.join(" ")
-                ));
-            }
-            let mut environment = unicode_environment(super::python_env::engine_environment())?;
-            // Literal adapter environment applies; templated values (model,
-            // port, credentials) only exist for an actual launch.
-            for (name, value) in &manifest.launch.env {
-                if !value.contains('{') {
-                    environment.insert(name.clone(), value.clone());
-                }
-            }
-            HelpCommand {
-                program: PathBuf::from(program),
-                args: request.args.clone(),
-                environment,
-                working_directory: manifest.launch.working_directory.map(PathBuf::from),
-                artifacts: manifest.artifacts.iter().map(PathBuf::from).collect(),
-                runtime_version: registry::probe_version(key.provider, &key.runtime)?
-                    .unwrap_or_else(|| "unprobed".into()),
-                scope: request.scope.clone(),
-                encoding: Encoding::Auto,
-                timeout_ms: HELP_TIMEOUT_MS,
-                output_limit: MAX_STREAM_BYTES,
-            }
+            manifest_help_command(&registry::manifest(key.provider, &key.runtime)?, request)?
         }
         ProviderId::Llama => {
             if request.args != ["--help"] || request.program.is_some() || !request.scope.is_empty()
@@ -387,6 +348,120 @@ fn help_command_for(
     // of the fingerprint like every other environment value.
     command.environment.insert("LC_ALL".into(), "C".into());
     Ok(command)
+}
+
+/// The help command for a registered (or about to be registered) engine's
+/// manifest: its launch program or a declared artifact, the exact entry
+/// prefix, literal adapter environment, working directory and artifacts.
+pub fn manifest_help_command(
+    manifest: &registry::RuntimeManifest,
+    request: &HelpRequest,
+) -> Result<HelpCommand, String> {
+    let program = request
+        .program
+        .clone()
+        .unwrap_or_else(|| manifest.launch.program.clone());
+    let launch_program = same_program(&program, &manifest.launch.program);
+    if !launch_program && !manifest.artifacts.iter().any(|a| same_program(a, &program)) {
+        return Err(
+            "help must run the registered launch program or one of its declared artifacts".into(),
+        );
+    }
+    let prefix = registry::launch_prefix(manifest);
+    if launch_program && !request.args.starts_with(&prefix) {
+        return Err(format!(
+            "help arguments must start with the registered entry point: {}",
+            prefix.join(" ")
+        ));
+    }
+    let mut environment = unicode_environment(super::python_env::engine_environment())?;
+    // Literal adapter environment applies; templated values (model,
+    // port, credentials) only exist for an actual launch.
+    for (name, value) in &manifest.launch.env {
+        if !value.contains('{') {
+            environment.insert(name.clone(), value.clone());
+        }
+    }
+    let mut command = HelpCommand {
+        program: PathBuf::from(program),
+        args: request.args.clone(),
+        environment,
+        working_directory: manifest.launch.working_directory.clone().map(PathBuf::from),
+        artifacts: manifest.artifacts.iter().map(PathBuf::from).collect(),
+        // Hashes identify the build; this names the registration so a
+        // discovery before registration matches the one after it.
+        runtime_version: format!(
+            "registered:{}/{}",
+            manifest.engine_id.as_str(),
+            manifest.runtime_id
+        ),
+        scope: request.scope.clone(),
+        encoding: Encoding::Auto,
+        timeout_ms: HELP_TIMEOUT_MS,
+        output_limit: MAX_STREAM_BYTES,
+    };
+    command.environment.insert("LC_ALL".into(), "C".into());
+    Ok(command)
+}
+
+/// Check a draft's help evidence before registration: the discovery must
+/// describe exactly the engine the draft registers (same command identity)
+/// and document every binding flag. Returns the acceptance to record once
+/// the registration is published.
+pub fn draft_acceptance(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+    manifest: &registry::RuntimeManifest,
+) -> Result<Option<AcceptedHelp>, String> {
+    let Some(help) = &draft.help else {
+        return Ok(None);
+    };
+    let snapshot = runtime_help_store::load_snapshot(
+        root,
+        manifest.engine_id.as_str(),
+        &manifest.runtime_id,
+        &help.fingerprint,
+    )?
+    .ok_or("discover the entry point's help again; the reviewed discovery is missing")?;
+    registry::check_draft_against_help(draft, &snapshot.schema)?;
+    let identity =
+        manifest_help_command(manifest, &help.request)?.identity(&AtomicBool::new(false))?;
+    if identity.fingerprint != help.fingerprint {
+        return Err(
+            "the entry point changed since its help was discovered; discover its help again".into(),
+        );
+    }
+    Ok(Some(AcceptedHelp {
+        version: ACCEPTED_VERSION,
+        fingerprint: help.fingerprint.clone(),
+        request: help.request.clone(),
+    }))
+}
+
+/// Register an entry point from an explicit draft: build its manifest, check
+/// any reviewed help against it, register (hash + probe + publish) and pin
+/// that help for the new registration.
+pub async fn register_entrypoint(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+    cancel: Option<std::sync::Arc<AtomicBool>>,
+) -> Result<registry::RuntimeManifest, String> {
+    let manifest = registry::manifest_from_draft(draft)?;
+    let check = (root.to_path_buf(), draft.clone(), manifest.clone());
+    let accepted =
+        tokio::task::spawn_blocking(move || draft_acceptance(&check.0, &check.1, &check.2))
+            .await
+            .map_err(|e| e.to_string())??;
+    let registered = registry::register_manifest(manifest, cancel).await?;
+    if let Some(accepted) = accepted {
+        write_accepted(
+            root,
+            registered.engine_id.as_str(),
+            &registered.runtime_id,
+            &accepted,
+        )?;
+    }
+    Ok(registered)
 }
 
 fn accepted_path(root: &Path, engine: &str, runtime: &str) -> Result<PathBuf, String> {
@@ -446,7 +521,7 @@ pub fn accept(
     Ok(accepted)
 }
 
-pub(crate) fn write_accepted(
+fn write_accepted(
     root: &Path,
     engine: &str,
     runtime: &str,

@@ -743,6 +743,15 @@ pub async fn register(
     cancel: Option<Arc<AtomicBool>>,
 ) -> Result<RuntimeManifest, String> {
     let manifest: RuntimeManifest = bounded_json(source)?;
+    register_manifest(manifest, cancel).await
+}
+
+/// Register a validated manifest: hash its program, probe and artifacts, run
+/// the model-independent probe and publish atomically.
+pub async fn register_manifest(
+    manifest: RuntimeManifest,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<RuntimeManifest, String> {
     validate_manifest(&manifest)?;
     let target = path(manifest.engine_id, &manifest.runtime_id)?;
     if target.exists() {
@@ -1256,190 +1265,309 @@ pub fn bound_launch_flags(manifest: &RuntimeManifest) -> (Vec<(String, String)>,
     (flags, positional)
 }
 
-/// The version the registration's last successful probe reported.
-pub fn probe_version(engine: ProviderId, runtime: &str) -> Result<Option<String>, String> {
-    Ok(read_registration(engine, runtime)?
-        .probe
-        .map(|probe| probe.version))
+/// How a launch argument receives an app-owned value. Every binding is an
+/// explicit user choice confirmed against the engine's help; none is guessed.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ArgBinding {
+    /// `--flag value`, or `--flag=value` when `equals` is set.
+    Flag {
+        flag: String,
+        #[serde(default)]
+        equals: bool,
+    },
+    /// A positional argument directly after the entry prefix.
+    Positional,
 }
 
-/// Human-readable entry-point parameters for manifest suggestion.
+/// Where the app's per-session credential goes. Credentials never travel
+/// in argv.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuthBinding {
+    /// The engine accepts no credential; the app gateway still authenticates.
+    None,
+    /// The engine reads its key from this environment variable.
+    Env { name: String },
+}
+
+/// The engine itself serves the OpenAI-compatible HTTP API, or a separate
+/// bridge program the user selected does and drives the engine.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ServingProtocol {
+    OpenaiHttp,
+    Bridge {
+        program: String,
+        #[serde(default)]
+        prefix: Vec<String>,
+    },
+}
+
+/// Everything an entry-point registration needs, chosen explicitly by the
+/// user. Turned into a manifest v1 without adding any value of its own.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EntrypointSuggestion {
+pub struct EntrypointDraft {
     pub engine_id: ProviderId,
     pub runtime_id: String,
     pub display_name: String,
+    /// The user-selected executable or interpreter.
     pub program: String,
-    pub help_args: Vec<String>,
+    /// Exact tokens before the bindings: interpreter flags, script or
+    /// module, subcommand and static options, verbatim.
+    #[serde(default)]
+    pub prefix: Vec<String>,
+    #[serde(default)]
     pub working_directory: Option<String>,
+    /// Files whose bytes define this engine (scripts, adapter code). Their
+    /// hashes are checked before every probe and launch.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    /// Literal, non-secret environment values.
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    pub model: ArgBinding,
+    pub port: ArgBinding,
+    #[serde(default)]
+    pub host: Option<ArgBinding>,
+    #[serde(default)]
+    pub served_model: Option<ArgBinding>,
+    pub auth: AuthBinding,
+    pub protocol: ServingProtocol,
+    /// The separate model probe that prints the probe JSON contract.
+    pub probe: ProcessSpec,
     pub health_path: String,
+    #[serde(default)]
     pub health_authenticated: bool,
+    pub model_formats: Vec<String>,
+    /// The help discovery the bindings were checked against, if any. Help is
+    /// not required to register; when given, every binding flag must be one
+    /// the help documents.
+    #[serde(default)]
+    pub help: Option<DraftHelp>,
 }
 
-/// Suggest a manifest v1 from an entry-point plus its verified help schema.
-///
-/// The caller reviews the JSON, saves it to a new file and registers it;
-/// registration still runs a fresh model probe before reporting Ready.
-/// Single-value launch flags become manifest options; positional, variadic,
-/// optional-value, repeated and unknown-arity flags stay in the help schema
-/// only and never become silent launch guesses. App-owned bindings always use
-/// explicit `{model}`/`{port}`/`{api_key}` placeholders.
-pub fn suggest_manifest_from_help(
-    entry: &EntrypointSuggestion,
-    schema: &super::runtime_options::OptionSchema,
-) -> Result<RuntimeManifest, String> {
-    schema.validate()?;
-    if entry.engine_id.as_str() != schema.binding.engine
-        || entry.runtime_id != schema.binding.runtime
-    {
-        return Err("help schema targets another runtime".into());
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftHelp {
+    pub fingerprint: String,
+    pub request: super::runtime_schema::HelpRequest,
+}
+
+fn binding_tokens(binding: &ArgBinding, placeholder: &str) -> Result<Vec<String>, String> {
+    match binding {
+        ArgBinding::Positional => Ok(vec![placeholder.into()]),
+        ArgBinding::Flag { flag, equals } => {
+            let body = flag.trim_start_matches('-');
+            if !flag.starts_with('-')
+                || body.is_empty()
+                || flag.len() > 128
+                || !body
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-.".contains(&b))
+            {
+                return Err(format!("binding flag {flag:?} is not a single option name"));
+            }
+            Ok(if *equals {
+                vec![format!("{flag}={placeholder}")]
+            } else {
+                vec![flag.clone(), placeholder.into()]
+            })
+        }
     }
+}
+
+/// Launch program, prefix and declared artifacts of an entry point. A bridge
+/// serves HTTP and drives the engine, which stays a hash-checked artifact.
+fn entry_launch(
+    program: &str,
+    prefix: &[String],
+    artifacts: &[String],
+    environment: &BTreeMap<String, String>,
+    protocol: &ServingProtocol,
+) -> Result<(String, Vec<String>, Vec<String>), String> {
+    if prefix
+        .iter()
+        .chain(environment.values())
+        .any(|token| token.contains('{'))
+    {
+        return Err("entry prefix and literal environment cannot contain {bindings}".into());
+    }
+    let mut artifacts = artifacts.to_vec();
+    let (launch_program, launch_prefix) = match protocol {
+        ServingProtocol::OpenaiHttp => (program.to_owned(), prefix.to_vec()),
+        ServingProtocol::Bridge {
+            program: bridge,
+            prefix: bridge_prefix,
+        } => {
+            if bridge_prefix.iter().any(|token| token.contains('{')) {
+                return Err("bridge prefix cannot contain {bindings}".into());
+            }
+            artifacts.push(program.to_owned());
+            (bridge.clone(), bridge_prefix.clone())
+        }
+    };
+    artifacts.sort();
+    artifacts.dedup();
+    Ok((launch_program, launch_prefix, artifacts))
+}
+
+/// The part of an entry point help discovery depends on, before any binding
+/// is chosen.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntrypointHelp {
+    pub engine_id: ProviderId,
+    pub runtime_id: String,
+    pub program: String,
+    #[serde(default)]
+    pub prefix: Vec<String>,
+    #[serde(default)]
+    pub working_directory: Option<String>,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    pub protocol: ServingProtocol,
+}
+
+/// A manifest-shaped description of an entry point before registration, used
+/// only to derive the same help command the registered engine will have.
+pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, String> {
     if !entry.engine_id.is_custom() {
         return Err("entry-point registration requires a custom.* engine ID".into());
     }
-    if entry.program.trim().is_empty() || !Path::new(&entry.program).is_absolute() {
-        return Err("entry-point program must be an absolute user-selected path".into());
-    }
-    if entry.health_path.trim().is_empty() {
-        return Err("entry-point health path is required".into());
-    }
-    let mut options = Vec::new();
-    for option in &schema.options {
-        if option.managed.is_some() || option.position.is_some() {
-            continue;
-        }
-        if option.target != super::runtime_options::Target::Launch {
-            continue;
-        }
-        let Some(spelling) = option.spellings.first() else {
-            continue;
-        };
-        let arity = option
-            .arity
-            .supported()
-            .copied()
-            .unwrap_or(super::runtime_options::Arity { min: 0, max: None });
-        if option.arity.supported().is_none()
-            || arity.max.is_none()
-            || arity.min != 1
-            || arity.max != Some(1)
-        {
-            continue;
-        }
-        if option.repeatable.supported() == Some(&true) {
-            continue;
-        }
-        let kind = match option.kind.supported() {
-            Some(super::runtime_options::ValueKind::Boolean) => {
-                if option.spellings.len() == 1 && spelling.polarity.is_none() {
-                    serde_json::json!({"type": "flag"})
-                } else {
-                    serde_json::json!({"type": "toggle"})
-                }
-            }
-            Some(super::runtime_options::ValueKind::Integer) => {
-                let (min, max) = match option.range.supported() {
-                    Some(range) => (
-                        range.min.unwrap_or(i64::MIN as f64),
-                        range.max.unwrap_or(i64::MAX as f64),
-                    ),
-                    None => (i64::MIN as f64, i64::MAX as f64),
-                };
-                serde_json::json!({"type": "integer", "min": min.trunc() as i64, "max": max.trunc() as i64})
-            }
-            Some(super::runtime_options::ValueKind::Number) => {
-                let (min, max) = match option.range.supported() {
-                    Some(range) => (
-                        range.min.unwrap_or(i32::MIN as f64),
-                        range.max.unwrap_or(i32::MAX as f64),
-                    ),
-                    None => (i32::MIN as f64, i32::MAX as f64),
-                };
-                serde_json::json!({"type": "number", "min": min, "max": max})
-            }
-            Some(
-                super::runtime_options::ValueKind::Text | super::runtime_options::ValueKind::Tokens,
-            )
-            | None => {
-                serde_json::json!({"type": "text", "max_len": 4096})
-            }
-            Some(super::runtime_options::ValueKind::Json) => serde_json::json!({"type": "json"}),
-        };
-        // Choices only when explicitly documented; prose never becomes one.
-        let kind = match option.choices.supported() {
-            Some(choices) if !choices.is_empty() => {
-                let strings = choices
-                    .iter()
-                    .filter_map(|value| value.as_str().map(str::to_owned))
-                    .collect::<Vec<_>>();
-                if strings.len() == choices.len() {
-                    serde_json::json!({"type": "choice", "choices": strings})
-                } else {
-                    kind
-                }
-            }
-            _ => kind,
-        };
-        options.push(ExternalOption {
-            key: option.key.clone(),
-            flag: Some(spelling.flag.clone()),
-            kind,
-            target: "launch".into(),
-            group: option.group.clone(),
-            runtime_default: None,
-        });
-    }
-    let launch_args = if entry.help_args.iter().any(|arg| arg == "serve") {
-        vec![
-            "serve".to_string(),
-            "--model".to_string(),
-            "{model}".to_string(),
-            "--port".to_string(),
-            "{port}".to_string(),
-        ]
-    } else {
-        vec![
-            "--model".to_string(),
-            "{model}".to_string(),
-            "--port".to_string(),
-            "{port}".to_string(),
-        ]
+    path(entry.engine_id, &entry.runtime_id)?;
+    let (program, mut args, artifacts) = entry_launch(
+        &entry.program,
+        &entry.prefix,
+        &entry.artifacts,
+        &entry.environment,
+        &entry.protocol,
+    )?;
+    // Bindings follow the prefix in the registered manifest as well, so the
+    // entry prefix derived from both is identical.
+    args.push("{model}".into());
+    let process = ProcessSpec {
+        program,
+        args,
+        env: entry.environment.clone(),
+        working_directory: entry.working_directory.clone(),
     };
-    let manifest = RuntimeManifest {
+    validate_process(&process)?;
+    Ok(RuntimeManifest {
         schema_version: VERSION,
         adapter_version: VERSION,
         engine_id: entry.engine_id,
         runtime_id: entry.runtime_id.clone(),
-        display_name: entry.display_name.clone(),
+        display_name: entry.runtime_id.clone(),
+        platforms: Vec::new(),
+        protocol: "openai-v1".into(),
+        probe: process.clone(),
+        launch: process,
+        options: Vec::new(),
+        model_formats: Vec::new(),
+        models: Vec::new(),
+        artifacts,
+        health_path: "/".into(),
+        health_authenticated: false,
+    })
+}
+
+/// Build the manifest an entry-point draft describes, exactly: launch is
+/// program + prefix + the chosen bindings; the credential goes to the chosen
+/// environment variable; the probe is the user's explicit probe command.
+pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, String> {
+    if !draft.engine_id.is_custom() {
+        return Err("entry-point registration requires a custom.* engine ID".into());
+    }
+    let (program, mut args, artifacts) = entry_launch(
+        &draft.program,
+        &draft.prefix,
+        &draft.artifacts,
+        &draft.environment,
+        &draft.protocol,
+    )?;
+    args.extend(binding_tokens(&draft.model, "{model}")?);
+    if let Some(host) = &draft.host {
+        args.extend(binding_tokens(host, "{host}")?);
+    }
+    args.extend(binding_tokens(&draft.port, "{port}")?);
+    if let Some(alias) = &draft.served_model {
+        args.extend(binding_tokens(alias, "{model_alias}")?);
+    }
+    let mut env = draft.environment.clone();
+    if let AuthBinding::Env { name } = &draft.auth {
+        if env.insert(name.clone(), "{api_key}".into()).is_some() {
+            return Err(format!("{name} is both a literal value and the credential"));
+        }
+    }
+    let manifest = RuntimeManifest {
+        schema_version: VERSION,
+        adapter_version: VERSION,
+        engine_id: draft.engine_id,
+        runtime_id: draft.runtime_id.clone(),
+        display_name: draft.display_name.clone(),
+        // Registration happens on, and declares, this machine only.
         platforms: vec![Platform {
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
         }],
         protocol: "openai-v1".into(),
-        probe: ProcessSpec {
-            program: entry.program.clone(),
-            args: vec!["{model}".into(), "{options_json}".into()],
-            env: Default::default(),
-            working_directory: entry.working_directory.clone(),
-        },
+        probe: draft.probe.clone(),
         launch: ProcessSpec {
-            program: entry.program.clone(),
-            args: launch_args,
-            env: [("ENGINE_KEY".to_string(), "{api_key}".to_string())]
-                .into_iter()
-                .collect(),
-            working_directory: entry.working_directory.clone(),
+            program,
+            args,
+            env,
+            working_directory: draft.working_directory.clone(),
         },
-        options,
-        model_formats: vec!["unknown".into()],
+        options: Vec::new(),
+        model_formats: draft.model_formats.clone(),
         models: Vec::new(),
-        artifacts: Vec::new(),
-        health_path: entry.health_path.clone(),
-        health_authenticated: entry.health_authenticated,
+        artifacts,
+        health_path: draft.health_path.clone(),
+        health_authenticated: draft.health_authenticated,
     };
     validate_manifest(&manifest)?;
     Ok(manifest)
+}
+
+/// Every binding flag must be an option the discovered help documents, so a
+/// typo or a guessed spelling cannot become the model/port/host binding.
+pub fn check_draft_against_help(
+    draft: &EntrypointDraft,
+    schema: &super::runtime_options::OptionSchema,
+) -> Result<(), String> {
+    let documented = |flag: &str| {
+        schema
+            .options
+            .iter()
+            .any(|option| option.spellings.iter().any(|s| s.flag == flag))
+    };
+    for (name, binding) in [
+        ("model", Some(&draft.model)),
+        ("port", Some(&draft.port)),
+        ("host", draft.host.as_ref()),
+        ("served model", draft.served_model.as_ref()),
+    ] {
+        match binding {
+            Some(ArgBinding::Flag { flag, .. }) if !documented(flag) => {
+                return Err(format!(
+                    "the {name} binding {flag} is not an option the discovered help documents"
+                ))
+            }
+            Some(ArgBinding::Positional)
+                if !schema.options.iter().any(|option| option.position.is_some()) =>
+            {
+                return Err(format!(
+                    "the {name} binding is positional but the discovered help documents no positional argument"
+                ))
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1614,91 +1742,5 @@ mod tests {
         assert_eq!(launch_prefix(&manifest), ["-m", "synthetic.server"]);
         manifest.launch.args = vec!["--model={model}".into()];
         assert!(launch_prefix(&manifest).is_empty());
-    }
-    #[test]
-    fn entrypoint_suggestion_keeps_explicit_bindings_and_skips_guesses() {
-        use super::super::runtime_help::{Identity, TextOutput, PARSER_VERSION};
-        use super::super::runtime_help_parse::parse_help_report;
-        use super::super::runtime_options::SchemaBinding;
-        use std::collections::BTreeMap;
-        let fingerprint = "a".repeat(64);
-        let report = super::super::runtime_help::HelpReport {
-            identity: Identity {
-                fingerprint: fingerprint.clone(),
-                executable_sha256: "b".repeat(64),
-                artifacts_sha256: BTreeMap::new(),
-                parser_version: PARSER_VERSION,
-            },
-            scope: vec![],
-            stdout: TextOutput {
-                text: "Options:\n  --threads N           threads\n  --port PORT           port\n  --files FILE [FILE ...]  files\n".into(),
-                clean_text: "Options:\n  --threads N           threads\n  --port PORT           port\n  --files FILE [FILE ...]  files\n".into(),
-                encoding: "utf-8".into(),
-                decoding_loss: false,
-                truncated: false,
-                read_error: None,
-            },
-            stderr: TextOutput {
-                text: String::new(),
-                clean_text: String::new(),
-                encoding: "utf-8".into(),
-                decoding_loss: false,
-                truncated: false,
-                read_error: None,
-            },
-            exit_code: Some(0),
-            success: true,
-            cancelled: false,
-            timed_out: false,
-            error: None,
-            elapsed_ms: 1,
-        };
-        let schema = parse_help_report(
-            &report,
-            SchemaBinding {
-                engine: "custom.suggest-test".into(),
-                runtime: "build-1".into(),
-                fingerprint: fingerprint.clone(),
-            },
-        )
-        .unwrap();
-        let manifest = suggest_manifest_from_help(
-            &EntrypointSuggestion {
-                engine_id: ProviderId::parse("custom.suggest-test").unwrap(),
-                runtime_id: "build-1".into(),
-                display_name: "Suggest Test".into(),
-                program: if cfg!(windows) {
-                    "C:\\synthetic\\server.exe".into()
-                } else {
-                    "/synthetic/server".into()
-                },
-                help_args: vec!["--help".into()],
-                working_directory: None,
-                health_path: "/health".into(),
-                health_authenticated: false,
-            },
-            &schema,
-        )
-        .unwrap();
-        // Explicit app-owned bindings use placeholders, never literal values.
-        assert!(manifest.launch.args.contains(&"{model}".to_string()));
-        assert!(manifest.launch.args.contains(&"{port}".to_string()));
-        assert!(!manifest.launch.args.iter().any(|a| a.contains("{api_key}")));
-        assert_eq!(
-            manifest.launch.env.get("ENGINE_KEY").map(String::as_str),
-            Some("{api_key}")
-        );
-        assert!(manifest.probe.args.iter().any(|a| a.contains("{model}")));
-        assert!(manifest
-            .probe
-            .args
-            .iter()
-            .any(|a| a.contains("{options_json}")));
-        // Single-value --threads converts; managed --port and variadic --files
-        // stay in the help schema only.
-        assert!(manifest.options.iter().any(|o| o.key == "threads"));
-        assert!(!manifest.options.iter().any(|o| o.key == "port"));
-        assert!(!manifest.options.iter().any(|o| o.key == "files"));
-        validate_manifest(&manifest).unwrap();
     }
 }

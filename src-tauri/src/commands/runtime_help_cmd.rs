@@ -242,15 +242,55 @@ pub(crate) fn runtime_help_import(
     crate::providers::runtime_ordered::import_plan_text(&schema, &scope, &text)
 }
 
-/// Suggest a manifest v1 from an entry-point plus its verified help schema.
-/// The caller reviews, saves and registers it; registration still runs a fresh
-/// model probe before reporting Ready. Exotic arities stay schema-only.
+/// Discover an entry point's help before registration, through the same
+/// command derivation the registered engine will use, so the reviewed help
+/// can be pinned at registration without running help twice.
 #[tauri::command]
-pub(crate) fn runtime_help_suggest_manifest(
-    entry: crate::providers::registry::EntrypointSuggestion,
-    schema: OptionSchema,
+pub(crate) async fn entrypoint_help_discover(
+    entry: crate::providers::registry::EntrypointHelp,
+    request: runtime_schema::HelpRequest,
+) -> Result<(HelpReport, RuntimeDescriptor), String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = crate::providers::registry::provisional_manifest(&entry)?;
+        let command = runtime_schema::manifest_help_command(&manifest, &request)?;
+        runtime_help_store::discover_against(
+            service(),
+            &adapters_root(),
+            &entrypoint_owner(&entry),
+            entry.engine_id.as_str(),
+            &entry.runtime_id,
+            &command,
+            &[],
+            runtime_help_store::Baseline::Latest,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Cancel an entry point's in-flight help discovery.
+#[tauri::command]
+pub(crate) async fn entrypoint_help_cancel(
+    entry: crate::providers::registry::EntrypointHelp,
+) -> Result<bool, String> {
+    service().cancel_owner(&entrypoint_owner(&entry))
+}
+
+fn entrypoint_owner(entry: &crate::providers::registry::EntrypointHelp) -> String {
+    format!(
+        "entrypoint:{}/{}",
+        entry.engine_id.as_str(),
+        entry.runtime_id
+    )
+}
+
+/// The manifest an entry-point draft would register, for review before the
+/// register action. Adds nothing the user did not choose.
+#[tauri::command]
+pub(crate) fn entrypoint_manifest_preview(
+    draft: crate::providers::registry::EntrypointDraft,
 ) -> Result<crate::providers::registry::RuntimeManifest, String> {
-    crate::providers::registry::suggest_manifest_from_help(&entry, &schema)
+    crate::providers::registry::manifest_from_draft(&draft)
 }
 
 /// Parse a complete help report without spawning. Failed or truncated reports

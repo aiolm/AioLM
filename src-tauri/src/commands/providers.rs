@@ -459,6 +459,43 @@ pub(crate) async fn runtime_adapter_register(
     .await
 }
 
+/// Register an executable/entry point from explicit choices: launch prefix,
+/// model/host/port/credential bindings, serving protocol (or bridge), probe
+/// command and health endpoint. When the draft carries reviewed help, it must
+/// describe exactly this engine and document every binding flag; it is then
+/// accepted for the new registration. A fresh model probe still decides Ready.
+#[tauri::command]
+pub(crate) async fn runtime_entrypoint_register(
+    state: State<'_, AppState>,
+    draft: providers::registry::EntrypointDraft,
+) -> Result<providers::registry::RuntimeManifest, String> {
+    let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
+    let _operation = state.operation.lock().await;
+    if super::runtimes::runtime_resources_in_use(&state)? {
+        return Err("stop model sessions before registering a runtime".into());
+    }
+    state.runtime_cancel.store(false, Ordering::Release);
+    providers::runtime_schema::register_entrypoint(
+        &providers::registry::root(),
+        &draft,
+        Some(state.runtime_cancel.clone()),
+    )
+    .await
+}
+
+/// Pick an executable, script or file (`file`) or a working directory
+/// (`folder`) with the native dialog. Nothing is read or run here.
+#[tauri::command]
+pub(crate) async fn pick_runtime_path(kind: String) -> Result<Option<String>, String> {
+    let dialog = rfd::AsyncFileDialog::new();
+    let picked = match kind.as_str() {
+        "file" => dialog.pick_file().await,
+        "folder" => dialog.pick_folder().await,
+        _ => return Err("unknown picker kind".into()),
+    };
+    Ok(picked.map(|item| item.path().to_string_lossy().into_owned()))
+}
+
 #[tauri::command]
 pub(crate) async fn pick_runtime_adapter() -> Result<Option<String>, String> {
     let file = rfd::AsyncFileDialog::new()
