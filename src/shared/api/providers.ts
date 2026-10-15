@@ -1,5 +1,6 @@
 import { invoke } from './transport.ts';
 import type { AppConfig, GgufModel } from './types.ts';
+import type { CommandSyntax } from './runtimeHelp.ts';
 
 import { PROVIDERS, type ProviderId } from './providerIdentity.ts';
 export { PROVIDERS, isProviderId, isExternalProvider } from './providerIdentity.ts';
@@ -93,7 +94,7 @@ export const modelArtifact = (path: string) => invoke<ModelArtifact>('model_arti
 export const modelCompatibility = (cfg: AppConfig) => invoke<ModelCompatibility>('model_compatibility', { cfg });
 export const providerCommandPreview = (cfg: AppConfig) => invoke<string[]>('provider_command_preview', { cfg });
 export const providerOptionIssues = (cfg: AppConfig) => invoke<Array<{ key: string; code: string; message: string }>>('provider_option_issues', { cfg });
-export const providerImportCommand = (providerId: ProviderId, command: string) => invoke<{ model?: string; options: Record<string, unknown>; issues: Array<{ key: string; message: string }> }>('provider_import_command', { providerId, command });
+export const providerImportCommand = (providerId: ProviderId, command: string, syntax?: CommandSyntax) => invoke<{ model?: string; options: Record<string, unknown>; issues: Array<{ key: string; message: string }> }>('provider_import_command', { providerId, command, ...(syntax ? { syntax } : {}) });
 export async function listModelArtifacts(modelsDir: string, scanId?: string, selection?: { provider: ProviderId; runtime: string }) {
   const catalog = await invoke<{ models: CatalogModel[]; truncated: boolean }>('list_model_artifacts', { modelsDir, scanId: scanId ?? null,
     providerId: selection?.provider ?? null, runtimeId: selection?.runtime ?? null });

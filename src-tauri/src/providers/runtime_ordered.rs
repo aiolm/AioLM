@@ -380,8 +380,22 @@ pub fn import_plan_text(
     selected_scope: &[String],
     text: &str,
 ) -> Result<ImportedPlan, String> {
+    import_plan_text_with_syntax(
+        schema,
+        selected_scope,
+        text,
+        super::options::CommandSyntax::Posix,
+    )
+}
+
+pub fn import_plan_text_with_syntax(
+    schema: &OptionSchema,
+    selected_scope: &[String],
+    text: &str,
+    syntax: super::options::CommandSyntax,
+) -> Result<ImportedPlan, String> {
     schema.validate()?;
-    let words = super::options::split_command(text)?;
+    let words = super::options::split_command_with_syntax(text, syntax)?;
     let mut plan: OrderedPlan = Vec::new();
     let mut managed = Vec::new();
     let mut unrecognized: Vec<String> = Vec::new();
@@ -708,6 +722,22 @@ mod tests {
             .any(|w| w.contains("--mystery")));
         assert_eq!(imported.plan.len(), 1);
         assert_eq!(imported.plan[0].key, "threads");
+    }
+
+    #[test]
+    fn command_import_preserves_windows_path_backslashes() {
+        let schema = schema(vec![option("template", "--template", 1, Some(1))]);
+        let text = r"--template C:\tpl\x.jinja";
+        let imported = import_plan_text_with_syntax(
+            &schema,
+            &[],
+            text,
+            super::super::options::CommandSyntax::Windows,
+        )
+        .unwrap();
+        assert_eq!(imported.plan[0].values, vec![json!(r"C:\tpl\x.jinja")]);
+        let legacy = import_plan_text(&schema, &[], text).unwrap();
+        assert_eq!(legacy.plan[0].values, vec![json!("C:tplx.jinja")]);
     }
 
     #[test]

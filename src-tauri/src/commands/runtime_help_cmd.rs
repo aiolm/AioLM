@@ -264,8 +264,14 @@ pub(crate) fn runtime_help_import(
     schema: OptionSchema,
     scope: Vec<String>,
     text: String,
+    syntax: Option<crate::providers::options::CommandSyntax>,
 ) -> Result<crate::providers::runtime_ordered::ImportedPlan, String> {
-    crate::providers::runtime_ordered::import_plan_text(&schema, &scope, &text)
+    crate::providers::runtime_ordered::import_plan_text_with_syntax(
+        &schema,
+        &scope,
+        &text,
+        syntax.unwrap_or_default(),
+    )
 }
 
 /// Discover an entry point's help before registration, through the same

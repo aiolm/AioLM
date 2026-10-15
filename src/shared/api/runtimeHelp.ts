@@ -184,12 +184,15 @@ export const runtimeHelpResolvePlan = (
   invoke<ResolvedOptions>('runtime_help_resolve_plan', { schema, scope, plan });
 
 /** Split a pasted command into an ordered plan preserving input order. */
+export type CommandSyntax = 'posix' | 'windows';
+
 export const runtimeHelpImport = (
   schema: OptionSchema,
   scope: string[],
   text: string,
+  syntax?: CommandSyntax,
 ): Promise<ImportedPlan> =>
-  invoke<ImportedPlan>('runtime_help_import', { schema, scope, text });
+  invoke<ImportedPlan>('runtime_help_import', { schema, scope, text, ...(syntax ? { syntax } : {}) });
 
 /** The help command a user chose; the adapter decides environment and artifacts. */
 export interface HelpRequest {

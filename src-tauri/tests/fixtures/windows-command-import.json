@@ -1,0 +1,10 @@
+[
+  {"input":"C:\\tpl\\x.jinja \"C:\\한글 dir\\one.jinja\" \"\" \"C:\\trailing dir\\\\\"","argv":["C:\\tpl\\x.jinja","C:\\한글 dir\\one.jinja","","C:\\trailing dir\\"]},
+  {"input":"--note \"눈길 ; & | %PATH% $HOME `x`\" \"--dash\" 'one two'","argv":["--note","눈길 ; & | %PATH% $HOME `x`","--dash","'one","two'"]},
+  {"input":"\"say \"\"hello\"\"\" \"say \\\"hello\\\"\" bare\\\\tail","argv":["say \"hello\"","say \"hello\"","bare\\\\tail"]},
+  {"input":"\"q\\\\\\\"r\"","argv":["q\\\"r"]},
+  {"input":"\"a b\\\\\" c","argv":["a b\\","c"]},
+  {"input":"one\" two \"three","argv":["one two three"]},
+  {"input":"\talpha\t\"beta gamma\"\t","argv":["alpha","beta gamma"]},
+  {"input":"\"unfinished value","argv":["unfinished value"]}
+]

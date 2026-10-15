@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
+import { commandImportCopy } from '../../shared/i18n/commandImportCopy';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import EngineSelect from '../../shared/ui/EngineSelect';
@@ -78,6 +79,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [validating, setValidating] = useState(true);
   const [error, setError] = useState(''); const [paste, setPaste] = useState(''); const [preview, setPreview] = useState('');
+  const [importSyntax, setImportSyntax] = useState<api.CommandSyntax | ''>('');
   // A preview can fail for launch-time reasons (a model awaiting its fresh
   // probe) while the options are valid; it informs but does not gate saving.
   const [previewError, setPreviewError] = useState('');
@@ -145,13 +147,14 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const visible = effective ? [] : schema.filter(option => inSection(option) && (option.target === 'request' || !option.flag || !runtimeFlags || runtimeFlags.includes(option.flag) || values[option.key] !== undefined));
   const schemaVisible = effective ? effective.schema.options.filter(option => inGroupSection(option.group)).length : visible.length;
   const importCommand = () => {
+    if (!importSyntax) return;
     const source = cfg;
     const request = ++importRequest.current;
     const current = () => cfgRef.current === source && importRequest.current === request;
     if (effective) {
       // Registered engines import through their effective schema; managed and
       // unrecognized words are reported, never applied.
-      void api.runtimeHelpImport(effective.schema, effective.scope, paste).then(result => {
+      void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax).then(result => {
         if (!current()) return;
         const review = [...result.managed, ...result.unrecognized];
         let next: Record<string, unknown>;
@@ -161,7 +164,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       }).catch(cause => { if (current()) setError(String(cause)); });
       return;
     }
-    void api.providerImportCommand(provider, paste).then(result => {
+    void api.providerImportCommand(provider, paste, importSyntax).then(result => {
       if (!current()) return;
       if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }
       setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
@@ -209,7 +212,11 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {advanced && <>
     {provider !== 'llama.cpp' && !api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
     <label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
-    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim()} onClick={importCommand}>{copy.import}</button>
+    <label>{commandImportCopy[locale].syntax}<CustomSelect<api.CommandSyntax | ''> ariaLabel={commandImportCopy[locale].syntax}
+      value={importSyntax} disabled={disabled}
+      options={[{ value: '', label: commandImportCopy[locale].choose }, { value: 'windows', label: commandImportCopy[locale].windows }, { value: 'posix', label: commandImportCopy[locale].posix }]}
+      onChange={value => { importRequest.current += 1; setImportSyntax(value); }} /></label>
+    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button>
     <button type="button" className="app-button app-button--secondary" disabled={disabled || runtimeNeeded} onClick={() => {
       const source = cfg;
       const request = ++previewRequest.current;

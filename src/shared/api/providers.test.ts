@@ -2,6 +2,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAdapterRegister, publishRuntimeCatalog, type ProviderDescription, listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
 import { invoke } from './transport.ts';
 import type { GgufModel } from './types';
+import { providerImportCommand } from './providers';
+import { runtimeHelpImport } from './runtimeHelp';
+import { effectiveSchema } from '../../testing/effectiveSchema';
 
 vi.mock('./transport.ts', () => ({
   NATIVE_RUNTIME_ERROR: 'Native desktop runtime is unavailable.',
@@ -11,6 +14,27 @@ vi.mock('./transport.ts', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('additive command import syntax contract', () => {
+  it('keeps the old provider payload when syntax is omitted and sends explicit Windows syntax when chosen', async () => {
+    vi.mocked(invoke).mockResolvedValue({ options: {}, issues: [] });
+    const command = String.raw`--template C:\tpl\x.jinja`;
+    await providerImportCommand('vllm', command);
+    expect(invoke).toHaveBeenLastCalledWith('provider_import_command', { providerId: 'vllm', command });
+    await providerImportCommand('vllm', command, 'windows');
+    expect(invoke).toHaveBeenLastCalledWith('provider_import_command', { providerId: 'vllm', command, syntax: 'windows' });
+  });
+
+  it('keeps the old effective-schema payload and adds only the selected quoting rule', async () => {
+    vi.mocked(invoke).mockResolvedValue({ plan: [], managed: [], unrecognized: [] });
+    const schema = effectiveSchema([]).schema;
+    const text = '--workers 4';
+    await runtimeHelpImport(schema, [], text);
+    expect(invoke).toHaveBeenLastCalledWith('runtime_help_import', { schema, scope: [], text });
+    await runtimeHelpImport(schema, [], text, 'posix');
+    expect(invoke).toHaveBeenLastCalledWith('runtime_help_import', { schema, scope: [], text, syntax: 'posix' });
+  });
 });
 
 const compatibility = (tasks: string[], status: ModelCompatibility['status'] = 'supported'): ModelCompatibility => ({

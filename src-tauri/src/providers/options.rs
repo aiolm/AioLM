@@ -15,7 +15,7 @@
 //! typed configuration fields and server-help driven catalog, so it has no
 //! entries here; options never cross from one provider to another.
 use super::ProviderId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
@@ -962,6 +962,72 @@ pub fn split_command(text: &str) -> Result<Vec<String>, String> {
     Ok(words)
 }
 
+/// Pasted argument syntax is explicit. Older API clients that omit it keep
+/// the POSIX interpretation they already used.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSyntax {
+    #[default]
+    Posix,
+    Windows,
+}
+
+pub fn split_command_with_syntax(text: &str, syntax: CommandSyntax) -> Result<Vec<String>, String> {
+    if syntax == CommandSyntax::Posix {
+        return split_command(text);
+    }
+    if text.contains('\0') {
+        return Err("a Windows command line cannot contain NUL".into());
+    }
+    // Microsoft C runtime argument quoting, independent of the host OS:
+    // https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments
+    // This splits arguments only; it never evaluates cmd/PowerShell syntax.
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if !quoted && matches!(ch, ' ' | '\t') {
+            if started {
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+            continue;
+        }
+        started = true;
+        let mut slashes = 0;
+        if ch == '\\' {
+            slashes = 1;
+            while chars.peek() == Some(&'\\') {
+                chars.next();
+                slashes += 1;
+            }
+            if chars.peek() != Some(&'"') {
+                word.extend(std::iter::repeat_n('\\', slashes));
+                continue;
+            }
+            chars.next();
+        } else if ch != '"' {
+            word.push(ch);
+            continue;
+        }
+        word.extend(std::iter::repeat_n('\\', slashes / 2));
+        if slashes % 2 == 1 {
+            word.push('"');
+        } else if quoted && chars.peek() == Some(&'"') {
+            chars.next();
+            word.push('"');
+        } else {
+            quoted = !quoted;
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    Ok(words)
+}
+
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct ImportedCommand {
     pub options: Map<String, Value>,
@@ -993,7 +1059,15 @@ fn parse_spec_value(spec: &OptionSpec, text: &str) -> Option<Value> {
 /// Import a command line for one provider. Only that provider's flags are
 /// recognised; a llama.cpp flag in a vLLM command is reported, not translated.
 pub fn import_command(provider: ProviderId, text: &str) -> Result<ImportedCommand, String> {
-    let words = split_command(text)?;
+    import_command_with_syntax(provider, text, CommandSyntax::Posix)
+}
+
+pub fn import_command_with_syntax(
+    provider: ProviderId,
+    text: &str,
+    syntax: CommandSyntax,
+) -> Result<ImportedCommand, String> {
+    let words = split_command_with_syntax(text, syntax)?;
     let mut result = ImportedCommand::default();
     let specs = schema(provider);
     let mut index = 0;
@@ -1119,6 +1193,33 @@ pub fn import_command(provider: ProviderId, text: &str) -> Result<ImportedComman
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn windows_argument_quoting_preserves_paths_empty_values_and_literals() {
+        #[derive(Deserialize)]
+        struct Case {
+            input: String,
+            argv: Vec<String>,
+        }
+        // The corpus also runs against a separately compiled native MSVC
+        // wmain fixture; these are argument rules, not shell evaluation.
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/windows-command-import.json"
+        ))
+        .unwrap();
+        for case in cases {
+            assert_eq!(
+                split_command_with_syntax(&case.input, CommandSyntax::Windows).unwrap(),
+                case.argv,
+                "{:?}",
+                case.input
+            );
+        }
+        assert!(split_command_with_syntax("x\0y", CommandSyntax::Windows).is_err());
+        assert!(split_command_with_syntax("", CommandSyntax::Windows)
+            .unwrap()
+            .is_empty());
+    }
 
     fn map(value: Value) -> Map<String, Value> {
         value.as_object().unwrap().clone()

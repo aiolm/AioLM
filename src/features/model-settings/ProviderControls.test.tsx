@@ -284,8 +284,47 @@ describe('registered engine options from accepted help (G04)', () => {
     const rendered = render(view(config));
     await screen.findByLabelText(/^--workers/);
     fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--workers 4' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
     rendered.rerender(view({ ...config, active_runtime: 'syn-2' }));
+    await act(async () => { finish({ plan: [{ key: 'workers', values: [4] }], managed: [], unrecognized: [] }); });
+    expect(onChange).not.toHaveBeenCalled();
+    imported.mockRestore();
+  });
+
+  it('requires explicit command syntax and passes Windows paths to the common import without guessing', async () => {
+    const path = String.raw`C:\한글 dir\x.jinja`;
+    const option = schemaOption({ key: 'template', flag: '--template', target: 'launch', group: 'options', kind: { type: 'path' } });
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [option]));
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [{ key: 'template', values: [path] }], managed: [], unrecognized: [] });
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--template/);
+    const text = `--template "${path}"`;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: text } });
+    expect(screen.getByRole('button', { name: 'Import command' })).toBeDisabled();
+    expect(imported).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    await waitFor(() => expect(imported).toHaveBeenCalledWith(expect.any(Object), [], text, 'windows'));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ provider_options: expect.objectContaining({ 'custom.synthetic': expect.objectContaining({ template: path }) }) })));
+    imported.mockRestore();
+  });
+
+  it('discards an import result after the quoting rules change', async () => {
+    let finish!: (value: api.ImportedPlan) => void;
+    const imported = vi.spyOn(api, 'runtimeHelpImport').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import command' }), { target: { value: '--workers 4' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Windows argument quoting' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
+    fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     await act(async () => { finish({ plan: [{ key: 'workers', values: [4] }], managed: [], unrecognized: [] }); });
     expect(onChange).not.toHaveBeenCalled();
     imported.mockRestore();

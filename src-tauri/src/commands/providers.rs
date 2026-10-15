@@ -400,8 +400,13 @@ pub(crate) async fn model_compatibility(
 pub(crate) fn provider_import_command(
     provider_id: String,
     command: String,
+    syntax: Option<providers::options::CommandSyntax>,
 ) -> Result<providers::options::ImportedCommand, String> {
-    providers::options::import_command(provider(&provider_id)?, &command)
+    providers::options::import_command_with_syntax(
+        provider(&provider_id)?,
+        &command,
+        syntax.unwrap_or_default(),
+    )
 }
 
 #[tauri::command]
