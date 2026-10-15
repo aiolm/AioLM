@@ -1379,13 +1379,33 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     }
 }
 
+/// llama.cpp's CMake keeps an explicitly defined `LLAMA_BUILD_COMMIT`, so the
+/// built server reports the reviewed head instead of anything Git finds. Older
+/// trees ignore the definition and report `unknown` behind the Git ceiling;
+/// the build number stays the honest Git-less 0.
+fn reviewed_commit_define(commit: &str) -> Result<String, String> {
+    validate_commit_sha(commit)?;
+    Ok(format!(
+        "-DLLAMA_BUILD_COMMIT={}",
+        commit.to_ascii_lowercase()
+    ))
+}
+
 /// A PR runtime's own `--version` must not name a commit other than the one
-/// the user reviewed. An empty or `unknown` commit is accepted (the archive
-/// carries none); the source manifest records the reviewed head.
+/// the user reviewed. An empty or `unknown` commit is accepted (an older tree
+/// without the commit definition); anything else must be an abbreviated (at
+/// least 7 hex digits) or full prefix of the reviewed head. The source
+/// manifest records the reviewed head either way.
 fn reported_commit_matches_source(version: &RuntimeVersion, reviewed: &str) -> Result<(), String> {
     let reported = version.commit.trim().to_ascii_lowercase();
     let reviewed = reviewed.trim().to_ascii_lowercase();
-    if reported.is_empty() || reported == "unknown" || reviewed.starts_with(&reported) {
+    if reported.is_empty() || reported == "unknown" {
+        return Ok(());
+    }
+    if reported.len() >= 7
+        && reported.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && reviewed.starts_with(&reported)
+    {
         return Ok(());
     }
     Err(format!(
@@ -5062,8 +5082,9 @@ pub async fn install_pr_with(
         } else {
             String::new()
         };
-        let configure_args =
+        let mut configure_args =
             source_build_configure_args(backend, &source_root, &build_root, &architectures)?;
+        configure_args.push(reviewed_commit_define(&origin.commit)?);
         progress("configuring", 0.0, 0.0);
         run_cmake_command(
             &cmake,
@@ -10226,8 +10247,17 @@ mod tests {
         assert!(reported_commit_matches_source(&version("18dc7ef"), reviewed).is_ok());
         assert!(reported_commit_matches_source(&version("unknown"), reviewed).is_ok());
         assert!(reported_commit_matches_source(&version(""), reviewed).is_ok());
-        let error = reported_commit_matches_source(&version("ec0d5f6"), reviewed).unwrap_err();
-        assert!(error.contains("foreign Git metadata"), "{error}");
+        assert!(reported_commit_matches_source(&version(reviewed), reviewed).is_ok());
+        for foreign in ["ec0d5f6", "1", "18dc7e", "18dc7ef-dirty", "18DC7EFX"] {
+            let error = reported_commit_matches_source(&version(foreign), reviewed).unwrap_err();
+            assert!(error.contains("foreign Git metadata"), "{foreign}: {error}");
+        }
+        assert_eq!(
+            reviewed_commit_define(reviewed).unwrap(),
+            format!("-DLLAMA_BUILD_COMMIT={reviewed}")
+        );
+        assert!(reviewed_commit_define("18dc7ef").is_err());
+        assert!(reviewed_commit_define("x").is_err());
     }
 }
 #[cfg(all(test, windows))]
