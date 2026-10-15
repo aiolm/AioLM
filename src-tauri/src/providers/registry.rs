@@ -332,16 +332,27 @@ fn registration_for_inventory(mut registered: Registration) -> Result<Registrati
 pub fn manifest(engine: ProviderId, runtime: &str) -> Result<RuntimeManifest, String> {
     Ok(read_registration(engine, runtime)?.manifest)
 }
+/// The exact bytes a registration is stored as, refused when the reader
+/// (`bounded_json`) could not read them back. Nothing is written then.
+fn record_bytes(registered: &Registration) -> Result<Vec<u8>, String> {
+    let bytes = serde_json::to_vec_pretty(registered).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(format!(
+            "the runtime registration record would be {} KiB; registrations are limited to {} KiB. Shorten the manifest's options or option metadata",
+            bytes.len().div_ceil(1024),
+            LIMIT / 1024
+        ));
+    }
+    Ok(bytes)
+}
 fn save(registered: &Registration) -> Result<(), String> {
     let target = path(
         registered.manifest.engine_id,
         &registered.manifest.runtime_id,
     )?;
+    let bytes = record_bytes(registered)?;
     fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
-    crate::config::atomic_write(
-        &target,
-        &serde_json::to_vec_pretty(registered).map_err(|e| e.to_string())?,
-    )
+    crate::config::atomic_write(&target, &bytes)
 }
 fn valid_text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.contains('\0')
@@ -429,6 +440,14 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     }
     if let Some(metadata) = &m.option_metadata {
         metadata.validate(m.engine_id)?;
+    }
+    let size = serde_json::to_vec(m).map_err(|e| e.to_string())?.len() as u64;
+    if size > LIMIT {
+        return Err(format!(
+            "the runtime manifest is {} KiB; registrations are limited to {} KiB",
+            size.div_ceil(1024),
+            LIMIT / 1024
+        ));
     }
     if m.artifacts.len() > 64
         || m.artifacts
@@ -873,6 +892,9 @@ pub async fn register_manifest(
         launch_fingerprint: String::new(),
         error: None,
     };
+    // A record that cannot be read back is refused before the probe runs;
+    // `save` checks the final record again with the probe result.
+    record_bytes(&r)?;
     let cfg = AppConfig {
         active_provider: r.manifest.engine_id.as_str().into(),
         active_runtime: r.manifest.runtime_id.clone(),

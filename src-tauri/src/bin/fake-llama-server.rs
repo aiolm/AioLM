@@ -242,6 +242,10 @@ fn main() {
         let engine = arguments.get(index + 1).expect("adapter engine ID");
         let runtime = arguments.get(index + 2).expect("adapter runtime ID");
         let model = arguments.get(index + 3).expect("adapter model binding");
+        // Lets a test prove whether registration reached the probe at all.
+        if let Ok(path) = std::env::var("FAKE_PROBE_MARKER") {
+            std::fs::write(path, b"probed").expect("record probe marker");
+        }
         if arguments.iter().any(|arg| arg == "--adapter-probe-jitter")
             && model.contains("slow-model")
         {

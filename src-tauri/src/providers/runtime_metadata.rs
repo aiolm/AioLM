@@ -22,6 +22,24 @@ use std::collections::BTreeSet;
 
 pub const METADATA_VERSION: u32 = 1;
 const MAX_ENTRIES: usize = 256;
+/// One declared value (choice, default or operand) is a single argv token at
+/// most, which the resolver limits to 32 KiB.
+const MAX_LITERAL_BYTES: usize = 32 * 1024;
+/// The whole document stays well inside the 256 KiB registration record that
+/// must be read back after publication.
+const MAX_METADATA_BYTES: usize = 128 * 1024;
+
+fn literal_size(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+fn literal_error(what: &str, value: &Value) -> String {
+    format!(
+        "a declared {what} is {} KiB; one value is limited to {} KiB",
+        literal_size(value).div_ceil(1024),
+        MAX_LITERAL_BYTES / 1024
+    )
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,6 +211,21 @@ impl MetadataOption {
         if self.unit.as_ref().is_some_and(|unit| !bounded(unit, 64)) {
             return Err("a unit is short, non-empty text".into());
         }
+        if let Some(choice) = self
+            .choices
+            .iter()
+            .flatten()
+            .find(|choice| literal_size(choice) > MAX_LITERAL_BYTES)
+        {
+            return Err(literal_error("choice", choice));
+        }
+        if let Some(default) = self
+            .runtime_default
+            .as_ref()
+            .filter(|default| literal_size(&default.literal) > MAX_LITERAL_BYTES)
+        {
+            return Err(literal_error("runtime default", &default.literal));
+        }
         if let Some(choices) = &self.choices {
             if choices.is_empty()
                 || choices.len() > 256
@@ -302,7 +335,26 @@ impl OptionMetadata {
                         predicate.flag
                     ));
                 }
+                if let Some(value) = predicate
+                    .equals
+                    .as_ref()
+                    .filter(|value| literal_size(value) > MAX_LITERAL_BYTES)
+                {
+                    return Err(format!(
+                        "{}: {}",
+                        predicate.flag,
+                        literal_error("constraint operand", value)
+                    ));
+                }
             }
+        }
+        let size = serde_json::to_vec(self).map_err(|e| e.to_string())?.len();
+        if size > MAX_METADATA_BYTES {
+            return Err(format!(
+                "option metadata is {} KiB; it is limited to {} KiB",
+                size.div_ceil(1024),
+                MAX_METADATA_BYTES / 1024
+            ));
         }
         Ok(())
     }
@@ -815,6 +867,35 @@ mod tests {
                 .unwrap_err();
             assert!(error.contains(needle), "{needle}: {error}");
         }
+        // Each declared literal is one argv token at most; the document as a
+        // whole stays inside a readable registration.
+        let wide = "x".repeat(33 * 1024 - 2); // 33 KiB as a JSON string
+        for (options, constraints) in [
+            (json!([{"flag": "--cache", "choices": [wide]}]), json!([])),
+            (
+                json!([{"flag": "--cache", "runtime_default": {"literal": wide}}]),
+                json!([]),
+            ),
+            (
+                json!([{"flag": "--cache", "unit": "s"}]),
+                json!([{"kind": "requires", "when": {"flag": "--cache", "equals": wide}, "other": {"flag": "--x"}}]),
+            ),
+        ] {
+            let error = metadata(options, constraints)
+                .validate(engine())
+                .unwrap_err();
+            assert!(
+                error.contains("33 KiB") && error.contains("32 KiB"),
+                "{error}"
+            );
+        }
+        let large = (0..8)
+            .map(|i| json!({"flag": format!("--o{i}"), "choices": (0..20).map(|j| format!("{j}{}", "y".repeat(1000))).collect::<Vec<_>>()}))
+            .collect::<Vec<_>>();
+        assert!(metadata(json!(large), json!([]))
+            .validate(engine())
+            .unwrap_err()
+            .contains("limited to 128 KiB"));
         let too_many = (0..257)
             .map(|i| json!({"flag": format!("--o{i}"), "unit": "s"}))
             .collect::<Vec<_>>();
