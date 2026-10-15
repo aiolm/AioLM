@@ -191,7 +191,7 @@ describe("ModelsPanel CSS cascade", () => {
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store: storeFor({ ...baseCfg, models_dir: "C:/models", active_backend: "", active_build: "" }) }) }));
     expect(await screen.findByText("No runtime is selected.")).toBeVisible();
     // Without a provider the panel still offers the way to the runtime list.
-    expect(screen.getByRole("button", { name: "Manage runtimes" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Inference engines" })).toBeVisible();
     expect(await screen.findByRole("button", { name: "Start: ready.gguf" })).toBeDisabled();
   });
 

@@ -351,11 +351,11 @@ describe("Workspace navigation", () => {
     fireEvent.click(mainTab("Run a model"));
     await screen.findByText("Model library");
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("button")).toHaveLength(11);
-    fireEvent.click(mainTab("Manage runtimes"));
+    fireEvent.click(mainTab("Inference engines"));
     await screen.findByText("Saved runtime settings");
     fireEvent.click(screen.getByRole("button", { name: "Choose model" }));
     expect(await screen.findByRole("dialog", { name: "Model settings editor" })).toBeVisible();
-    expect(mainTab("Manage runtimes")).toHaveAttribute("aria-current", "page");
+    expect(mainTab("Inference engines")).toHaveAttribute("aria-current", "page");
   });
 
   it("collapses the desktop sidebar to a named icon rail that survives page changes", async () => {
@@ -428,7 +428,7 @@ describe("Workspace navigation", () => {
     fireEvent.click(mainTab("Run a model"));
     fireEvent.click(mainTab("Benchmark"));
     fireEvent.change(await screen.findByLabelText("Benchmark result"), { target: { value: "completed 24 t/s" } });
-    fireEvent.click(mainTab("Manage runtimes"));
+    fireEvent.click(mainTab("Inference engines"));
     fireEvent.click(await screen.findByText('Saved runtime settings'));
     expect(await screen.findByText("profiles")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }));

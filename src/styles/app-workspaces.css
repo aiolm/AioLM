@@ -36,8 +36,6 @@
 .runtimes-layout { display: grid; grid-template-columns: minmax(0,1fr); gap: 20px; align-items: start; }
 .runtimes-main { display: flex; flex-direction: column; min-width: 0; }
 .engine-select { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: var(--ui-text-support); }
-.runtime-engine-context { margin-block-end: 16px; }
-.runtime-engine-context .engine-select { max-width: 24rem; }
 .provider-runtime-list { display: grid; gap: 8px; margin-block: 12px; }
 .provider-runtime-row { flex-wrap: wrap; gap: 12px; }
 .provider-runtime-row > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
@@ -45,6 +43,44 @@
 .provider-runtime-row .app-page-actions { flex-wrap: wrap; }
 .runtimes-aside { display: grid; gap: 10px; align-content: start; min-width: 0; }
 .runtime-profiles-link { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
+/* Engine inventory: one neutral list for built-in and registered adapters,
+   with the add journey above it. An opened adapter keeps a back control and
+   its own heading above the existing runtime layout. */
+.adapter-add { display: grid; gap: 10px; }
+.adapter-add--empty { border-color: var(--ui-border-accent); background: var(--ui-soft-gradient); }
+.adapter-journey { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: adapter-step; }
+.adapter-journey > li { counter-increment: adapter-step; padding: 2px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-pill); color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
+.adapter-journey > li::before { content: counter(adapter-step) ". "; }
+.adapter-count { margin-block: 8px 0; }
+.adapter-list { display: grid; gap: 8px; margin: 8px 0 12px; padding: 0; list-style: none; }
+.adapter-row { padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); content-visibility: auto; contain-intrinsic-size: auto 52px; }
+.adapter-row__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.adapter-row__open { display: grid; flex: 1 1 12rem; gap: 2px; min-width: 0; min-height: var(--ui-control); padding: 4px; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: var(--ui-ink); font: inherit; text-align: start; cursor: pointer; overflow-wrap: anywhere; }
+.adapter-row__open:hover:not(:disabled) { background: var(--ui-row-hover); }
+.adapter-row__open:disabled { cursor: not-allowed; opacity: .6; }
+.adapter-row__meta { color: var(--ui-muted); font-size: var(--ui-text-support); }
+.adapter-row__badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.adapter-row__details { margin-block-start: 8px; padding-block-start: 8px; border-top: 1px solid var(--ui-border); color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
+.adapter-row__details ul { margin: 4px 0 0; padding-inline-start: 18px; }
+.adapter-context { display: grid; justify-items: start; gap: 4px; margin-block-end: 12px; }
+.adapter-back svg { flex-shrink: 0; }
+.adapter-next { flex-wrap: wrap; margin-block-start: 8px; }
+/* Registration is also used outside the model-settings dialog. Keep its
+   labels, token rows and progress readable in that independent page. */
+.entrypoint-registration { display: grid; gap: 14px; }
+.entrypoint-registration .entrypoint-steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.entrypoint-steps > li { padding: 5px 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control); color: var(--ui-muted); font-size: var(--ui-text-support); }
+.entrypoint-steps > li[aria-current="step"] { color: var(--ui-ink); border-color: var(--ui-border-accent); background: var(--ui-surface-muted); font-weight: 600; }
+.entrypoint-registration .model-settings-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 16px; }
+.entrypoint-registration .model-settings-fields > :is(div, fieldset) { grid-column: 1 / -1; }
+.entrypoint-registration label { display: grid; gap: 6px; min-width: 0; }
+.entrypoint-registration fieldset { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
+.entrypoint-registration legend { padding-inline: 4px; color: var(--ui-muted); font-size: var(--ui-text-support); }
+.entrypoint-registration label:has(> input:is([type="radio"], [type="checkbox"])) { display: flex; align-items: start; gap: 8px; }
+.entrypoint-registration label > input:is([type="radio"], [type="checkbox"]) { flex-shrink: 0; margin-block-start: 3px; }
+.entrypoint-path, .entrypoint-token { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.entrypoint-path > .app-input, .entrypoint-token > .app-input { flex: 1 1 12rem; width: auto; min-width: 0; }
+.entrypoint-path > button, .entrypoint-token > button { flex-shrink: 0; }
 .runtime-device-summary { min-width: 0; }
 .runtime-device-summary h2 { margin-bottom: 6px; color: var(--ui-ink); font-size: var(--ui-text-group); font-weight: 600; line-height: 1.4; }
 .runtime-device-properties { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 6px 20px; margin: 0; }

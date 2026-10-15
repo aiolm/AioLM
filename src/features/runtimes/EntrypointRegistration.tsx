@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type Ref } from 'react';
 import {
   entrypointHelpCancel,
   entrypointHelpDiscover,
@@ -90,8 +90,8 @@ function BindingField({ label, state, optional, documented, positionalDocumented
 /** Executable/entry point → help → explicit bindings, protocol and probe →
  * reviewed manifest → register. Nothing is inferred; a fresh model probe
  * after registration decides Ready. */
-export default function EntrypointRegistration({ locked, onRegistered, onBusyChange }: {
-  locked: boolean; onRegistered: (engine: ProviderId) => void; onBusyChange?: (busy: boolean) => void;
+export default function EntrypointRegistration({ locked, onRegistered, onBusyChange, titleRef }: {
+  locked: boolean; onRegistered: (engine: ProviderId) => void; onBusyChange?: (busy: boolean) => void; titleRef?: Ref<HTMLHeadingElement>;
 }) {
   const { locale } = useI18n();
   const copy = entrypointCopy[locale];
@@ -243,8 +243,8 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   ][step];
 
   return (
-    <section className="app-card app-card--tight mb-4" aria-labelledby={`${id}-title`}>
-      <h3 id={`${id}-title`} className="app-section-title">{copy.title}</h3>
+    <section className="app-card app-card--tight mb-4 entrypoint-registration" aria-labelledby={`${id}-title`}>
+      <h3 id={`${id}-title`} ref={titleRef} tabIndex={-1} className="app-section-title">{copy.title}</h3>
       <p className="app-section-hint">{copy.hint}</p>
       <nav aria-label={copy.steps}>
         <ol className="entrypoint-steps">
@@ -255,15 +255,17 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
       <form action="#" method="POST" onSubmit={event => event.preventDefault()}>
         {step === 0 && (
           <div className="model-settings-fields">
-            {([[copy.engine, engine, setEngine], [copy.runtime, runtime, setRuntime], [copy.display, displayName, setDisplayName]] as const).map(([label, value, set]) => (
+            <div className="entrypoint-primary">
+              <PathField label={copy.program} value={program} kind="file" disabled={disabled} required copy={copy} onChange={setProgram} />
+            </div>
+            <RuntimeArgumentList label={copy.prefix} tokens={prefix} disabled={disabled} onError={setError} onChange={setPrefix}
+              onFile={path => setArtifacts(current => (current.includes(path) ? current : [...current, path]))} />
+            {([[copy.display, displayName, setDisplayName], [copy.engine, engine, setEngine], [copy.runtime, runtime, setRuntime]] as const).map(([label, value, set]) => (
               <label key={label} htmlFor={`${id}-${label}`}>{label}
                 <input id={`${id}-${label}`} name={label} className="app-input" value={value} disabled={disabled}
                   autoCorrect="off" autoCapitalize="off" spellCheck={false} onChange={event => set(event.target.value)} />
               </label>
             ))}
-            <PathField label={copy.program} value={program} kind="file" disabled={disabled} required copy={copy} onChange={setProgram} />
-            <RuntimeArgumentList label={copy.prefix} tokens={prefix} disabled={disabled} onError={setError} onChange={setPrefix}
-              onFile={path => setArtifacts(current => (current.includes(path) ? current : [...current, path]))} />
             <PathField label={copy.workingDir} value={workingDir} kind="folder" disabled={disabled} copy={copy} onChange={setWorkingDir} />
             <RuntimeArgumentList label={copy.artifacts} tokens={artifacts} disabled={disabled} onError={setError} onChange={setArtifacts} onFile={() => undefined} />
             <fieldset>
