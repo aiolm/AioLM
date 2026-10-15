@@ -71,6 +71,11 @@ path = "tests/runtime_adapter_setup.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "runtime_command_journey"
+path = "tests/runtime_command_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "runtime_context_journey"
 path = "tests/runtime_context_journey.rs"
 required-features = ["test-fixtures"]

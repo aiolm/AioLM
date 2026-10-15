@@ -237,3 +237,24 @@ bridge는 `launch_resources`의 앱 소유 폴더에만 파생 deployment와 로
 Manifest의 명시적 launch/probe 디렉터리는 우선한다. probe 디렉터리가 없으면 launch 디렉터리를 사용하며, 새 등록의 첫 probe는 제거된 같은 runtime ID의 이전 help 문맥을 가져오지 않는다. GUI의 실행 작업 디렉터리 선택은 adapter가 선언한 디렉터리를 덮어쓸 수 없다. Entry point 등록에서 help에 경로를 지정하려면 entry point 자체에도 그 경로를 명시해야 한다.
 
 실제 디렉터리 변경은 help/probe identity를 변경하므로 다시 검토하고 model probe를 실행해야 한다. 기록된 폴더가 사라지면 저장된 옵션을 유지한 채 실행을 거부한다. 공통 도움말 화면에서 새 폴더를 선택하고 다시 탐색·수락해 복구한다. 폴더 선택의 늦은 응답은 이후의 사용자 입력이나 runtime 전환을 덮어쓰지 않는다. 이 계약은 실행 디렉터리에 한하며 subcommand·사용자 positional layout 및 encoding/locale의 후속 구현을 대신하지 않는다.
+
+
+## 명시적 entry token 역할과 subcommand 배치
+
+`command_layout`은 manifest·entry help·draft에 선택적으로 추가하는 버전 1 계약이다. `subcommands`는 실제 **serving entry prefix**의 0부터 시작하는 token 위치이며, `options`는 고정 옵션 위치와 뒤따르는 정확한 값 개수다. 예를 들어 prefix가 `["-I", "engine.py", "--label", "serve", "serve", "api"]`라면 다음 선언은 첫 `serve`를 `--label`의 값으로, 마지막 두 단어를 실제 중첩 subcommand로 구분한다.
+
+```json
+{
+  "version": 1,
+  "subcommands": [4, 5],
+  "options": [{ "index": 0, "values": 0 }, { "index": 2, "values": 1 }]
+}
+```
+
+진입 등록 GUI에서 **진입 인자 역할**을 켠 뒤 각 token을 리터럴·고정 옵션·서브커맨드로 명시한다. 고정 옵션에 소속된 값은 별도 subcommand로 선택할 수 없다. 선언은 어댑터/사용자 정보이며 도움말이나 API 능력을 새로 입증하지 않는다. Bridge를 사용하는 경우에는 실제 HTTP serving bridge의 prefix를 연결하며, 원래 native argv를 전달하는 기존 JSON 계약은 유지한다.
+
+Help 요청의 scope는 이 선언이 증명하는 실제 prefix와 일치해야 한다. 값 위치·범위 밖 token·중복/역순 scope·겹치는 역할·미지원 버전은 거부한다. 고정 옵션처럼 생긴 **값**은 그 이름의 일반 옵션을 예약하지 않는다. Layout 변경은 help 및 model probe identity를 무효화한다. 이전에 선언 없이 임의의 nonempty scope를 저장했다면 값을 유지한 채 다시 검토하도록 거부하며, 실제 subcommand를 연결한 entry point를 재등록해야 한다. 기존 scope 없는 등록과 생략된 필드의 wire/hash는 유지한다.
+
+Manifest 옵션은 선택적 `scope`로 위치를 명시할 수 있다. `[]`는 전역, `["serve"]`는 중간 scope다. 생략하면 기존처럼 수락한 help scope에 적용한다. 선언은 layout 안에 있어야 하며 명시적 scope 데이터 변경도 help/model probe identity를 무효화한다. 하나의 공통 resolver가 생성 과정에서 scope 경계를 기록하며, 실행 serializer는 그 경계로 전역 옵션을 첫 subcommand 앞에, 중간 옵션을 다음 subcommand 앞에, 최종 옵션을 기존 app binding 뒤에 배치한다. 같은 단어를 값과 subcommand로 썼다는 이유로 argv를 검색하거나 지우지 않는다. 내부 경계는 기존 `ResolvedOptions` wire에 추가하지 않는다.
+
+공통 import의 occurrence/spelling 저장 형식도 manifest launch 옵션에 사용할 수 있다. 타입·arity·반복·순서·제약은 effective schema로 검사하며 기존 manifest text의 `max_len`도 각 occurrence에 적용한다. 기존 scalar 저장형과 request 옵션 계약은 보존한다. 이 구현 단위의 근거는 합성 실제 help·저장/재로드·subprocess parser 및 GUI 검사다. 전체 interpreter/script 명령 import, 명시적 사용자 positional layout, encoding/locale과 실제 production 엔진 여정은 후속 검증이 남아 있으며 이 절로 완료 판정하지 않는다.

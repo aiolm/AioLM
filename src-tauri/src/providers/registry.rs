@@ -44,6 +44,8 @@ pub struct ProcessSpec {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalOption {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
     pub key: String,
     #[serde(default)]
     pub flag: Option<String>,
@@ -68,6 +70,8 @@ pub struct ModelBinding {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeManifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_layout: Option<super::runtime_command::CommandLayout>,
     pub schema_version: u32,
     pub adapter_version: u32,
     pub engine_id: ProviderId,
@@ -456,6 +460,9 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     if let Some(bindings) = &m.launch_bindings {
         validate_launch_bindings(bindings, &m.launch.args)?;
     }
+    if let Some(layout) = &m.command_layout {
+        layout.validate(&launch_prefix(m))?;
+    }
     if let Some(metadata) = &m.option_metadata {
         metadata.validate(m.engine_id)?;
     }
@@ -520,6 +527,13 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
     let (bound_flags, _) = bound_launch_flags(m);
     let mut keys = std::collections::BTreeSet::new();
     for option in &m.options {
+        if let Some(scope) = &option.scope {
+            let actual =
+                super::runtime_command::scope(m.command_layout.as_ref(), &launch_prefix(m))?;
+            if !super::runtime_options::valid_scope(scope) || !actual.starts_with(scope) {
+                return Err("adapter option scope is outside its declared command layout".into());
+            }
+        }
         if !valid_text(&option.key, 128)
             || !option
                 .key
@@ -671,7 +685,54 @@ pub fn saved_option_issues(
         .filter(|(key, _)| keys.contains(key))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    let mut issues = option_issues(m, &declared);
+    // Common GUI/import values carry occurrence and spelling records. The
+    // scalar-only legacy validator must not reject that storage envelope;
+    // the effective schema below validates its type, arity, order and facts.
+    let structured_launch = |key: &str, value: &Value| {
+        serde_json::from_value::<super::runtime_options::Override>(value.clone()).is_ok()
+            && m.options.iter().any(|option| {
+                // JSON values are already objects in the legacy contract;
+                // retain its whole-record 64 KiB check for both shapes.
+                option.key == key && option.target == "launch" && option.kind["type"] != "json"
+            })
+    };
+    let scalar = declared
+        .iter()
+        .filter(|(key, value)| !structured_launch(key, value))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let mut issues = option_issues(m, &scalar);
+    // max_len is an existing manifest text limit beyond the common schema's
+    // bounded text policy. Keep applying it to every explicit occurrence.
+    for option in m
+        .options
+        .iter()
+        .filter(|option| option.target == "launch" && option.kind["type"] == "text")
+    {
+        let Some(value) = declared
+            .get(&option.key)
+            .filter(|value| structured_launch(&option.key, value))
+        else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_value::<super::runtime_options::Override>(value.clone())
+        {
+            let max = option.kind["max_len"].as_u64().unwrap_or(0) as usize;
+            if value
+                .occurrences
+                .iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|text| text.len() > max)
+            {
+                issues.push(super::options::OptionIssue {
+                    key: option.key.clone(),
+                    code: "type",
+                    message: format!("{} exceeds its declared text length limit", option.key),
+                });
+            }
+        }
+    }
     let reported = issues.iter().map(|issue| issue.key.clone()).collect();
     issues.extend(super::runtime_schema::saved_issues(
         &root(),
@@ -1208,11 +1269,15 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
     // Manifest options and options only the runtime's accepted help
     // describes resolve together through the common schema; unknown keys block
     // launch with their values retained.
-    args.extend(super::runtime_schema::launch_arguments(
-        &root(),
-        cfg,
-        &options(cfg),
-    )?);
+    if m.command_layout.is_some() {
+        args = super::runtime_schema::assemble_registered_arguments(&root(), cfg, &m, &args)?;
+    } else {
+        args.extend(super::runtime_schema::launch_arguments(
+            &root(),
+            cfg,
+            &options(cfg),
+        )?);
+    }
     let mut env = m
         .launch
         .env
@@ -1308,6 +1373,22 @@ pub fn assess(
     super::compat::ModelCompatibility { provider:engine, status:if compatible { super::compat::CompatStatus::Partial } else { super::compat::CompatStatus::Unknown }, tasks:vec![], modalities:Modalities::default(), reasons:vec![], limitations:vec!["Format declaration only: selecting this model requires a fresh model-specific adapter probe.".into()], readiness:artifact.missing.clone(), evidence:"adapter-manifest" }
 }
 
+/// Explicit option scopes alter command placement. Omitted legacy scopes
+/// add nothing to existing help and model-probe identities.
+pub fn option_scope_digest(manifest: &RuntimeManifest) -> Option<String> {
+    let scoped = manifest
+        .options
+        .iter()
+        .filter(|option| option.scope.is_some())
+        .collect::<Vec<_>>();
+    (!scoped.is_empty()).then(|| {
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&scoped).expect("serializable option scopes"))
+        )
+    })
+}
+
 fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
     let values = options(cfg)
         .into_iter()
@@ -1331,6 +1412,12 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
     if let Some(launch_bindings) = &manifest.launch_bindings {
         binding["launch_bindings"] =
             serde_json::to_value(launch_bindings).expect("serializable bindings");
+    }
+    if let Some(digest) = option_scope_digest(manifest) {
+        binding["option_scopes"] = digest.into();
+    }
+    if let Some(layout) = &manifest.command_layout {
+        binding["command_layout"] = serde_json::to_value(layout).expect("serializable layout");
     }
     if let Some(bridge) = &manifest.bridge_command {
         binding["bridge_command"] = serde_json::to_value(bridge).expect("serializable bridge");
@@ -1566,6 +1653,8 @@ pub enum ServingProtocol {
 #[serde(deny_unknown_fields)]
 pub struct EntrypointDraft {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_layout: Option<super::runtime_command::CommandLayout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options_separator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_resources: Option<super::launch_resources::Request>,
@@ -1707,6 +1796,8 @@ fn entry_launch(
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntrypointHelp {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_layout: Option<super::runtime_command::CommandLayout>,
     pub engine_id: ProviderId,
     pub runtime_id: String,
     pub program: String,
@@ -1745,6 +1836,9 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
         &entry.environment,
         &entry.protocol,
     )?;
+    if let Some(layout) = &entry.command_layout {
+        layout.validate(&args)?;
+    }
     // Bindings follow the prefix in the registered manifest as well, so the
     // entry prefix derived from both is identical.
     let launch_bindings = LaunchBindings {
@@ -1765,6 +1859,7 @@ pub fn provisional_manifest(entry: &EntrypointHelp) -> Result<RuntimeManifest, S
     };
     validate_process(&process)?;
     Ok(RuntimeManifest {
+        command_layout: entry.command_layout.clone(),
         schema_version: VERSION,
         adapter_version: VERSION,
         engine_id: entry.engine_id,
@@ -1845,6 +1940,7 @@ pub fn manifest_from_draft(draft: &EntrypointDraft) -> Result<RuntimeManifest, S
         }
     }
     let manifest = RuntimeManifest {
+        command_layout: draft.command_layout.clone(),
         schema_version: VERSION,
         adapter_version: VERSION,
         engine_id: draft.engine_id,

@@ -300,8 +300,30 @@ pub struct OptionIssue {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ResolvedOptions {
+    /// Internal emission boundaries; never inferred by searching token text.
+    #[serde(skip)]
+    pub(crate) scope_boundaries: Vec<usize>,
     pub argv: Vec<String>,
     pub request: Map<String, Value>,
+}
+
+impl ResolvedOptions {
+    pub(crate) fn sections(&self, scope: &[String]) -> Result<Vec<Vec<String>>, String> {
+        if self.scope_boundaries.len() != scope.len() {
+            return Err("resolved scope boundaries do not match the command layout".into());
+        }
+        let mut start = 0;
+        let mut sections = Vec::new();
+        for (depth, index) in self.scope_boundaries.iter().copied().enumerate() {
+            if index < start || self.argv.get(index) != Some(&scope[depth]) {
+                return Err("resolved scope boundary is invalid".into());
+            }
+            sections.push(self.argv[start..index].to_vec());
+            start = index + 1;
+        }
+        sections.push(self.argv[start..].to_vec());
+        Ok(sections)
+    }
 }
 
 fn bounded_text(value: &str, max: usize) -> bool {
@@ -316,7 +338,7 @@ pub(crate) fn identifier(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b))
 }
 
-fn valid_scope(scope: &[String]) -> bool {
+pub(crate) fn valid_scope(scope: &[String]) -> bool {
     scope.len() <= 8
         && scope
             .iter()
@@ -646,8 +668,10 @@ impl OptionSchema {
             }
         }
         let mut argv = Vec::new();
+        let mut scope_boundaries = Vec::new();
         for depth in 0..=selected_scope.len() {
             if depth > 0 {
+                scope_boundaries.push(argv.len());
                 argv.push(selected_scope[depth - 1].clone());
             }
             let mut positional = Vec::new();
@@ -707,7 +731,11 @@ impl OptionSchema {
             });
         }
         if issues.is_empty() {
-            Ok(ResolvedOptions { argv, request })
+            Ok(ResolvedOptions {
+                argv,
+                request,
+                scope_boundaries,
+            })
         } else {
             Err(issues)
         }

@@ -34,6 +34,7 @@ pub mod portable;
 pub mod protocol;
 pub mod python_env;
 pub mod registry;
+pub mod runtime_command;
 pub mod runtime_help;
 pub mod runtime_help_parse;
 pub mod runtime_help_store;

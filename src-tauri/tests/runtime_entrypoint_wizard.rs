@@ -68,6 +68,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         "--adapter-no-health-auth".to_string(),
     ];
     let entry = EntrypointHelp {
+        command_layout: None,
         engine_id: engine,
         runtime_id: "local-1".into(),
         program: program.clone(),
@@ -111,6 +112,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         request: request.clone(),
     };
     let draft = EntrypointDraft {
+        command_layout: None,
         options_separator: None,
         launch_resources: None,
         models: vec![],

@@ -60,6 +60,7 @@ fn metadata(entry: Value, constraints: Value) -> Value {
 fn draft(area: &Path, marker: &Path, metadata: Value) -> EntrypointDraft {
     let program = env!("CARGO_BIN_EXE_fake-llama-server").to_string();
     EntrypointDraft {
+        command_layout: None,
         options_separator: None,
         launch_resources: None,
         models: vec![],

@@ -343,8 +343,10 @@ pub fn resolve_plan(
         }
     }
     let mut argv = Vec::new();
+    let mut scope_boundaries = Vec::new();
     for depth in 0..=selected_scope.len() {
         if depth > 0 {
+            scope_boundaries.push(argv.len());
             argv.push(selected_scope[depth - 1].clone());
         }
         if let Some(flags) = flags_by_depth.remove(&depth) {
@@ -364,6 +366,7 @@ pub fn resolve_plan(
         }
     }
     Ok(ResolvedOptions {
+        scope_boundaries,
         argv,
         request: canonical.request,
     })
@@ -433,6 +436,13 @@ pub fn import_plan_text_with_syntax(
         index += 1;
     }
     while index < words.len() {
+        // Only a token reached outside an option's consumed values may be
+        // the next scope boundary. Equal-looking values stay values.
+        if scope_cursor < selected_scope.len() && words[index] == selected_scope[scope_cursor] {
+            scope_cursor += 1;
+            index += 1;
+            continue;
+        }
         let word = words[index].clone();
         index += 1;
         if word == "--" {
@@ -1134,5 +1144,85 @@ mod tests {
         let imported = import_plan_text(&schema, &[], "--new-flag retained").unwrap();
         assert_eq!(imported.plan[0].key, "new_flag");
         assert!(resolve_plan(&schema, &[], &imported.plan).is_err());
+    }
+    #[test]
+    fn global_options_before_nested_subcommands_keep_equal_values_and_scope_boundaries() {
+        let mut worker = option("worker", "--worker", 1, Some(1));
+        worker.scope = vec!["serve".into()];
+        let mut pair = option("pair", "--pair", 2, Some(2));
+        pair.scope = vec!["serve".into(), "api".into()];
+        pair.repeatable = known(true);
+        let schema = schema(vec![option("root", "--root", 1, Some(1)), worker, pair]);
+        let scope = vec!["serve".into(), "api".into()];
+        let imported = import_plan_text(
+            &schema,
+            &scope,
+            "--root serve serve --worker api api --pair 1 2 --pair 3 4",
+        )
+        .unwrap();
+        assert!(
+            imported.unrecognized.is_empty(),
+            "{:?}",
+            imported.unrecognized
+        );
+        let resolved = resolve_plan(&schema, &scope, &imported.plan).unwrap();
+        assert_eq!(
+            resolved.sections(&scope).unwrap(),
+            vec![
+                vec!["--root", "serve"],
+                vec!["--worker", "api"],
+                vec!["--pair", "1", "2", "--pair", "3", "4"]
+            ]
+        );
+        let prefix = ["-I", "engine.py", "--label", "serve", "serve", "api"]
+            .map(String::from)
+            .to_vec();
+        let layout = super::super::runtime_command::CommandLayout {
+            version: 1,
+            subcommands: vec![4, 5],
+            options: vec![
+                super::super::runtime_command::PrefixOption {
+                    index: 0,
+                    values: 0,
+                },
+                super::super::runtime_command::PrefixOption {
+                    index: 2,
+                    values: 1,
+                },
+            ],
+        };
+        let mut template = prefix.clone();
+        template.extend(["--model", "synthetic.bin", "--port", "8080"].map(String::from));
+        assert_eq!(
+            layout
+                .assemble(&prefix, &template, &resolved.sections(&scope).unwrap())
+                .unwrap(),
+            vec![
+                "-I",
+                "engine.py",
+                "--label",
+                "serve",
+                "--root",
+                "serve",
+                "serve",
+                "--worker",
+                "api",
+                "api",
+                "--model",
+                "synthetic.bin",
+                "--port",
+                "8080",
+                "--pair",
+                "1",
+                "2",
+                "--pair",
+                "3",
+                "4"
+            ]
+        );
+        assert!(serde_json::to_value(&resolved)
+            .unwrap()
+            .get("scope_boundaries")
+            .is_none());
     }
 }

@@ -66,6 +66,7 @@ fn prefix() -> Vec<String> {
 fn entry(area: &Path, runtime: &str, metadata: Option<Value>) -> (EntrypointHelp, HelpRequest) {
     let program = env!("CARGO_BIN_EXE_fake-llama-server").to_string();
     let entry = EntrypointHelp {
+        command_layout: None,
         engine_id: providers::ProviderId::parse(ENGINE).unwrap(),
         runtime_id: runtime.into(),
         program,
@@ -96,7 +97,29 @@ fn entry(area: &Path, runtime: &str, metadata: Option<Value>) -> (EntrypointHelp
 }
 
 async fn register(area: &Path, runtime: &str, metadata: Option<Value>) -> Result<(), String> {
-    let (entry, request) = entry(area, runtime, metadata);
+    register_entry(area, runtime, metadata, None).await
+}
+
+async fn register_entry(
+    area: &Path,
+    runtime: &str,
+    metadata: Option<Value>,
+    roles: Option<(Vec<String>, Value)>,
+) -> Result<(), String> {
+    let (mut entry, mut request) = entry(area, runtime, metadata);
+    if let Some((prefix, roles)) = roles {
+        entry.command_layout = Some(serde_json::from_value(roles).unwrap());
+        entry.prefix = prefix;
+        request.args = entry.prefix.clone();
+        request
+            .args
+            .extend(["--adapter-help-fixture".into(), "--help".into()]);
+        request.scope = entry
+            .command_layout
+            .as_ref()
+            .unwrap()
+            .scope(&entry.prefix)?;
+    }
     let root = providers::registry::root();
     let provisional = providers::registry::provisional_manifest(&entry)?;
     let command = runtime_schema::manifest_help_command(&provisional, &request)?;
@@ -111,6 +134,7 @@ async fn register(area: &Path, runtime: &str, metadata: Option<Value>) -> Result
         Baseline::Latest,
     )?;
     let draft = EntrypointDraft {
+        command_layout: entry.command_layout.clone(),
         options_separator: None,
         launch_resources: None,
         models: vec![],
@@ -202,6 +226,12 @@ async fn fixed_entry_options_and_adapter_reservations_stay_app_owned() {
     cfg.normalize();
     register(&area.path, "local-1", None).await.unwrap();
     let root = providers::registry::root();
+    let (_, mut forged) = entry(&area.path, "local-1", None);
+    forged.scope = vec!["serve".into()];
+    assert!(
+        runtime_schema::help_command(&cfg, &forged).is_err(),
+        "a claimed subcommand absent from the actual launch entry must be refused"
+    );
 
     // The entry prefix fixes `--engine strata`; the documented selector
     // cannot be saved over it, so launch never claims a different engine.
@@ -302,4 +332,32 @@ async fn fixed_entry_options_and_adapter_reservations_stay_app_owned() {
         let mut state = shared.lock().unwrap();
         server::kill(&mut state.child, Some(err.clone()));
     }
+
+    let prefix = [
+        "--adapter-engine",
+        "--adapter-no-health-auth",
+        "--label",
+        "--engine",
+    ]
+    .map(String::from)
+    .to_vec();
+    register_entry(&area.path, "value-role", None, Some((prefix.clone(), json!({"version":1,"subcommands":[],"options":[{"index":0,"values":0},{"index":1,"values":0},{"index":2,"values":1}]})))).await.unwrap();
+    cfg.active_runtime = "value-role".into();
+    saved(&mut cfg, json!({"engine":"mock"}));
+    let effective = runtime_schema::effective(&root, &cfg, true).unwrap();
+    assert_eq!(
+        effective
+            .schema
+            .options
+            .iter()
+            .find(|o| o.key == "engine")
+            .unwrap()
+            .managed,
+        None,
+        "a fixed option VALUE that looks like a flag cannot reserve that flag"
+    );
+    providers::adapter::refresh(&cfg, None).await.unwrap();
+    let command = providers::registry::command(&cfg, port, "synthetic-key").unwrap();
+    assert!(command.args.starts_with(&prefix));
+    assert!(command.args.ends_with(&["--engine".into(), "mock".into()]));
 }

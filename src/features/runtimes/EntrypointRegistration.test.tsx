@@ -63,7 +63,7 @@ it('takes adapter setup through fresh help and preserves probe environment, mode
     prepare: { program: '/synthetic/prepare', args: [], env: {} } };
   const prepared: api.EntrypointDraft = {
     engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic', program: '/synthetic/engine',
-    prefix: [], artifacts: ['/synthetic/bridge.py'], environment: {}, protocol: { kind: 'openai_http' },
+    prefix: ['--label', 'serve', 'serve'], command_layout: { version: 1, subcommands: [2], options: [{ index: 0, values: 1 }] }, artifacts: ['/synthetic/bridge.py'], environment: {}, protocol: { kind: 'openai_http' },
     model: { kind: 'flag', flag: '--model' }, port: { kind: 'flag', flag: '--port' }, auth: { kind: 'none' },
     probe: { program: '/synthetic/probe', args: ['{model}'], env: { INSTALLED_LOADER: 'synthetic' }, working_directory: '/synthetic/sdk' },
     health_path: '/health', health_authenticated: false, model_formats: ['unknown'],
@@ -90,7 +90,8 @@ it('takes adapter setup through fresh help and preserves probe environment, mode
   await screen.findByRole('button', { name: 'Register' });
   expect(vi.mocked(api.entrypointManifestPreview).mock.calls.at(-1)?.[0]).toMatchObject({
     probe: prepared.probe, models: prepared.models, launch_resources: prepared.launch_resources, options_separator: '--',
-    help: { fingerprint: report.identity.fingerprint },
+    command_layout: prepared.command_layout,
+    help: { fingerprint: report.identity.fingerprint, request: { scope: ['serve'] } },
   });
 });
 

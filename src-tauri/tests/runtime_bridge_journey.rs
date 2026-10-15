@@ -146,6 +146,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         engine_argv_env: Some("SYNTHETIC_ENGINE_ARGV".into()),
     };
     let entry = EntrypointHelp {
+        command_layout: None,
         engine_id: id,
         runtime_id: "bridge-1".into(),
         program: engine.clone(),
@@ -188,6 +189,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         "{model}".into(),
     ]);
     let draft = EntrypointDraft {
+        command_layout: None,
         options_separator: Some("--".into()),
         launch_resources: Some(resource_request),
         models: vec![ModelBinding {

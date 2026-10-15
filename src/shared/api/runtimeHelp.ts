@@ -348,8 +348,16 @@ export interface ProcessSpec {
   working_directory?: string | null;
 }
 
+/** Explicit roles in the serving entry prefix, indexed by argv position. */
+export interface CommandLayout {
+  version: 1;
+  subcommands: number[];
+  options: Array<{ index: number; values: number }>;
+}
+
 /** An entry point before any binding is chosen; enough to derive its help. */
 export interface EntrypointHelp {
+  command_layout?: CommandLayout | null;
   engine_id: string;
   runtime_id: string;
   program: string;
@@ -380,6 +388,7 @@ export interface EntrypointDraft extends EntrypointHelp {
 }
 
 export interface RegisteredManifest {
+  command_layout?: CommandLayout | null;
   engine_id: string;
   runtime_id: string;
   display_name: string;

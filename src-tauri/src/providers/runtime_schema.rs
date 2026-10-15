@@ -23,8 +23,8 @@ use super::{
     runtime_metadata::{self, Applies, FactConflict, MetadataView, OptionMetadata},
     runtime_options::{
         Arity, Certainty, Fact, ManagedBinding, NumericRange, OptionDefinition, OptionIssue,
-        OptionSchema, RuntimeDefault, Source, Spelling, Target, ValueKind, ValueStyle,
-        SCHEMA_VERSION,
+        OptionSchema, ResolvedOptions, RuntimeDefault, Source, Spelling, Target, ValueKind,
+        ValueStyle, SCHEMA_VERSION,
     },
     runtime_ordered::{self, ORDER_KEY},
     ProviderId,
@@ -305,13 +305,14 @@ fn help_target_for(
         ProviderId::Custom(_) => {
             let manifest = registry::manifest(key.provider, &key.runtime)?;
             let prefix = registry::launch_prefix(&manifest);
+            let scope = super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)?;
             let mut args = prefix.clone();
             args.push("--help".into());
             let request = HelpRequest {
                 working_directory: None,
                 program: None,
                 args,
-                scope: Vec::new(),
+                scope,
             };
             (manifest.launch.program, false, prefix, request)
         }
@@ -462,6 +463,12 @@ pub fn manifest_help_command(
             prefix.join(" ")
         ));
     }
+    if launch_program
+        && request.scope
+            != super::runtime_command::scope(manifest.command_layout.as_ref(), &prefix)?
+    {
+        return Err("the help scope does not match the entry point; explicitly map its subcommand tokens and discover again".into());
+    }
     let mut environment = unicode_environment(super::python_env::engine_environment())?;
     // Literal adapter environment applies; templated values (model,
     // port, credentials) only exist for an actual launch.
@@ -504,6 +511,17 @@ pub fn manifest_help_command(
         timeout_ms: HELP_TIMEOUT_MS,
         output_limit: MAX_STREAM_BYTES,
     };
+    if let Some(digest) = registry::option_scope_digest(manifest) {
+        command
+            .runtime_version
+            .push_str(&format!(";option-scopes:{digest}"));
+    }
+    if let Some(layout) = &manifest.command_layout {
+        command.runtime_version.push_str(&format!(
+            ";command-layout:{:x}",
+            Sha256::digest(serde_json::to_vec(layout).map_err(|error| error.to_string())?)
+        ));
+    }
     command.environment.insert("LC_ALL".into(), "C".into());
     Ok(command)
 }
@@ -867,7 +885,7 @@ pub fn from_external(option: &ExternalOption, source: &Source) -> Option<OptionD
         "json" => CompatKind::Json,
         _ => return None,
     };
-    Some(compat_definition(
+    let mut definition = compat_definition(
         &option.key,
         &option.group,
         option.flag.as_deref(),
@@ -875,7 +893,11 @@ pub fn from_external(option: &ExternalOption, source: &Source) -> Option<OptionD
         kind,
         option.runtime_default.as_deref(),
         source,
-    ))
+    );
+    if let Some(scope) = &option.scope {
+        definition.scope = scope.clone();
+    }
+    Some(definition)
 }
 
 /// The argv a valid built-in catalog value produces, through the common
@@ -888,6 +910,7 @@ pub fn spec_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {
 }
 
 struct Compat {
+    explicit_scopes: BTreeMap<String, Vec<String>>,
     options: Vec<OptionDefinition>,
     /// Flag spelling to the app-owned binding it carries.
     managed_flags: BTreeMap<String, ManagedBinding>,
@@ -1194,6 +1217,7 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
             .iter()
             .map(|flag| ((*flag).to_owned(), ManagedBinding::Discovery))
             .collect();
+    let mut explicit_scopes = BTreeMap::new();
     let mut metadata = runtime_metadata::builtin(key.provider).map(|metadata| (metadata, true));
     let options = match key.provider {
         ProviderId::Custom(_) => {
@@ -1210,9 +1234,19 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
             for (flag, binding) in bound {
                 managed_flags.insert(flag, binding_for(&binding));
             }
+            for option in &manifest.options {
+                if let Some(scope) = &option.scope {
+                    explicit_scopes.insert(option.key.clone(), scope.clone());
+                }
+            }
             // Every option the fixed entry prefix spells (`--engine strata`,
             // `--flag=value`) is part of what was registered and probed.
-            for token in registry::launch_prefix(&manifest) {
+            let prefix = registry::launch_prefix(&manifest);
+            let fixed = match &manifest.command_layout {
+                Some(layout) => layout.fixed_flags(&prefix)?,
+                None => prefix,
+            };
+            for token in fixed {
                 let flag = token
                     .split_once('=')
                     .map_or(token.as_str(), |(flag, _)| flag);
@@ -1239,6 +1273,7 @@ fn compat(selected: &Selected) -> Result<Compat, String> {
         }
     };
     Ok(Compat {
+        explicit_scopes,
         options,
         managed_flags,
         metadata,
@@ -1340,7 +1375,11 @@ fn build_effective(
         // Catalog/manifest options apply to the same launch subcommand the
         // help describes, so one resolution orders and validates them all.
         for option in &mut options {
-            option.scope = scope.clone();
+            option.scope = compat
+                .explicit_scopes
+                .get(&option.key)
+                .cloned()
+                .unwrap_or_else(|| scope.clone());
         }
         for help in &snapshot.schema.options {
             let covered = help
@@ -1880,15 +1919,22 @@ pub fn saved_issues_for(
 /// Resolve saved values for launch with the effective schema. Any value only
 /// accepted help describes requires that help to still describe the runtime
 /// exactly; a changed runtime blocks launch with the values retained.
-fn resolve_launch(
+fn resolve_launch_plan(
     root: &Path,
     cfg: &AppConfig,
     selected: &Selected,
     mut values: Map<String, Value>,
     order: Option<&Value>,
-) -> Result<Vec<String>, String> {
+) -> Result<(ResolvedOptions, Vec<String>), String> {
     if values.is_empty() && order.is_none() {
-        return Ok(Vec::new());
+        return Ok((
+            ResolvedOptions {
+                argv: Vec::new(),
+                request: Map::new(),
+                scope_boundaries: Vec::new(),
+            },
+            Vec::new(),
+        ));
     }
     let mut effective = effective_for(root, cfg, selected, false)?;
     let help_keys = values
@@ -1933,7 +1979,55 @@ fn resolve_launch(
     if !resolved.request.is_empty() {
         return Err("request fields are sent with requests, not launch arguments".into());
     }
-    strip_scope(resolved.argv, &effective.scope)
+    Ok((resolved, effective.scope))
+}
+
+fn resolve_launch(
+    root: &Path,
+    cfg: &AppConfig,
+    selected: &Selected,
+    values: Map<String, Value>,
+    order: Option<&Value>,
+) -> Result<Vec<String>, String> {
+    let (resolved, scope) = resolve_launch_plan(root, cfg, selected, values, order)?;
+    strip_scope(resolved.argv, &scope)
+}
+
+/// A registered layout assembles the exact same resolver output used by
+/// validation and preview, without finding subcommands by their spelling.
+pub fn assemble_registered_arguments(
+    root: &Path,
+    cfg: &AppConfig,
+    manifest: &registry::RuntimeManifest,
+    template: &[String],
+) -> Result<Vec<String>, String> {
+    let layout = manifest
+        .command_layout
+        .as_ref()
+        .ok_or("the entry has no command layout")?;
+    let selected = Selected::from_config(cfg)?;
+    let effective = effective_for(root, cfg, &selected, false)?;
+    let all = super::launch::provider_options(cfg, selected.key.provider);
+    let values: Map<String, Value> = generic_values(&all)
+        .into_iter()
+        .filter(|(key, _)| {
+            effective
+                .schema
+                .options
+                .iter()
+                .find(|option| option.key == *key)
+                .is_none_or(|option| option.target == Target::Launch)
+        })
+        .collect();
+    if values.is_empty() && !all.contains_key(ORDER_KEY) {
+        return Ok(template.to_vec());
+    }
+    let (resolved, scope) = resolve_launch_plan(root, cfg, &selected, values, all.get(ORDER_KEY))?;
+    let prefix = registry::launch_prefix(manifest);
+    if layout.scope(&prefix)? != scope {
+        return Err("review help for the declared subcommands before using scoped options; saved values were retained".into());
+    }
+    layout.assemble(&prefix, template, &resolved.sections(&scope)?)
 }
 
 /// Launch arguments for every saved generic option of a registered engine:
@@ -2390,6 +2484,7 @@ mod tests {
             polarity: None,
         });
         let mut compat = Compat {
+            explicit_scopes: BTreeMap::new(),
             options: vec![option],
             managed_flags: BTreeMap::from([("--weights".into(), ManagedBinding::Model)]),
             metadata: None,

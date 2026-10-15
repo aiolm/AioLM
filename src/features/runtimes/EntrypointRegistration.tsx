@@ -26,6 +26,7 @@ import { helpSummary } from './helpSummary';
 import RuntimeArgumentList from './RuntimeArgumentList';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 import AdapterSetupPanel from './AdapterSetupPanel';
+import RuntimeCommandLayout from './RuntimeCommandLayout';
 
 type Copy = (typeof entrypointCopy)['en'];
 type Step = 0 | 1 | 2 | 3;
@@ -116,6 +117,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const [bridgePrefix, setBridgePrefix] = useState<string[]>([]);
   const [bridgeArgvEnv, setBridgeArgvEnv] = useState('');
   const [metadataText, setMetadataText] = useState('');
+  const [commandLayout, setCommandLayout] = useState<EntrypointHelp['command_layout']>();
   const [helpArgs, setHelpArgs] = useState<string[]>(['--help']);
   const [found, setFound] = useState<{ entry: string; request: HelpRequest; result: [HelpReport, RuntimeDescriptor] } | null>(null);
   const [skipHelp, setSkipHelp] = useState(false);
@@ -168,7 +170,8 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     environment: Object.fromEntries(env.filter(([name]) => name.trim())),
     protocol: protocol === 'bridge' ? { kind: 'bridge', program: bridgeProgram.trim(), prefix: bridgePrefix, engine_argv_env: bridgeArgvEnv.trim() } : { kind: 'openai_http' },
     ...(metadata.value ? { option_metadata: metadata.value } : {}),
-  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv, metadata]);
+    ...(commandLayout ? { command_layout: commandLayout } : {}),
+  }), [engine, runtime, program, prefix, workingDir, artifacts, env, protocol, bridgeProgram, bridgePrefix, bridgeArgvEnv, metadata, commandLayout]);
   const entryKey = JSON.stringify(entry);
   const current = found && found.entry === entryKey ? found : null;
   const schema = current?.result[1].schema;
@@ -181,7 +184,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     if (busy) return;
     const ownGeneration = ++generation.current;
     cancelled.current = false; pendingHelp.current = entry;
-    const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: [] };
+    const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: commandLayout?.subcommands.map(index => (protocol === 'bridge' ? bridgePrefix : prefix)[index] ?? '') ?? [] };
     setBusy(true); setError(''); setSkipHelp(false);
     registerTask({ id: taskId, kind: 'runtime', label: copy.title, interruptible: true, cancel: () => { cancelled.current = true; void entrypointHelpCancel(entry); } });
     try {
@@ -300,6 +303,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
         setProbeWorkingDir(prepared.probe.working_directory ?? null);
         setLaunchResources(prepared.launch_resources); setModelBindings(prepared.models);
         setOptionsSeparator(prepared.options_separator);
+        setCommandLayout(prepared.command_layout);
         setHealthPath(prepared.health_path); setHealthAuth(prepared.health_authenticated); setFormats(prepared.model_formats);
         setHelpArgs(['--help']); setFound(null); setSkipHelp(false); setManifest(''); setDone(false); setError('');
         setStep(1);
@@ -358,6 +362,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
                 </>
               )}
             </fieldset>
+            <RuntimeCommandLayout prefix={protocol === 'bridge' ? bridgePrefix : prefix} value={commandLayout} disabled={disabled} onChange={setCommandLayout} />
             <label htmlFor={`${id}-metadata`}>{copy.optionMetadata}</label>
             <textarea id={`${id}-metadata`} name="option-metadata" className="app-textarea" value={metadataText} disabled={disabled}
               autoCorrect="off" autoCapitalize="off" spellCheck={false}

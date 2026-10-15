@@ -370,6 +370,67 @@ fn main() {
         return;
     }
     if arguments
+        .get(1)
+        .is_some_and(|arg| arg == "--adapter-command-contract-fixture")
+    {
+        let result = (|| -> Result<serde_json::Value, String> {
+            let mut parsed = serde_json::json!({"pairs":[]});
+            let mut stage = 0;
+            let mut index = 3; // fixture mode and one fixed script token
+            while index < arguments.len() {
+                let token = &arguments[index];
+                index += 1;
+                if (stage == 0 && token == "serve") || (stage == 1 && token == "api") {
+                    stage += 1;
+                    continue;
+                }
+                let key = match (stage, token.as_str()) {
+                    (0, "--label") => "label",
+                    (0, "--global-name") => "global",
+                    (1, "--worker-mode") => "worker",
+                    (2, "--model") => "model",
+                    (2, "--port") => "port",
+                    (2, "--fresh-count") => "count",
+                    (2, "--fresh-pair") => "pairs",
+                    _ => return Err(format!("unexpected {token} in scope {stage}")),
+                };
+                let value = arguments.get(index).ok_or("missing option value")?.clone();
+                index += 1;
+                if key == "pairs" {
+                    let second = arguments.get(index).ok_or("missing tuple member")?.clone();
+                    index += 1;
+                    parsed[key]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!([value, second]));
+                } else if key == "count" {
+                    parsed[key] = value.parse::<u64>().map_err(|e| e.to_string())?.into();
+                } else {
+                    parsed[key] = value.into();
+                }
+            }
+            if stage != 2
+                || parsed["model"]
+                    .as_str()
+                    .is_none_or(|model| !std::path::Path::new(model).is_file())
+                || parsed["port"]
+                    .as_str()
+                    .is_none_or(|port| port.parse::<u16>().is_err())
+            {
+                return Err("incomplete command contract".into());
+            }
+            Ok(serde_json::json!({"argv":&arguments[1..],"parsed":parsed}))
+        })();
+        match result {
+            Ok(value) => println!("{value}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+    if arguments
         .iter()
         .any(|arg| arg == "--adapter-observe-context-fixture")
     {
