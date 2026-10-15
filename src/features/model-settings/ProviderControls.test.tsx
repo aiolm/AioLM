@@ -315,6 +315,67 @@ describe('registered engine options from accepted help (G04)', () => {
     expect(screen.getByText('The accepted help matches this runtime.')).toBeVisible();
   });
 
+  it('saves a confirmed repetition pinned to the accepted help and revalidates', async () => {
+    const effective = effectiveSchema([{ key: 'workers', flag: '--workers', target: 'launch', group: 'runtime', kind: { type: 'integer', min: 1, max: 8 } }], [fresh]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effective);
+    const confirm = vi.spyOn(api, 'runtimeHelpConfirmSyntax').mockResolvedValue(effective);
+    const cfg = { ...config, provider_options: { 'custom.synthetic': { fresh_pair: { spelling: null, occurrences: [['a', 'b'], ['c', 'd']] } } } };
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={cfg} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    await screen.findByLabelText(/^--workers/);
+    // Catalog options are adapter facts; only the help option offers confirmation.
+    expect(screen.getAllByText(/^Confirm value syntax/)).toHaveLength(1);
+    const issueCalls = vi.mocked(api.providerOptionIssues).mock.calls.length;
+    fireEvent.click(screen.getByRole('combobox', { name: 'repeatable (--fresh-pair)' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Can repeat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save confirmed syntax' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(cfg, 'a'.repeat(64), { fresh_pair: { repeatable: true } }));
+    await waitFor(() => expect(vi.mocked(api.providerOptionIssues).mock.calls.length).toBeGreaterThan(issueCalls));
+    confirm.mockRestore();
+  });
+
+  it('shows stale confirmations with the help difference and re-pins only still-unknown facts', async () => {
+    const items = { ...fresh, key: 'fresh_items', spellings: [{ flag: '--fresh-items' }], arity: { value: null, certainty: 'unknown' as const } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [fresh, items], {
+      supplement: {
+        fingerprint: 'c'.repeat(64), current: false, applied: [],
+        options: { fresh_pair: { arity: { min: 1, max: 1 }, repeatable: true }, fresh_items: { arity: { min: 1, max: null } } },
+        conflicts: [{ key: 'fresh_pair', field: 'arity', confirmed: { min: 1, max: 1 }, help: { min: 2, max: 2 } }],
+      },
+    }));
+    const confirm = vi.spyOn(api, 'runtimeHelpConfirmSyntax').mockImplementation(async () => effectiveSchema([], [fresh, items]));
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    expect(await screen.findByText(/Confirmed for an earlier help/)).toBeVisible();
+    expect(screen.getByText(/Differs from the current help \(arity: \{"min":2,"max":2\}\)/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm again for this help (fresh_pair, fresh_items)' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(config, 'a'.repeat(64), {
+      fresh_pair: { repeatable: true }, fresh_items: { arity: { min: 1, max: null } },
+    }));
+    confirm.mockRestore();
+  });
+
+  it('offers an explicit discard for an unreadable confirmation file', async () => {
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [fresh], { supplement_error: 'confirmed option syntax version 2 is not supported by this app' }));
+    const clear = vi.spyOn(api, 'runtimeHelpClearConfirmedSyntax').mockResolvedValue(effectiveSchema([], [fresh]));
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={config} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} /></I18nProvider>);
+    expect(await screen.findByText(/version 2 is not supported/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard all confirmations' }));
+    await waitFor(() => expect(clear).toHaveBeenCalledWith(config));
+    clear.mockRestore();
+  });
+
+  it('keeps the saved order record out of unknown values and reorders it from settings', async () => {
+    const items = { ...fresh, key: 'fresh_tag', spellings: [{ flag: '--fresh-tag' }], arity: { value: { min: 1, max: 1 }, certainty: 'verified' as const, source: { kind: 'help', document: 'stdout', start_line: 1, end_line: 1 } } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [fresh, items]));
+    const saved = { fresh_pair: { spelling: null, occurrences: [['a', 'b']] }, fresh_tag: 'x' };
+    const onChange = vi.fn();
+    const onInvalid = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...config, provider_options: { 'custom.synthetic': saved } }} disabled={false} onChange={onChange} onInvalid={onInvalid} /></I18nProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Move up: --fresh-tag "x"' }));
+    expect(onChange).toHaveBeenLastCalledWith({ provider_options: { 'custom.synthetic': { ...saved,
+      '@option_order': { version: 1, occurrences: [{ key: 'fresh_tag' }, { key: 'fresh_pair' }] } } } });
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
+  });
+
   it('keeps saved help values when the runtime changed and says why launch is blocked', async () => {
     vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [], {
       help_state: 'stale', help_detail: 'the runtime, its declared artifacts or its help command changed since its options were reviewed',

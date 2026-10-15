@@ -104,7 +104,11 @@ describe('generic runtime option renderer', () => {
     expect(screen.getByText(/Managed by the app/)).toBeInTheDocument();
     expect(screen.getByText(/Unrecognized/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Apply plan to values' }));
-    expect(onChange).toHaveBeenCalledWith({ alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2' });
+    // Grouped values alone would launch A1 A3 B2; the saved order keeps A1 B2 A3.
+    expect(onChange).toHaveBeenCalledWith({
+      alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
+      '@option_order': { version: 1, occurrences: [{ key: 'alpha' }, { key: 'beta' }, { key: 'alpha' }] },
+    });
   });
 });
 const known = <T,>(value: T) => ({ value, certainty: 'documented' as const, source: { kind: 'adapter', id: 't', revision: 'r' } });
@@ -187,5 +191,68 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     expect(screen.getByLabelText(/^--token/)).toHaveAttribute('type', 'password');
     fireEvent.click(screen.getByRole('button', { name: 'Show value' }));
     expect(screen.getByLabelText(/^--token/)).toHaveAttribute('type', 'text');
+  });
+});
+
+describe('saved command-line order and confirmed syntax in the form', () => {
+  const alpha = () => textOption('alpha', { spellings: [{ flag: '--alpha' }, { flag: '-a' }], repeatable: known(true) });
+  const ordered = {
+    alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
+    '@option_order': { version: 1, occurrences: [{ key: 'alpha' }, { key: 'beta' }, { key: 'alpha', spelling: '-a' }] },
+  };
+
+  it('reorders occurrences and gives one occurrence its own alias', () => {
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([alpha(), textOption('beta')])} values={ordered} scope={[]} onChange={onChange} /></I18nProvider>);
+    expect(screen.getAllByRole('listitem').map(item => item.querySelector('code')?.textContent)).toEqual(['--alpha "1"', '--beta "2"', '-a "3"']);
+    fireEvent.click(screen.getByRole('button', { name: 'Move up: --beta "2"' }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
+      '@option_order': { version: 1, occurrences: [{ key: 'beta' }, { key: 'alpha' }, { key: 'alpha', spelling: '-a' }] },
+    });
+    // An edge button stays focusable and does nothing.
+    fireEvent.click(screen.getByRole('button', { name: 'Move up: --alpha "1"' }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('combobox', { name: '--alpha Occurrence 2 Spelling' })).toHaveTextContent('-a');
+    fireEvent.click(screen.getByRole('combobox', { name: '--alpha Occurrence 2 Spelling' }));
+    fireEvent.click(screen.getByRole('option', { name: '--alpha' }));
+    expect(onChange).toHaveBeenLastCalledWith({ alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
+      '@option_order': { version: 1, occurrences: [{ key: 'alpha' }, { key: 'beta' }, { key: 'alpha' }] } });
+  });
+
+  it('removes an occurrence together with its saved position', () => {
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([alpha(), textOption('beta')])} values={ordered} scope={[]} onChange={onChange} /></I18nProvider>);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove occurrence' })[0]);
+    expect(onChange).toHaveBeenLastCalledWith({ alpha: { spelling: '-a', occurrences: [['3']] }, beta: '2',
+      '@option_order': { version: 1, occurrences: [{ key: 'beta' }, { key: 'alpha', spelling: '-a' }] } });
+  });
+
+  it('shows a refused record with an explicit discard action and keeps the values', () => {
+    const onChange = vi.fn();
+    const future = { ...ordered, '@option_order': { version: 2, occurrences: [] } };
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={schema([alpha(), textOption('beta')])} values={future} scope={[]} onChange={onChange} /></I18nProvider>);
+    expect(screen.getByText(/cannot read the saved option order/)).toBeInTheDocument();
+    expect(screen.queryByText(/not an option of this runtime/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard saved order' }));
+    expect(onChange).toHaveBeenLastCalledWith({ alpha: ordered.alpha, beta: '2' });
+  });
+
+  it('confirms an unknown value count only on explicit input for reviewed help options', () => {
+    const onConfirm = vi.fn();
+    const items = textOption('items', { arity: { value: null, certainty: 'unknown' } });
+    const catalog = textOption('catalog');
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([items, catalog])} values={{ items: 'kept' }} scope={[]} onChange={() => undefined}
+      confirmSyntaxFor={option => option.key === 'items'} onConfirmSyntax={onConfirm} /></I18nProvider>);
+    expect(screen.getAllByText(/Confirm value syntax/)).toHaveLength(1);
+    fireEvent.click(screen.getByText('Confirm value syntax (--items)'));
+    fireEvent.change(screen.getByLabelText('Minimum values per occurrence'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Maximum values per occurrence'), { target: { value: '1' } });
+    expect(screen.getByRole('button', { name: 'Save confirmed syntax' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Maximum values per occurrence'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'repeatable (--items)' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Can repeat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save confirmed syntax' }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ key: 'items' }), { arity: { min: 2, max: null }, repeatable: true });
   });
 });

@@ -1,5 +1,5 @@
 import { memo, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { runtimeHelpImport, runtimeHelpResolve, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition, type OptionSchemaFact } from '../../shared/api/runtimeHelp';
+import { runtimeHelpImport, runtimeHelpResolve, type ConfirmedSyntax, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition, type OptionSchemaFact } from '../../shared/api/runtimeHelp';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -7,34 +7,8 @@ import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 
 type Copy = (typeof runtimeOptionsCopy)['en'];
 
-/** Saved occurrences of one option and the alias they were spelled with. */
-export interface StoredOption {
-  rows: unknown[][];
-  spelling: string | null;
-}
-
-/** Reads the saved map shape shared with the backend (scalar or occurrences). */
-export function readStored(stored: unknown): StoredOption | undefined {
-  if (stored === undefined) return undefined;
-  if (stored !== null && typeof stored === 'object' && !Array.isArray(stored)) {
-    const candidate = stored as { occurrences?: unknown; spelling?: unknown };
-    if (Array.isArray(candidate.occurrences)) {
-      return {
-        rows: candidate.occurrences.map(row => (Array.isArray(row) ? [...row] : [row])),
-        spelling: typeof candidate.spelling === 'string' ? candidate.spelling : null,
-      };
-    }
-  }
-  return { rows: [[stored]], spelling: null };
-}
-
-/** One occurrence with one value and the default spelling stays a plain
- * scalar so older readers keep working; anything else keeps every row. */
-export function writeStored(rows: unknown[][], spelling: string | null): unknown {
-  if (rows.length === 0) return undefined;
-  if (!spelling && rows.length === 1 && rows[0].length === 1) return rows[0][0];
-  return { spelling, occurrences: rows };
-}
+import { applyPlan, editOption, expandPlan, moveOccurrence, ORDER_KEY, readOrder, readStored, setOccurrenceSpelling, writeStored } from './optionOrder';
+export { readStored, writeStored, applyPlan, type StoredOption } from './optionOrder';
 
 function supported<T>(fact: OptionSchemaFact<T> | undefined): T | undefined {
   return fact && fact.certainty !== 'unknown' ? (fact.value ?? undefined) : undefined;
@@ -187,12 +161,18 @@ export interface SchemaOptionFieldProps {
   /** Label for "no saved value" (e.g. an automatic capability default). */
   inheritLabel?: string;
   hint?: string;
-  onStore: (next: unknown) => void;
+  /** `origins[i]` is the saved occurrence a new row came from (null: new). */
+  onStore: (next: unknown, origins?: Array<number | null>) => void;
   onInvalid?: (key: string, invalid: boolean) => void;
+  /** Each saved occurrence's own alias, when a saved order records it. */
+  rowSpellings?: Array<string | null>;
+  onRowSpelling?: (row: number, flag: string) => void;
+  /** Offered for reviewed help options whose help left syntax unknown. */
+  onConfirmSyntax?: (syntax: ConfirmedSyntax) => void;
 }
 
 /** One schema option: the same editor for catalog, manifest and help options. */
-export const SchemaOptionField = memo(function SchemaOptionField({ option, stored, disabled, applicable = true, inheritLabel, hint, onStore, onInvalid }: SchemaOptionFieldProps) {
+export const SchemaOptionField = memo(function SchemaOptionField({ option, stored, disabled, applicable = true, inheritLabel, hint, onStore, onInvalid, rowSpellings, onRowSpelling, onConfirmSyntax }: SchemaOptionFieldProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const id = useId();
@@ -209,25 +189,30 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
     onInvalid?.(`schema:${option.key}`, invalidCells.current.size > 0);
   };
   useEffect(() => () => onInvalid?.(`schema:${option.key}`, false), [option.key, onInvalid]);
-  const store = (rows: unknown[][], spelling = current?.spelling ?? null) => onStore(writeStored(rows, spelling));
+  const store = (rows: unknown[][], spelling = current?.spelling ?? null, origins?: Array<number | null>) => onStore(writeStored(rows, spelling), origins);
   const defaultValue = supported(option.runtime_default);
+  const confirmed = option.arity.certainty === 'user_confirmed' || option.repeatable.certainty === 'user_confirmed';
   const facts = [
     option.target === 'request' ? copy.request : copy.launch,
     `${copy.inherit}: ${inheritLabel ?? (defaultValue ? display(defaultValue.literal) : copy.inherit)}`,
     supported(option.unit),
     option.kind.certainty === 'unknown' && !isSwitch(option) ? copy.unverifiedType : undefined,
     option.arity.certainty === 'unknown' && option.target === 'launch' ? copy.unconfirmedArity : undefined,
+    confirmed ? copy.confirmedByYou : undefined,
   ].filter(Boolean).join(' · ');
   const header = (
     <span className="schema-option__header">
       <span id={`${id}-name`}>{name}</span> <small>{facts}</small>
     </span>
   );
+  const syntaxUnknown = option.target === 'launch' && !option.managed
+    && (option.arity.certainty === 'unknown' || option.repeatable.certainty === 'unknown');
   const help = (
     <>
       {hint && <small>{hint}</small>}
       {option.help && <p id={helpId} className="app-section-hint">{option.help}</p>}
       {!applicable && <p className="app-section-hint">{copy.notApplicable}</p>}
+      {onConfirmSyntax && syntaxUnknown && <ConfirmSyntax option={option} name={name} disabled={disabled} copy={copy} onConfirm={onConfirmSyntax} />}
     </>
   );
   if (option.managed) {
@@ -322,8 +307,17 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
             <button type="button" className="app-button app-button--secondary" disabled={locked}
               onClick={() => store(rows.map((r, i) => (i === rowIndex ? [...r, ''] : r)))}>{copy.addValue}</button>
           )}
+          {onRowSpelling && spellings.length > 1 && (
+            <CustomSelect
+              ariaLabel={`${name} ${copy.occurrence} ${rowIndex + 1} ${copy.spelling}`}
+              value={rowSpellings?.[rowIndex] ?? current?.spelling ?? spellings[0].flag}
+              disabled={locked}
+              options={spellings.map(spelling => ({ value: spelling.flag, label: spelling.flag }))}
+              onChange={flag => onRowSpelling(rowIndex, flag)}
+            />
+          )}
           <button type="button" className="app-button app-button--secondary" disabled={locked}
-            onClick={() => store(rows.filter((_, i) => i !== rowIndex))}>{copy.removeOccurrence}</button>
+            onClick={() => store(rows.filter((_, i) => i !== rowIndex), undefined, rows.flatMap((_, i) => (i === rowIndex ? [] : [i])))}>{copy.removeOccurrence}</button>
         </div>
       ))}
       {(repeatable || rows.length === 0) && (
@@ -349,6 +343,105 @@ function SingleValue({ option, value, label, disabled, copy, describedBy, inputI
       <ValueInput inputId={inputId} option={option} value={value} label={label} disabled={disabled} emptyMeans="inherit" copy={copy}
         describedBy={describedBy} onValue={onValue} onInvalid={onInvalid} />
     </span>
+  );
+}
+
+/** Explicit value count and repetition for a help option whose help left
+ * them unknown. Nothing is inferred; the user states what the runtime takes. */
+function ConfirmSyntax({ option, name, disabled, copy, onConfirm }: {
+  option: OptionSchemaDefinition; name: string; disabled: boolean; copy: Copy; onConfirm: (syntax: ConfirmedSyntax) => void;
+}) {
+  const id = useId();
+  const arityUnknown = option.arity.certainty === 'unknown';
+  const repeatUnknown = option.repeatable.certainty === 'unknown';
+  const [min, setMin] = useState('1');
+  const [max, setMax] = useState('1');
+  const [repeat, setRepeat] = useState('');
+  const minValue = Number(min);
+  const maxValue = max.trim() === '' ? null : Number(max);
+  const arityValid = !arityUnknown || (/^\d+$/.test(min.trim()) && minValue <= 256
+    && (maxValue === null || (/^\d+$/.test(max.trim()) && maxValue >= minValue && maxValue <= 256)));
+  const syntax: ConfirmedSyntax = {
+    ...(arityUnknown ? { arity: { min: minValue, max: maxValue } } : {}),
+    ...(repeatUnknown && repeat ? { repeatable: repeat === 'yes' } : {}),
+  };
+  const ready = arityValid && (syntax.arity !== undefined || syntax.repeatable !== undefined);
+  return (
+    <details>
+      <summary>{copy.confirmSyntax} ({name})</summary>
+      <p className="app-section-hint">{copy.confirmSyntaxHint}</p>
+      {arityUnknown && (
+        <span className="schema-option__value">
+          <label htmlFor={`${id}-min`}>{copy.minValues}</label>
+          <input id={`${id}-min`} name={`${option.key}-min-values`} className="app-input" inputMode="numeric" value={min} disabled={disabled}
+            aria-invalid={!arityValid || undefined} onChange={event => setMin(event.target.value)} />
+          <label htmlFor={`${id}-max`}>{copy.maxValues}</label>
+          <input id={`${id}-max`} name={`${option.key}-max-values`} className="app-input" inputMode="numeric" value={max} disabled={disabled}
+            placeholder={copy.noLimit} aria-invalid={!arityValid || undefined} onChange={event => setMax(event.target.value)} />
+        </span>
+      )}
+      {repeatUnknown && (
+        <CustomSelect ariaLabel={`${copy.repeatable} (${name})`} value={repeat} disabled={disabled}
+          options={[{ value: '', label: copy.repeatUnknown }, { value: 'yes', label: copy.repeatYes }, { value: 'no', label: copy.repeatNo }]}
+          onChange={setRepeat} />
+      )}
+      <button type="button" className="app-button app-button--secondary" disabled={disabled || !ready} onClick={() => onConfirm(syntax)}>{copy.confirm}</button>
+    </details>
+  );
+}
+
+/** The saved command-line order of every orderable occurrence, reorderable
+ * with buttons. Moving creates or updates the saved order record. */
+export function OccurrenceOrder({ schema, values, disabled = false, onChange }: {
+  schema: OptionSchema; values: Record<string, unknown>; disabled?: boolean; onChange: (next: Record<string, unknown>) => void;
+}) {
+  const { locale } = useI18n();
+  const copy = runtimeOptionsCopy[locale];
+  const id = useId();
+  const state = readOrder(values);
+  const [status, setStatus] = useState('');
+  if (!state.ok) {
+    return (
+      <FeedbackBanner tone="error">
+        {copy.orderInvalid} ({state.error})
+        <button type="button" className="app-button app-button--secondary" disabled={disabled}
+          onClick={() => { const next = { ...values }; delete next[ORDER_KEY]; onChange(next); }}>{copy.discardOrder}</button>
+      </FeedbackBanner>
+    );
+  }
+  const plan = expandPlan(schema, values, state.order);
+  if (plan.length < 2) return null;
+  const options = new Map(schema.options.map(option => [option.key, option]));
+  const label = (index: number) => {
+    const item = plan[index];
+    const flag = item.spelling ?? options.get(item.key)?.spellings[0]?.flag ?? item.key;
+    const shown = supported(options.get(item.key)?.sensitive) === true ? item.values.map(() => '•••') : item.values.map(value => JSON.stringify(value));
+    return [flag, ...shown].join(' ');
+  };
+  const move = (index: number, offset: -1 | 1) => {
+    const target = index + offset;
+    if (disabled || target < 0 || target >= plan.length) return;
+    onChange(moveOccurrence(schema, values, index, offset));
+    setStatus(`${label(index)} → ${target + 1}`);
+  };
+  return (
+    <section aria-labelledby={`${id}-title`}>
+      <h4 id={`${id}-title`}>{copy.orderTitle}</h4>
+      <p className="app-section-hint">{copy.orderHint}</p>
+      <ol>
+        {plan.map((item, index) => (
+          <li key={`${item.key}:${index}`}>
+            <code>{label(index)}</code>{' '}
+            {/* aria-disabled keeps focus on an edge button after a move. */}
+            <button type="button" className="app-button app-button--secondary" aria-disabled={disabled || index === 0}
+              aria-label={`${copy.moveUp}: ${label(index)}`} onClick={() => move(index, -1)}>{copy.moveUp}</button>
+            <button type="button" className="app-button app-button--secondary" aria-disabled={disabled || index === plan.length - 1}
+              aria-label={`${copy.moveDown}: ${label(index)}`} onClick={() => move(index, 1)}>{copy.moveDown}</button>
+          </li>
+        ))}
+      </ol>
+      <p role="status" className="app-section-hint">{status}</p>
+    </section>
   );
 }
 
@@ -390,10 +483,14 @@ export interface RuntimeOptionSchemaFormProps {
   inheritLabel?: (option: OptionSchemaDefinition) => string | undefined;
   hint?: (option: OptionSchemaDefinition) => string | undefined;
   onInvalid?: (key: string, invalid: boolean) => void;
+  /** Saves confirmed syntax for a reviewed help option; omitted where none applies. */
+  onConfirmSyntax?: (option: OptionSchemaDefinition, syntax: ConfirmedSyntax) => void;
+  /** Options whose syntax may be confirmed (reviewed help options only). */
+  confirmSyntaxFor?: (option: OptionSchemaDefinition) => boolean;
 }
 
 /** Generic runtime-scoped option renderer, validator and argv preview. */
-export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, filter, inheritLabel, hint, onInvalid }: RuntimeOptionSchemaFormProps) {
+export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const formId = useId();
@@ -436,18 +533,26 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
     return () => { active = false; clearTimeout(timer); };
   }, [compact, schema, scope, values]);
 
-  const update = (key: string, next: unknown) => {
-    const copyValues = { ...values };
-    if (next === undefined) delete copyValues[key]; else copyValues[key] = next;
-    onChange(copyValues);
-  };
+  // Field edits keep a saved order record consistent: occurrence positions
+  // and per-occurrence aliases follow the edited rows.
+  const update = (key: string, next: unknown, origins?: Array<number | null>) => onChange(editOption(schema, values, key, next, origins));
+  const order = useMemo(() => readOrder(values), [values]);
+  const rowSpellings = useMemo(() => {
+    const byKey = new Map<string, Array<string | null>>();
+    if (!order.ok || !order.order) return byKey;
+    for (const item of expandPlan(schema, values, order.order)) byKey.set(item.key, [...(byKey.get(item.key) ?? []), item.spelling ?? null]);
+    return byKey;
+  }, [order, schema, values]);
   const masked = useMemo(() => (preview ? maskPreview(preview, schema, values) : null), [preview, schema, values]);
-  const unknownKeys = useMemo(() => Object.keys(values).filter(key => !schema.options.some(option => option.key === key)), [schema, values]);
+  const unknownKeys = useMemo(() => Object.keys(values).filter(key => key !== ORDER_KEY && !schema.options.some(option => option.key === key)), [schema, values]);
 
   const fields = visible.slice(0, limit).map((option, index) => (
     <div key={option.key} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
       <SchemaOptionField option={option} stored={values[option.key]} disabled={disabled} applicable={isApplicable(option, scope)}
-        inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} onStore={next => update(option.key, next)} onInvalid={onInvalid} />
+        inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} onStore={(next, origins) => update(option.key, next, origins)} onInvalid={onInvalid}
+        rowSpellings={rowSpellings.get(option.key)}
+        onRowSpelling={order.ok ? (row, flag) => onChange(setOccurrenceSpelling(schema, values, option.key, row, flag)) : undefined}
+        onConfirmSyntax={onConfirmSyntax && (!confirmSyntaxFor || confirmSyntaxFor(option)) ? syntax => onConfirmSyntax(option, syntax) : undefined} />
     </div>
   ));
   const navigation = (
@@ -478,6 +583,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
       ))}
       {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
       {fields}
+      <OccurrenceOrder schema={schema} values={values} disabled={disabled} onChange={onChange} />
       {more}
       {visible.length === 0 && <p className="app-section-hint">{copy.noMatch}</p>}
       <details>
@@ -496,7 +602,9 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
             }}>{copy.split}</button>
           {imported && (
             <button type="button" className="app-button app-button--secondary" disabled={disabled}
-              onClick={() => onChange(applyPlan(schema, values, imported))}>{copy.apply}</button>
+              onClick={() => {
+                try { onChange(applyPlan(schema, values, imported)); } catch (cause) { setImportError(cause instanceof Error ? cause.message : String(cause)); }
+              }}>{copy.apply}</button>
           )}
         </div>
         {importError && <FeedbackBanner tone="error">{importError}</FeedbackBanner>}
@@ -517,23 +625,3 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
     </div>
   );
 });
-
-/** Group an imported ordered plan into saved values, keeping every occurrence
- * of an option in input order and the alias it was spelled with. */
-export function applyPlan(schema: OptionSchema, values: Record<string, unknown>, imported: ImportedPlan): Record<string, unknown> {
-  const grouped = new Map<string, StoredOption>();
-  for (const occurrence of imported.plan) {
-    const entry = grouped.get(occurrence.key) ?? { spelling: null, rows: [] };
-    if (entry.rows.length === 0) entry.spelling = occurrence.spelling ?? null;
-    entry.rows.push([...occurrence.values]);
-    grouped.set(occurrence.key, entry);
-  }
-  const next = { ...values };
-  for (const [key, entry] of grouped) {
-    const option = schema.options.find(item => item.key === key);
-    const defaultSpelling = option?.spellings[0]?.flag ?? null;
-    const spelling = !entry.spelling || entry.spelling === defaultSpelling ? null : entry.spelling;
-    next[key] = writeStored(entry.rows, spelling);
-  }
-  return next;
-}

@@ -227,7 +227,41 @@ export interface EffectiveSchema {
   compat_keys: string[];
   help_keys: string[];
   shadowed: string[];
+  /** Value counts and repetition the user confirmed for help options. */
+  supplement?: SupplementView | null;
+  /** A confirmation file this app refuses to read; nothing from it applies. */
+  supplement_error?: string | null;
 }
+
+/** Syntax a user confirmed where the reviewed help left it unknown. */
+export interface ConfirmedSyntax {
+  arity?: { min: number; max: number | null };
+  repeatable?: boolean;
+}
+
+export interface SupplementConflict {
+  key: string;
+  field: 'option' | 'arity' | 'repeatable';
+  confirmed: unknown;
+  help: unknown;
+}
+
+export interface SupplementView {
+  fingerprint: string;
+  options: Record<string, ConfirmedSyntax>;
+  /** The confirmations describe the accepted help and are in effect. */
+  current: boolean;
+  applied: string[];
+  conflicts: SupplementConflict[];
+}
+
+/** Replace the selected runtime's confirmations for its accepted help. */
+export const runtimeHelpConfirmSyntax = (cfg: AppConfig, fingerprint: string, options: Record<string, ConfirmedSyntax>): Promise<EffectiveSchema> =>
+  invoke<EffectiveSchema>('runtime_help_confirm_syntax', { cfg, fingerprint, options });
+
+/** Discard every confirmation, including a file this app refuses to read. */
+export const runtimeHelpClearConfirmedSyntax = (cfg: AppConfig): Promise<EffectiveSchema> =>
+  invoke<EffectiveSchema>('runtime_help_clear_confirmed_syntax', { cfg });
 
 export const providerOptionSchema = (cfg: AppConfig): Promise<EffectiveSchema> =>
   invoke<EffectiveSchema>('provider_option_schema', { cfg });

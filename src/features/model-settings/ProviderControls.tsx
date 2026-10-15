@@ -6,9 +6,11 @@ import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import EngineSelect from '../../shared/ui/EngineSelect';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
-import type { EffectiveSchema } from '../../shared/api/runtimeHelp';
-import RuntimeOptionSchemaForm, { applyPlan, maskPreview } from '../runtimes/RuntimeOptionSchemaForm';
+import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
+import RuntimeOptionSchemaForm, { applyPlan, maskPreview, OccurrenceOrder } from '../runtimes/RuntimeOptionSchemaForm';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
+import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
+import { ORDER_KEY } from '../runtimes/optionOrder';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -65,7 +67,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   cfgRef.current = cfg;
   const importRequest = useRef(0);
   const previewRequest = useRef(0);
-  useEffect(() => () => { importRequest.current += 1; previewRequest.current += 1; }, []);
+  const syntaxRequest = useRef(0);
+  const [syntaxBusy, setSyntaxBusy] = useState(false);
+  useEffect(() => () => { importRequest.current += 1; previewRequest.current += 1; syntaxRequest.current += 1; }, []);
   const [schema, setSchema] = useState<api.ProviderOption[]>([]);
   const [loadingSchema, setLoadingSchema] = useState(true);
   const [schemaKnown, setSchemaKnown] = useState(false);
@@ -89,11 +93,12 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
         .catch(cause => { if (active) { setError(String(cause)); setValidating(false); } });
     }, 150);
     return () => { active = false; clearTimeout(timer); };
-  }, [cfg, runtimeNeeded]);
+    // Saved confirmations change what the same values mean; revalidate.
+  }, [cfg, runtimeNeeded, effectiveRevision]);
   const usesEffective = !!selectedRuntime;
   useEffect(() => {
     let active = true; setSchema([]); setEffective(null); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError('');
-    importRequest.current += 1; previewRequest.current += 1;
+    importRequest.current += 1; previewRequest.current += 1; syntaxRequest.current += 1; setSyntaxBusy(false);
     void Promise.all([
       api.providerCatalog(), api.providerRuntimes(),
       provider !== 'llama.cpp' && cfgRef.current.active_runtime ? api.providerRuntimeOptions(provider, cfgRef.current.active_runtime) : Promise.resolve(undefined),
@@ -112,7 +117,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   // Until the schema answers, absence from this list is not evidence that a
   // saved option is unsupported. Do not offer destructive resets while probing.
   const known = (key: string) => effective ? effective.schema.options.some(option => option.key === key) : schema.some(option => option.key === key);
-  const unknown = schemaKnown ? Object.keys(values).filter(key => !known(key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model'].includes(key)
+  const unknown = schemaKnown ? Object.keys(values).filter(key => !known(key) && !['extra_args', 'lora_adapters', 'request_lora', 'draft_model', ORDER_KEY].includes(key)
     && !(key === 'trust_remote_code' && values[key] === false)) : [];
   const supports = (...flags: string[]) => !runtimeFlags || flags.every(flag => runtimeFlags.includes(flag));
   const showLora = provider !== 'llama.cpp' && !api.isExternalProvider(provider) && (supports(...(provider === 'vllm' ? ['--enable-lora', '--lora-modules'] : ['--adapter-path'])) || values.lora_adapters !== undefined);
@@ -146,8 +151,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       void api.runtimeHelpImport(effective.schema, effective.scope, paste).then(result => {
         if (!current()) return;
         const review = [...result.managed, ...result.unrecognized];
+        let next: Record<string, unknown>;
+        try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(String(cause)); return; }
         setError(review.length ? review.join(' ') : '');
-        onChange({ provider_options: { ...cfg.provider_options, [provider]: applyPlan(effective.schema, values, result) } });
+        onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
       }).catch(cause => { if (current()) setError(String(cause)); });
       return;
     }
@@ -156,6 +163,24 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       if (result.issues.length) { setError(result.issues.map(issue => issue.message).join('\n')); return; }
       setError(''); onChange({ ...(result.model ? { active_model: result.model } : {}), provider_options: { ...cfg.provider_options, [provider]: result.options } });
     }).catch(cause => { if (current()) setError(String(cause)); });
+  };
+  // Confirmations are runtime metadata pinned to the accepted help, saved
+  // immediately and apart from the profile's values.
+  const saveSyntax = (save: () => Promise<EffectiveSchema>) => {
+    const request = ++syntaxRequest.current;
+    setSyntaxBusy(true);
+    void save().then(() => {
+      if (syntaxRequest.current !== request) return;
+      setError(''); setEffectiveRevision(current => current + 1);
+    }).catch(cause => { if (syntaxRequest.current === request) setError(String(cause)); })
+      .finally(() => { if (syntaxRequest.current === request) setSyntaxBusy(false); });
+  };
+  const confirmable = effective?.help_state === 'current' && !!effective.accepted_fingerprint;
+  const confirmSyntax = (key: string, syntax: ConfirmedSyntax) => {
+    if (!effective?.accepted_fingerprint) return;
+    const fingerprint = effective.accepted_fingerprint;
+    const existing = effective.supplement?.current ? effective.supplement.options : {};
+    saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, { ...existing, [key]: { ...existing[key], ...syntax } }));
   };
   const adapters = !section || section === 'adapters';
   const advanced = !section || section === 'advanced';
@@ -171,7 +196,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
         || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined)}
       inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
       hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
-      onInvalid={onInvalid} />}
+      onInvalid={onInvalid}
+      confirmSyntaxFor={option => effective.help_keys.includes(option.key)}
+      onConfirmSyntax={confirmable ? (option, syntax) => confirmSyntax(option.key, syntax) : undefined} />}
     {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
@@ -191,6 +218,11 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       }).catch(cause => { if (current()) setError(String(cause)); });
     }}>{copy.preview}</button>
     {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
+    {effective && <OccurrenceOrder schema={effective.schema} values={values} disabled={disabled}
+      onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })} />}
+    {effective && <ConfirmedSyntaxReview effective={effective} disabled={disabled || syntaxBusy}
+      onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}
+      onDiscard={() => saveSyntax(() => api.runtimeHelpClearConfirmedSyntax(cfg))} />}
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
     </>}
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
