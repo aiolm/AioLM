@@ -1,6 +1,7 @@
 import { Children, type ReactNode } from "react";
 import { useI18n } from "../i18n/i18n";
 import { normalizeDisplayText } from "../lib/displayPaths";
+import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
 
 export type FeedbackTone = "info" | "success" | "warning" | "error";
 
@@ -64,6 +65,17 @@ export default function FeedbackBanner({
   "aria-label"?: string;
 }) {
   const { t } = useI18n();
+  // Long pure-text engine diagnostics collapse behind a toggle so a usage /
+  // template dump cannot dominate the workspace. Mixed JSX (links, actions)
+  // keeps the existing inline rendering untouched.
+  const textParts: string[] = [];
+  let hasRichContent = false;
+  Children.forEach(children, (child) => {
+    if (typeof child === "string" || typeof child === "number") textParts.push(String(child));
+    else if (child !== null && child !== undefined && typeof child !== "boolean") hasRichContent = true;
+  });
+  const fullText = textParts.join("");
+  const collapsible = !hasRichContent && isLongDiagnostic(fullText);
   const displayChildren = Children.map(children, (child) => typeof child === "string" ? normalizeDisplayText(child) : child);
   return (
     <div className={`app-feedback ${toneClass[tone]}${className ? ` ${className}` : ""}`} role={tone === "error" ? "alert" : "status"} aria-label={ariaLabel} aria-live={tone === "error" ? "assertive" : "polite"} aria-atomic="true">
@@ -72,7 +84,7 @@ export default function FeedbackBanner({
       </span>
       <div className="app-feedback-body">
         {title && <div className="app-feedback-title">{normalizeDisplayText(title)}</div>}
-        <div className="app-feedback-message">{displayChildren}</div>
+        <div className="app-feedback-message">{collapsible ? <DiagnosticDetails summary={summarizeDiagnostic(fullText)} detail={fullText} /> : displayChildren}</div>
       </div>
       {action && <button type="button" className="app-button app-button--ghost app-button--sm app-feedback-action" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
       {onDismiss && <button type="button" className="app-icon-button app-icon-button--sm app-feedback-dismiss" aria-label={t("common.dismiss")} onClick={onDismiss}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="M3 3 9 9M9 3 3 9" /></svg></button>}

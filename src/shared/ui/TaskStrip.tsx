@@ -7,6 +7,7 @@ import { useLocalTaskCancellationIds } from "./TaskCancellation";
 import { formatBytes, formatSpeedBps } from "../lib/units";
 import Badge from "./Badge";
 import ProgressBar from "./ProgressBar";
+import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
 import FeedbackBanner from "./FeedbackBanner";
 
 function hasPanelCancellation(task: AppTask): boolean {
@@ -70,7 +71,10 @@ export default function TaskStrip() {
             <div key={task.id} className={`app-task-strip__item app-task-strip__item--${task.state}`} data-task-id={task.id}>
               <div className="app-task-strip__copy">
                 <span className="app-task-strip__label">{normalizeDisplayText(task.label)}</span>
-                <span className="app-task-strip__status">{normalizeDisplayText(statusLabel(task, t))}{task.detail ? ` · ${normalizeDisplayText(task.detail)}` : ""}</span>
+                <span className="app-task-strip__status">{normalizeDisplayText(statusLabel(task, t))}</span>
+                {task.detail ? (isLongDiagnostic(task.detail)
+                  ? <DiagnosticDetails summary={summarizeDiagnostic(task.detail)} detail={task.detail} id={`task-${task.id}`} />
+                  : <span className="app-task-strip__detail">{normalizeDisplayText(task.detail)}</span>) : null}
                 {activeTask && transfer && <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`}>{transfer}</span>}
               </div>
               {progress !== undefined && <ProgressBar className="app-task-strip__progress" label={normalizeDisplayText(task.label)} value={progress} />}

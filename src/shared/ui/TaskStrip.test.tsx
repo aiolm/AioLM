@@ -172,6 +172,39 @@ describe("task cancellation ownership", () => {
     }
   });
 
+  it("collapses a long failed-task diagnostic while keeping status and stored detail intact", () => {
+    const firstLine = "server exited before ready (1). error while handling argument --chat-template-file: failed to open file [synthetic D15 missing path]";
+    const full = [
+      firstLine,
+      "usage: synthetic-engine [options] --chat-template-file PATH",
+      ...Array.from({ length: 16 }, (_, index) => `  synthetic-template-${index} (synthetic variant)`),
+      "한글 합성 진단 · 日本語の合成診断 · 中文合成诊断",
+    ].join("\n");
+    registerTask({ id: "benchmark-synthetic", kind: "benchmark", label: "Synthetic benchmark", interruptible: true });
+    act(() => finishTask("benchmark-synthetic", "failed", full));
+    render(<View taskId="benchmark-synthetic" />);
+    const strip = within(screen.getByRole("complementary", { name: "Background tasks" }));
+    // Truthful Failed status stays separately exposed, not merged into the detail.
+    expect(strip.getByText("Failed")).toBeVisible();
+    expect(strip.getByText(firstLine)).toBeVisible();
+    expect(document.querySelector("details.app-diagnostic-disclosure")).toBeInTheDocument();
+    expect(document.querySelector("pre.app-diagnostic-full")?.textContent).toBe(full);
+    // Stored registry detail is untouched by the collapsed presentation.
+    expect(getTaskSnapshot().find((item) => item.id === "benchmark-synthetic")?.detail).toBe(full);
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss/ }));
+    expect(getTaskSnapshot()).toHaveLength(0);
+  });
+
+  it("keeps a short failed-task detail inline without collapsing", () => {
+    registerTask({ id: "benchmark-short", kind: "benchmark", label: "Synthetic benchmark", interruptible: true });
+    act(() => finishTask("benchmark-short", "failed", "disk full"));
+    render(<View taskId="benchmark-short" />);
+    const strip = within(screen.getByRole("complementary", { name: "Background tasks" }));
+    expect(strip.getByText("Failed")).toBeVisible();
+    expect(strip.getByText("disk full")).toBeVisible();
+    expect(document.querySelector("details.app-diagnostic-disclosure")).not.toBeInTheDocument();
+  });
+
   it("shows transferred bytes and speed while a download is running", () => {
     registerTask({
       id: "model-download",
