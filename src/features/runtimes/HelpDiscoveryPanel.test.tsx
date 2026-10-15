@@ -13,6 +13,7 @@ vi.mock('../../shared/api/runtimeHelp', async origin => {
     runtimeHelpCached: vi.fn(),
     runtimeHelpCancelOwner: vi.fn(),
     runtimeHelpResolve: vi.fn().mockResolvedValue({ argv: [], request: {} }),
+    runtimeHelpSuggestManifest: vi.fn(),
   };
 });
 
@@ -92,5 +93,26 @@ describe('open adapter list', () => {
     fireEvent.change(screen.getByLabelText('Search adapters'), { target: { value: 'synthetic' } });
     expect(screen.queryByText(/llama\.cpp · llama-server/)).not.toBeInTheDocument();
     expect(screen.getByText(/Synthetic/)).toBeInTheDocument();
+  });
+
+  it('suggests a manifest v1 with explicit model and port bindings', async () => {
+    vi.mocked(runtimeHelp.runtimeHelpDiscover).mockResolvedValueOnce([
+      {
+        identity: { fingerprint, executable_sha256: 'b'.repeat(64), artifacts_sha256: {}, parser_version: 1 },
+        scope: [],
+        stdout: { text: '', clean_text: '', encoding: 'utf-8', decoding_loss: false, truncated: false, read_error: null },
+        stderr: { text: '', clean_text: '', encoding: 'utf-8', decoding_loss: false, truncated: false, read_error: null },
+        exit_code: 0, success: true, cancelled: false, timed_out: false, error: null, elapsed_ms: 1,
+      },
+      { engine: 'custom.example', runtime: 'build-1', fingerprint, help_complete: true, schema: { schema_version: 1, binding: { engine: 'custom.example', runtime: 'build-1', fingerprint }, options: [], constraints: [], raw_help: [], end_of_options: { value: null, certainty: 'unknown' } }, diff: null, retained: [] },
+    ]);
+    vi.mocked(runtimeHelp.runtimeHelpSuggestManifest).mockResolvedValueOnce({ engine_id: 'custom.example', runtime_id: 'build-1', launch: { args: ['--model', '{model}', '--port', '{port}'], env: { ENGINE_KEY: '{api_key}' } }, probe: { args: ['{model}', '{options_json}'] } });
+    render(<I18nProvider initialLocale="en"><HelpDiscoveryPanel locked={false} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText(/Executable absolute path/), { target: { value: '/opt/engines/server' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Suggest manifest v1' }));
+    expect(await screen.findByText(/{model}/)).toBeInTheDocument();
+    expect(screen.getByText(/{port}/)).toBeInTheDocument();
+    expect(runtimeHelp.runtimeHelpSuggestManifest).toHaveBeenCalledTimes(1);
   });
 });

@@ -161,3 +161,49 @@ export const runtimeHelpParse = (
   runtime: string,
 ): Promise<OptionSchema> =>
   invoke<OptionSchema>('runtime_help_parse', { report, engine, runtime });
+
+export interface PlannedOccurrence {
+  key: string;
+  spelling?: string | null;
+  values: unknown[];
+}
+
+export interface ImportedPlan {
+  plan: PlannedOccurrence[];
+  managed: string[];
+  unrecognized: string[];
+}
+
+export interface EntrypointSuggestion {
+  engine_id: string;
+  runtime_id: string;
+  display_name: string;
+  program: string;
+  help_args: string[];
+  working_directory?: string | null;
+  health_path: string;
+  health_authenticated: boolean;
+}
+
+/** Order-preserving resolution: flags follow plan order within each scope depth. */
+export const runtimeHelpResolvePlan = (
+  schema: OptionSchema,
+  scope: string[],
+  plan: PlannedOccurrence[],
+): Promise<ResolvedOptions> =>
+  invoke<ResolvedOptions>('runtime_help_resolve_plan', { schema, scope, plan });
+
+/** Split a pasted command into an ordered plan preserving input order. */
+export const runtimeHelpImport = (
+  schema: OptionSchema,
+  scope: string[],
+  text: string,
+): Promise<ImportedPlan> =>
+  invoke<ImportedPlan>('runtime_help_import', { schema, scope, text });
+
+/** Suggest a manifest v1 from an entry-point plus its verified help schema. */
+export const runtimeHelpSuggestManifest = (
+  entry: EntrypointSuggestion,
+  schema: OptionSchema,
+): Promise<unknown> =>
+  invoke<unknown>('runtime_help_suggest_manifest', { entry, schema });

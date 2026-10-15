@@ -20,6 +20,7 @@ export const helpDiscoveryCopy = {
     changed: '변경된 옵션',
     retained: '유지된 저장값',
     ready: '등록은 manifest 선택과 fresh probe로 진행합니다. manifest v1은 그대로 읽히며, 변경된 실행 파일은 다시 등록해야 합니다.',
+    suggest: 'manifest v1 제안',
     scope: '서브커맨드 범위 (공백 구분)',
   },
   en: {
@@ -43,6 +44,7 @@ export const helpDiscoveryCopy = {
     changed: 'Changed options',
     retained: 'Retained saved values',
     ready: 'Registration continues with manifest selection and a fresh probe. Manifest v1 stays readable; changed executables must be re-registered.',
+    suggest: 'Suggest manifest v1',
     scope: 'Subcommand scope (space separated)',
   },
   ja: {
@@ -66,6 +68,7 @@ export const helpDiscoveryCopy = {
     changed: '変更されたオプション',
     retained: '保持された保存値',
     ready: '登録はmanifest選択とfresh probeで続行します。manifest v1は読み取り可能です。変更された実行ファイルは再登録が必要です。',
+    suggest: 'manifest v1を提案',
     scope: 'サブコマンド範囲 (空白区切り)',
   },
   zh: {
@@ -89,6 +92,7 @@ export const helpDiscoveryCopy = {
     changed: '已更改选项',
     retained: '保留的已存值',
     ready: '注册继续使用manifest选择和fresh probe。manifest v1保持可读；已更改的可执行文件必须重新注册。',
+    suggest: '建议manifest v1',
     scope: '子命令范围（空格分隔）',
   },
 };

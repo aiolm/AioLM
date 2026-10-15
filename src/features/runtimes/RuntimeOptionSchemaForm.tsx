@@ -1,5 +1,5 @@
 import { memo, useDeferredValue, useEffect, useId, useMemo, useState } from 'react';
-import { runtimeHelpResolve, type OptionSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import { runtimeHelpImport, runtimeHelpResolve, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 
@@ -255,6 +255,9 @@ export default memo(function RuntimeOptionSchemaForm({
   const deferredSearch = useDeferredValue(search);
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [preview, setPreview] = useState<string[]>([]);
+  const [paste, setPaste] = useState('');
+  const [imported, setImported] = useState<ImportedPlan | null>(null);
+  const [importError, setImportError] = useState('');
   const [error, setError] = useState('');
 
   const groups = useMemo(() => {
@@ -361,6 +364,77 @@ export default memo(function RuntimeOptionSchemaForm({
         />
       ))}
       {visible.length === 0 && <p className="app-section-hint">No options match this search.</p>}
+      <details>
+        <summary>Import a pasted command line</summary>
+        <label htmlFor="schema-import">Pasted command (program and scope words are skipped when recognized)</label>
+        <textarea
+          id="schema-import"
+          name="schema-import"
+          className="app-textarea"
+          value={paste}
+          disabled={disabled}
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          onChange={event => { setPaste(event.target.value); setImportError(''); }}
+        />
+        <div className="app-page-actions mt-3">
+          <button
+            type="button"
+            className="app-button app-button--secondary"
+            disabled={disabled || !paste.trim()}
+            onClick={() => {
+              setImportError('');
+              void runtimeHelpImport(schema, scope, paste)
+                .then(result => setImported(result))
+                .catch(cause => { setImported(null); setImportError(cause instanceof Error ? cause.message : String(cause)); });
+            }}
+          >
+            Split into ordered plan
+          </button>
+          {imported && (
+            <button
+              type="button"
+              className="app-button app-button--secondary"
+              disabled={disabled}
+              onClick={() => {
+                const grouped = new Map<string, { spelling: string | null; occurrences: unknown[][] }>();
+                for (const occurrence of imported.plan) {
+                  const entry = grouped.get(occurrence.key) ?? { spelling: null as string | null, occurrences: [] as unknown[][] };
+                  if (entry.spelling === null) entry.spelling = occurrence.spelling ?? null;
+                  entry.occurrences.push(occurrence.values);
+                  grouped.set(occurrence.key, entry);
+                }
+                const next: Record<string, unknown> = { ...values };
+                for (const [key, entry] of grouped) {
+                  const option = schema.options.find(item => item.key === key);
+                  const defaultSpelling = option?.spellings[0]?.flag ?? null;
+                  const spelling = !entry.spelling || entry.spelling === defaultSpelling ? null : entry.spelling;
+                  const single = !spelling && (option?.spellings.length ?? 1) <= 1 && entry.occurrences.length === 1 && entry.occurrences[0].length === 1;
+                  next[key] = single ? entry.occurrences[0][0] : { spelling, occurrences: entry.occurrences };
+                }
+                onChange(next);
+              }}
+            >
+              Apply plan to values
+            </button>
+          )}
+        </div>
+        {importError && <FeedbackBanner tone="error">{importError}</FeedbackBanner>}
+        {imported && (
+          <div>
+            <p className="app-section-hint">
+              Plan order: {imported.plan.map(item => item.key).join(', ') || '—'}
+            </p>
+            {imported.managed.length > 0 && (
+              <FeedbackBanner tone="warning">Managed by the app, not imported: {imported.managed.join(' ')}</FeedbackBanner>
+            )}
+            {imported.unrecognized.length > 0 && (
+              <FeedbackBanner tone="warning">Unrecognized, kept for review: {imported.unrecognized.join(' ')}</FeedbackBanner>
+            )}
+          </div>
+        )}
+      </details>
       {masked.length > 0 && (
         <div>
           <h4>Launch preview</h4>

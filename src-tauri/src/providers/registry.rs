@@ -1008,12 +1008,15 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
         .iter()
         .map(|a| expand(a, cfg, port, key, &info.upstream_model))
         .collect::<Result<Vec<_>, _>>()?;
+    // Help-derived options use the discovery schema; the manifest predates them
+    // but the sidecar records their verified syntax. Truly unknown keys still
+    // error below with retained values instead of launching.
+    let mut help_only: Map<String, Value> = Map::new();
     for (name, value) in options(cfg) {
-        let spec = m
-            .options
-            .iter()
-            .find(|s| s.key == name)
-            .ok_or("unknown adapter option")?;
+        let Some(spec) = m.options.iter().find(|s| s.key == name) else {
+            help_only.insert(name, value);
+            continue;
+        };
         if spec.target != "launch" {
             continue;
         }
@@ -1044,6 +1047,9 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
                 );
             }
         }
+    }
+    if !help_only.is_empty() {
+        args.extend(help_launch_tail(&m, &help_only)?);
     }
     let env = m
         .launch
@@ -1179,6 +1185,255 @@ pub fn registered_models() -> Vec<super::artifacts::ModelArtifact> {
     models
 }
 
+/// Latest verified help schema for a registration, if discovery ran.
+/// The sidecar never replaces the manifest launch contract; it only adds
+/// options the manifest predates.
+pub fn help_schema_for(
+    engine: ProviderId,
+    runtime: &str,
+) -> Result<Option<super::runtime_options::OptionSchema>, String> {
+    Ok(
+        super::runtime_help_store::latest_snapshot(&root(), engine.as_str(), runtime)?
+            .map(|snapshot| snapshot.schema),
+    )
+}
+
+/// Human-readable entry-point parameters for manifest suggestion.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntrypointSuggestion {
+    pub engine_id: ProviderId,
+    pub runtime_id: String,
+    pub display_name: String,
+    pub program: String,
+    pub help_args: Vec<String>,
+    pub working_directory: Option<String>,
+    pub health_path: String,
+    pub health_authenticated: bool,
+}
+
+/// Resolve help-only stored values into launch argv tail.
+///
+/// Only keys absent from the manifest reach here. The snapshot must describe
+/// the currently registered executable; otherwise launch blocks until fresh
+/// discovery runs. Truly unknown keys error with retained values.
+fn help_launch_tail(
+    manifest: &RuntimeManifest,
+    help_only: &Map<String, Value>,
+) -> Result<Vec<String>, String> {
+    help_launch_tail_at(&root(), manifest, help_only)
+}
+
+fn help_launch_tail_at(
+    help_root: &Path,
+    manifest: &RuntimeManifest,
+    help_only: &Map<String, Value>,
+) -> Result<Vec<String>, String> {
+    let snapshot = super::runtime_help_store::latest_snapshot(
+        help_root,
+        manifest.engine_id.as_str(),
+        &manifest.runtime_id,
+    )?
+    .ok_or("saved options need verified help first; run help discovery for this runtime")?;
+    let registration = read_registration(manifest.engine_id, &manifest.runtime_id)?;
+    if snapshot.report.identity.executable_sha256 != registration.executable_sha256 {
+        return Err("help options describe another build; rediscover before launching".into());
+    }
+    if snapshot.schema.binding.fingerprint != snapshot.report.identity.fingerprint {
+        return Err("help snapshot schema does not match its report".into());
+    }
+    let scope = snapshot.report.scope.clone();
+    let resolved = super::runtime_help_store::resolve_stored(&snapshot.schema, &scope, help_only)
+        .map_err(|issues| {
+        issues
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    let mut tail = resolved.argv;
+    // Discovery scope segments (for example `serve`) are part of the schema
+    // argv, but the manifest base already carries the entry-point command.
+    // Drop a duplicated leading scope so it is not emitted twice.
+    if !scope.is_empty()
+        && tail.len() >= scope.len()
+        && tail[..scope.len()].iter().zip(&scope).all(|(a, b)| a == b)
+    {
+        tail.drain(..scope.len());
+    }
+    if !resolved.request.is_empty() {
+        return Err(
+            "help-derived request fields need an explicit protocol overlay before launch".into(),
+        );
+    }
+    Ok(tail)
+}
+
+/// Suggest a manifest v1 from an entry-point plus its verified help schema.
+///
+/// The caller reviews the JSON, saves it to a new file and registers it;
+/// registration still runs a fresh model probe before reporting Ready.
+/// Single-value launch flags become manifest options; positional, variadic,
+/// optional-value, repeated and unknown-arity flags stay in the help schema
+/// only and never become silent launch guesses. App-owned bindings always use
+/// explicit `{model}`/`{port}`/`{api_key}` placeholders.
+pub fn suggest_manifest_from_help(
+    entry: &EntrypointSuggestion,
+    schema: &super::runtime_options::OptionSchema,
+) -> Result<RuntimeManifest, String> {
+    schema.validate()?;
+    if entry.engine_id.as_str() != schema.binding.engine
+        || entry.runtime_id != schema.binding.runtime
+    {
+        return Err("help schema targets another runtime".into());
+    }
+    if !entry.engine_id.is_custom() {
+        return Err("entry-point registration requires a custom.* engine ID".into());
+    }
+    if entry.program.trim().is_empty() || !Path::new(&entry.program).is_absolute() {
+        return Err("entry-point program must be an absolute user-selected path".into());
+    }
+    if entry.health_path.trim().is_empty() {
+        return Err("entry-point health path is required".into());
+    }
+    let mut options = Vec::new();
+    for option in &schema.options {
+        if option.managed.is_some() || option.position.is_some() {
+            continue;
+        }
+        if option.target != super::runtime_options::Target::Launch {
+            continue;
+        }
+        let Some(spelling) = option.spellings.first() else {
+            continue;
+        };
+        let arity = option
+            .arity
+            .supported()
+            .copied()
+            .unwrap_or(super::runtime_options::Arity { min: 0, max: None });
+        if option.arity.supported().is_none()
+            || arity.max.is_none()
+            || arity.min != 1
+            || arity.max != Some(1)
+        {
+            continue;
+        }
+        if option.repeatable.supported() == Some(&true) {
+            continue;
+        }
+        let kind = match option.kind.supported() {
+            Some(super::runtime_options::ValueKind::Boolean) => {
+                if option.spellings.len() == 1 && spelling.polarity.is_none() {
+                    serde_json::json!({"type": "flag"})
+                } else {
+                    serde_json::json!({"type": "toggle"})
+                }
+            }
+            Some(super::runtime_options::ValueKind::Integer) => {
+                let (min, max) = match option.range.supported() {
+                    Some(range) => (
+                        range.min.unwrap_or(i64::MIN as f64),
+                        range.max.unwrap_or(i64::MAX as f64),
+                    ),
+                    None => (i64::MIN as f64, i64::MAX as f64),
+                };
+                serde_json::json!({"type": "integer", "min": min.trunc() as i64, "max": max.trunc() as i64})
+            }
+            Some(super::runtime_options::ValueKind::Number) => {
+                let (min, max) = match option.range.supported() {
+                    Some(range) => (
+                        range.min.unwrap_or(i32::MIN as f64),
+                        range.max.unwrap_or(i32::MAX as f64),
+                    ),
+                    None => (i32::MIN as f64, i32::MAX as f64),
+                };
+                serde_json::json!({"type": "number", "min": min, "max": max})
+            }
+            Some(
+                super::runtime_options::ValueKind::Text | super::runtime_options::ValueKind::Tokens,
+            )
+            | None => {
+                serde_json::json!({"type": "text", "max_len": 4096})
+            }
+            Some(super::runtime_options::ValueKind::Json) => serde_json::json!({"type": "json"}),
+        };
+        // Choices only when explicitly documented; prose never becomes one.
+        let kind = match option.choices.supported() {
+            Some(choices) if !choices.is_empty() => {
+                let strings = choices
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                if strings.len() == choices.len() {
+                    serde_json::json!({"type": "choice", "choices": strings})
+                } else {
+                    kind
+                }
+            }
+            _ => kind,
+        };
+        options.push(ExternalOption {
+            key: option.key.clone(),
+            flag: Some(spelling.flag.clone()),
+            kind,
+            target: "launch".into(),
+            group: option.group.clone(),
+            runtime_default: None,
+        });
+    }
+    let launch_args = if entry.help_args.iter().any(|arg| arg == "serve") {
+        vec![
+            "serve".to_string(),
+            "--model".to_string(),
+            "{model}".to_string(),
+            "--port".to_string(),
+            "{port}".to_string(),
+        ]
+    } else {
+        vec![
+            "--model".to_string(),
+            "{model}".to_string(),
+            "--port".to_string(),
+            "{port}".to_string(),
+        ]
+    };
+    let manifest = RuntimeManifest {
+        schema_version: VERSION,
+        adapter_version: VERSION,
+        engine_id: entry.engine_id,
+        runtime_id: entry.runtime_id.clone(),
+        display_name: entry.display_name.clone(),
+        platforms: vec![Platform {
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+        }],
+        protocol: "openai-v1".into(),
+        probe: ProcessSpec {
+            program: entry.program.clone(),
+            args: vec!["{model}".into(), "{options_json}".into()],
+            env: Default::default(),
+            working_directory: entry.working_directory.clone(),
+        },
+        launch: ProcessSpec {
+            program: entry.program.clone(),
+            args: launch_args,
+            env: [("ENGINE_KEY".to_string(), "{api_key}".to_string())]
+                .into_iter()
+                .collect(),
+            working_directory: entry.working_directory.clone(),
+        },
+        options,
+        model_formats: vec!["unknown".into()],
+        models: Vec::new(),
+        artifacts: Vec::new(),
+        health_path: entry.health_path.clone(),
+        health_authenticated: entry.health_authenticated,
+    };
+    validate_manifest(&manifest)?;
+    Ok(manifest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1305,5 +1560,104 @@ mod tests {
             .unwrap(),
             "--model=/synthetic/model with spaces"
         );
+    }
+    #[test]
+    fn help_only_values_block_launch_until_verified_discovery() {
+        let mut manifest = example();
+        manifest.engine_id = ProviderId::parse("custom.help-tail-test").unwrap();
+        manifest.runtime_id = "synthetic-tail-1".into();
+        let mut stored = Map::new();
+        stored.insert("fresh_flag".into(), serde_json::json!("v"));
+        // No registration exists for this synthetic id on any machine, so the
+        // tail always reports missing verified help rather than launching.
+        let error = help_launch_tail(&manifest, &stored).unwrap_err();
+        assert!(error.contains("verified help"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn entrypoint_suggestion_keeps_explicit_bindings_and_skips_guesses() {
+        use super::super::runtime_help::{Identity, TextOutput, PARSER_VERSION};
+        use super::super::runtime_help_parse::parse_help_report;
+        use super::super::runtime_options::SchemaBinding;
+        use std::collections::BTreeMap;
+        let fingerprint = "a".repeat(64);
+        let report = super::super::runtime_help::HelpReport {
+            identity: Identity {
+                fingerprint: fingerprint.clone(),
+                executable_sha256: "b".repeat(64),
+                artifacts_sha256: BTreeMap::new(),
+                parser_version: PARSER_VERSION,
+            },
+            scope: vec![],
+            stdout: TextOutput {
+                text: "Options:\n  --threads N           threads\n  --port PORT           port\n  --files FILE [FILE ...]  files\n".into(),
+                clean_text: "Options:\n  --threads N           threads\n  --port PORT           port\n  --files FILE [FILE ...]  files\n".into(),
+                encoding: "utf-8".into(),
+                decoding_loss: false,
+                truncated: false,
+                read_error: None,
+            },
+            stderr: TextOutput {
+                text: String::new(),
+                clean_text: String::new(),
+                encoding: "utf-8".into(),
+                decoding_loss: false,
+                truncated: false,
+                read_error: None,
+            },
+            exit_code: Some(0),
+            success: true,
+            cancelled: false,
+            timed_out: false,
+            error: None,
+            elapsed_ms: 1,
+        };
+        let schema = parse_help_report(
+            &report,
+            SchemaBinding {
+                engine: "custom.suggest-test".into(),
+                runtime: "build-1".into(),
+                fingerprint: fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        let manifest = suggest_manifest_from_help(
+            &EntrypointSuggestion {
+                engine_id: ProviderId::parse("custom.suggest-test").unwrap(),
+                runtime_id: "build-1".into(),
+                display_name: "Suggest Test".into(),
+                program: if cfg!(windows) {
+                    "C:\\synthetic\\server.exe".into()
+                } else {
+                    "/synthetic/server".into()
+                },
+                help_args: vec!["--help".into()],
+                working_directory: None,
+                health_path: "/health".into(),
+                health_authenticated: false,
+            },
+            &schema,
+        )
+        .unwrap();
+        // Explicit app-owned bindings use placeholders, never literal values.
+        assert!(manifest.launch.args.contains(&"{model}".to_string()));
+        assert!(manifest.launch.args.contains(&"{port}".to_string()));
+        assert!(!manifest.launch.args.iter().any(|a| a.contains("{api_key}")));
+        assert_eq!(
+            manifest.launch.env.get("ENGINE_KEY").map(String::as_str),
+            Some("{api_key}")
+        );
+        assert!(manifest.probe.args.iter().any(|a| a.contains("{model}")));
+        assert!(manifest
+            .probe
+            .args
+            .iter()
+            .any(|a| a.contains("{options_json}")));
+        // Single-value --threads converts; managed --port and variadic --files
+        // stay in the help schema only.
+        assert!(manifest.options.iter().any(|o| o.key == "threads"));
+        assert!(!manifest.options.iter().any(|o| o.key == "port"));
+        assert!(!manifest.options.iter().any(|o| o.key == "files"));
+        validate_manifest(&manifest).unwrap();
     }
 }

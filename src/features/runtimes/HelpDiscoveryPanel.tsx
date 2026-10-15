@@ -3,6 +3,7 @@ import {
   runtimeHelpCached,
   runtimeHelpCancelOwner,
   runtimeHelpDiscover,
+  runtimeHelpSuggestManifest,
   type HelpCommand,
   type OptionSchema,
   type RuntimeDescriptor,
@@ -27,6 +28,8 @@ export default function HelpDiscoveryPanel({ locked }: { locked: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [descriptor, setDescriptor] = useState<RuntimeDescriptor | null>(null);
+  const [manifestJson, setManifestJson] = useState('');
+  const [manifestError, setManifestError] = useState('');
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [scope, setScope] = useState<string[]>([]);
   const taskId = `runtime-help-discovery-${owner}`;
@@ -134,6 +137,24 @@ export default function HelpDiscoveryPanel({ locked }: { locked: boolean }) {
             <FeedbackBanner tone="warning">{copy.retained}: {descriptor.retained.join(', ')}</FeedbackBanner>
           )}
           <p className="app-section-hint">{copy.ready}</p>
+          <div className="app-page-actions mt-3">
+            <button
+              type="button"
+              className="app-button app-button--secondary"
+              disabled={busy || locked || !descriptor.help_complete}
+              onClick={() => {
+                setManifestError('');
+                void runtimeHelpSuggestManifest(
+                  { engine_id: engine.trim(), runtime_id: runtime.trim(), display_name: engine.trim(), program: program.trim(), help_args: helpArgs.split(/\s+/).filter(Boolean), working_directory: workingDir.trim() ? workingDir.trim() : null, health_path: '/health', health_authenticated: false },
+                  descriptor.schema,
+                ).then(manifest => setManifestJson(JSON.stringify(manifest, null, 2))).catch(cause => setManifestError(cause instanceof Error ? cause.message : String(cause)));
+              }}
+            >
+              {copy.suggest}
+            </button>
+          </div>
+          {manifestError && <FeedbackBanner tone="error">{manifestError}</FeedbackBanner>}
+          {manifestJson && <pre className="overflow-auto whitespace-pre-wrap">{manifestJson}</pre>}
         </div>
       )}
       {schema && (

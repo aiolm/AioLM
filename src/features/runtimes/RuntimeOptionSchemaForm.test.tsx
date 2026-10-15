@@ -7,7 +7,7 @@ import type { OptionSchema } from '../../shared/api/runtimeHelp';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => {
   const actual = await origin<typeof import('../../shared/api/runtimeHelp')>();
-  return { ...actual, runtimeHelpResolve: vi.fn() };
+  return { ...actual, runtimeHelpResolve: vi.fn(), runtimeHelpImport: vi.fn() };
 });
 
 const schema = (options: OptionSchema['options']): OptionSchema => ({
@@ -82,5 +82,27 @@ describe('generic runtime option renderer', () => {
     fireEvent.change(screen.getByLabelText('Search options'), { target: { value: 'beta' } });
     await waitFor(() => expect(screen.queryByText('--alpha', { exact: false })).not.toBeInTheDocument());
     expect(screen.getByText('--beta', { exact: false })).toBeInTheDocument();
+  });
+
+  it('splits a pasted command into an ordered plan with review buckets', async () => {
+    const current = schema([textOption('alpha'), textOption('beta')]);
+    vi.mocked(runtimeHelp.runtimeHelpImport).mockResolvedValueOnce({
+      plan: [
+        { key: 'alpha', spelling: '--alpha', values: ['1'] },
+        { key: 'beta', spelling: '--beta', values: ['2'] },
+        { key: 'alpha', spelling: '--alpha', values: ['3'] },
+      ],
+      managed: ['--port 8080'],
+      unrecognized: ['--mystery 1'],
+    });
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{}} scope={[]} onChange={onChange} /></I18nProvider>);
+    fireEvent.change(screen.getByLabelText(/Pasted command/), { target: { value: '--alpha 1 --beta 2 --alpha 3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Split into ordered plan' }));
+    expect(await screen.findByText(/Plan order: alpha, beta, alpha/)).toBeInTheDocument();
+    expect(screen.getByText(/Managed by the app/)).toBeInTheDocument();
+    expect(screen.getByText(/Unrecognized/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply plan to values' }));
+    expect(onChange).toHaveBeenCalledWith({ alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2' });
   });
 });

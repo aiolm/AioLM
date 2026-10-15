@@ -35,6 +35,7 @@ pub mod runtime_help;
 pub mod runtime_help_parse;
 pub mod runtime_help_store;
 pub mod runtime_options;
+pub mod runtime_ordered;
 pub use resolve_python_runtime as selected_python_runtime;
 
 /// The serving implementation behind a runtime. The wire spelling is stable

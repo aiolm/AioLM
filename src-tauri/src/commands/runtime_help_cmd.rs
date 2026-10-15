@@ -135,6 +135,39 @@ pub(crate) fn runtime_help_diff(
     ))
 }
 
+/// Order-preserving resolution: flags follow plan order within each scope
+/// depth instead of schema order. Same validation as grouped profiles.
+#[tauri::command]
+pub(crate) fn runtime_help_resolve_plan(
+    schema: OptionSchema,
+    scope: Vec<String>,
+    plan: crate::providers::runtime_ordered::OrderedPlan,
+) -> Result<ResolvedOptions, Vec<OptionIssue>> {
+    crate::providers::runtime_ordered::resolve_plan(&schema, &scope, &plan)
+}
+
+/// Split a pasted command into an ordered plan preserving input order.
+/// Managed and unknown words land in review buckets, never silently emitted.
+#[tauri::command]
+pub(crate) fn runtime_help_import(
+    schema: OptionSchema,
+    scope: Vec<String>,
+    text: String,
+) -> Result<crate::providers::runtime_ordered::ImportedPlan, String> {
+    crate::providers::runtime_ordered::import_plan_text(&schema, &scope, &text)
+}
+
+/// Suggest a manifest v1 from an entry-point plus its verified help schema.
+/// The caller reviews, saves and registers it; registration still runs a fresh
+/// model probe before reporting Ready. Exotic arities stay schema-only.
+#[tauri::command]
+pub(crate) fn runtime_help_suggest_manifest(
+    entry: crate::providers::registry::EntrypointSuggestion,
+    schema: OptionSchema,
+) -> Result<crate::providers::registry::RuntimeManifest, String> {
+    crate::providers::registry::suggest_manifest_from_help(&entry, &schema)
+}
+
 /// Parse a complete help report without spawning. Failed or truncated reports
 /// never parse; callers must rediscover.
 #[tauri::command]

@@ -469,6 +469,14 @@ impl OptionSchema {
                 if !keys.contains(&when.key) || !keys.contains(&other.key) {
                     return Err("constraint refers to an unknown option".into());
                 }
+                // JSON null arrives as None (occurrence test), so an explicit
+                // null value constraint cannot round-trip through Option<Value>.
+                // v1 does not support null constraint operands; choices already exclude null.
+                if when.equals == Some(Value::Null) || other.equals == Some(Value::Null) {
+                    return Err(
+                        "null constraint values need an explicit representation before use".into(),
+                    );
+                }
             }
         }
         if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_SCHEMA_BYTES {
@@ -773,6 +781,19 @@ impl OptionDefinition {
             }
         }
         Ok(args)
+    }
+
+    /// Validate and serialize one planned occurrence in input order.
+    /// Stored profiles group rows by key; plans keep input order.
+    pub(crate) fn resolve_one(
+        &self,
+        spelling: &Option<String>,
+        values: &[Value],
+    ) -> Result<Vec<String>, String> {
+        self.resolve(&Override {
+            spelling: spelling.clone(),
+            occurrences: vec![values.to_vec()],
+        })
     }
 }
 
