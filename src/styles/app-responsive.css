@@ -23,6 +23,9 @@
  .aiolm-server { grid-column: 2; grid-row: 1; }
  .app-feedback { flex-wrap: wrap; }
  .app-task-strip { flex-direction: column; gap: 8px; }
+ /* The copy takes the whole row; progress and buttons wrap below it. */
+ .app-task-strip__item { flex-wrap: wrap; }
+ .app-task-strip__copy { flex: 1 1 100%; }
  .app-confirm-dialog__panel { padding: 20px; }
  .tuning-sampler-chain__add { flex-wrap: wrap; }
 }

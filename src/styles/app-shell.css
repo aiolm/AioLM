@@ -71,8 +71,11 @@
 .app-task-strip { display: flex; align-items: start; gap: 16px; margin: 12px var(--ui-canvas-padding) 0; padding: 10px 14px; background: var(--ui-panel-raised); border: 1px solid transparent; border-radius: var(--ui-radius-panel); max-height: 140px; overflow: auto; flex-shrink: 0; font-size: var(--ui-text-support); }
 .app-task-strip__heading, .app-task-strip__item { display: flex; gap: 8px; align-items: center; }
 .app-task-strip__list { display: flex; flex-wrap: wrap; gap: 12px; min-width: 0; }
+/* Long unbroken diagnostic tokens (paths, compiler flags) must not set the
+   row width: the copy shrinks and wraps anywhere, so its buttons stay in view. */
+.app-task-strip__item { min-width: 0; }
 .app-task-strip__copy { min-width: 0; }
-.app-task-strip__label { overflow-wrap: break-word; }
+.app-task-strip__label, .app-task-strip__detail { overflow-wrap: anywhere; }
 .app-task-strip__status, .app-task-strip__progress { color: var(--ui-muted); }
 .app-task-strip__copy > span { display: block; }
 .app-task-strip__transfer { color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
