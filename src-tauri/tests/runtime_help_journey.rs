@@ -190,6 +190,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     );
     assert_eq!(target.program, v1.launch.program);
     let request = HelpRequest {
+        working_directory: None,
         program: None,
         args: vec![
             "--adapter-engine".into(),
@@ -212,11 +213,13 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         .values()
         .all(|value| !value.contains('{')));
     let foreign = HelpRequest {
+        working_directory: None,
         program: Some(area.path.join("other.exe").to_string_lossy().into_owned()),
         ..request.clone()
     };
     assert!(runtime_schema::help_command(&cfg, &foreign).is_err());
     let unprefixed = HelpRequest {
+        working_directory: None,
         args: vec!["--adapter-help-fixture".into(), "--help".into()],
         ..request.clone()
     };

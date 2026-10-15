@@ -159,6 +159,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     let mut args = bridge_prefix.clone();
     args.extend(["--adapter-help-fixture".into(), "--help".into()]);
     let request = HelpRequest {
+        working_directory: None,
         program: None,
         args,
         scope: vec![],
@@ -247,6 +248,7 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
     // An artifact's help remains available for inspection. It cannot become
     // the bridge's launch schema, even with a cached complete snapshot.
     let inspection = HelpRequest {
+        working_directory: None,
         program: Some(engine.clone()),
         args: vec!["--adapter-help-fixture".into(), "--help".into()],
         scope: vec![],

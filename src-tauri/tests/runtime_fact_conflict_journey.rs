@@ -115,6 +115,7 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     cfg.normalize();
     let root = providers::registry::root();
     let request = runtime_schema::HelpRequest {
+        working_directory: None,
         program: None,
         args: vec![
             "--adapter-engine".into(),

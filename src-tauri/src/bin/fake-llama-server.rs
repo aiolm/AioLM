@@ -188,6 +188,44 @@ fn handle(mut stream: TcpStream) {
 
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+    if arguments
+        .iter()
+        .any(|arg| arg == "--adapter-context-contract-fixture")
+    {
+        let result = (|| -> Result<serde_json::Value, String> {
+            use aiolm_lib::providers::{adapter, registry, runtime_schema};
+            let cfg = aiolm_lib::config::load_result()?;
+            let target = runtime_schema::help_target(&registry::root(), &cfg)?;
+            let command = runtime_schema::help_command(&cfg, &target.request)?;
+            let identity = command.identity(&std::sync::atomic::AtomicBool::new(false))?;
+            let plan = adapter::resolve(&cfg).launch(&cfg, cfg.port, "", &Default::default())?;
+            let mut process = std::process::Command::new(&plan.program);
+            process.args(&plan.args).env_clear().envs(plan.env);
+            if let Some(cwd) = &plan.working_directory {
+                process.current_dir(cwd);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                process.creation_flags(0x08000000);
+            }
+            let output = process.output().map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+            }
+            let actual: serde_json::Value =
+                serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())?;
+            Ok(
+                serde_json::json!({"help": identity.fingerprint, "help_cwd": command.working_directory,
+                "launch_cwd": plan.working_directory, "actual": actual}),
+            )
+        })();
+        println!(
+            "{}",
+            result.unwrap_or_else(|error| serde_json::json!({"error":error}))
+        );
+        return;
+    }
     if let Some(index) = arguments
         .iter()
         .position(|arg| arg == "--adapter-setup-fixture")
@@ -282,6 +320,13 @@ fn main() {
         if let Ok(path) = std::env::var("FAKE_PROBE_MARKER") {
             std::fs::write(path, b"probed").expect("record probe marker");
         }
+        if let Ok(path) = std::env::var("FAKE_PROBE_CWD_RECORD") {
+            std::fs::write(
+                path,
+                serde_json::to_vec(&std::env::current_dir().unwrap()).unwrap(),
+            )
+            .unwrap();
+        }
         if arguments.iter().any(|arg| arg == "--adapter-probe-jitter")
             && model.contains("slow-model")
         {
@@ -321,6 +366,16 @@ fn main() {
         };
         println!(
             "usage: fake-engine [options] [TARGET]\n\npositional arguments:\n  TARGET                entry to serve\n\noptions:\n  -h, --help            show this help message and exit\n  --model MODEL         model path\n  --host HOST           bind address\n  -p, --port PORT       bind port\n  --fresh-count N       synthetic count, zero is meaningful\n  --fresh-label TEXT    synthetic label, empty is meaningful\n  --fresh-pair A B      synthetic fixed pair\n  --fresh-switch        synthetic switch\n{extra}"
+        );
+        return;
+    }
+    if arguments
+        .iter()
+        .any(|arg| arg == "--adapter-observe-context-fixture")
+    {
+        println!(
+            "{}",
+            serde_json::json!({"argv": &arguments[1..], "cwd": std::env::current_dir().unwrap()})
         );
         return;
     }

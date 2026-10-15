@@ -147,7 +147,7 @@ impl InferenceRuntimeAdapter for BuiltinAdapter {
                 &cfg.active_backend,
                 &cfg.active_build,
             )?,
-            working_directory: None,
+            working_directory: super::execution_context::directory(&cfg, None)?,
             upstream_model: cfg.active_model.clone(),
             readiness: Readiness {
                 health_path: "/health".into(),

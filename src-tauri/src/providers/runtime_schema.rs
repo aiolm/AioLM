@@ -60,6 +60,9 @@ const RESERVED_KEYS: &[&str] = &[
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HelpRequest {
+    /// Explicit execution context. Declared adapter directories stay fixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<String>,
     /// Registered engines default to their launch program; a bridge's engine
     /// executable may be asked when it is a declared, hash-checked artifact.
     #[serde(default)]
@@ -73,6 +76,8 @@ pub struct HelpRequest {
 #[serde(deny_unknown_fields)]
 pub struct AcceptedHelp {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
     pub fingerprint: String,
     pub request: HelpRequest,
 }
@@ -303,6 +308,7 @@ fn help_target_for(
             let mut args = prefix.clone();
             args.push("--help".into());
             let request = HelpRequest {
+                working_directory: None,
                 program: None,
                 args,
                 scope: Vec::new(),
@@ -316,6 +322,7 @@ fn help_target_for(
             true,
             Vec::new(),
             HelpRequest {
+                working_directory: None,
                 program: None,
                 args: vec!["--help".into()],
                 scope: Vec::new(),
@@ -329,6 +336,7 @@ fn help_target_for(
                 true,
                 Vec::new(),
                 HelpRequest {
+                    working_directory: None,
                     program: None,
                     args,
                     scope,
@@ -380,7 +388,10 @@ fn help_command_for(
                     &cfg.active_backend,
                     &cfg.active_build,
                 )?)?,
-                working_directory: None,
+                working_directory: super::execution_context::requested(
+                    None,
+                    request.working_directory.as_deref(),
+                )?,
                 artifacts: Vec::new(),
                 runtime_version: crate::runtime::installed_version_label(
                     &cfg.active_backend,
@@ -402,7 +413,10 @@ fn help_command_for(
                 program: PathBuf::from(&runtime.python),
                 args,
                 environment: unicode_environment(super::python_env::engine_environment())?,
-                working_directory: None,
+                working_directory: super::execution_context::requested(
+                    None,
+                    request.working_directory.as_deref(),
+                )?,
                 artifacts: Vec::new(),
                 runtime_version: runtime
                     .probe
@@ -419,6 +433,8 @@ fn help_command_for(
     // A fixed locale keeps help text comparable across sessions; it is part
     // of the fingerprint like every other environment value.
     command.environment.insert("LC_ALL".into(), "C".into());
+    command.working_directory =
+        super::execution_context::directory(cfg, command.working_directory)?;
     Ok(command)
 }
 
@@ -461,7 +477,10 @@ pub fn manifest_help_command(
         program: PathBuf::from(program),
         args: request.args.clone(),
         environment,
-        working_directory: manifest.launch.working_directory.clone().map(PathBuf::from),
+        working_directory: super::execution_context::requested(
+            manifest.launch.working_directory.clone().map(PathBuf::from),
+            request.working_directory.as_deref(),
+        )?,
         artifacts: manifest.artifacts.iter().map(PathBuf::from).collect(),
         // Hashes identify the build; this names the registration so a
         // discovery before registration matches the one after it. Declared
@@ -518,6 +537,12 @@ pub fn draft_acceptance(
     let Some(help) = &draft.help else {
         return Ok(None);
     };
+    if help.request.working_directory.is_some() && draft.working_directory.is_none() {
+        return Err(
+            "make the reviewed working directory part of the entry point before registration"
+                .into(),
+        );
+    }
     let command = require_launch_help(
         manifest_help_command(manifest, &help.request)?,
         &manifest.launch.program,
@@ -538,6 +563,9 @@ pub fn draft_acceptance(
     }
     Ok(Some(AcceptedHelp {
         version: ACCEPTED_VERSION,
+        working_directory: Some(super::execution_context::observed(
+            command.working_directory,
+        )?),
         fingerprint: help.fingerprint.clone(),
         request: help.request.clone(),
     }))
@@ -610,8 +638,8 @@ pub fn accept(
 ) -> Result<AcceptedHelp, String> {
     let key = runtime_key(cfg)?;
     let selected = Selected::from_config(cfg)?;
-    let identity = option_help_command_for(root, cfg, &selected, request)?
-        .identity(&AtomicBool::new(false))?;
+    let command = option_help_command_for(root, cfg, &selected, request)?;
+    let identity = command.identity(&AtomicBool::new(false))?;
     if identity.fingerprint != fingerprint {
         return Err(
             "the runtime or its help command changed since this discovery; discover again".into(),
@@ -621,6 +649,9 @@ pub fn accept(
         .ok_or("discover this runtime's help before accepting it")?;
     let accepted = AcceptedHelp {
         version: ACCEPTED_VERSION,
+        working_directory: Some(super::execution_context::observed(
+            command.working_directory,
+        )?),
         fingerprint: fingerprint.into(),
         request: request.clone(),
     };
@@ -2429,8 +2460,10 @@ mod tests {
             "cpu-source-test",
             &AcceptedHelp {
                 version: ACCEPTED_VERSION,
+                working_directory: None,
                 fingerprint,
                 request: HelpRequest {
+                    working_directory: None,
                     program: None,
                     args: vec!["--help".into()],
                     scope: vec![],
@@ -2548,8 +2581,10 @@ mod tests {
             "cpu-metadata-test",
             &AcceptedHelp {
                 version: ACCEPTED_VERSION,
+                working_directory: None,
                 fingerprint,
                 request: HelpRequest {
+                    working_directory: None,
                     program: None,
                     args: vec!["--help".into()],
                     scope: vec![],

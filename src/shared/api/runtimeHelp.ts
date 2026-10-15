@@ -233,12 +233,14 @@ export const runtimeHelpImport = (
 
 /** The help command a user chose; the adapter decides environment and artifacts. */
 export interface HelpRequest {
+  working_directory?: string | null;
   program?: string | null;
   args: string[];
   scope: string[];
 }
 
 export interface AcceptedHelp {
+  working_directory?: string | null;
   version: number;
   fingerprint: string;
   request: HelpRequest;

@@ -228,3 +228,12 @@ Mac 후속 §100에서는 URI/decoder 오류와 audio history 배치를 별도 �
 제공 Strata 설정은 검토한 source revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 설치된 Python·SDK 폴더·전용 deployment JSON을 사용한다. 명시적 bridge가 선택한 **native 실행 파일의 실제 `--help`**와 자기 `--aiolm-model/host/port` binding을 보여 준다. 네이티브 옵션은 별도 `--` 경계 뒤에 전달되어 원본 deployment의 `args` 뒤에 정확한 token으로 붙는다. 고정 source의 scalar parser는 뒤의 값을 적용하며, 반복 옵션의 의미와 검증은 엔진에 남긴다. 도움말에서 확인하지 못한 타입·제약·API 능력을 확정하지 않는다.
 
 bridge는 `launch_resources`의 앱 소유 폴더에만 파생 deployment와 로그를 만들고, 설치된 HTTP 서버에는 고정 `--engine strata`, 파생 config, 앱 host/port만 전달한다. 원본 deployment·weight·tokenizer를 바꾸지 않는다. 모델 소스·입력·resident protocol은 명시 metadata로 예약하며, flag처럼 생긴 **값**을 별도 옵션으로 다시 해석하지 않는다. HTTP 서버와 native CLI의 인자를 섞지 않는다. 모델·tokenizer·source revision·build 검사는 별도 기존 probe가 담당한다. 도움말·producer 성공은 모델 로드나 추론 성공의 증거가 아니다. 다른 revision은 검토한 어댑터 설정/bridge가 필요하며, 다른 엔진의 설정 파일 추가는 앱의 공통 기능에 engine ID 분기를 요구하지 않는다.
+
+
+## 검토한 실행 디렉터리
+
+`HelpRequest.working_directory`는 선택적인 절대 경로이며, help를 수락하면 `AcceptedHelp.working_directory`에 실제 canonical 실행 디렉터리를 기록한다. 이후 같은 runtime의 help·launch와 명시적인 probe 디렉터리가 없는 probe는 이 문맥을 사용한다. GUI·CLI·shortcut의 시작 폴더가 다르다는 이유로 수락한 옵션이 stale이 되지 않는다. 기존 필드가 없는 request/accepted 레코드는 생략된 wire 표현과 이전 동작을 유지한다.
+
+Manifest의 명시적 launch/probe 디렉터리는 우선한다. probe 디렉터리가 없으면 launch 디렉터리를 사용하며, 새 등록의 첫 probe는 제거된 같은 runtime ID의 이전 help 문맥을 가져오지 않는다. GUI의 실행 작업 디렉터리 선택은 adapter가 선언한 디렉터리를 덮어쓸 수 없다. Entry point 등록에서 help에 경로를 지정하려면 entry point 자체에도 그 경로를 명시해야 한다.
+
+실제 디렉터리 변경은 help/probe identity를 변경하므로 다시 검토하고 model probe를 실행해야 한다. 기록된 폴더가 사라지면 저장된 옵션을 유지한 채 실행을 거부한다. 공통 도움말 화면에서 새 폴더를 선택하고 다시 탐색·수락해 복구한다. 폴더 선택의 늦은 응답은 이후의 사용자 입력이나 runtime 전환을 덮어쓰지 않는다. 이 계약은 실행 디렉터리에 한하며 subcommand·사용자 positional layout 및 encoding/locale의 후속 구현을 대신하지 않는다.

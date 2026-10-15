@@ -87,6 +87,7 @@ fn entry(area: &Path, runtime: &str, metadata: Option<Value>) -> (EntrypointHelp
     (
         entry,
         HelpRequest {
+            working_directory: None,
             program: None,
             args,
             scope: vec![],

@@ -84,6 +84,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     let mut help_args = prefix.clone();
     help_args.extend(["--adapter-help-fixture".to_string(), "--help".to_string()]);
     let request = HelpRequest {
+        working_directory: None,
         program: None,
         args: help_args,
         scope: vec![],
@@ -259,6 +260,7 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     assert!(runtime_schema::help_command(
         &cfg,
         &HelpRequest {
+            working_directory: None,
             program: None,
             args: other_args,
             scope: vec![],

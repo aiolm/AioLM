@@ -1314,7 +1314,7 @@ pub fn engine_command(
     }
     Ok(EngineCommand {
         program: PathBuf::from(&runtime.python),
-        working_directory: None,
+        working_directory: super::execution_context::directory(cfg, None)?,
         args,
         env,
         upstream_model,

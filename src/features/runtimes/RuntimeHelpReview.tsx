@@ -5,6 +5,7 @@ import {
   runtimeHelpCancelSelected,
   runtimeHelpDiscoverSelected,
   runtimeHelpTarget,
+  pickRuntimePath,
   type EffectiveSchema,
   type HelpReport,
   type HelpRequest,
@@ -35,6 +36,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const taskId = `runtime-help-review-${id}`;
   const [target, setTarget] = useState<HelpTarget | null>(null);
   const [extra, setExtra] = useState<string[]>([]);
+  const [workingDirectory, setWorkingDirectory] = useState('');
   const [busy, setBusy] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [error, setError] = useState('');
@@ -50,6 +52,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       if (!active) return;
       setTarget(next);
       setExtra(next.request.args.slice(next.prefix.length));
+      setWorkingDirectory(next.request.working_directory ?? next.accepted?.working_directory ?? '');
     }).catch(cause => { if (active) setError(String(cause)); });
     return () => {
       active = false;
@@ -65,11 +68,14 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
   const status = state === 'current' ? copy.helpCurrent : state === 'stale' ? copy.helpStale : state === 'unchecked' ? copy.helpUnchecked : copy.helpNone;
   const discover = async () => {
     if (!target || busy || accepting) return;
-    const next: HelpRequest = target.fixed ? target.request : {
+    const next: HelpRequest = target.fixed ? { ...target.request } : {
+      ...target.request,
       program: target.request.program ?? null,
       args: [...target.prefix, ...extra],
       scope: target.request.scope,
     };
+    if (workingDirectory.trim()) next.working_directory = workingDirectory.trim();
+    else delete next.working_directory;
     const ownGeneration = ++generation.current;
     cancelRequested.current = false;
     pending.current = cfg;
@@ -97,9 +103,10 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
     setAccepting(true);
     setError('');
     try {
-      await runtimeHelpAccept(cfg, found[1].fingerprint, request);
+      const accepted = await runtimeHelpAccept(cfg, found[1].fingerprint, request);
       if (ownGeneration !== generation.current) return;
       setFound(null);
+      if (accepted?.working_directory) setWorkingDirectory(accepted.working_directory);
       onAccepted();
     } catch (cause) {
       if (ownGeneration === generation.current) setError(cause instanceof Error ? cause.message : String(cause));
@@ -122,6 +129,26 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
         <RuntimeArgumentList label={entrypointCopy[locale].helpArgs} tokens={extra} disabled={disabled || busy || accepting}
           onChange={next => { setExtra(next); setFound(null); setRequest(null); }} />
       )}
+      {target && <div className="mt-3">
+        <label htmlFor={`${id}-cwd`}>{copy.workingDirectory}</label>
+        <div className="entrypoint-path mt-2">
+          <input id={`${id}-cwd`} name="execution-directory" className="app-input" value={workingDirectory}
+            disabled={disabled || busy || accepting} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
+            aria-describedby={`${id}-cwd-hint`} onChange={event => {
+              generation.current += 1;
+              setWorkingDirectory(event.target.value); setFound(null); setRequest(null); setError('');
+            }} />
+          <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting}
+            onClick={() => {
+              const ownGeneration = ++generation.current;
+              void pickRuntimePath('folder').then(path => {
+                if (generation.current !== ownGeneration || !path) return;
+                setWorkingDirectory(path); setFound(null); setRequest(null); setError('');
+              }).catch(cause => { if (generation.current === ownGeneration) setError(String(cause)); });
+            }}>{copy.chooseDirectory}</button>
+        </div>
+        <p id={`${id}-cwd-hint`} className="app-section-hint">{copy.workingDirectoryHint}</p>
+      </div>}
       <div className="app-page-actions mt-3">
         <button type="button" className="app-button app-button--secondary" disabled={disabled || busy || accepting || !target} onClick={() => void discover()}>{copy.discover}</button>
         {busy && (

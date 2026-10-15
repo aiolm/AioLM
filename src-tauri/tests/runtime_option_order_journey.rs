@@ -219,6 +219,7 @@ async fn saved_order_and_confirmed_syntax_reach_the_launched_engine_argv() {
     let root = providers::registry::root();
     let service = HelpService::default();
     let request = HelpRequest {
+        working_directory: None,
         program: None,
         args: vec![
             "--adapter-engine".into(),

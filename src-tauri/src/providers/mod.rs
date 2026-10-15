@@ -24,6 +24,7 @@ pub mod artifacts;
 pub mod catalog_data;
 pub mod compat;
 pub mod execution;
+pub mod execution_context;
 pub mod launch;
 pub mod launch_resources;
 pub mod metal_env;

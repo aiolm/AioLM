@@ -3,6 +3,9 @@ import type { Locale } from './i18n';
 /** Wording for the common runtime option renderer and help review. */
 export const runtimeOptionsCopy = {
   ko: {
+    workingDirectory: '실행 작업 디렉터리 (선택)',
+    workingDirectoryHint: '비워두면 어댑터의 실행 문맥을 사용합니다. 도움말을 수락하면 실제 디렉터리를 기록해 다음 실행에도 유지합니다. 어댑터가 명시한 디렉터리는 여기서 바꿀 수 없습니다.',
+    chooseDirectory: '폴더 선택',
     legend: '런타임 옵션',
     search: '옵션 검색',
     more: '옵션 더 보기',
@@ -123,6 +126,9 @@ export const runtimeOptionsCopy = {
     field_reserved: '앱 소유 예약',
   },
   en: {
+    workingDirectory: 'Execution working directory (optional)',
+    workingDirectoryHint: 'Leave empty to use the adapter context. Accepting help records the actual directory for later launches. A directory declared by the adapter stays fixed here.',
+    chooseDirectory: 'Choose folder',
     legend: 'Runtime options',
     search: 'Search options',
     more: 'Show more options',
@@ -243,6 +249,9 @@ export const runtimeOptionsCopy = {
     field_reserved: 'reserved for the app',
   },
   ja: {
+    workingDirectory: '実行作業ディレクトリ（任意）',
+    workingDirectoryHint: '空欄ではアダプターの実行環境を使います。ヘルプの承認時に実際のディレクトリを記録し、次回も維持します。アダプターが指定した場所はここでは変更できません。',
+    chooseDirectory: 'フォルダーを選択',
     legend: 'ランタイムのオプション',
     search: 'オプションを検索',
     more: 'オプションをさらに表示',
@@ -363,6 +372,9 @@ export const runtimeOptionsCopy = {
     field_reserved: 'アプリ用に予約',
   },
   zh: {
+    workingDirectory: '执行工作目录（可选）',
+    workingDirectoryHint: '留空以使用适配器的执行环境。接受帮助时会记录实际目录，供后续启动使用。适配器声明的目录无法在此更改。',
+    chooseDirectory: '选择文件夹',
     legend: '运行时选项',
     search: '搜索选项',
     more: '显示更多选项',

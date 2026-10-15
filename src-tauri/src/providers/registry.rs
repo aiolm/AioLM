@@ -805,6 +805,12 @@ fn run_probe(
     }
     if let Some(cwd) = &m.probe.working_directory {
         command.current_dir(cwd);
+    } else if let Some(cwd) = &m.launch.working_directory {
+        command.current_dir(cwd);
+    } else if path(m.engine_id, &m.runtime_id)?.is_file() {
+        if let Some(cwd) = super::execution_context::directory(cfg, None)? {
+            command.current_dir(cwd);
+        }
     }
     if !cfg.active_model.is_empty() && !Path::new(&cfg.active_model).exists() {
         return Err("selected model path is missing".into());
@@ -1226,7 +1232,10 @@ pub fn command(cfg: &AppConfig, port: u16, key: &str) -> Result<EngineCommand, S
         program: m.launch.program.into(),
         args,
         env,
-        working_directory: m.launch.working_directory.map(PathBuf::from),
+        working_directory: super::execution_context::directory(
+            cfg,
+            m.launch.working_directory.map(PathBuf::from),
+        )?,
         upstream_model: info.upstream_model.clone(),
         readiness: Readiness {
             health_path: m.health_path,
@@ -2047,6 +2056,7 @@ mod tests {
             expected
         );
         let request = super::super::runtime_schema::HelpRequest {
+            working_directory: None,
             program: None,
             args: vec!["--http".into(), "--help".into()],
             scope: vec![],

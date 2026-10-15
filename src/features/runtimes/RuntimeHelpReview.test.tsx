@@ -10,6 +10,7 @@ vi.mock('../../shared/api', async origin => ({
   ...await origin<typeof import('../../shared/api')>(),
   runtimeHelpTarget: vi.fn(), runtimeHelpDiscoverSelected: vi.fn(),
   runtimeHelpCancelSelected: vi.fn(async () => true), runtimeHelpAccept: vi.fn(),
+  pickRuntimePath: vi.fn(),
 }));
 
 const cfg = { ...testConfig, active_provider: 'custom.synthetic' as const, active_runtime: 'build-1' };
@@ -39,6 +40,50 @@ beforeEach(() => {
 function view(config = cfg, onAccepted = vi.fn()) {
   return <I18nProvider initialLocale="en"><RuntimeHelpReview cfg={config} effective={effective} disabled={false} onAccepted={onAccepted} /></I18nProvider>;
 }
+
+it('reviews an explicit execution directory, clears stale review on edit and retains the backend-pinned context', async () => {
+  const onAccepted = vi.fn();
+  render(view(cfg, onAccepted));
+  const directory = await screen.findByLabelText('Execution working directory (optional)');
+  expect(directory).toHaveValue('');
+  fireEvent.change(directory, { target: { value: '/synthetic/first directory' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/first directory' }));
+  fireEvent.change(directory, { target: { value: '/synthetic/second 눈길' } });
+  expect(screen.queryByRole('button', { name: 'Accept this help' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  const request = vi.mocked(api.runtimeHelpDiscoverSelected).mock.calls.at(-1)![1];
+  expect(request.working_directory).toBe('/synthetic/second 눈길');
+  vi.mocked(api.runtimeHelpAccept).mockResolvedValueOnce({ version: 1, fingerprint: report.identity.fingerprint,
+    request, working_directory: '/synthetic/second 눈길' });
+  fireEvent.click(screen.getByRole('button', { name: 'Accept this help' }));
+  await waitFor(() => expect(onAccepted).toHaveBeenCalledOnce());
+  expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint, request);
+  expect(directory).toHaveValue('/synthetic/second 눈길');
+});
+
+it('recovers a missing pinned directory through the common folder control without dropping saved options', async () => {
+  vi.mocked(api.runtimeHelpTarget).mockResolvedValueOnce({
+    engine: cfg.active_provider, runtime: cfg.active_runtime, program: '/synthetic/engine', fixed: false, prefix: [],
+    request: { args: ['--help'], scope: [] }, accepted: { version: 1, fingerprint: 'old',
+      request: { args: ['--help'], scope: [] }, working_directory: '/synthetic/missing' },
+  });
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new Error('The reviewed execution directory is missing'));
+  vi.mocked(api.pickRuntimePath).mockResolvedValueOnce('/synthetic/recovered');
+  render(view());
+  expect(await screen.findByLabelText('Execution working directory (optional)')).toHaveValue('/synthetic/missing');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByText(/reviewed execution directory is missing/);
+  fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }));
+  await waitFor(() => expect(screen.getByLabelText('Execution working directory (optional)')).toHaveValue('/synthetic/recovered'));
+  expect(api.pickRuntimePath).toHaveBeenCalledWith('folder');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/recovered' }));
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+});
 
 it('discovers only on explicit action, preserves token boundaries, reviews the diff and accepts the exact result', async () => {
   const accepted = vi.fn();
@@ -99,4 +144,18 @@ it('cancels an owned discovery when unmounted and never accepts an incomplete re
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   rendered.unmount();
   expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
+});
+
+it('keeps a later manual directory edit when an earlier folder picker resolves', async () => {
+  let finish!: (value: string) => void;
+  vi.mocked(api.pickRuntimePath).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  render(view());
+  const directory = await screen.findByLabelText('Execution working directory (optional)');
+  fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }));
+  fireEvent.change(directory, { target: { value: '/synthetic/new manual directory' } });
+  await act(async () => { finish('/synthetic/earlier picker directory'); });
+  expect(directory).toHaveValue('/synthetic/new manual directory');
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await screen.findByRole('button', { name: 'Accept this help' });
+  expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/new manual directory' }));
 });
