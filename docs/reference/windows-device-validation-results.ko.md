@@ -355,6 +355,8 @@ raw는 `package15-candidate.json`, `package15-unknown-engine-preparation/result.
 
 W05 원본 argv와 이력을 다시 대조하면 최초 실패 runtime은 b11617 CPU/revision `14310190c`이고 b11460 호환 runtime은 이후 도형 후속 검증이다. 두 실행을 혼동한 작업 메모는 정정했다. 원본 argv가 가리키는 현재 보존 실행 파일의 SHA-256은 `715f0ea98819f03fc596e9d352e989fc0ae093056282e0d73b2d657e7afa7d02`다. 도움말/소스 기반 요청 비교 도구는 합성 stub에서만 검사했으며 아직 실제 GUI HTTP body를 포착하지 않았다. `/slots`의 detokenized prompt와 노출 params 일치는 해당 관측 필드의 일치만 뜻한다. 이미지 embedding이나 전체 HTTP bytes의 동등성 또는 배타적 원인 증명이 아니다. 원래 미디어 fail·필수 GUI/공통 기능 unrun·W08 별도 설치 세션 blocked를 유지하고 goal은 active다.
 
+추가로 **원래 b11617 CPU runtime**의 파일 52개를 새 격리 CLI 홈에만 복사·전체 해시 대조하고, 같은 production15 CLI와 원래 SmolVLM256 Q8_0/f16 projector·이미지·복합 질문으로 실제 제어 실행했다. 명시한 caller system/sampling/text-first 설정에서 HTTP200·PP185/TG7·stop은 확인했지만 답변은 ` A1) A12`로 색상/도형 검사는 **fail**다(exit1/6,587ms). 미리 관측한 소유 PID 종료·포트 종료·state/staging 정리와 원래 runtime 52개·모델·projector·이미지 해시 보존은 pass다. 호환 runtime으로 바꾸지 않고도 별도 API 요청에서 내용 실패가 발생했음을 좁혀 기록한다. 실제 GUI wire를 포착한 것은 아니며 전체 요청 동등성이나 배타적인 앱 밖 원인으로 단정하지 않는다. raw `package15-original-w05-control/results.json`과 해당 `request.json`·`response-sse.txt`, 실행 `1792133600410-package15-original-w05-control`에 연결한다.
+
 ## production15 실제 GUI의 미지 옵션·버전 변경·Strata 종료 재검증
 
 같은 고정 GUI와 검증 홈에서 새 합성 엔진의 실제 help 1,014개(형식 미확인 1,008개)를 탐색·검토했다. 전용 화면이나 미리 선언한 옵션 없이 공통 GUI에서 Unicode·공백·따옴표·`;`·`&`를 포함한 텍스트, negative flag, 정수 0, 마지막 1,000번째 옵션을 설정했다. 새 프로필 저장→닫기/재열기→새 probe/Ready→실제 Windows 소유 프로세스 argv→HTTP/SSE의 파서 echo→저장 이력을 대조해 pass다. TG4와 답변은 합성 fixture이며 실제 추론 성공으로 계산하지 않는다. 등록 후 새 엔진의 올바른 이름과 다음 동작이 화면에 나타나고 Tab→Enter로 해당 엔진을 연 D72 검사는 advanced 등록 범위의 pass다.
