@@ -943,6 +943,9 @@ async fn server_stop_unlocked() -> Result<Value, String> {
             "headless state does not identify the current process; refusing to stop it".into(),
         );
     }
+    // File handles can outlive taskkill's root process. Cleanup shares this
+    // existing shutdown budget instead of adding a new retry timeout.
+    let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     if state_process_is_managed(&state) {
         terminate_pid(state.pid)?;
         // Sending SIGTERM only requests shutdown. Keep the state and command
@@ -956,7 +959,12 @@ async fn server_stop_unlocked() -> Result<Value, String> {
     }
     wait_for_log_collector(&state).await?;
     if let Some(id) = &state.launch_resources {
-        aiolm_lib::providers::launch_resources::cleanup(id, state.pid)?;
+        aiolm_lib::providers::launch_resources::cleanup_stopped_until(
+            id,
+            state.pid,
+            cleanup_deadline,
+        )
+        .await?;
     }
     remove_state();
     Ok(json!({"state":"stopped","pid":state.pid,"model":state.model}))

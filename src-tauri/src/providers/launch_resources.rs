@@ -54,12 +54,15 @@ fn root() -> PathBuf {
 }
 
 fn path(id: &str) -> Result<PathBuf, String> {
+    path_in(&root(), id)
+}
+
+fn path_in(parent: &Path, id: &str) -> Result<PathBuf, String> {
     let parsed = uuid::Uuid::parse_str(id).map_err(|_| "invalid launch resource identity")?;
     if parsed.to_string() != id {
         return Err("invalid launch resource identity".into());
     }
-    let parent = root();
-    if fs::symlink_metadata(&parent).is_ok_and(|m| m.file_type().is_symlink() || !m.is_dir()) {
+    if fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink() || !m.is_dir()) {
         return Err("launch resource root must be an owned directory, not a link".into());
     }
     Ok(parent.join(id))
@@ -68,10 +71,17 @@ fn path(id: &str) -> Result<PathBuf, String> {
 /// Removing persisted headless resources requires both the generated UUID
 /// and the process identity recorded when that directory was created.
 pub fn cleanup(id: &str, pid: u32) -> Result<(), String> {
-    let path = path(id)?;
+    let Some(path) = owned_path_in(&root(), id, pid)? else {
+        return Ok(());
+    };
+    remove_owned(&path).map_err(|e| e.to_string())
+}
+
+fn owned_path_in(parent: &Path, id: &str, pid: u32) -> Result<Option<PathBuf>, String> {
+    let path = path_in(parent, id)?;
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.to_string()),
     };
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -81,7 +91,45 @@ pub fn cleanup(id: &str, pid: u32) -> Result<(), String> {
     if marker.version != 1 || marker.id != id || marker.pid.unwrap_or_default() != pid {
         return Err("launch resource ownership does not match the stopped process".into());
     }
-    remove_owned(&path).map_err(|e| e.to_string())
+    Ok(Some(path))
+}
+
+/// A stopped Windows process tree can still be releasing a native log handle.
+/// Share the caller's existing shutdown deadline, and retry only the OS sharing
+/// errors. Every attempt rechecks ownership; other failures retain the state.
+pub async fn cleanup_stopped_until(
+    id: &str,
+    pid: u32,
+    deadline: std::time::Instant,
+) -> Result<(), String> {
+    cleanup_stopped_in(&root(), id, pid, deadline).await
+}
+
+async fn cleanup_stopped_in(
+    parent: &Path,
+    id: &str,
+    pid: u32,
+    deadline: std::time::Instant,
+) -> Result<(), String> {
+    loop {
+        let Some(path) = owned_path_in(parent, id, pid)? else {
+            return Ok(());
+        };
+        match remove_owned(&path) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                #[cfg(windows)]
+                let sharing = matches!(error.raw_os_error(), Some(32 | 33));
+                #[cfg(not(windows))]
+                let sharing = false;
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if !sharing || remaining.is_zero() {
+                    return Err(error.to_string());
+                }
+                tokio::time::sleep(remaining.min(std::time::Duration::from_millis(10))).await;
+            }
+        }
+    }
 }
 
 fn read_marker(directory: &Path) -> Result<Marker, String> {
@@ -112,7 +160,14 @@ fn remove_owned(directory: &Path) -> std::io::Result<()> {
             fs::remove_dir_all(&path)?;
         } else {
             // A link is removed itself, never its target.
-            fs::remove_file(&path).or_else(|_| fs::remove_dir(&path))?;
+            match fs::remove_file(&path) {
+                Err(error) if entry.file_type()?.is_symlink() => {
+                    // Windows directory links require RemoveDirectory. A
+                    // regular file's sharing error must not be overwritten.
+                    fs::remove_dir(&path).map_err(|_| error)?;
+                }
+                result => result?,
+            }
         }
     }
     match fs::remove_file(directory.join(OWNER_LOCK)) {
@@ -408,5 +463,67 @@ mod tests {
         recover_in(&root);
         assert!(!directory.exists());
         fs::remove_dir_all(&root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn locked_log_reports_the_original_sharing_error_and_keeps_ownership() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("aiolm-staging-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let (directory, _) = staged(&root, None, false);
+        let held = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .share_mode(0x1) // FILE_SHARE_READ, without FILE_SHARE_DELETE
+            .open(directory.join("engine.log"))
+            .unwrap();
+        let error = remove_owned(&directory).unwrap_err();
+        let ownership_retained = directory.join(".aiolm-launch.json").is_file();
+        drop(held);
+        remove_owned(&directory).unwrap();
+        fs::remove_dir(&root).unwrap();
+        assert!(ownership_retained);
+        assert_eq!(error.raw_os_error(), Some(32), "retain ERROR_SHARING_VIOLATION instead of trying to remove a regular file as a directory");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn stopped_cleanup_waits_for_a_closing_log_and_rechecks_ownership() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::{Duration, Instant};
+        let root = std::env::temp_dir().join(format!("aiolm-staging-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let (directory, _) = staged(&root, Some(17), false);
+        let id = directory.file_name().unwrap().to_str().unwrap();
+        let held = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .share_mode(0x1)
+            .open(directory.join("engine.log"))
+            .unwrap();
+        let wrong_owner =
+            cleanup_stopped_in(&root, id, 18, Instant::now() + Duration::from_secs(1))
+                .await
+                .unwrap_err();
+        assert!(wrong_owner.contains("ownership"));
+        let blocked = cleanup_stopped_in(&root, id, 17, Instant::now())
+            .await
+            .unwrap_err();
+        assert!(blocked.contains("32"));
+        assert!(directory.join(".aiolm-launch.json").is_file());
+        let closing = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(80));
+            drop(held);
+        });
+        let result =
+            cleanup_stopped_in(&root, id, 17, Instant::now() + Duration::from_secs(1)).await;
+        closing.join().unwrap();
+        let removed = !directory.exists();
+        if directory.exists() {
+            remove_owned(&directory).unwrap();
+        }
+        fs::remove_dir(&root).unwrap();
+        result.unwrap();
+        assert!(removed);
     }
 }
