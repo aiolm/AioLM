@@ -89,14 +89,34 @@ impl Child {
 }
 impl Drop for Child {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        let tree = self
+            .launch_resources
+            .as_ref()
+            .and(self.process.as_ref())
+            .and_then(|process| process.process_handle());
         if let Some(process) = self.process.as_mut() {
             process.terminate();
         }
+        // Close the root's own handle too before waiting for the tree.
+        self.process.take();
         self.output_readers.clear();
         self.key_file.take();
+        // Descendants may still hold files in the launch directory (an engine
+        // log) while they exit. A tree still exiting after this bound leaves
+        // the directory, with its owner record, to the next launch's recovery.
+        #[cfg(windows)]
+        if let Some(tree) = tree {
+            tree.wait_exited(LAUNCH_TREE_EXIT_WAIT);
+        }
         self.launch_resources.take();
     }
 }
+
+/// How long unloading waits for a terminated tree before removing its launch
+/// directory; the same bound the CLI gives a stopped server to exit.
+#[cfg(windows)]
+const LAUNCH_TREE_EXIT_WAIT: Duration = Duration::from_secs(10);
 
 struct ApiKeyFile(PathBuf);
 impl Drop for ApiKeyFile {

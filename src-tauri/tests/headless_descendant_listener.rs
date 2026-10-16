@@ -12,7 +12,7 @@
 
 use aiolm_lib::providers::{
     self,
-    launch_resources::Request,
+    launch_resources::{self, Request},
     registry::{ArgBinding, AuthBinding, EntrypointDraft, ProcessSpec, ServingProtocol},
     runtime_schema,
 };
@@ -168,6 +168,17 @@ impl Tree {
     fn exits_within(&self, limit: Duration) -> bool {
         self.launcher.exits_within(limit) && self.server.exits_within(limit)
     }
+}
+
+/// Open a file the way a slow-exiting engine holds its log: deletion refused.
+fn hold(path: &Path) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .share_mode(0x1) // FILE_SHARE_READ
+        .open(path)
+        .unwrap()
 }
 
 fn free_port() -> u16 {
@@ -331,6 +342,54 @@ impl Drop for ForeignServer {
     }
 }
 
+/// Unrecognized or unverifiable staging entries recovery must keep.
+struct ForeignStaging {
+    entries: Vec<PathBuf>,
+    target: PathBuf,
+}
+fn foreign_staging(staging: &Path, home: &Path) -> ForeignStaging {
+    let id = || uuid::Uuid::new_v4().to_string();
+    let marker = |id: &str| format!(r#"{{"version":1,"id":"{id}","pid":null}}"#);
+    let named = staging.join("not-a-launch");
+    fs::create_dir(&named).unwrap();
+    fs::write(named.join("keep.txt"), b"user").unwrap();
+    let empty = staging.join(id());
+    fs::create_dir(&empty).unwrap();
+    let (unlocked_id, file, junction_id) = (id(), staging.join(id()), id());
+    let unlocked = staging.join(&unlocked_id);
+    fs::create_dir(&unlocked).unwrap();
+    fs::write(unlocked.join(".aiolm-launch.json"), marker(&unlocked_id)).unwrap();
+    fs::write(&file, b"user").unwrap();
+    let target = home.join("outside staging target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join(".aiolm-launch.json"), marker(&junction_id)).unwrap();
+    fs::write(target.join(".aiolm-launch.lock"), b"").unwrap();
+    fs::write(target.join("keep.txt"), b"user").unwrap();
+    let junction = staging.join(&junction_id);
+    let linked = Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&target)
+        .stdout(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(linked.success());
+    ForeignStaging {
+        entries: vec![named.join("keep.txt"), empty, unlocked, file, junction],
+        target,
+    }
+}
+impl ForeignStaging {
+    fn assert_preserved(&self) {
+        for entry in &self.entries {
+            assert!(fs::symlink_metadata(entry).is_ok(), "{}", entry.display());
+        }
+        for name in [".aiolm-launch.json", ".aiolm-launch.lock", "keep.txt"] {
+            assert!(self.target.join(name).is_file(), "junction target {name}");
+        }
+    }
+}
+
 /// `engine` is the synthetic fixture, which also answers the probe.
 fn draft(
     engine: &str,
@@ -387,7 +446,7 @@ fn draft(
     }
 }
 
-fn select(model: &Path, runtime: &str, port: u16) {
+fn select(model: &Path, runtime: &str, port: u16) -> aiolm_lib::AppConfig {
     let mut cfg = aiolm_lib::AppConfig {
         active_provider: ENGINE.into(),
         active_runtime: runtime.into(),
@@ -396,7 +455,7 @@ fn select(model: &Path, runtime: &str, port: u16) {
         ..Default::default()
     };
     cfg.normalize();
-    aiolm_lib::config::save(&cfg).unwrap();
+    aiolm_lib::config::save(&cfg).unwrap()
 }
 
 #[tokio::test]
@@ -432,6 +491,7 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
     };
     let serving = [
         "--adapter-resource-fixture",
+        "--adapter-staging-log-fixture",
         "--adapter-engine",
         "--adapter-no-health-auth",
     ];
@@ -440,11 +500,12 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
         (
             "holder-1",
             &[
+                "--adapter-resource-fixture",
                 "--adapter-hold-fixture",
                 "--adapter-engine",
                 "--adapter-no-health-auth",
             ][..],
-            false,
+            true,
         ),
         (
             "failing-1",
@@ -505,6 +566,15 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
     assert!(first_directory.join("effective-config.json").is_file());
     let status = cli(&home, &["server", "status"]).output().unwrap();
     assert_eq!(json(&status)["state"], "running", "{status:?}");
+    // Entries recovery must never reclaim: no owner record, an owner record
+    // without a lock (an earlier release or another tool), a file, and a
+    // junction whose target carries a complete owner record.
+    let staging = first_directory.parent().unwrap().to_path_buf();
+    let foreign_data = foreign_staging(&staging, &home);
+    // A launch preparation is the recovery boundary. The persistent server
+    // released by its exited CLI keeps its directory.
+    drop(launch_resources::prepare(None, &mut Vec::new()).unwrap());
+    assert!(first_directory.join("effective-config.json").is_file());
 
     // Restart replaces exactly that tree and its launch directory.
     fs::remove_file(record("launcher-1")).unwrap();
@@ -523,15 +593,78 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
         .unwrap_or_default()
         .contains("fake-model"));
 
-    let stopped = cli(&home, &["server", "stop"]).output().unwrap();
-    assert!(stopped.status.success(), "stop failed: {stopped:?}");
+    // A file still held at stop fails the removal, not the ownership: the
+    // state and owner record remain, and repeating stop finishes cleanup.
+    let held = hold(&second_directory.join("held.log"));
+    let blocked = cli(&home, &["server", "stop"]).output().unwrap();
+    assert!(!blocked.status.success(), "{blocked:?}");
     assert!(
         second.exits_within(EXIT_BOUND),
         "stop left the launcher or its listener running"
     );
+    assert!(state_file.exists(), "a failed cleanup dropped the state");
+    assert!(second_directory.join(".aiolm-launch.json").is_file());
+    drop(held);
+    let stopped = cli(&home, &["server", "stop"]).output().unwrap();
+    assert!(stopped.status.success(), "stop failed: {stopped:?}");
     assert!(!second_directory.exists(), "stop left the launch directory");
     assert!(!state_file.exists());
     assert!(get(port, "/health").is_none(), "the port is still served");
+
+    // Desktop unload of the same launcher: its listener still holds the
+    // engine log in the launch directory when termination starts. The whole
+    // directory, owner record included, is gone once unload returns.
+    let cfg = select(&model, "launcher-1", port);
+    for _ in 0..3 {
+        fs::remove_file(record("launcher-1")).unwrap();
+        let ring = Arc::new(aiolm_lib::ErrBuf::default());
+        let (child, _, _) = aiolm_lib::server::spawn(&cfg, "", &ring, &Default::default()).unwrap();
+        let mut owned = Some(child);
+        let tree = Tree::wait(&record("launcher-1"), Some(&image));
+        let deadline = Instant::now() + START_BOUND;
+        while get(port, "/health").is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let directory = staged("launcher-1");
+        assert!(directory.join("engine.log").is_file());
+        aiolm_lib::server::kill(&mut owned, Some(ring));
+        let remaining: Vec<_> = fs::read_dir(&directory)
+            .map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
+            .unwrap_or_default();
+        assert!(
+            !directory.exists(),
+            "unload left {} with {remaining:?}",
+            directory.display()
+        );
+        assert!(tree.exits_within(EXIT_BOUND));
+        assert!(get(port, "/health").is_none());
+    }
+    // A file still held when unload removes the directory (here by this
+    // test, as an engine that is slow to exit would) must not cost the owner
+    // record: the next launch preparation finishes the removal once the file
+    // is released.
+    fs::remove_file(record("launcher-1")).unwrap();
+    let ring = Arc::new(aiolm_lib::ErrBuf::default());
+    let (child, _, _) = aiolm_lib::server::spawn(&cfg, "", &ring, &Default::default()).unwrap();
+    let mut owned = Some(child);
+    let tree = Tree::wait(&record("launcher-1"), Some(&image));
+    let deadline = Instant::now() + START_BOUND;
+    while get(port, "/health").is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let directory = staged("launcher-1");
+    let held = hold(&directory.join("held.log"));
+    aiolm_lib::server::kill(&mut owned, Some(ring));
+    assert!(tree.exits_within(EXIT_BOUND));
+    for name in [".aiolm-launch.json", ".aiolm-launch.lock", "held.log"] {
+        assert!(
+            directory.join(name).is_file(),
+            "unload removed {name} while a file was held"
+        );
+    }
+    drop(held);
+    drop(launch_resources::prepare(None, &mut Vec::new()).unwrap());
+    assert!(!directory.exists(), "recovery did not finish the removal");
 
     // An unrelated process answers readiness on the configured port while
     // the launched tree runs without listening. Readiness reaches the model
@@ -552,6 +685,10 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
     );
     assert!(!state_file.exists(), "a foreign listener produced state");
     assert!(held.running());
+    // A concurrent launch preparation leaves this live start's directory.
+    let interrupted = staged("holder-1");
+    drop(launch_resources::prepare(None, &mut Vec::new()).unwrap());
+    assert!(interrupted.join("effective-config.json").is_file());
     // Terminating the CLI before readiness (no destructor runs) still
     // reclaims the launcher and its descendant.
     start.child.kill().unwrap();
@@ -562,6 +699,22 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
     );
     assert!(!state_file.exists());
     drop(foreign);
+    // No destructor ran, so the interrupted start's directory remains until
+    // the next launch preparation in this home.
+    assert!(interrupted.is_dir(), "{}", interrupted.display());
+    // Another live launch (this test process) holds its own directory
+    // across that boundary.
+    let mut live_env = Vec::new();
+    let live = launch_resources::prepare(
+        Some(Request {
+            version: 1,
+            directory_env: "SYNTHETIC_LIVE_DIRECTORY".into(),
+        }),
+        &mut live_env,
+    )
+    .unwrap()
+    .unwrap();
+    let live_directory = PathBuf::from(&live_env[0].1);
 
     // The launched server fails before readiness: the CLI reports it and
     // leaves no process, state or launch directory.
@@ -583,6 +736,15 @@ async fn headless_start_owns_a_launcher_descendant_listener_and_only_that_listen
         "failed start left its directory"
     );
     assert!(!state_file.exists());
+    // That start was the recovery boundary for the interrupted directory.
+    assert!(
+        !interrupted.exists(),
+        "the next start did not reclaim the interrupted start's directory"
+    );
+    assert!(live_directory.is_dir(), "recovery removed a live launch");
+    drop(live);
+    assert!(!live_directory.exists());
+    foreign_data.assert_preserved();
 
     // Explicit opt-in: the same journey through an actual venv `python.exe`
     // redirector, whose base interpreter runs this synthetic HTTP script.

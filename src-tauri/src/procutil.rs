@@ -51,6 +51,13 @@ impl ProcessHandle {
         self.0.job.contains(pid)
     }
 
+    /// After termination, wait at most `limit` until no member of the tree
+    /// is still exiting, so files it held are closed.
+    #[cfg(windows)]
+    pub fn wait_exited(&self, limit: std::time::Duration) -> bool {
+        self.0.job.wait_empty(limit)
+    }
+
     #[cfg(test)]
     pub(crate) fn empty_for_test() -> Self {
         Self(std::sync::Arc::new(ProcessTree {
@@ -1012,6 +1019,31 @@ mod tests {
         }
         assert!(survived, "closing a released job terminated its members");
         assert!(descendant.wait(std::time::Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn waiting_after_termination_covers_every_job_member() {
+        use std::io::BufRead;
+        let mut command = std_command("powershell");
+        command
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$child = Start-Process ping.exe -ArgumentList @('-n','60','127.0.0.1') -WindowStyle Hidden -PassThru; [Console]::Out.WriteLine($child.Id); Start-Sleep -Seconds 60"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let mut owned = OwnedChild::spawn(&mut command).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(owned.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        // This probe's open handle must not keep the wait from completing.
+        let descendant = ProcessExitProbe::open(line.trim().parse().unwrap()).unwrap();
+        let tree = owned.process_handle().unwrap();
+        owned.terminate();
+        drop(owned);
+        let started = std::time::Instant::now();
+        assert!(tree.wait_exited(std::time::Duration::from_secs(10)));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(descendant.exited());
     }
 
     #[test]

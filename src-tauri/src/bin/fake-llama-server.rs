@@ -294,6 +294,48 @@ fn main() {
     }
     if arguments
         .iter()
+        .any(|arg| arg == "--adapter-staging-log-fixture")
+    {
+        // Like a native engine under a bridge: a separate descendant without
+        // the server's output pipes holds its log in the launch directory,
+        // refusing deletion.
+        let directory = std::env::var_os("SYNTHETIC_LAUNCH_DIRECTORY").expect("owned directory");
+        let log = std::path::Path::new(&directory).join("engine.log");
+        let holder = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--adapter-log-holder")
+            .arg(&log)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn synthetic log holder");
+        // It lives as long as this server; the owner's teardown ends both.
+        std::mem::forget(holder);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !log.is_file() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    if let Some(index) = arguments
+        .iter()
+        .position(|arg| arg == "--adapter-log-holder")
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(0x1); // FILE_SHARE_READ only
+        }
+        let mut log = options
+            .open(arguments.get(index + 1).expect("log path"))
+            .expect("open synthetic engine log");
+        writeln!(log, "synthetic engine ready").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(120));
+        return;
+    }
+    if arguments
+        .iter()
         .any(|arg| arg == "--native-stderr-help-fixture")
     {
         // A native build that, like the pinned Strata engine, documents its
