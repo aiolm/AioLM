@@ -13,7 +13,7 @@ import { SettingsDeliveryError, type ProfileEditorResult } from './profileEditor
 
 const mocks = vi.hoisted(() => ({
   dialog: null as ModelSettingsDialogProps | null,
-  sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(),
+  sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(), cancelLaunchPreflight: vi.fn(),
   sessionStart: vi.fn(), sessionStop: vi.fn(), applyRequestSettings: vi.fn(),
 }));
 
@@ -26,7 +26,7 @@ vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => false,
   sessionList: mocks.sessionList, serverStatus: mocks.serverStatus,
   normalizeSessionList: (value: SessionStatus[]) => value,
-  preflightLaunch: mocks.preflightLaunch, sessionStart: mocks.sessionStart,
+  preflightLaunch: mocks.preflightLaunch, cancelLaunchPreflight: mocks.cancelLaunchPreflight, sessionStart: mocks.sessionStart,
   sessionStop: mocks.sessionStop, applyRequestSettings: mocks.applyRequestSettings,
 }));
 let context: ModelSettingsContext;
@@ -76,6 +76,7 @@ beforeEach(() => {
   mocks.sessionList.mockResolvedValue([]);
   mocks.serverStatus.mockResolvedValue({ state: 'stopped' });
   mocks.preflightLaunch.mockImplementation(async (cfg: AppConfig) => structuredClone(cfg));
+  mocks.cancelLaunchPreflight.mockResolvedValue(undefined);
   mocks.sessionStart.mockResolvedValue(undefined);
   mocks.sessionStop.mockResolvedValue(undefined);
   mocks.applyRequestSettings.mockImplementation(async (cfg: AppConfig) => executionSettings(cfg));
@@ -83,6 +84,35 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); });
 
 describe('model settings target application', () => {
+  it('cancels the pending preflight without saving its late result or stopping another target, then retries with a new owner', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const dialog = await open(store, { target: { kind: 'default' } });
+    const before = structuredClone(store.cfg);
+    let finish!: (cfg: AppConfig) => void;
+    mocks.preflightLaunch.mockImplementationOnce(() => new Promise<AppConfig>(resolve => { finish = resolve; }));
+    let result!: Promise<unknown>;
+    act(() => { result = apply(dialog, dialog.initialConfig, 'start').then(() => undefined, cause => cause); });
+    await waitFor(() => expect(mocks.preflightLaunch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.dialog?.onCancelStart).toBeTypeOf('function'));
+    const owner = mocks.preflightLaunch.mock.calls[0][1];
+    expect(owner).toBeTypeOf('string');
+    act(() => { mocks.dialog!.onCancelStart!(); });
+    await waitFor(() => expect(mocks.cancelLaunchPreflight).toHaveBeenCalledWith(owner));
+    let outcome: unknown;
+    await act(async () => { finish({ ...dialog.initialConfig, ctx_size: 512 }); outcome = await result; });
+    expect(String(outcome)).toContain('server start cancelled');
+    expect(store.cfg).toEqual(before);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.start).not.toHaveBeenCalled();
+    expect(store.stop).not.toHaveBeenCalled();
+    expect(mocks.sessionStart).not.toHaveBeenCalled();
+    expect(mocks.sessionStop).not.toHaveBeenCalled();
+    await act(async () => { await apply(mocks.dialog!, dialog.initialConfig, 'start'); });
+    expect(mocks.preflightLaunch).toHaveBeenCalledTimes(2);
+    expect(mocks.preflightLaunch.mock.calls[1][1]).not.toBe(owner);
+    expect(store.start).toHaveBeenCalledTimes(1);
+    expect(mocks.cancelLaunchPreflight).toHaveBeenCalledTimes(1);
+  });
   it('opens and saves a loaded snapshot without replacing its path with the public engine alias', async () => {
     const path = '/synthetic/cache/models--community--Qwen-model/snapshots/' + 'a'.repeat(40);
     const store = createTestStore({ active_model: path, active_provider: 'vllm', active_runtime: 'synthetic-runtime' });

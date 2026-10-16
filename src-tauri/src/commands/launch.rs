@@ -73,10 +73,40 @@ pub(super) async fn validate_launch_config_with_cancel(
 
 #[tauri::command]
 pub(crate) async fn preflight_launch(
-    mut cfg: config::AppConfig,
+    state: State<'_, AppState>,
+    cfg: config::AppConfig,
+    operation_id: Option<String>,
 ) -> Result<config::AppConfig, String> {
-    validate_launch(&mut cfg, None, false).await?;
+    run_launch_preflight(&state, cfg, operation_id).await
+}
+
+async fn run_launch_preflight(
+    state: &AppState,
+    mut cfg: config::AppConfig,
+    operation_id: Option<String>,
+) -> Result<config::AppConfig, String> {
+    let job = state
+        .launch_preflights
+        .begin(operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))?;
+    if state.exiting.load(Ordering::Acquire) || job.cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+    let result = validate_launch(&mut cfg, Some(&job.cancel), false).await;
+    // A cancellation racing a successful probe must not publish settings for
+    // the caller to save or use to replace a running model.
+    if state.exiting.load(Ordering::Acquire) || job.cancel.load(Ordering::Acquire) {
+        return Err("server start cancelled".into());
+    }
+    result?;
     Ok(cfg)
+}
+
+#[tauri::command]
+pub(crate) fn preflight_launch_cancel(
+    state: State<'_, AppState>,
+    operation_id: String,
+) -> Result<(), String> {
+    state.launch_preflights.cancel(&operation_id)
 }
 
 /// Accept a blocked GPU placement and let it start anyway.
@@ -310,6 +340,41 @@ fn validate_runtime_adapter_capabilities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_queued_preflight_cancel_stops_before_validation_and_releases_its_owner() {
+        let state = AppState::default();
+        state.launch_preflights.cancel("queued-launch").unwrap();
+        let result = run_launch_preflight(
+            &state,
+            config::AppConfig::default(),
+            Some("queued-launch".into()),
+        )
+        .await;
+        assert_eq!(result.err().as_deref(), Some("server start cancelled"));
+        let retry = state
+            .launch_preflights
+            .begin("queued-launch".into())
+            .unwrap();
+        assert!(!retry.cancel.load(Ordering::Acquire));
+        // Existing cfg-only clients still enter the ordinary validation gate.
+        let legacy = run_launch_preflight(&state, config::AppConfig::default(), None).await;
+        assert!(legacy.is_err());
+        assert_ne!(legacy.err().as_deref(), Some("server start cancelled"));
+    }
+
+    #[tokio::test]
+    async fn an_exiting_app_refuses_a_preflight_before_executing_the_runtime() {
+        let state = AppState::default();
+        state.begin_normal_exit();
+        let result = run_launch_preflight(
+            &state,
+            config::AppConfig::default(),
+            Some("exit-launch".into()),
+        )
+        .await;
+        assert_eq!(result.err().as_deref(), Some("server start cancelled"));
+    }
 
     #[test]
     fn deep_verification_excludes_active_sessions_and_preserves_an_existing_run_cancellation() {

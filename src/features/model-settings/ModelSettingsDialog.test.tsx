@@ -306,6 +306,22 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it('exposes preflight progress and cancellation before a server starts', () => {
+    const onCancelStart = vi.fn();
+    const { onClose } = mount({ busy: true, liveState: 'stopped', preflightState: 'checking', onCancelStart });
+    expect(screen.getByText('Checking the selected engine and model…')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancelStart).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('reports preflight cancellation while preventing repeated cancellation', () => {
+    mount({ busy: true, liveState: 'stopped', preflightState: 'cancelling', onCancelStart: vi.fn() });
+    expect(screen.getByText('Cancelling the engine and model check…')).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  });
+
   it('offers unloading instead of loading while the target holds a model', () => {
     // Launching again would race the process that is already up, so the footer
     // drops the start action entirely rather than leaving a dead button on it.

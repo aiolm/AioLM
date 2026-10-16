@@ -14,6 +14,7 @@ pub mod hardware;
 mod hardware_memory;
 pub mod home;
 mod inference_args;
+mod launch_jobs;
 #[cfg(any(target_os = "macos", test))]
 mod launch_path;
 mod mcp;
@@ -60,6 +61,7 @@ use tauri::{Manager, RunEvent, WindowEvent};
 /// sessions untouched; if the spawn itself fails the app stays open and usable
 /// (servers already stopped) with an error.
 pub(crate) fn shutdown_managed_processes(state: &AppState) {
+    state.launch_preflights.cancel_all();
     state.bench_cancel.store(true, Ordering::Release);
     state.runtime_cancel.store(true, Ordering::Release);
     state.discover_cancel.store(true, Ordering::Release);
@@ -240,6 +242,7 @@ pub fn run() {
             commands::documents::cancel_media_operation,
             commands::server::start_server,
             commands::launch::preflight_launch,
+            commands::launch::preflight_launch_cancel,
             commands::launch::verify_model_deeply,
             commands::launch::verify_cancel,
             commands::launch::allow_verification_override,

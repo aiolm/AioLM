@@ -1,4 +1,5 @@
 const en = {
+  preflightChecking: 'Checking the selected engine and model…', preflightCancelling: 'Cancelling the engine and model check…',
   clearGpu: 'Clear GPU assignment',
   saveConfirmAction: 'Save changes',
   saveConfirmTitle: 'Save these changes to “{name}”?', saveConfirmUnchanged: 'Nothing in this profile would change.',
@@ -23,6 +24,7 @@ const en = {
 };
 type Copy = { [K in keyof typeof en]: string };
 const ko: Copy = {
+  preflightChecking: '선택한 엔진과 모델을 확인하고 있습니다…', preflightCancelling: '엔진과 모델 확인을 취소하고 있습니다…',
   clearGpu: 'GPU 할당 해제',
   saveConfirmTitle: '이 변경을 “{name}” 프로필에 저장할까요?', saveConfirmUnchanged: '이 프로필에서 바뀌는 항목이 없습니다.',
   saveConfirmAction: '변경 저장',
@@ -46,6 +48,7 @@ const ko: Copy = {
   options: '런타임 옵션', optionSearch: '런타임 옵션 검색', optionApply: '편집기에 반영', unavailable: '사용 불가',
 };
 const ja: Copy = {
+  preflightChecking: '選択したエンジンとモデルを確認しています…', preflightCancelling: 'エンジンとモデルの確認をキャンセルしています…',
   clearGpu: 'GPU 割り当てを解除',
   saveConfirmTitle: 'この変更を「{name}」に保存しますか？', saveConfirmUnchanged: 'このプロファイルで変わる項目はありません。',
   pasteLabel: 'llama-server コマンドを貼り付け', pasteHint: 'モデルカードや投稿のコマンドを貼り付けると、下の設定に反映されます。行継続と引用符付きパスも解釈します。', pastePlaceholder: '-c 131072 -ngl 999 -fa on --temp 0.7', pasteApply: '貼り付けた設定を適用', pasteApplied: '{count}件の設定を適用しました。', pasteRejected: '適用できなかった項目:', pasteUnknown: 'このアプリに対応する設定がありません', pasteMissing: '値がありません', pasteBadValue: '許容範囲外です',
@@ -68,6 +71,7 @@ const ja: Copy = {
   gpu: 'GPU 配置', automatic: '自動', tensorSplit: 'テンソル分割（カンマ区切りの重み）', truncated: 'モデル一覧が省略されています。フォルダーを絞るかパスを入力してください。', failureDetails: '詳細', options: 'ランタイムオプション', optionSearch: 'オプションを検索', optionApply: 'エディターを更新', unavailable: '利用不可',
 };
 const zh: Copy = {
+  preflightChecking: '正在检查所选引擎和模型…', preflightCancelling: '正在取消引擎和模型检查…',
   clearGpu: '清除 GPU 分配',
   saveConfirmTitle: '将这些更改保存到“{name}”吗？', saveConfirmUnchanged: '此配置档没有任何项目会改变。',
   pasteLabel: '粘贴 llama-server 命令', pasteHint: '粘贴模型卡片或帖子中的命令，其参数会填入下方设置。支持换行续行符和带引号的路径。', pastePlaceholder: '-c 131072 -ngl 999 -fa on --temp 0.7', pasteApply: '应用粘贴的设置', pasteApplied: '已应用 {count} 项设置。', pasteRejected: '未应用的项目：', pasteUnknown: '本应用没有对应的设置', pasteMissing: '缺少值', pasteBadValue: '超出允许范围',

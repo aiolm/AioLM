@@ -39,6 +39,7 @@ import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadin
 import './model-settings.css';
 import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerCopy } from '../../shared/i18n/providerCopy';
+import { isLifecycleCancellation } from '../../shared/lib/serverLifecycle';
 
 export interface ModelSettingsDialogProps {
   open: boolean; initialConfig: api.AppConfig; targetLabel: string;
@@ -48,6 +49,7 @@ export interface ModelSettingsDialogProps {
   onReloadProfile: (modelPath: string) => Promise<ProfileCommitResult>;
   onClose: () => void; onManageRuntimes?: (draft?: api.AppConfig) => void;
   busy?: boolean; liveState?: string;
+  preflightState?: 'checking' | 'cancelling';
   liveConfig?: api.AppConfig;
   initialApplication?: ProfileApplication; liveApplication?: ProfileApplication; sessionId?: string;
   requireModelSelection?: boolean;
@@ -60,7 +62,7 @@ const normalizeSection = (section = 'model') => ({ setup: 'runtime', gpu: 'runti
 
 /** A target-scoped editor. No configuration or model-profile writes happen on preview. */
 export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, initialSection, onApply, onProfileCommit, onReloadProfile, onClose, onManageRuntimes,
-  busy = false, liveState, liveConfig, initialApplication, liveApplication, sessionId = 'default', executionNotice, onCancelStart, onStop, requireModelSelection = false }: ModelSettingsDialogProps) {
+  busy = false, liveState, liveConfig, initialApplication, liveApplication, sessionId = 'default', executionNotice, onCancelStart, onStop, requireModelSelection = false, preflightState }: ModelSettingsDialogProps) {
   const { t, locale } = useI18n();
   const copy = modelSettingsCopy[locale];
   const help = modelSettingsHelp[locale];
@@ -246,7 +248,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         setSettings(executionSettings(cause.saved)); setBaseline(executionSettings(cause.saved));
         profiles.acceptSaved(cause.saved, cause.application);
         setError(profileCopy.savedFailure + cause.message);
-      } else setError(String(cause));
+      } else setError(isLifecycleCancellation(cause) ? '' : String(cause));
     }
     finally { applyLock.current = false; setApplying(false); }
   };
@@ -400,6 +402,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         </div>
         <footer className="model-settings-footer">
           <div className="model-settings-footer-summary" tabIndex={0}>
+            {preflightState && <p className="app-section-hint" role="status">{preflightState === 'checking' ? copy.preflightChecking : copy.preflightCancelling}</p>}
             {providerOptionsPending && <p className="app-section-hint" role="status">{copy.checkingOptions}</p>}
             <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
               {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || compatibility?.status}</FeedbackBanner>}
@@ -418,7 +421,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             {!benchmark && mode !== 'project' && (live
               ? <button type="button" className="app-button app-button--danger" disabled={disabled || liveState === 'stopping' || !onStop} onClick={() => onStop?.()}>{liveState === 'stopping' ? t('status.working') : t('action.stop')}</button>
               : <button type="button" className="app-button app-button--primary" disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || !cfg.active_model.trim() || !runtimeSelected || incomplete || compatibilityBlocked || (!llama && catalog.loading) || !runtimeKnown || runtimeMissing} onClick={() => void apply('start')}>{startText}</button>)}
-            {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" onClick={onCancelStart}>{copy.cancel}</button>}
+            {disabled && onCancelStart && <button type="button" className="app-button app-button--secondary" data-icon="close" disabled={preflightState === 'cancelling'} onClick={onCancelStart}>{copy.cancel}</button>}
           </div>
         </footer>
       </div>

@@ -83,7 +83,10 @@ export const mcpCallTool = (id: string, name: string, argumentsValue: Record<str
 export const mcpCancelToolCall = (callId: string) => invoke<void>("mcp_cancel_tool_call", { callId });
 
 export const startServer = (cfg: AppConfig) => invoke<string>("start_server", { cfg });
-export const preflightLaunch = (cfg: AppConfig) => invoke<AppConfig>('preflight_launch', { cfg });
+export const preflightLaunch = (cfg: AppConfig, operationId?: string) =>
+  invoke<AppConfig>('preflight_launch', { cfg, ...(operationId ? { operationId } : {}) });
+/** Cancel only this preflight, including one whose IPC command is still queued. */
+export const cancelLaunchPreflight = (operationId: string) => invoke<void>('preflight_launch_cancel', { operationId });
 /** Accept one blocked GPU placement, using the key printed in its refusal. */
 export const allowVerificationOverride = (key: string) => invoke<void>('allow_verification_override', { key });
 export const verifyModelDeeply = (cfg: AppConfig) => invoke<VerificationRecord>('verify_model_deeply', { cfg });

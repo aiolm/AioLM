@@ -44,11 +44,22 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const [suspended, setSuspended] = useState(false);
   const [busy, setBusy] = useState(false);
   const [launching, setLaunching] = useState(false);
+  const [preflightState, setPreflightState] = useState<'checking' | 'cancelling' | null>(null);
+  const preflightOwner = useRef<{ id: string; cancelled: boolean } | null>(null);
   const [error, setError] = useState('');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
   const lock = useRef(false);
   const liveProfiles = useRef(new Map<string, { model: string; pid?: number; application: ProfileApplication }>());
   const deletedProfileFallbacks = useRef(new Map<string, ProfileApplication>());
+  const cancelPreflight = () => {
+    const owner = preflightOwner.current;
+    if (!owner || owner.cancelled) return;
+    owner.cancelled = true;
+    setPreflightState('cancelling');
+    void api.cancelLaunchPreflight(owner.id).catch(cause => {
+      if (preflightOwner.current === owner) setError(String(cause));
+    });
+  };
   const requestFallback = useCallback((id: string, model: string) => {
     const key = profileTargetKey(model, id, providerOf(latest.current.getConfig() ?? {}));
     const fallback = deletedProfileFallbacks.current.get(key);
@@ -237,7 +248,17 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       if (intent === 'start' && (sessionHasActivity(id) || (status?.active_requests ?? 0) > 0 || (current.stop_existing_sessions_on_load !== false && (anySessionActivity() || list.some(session => (session.active_requests ?? 0) > 0))))) throw new Error(copy.activity);
       if (status?.state === 'running' && !liveProfiles.current.has(id)) liveProfiles.current.set(id, { model: live.active_model, pid: status.pid,
         application: structuredClone(resolveProfileApplicationOrDefault(live, profileLibrary(live), appliedProfile(live, id), profileTargetKey(live.active_model, id, providerOf(live))).application) });
-      if (intent === 'start') next = await api.preflightLaunch(next);
+      if (intent === 'start') {
+        const owner = { id: crypto.randomUUID(), cancelled: false };
+        preflightOwner.current = owner;
+        setPreflightState('checking');
+        try {
+          next = await api.preflightLaunch(next, owner.id);
+          if (owner.cancelled) throw new Error('server start cancelled');
+        } finally {
+          if (preflightOwner.current === owner) { preflightOwner.current = null; setPreflightState(null); }
+        }
+      }
       application = { ...profile.application, model: next.active_model, settings: profileSettingsSnapshot(next) };
       const edit = { ...profile, application };
       let saved: api.AppConfig;
@@ -332,7 +353,8 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         ? assignedTarget(editor.initial, { model: editor.initial.active_model, settings: profileSettingsSnapshot(editor.initial), system_prompt: editor.request.systemPrompt ?? '' }).application : appliedProfile(editor.initial, id))}
       liveApplication={liveApplication}
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
-      onCancelStart={launching ? stopTarget : undefined} onStop={stopTarget}
+      preflightState={preflightState ?? undefined}
+      onCancelStart={preflightState ? cancelPreflight : launching ? stopTarget : undefined} onStop={stopTarget}
       onManageRuntimes={cfg => { setSuspended(true); window.dispatchEvent(new CustomEvent(MANAGE_MODEL_RUNTIMES, { detail: { provider: providerOf(cfg ?? editor.initial) } })); }} /></Suspense>}
   </Context.Provider>;
 }
