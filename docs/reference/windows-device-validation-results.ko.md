@@ -554,16 +554,16 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 | --- | --- | --- |
 | W01 | pass | 마지막 제품 수정의 전체 UI 202파일/2,147개·typecheck·lint 및 고정17 native CLI smoke pass. 이후 문서만 변경했다. 제품을 다시 수정하면 영향 검사와 수정 후 production을 다시 실행한다. |
 | W02 | blocked | 기존 합성 migration·프로필/이력 보존과 새 앱 홈 onboarding은 각각 기록한 source에서 pass. 기존 설치의 실제 OS 계정 이전·자격 증명 검사는 별도 세션 부재로 blocked다. |
-| W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성 v1/v2의 실제 최종 GUI·모델 probe 경합/취소·늦은 응답 보호가 남았다. |
+| W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성17 v1/v2의 실제 GUI 등록·help/변경 diff·프로필·argv/echo·정상 언로드는 아래 범위 pass. 모델 probe 경합/취소·늦은 응답 보호는 남았다. |
 | W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI 실제 추론/usage·취소·재시작 pass. 최종 GUI의 새 개인 엔진과 Strata 전체 여정은 unrun이다. |
 | W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·MCP 후속/거부/취소·저장/재로드의 한정 성공은 보존한다. 최종17 GUI 관련 재검증이 남았다. |
 | W06 | unrun | production16의 실제 Strata+BGE RAG·Whisper STT·멀티 세션·gateway·CSV/XLSX는 위 source 범위 pass. D79/D80 수정 후 실제 이름/라우팅·깨끗한 세션 편집 상태 등 최종17 GUI가 남았다. |
 | W07 | unrun | 원래12 staging 실패는 유지하고 이후 수정된 CLI17 정상 소유 정리와16 GUI의 언로드/로드 중 정상 Quit 성공을 분리한다. 최종17 실제 GUI의 원래 Strata·실패 복구/경합/다른 세션 보호가 남았다. |
 | W08 | blocked | 고정17 네 target 생성·MSI/NSIS 읽기 전용 내부 application payload, 새 홈16 CPU bundle 실제 추론은 한정 pass. 별도 OS 계정의 실제 설치/업그레이드/제거·Credential Manager는 blocked이며, 최종 실제 GUI/OS 표시 검사는 남았다. |
-| G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 미지 옵션의 최종 GUI/저장/argv 확인이 남았다. |
-| G02 | unrun | help 수명/해시·cache/diff의 source별 근거 보존. 고정17 v2 변경·탐색 취소·경합의 실제 GUI 확인이 남았다. |
-| G03 | unrun | parser/명시 metadata·미확정 정보 보호의 구현/관련 검사 보존. 실제17 미지 flag 발견·미해석 옵션 처리 확인이 남았다. |
-| G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 프로필 재로드와 실제 OS argv 대조가 남았다. |
+| G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 합성 미지 옵션의 GUI/저장/실제 argv·응답은 아래 범위 pass. 개인 실제 엔진과 전체 보존 확인은 남았다. |
+| G02 | unrun | help 수명/해시·cache/diff의 source별 근거 보존. 고정17 v2 stale/start 거부·실제 새/삭제/변경 diff·명시 복구는 아래 범위 pass. 탐색 취소·경합의 실제 GUI 확인은 남았다. |
+| G03 | unrun | parser/명시 metadata·미확정 정보 보호의 구현/관련 검사 보존. 실제17 합성 미지 flag 발견·미확정 표시·유지되는 미해석 값의 명시 복구는 아래 범위 pass. 실제 개인 엔진과 관련 경합은 남았다. |
+| G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 합성 v1/v2 프로필 재로드·negative/zero/arity2/repeat tuple/multiple/optional의 실제 OS argv 대조는 아래 범위 pass. 실제 개인 엔진·전체 공통 기능 보존 확인은 남았다. |
 | G05 | unrun | 빈 options와 필수 server 기본값 없는 개인17 setup 준비 완료. 실제 실행 파일 선택→help→명시 binding/probe→등록→응답을 수행해야 한다. |
 | G06 | unrun | 실제17 중립 runtime 목록을 관찰했다. 최종 공통 기능과 D79/D80 실제 수정 재검증이 남았다. |
 | G07 | unrun | 이전16의 긴 wizard·접근성·작은 창 및 source2147 검사 근거 보존. 최종17 대량 옵션·미지 엔진·오류/복구·경합을 실제 GUI로 확인해야 한다. |
@@ -576,8 +576,25 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 
 고정17 이후 만든 합성 v1/v2도 Windows의 명시된 Python entry point에서 실제 `--help`와 같은 opaque 모델의 `--probe`를 실행했다. 두 모델 probe는 선언한 engine/runtime/version·모델 지원을 반환했고 tools는 false였다. 도움말은 각각 203,104/203,146바이트이며 SHA256은 `eca99e97843b40841b087ff88a4752108e0b5379b4f0df29c727c642255d9bda` / `d6745e37e74758d8f50eff2fd36fbae8361abf231205b6e884816afb9cd1869e`다. 실제 v2 출력의 기존 text flag 제거/새 flag 추가, count의 단일 값→두 값과 기본값17→[23,24], negative spelling·1,000개 목록의 마지막 flag를 확인했다. fixture·모델·고정 GUI 해시는 보존됐다. 이는 **새 엔진의 entry point/help/probe 실행 전제 검사 pass**이며 AioLM의 parser·cache/diff·공통 GUI·프로필·실제 argv/응답 성공이 아니다. 추론 서버나 GUI 등록은 실행하지 않았다. 두 조사 결과는 `package17-independent-engine-preflight/results.json`과 해당 stdout/stderr에 있으며 완료한 이 사전 검사를 GUI 재개 시 반복하지 않는다.
 
-### 외부 차단 판정과 정확한 재개 지점
+### 2026-10-16의 외부 차단 판정과 당시 재개 지점
 
 2026-10-16의 독립 CLI·설치 파일 내부·새 엔진 사전 실행·Strata 취소 로그 조사와 관련 기록을 마친 뒤, **연속 세 goal 턴에서 같은 GUI 접근 차단**을 확인했다. 고정17 GUI의 생성 식별자·전체 해시는 그대로이며 창은 응답/표시 중이고 최소화되지 않았다. 다른 앱이 전면에 있고 native 접근성의 내부 항목 수는 0이었다. 표준 전면 전환 거부 뒤 사용자에게 요청한 전면 유지 응답은 아직 없으며, 관련 없는 앱에 입력을 보내거나 검증 창을 강제 재시작하지 않았다. 현재 남은 필수 GUI 실행은 이 외부 상태가 바뀌어야 진행할 수 있다. 별도 Windows 설치 테스트 세션을 제공할 수 없다는 W08 차단도 유지한다. `gui/package17-post-independent-blocker-2.json`, `gui/package17-post-independent-blocker-3.json` 및 `progress.md`에 각 확인과 근거를 남겼다. 이 상태는 **goal blocked 판정의 근거**이며 W/G 완료 또는 Windows 종료 commit을 뜻하지 않는다.
 
 재개 조건은 현재 production17 AioLM 검증 창을 전면에 유지하는 것이다. 새 접근성 상태를 확인한 뒤 **추론 엔진 추가 → 준비된 새 합성17 v1의 실제 help 검토/수락 → 공통 옵션 → 새 프로필 저장/재로드 → fresh probe/Ready → 실제 OS argv/echo/이력 → 정상 언로드**부터 이어간다. 이후 같은 ID의 v2 변경/cache diff·미해석 값 복구, 별도 개인17 setup의 명시적 실행 파일 선택/실제 help/등록/추론, D79/D80과 원래 Strata의 공통 기능을 검증한다. 이미 끝낸 CLI·패키지 내부·help/probe 사전 검사는 반복하지 않는다. 기존 바이너리와 고정 이후 만든 flag·모델·프로필·원래 실패를 보존한다. W08의 설치/업그레이드/제거·Credential Manager는 별도 로그인된 테스트 계정/VM이 필요한 독립 잔여 항목이며 기존 설치·사용자 데이터로 대체하지 않는다.
+
+
+### 재개 후 production17의 미지 합성 엔진 v1/v2 실제 GUI 검증
+
+사용자의 명시적 재개 뒤 goal이 active임을 확인했다. 당시 GUI 프로세스가 실제로 없다는 native 관찰과 Orca 앱 목록을 확인한 후, **같은 고정17 binary와 기존 검증 홈**을 일반 실행했다. 시간 경과만으로 실행 중인 창을 재시작하지 않았다. 새 창의 소유 WebView2와 생성 시각·binary 전체 해시를 검증해 native 접근성/표준 키보드로 조작했다. 이전 외부 전면 차단 판정은 당시 기록이며 현재 진행을 막지 않는다. 설치용 별도 OS 세션의 W08 차단은 유지한다.
+
+고정 이후 만든 합성17 v1의 **빈 `options` manifest**를 실제 GUI에서 등록했다. 같은 engine family의 예전 표시 이름과 이번 runtime ID를 구분해 이번 빌드를 명시적으로 선택했다. 실제 `--help`의 1,014개 옵션·형식/arity 미확정 1,008개를 검토/수락하고 공통 GUI에서 새 Unicode·공백·따옴표 값, negative false, count0, 1,000개 목록의 마지막 옵션을 설정했다. 기존 설정의 다른 namespace 값과 순서는 명시적으로 보존/경고됐으며, 이번 새 draft에서만 지워 복구했다. **새 프로필 저장→닫기/재열기→현재 help 확인→fresh probe/Ready→소유 Windows 프로세스 두 개의 실제 argv→HTTP/SSE parser echo→stop/TG4와 두 메시지 이력**까지 한정 pass다. fixture에 cache split이 없어 PP는 빈 값이며 실제 추론 성공으로 기록하지 않는다. 원래 프로필 30개 전체 항목 해시와 config 외 원래 파일 46개는 같았다. 원본 전체 47개 파일/30개 프로필은 새 프로필을 만들기 전에도 모두 일치했다.
+
+같은 runtime ID에 v2를 덮어쓰려는 등록은 거부됐다. 이번 검증용 v1 등록만 명시적으로 제거한 뒤 준비된 v2를 등록했다. v1 저장 프로필을 열자 runtime/help 변경과 값 유지가 표시됐으며, 이전 entry point의 help로 실행하려던 요청은 실제로 거부되고 프로필 해시는 그대로였다. 실행 디렉터리를 비워 어댑터 문맥으로 다시 탐색하자 **새 replacement text·삭제된 text·단일 값에서 두 값으로 바뀐 count**가 diff에 표시됐다. 삭제된 옵션 값은 자동 삭제되지 않았다. v2 help를 수락한 뒤 이번 draft의 유지 값만 명시적으로 지우고 count를 두 값으로 복구했다. 반복 tuple은 사용자가 확인한 구문으로 현재 help에 연결해 저장했다. 앞선 native Invoke helper의 거부는 offscreen/disabled를 구분하지 않는 조건이므로 별도 disabled-state 입증으로 계산하지 않는다.
+
+별도의 **새 v2 프로필**에 count `[0,7]`, 반복 pair `[[1,2],[3,4]]`, 공백/Unicode 복수 값, 값 없이 존재하는 optional flag, choice와 negative false를 저장했다. 실제 재열기·current help·fresh probe/Ready 뒤 두 소유 프로세스의 Windows 명령줄을 `CommandLineToArgvW`로 해석해 fixture trace와 전부 대조했다. shell 보간 없이 값이 유지되고 두 pair flag·negative spelling·optional 존재와 인접 option 경계가 일치했다. 실제 Chat parser echo와 저장 이력도 같은 값/stop/TG4였다. **v1 프로필을 포함한 기존 31개 프로필·원래 46개 파일과 새 v1 이력 전체 해시가 그대로**이며 새 프로필은 총32개다.
+
+v1/v2 각각 정상 GUI 언로드 뒤 사전 관찰 소유 프로세스 두 개가 없어지고 포트가 닫혔으며 새 staging은 남지 않았다. 원래 marker 없는 두 staging 디렉터리와 로그 전체 해시는 보존했다. 강제 종료나 이전 자료 삭제를 하지 않았다. 이는 **합성 v1/v2의 GUI·버전 교체·명시 복구·argv·응답·언로드 범위 pass**이고 실제 개인 엔진/Strata 추론·GUI 정상 Quit·probe 경합·전체 W/G 완료는 아니다. 제품 소스·고정 binary·fixture/모델을 바꾸거나 성공에 맞춰 다시 생성하지 않았다.
+
+source는 계속 `1c95946186afccc3161b754ae952ee47e3a63649`, GUI/CLI 전체 해시는 앞선 고정17과 같다. v1/v2 script SHA256은 `59019e0f894cf4ca3d4610d3083464b2f8dc2415c264c60d50d480820bc701ee`, spec SHA256은 각각 `032163f8b64c53fdc359b3b20e67fa5a75999bcbcab017cd17caea917722767d` / `90d6074801687195f341325b59b3f6ded70ce7b83b5b452fa002e92106ee217b`, opaque model SHA256은 `8d0a5749b7319141d107980bfe59f5d0d4cca2425d13781dff77f1800c45a356`다. raw는 `package17r1-synthetic-v1-argv-echo-verdict.json`, `package17r1-synthetic-v2-argv-echo-verdict.json`, 각 `normal-unload.json`과 내부 native evidence 목록이다.
+
+다음 필수 실행은 빈 options/필수 server 기본값 없는 개인17 setup의 실제 실행 파일 선택→help→binding/probe→등록→실제 모델 응답/취소/Retry, 이후 D79/D80와 원래 Strata의 공통 GUI다. 기존 Strata/SmolVLM 내용 fail·W08 blocked는 유지하며 전체 goal은 active다. Linux/Mac 실제 검증은 별도 기기 인계로 유지한다.
