@@ -771,3 +771,56 @@ Linux/Mac의 실제 preflight 취소·다른 대상 보존·늦은 반환·다�
 고정19 CLI smoke와 같은 실제 개인 엔진의 A01–A09는 모두 pass다. 관찰용 local harness의 자식 창만 숨겼고 질문·모델·응답·제한·timeout은 바꾸지 않았다. raw `package19-private-cli-observed/results.json`이다. NSIS/MSI는 설치나 추출 exe 실행 없이 payload를 읽었다. 전체 예상 GUI bytes와 정확한3-byte 패키지 표식 차이, CLI 고정 bytes 일치·개인 절대 경로 검색0개를 확인했다. 패키지 GUI의 전체 SHA256은 MSI `90b568b64a6090abe72695ba8a9cc1821f7bbb1a71ce43afbc3c0e66db1b913e`, NSIS `77dcf1f64b0cf843dc27b1c991674d77e4009c207f3c9c8a07d5282718d037b1`이다. raw `package19-msi-payload-readonly/results-assessment.json`, `package19-nsis-payload-readonly/results.json`이다. 이는 W08 실제 설치/업그레이드/제거/Vault의 대체가 아니다.
 
 **D82는 자동 회귀와 수정 후 production19의 합성·실제 개인 엔진 첫 클릭/저장/재열기/argv/응답 범위 pass다.** 런타임 v2 변경·잔여 관련 흐름·최종 종료/인계 검사는 계속한다. 원래 Strata CLI/미디어 content 실패와 별도 OS 계정이 없는 W08 blocked/unrun을 보존하며 전체 goal이나 Windows 종료 commit을 아직 complete로 선언하지 않는다.
+
+
+### production19 같은 runtime의 v2 변경·미해석 값·명시 복구
+
+같은 `custom.synthetic-g18`의 같은 runtime ID를 v2로 명시적으로 재등록했다. 원래 v1 엔진/fixture 파일과 수락된 help cache는 보존했다. 같은 고정19 GUI에서 오래된 help 경고가 나타났고 정상 실행 시도는 backend의 entry point 불일치 검사에서 거부됐다. 당시 버튼은 enabled였으므로 UI disabled로 거부했다고 기록하지 않는다. 실제 거부 화면은 저장값을 유지했다고 알렸으며 새 엔진 프로세스/포트는 없었다.
+
+원래 help 작업 디렉터리의 자체 override를 비워 새 등록의 실행 문맥으로 다시 탐색했다. 새 옵션·사라진 옵션·count arity 변경 diff를 검토/수락하자 사라진 text 값과 불충분한 count가 경고와 함께 남았다. 자체 새 draft에서만 제거/복구했고 기존 프로필을 고치거나 버리지 않았다. count 두 값 `[0,7]`, 새 문자열, 명시적 false, 반복 tuple `[[1,2],[3,4]]`, 복수 문자열, 값 없는 optional, choice를 공통 GUI로 설정했다. repeat 정보는 help가 확정한 것으로 꾸미지 않고 명시적 사용자 확인으로 기록했다. 새 **G19 synthetic v2 recovery** 저장·재열기→fresh model probe/Ready→두 Python 프로세스의 실제 Windows argv→parser echo가 일치했다. 원래 v1 모델 경로/bytes·8개 fixture 전체 해시·이전48개 전체 프로필·세션6개를 보존했다. 새 프로필까지49개다. 새 help fingerprint는 `2d8307a281a4f21dbb9178e1ab68c4f9bafe7aaa337ca85001234bc36e9abcce`이며 원래 v1 cache도 전체 bytes가 같다.
+
+앱 재빌드 없이 수행한 **합성 parser 범위 pass**다. 실제 LLM 추론으로 계산하지 않는다. 첫 전송 계획은 runtime 화면에서 새 채팅 버튼을 찾지 못해 전송 전에 거부됐고, 정상 채팅 이동 뒤 한 번만 요청했다. 무인증401·정상 언로드 후 기본7개/포트 없음도 확인했다. raw `package19-before-runtime-v2-data.json`, `package19-synthetic-v2-argv-echo-verdict.json`, `package19-v2-after-normal-unload-owned.json`이다.
+
+### production19 원래 Strata와 로드 상태 종료
+
+원래 Strata revision `296b59d2f73c8f04a805df29c2fa97655adace78`/0.1.44.1과 원래 두 모델 shard revision `5348543e0147355ac9cbcb031184a3546350988e`를 유지했다. 모델59GB를 포함한 원래6개 파일의 전체 해시를 다시 확인했다. 새로운 **G19 Strata original native validation**의 설정/prompt는 기존18 프로필과 정확히 같고 실제 Windows native argv도 이전18과 정확히 같다. 원래 GPU0/HIP·spec4 두 회·minp0.5·context/KV·모델·제한을 바꾸지 않았다. probe의 accelerator 표시는 계속 unverified이며 Ready나 실제 응답을 근거로 그 표시를 임의 확정하지 않는다.
+
+fresh probe/Ready 이후 원래 질문의 실제 최종 답변 `5`·PP74/TG45·stop·무인증401을 확인했다. 이전49개 전체 프로필·세션6개·기존 이력/프로젝트/측정/MCP53개 파일은 같다. 새 프로필까지50개다. 이 범위는 **최종 관련19의 실제 Strata 설정/실행/응답 보존 pass**이며 원래 제한32/1024의 CLI content 실패를 덮지 않는다. 이전18 생성 취소/같은 질문 Retry와 별도 native STOP/DONE 진단은 해당 source/조건으로 유지한다. raw `package19-strata-full-original-provenance.json`, `package19-strata-original-profile-argv-response-verdict.json`이다.
+
+Strata를 로드한 채 정상 창 닫기로 전체11개 소유 프로세스 종료·bridge55471 닫힘·새 staging 제거를 확인했다. 실제 종료 직전206개 persistent 파일 전체 해시·50개 전체 프로필·세션6개는 같다. 현재 소유 staging4개 파일은 ephemeral로 구분했고 기존 marker 없는2개 로그와 홈 밖 help2개 타깃 보호는 유지했다. 강제 kill은 없었다. raw `package19-valid-before-loaded-normal-quit-data.json`, `package19-loaded-normal-quit-native-verdict.json`이다.
+
+### production19 새 홈의 실제 GUI CPU bundle 가져오기
+
+이전19 창을 정상 종료한 뒤 별도 새 앱/WebView 홈에서 같은 고정19 GUI를 시작했다. 기존 설정·runtime·사용자 이력을 복사하지 않았다. 언어/테마/모델 폴더의 최초 설정을 GUI에서 완료했다. 자식 PATH는 Windows/System32만 사용하고 SDK 환경 변수를 제외했다. `cl`, `cmake`, `hipcc`, `nvcc`를 자식 환경에서 찾을 수 없음을 확인했다. **호스트의 SDK 파일을 제거했다거나 별도 OS 계정이라고 주장하지 않는다.**
+
+production15 GUI가 내보낸 원래 CPU ZIP `4cb6f6bd4602facbc1ac9818aeef378e666c63fe69756e7f24f9837f0c9d428f`를 새19의 실제 ZIP 가져오기 버튼/소유 파일 선택기로 가져왔다. debug helper나 CLI import로 GUI 동작을 대신하지 않았다. CPU b11617/원래 revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`의63개 payload 전체 해시가 일치했다. engine SHA256은 `715f0ea98819f03fc596e9d352e989fc0ae093056282e0d73b2d657e7afa7d02`다.
+
+원래 Qwen0.5B 모델 revision `9217f5db79a29953eb74d5343926648285ec7e67`/SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`를 그대로 선택했다. 앞선 CPU text 대조와 같은 ngl0/threads4를 GUI로 지정했다. 편집된 numeric Spinner에 실제 포커스를 둔 뒤 첫 pointer SaveAs로 새 **G19 SDK-free original CPU**를 저장하고 재열기·저장값·실제 argv를 확인했다. fresh probe/Ready→실제 답변 `5`·PP34/TG2·stop·무인증401을 확인했다. 별도 CPU text 검증이며 W05 원래 media 실패를 다른 모델로 바꾼 성공이 아니다.
+
+CPU를 로드한 상태에서 정상 창 닫기로 소유9개 종료·51940 닫힘·staging 없음·새 홈66개 파일 전체 해시/프로필4개/저장 세션0개 보존을 확인했다. 기존 주 검증 홈의206개 파일·프로필50개·세션6개도 그대로다. raw `package19-sdkfree-fresh-gui-launch.json`, `package19-sdkfree-gui-import-profile-inference-verdict.json`, `package19-sdkfree-loaded-normal-quit-native-verdict.json`이다. **최신 production GUI의 새 홈 bundle 가져오기/실제 추론/정상 종료 범위 pass**이며 설치/업그레이드/제거·Vault 검사는 대체하지 않는다.
+
+### production19 기준 W/G 판정과 남은 완료 조건
+
+아래 표가 앞선17의 잔여 표를 갱신한다. 제품 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`이고 이후 변경은 익명 결과/인계 문서뿐이다. `package19-preservation-source-boundary-audit.json`에17 이후 D81/D82 변경 파일과18 이후 Rust tree 동일 근거를 고정했다. 변경되지 않은 MCP/RAG/STT/gateway/media/측정·공유·이력/CSV/XLSX/저장 schema의 실제16/17 결과를19에서 전부 반복했다고 바꾸지 않는다. D81은18의 pending 취소/모델 복구/최소 창/다른 실제 엔진 보존, D82는19의 합성·실제 개인·수치 입력 첫 저장과 관련 실행·데이터 보존으로 재검증했다. pass는 해당 Windows 경계의 판정이며 전체 goal/모든 OS 완료가 아니다.
+
+| ID | 판정 | 실행 근거와 남는 범위 |
+| --- | --- | --- |
+| W01 | pass | 원래 환경/공통20명령 기준,18 Rust 전체/opt-in/Clippy·no-default·fmt와2150 UI, 마지막 D82 관련132/전체202파일2151 UI·typecheck·lint,19 production 네 target/CLI smoke·실제 CLI9항목. 마지막 수정 이후 Rust tree는 동일하다. 기존 lint 경고1개와 opt-in ignore의 실제 범위를 유지한다. |
+| W02 | blocked | 합성 migration/backup/미등록 engine 값/미래 schema 거부와 실제18→19 전체200파일 보존, 새19 GUI onboarding은 pass. 기존0.2 설치의 실제 OS 계정 이전/자격 증명은 별도 세션 부재로 blocked다. |
+| W03 | pass | 원래 CLI 등록/변조/제거/재등록,18 D81 실제 취소·늦은 반환/다른 모델 복구·다른 엔진 보존,19 미지 개인 엔진과 합성 v1/v2의 fresh help/probe·diff·미해석 값 복구·실제 argv 근거. 합성 echo와 실제 추론은 분리했다. |
+| W04 | fail | 원래 Strata CLI A03/A05/A07의 제한32 최종 content 실패와, A04의 원래1024 요청에서 내용이 없어 취소 trigger에 도달하지 못한 실패는 유지한다. 실제 CPU/Vulkan/지원 ROCm·개인 엔진·Strata의 source별 추론/usage·생성 취소/Retry/restart와19 실제 개인/원래 Strata/CPU bundle 응답·로드 상태 정상 종료는 한정 pass다. 모델/제한/정답을 바꾸어 원래 실패를 닫지 않는다. |
+| W05 | fail | 원래 SmolVLM 내용 실패/같은 body 대조 실패는 유지한다. actual source별 첨부 순서·전달/저장/재로드,17 실제 MCP 거부/승인/입력과 다른 반환값 후속/호출 취소는 한정 pass다. 이후 해당 feature/프로토콜 코드는 바뀌지 않았다. |
+| W06 | pass |17 실제 프로젝트/RAG·BGE·Whisper STT·역할별 멀티 세션·gateway401/라우팅/task 거부·이력/CSV/XLSX/공유 미리보기 근거 유지. 관련18 owner 취소/다른 엔진 보존,19 기존53개 feature 데이터와50개 전체 프로필/세션6개 및 실제19 실행/종료 보존으로 변경 경계를 확인했다. 모든 기능을19에서 다시 실행한 의미는 아니다. |
+| W07 | pass | 원래12 markerless staging 실패는 보존하며 수정된 source의 새 소유 staging 정리와 구분한다. source별 install/build/help/probe/load/stream/tool/benchmark/import 실패·취소·Unicode/공백/긴 경로·shell 없는 argv,18 다른 엔진 보존과19 두 홈의 실제 loaded Quit/소유20개 종료/포트/staging/기존 로그·데이터 보존 pass다. |
+| W08 | blocked |19 네 target·MSI/NSIS 읽기 전용 전체 payload/개인 경로 검사·실제 GUI 새 홈 CPU ZIP import/실제 추론/종료는 pass. source별 IME/clipboard/picker/tray 근거는 보존한다. 설치된 package의 실제 upgrade/remove/최초 OS 계정 실행·Credential Manager·설치 identity의 OS 통합/알림은 별도 Windows 계정/VM이 없어 blocked/unrun이다. |
+| G01 | pass | versioned sourced schema/descriptor와 실제19의 앱이 모르는 빈-options 엔진이 공통 표시·검증·새 프로필·실제 argv·응답으로 연결된다. 기존 내장/외부 데이터 계약과 미확정 사실의 구분을 보존했다. |
+| G02 | pass | 소유 help/probe의 제한·취소·cache/identity/늦은 반환 자동 검사,17 실제 help Cancel/탭 context 종료,18 pending preflight 취소/다른 모델 복구,19 같은 ID v2 stale/정상 실행 거부/fresh 탐색/diff 근거. |
+| G03 | pass | parser·명시 metadata/encoding/locale·민감 값·예약 옵션/arity/alias/scope의 source별 자동/실제 근거,19 알려지지 않은 타입 표시·삭제값 보존·명시적 반복 확인·변경 arity 복구. help에서 API 능력을 추정하지 않았다. |
+| G04 | pass | 같은 renderer/검증/serializer의19 first SaveAs·재열기·false/0/quoted Unicode/arity2/반복 tuple/복수 값/optional·기존 순서/alias 근거. D82 실제 red→수정→2151 자동/두 미지 엔진·numeric 실제 재검증을 연결했다. |
+| G05 | pass |18 실제 수동 entry point/help/명시 binding/protocol/probe 등록과19 같은 개인 엔진의 fresh help/Ready/실제 응답,19 같은 ID v2 명시 재등록/복구,원래 native Strata bridge/실제 응답/정상 종료. 공통 기능에 새 engine ID 분기는 추가하지 않았다. |
+| G06 | pass | 중립 목록/검색/Add 동선과 내장 adapter 표시, 실제 사용자 등록·모델/프로필 여정,17 D79/D80 세 역할 이름/연결/미저장 보호·공통 기능,19 기존 전체 데이터 보존과 실제 새 홈 onboarding/bundle 여정을 확인했다. |
+| G07 | pass | source별 재현 결함/수정/재검증과16 긴 wizard·접근성 tree/키보드·작은 창,18 최소 창 pending 취소/타 엔진 보존,19 1000개 옵션 검색/999번 편집·미지 개인 엔진·D82 첫 클릭·v2 실패 복구를 실제 관찰했다. 계측 native INP나 전체 OS 접근성 인증을 주장하지 않는다. Linux/Mac 실제 검사는 후속 범위다. |
+
+Windows native 미지원인 MLX/표준 vLLM/Metal, 외부 v1의 정확 tokenizer/cold-cache benchmark·CPU reference deep·ABI portable은 실제 플랫폼/계약 근거 범위에서만 unsupported를 유지한다. 원래 지원 내용의 실패를 unsupported로 바꾸지 않는다. W04/W05 원본 실패와 W02/W08 필수 OS 검사가 남아 있으므로 **goal complete와 Windows 종료 commit을 지정하지 않는다.** 제품 결함 D81/D82의 수정 및 현재 실행 가능한 관련 검증을 마쳤다는 것과 전체 완료는 구분한다.
+
+W02/W08 재개 조건은 로그인된 별도 Windows 테스트 계정 또는 VM과 보호할 원래0.2 설치/합성 이전 데이터다. 사용자가 현재 제공 불가라고 답한 상태를 유지하며 다시 요청하거나 기존 설치/사용자 Vault를 바꾸어 우회하지 않는다. 그 조건이 갖춰지면 원래0.2와 고정19 installer의 버전/전체 해시를 확인하고, 새 설치와0.2→19 업그레이드를 각각 깨끗한 OS 스냅샷에서 실행한다. 새 설치→같은 원래 모델 응답/저장/재로드→정상 종료와, 원래0.2 설치/합성 이전 데이터 생성→고정19 실제 업그레이드→같은 모델 응답/데이터·자격 증명 보존을 구분한다. 설치 identity의 OS 통합/알림과 제거/잔여 데이터 정책을 NSIS/MSI별로 기록한다. 최신 source가 달라지면 영향받는 W/G를 재검증한다. Linux L01–L04 및 Mac M01–M04/R01–R13은 별도 인계의 구체 작업으로 남기며 Windows goal의 실제 기기 완료 조건으로 추가하지 않는다.

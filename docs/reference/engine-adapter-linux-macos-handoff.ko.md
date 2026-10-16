@@ -2,7 +2,7 @@
 
 ## 기준과 현재 경계
 
-현재 Windows production17의 고정 source는 `1c95946186afccc3161b754ae952ee47e3a63649`이며 작업 브랜치는 `codex/windows-runtime-adapter-validation`이다. 필수 조상은 `df3264bad99deb0144b947f96300e8625f7a2da5`다. 이 문서는 **진행 중인 Windows 검증에서 준비한 후속 실행 지침**이며 Windows 종료 선언이나 Linux/Mac 실행 결과가 아니다. Windows 최종 수정·production GUI 수락·설치/OS 계정 검증이 남아 있으므로 실제 이관 시 [Windows 결과](windows-device-validation-results.ko.md)의 최종 source·종료 commit·잔여 판정을 다시 고정한다. 후보 source를 최종 종료 commit으로 바꾸어 부르지 않는다.
+현재 Windows production19의 고정 제품 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`이며 작업 브랜치는 `codex/windows-runtime-adapter-validation`이다. 필수 조상은 `df3264bad99deb0144b947f96300e8625f7a2da5`다. 이 문서는 **진행 중인 Windows 검증에서 준비한 후속 실행 지침**이며 Windows 종료 선언이나 Linux/Mac 실행 결과가 아니다. D81/D82 수정과 관련 production19 실제 GUI·원래 Strata·새 홈 bundle 수락은 완료했고 W02/W08 설치/OS 계정 검증 및 원래 W04/W05 content 실패가 남아 있으므로 실제 이관 시 [Windows 결과](windows-device-validation-results.ko.md)의 최종 source·종료 commit·잔여 판정을 다시 고정한다. 후보 source를 최종 종료 commit으로 바꾸어 부르지 않는다.
 
 원격 push는 수행하지 않았다. 다음 기기는 사용자가 공유한 정확한 commit을 받은 뒤 시작한다. 이전 브랜치, 공개 0.3.1 binary, Windows `node_modules`·`dist`·실행 파일·Python 환경을 복사해 최신 소스 검증으로 계산하지 않는다. 기존 checkout·동명 작업 브랜치·모델·설정·기록은 보존한다.
 
@@ -10,7 +10,7 @@
 git status --short
 git rev-parse HEAD
 git merge-base --is-ancestor df3264bad99deb0144b947f96300e8625f7a2da5 HEAD
-git merge-base --is-ancestor 1c95946186afccc3161b754ae952ee47e3a63649 HEAD
+git merge-base --is-ancestor 4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2 HEAD
 ```
 
 시작 전 `AGENTS.md`, 존재하는 `tmp/AGENTS.local.md`, [Windows 인계의 L/M 정의](windows-device-handoff.ko.md), [공통 adapter 계약](runtime-adapter-handoff.ko.md), [외부 runtime 계약](pluggable-inference-runtimes.ko.md), [실제 엔진 수락](provider-native-acceptance.md)을 읽는다. 이 문서의 L01–L04/M01–M04는 Windows goal의 후속 단계다. 과거 [Linux 기기 인계](linux-device-handoff.ko.md)의 L01–L11 및 Mac의 옛 M01–M12 결과와 ID 범위를 합치지 않는다.
@@ -94,3 +94,12 @@ Linux L01/L02와 Mac M01/M02는 각 OS에서 새로 빌드한 production으로 �
 공통 GUI 수정 source `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`는 이미 입력 변경에서 파싱/commit한 값을 blur에서 다시 commit하지 않도록 한다. 중복 cfg 변경이 pointer down과 click 사이에 비동기 검증을 재시작해 SaveAs를 disabled로 만들던 결함이다. 검증·오류·Ready 조건은 보존한다. 실제 설정 대화상자의 red→green 회귀와 전체 UI2151개, production19의 합성·실제 개인 엔진에서 focused input→첫 pointer SaveAs→새 프로필/재열기→실제 argv/응답 근거는 Windows 결과 문서 D82에 연결한다. 이 source는 Windows 전체 종료 commit이 아니다.
 
 Linux L01/L02와 Mac M01/M02에서 일반 text·수치·JSON textarea·반복/복수 값의 편집 후 검증 완료→첫 pointer 저장과 키보드 이동/저장을 확인한다. 유효하지 않은 중간 입력은 저장을 계속 막아야 하고, 실제 변경은 새 검증을 수행해야 한다. 다른 탭 이동·미저장 보호·저장/재열기·기존 프로필/이력·런타임/모델 binding도 보존한다. 이 경계의 공통 코드를 후속 OS에서 수정하면 Windows W03/G03–G06의 같은 첫 클릭/보존/argv 흐름과 관련 자동 회귀를 새 source로 다시 실행한다. 저장 차단 제거나 검증 무시로 통과시키지 않는다.
+
+
+## production19 인계 checkpoint와 Windows 재개 지점
+
+현재 고정 제품 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`다. 이후 익명 결과/인계 문서 commit을 포함한 정확한 수신 HEAD도 기록한다. 이 source는 Windows 전체 종료 commit이 아니다. 같은19 binary에서 합성/실제 개인 엔진의 첫 저장·재열기·실제 argv/응답, 같은 runtime의 v2 stale/diff/미해석 값 복구, 원래 Strata의 동일 설정/prompt/Windows argv·실제 응답, 두 홈의 loaded normal Quit/데이터 보존, SDK가 자식 PATH에 없는 별도 새 홈에서의 실제 GUI CPU bundle import/추론까지 확인했다. 합성 parser와 실제 LLM을 구분한 원본 receipt/해시는 Windows 결과 문서의 production19 절에 있다.
+
+W02/W08의 별도 OS 계정/VM은 현재 제공되지 않아 기존 설치 upgrade/remove·Credential Manager·설치 identity의 OS 통합/알림은 blocked/unrun이다. Windows의 원래 Strata32/1024 content 실패와 SmolVLM 내용 실패도 유지한다. 원래 모델/질문/제한을 바꾸거나 실패를 unsupported로 바꾸지 않는다. 별도 Windows 세션이 마련되면 Windows 결과 문서의 정확한 고정 installer/원래 모델로 그 지점부터 재개한다. Linux/Mac 기기에서 실행했다고 Windows 설치 성공으로 계산하지 않는다.
+
+Linux L01–L04와 이후 Mac M01–M04/R01–R13은 위 source 및 문서 checkpoint를 받은 뒤 각 OS에서 새로 빌드해 실행할 수 있도록 준비한다. 실제 이관/종료 commit은 필수 Windows 잔여의 상태를 확인해 다시 고정한다. D81/D82 또는 schema/help/protocol/저장·프로세스/패키지 경계에 후속 OS의 공통 수정이 생기면 위 재검증 표의 Windows W/G를 연결한다. Windows의 전부를 반복한 것으로 추정하지 않고 변경 파일·해당 기존 근거·새 source의 관련 실제 검증을 함께 남긴다.
