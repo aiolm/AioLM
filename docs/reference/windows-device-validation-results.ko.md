@@ -557,7 +557,7 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 | W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성17 v1/v2의 실제 GUI 등록·help/변경 diff·프로필·argv/echo·정상 언로드는 아래 범위 pass. 모델 probe 경합/취소·늦은 응답 보호는 남았다. |
 | W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI와 아래 실제 GUI의 새 옵션/추론/usage·생성 중 취소·Retry·정상 언로드는 한정 pass. Strata 최종 GUI 전체 여정은 남았다. |
 | W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·MCP 후속/거부/취소·저장/재로드의 한정 성공은 보존한다. 최종17 GUI 관련 재검증이 남았다. |
-| W06 | unrun | production16의 실제 Strata+BGE RAG·Whisper STT·멀티 세션·gateway·CSV/XLSX는 위 source 범위 pass. 아래 최종17 D79의 깨끗한 세션/실제 미저장 보호와 D80 답변 세션 이름·응답은 한정 pass. 임베딩/STT 이름·라우팅과 Strata 공통 GUI는 남았다. |
+| W06 | unrun | 아래 최종17 D79의 깨끗한 세션/실제 미저장 보호, D80 답변·임베딩·STT 이름/역할, 실제 Strata+BGE RAG·Whisper→Strata STT와 동시 세션 보존은 한정 pass. gateway·CSV/XLSX·공유·이력 재로드/최종 종료 등의 잔여 흐름은 남았다. 이전16 성공은 해당 source 범위로 유지한다. |
 | W07 | unrun | 원래12 staging 실패는 유지하고 이후 수정된 CLI17 정상 소유 정리와16 GUI의 언로드/로드 중 정상 Quit 성공을 분리한다. 최종17 실제 GUI의 원래 Strata·실패 복구/경합/다른 세션 보호가 남았다. |
 | W08 | blocked | 고정17 네 target 생성·MSI/NSIS 읽기 전용 내부 application payload, 새 홈16 CPU bundle 실제 추론은 한정 pass. 별도 OS 계정의 실제 설치/업그레이드/제거·Credential Manager는 blocked이며, 최종 실제 GUI/OS 표시 검사는 남았다. |
 | G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 합성 미지 옵션의 GUI/저장/실제 argv·응답은 아래 범위 pass. 개인 실제 엔진과 전체 보존 확인은 남았다. |
@@ -618,3 +618,17 @@ source는 계속 `1c95946186afccc3161b754ae952ee47e3a63649`, GUI/CLI 전체 해�
 Chat 대화 설정에서 실행 중 세션이 저장한 **G17 private answer** 이름으로 표시됐고, 실제 선택 readback 뒤 같은 산술 질문의 답변 `5`·PP34/TG2·stop을 확인했다. 기본 서버는 중지된 채 별도 세션의 새 소유 native 프로세스가 응답했다. 기존 세션 정의 3개와 직전 프로필 34개 전체 항목 해시가 같고, 이번 세션의 해결된 실행 설정만 추가됐다. **D80의 답변 대상 이름/연결 범위 pass**이며 임베딩·STT 이름/라우팅은 최종17에서 아직 unrun이다. 세션 엔진은 다음 공통 검사에 사용하기 위해 실행 중이다. raw `package17r1-d79-d80-answer-native-verdict.json`이며 정상 종료 근거를 이 항목에 포함하지 않는다.
 
 고정 binary의 합성 엔진과 실제 개인 엔진에서 모두 help→공통 GUI→새 프로필→실제 argv→응답을 확인했다. 이 범위의 완료 근거를 전체 W/G 완료로 확대하지 않는다. 다음은 원래 Strata의 공통 GUI와 임베딩/STT 이름·라우팅, probe/help 경합·실패 복구·최종 정상 종료다. W08의 별도 OS 세션 차단과 원래 Strata/SmolVLM 내용 fail을 유지하고 goal은 active다.
+
+### production17의 Strata·BGE·Whisper 실제 공통 기능과 D80 역할 검증
+
+실제 개인 엔진 답변 세션을 유지한 채 원래 b11617 CPU runtime·BGE Q8_0 모델로 새 임베딩 프로필과 세션을 구성했다. 기존 `--embedding` 설정과 context512를 확인했다. **기존 세션을 중지하지 않는 원래 false 설정**을 로드 직전에 확인했고 답변 세션의 생성 식별자·포트가 그대로 유지됐다. 준비 중 작업용 토글을 잘못 한 번 바꾼 것은 새 엔진 로드 전에 원래 false로 복구하고 readback/기존 프로세스 보존을 확인했다. 제품이나 기본 정책의 변경으로 계산하지 않는다. 실행 중 임베딩 세션을 새 이름으로 저장한 뒤 Chat에 **G17 BGE embedding**이 반영되고 정확히 선택됐다.
+
+원래 Whisper native bridge와 tiny.en 모델도 새 프로필·세션으로 연결했다. 첫 별칭 경로는 bridge의 **선언한 모델 경로 문자열만 허용하는 계약**에 따라 probe가 false를 반환했다. 이전16의 같은 계약/거부 기록과 소스를 확인하고, `samefile`·원래 모델/bridge 해시로 동일 파일임을 검증한 뒤 기존에 선언한 경로를 GUI에서 선택했다. bridge·모델·해시를 바꾸지 않았다. 실제 fresh probe는 transcription만 허용하고 chat은 false이며, 새 세션 로드가 성공했다. 첫 거부와 새 프로필도 보존했다. Windows 기능 미지원 판정이 아니다. 실행 후 저장한 **G17 Whisper STT**가 음성 전사 선택기에 반영되고 정확히 선택됐다. 기존 프로필34개 전체 해시를 유지하면서 이번 BGE·STT·Strata 검증 프로필 등을 추가해 총38개다.
+
+같은 고정17에서 원래 Strata의 실제 help를 다시 탐색/수락하고 공통 GUI의 **spec4·tokens 단위·재시작 메타데이터와 출처**를 확인했다. 기존 값을 복제한 새 검증 프로필을 저장/재열기한 뒤 원래 배포 모델로 fresh probe/Ready를 거쳤다. 원래 revision `296b59d2f73c8f04a805df29c2fa97655adace78`, 모델 revision `5348543e0147355ac9cbcb031184a3546350988e`, native executable SHA256 `c4709f17ef974ffa34af4f0c357160a89249cabf6e9a698fbe6d0dc65a3243fa`를 유지했다. 실제 Windows argv의 spec4 두 곳·context131072·KV int8·resident32768이 기존 설정과 같다. 실제 probe의 accelerator 값은 `unverified`였으며 이를 임의로 GPU 검증값으로 고치지 않았다. 모델 지원과 chat/tools capability, 실제 모델 실행은 별도 근거로 기록했다. BGE·Whisper·개인 답변 세션도 함께 유지됐다.
+
+Chat에서 답변을 기본 Strata로, 임베딩을 위의 새 BGE 이름으로 명시적으로 선택했다. 원래 Unicode/공백 경로의 **lumen-notes.md→unrelated.md** 두 문서와 질문의 전체 해시·순서를 유지한 실제 요청은 `Pim, a teal heron.`·PP229/TG231·stop과 저장 이력으로 완료됐다. 실제 인용 순위는 Lumen0.6168/다른 문서0.4061이다. 이전16의0.6176/0.4054로 보정하지 않았다. BGE revision `d32f8c040ea3b516330eeb75b72bcc2d3a780ab7`, 모델 SHA256 `ec38e8da142596baa913124ae50550de284b6916bf59577ef2f0cb9660c2f514`와 원래 CPU executable 해시를 대조했다. **이 실제 RAG/역할 연결 범위 pass**다.
+
+이어 새 대화에서 원래 JFK WAV(`59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e`,352,078바이트)와 같은 질문을 전송했다. 원래 native Whisper CLI가 전사한 실제 새 기록은 한 개이며 exit0·전사106자다. 저장 오디오의 preparation은 새 STT 세션·모델·그 실제 전사와 일치했다. Strata는 나라가 자신을 위해 무엇을 할지 묻기보다 자신이 나라를 위해 무엇을 할지 물으라는 내용의 한 문장 답변을 PP124/TG160·stop으로 완료했다. 원래 Whisper revision `0c7be696371069e0baa2515ed7aa08d5a5473aa6`, CLI·모델·bridge 해시는 앞선 근거와 같다. 기존 bridge 로그 prefix 전체 해시도 보존됐다. **실제 STT→Strata 답변/usage·저장 역할과 D80 임베딩/STT 이름 반영 범위 pass**다. 가짜 전사나 합성 추론으로 대체하지 않았다.
+
+raw `package17r1-strata-rag-stt-native-verdict.json`, `package17r1-stt-original-path-identity.json`, `package17r1-four-engines-load-observed.json`과 각각의 native 근거에 입력/출력·revision·해시·역할이 있다. 프로세스 소유권은 부모 PID만 보지 않고 **실제 부모 이후에 생성된 자식**으로 검증해 이전 PID 재사용의 외부 프로세스를 제외했다. 원래 Strata CLI 산술 질문의 빈 content fail·SmolVLM 내용 fail은 유지한다. MCP·gateway·probe/help 경합·실패 복구·실제 이력 재로드·로드 상태 정상 Quit와 W08의 별도 OS 세션 차단이 남아 goal은 active다.
