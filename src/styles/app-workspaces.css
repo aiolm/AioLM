@@ -73,6 +73,8 @@
 .entrypoint-steps > li[aria-current="step"] { color: var(--ui-ink); border-color: var(--ui-border-accent); background: var(--ui-surface-muted); font-weight: 600; }
 .entrypoint-registration .model-settings-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 16px; }
 .entrypoint-registration .model-settings-fields > :is(div, fieldset) { grid-column: 1 / -1; }
+.entrypoint-review { display: flex; flex-direction: column; gap: 16px; min-inline-size: 0; }
+.entrypoint-review-manifest { min-inline-size: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .entrypoint-registration label { display: grid; gap: 6px; min-width: 0; }
 .entrypoint-registration fieldset { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
 .entrypoint-registration legend { padding-inline: 4px; color: var(--ui-muted); font-size: var(--ui-text-support); }

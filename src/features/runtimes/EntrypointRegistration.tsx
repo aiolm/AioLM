@@ -446,10 +446,12 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
           </div>
         )}
         {step === 3 && (
-          <div className="model-settings-fields">
-            {manifest && <pre className="overflow-auto whitespace-pre-wrap">{manifest}</pre>}
+          <div className="entrypoint-review">
+            {manifest && <pre className="entrypoint-review-manifest">{manifest}</pre>}
             {done ? <p role="status">{copy.registered}</p> : (
-              <button type="submit" className="app-button app-button--primary" disabled={disabled} onClick={() => void register()}>{copy.register}</button>
+              <div className="app-page-actions">
+                <button type="submit" className="app-button app-button--primary" disabled={disabled} onClick={() => void register()}>{copy.register}</button>
+              </div>
             )}
           </div>
         )}
