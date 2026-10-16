@@ -804,6 +804,7 @@ fn declared_differences(
     let conflict = |field: &str, seen: Value, said: Value, blocking: bool| FactConflict {
         key: declared.key.clone(),
         flag: flag.clone(),
+        positional: None,
         field: field.into(),
         observed: seen,
         declared: said,

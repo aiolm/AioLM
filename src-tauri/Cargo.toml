@@ -71,6 +71,11 @@ path = "tests/runtime_metadata_journey.rs"
 required-features = ["test-fixtures"]
 
 [[test]]
+name = "runtime_positional_metadata_journey"
+path = "tests/runtime_positional_metadata_journey.rs"
+required-features = ["test-fixtures"]
+
+[[test]]
 name = "runtime_entry_ownership_journey"
 path = "tests/runtime_entry_ownership_journey.rs"
 required-features = ["test-fixtures"]

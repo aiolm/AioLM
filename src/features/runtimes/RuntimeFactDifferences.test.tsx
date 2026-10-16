@@ -39,6 +39,15 @@ describe('declared fact differences', () => {
     expect(region).toHaveTextContent('{"min":2,"max":2}');
   });
 
+  it('names an absent positional declaration and hides its secret literals', () => {
+    render(<I18nProvider initialLocale="en"><RuntimeFactDifferences schema={schema(false)}
+      metadata={{ adapter: 'synthetic.adapter', revision: 'r1', builtin: false, applied: [], error: null,
+        conflicts: [{ ...conflict('option', null, { sensitive: true, choices: ['absent-slot-synthetic'] }, ''), flag: '', positional: 'absent_slot' }] }} /></I18nProvider>);
+    const item = screen.getByRole('listitem');
+    expect(item.querySelector('code')).toHaveTextContent(/^absent_slot$/);
+    expect(item).not.toHaveTextContent('absent-slot-synthetic');
+  });
+
   it('shows the literals of an option nothing declares secret', () => {
     render(<I18nProvider initialLocale="en"><RuntimeFactDifferences schema={schema(false)}
       conflicts={[conflict('runtime_default', { literal: 'observed-visible' }, { literal: 'declared-visible' })]} /></I18nProvider>);

@@ -101,7 +101,10 @@ export interface SchemaDiff {
 export interface FactConflict {
   /** Effective option key; empty when no option has the flag. */
   key: string;
+  /** Empty when the declaration names a positional. */
   flag: string;
+  /** The positional key a declaration names; omitted for flags and constraints. */
+  positional?: string;
   field: string;
   /** What reviewed help shows; null when it shows nothing. */
   observed: unknown;
@@ -128,7 +131,8 @@ export interface OptionMetadata {
   version: number;
   engine_id: string;
   adapter: { id: string; revision: string };
-  options?: Array<{ flag: string } & Record<string, unknown>>;
+  /** Each entry names exactly one observed flag spelling or help positional key. */
+  options?: Array<({ flag: string } | { positional: string }) & Record<string, unknown>>;
   constraints?: unknown[];
 }
 

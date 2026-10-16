@@ -331,7 +331,7 @@ pub(crate) fn builtin_metadata(provider: ProviderId) -> Option<OptionMetadata> {
                 revision: "aiolm-builtin-1".into(),
             },
             options: vec![MetadataOption {
-                flag: "--hf-token".into(),
+                flag: Some("--hf-token".into()),
                 sensitive: Some(true),
                 ..Default::default()
             }],
@@ -484,7 +484,7 @@ mod tests {
         assert!(shipped);
         assert_eq!(metadata.engine_id, ProviderId::Llama);
         assert_eq!(metadata.options.len(), 1);
-        assert_eq!(metadata.options[0].flag, "--hf-token");
+        assert_eq!(metadata.options[0].flag.as_deref(), Some("--hf-token"));
         assert_eq!(metadata.options[0].sensitive, Some(true));
     }
 }

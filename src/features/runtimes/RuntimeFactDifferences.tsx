@@ -60,8 +60,8 @@ export default function RuntimeFactDifferences({ conflicts = [], metadata, schem
       {all.length > 0 && (
         <ul>
           {all.map((conflict, index) => (
-            <li key={`${conflict.flag}:${conflict.field}:${index}`}>
-              <code>{conflict.flag || conflict.key}</code>
+            <li key={`${conflict.flag || conflict.positional}:${conflict.field}:${index}`}>
+              <code>{conflict.flag || conflict.positional || conflict.key}</code>
               {` · ${fieldLabel(conflict.field, copy)} · ${copy.sourceHelp}: ${value(conflict, conflict.observed)} · ${conflict.declared_by}: ${value(conflict, conflict.declared)} · `}
               {conflict.applies === 'observed' ? copy.appliesObserved : copy.appliesDeclared}
               {conflict.blocking && ` · ${copy.blocksLaunch}`}

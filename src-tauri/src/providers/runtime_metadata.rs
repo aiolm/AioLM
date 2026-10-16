@@ -4,10 +4,11 @@
 //! which unit a number counts, that a change needs a restart, or which values
 //! a type admits. An adapter states those facts in this bounded document,
 //! identified by its adapter id and revision. Facts attach by an observed
-//! flag spelling to options the effective schema already has; they never add
-//! options, request fields or app-owned bindings. Observed help syntax,
-//! existing adapter facts and app bindings always win: every declaration
-//! they contradict, or that names no option, is reported instead of applied.
+//! flag spelling, or by the key of an observed launch positional, to options
+//! the effective schema already has; they never add options, request fields
+//! or app-owned bindings. Observed help syntax, existing adapter facts and
+//! app bindings always win: every declaration they contradict, or that names
+//! no option, is reported instead of applied.
 use super::{
     runtime_options::{
         explicit_operand, identifier, Arity, Certainty, Fact, ManagedBinding, NumericRange,
@@ -63,12 +64,19 @@ pub struct OptionMetadata {
     pub constraints: Vec<MetadataRelation>,
 }
 
-/// Facts for the option one observed spelling names. Absent fields stay
+/// Facts for the one option an entry names: by an observed flag spelling, or
+/// by the effective key of an observed launch positional (help positionals
+/// have no spelling). Exactly one of the two is set. Absent fields stay
 /// whatever help or the adapter catalog already established (or unknown).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataOption {
-    pub flag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+    /// Omitted for flag entries, so their documents keep their exact bytes
+    /// and digest. An app without this field refuses such a document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positional: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ValueKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,7 +144,12 @@ pub enum Applies {
 pub struct FactConflict {
     /// The effective option key; empty when no option has the flag.
     pub key: String,
+    /// Empty when the declaration names a positional.
     pub flag: String,
+    /// The positional key a declaration names, even when no such observed
+    /// positional exists; omitted for flag declarations and constraints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positional: Option<String>,
     pub field: String,
     /// What reviewed help shows; null when it shows nothing for this.
     pub observed: Value,
@@ -174,6 +187,17 @@ fn valid_flag(flag: &str) -> bool {
         && body
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_-.?".contains(&b))
+}
+
+/// An option key that can never be read as a flag spelling.
+fn valid_positional(key: &str) -> bool {
+    identifier(key) && !key.starts_with(['-', '/'])
+}
+
+/// The one option an entry names.
+enum Selector<'a> {
+    Flag(&'a str),
+    Positional(&'a str),
 }
 
 pub(crate) fn typed(kind: ValueKind, value: &Value) -> bool {
@@ -289,8 +313,43 @@ impl MetadataOption {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
         if let Some(object) = value.as_object_mut() {
             object.remove("flag");
+            object.remove("positional");
         }
         value
+    }
+
+    fn selector(&self) -> Option<Selector<'_>> {
+        match (&self.flag, &self.positional) {
+            (Some(flag), None) => Some(Selector::Flag(flag)),
+            (None, Some(key)) => Some(Selector::Positional(key)),
+            _ => None,
+        }
+    }
+
+    /// The schema index of the launch option this entry names: one with the
+    /// observed spelling, or the observed positional slot with the key.
+    /// Never a flag option that happens to share a positional's key.
+    fn target(&self, schema: &OptionSchema) -> Option<usize> {
+        let selector = self.selector()?;
+        schema.options.iter().position(|o| {
+            o.target == Target::Launch
+                && match selector {
+                    Selector::Flag(flag) => o.spellings.iter().any(|s| s.flag == flag),
+                    Selector::Positional(key) => {
+                        o.position.is_some() && o.spellings.is_empty() && o.key == key
+                    }
+                }
+        })
+    }
+
+    /// The app binding that owns the option. A positional whose role is
+    /// still open (`Discovery`, confirmed later from the reviewed help) is
+    /// owned by nothing yet; declared facts never change its ownership.
+    fn owner(&self, option: &OptionDefinition) -> Option<ManagedBinding> {
+        match option.managed {
+            Some(ManagedBinding::Discovery) if self.positional.is_some() => None,
+            managed => managed,
+        }
     }
 }
 
@@ -330,13 +389,34 @@ impl OptionMetadata {
             return Err("option metadata declares no option or constraint".into());
         }
         let mut flags = BTreeSet::new();
+        let mut positionals = BTreeSet::new();
         for option in &self.options {
-            let name = &option.flag;
-            if !valid_flag(name) || !flags.insert(name) {
-                return Err(format!(
-                    "{name}: each metadata entry names one distinct flag spelling"
-                ));
-            }
+            let name = match option.selector() {
+                Some(Selector::Flag(name)) => {
+                    if !valid_flag(name) || !flags.insert(name) {
+                        return Err(format!(
+                            "{name}: each metadata entry names one distinct flag spelling"
+                        ));
+                    }
+                    name
+                }
+                Some(Selector::Positional(key)) => {
+                    if !valid_positional(key) || !positionals.insert(key) {
+                        return Err(format!(
+                            "{key}: each positional entry names one distinct observed positional key"
+                        ));
+                    }
+                    if option.reserved.is_some() {
+                        return Err(format!(
+                            "{key}: a positional entry cannot be reserved; its role is confirmed from the reviewed help"
+                        ));
+                    }
+                    key
+                }
+                None => {
+                    return Err("each metadata entry names exactly one target: a flag spelling or an observed positional key".into())
+                }
+            };
             option.check().map_err(|error| format!("{name}: {error}"))?;
         }
         for relation in &self.constraints {
@@ -422,8 +502,8 @@ fn launch_option<'a>(schema: &'a OptionSchema, flag: &str) -> Option<&'a OptionD
 }
 
 /// Establish declared facts on the schema's options. `report_absent` names
-/// declarations for flags no option has; built-in metadata stays silent
-/// because a given build need not have every option.
+/// declarations for flags or positionals no option has; built-in metadata
+/// stays silent because a given build need not have every option.
 pub fn apply(
     schema: &mut OptionSchema,
     metadata: &OptionMetadata,
@@ -448,6 +528,7 @@ pub fn apply(
         |key: &str, flag: &str, field: &str, observed: Value, declared: Value| FactConflict {
             key: key.into(),
             flag: flag.into(),
+            positional: None,
             field: field.into(),
             observed,
             declared,
@@ -455,38 +536,43 @@ pub fn apply(
             applies: Applies::Observed,
             blocking: false,
         };
+    // A difference about one entry names the entry's own selector.
+    let reported = |entry: &MetadataOption, key: &str, field: &str, observed, declared| {
+        let mut found = conflict(
+            key,
+            entry.flag.as_deref().unwrap_or_default(),
+            field,
+            observed,
+            declared,
+        );
+        found.positional = entry.positional.clone();
+        found
+    };
     let mut claimed = BTreeSet::new();
     for entry in &metadata.options {
-        let Some(index) = schema.options.iter().position(|o| {
-            o.target == Target::Launch && o.spellings.iter().any(|s| s.flag == entry.flag)
-        }) else {
+        let Some(index) = entry.target(schema) else {
             if report_absent {
-                view.conflicts.push(conflict(
-                    "",
-                    &entry.flag,
-                    "option",
-                    Value::Null,
-                    entry.declared(),
-                ));
+                view.conflicts
+                    .push(reported(entry, "", "option", Value::Null, entry.declared()));
             }
             continue;
         };
         let option = &mut schema.options[index];
         if !claimed.insert(index) {
             // Two entries name aliases of one option; the first one applies.
-            view.conflicts.push(conflict(
+            view.conflicts.push(reported(
+                entry,
                 &option.key,
-                &entry.flag,
                 "duplicate",
                 Value::Null,
                 entry.declared(),
             ));
             continue;
         }
-        if let Some(binding) = option.managed {
-            view.conflicts.push(conflict(
+        if let Some(binding) = entry.owner(option) {
+            view.conflicts.push(reported(
+                entry,
                 &option.key,
-                &entry.flag,
                 "binding",
                 serde_json::to_value(binding).unwrap_or(Value::Null),
                 entry.declared(),
@@ -496,9 +582,9 @@ pub fn apply(
         // A reservation only ever locks an option; it never unlocks one.
         if let Some(reason) = &entry.reserved {
             option.managed = Some(ManagedBinding::Reserved);
-            let mut found = conflict(
+            let mut found = reported(
+                entry,
                 &option.key,
-                &entry.flag,
                 "reserved",
                 Value::Null,
                 Value::from(reason.clone()),
@@ -512,16 +598,8 @@ pub fn apply(
         let mut applied = false;
         let key = option.key.clone();
         let mut differs = |field: &str, observed: Value, declared: Value| {
-            view.conflicts.push(FactConflict {
-                key: key.clone(),
-                flag: entry.flag.clone(),
-                field: field.into(),
-                observed,
-                declared,
-                declared_by: declared_by.clone(),
-                applies: Applies::Observed,
-                blocking: false,
-            });
+            view.conflicts
+                .push(reported(entry, &key, field, observed, declared));
         };
         macro_rules! field {
             ($fact:ident, $name:literal) => {
@@ -640,11 +718,10 @@ pub fn apply(
         // only hides values), and the options the metadata describes refuse
         // saved values until it is corrected.
         for entry in &metadata.options {
-            let Some(index) = schema.options.iter().position(|o| {
-                o.target == Target::Launch
-                    && o.managed.is_none()
-                    && o.spellings.iter().any(|s| s.flag == entry.flag)
-            }) else {
+            let Some(index) = entry
+                .target(schema)
+                .filter(|index| entry.owner(&schema.options[*index]).is_none())
+            else {
                 continue;
             };
             let option = &mut schema.options[index];
@@ -655,9 +732,9 @@ pub fn apply(
                     source: Some(source.clone()),
                 };
             }
-            let mut found = conflict(
+            let mut found = reported(
+                entry,
                 &option.key,
-                &entry.flag,
                 "metadata",
                 Value::from(error.clone()),
                 entry.declared(),
@@ -668,16 +745,26 @@ pub fn apply(
     }
     // Differences about a secret option never carry its value literals
     // (defaults, choices), whether help or the entry itself says it is secret.
-    let secret_flags: BTreeSet<&str> = metadata
-        .options
-        .iter()
-        .filter(|entry| entry.sensitive == Some(true))
-        .map(|entry| entry.flag.as_str())
-        .collect();
+    let secret = |found: &FactConflict| {
+        let named = |entry: &MetadataOption| {
+            entry.flag.as_deref().unwrap_or_default() == found.flag
+                && entry.positional == found.positional
+        };
+        let option = match &found.positional {
+            Some(key) => schema
+                .options
+                .iter()
+                .find(|o| o.target == Target::Launch && o.position.is_some() && o.key == *key),
+            None => launch_option(schema, &found.flag),
+        };
+        metadata
+            .options
+            .iter()
+            .any(|entry| entry.sensitive == Some(true) && named(entry))
+            || option.is_some_and(|option| option.sensitive.supported() == Some(&true))
+    };
     for found in &mut view.conflicts {
-        let secret = secret_flags.contains(found.flag.as_str())
-            || launch_option(schema, &found.flag)
-                .is_some_and(|option| option.sensitive.supported() == Some(&true));
+        let secret = secret(found);
         if secret && !VALUE_FREE.contains(&found.field.as_str()) {
             found.observed = redacted(&found.observed);
             found.declared = redacted(&found.declared);
@@ -934,7 +1021,7 @@ mod tests {
         let builtin = builtin(ProviderId::Llama).unwrap();
         builtin.validate(ProviderId::Llama).unwrap();
         assert_eq!(builtin.options.len(), 1);
-        assert_eq!(builtin.options[0].flag, "--hf-token");
+        assert_eq!(builtin.options[0].flag.as_deref(), Some("--hf-token"));
         assert_eq!(builtin.options[0].sensitive, Some(true));
         assert!(super::builtin(ProviderId::Vllm).is_none());
         // A build without the option is not a difference worth reporting.
@@ -1113,6 +1200,262 @@ mod tests {
         assert_eq!(view.applied, ["cache"]);
         assert!(find(&discovered, "cache").sensitive.supported().is_none());
     }
+
+    /// `schema()` plus help positionals: a slot whose role the user has not
+    /// confirmed yet, an unmanaged slot and a slot an app binding owns.
+    fn positional_schema() -> OptionSchema {
+        let slot = |key: &str, position: u16, managed: Option<ManagedBinding>| {
+            let mut option: OptionDefinition = serde_json::from_value(json!({
+                "key": key, "target": "launch", "position": position
+            }))
+            .unwrap();
+            option.arity = observed(Arity {
+                min: 1,
+                max: Some(1),
+            });
+            option.managed = managed;
+            option
+        };
+        let mut schema = schema();
+        schema.options.extend([
+            slot("marker", 0, Some(ManagedBinding::Discovery)),
+            slot("plain", 1, None),
+            slot("model_path", 2, Some(ManagedBinding::Model)),
+        ]);
+        schema.validate().unwrap();
+        schema
+    }
+
+    fn selectors(view: &MetadataView) -> BTreeSet<(String, String, String)> {
+        view.conflicts
+            .iter()
+            .map(|c| {
+                let wire = serde_json::to_value(c).unwrap();
+                (
+                    c.flag.clone(),
+                    wire["positional"].as_str().unwrap_or("").to_owned(),
+                    c.field.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_positional_declaration_attaches_only_to_the_observed_slot_it_names() {
+        let declared = metadata(
+            json!([
+                {"positional": "marker", "sensitive": true},
+                {"positional": "plain", "unit": "files", "arity": {"min": 2, "max": 2}},
+                {"positional": "model_path", "sensitive": true},
+                {"positional": "cache", "sensitive": true},
+                {"positional": "absent", "sensitive": true},
+                {"flag": "--switch", "sensitive": true}
+            ]),
+            json!([]),
+        );
+        declared.validate(engine()).unwrap();
+        let mut schema = positional_schema();
+        let view = apply(&mut schema, &declared, false, true);
+        assert_eq!(view.error, None);
+        // Documented by the adapter on exactly the named slot; its role
+        // stays for the user to confirm and it gains no spelling.
+        let marker = find(&schema, "marker");
+        assert_eq!(marker.sensitive.supported(), Some(&true));
+        assert_eq!(marker.sensitive.certainty, Certainty::Documented);
+        assert!(
+            matches!(&marker.sensitive.source, Some(Source::Adapter { id, revision }) if id == "synthetic.adapter" && revision == "r1")
+        );
+        assert_eq!(marker.managed, Some(ManagedBinding::Discovery));
+        assert!(marker.spellings.is_empty());
+        // The neighbouring slot takes only its own declaration; observed
+        // syntax wins over a contradictory value count.
+        let plain = find(&schema, "plain");
+        assert!(plain.sensitive.supported().is_none());
+        assert_eq!(plain.unit.supported().map(String::as_str), Some("files"));
+        assert_eq!(plain.arity.supported().unwrap().max, Some(1));
+        assert_eq!(plain.arity.certainty, Certainty::Verified);
+        // An app binding, a flag option with the same key and an absent
+        // key take nothing.
+        assert!(find(&schema, "model_path").sensitive.supported().is_none());
+        assert!(find(&schema, "cache").sensitive.supported().is_none());
+        assert!(find(&schema, "cache").position.is_none());
+        assert_eq!(find(&schema, "switch").sensitive.supported(), Some(&true));
+        let found = selectors(&view);
+        for expected in [
+            ("", "plain", "arity"),
+            ("", "model_path", "binding"),
+            ("", "cache", "option"),
+            ("", "absent", "option"),
+        ] {
+            let expected = (
+                expected.0.to_owned(),
+                expected.1.to_owned(),
+                expected.2.to_owned(),
+            );
+            assert!(found.contains(&expected), "{expected:?} in {found:?}");
+        }
+        assert_eq!(found.len(), 4, "{found:?}");
+        assert!(view
+            .conflicts
+            .iter()
+            .all(|c| c.applies == Applies::Observed && !c.blocking));
+        assert_eq!(view.applied, ["marker", "plain", "switch"]);
+        // Built-in metadata stays silent about absent positionals too.
+        let mut quiet = positional_schema();
+        let view = apply(&mut quiet, &declared, true, false);
+        assert!(!selectors(&view)
+            .iter()
+            .any(|(_, _, field)| field == "option"));
+    }
+
+    #[test]
+    fn a_positional_declaration_without_sensitivity_leaves_it_unknown() {
+        let declared = metadata(
+            json!([{"positional": "marker", "unit": "entries"}]),
+            json!([]),
+        );
+        declared.validate(engine()).unwrap();
+        let mut schema = positional_schema();
+        let view = apply(&mut schema, &declared, false, true);
+        assert_eq!(view.applied, ["marker"]);
+        let marker = find(&schema, "marker");
+        assert!(marker.sensitive.supported().is_none());
+        assert_eq!(marker.sensitive.certainty, Certainty::Unknown);
+    }
+
+    #[test]
+    fn an_unappliable_combination_keeps_a_declared_positional_secret() {
+        let mut schema = positional_schema();
+        schema.options[3].spellings[0].style = ValueStyle::Equals;
+        let declared = metadata(
+            json!([
+                {"positional": "marker", "sensitive": true, "unit": "s"},
+                {"flag": "--loose", "unit": "s"}
+            ]),
+            json!([]),
+        );
+        let view = apply(&mut schema, &declared, false, true);
+        assert!(view.error.is_some());
+        let marker = find(&schema, "marker");
+        assert_eq!(marker.sensitive.supported(), Some(&true));
+        assert!(marker.unit.supported().is_none());
+        assert!(selectors(&view).contains(&("".into(), "marker".into(), "metadata".into())));
+    }
+
+    #[test]
+    fn differences_of_a_secret_positional_never_carry_its_literals() {
+        let declared = metadata(
+            json!([
+                {"positional": "plain", "sensitive": true, "kind": "text",
+                 "runtime_default": {"literal": "hidden-positional-default"}, "arity": {"min": 3, "max": 3}},
+                {"positional": "absent", "sensitive": true, "choices": ["hidden-positional-choice"]}
+            ]),
+            json!([]),
+        );
+        declared.validate(engine()).unwrap();
+        let view = review(&positional_schema(), &declared, false);
+        let text = serde_json::to_string(&view.conflicts).unwrap();
+        assert!(view.conflicts.iter().any(|c| c.field == "option"));
+        for literal in ["hidden-positional-default", "hidden-positional-choice"] {
+            assert!(!text.contains(literal), "{text}");
+        }
+    }
+
+    #[test]
+    fn each_entry_names_exactly_one_valid_distinct_target() {
+        let refused = |options: Value| {
+            serde_json::from_value::<OptionMetadata>(json!({
+                "version": 1, "engine_id": "custom.example",
+                "adapter": {"id": "synthetic.adapter", "revision": "r1"},
+                "options": options
+            }))
+            .map_err(|error| error.to_string())
+            .and_then(|metadata| metadata.validate(engine()))
+            .unwrap_err()
+        };
+        for (options, needle) in [
+            (
+                json!([{"flag": "--cache", "positional": "cache", "sensitive": true}]),
+                "exactly one",
+            ),
+            (json!([{"sensitive": true}]), "exactly one"),
+            (
+                json!([{"positional": "-marker", "sensitive": true}]),
+                "positional",
+            ),
+            (
+                json!([{"positional": "/marker", "sensitive": true}]),
+                "positional",
+            ),
+            (json!([{"positional": "", "sensitive": true}]), "positional"),
+            (
+                json!([{"positional": "two words", "sensitive": true}]),
+                "positional",
+            ),
+            (
+                json!([{"positional": "x".repeat(129), "sensitive": true}]),
+                "positional",
+            ),
+            (
+                json!([{"positional": "marker", "sensitive": true}, {"positional": "marker", "unit": "s"}]),
+                "distinct",
+            ),
+            (
+                json!([{"positional": "marker", "reserved": "the app owns it"}]),
+                "reserved",
+            ),
+            (json!([{"positional": "marker"}]), "no fact"),
+        ] {
+            let error = refused(options.clone());
+            assert!(error.contains(needle), "{options}: {error}");
+        }
+        // A flag spelling and a positional key are separate namespaces.
+        metadata(
+            json!([{"flag": "--marker", "unit": "s"}, {"positional": "marker", "sensitive": true}]),
+            json!([]),
+        )
+        .validate(engine())
+        .unwrap();
+        // Constraints still name flag spellings only.
+        assert!(serde_json::from_value::<OptionMetadata>(json!({
+            "version": 1, "engine_id": "custom.example",
+            "adapter": {"id": "synthetic.adapter", "revision": "r1"},
+            "constraints": [{"kind": "requires", "when": {"positional": "marker"}, "other": {"flag": "--cache"}}]
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn flag_only_documents_keep_their_exact_bytes_digest_and_differences() {
+        let text = r#"{"version":1,"engine_id":"custom.example","adapter":{"id":"synthetic.adapter","revision":"r1"},"options":[{"flag":"--cache","kind":"integer","unit":"MiB"},{"flag":"--switch","sensitive":true}],"constraints":[{"kind":"requires","when":{"flag":"--switch"},"other":{"flag":"--cache"}}]}"#;
+        let parsed: OptionMetadata = serde_json::from_str(text).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), text);
+        assert_eq!(parsed.digest(), FLAG_ONLY_DIGEST);
+        let llama = builtin(ProviderId::Llama).unwrap();
+        assert_eq!(
+            serde_json::to_string(&llama).unwrap(),
+            r#"{"version":1,"engine_id":"llama.cpp","adapter":{"id":"llama.cpp","revision":"aiolm-builtin-1"},"options":[{"flag":"--hf-token","sensitive":true}]}"#
+        );
+        assert_eq!(llama.digest(), LLAMA_BUILTIN_DIGEST);
+        // A flag declaration's difference keeps its earlier wire shape.
+        let view = review(
+            &schema(),
+            &metadata(json!([{"flag": "--missing", "unit": "s"}]), json!([])),
+            false,
+        );
+        assert_eq!(
+            serde_json::to_value(&view.conflicts).unwrap(),
+            json!([{"key": "", "flag": "--missing", "field": "option", "observed": null,
+                    "declared": {"unit": "s"}, "declared_by": "synthetic.adapter r1",
+                    "applies": "observed", "blocking": false}])
+        );
+    }
+
+    /// Digests of flag-only documents before positional declarations existed.
+    const FLAG_ONLY_DIGEST: &str =
+        "9ed3724b1747c95b8ef7fa80f75a92012020529bb56a8bdfbd6f61910c600c7a";
+    const LLAMA_BUILTIN_DIGEST: &str =
+        "a9c26ab5bf24a9346323773cccd30e2b2029d8cc0cee3c00e9f71a4d39d50d3c";
 
     #[test]
     fn an_equals_spelling_keeps_its_single_value() {
