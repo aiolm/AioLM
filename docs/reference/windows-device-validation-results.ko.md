@@ -379,7 +379,7 @@ D78은 개인 엔진의 긴 manifest 검토에서 Register가 높이 4,285px의 
 
 raw는 `package15-private-review-layout-defect.json`, `root-d78/1792139343716-red-raw-cdp/results.json`, `root-d78/1792139511402-green-raw-cdp/results.json`과 각 PNG, `claude-g-repair/runs/1792139369348-d78-final-full-npm-unit/result.json`이다. 브라우저 시작·연결·개발 서버의 실패 실행과 잘못된 자동화 Enter 입력도 보존했으며 성공 근거에서 제외했다. D78 수정 후에는 새 production을 고정하고 그 뒤 새 미지 flag를 만들어 실제 GUI를 다시 검증해야 한다. 공통 기능·경합·원래 미디어 실패 조사와 별도 Windows 설치 세션도 남아 goal은 active다.
 
-## production16 고정과 GUI 대기 중 독립 검증
+## production16 고정과 독립 검증·실제 GUI 재검증
 
 D78 수정 후 source `45cb369e15ef4be16151941107aed841c2007d59`(제품 수정 `882d8be`)에서 production 네 target을 새로 빌드했다(exit0/304,433ms). lockfile·도구 설정 입력 해시와 clean Git/필수 인계 커밋을 확인하고 산출물을 별도 고정했다. GUI SHA-256 `b15c65b7e3e76e3a222922d7ea8fc6c61c9dbbcf09826948ecc5619a6afaa1f0`, CLI `160e2a17d1c5158405367ebc18e60aa7ee12db24950f36d1cc3e17d799a28940`, NSIS `2f8ab92ef3bf200100d4c9f9045699eb3ed80df33dcf46e9e9378e6ec372ede5`, MSI `fcf7fa4f0e7cb2ed0741653dc77a514be78ef9e2c141fcebe56e13e230241b4c`다. 설치 파일은 실행하지 않았다. 고정 뒤 생성한 합성 엔진 v1/v2·실제 개인 엔진의 새 flag가 이 GUI/CLI와 고정 source에 없음을 확인했다.
 
@@ -390,9 +390,19 @@ D78 수정 후 source `45cb369e15ef4be16151941107aed841c2007d59`(제품 수정 `
 | CLI 저장/API 계약 | **pass, 3,444ms/exit0**. 고정 production16 CLI를 명시해 새 홈 초기화·설정 왕복·provider 옵션 검증·선택 원자성/실패 보존을 검사했다. 앞선 환경 변수 지정 오류로 기본 debug CLI를 실행한 별도 성공 로그는 production 근거에서 제외했다 |
 | 원래 CPU 번들 | **pass, 이 CLI 범위**. production15 GUI에서 내보낸 원래 b11617 CPU ZIP을 SDK 경로를 제외한 환경의 새 격리 홈에 가져와 payload 63개 해시를 확인했다. 가져오기는 기존 debug `runtime-bundle` 예제 도구(변하지 않은 import 코드, 해시 `e6ebd938…`)를 사용했고 이후 실행은 고정 production16 CLI다. 같은 Qwen 모델로 fresh probe/Ready·답변 `5`/PP34·TG2·정상 stop 뒤 소유 PID/포트/state/staging 정리를 확인했다(6,053ms/exit0). 원래 SmolVLM 미디어 실패를 이 다른 텍스트 검사로 대체하지 않는다. 새 홈의 production GUI 가져오기/실행은 여전히 unrun이다 |
 | MSI/산출물 정적 검사 | **pass, 제한된 범위**. Windows Installer database를 읽기 전용 mode0으로 열어 제품/버전·GUI/CLI 두 파일·shortcut 3개·registry 항목 4개를 확인했다. 네 고정 산출물의 UTF-8/UTF-16LE에서 동적으로 구한 builder home/tool-cache/repository 경로 패턴은 발견되지 않았다. 압축 payload 전체의 개인정보 부재·설치/업그레이드/제거·Credential Manager의 성공을 뜻하지 않는다 |
-| 실제 GUI16 | **unrun/일시 차단**. 같은 검증 홈에서 새 GUI를 실행하고 이전 이력을 다시 표시했으며 기존 프로필 10개·이력 10개의 해시가 같았다. Windows 작업 보기 화면이 검증 창을 덮어 이후 합성 엔진 등록 동작이 반영되지 않았다. 도구의 성공 반환과 전경 HWND만으로 등록 성공을 판정하지 않았다. 실제 화면을 여는 사용자 조작을 요청한 상태로, D78/D72·새 미지 옵션 여정·공통 기능의 최종 native 재검증은 남아 있다 |
+| 실제 GUI16 | **pass, 아래 한정된 여정**. 작업 보기 장애를 해소한 뒤 같은 검증 홈에서 합성 v1·실제 개인 엔진의 새 옵션 등록/도움말/공통 GUI/새 프로필/재열기/실제 argv/응답과 정상 언로드, D78/D72의 긴 검토·작은 창·완료 포커스를 확인했다. 기존 프로필과 시작 전 이력은 해시로 보존을 확인했다. runtime v2·남은 경합/복구·공통 기능·원래 미디어의 최종 native 실행은 별도 unrun이다 |
 
 raw `package16-candidate.json`, `package16-unknown-engine-preparation/result.json`, `package16-private-cli-observed/results.json`, `package16-private-integrity-cli/results.json`, `package16-original-cpu-portable-text/results.json`, `package16-msi-read-only-database.json`, `package16-distribution-path-byte-audit.json`, `package16-current-status.json`에 source/runtime/model revision과 해시·실행 결과·정확한 재개 지점을 남겼다. BGE·Whisper·원래 RAG 문서 등 8개 입력 파일의 전체 해시도 확인했지만 그 준비를 실제 GUI 공통 기능 성공으로 계산하지 않는다.
+
+합성 v1은 앱 고정 뒤 만든 namespace `f34875b685e7`의 옵션을 실제 도움말에서 수락했다. 이전 runtime의 값 7개와 저장 순서는 경고와 함께 보존돼 실행을 차단했으며, 검증용 미저장 초안에서만 명시적으로 정리했다. 새 문자열·negative flag의 `false`·`0`·1,000개 중 마지막 검색 옵션을 공통 GUI로 입력해 **새 G16 프로필**로 저장/재열기했다. 실제 소유 자식 두 개의 Windows argv와 합성 엔진의 파싱 결과·HTTP/SSE 응답·저장 이력이 일치했다. 정상 언로드 후 두 PID와 포트가 사라졌고 예전 두 markerless staging의 로그 해시는 같았다. 합성 TG4는 실제 추론 성공이 아니다. raw `package16-synthetic-v1-argv-echo-verdict.json`, `package16-synthetic-v1-normal-unload.json`이다.
+
+실제 개인 빌드는 위 `87dae167…` 서버와 원래 Qwen0.5B 모델을 유지했다. 별도 setup을 가져와 비어 있는 필수 실행 파일을 native picker로 지정하고, 실제 도움말 255개 옵션/형식·값 개수 미확정 189개를 검토했다(raw schema의 kind 미확정 수는 별도 193개). 등록 manifest의 `options`는 비어 있으며 새 flag를 미리 선언하지 않았다. 모델/포트/호스트/별칭·환경 변수 인증과 별도 probe를 확인해 등록한 뒤 공통 GUI의 새 옵션을 **새 G16 개인 프로필**로 저장/재열기했다. fresh model probe/Ready, 실제 argv의 단일 Unicode·공백·따옴표 인자, 원래 산술 답변 `5`/PP34·TG2, 누락 인증 401을 확인했다. 기존 프로필 10개와 시작 전 비설정 파일 29개의 해시가 유지됐다. raw `package16-private-gui-argv-response-verdict.json`이다.
+
+취소 검사의 첫 실행은 136.8ms 만에 자연 종료해 중지 버튼을 관찰하지 못했으므로 취소 pass에서 제외했다. 같은 질문·모델·제한을 유지한 native UIA 전송/중지 검사에서는 68ms에 실제 중지 버튼을 관찰하고 한 번 실행했다. 부분 응답 16자의 보존과 Retry 전 이력 해시를 기록했으며, 같은 질문으로 Retry가 정상 stop/TG3914로 끝났다. 이 긴 답변의 내용 품질은 판정하지 않았다. 이후 정상 언로드로 소유 PID/포트가 정리됐고 원래 staging 로그는 보존됐다. raw `package16-private-cancel-before-retry.json`, `package16-private-cancel-retry-verdict.json`, `package16-private-gui-normal-unload.json`이다. 프로필 저장의 일부 자동화 클릭은 효과를 확인하지 못한 기록을 보존했고, 표준 키보드 동작 후 실제 이름 입력 화면과 저장 결과를 확인했다. 자동화 반환만으로 성공을 계산하지 않았다.
+
+D78/D72는 **수정 후 실제 Windows GUI의 이 범위 pass**다. 같은 긴 개인 manifest의 Register가 192dpi에서 높이 68px(34 CSS px)로 표시됐으며 일반 창과 실제 client 360×520에서 문구가 보였다. 작은 창의 등록 후 완료 영역에 포커스가 이동하고 Tab으로 정확한 새 엔진 Open에 이동한 뒤 Enter로 해당 상세 화면을 열었다. 원래 창의 위치·outer/client 크기도 정확히 복원했다. 실제 등록은 accessibility primaryAction 경로이므로 이를 물리 마우스 입력 성공으로 확대하지 않는다. headless 실제 pointer/keyboard·실패 복구 6개 검사는 앞선 범위로 유지한다. raw `package16-d78-d72-native-verdict.json`이다.
+
+원래 고정 Strata의 production16 CLI는 309,940ms/exit1로 완료됐다. A01/A02/A04/A06/A08/A09는 pass이며 소유 PID 12개·포트·staging 정리와 원래 입력 6개 해시를 확인했다. **A03/A05/A07의 원래 32-token 산술 답변은 fail**로 유지한다. 모델·질문·제한을 바꾸지 않았으며 같은 엔진의 GUI 성공으로 이 CLI 실패를 지우지 않는다. 실행 시 checkout `01227ae`와 binary source `45cb369`의 차이는 결과 문서뿐임을 별도 pairing 근거로 확인했다. raw `strata-adapter-acceptance/package16-cli-observed/results.json`, `package16-cli-binary-source-pairing.json`이다. 필수 Strata GUI 공통 흐름과 다른 잔여 항목은 계속 실행한다.
 
 W05의 추가 원인 조사에서는 원래 b11617/SmolVLM256 Q8_0/f16·이미지·질문·기록한 caller JSON 제어를 유지한 native 실행이 HTTP200/PP185·TG8/stop·답변 ` Aiolm 42`로 끝나 복합 내용 실패를 다시 관찰했다. 상세 로그 level5에서도 HTTP body 포착은 실패했다. 같은 revision의 `server-http.cpp:181`에서 요청 로거 등록이 주석 처리돼 있으며 로그 자체도 실제 level5를 확인한다. 함수 정의가 존재한다는 사실을 활성 로그 기능으로 추정하지 않는다. 소유 진단 PID/포트와 모든 원래 입력 해시는 정리·보존했으며 이 진단 프로세스의 강제 종료를 앱의 정상 Quit 검증으로 계산하지 않는다.
 
