@@ -3225,33 +3225,77 @@ mod tests {
         assert!(strip_scope(vec!["--a".into(), "serve".into()], &scope).is_err());
         assert_eq!(strip_scope(vec!["--a".into()], &[]).unwrap(), vec!["--a"]);
     }
+    /// Isolated-home fixture: the parent test never touches the process
+    /// environment. It creates an owned temp home, spawns this test binary
+    /// with an exact fixture filter plus isolated `AIOLM_HOME`, checks the
+    /// child status with its output preserved, then removes only the owned
+    /// home it created. The child builds every fixture under that home.
+    const STATIC_PREFIX_FIXTURE_MODE: &str = "AIOLM_STATIC_PREFIX_FIXTURE_MODE";
 
-    /// Isolated-home fixture: AIOLM_HOME is process-global, so the
-    /// isolated-home tests below serialize on a lock. No other default-run
-    /// test swaps that variable (the one precedent is an ignored
-    /// live-environment test).
-    fn isolated_home_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ISOLATED_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        ISOLATED_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    /// Create the temp home this parent test owns. Only this exact directory
+    /// is ever removed, after checking it stays inside the temp root.
+    fn owned_fixture_home() -> PathBuf {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("temp dir resolves");
+        let home = base.join(format!("aiolm-static-prefix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("create owned fixture home");
+        home
     }
 
-    /// An isolated adapters home holding one synthetic custom engine
-    /// whose entry prefix carries `secret`. Restores the process
-    /// environment and removes the home when the test settles.
-    struct IsolatedHomeGuard {
-        home: PathBuf,
-        original: Option<std::ffi::OsString>,
+    fn remove_owned_fixture_home(home: &Path) {
+        let base = std::env::temp_dir()
+            .canonicalize()
+            .expect("temp dir resolves");
+        let owned = home.canonicalize().expect("owned fixture home exists");
+        assert!(
+            owned.starts_with(&base),
+            "refusing to remove outside the owned temp home"
+        );
+        std::fs::remove_dir_all(&owned).expect("remove owned fixture home");
     }
-    impl Drop for IsolatedHomeGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                Some(home) => std::env::set_var("AIOLM_HOME", home),
-                None => std::env::remove_var("AIOLM_HOME"),
+
+    fn run_static_prefix_fixture(mode: &str) {
+        // The parent never assigns the process environment: the isolated
+        // home travels to the child through its own spawn environment only.
+        let parent_home = std::env::var_os("AIOLM_HOME");
+        let home = owned_fixture_home();
+        let output = match crate::procutil::std_command(
+            std::env::current_exe().expect("current test binary"),
+        )
+        .args([
+            "--exact",
+            "providers::runtime_schema::tests::isolated_static_prefix_mask_fixture",
+            "--nocapture",
+        ])
+        .env("AIOLM_HOME", &home)
+        .env(STATIC_PREFIX_FIXTURE_MODE, mode)
+        .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                remove_owned_fixture_home(&home);
+                panic!("failed to spawn isolated mask fixture: {error}");
             }
-            let _ = std::fs::remove_dir_all(&self.home);
-        }
+        };
+        remove_owned_fixture_home(&home);
+        assert_eq!(
+            std::env::var_os("AIOLM_HOME"),
+            parent_home,
+            "the parent process environment must stay untouched"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "isolated mask fixture {mode} failed:\nstdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // An exact filter matching nothing also exits successfully, so require
+        // the child's own summary: the mask case really ran and passed.
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "isolated mask fixture {mode} ran no mask case:\n{stdout}"
+        );
     }
 
     fn synthetic_engine_ids() -> (String, String, String) {
@@ -3467,27 +3511,19 @@ mod tests {
         }
     }
 
-    /// Plant a manifest, accepted snapshot and supplement under an isolated
-    /// home, point AIOLM_HOME at it and hand back the adapters root plus a
-    /// config selecting the engine. `supplement_fp` equal to `snapshot_fp`
-    /// is current; different is stale.
-    fn isolated_engine_home(
+    /// Plant a manifest, accepted snapshot and supplement under the given
+    /// adapters root. `supplement_fp` equal to `snapshot_fp` is current;
+    /// different is stale. Filesystem writes only; the process environment
+    /// is never read or changed here.
+    fn build_engine_fixture(
+        adapters: &Path,
+        home: &Path,
         snapshot_fp: &str,
         supplement_fp: &str,
         marker_sensitive: Fact<bool>,
-    ) -> (
-        IsolatedHomeGuard,
-        PathBuf,
-        AppConfig,
-        String,
-        String,
-        String,
-    ) {
+    ) -> (AppConfig, String, String, String) {
         let (engine, runtime, secret) = synthetic_engine_ids();
-        let home =
-            std::env::temp_dir().join(format!("aiolm-static-prefix-{}", uuid::Uuid::new_v4()));
-        let adapters = home.join("runtimes").join("adapters");
-        let manifest = manifest_with_static_prefix(&engine, &runtime, &home, &secret);
+        let manifest = manifest_with_static_prefix(&engine, &runtime, home, &secret);
         registry::validate_manifest(&manifest).unwrap();
         let record = serde_json::json!({
             "manifest": serde_json::to_value(&manifest).unwrap(),
@@ -3502,7 +3538,7 @@ mod tests {
         std::fs::write(&registration, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
         let schema = schema_with_sensitive_slot(&engine, &runtime, snapshot_fp, marker_sensitive);
         runtime_help_store::save_snapshot(
-            &adapters,
+            adapters,
             &engine,
             &runtime,
             &HelpSnapshot {
@@ -3512,7 +3548,7 @@ mod tests {
         )
         .unwrap();
         write_accepted(
-            &adapters,
+            adapters,
             &engine,
             &runtime,
             &AcceptedHelp {
@@ -3531,7 +3567,7 @@ mod tests {
         )
         .unwrap();
         let supplement = supplement_with_static_roles(supplement_fp);
-        let dir = runtime_help_store::snapshot_root(&adapters, &engine, &runtime).unwrap();
+        let dir = runtime_help_store::snapshot_root(adapters, &engine, &runtime).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(SUPPLEMENT_FILE),
@@ -3543,24 +3579,52 @@ mod tests {
             active_runtime: runtime.clone(),
             ..Default::default()
         };
-        let original = std::env::var_os("AIOLM_HOME");
-        std::env::set_var("AIOLM_HOME", &home);
-        (
-            IsolatedHomeGuard { home, original },
-            adapters,
-            cfg,
-            engine,
-            runtime,
-            secret,
-        )
+        (cfg, engine, runtime, secret)
     }
 
     #[test]
     fn static_entry_prefix_secrets_are_masked_for_current_help() {
-        let _home_lock = isolated_home_lock();
+        run_static_prefix_fixture("current");
+    }
+
+    #[test]
+    fn stale_static_roles_stay_masked_without_applying_launch() {
+        run_static_prefix_fixture("stale");
+    }
+
+    #[test]
+    fn unknown_sensitivity_never_masks_entry_tokens() {
+        run_static_prefix_fixture("unknown");
+    }
+
+    /// Child entry point for the isolated mask cases above. Runs only when
+    /// spawned with an isolated `AIOLM_HOME`; a plain suite run returns
+    /// immediately without touching the process environment. Never spawns.
+    #[test]
+    fn isolated_static_prefix_mask_fixture() {
+        // The mode variable only travels with a spawned isolated child; a
+        // plain suite run (whose ambient environment may well define a home)
+        // returns immediately without touching anything.
+        let Ok(mode) = std::env::var(STATIC_PREFIX_FIXTURE_MODE) else {
+            return;
+        };
+        let Some(home) = std::env::var_os("AIOLM_HOME") else {
+            return;
+        };
+        let home = PathBuf::from(home);
+        let adapters = home.join("runtimes").join("adapters");
+        match mode.as_str() {
+            "current" => current_mask_case(&adapters, &home),
+            "stale" => stale_mask_case(&adapters, &home),
+            "unknown" => unknown_mask_case(&adapters, &home),
+            mode => panic!("unknown static prefix fixture mode: {mode}"),
+        }
+    }
+
+    fn current_mask_case(root: &Path, home: &Path) {
         let snapshot = "a".repeat(64);
-        let (_guard, root, cfg, engine, runtime, secret) =
-            isolated_engine_home(&snapshot, &snapshot, documented_sensitive());
+        let (cfg, engine, runtime, secret) =
+            build_engine_fixture(root, home, &snapshot, &snapshot, documented_sensitive());
         // The stored registration is legal and keeps the real token.
         let manifest =
             registry::manifest(super::ProviderId::parse(&engine).unwrap(), &runtime).unwrap();
@@ -3575,7 +3639,7 @@ mod tests {
             "plain-token".into(),
             format!("--token={secret}"),
         ];
-        let masked = mask_argv(&root, &cfg, argv.clone(), REDACTED);
+        let masked = mask_argv(root, &cfg, argv.clone(), REDACTED);
         let redacted_token = format!("--token={REDACTED}");
         let expected = [
             "C:\\synthetic\\static-prefix-engine.exe",
@@ -3597,7 +3661,7 @@ mod tests {
         assert!(argv.contains(&secret));
         assert!(manifest.launch.args.contains(&secret));
         // Current roles still configure launch.
-        let effective = effective(&root, &cfg, false).unwrap();
+        let effective = effective(root, &cfg, false).unwrap();
         assert_eq!(
             effective
                 .entry
@@ -3609,18 +3673,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stale_static_roles_stay_masked_without_applying_launch() {
-        let _home_lock = isolated_home_lock();
-        let (_guard, root, cfg, _engine, _runtime, secret) =
-            isolated_engine_home(&"a".repeat(64), &"b".repeat(64), documented_sensitive());
+    fn stale_mask_case(root: &Path, home: &Path) {
+        let (cfg, _engine, _runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &"a".repeat(64),
+            &"b".repeat(64),
+            documented_sensitive(),
+        );
         let argv = vec![
             "C:\\synthetic\\static-prefix-engine.exe".into(),
             "serve".into(),
             secret.clone(),
             "plain-token".into(),
         ];
-        let masked = mask_argv(&root, &cfg, argv.clone(), REDACTED);
+        let masked = mask_argv(root, &cfg, argv.clone(), REDACTED);
         let expected = [
             "C:\\synthetic\\static-prefix-engine.exe",
             "serve",
@@ -3636,7 +3703,7 @@ mod tests {
         );
         assert!(argv.contains(&secret));
         // A stale role never configures launch, only display copies.
-        let effective = effective(&root, &cfg, false).unwrap();
+        let effective = effective(root, &cfg, false).unwrap();
         assert!(!effective.supplement.as_ref().unwrap().current);
         assert!(effective
             .entry
@@ -3646,11 +3713,11 @@ mod tests {
             .is_empty());
     }
 
-    #[test]
-    fn unknown_sensitivity_never_masks_entry_tokens() {
-        let _home_lock = isolated_home_lock();
+    fn unknown_mask_case(root: &Path, home: &Path) {
         let snapshot = "a".repeat(64);
-        let (_guard, root, cfg, _engine, _runtime, secret) = isolated_engine_home(
+        let (cfg, _engine, _runtime, secret) = build_engine_fixture(
+            root,
+            home,
             &snapshot,
             &snapshot,
             Fact {
@@ -3660,7 +3727,7 @@ mod tests {
             },
         );
         let argv = vec!["serve".into(), secret.clone(), "plain-token".into()];
-        assert_eq!(mask_argv(&root, &cfg, argv.clone(), REDACTED), argv);
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
     }
 
     #[test]
