@@ -717,3 +717,22 @@ Strata만 정상 언로드하자 소유 프로세스4개 종료·포트 닫힘·
 원래 production15 GUI가 내보낸 CPU bundle은 별도 SDK-free 새 홈에서63개 payload 해시를 확인하고 고정18 CLI로 실제 `5`/usage·정상 종료·포트/staging 정리까지 pass다. 처음 이전 debug import helper 해시를 그대로 적용한 검사는 실행 전에 정확히 거부됐다. 기존 실패를 보존하고 현재 source의 helper를 명시적으로 새 빌드/고정한 별도 실행을 사용했다. 이는 **현재 source debug helper의 import와 production18 CLI 실행 범위**이며 production18 GUI import 성공으로 계산하지 않는다. 원래 ZIP/모델/runtime은 바꾸지 않았고 W05 원래 미디어 실패도 유지한다. raw `package18-runtime-bundle-helper-pin.json`, `package18-original-cpu-portable-text-current-helper/results.json`이다.
 
 Linux/Mac의 실제 preflight 취소·다른 대상 보존·늦은 반환·다른 모델 복구·최소 창/접근성·앱 종료 검사와 이후 공통 변경의 Windows 재검증은 [공통 후속 인계](engine-adapter-linux-macos-handoff.ko.md)의 D81 절로 연결한다. Windows 종료 commit과 전체 goal 완료는 아직 선언하지 않는다.
+
+
+### production18의 실제 Strata solo STOP/DONE 확인
+
+원래1024-token 요청의 실제 생성 중 취소에서 native 응답을 별도로 관찰했다. 첫 시도는 upstream의 `STRATA_BATCH_TRACE`를 켰으나 원래 batch0의 solo 경로가 그 로그를 사용하지 않아 실패했다. 그 뒤 관찰 도구의 물리 경로/별칭 경로 비교가 실제 callback을 놓친 실패도 보존했다. 두 시도 모두 정상 소유 프로세스·포트·staging 정리와 원래6개 파일의 해시를 확인했으며 제품 취소 실패나 unsupported로 바꾸지 않았다.
+
+새 별도 진단은 실제로 등록/해시 검증한 관찰용 Python wrapper에서 원래 server source의 성공한 stdin flush 반환과 `_parse_done` 반환을 수동으로 조작하지 않고 기록했다. 앱·원래 bridge·server·native·모델 파일은 수정하지 않았다. 같은 소유 native PID에서 STOP 쓰기/flush가 반환한 뒤2.9998ms 후 `DONE 5 75 1094.1 51.2 cancel …`이 파싱됐다. 원래 solo·can_stop=true·max_new1024를 유지했고5토큰에서 끝나 generation 한도에 도달한 자연 종료와 구분된다. 실제 native argv는 원래 배포 설정과 정확히 같았다. 원래6개 파일 해시·정상4개 소유 종료·포트/staging 정리까지5개 항목이 pass다.
+
+**이 별도 관찰 조건의 native STOP/DONE 확인 범위 pass**다. 이전 일반 GUI/CLI 실행을 소급해 wire 관찰 성공으로 바꾸지 않는다. 원래 A04/최종 content 실패와 요청 제한은 유지하며 성능 비교를 주장하지 않는다. raw `package18-strata-solo-native-stop-done-verdict.json`, `strata-adapter-acceptance/package18-solo-native-ack-path-observed/results.json`이다.
+
+### production18 새 개인 엔진의 수동 등록·공통 GUI·실제 argv·응답
+
+고정18이 모르는 같은 개인17 엔진의 옵션을 새 namespace `custom.personal-g18`/`private-g18`로 등록했다. 새18 엔진을 별도로 빌드했다고 주장하지 않는다. 고정18 GUI/CLI와 해당 binary source에 옵션이 없음을 확인한 뒤 실행 파일·표시 이름·ID를 직접 입력하고 실제 help255개를 읽었다. 모델/호스트/포트/제공 이름 binding·환경 변수 인증·probe18개 argv·hash 대상 helper·GGUF·원래 CPU0 prefix/cwd를 명시했다. prefix/파일을 추가하자 help를 새로 탐색했고, 검토한 manifest의 `options`는 비어 있었다. 실제 등록 후 해당 런타임의 모델별 fresh probe가 Ready를 결정했다.
+
+고급 탭의 공통 옵션에서 새 값을 입력해 새 **G18 personal help options** 프로필로 저장하고 닫기/재열기에서 정확한 값을 확인했다. 처음 런타임·GPU 탭의 검색으로 옵션을 찾지 못한 것은 기존 탭 분류 때문이며, 실제 수락된 schema와 고급 탭에서 옵션·형식 미확정·help 근거를 확인했다. SaveAs의 일부 자동화 입력은 폼 효과가 확인되지 않아 성공으로 계산하지 않았다. 실제 native focus readback 후 정상 Return으로 폼을 열어 저장했으며 이전17에서도 기록한 같은 자동화 한계다.
+
+실제 Windows argv에서 Unicode·따옴표·공백·세미콜론·ampersand가 있는 저장값은 정확히 하나의 인자로 전달됐다. 키가 argv에 없고 무인증 요청은401이었다. 원래 모델의 실제 산술 답변 `5`·PP34/TG2·stop을 확인했다. 이전42개 전체 프로필·세션 정의6개·production18 시작 전 이력/프로젝트/측정/MCP 파일53개의 전체 해시가 같다. 엔진별 Default와 새 검증 프로필을 추가해 총44개다. 원래 engine/model SHA256과 revision은 앞선 개인17 검증 그대로다.
+
+정상 언로드 후 새 소유 프로세스2개 종료·포트 닫힘·기존 GUI7개·원래 staging 로그를 확인했다. **새 고정18의 수동 등록→실제 help→공통 GUI→새 프로필/재열기→실제 argv→실제 응답/인증→정상 언로드 범위 pass**다. raw `package18-personal-manual-gui-argv-response-native-verdict.json`, `package18-personal-normal-unload-native-verdict.json`이다. 새 post-pin 합성 엔진/버전 변경과 최종 종료 등 나머지 검사는 계속하며 전체 goal 완료를 뜻하지 않는다.
