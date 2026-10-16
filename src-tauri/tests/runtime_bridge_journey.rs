@@ -329,9 +329,30 @@ async fn bridge_help_probe_and_launch_share_an_explicit_engine_command() {
         shared.engine = Some(providers::execution::info(&cfg).unwrap());
     }
     let ready = server::wait_ready(state.clone(), &url, "", 5, &err).await;
+    // A launch file can stay open briefly after the job reports its tree
+    // gone, as the production Strata GUI unload left engine.log. Unload must
+    // keep retrying that sharing error within its existing teardown budget.
+    #[cfg(windows)]
+    let closing_log = fs::read_to_string(&resource_record).ok().map(|directory| {
+        use std::os::windows::fs::OpenOptionsExt;
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .share_mode(0x1) // FILE_SHARE_READ: deletion is refused while open
+            .open(PathBuf::from(directory).join("engine.log"))
+            .unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            drop(log);
+        })
+    });
     // Stop the exact owned process even if readiness fails.
     {
         server::kill(&mut state.lock().unwrap().child, Some(err.clone()));
+    }
+    #[cfg(windows)]
+    if let Some(closing_log) = closing_log {
+        closing_log.join().unwrap();
     }
     ready.unwrap();
     let launched_directory = PathBuf::from(fs::read_to_string(&resource_record).unwrap());

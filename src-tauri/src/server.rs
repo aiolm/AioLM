@@ -89,6 +89,8 @@ impl Child {
 }
 impl Drop for Child {
     fn drop(&mut self) {
+        // Waiting for the tree and removing its launch directory share one bound.
+        let deadline = Instant::now() + LAUNCH_TREE_EXIT_WAIT;
         #[cfg(windows)]
         let tree = self
             .launch_resources
@@ -103,19 +105,22 @@ impl Drop for Child {
         self.output_readers.clear();
         self.key_file.take();
         // Descendants may still hold files in the launch directory (an engine
-        // log) while they exit. A tree still exiting after this bound leaves
-        // the directory, with its owner record, to the next launch's recovery.
+        // log) while they exit, and a file can still be closing after the job
+        // reports no process. A tree or file still held after this bound
+        // leaves the directory, with its owner record, to the next launch's
+        // recovery.
         #[cfg(windows)]
         if let Some(tree) = tree {
-            tree.wait_exited(LAUNCH_TREE_EXIT_WAIT);
+            tree.wait_exited(deadline.saturating_duration_since(Instant::now()));
         }
-        self.launch_resources.take();
+        if let Some(resources) = self.launch_resources.take() {
+            let _ = resources.remove_stopped_until(deadline);
+        }
     }
 }
 
-/// How long unloading waits for a terminated tree before removing its launch
-/// directory; the same bound the CLI gives a stopped server to exit.
-#[cfg(windows)]
+/// How long unloading waits for a terminated tree and its launch directory's
+/// files; the same bound the CLI gives a stopped server and its cleanup.
 const LAUNCH_TREE_EXIT_WAIT: Duration = Duration::from_secs(10);
 
 struct ApiKeyFile(PathBuf);

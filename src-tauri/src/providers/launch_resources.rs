@@ -111,25 +111,49 @@ async fn cleanup_stopped_in(
     pid: u32,
     deadline: std::time::Instant,
 ) -> Result<(), String> {
-    loop {
-        let Some(path) = owned_path_in(parent, id, pid)? else {
-            return Ok(());
-        };
-        match remove_owned(&path) {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                #[cfg(windows)]
-                let sharing = matches!(error.raw_os_error(), Some(32 | 33));
-                #[cfg(not(windows))]
-                let sharing = false;
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                if !sharing || remaining.is_zero() {
-                    return Err(error.to_string());
-                }
-                tokio::time::sleep(remaining.min(std::time::Duration::from_millis(10))).await;
-            }
-        }
+    while let Some(pause) = cleanup_stopped_attempt(parent, id, pid, deadline)? {
+        tokio::time::sleep(pause).await;
     }
+    Ok(())
+}
+
+/// The desktop counterpart of `cleanup_stopped_in`, for a teardown that runs
+/// outside an async context.
+fn cleanup_stopped_blocking(
+    parent: &Path,
+    id: &str,
+    pid: u32,
+    deadline: std::time::Instant,
+) -> Result<(), String> {
+    while let Some(pause) = cleanup_stopped_attempt(parent, id, pid, deadline)? {
+        std::thread::sleep(pause);
+    }
+    Ok(())
+}
+
+/// One ownership-checked removal. `Some(pause)` retries an OS sharing error
+/// before `deadline`; every other outcome is final.
+fn cleanup_stopped_attempt(
+    parent: &Path,
+    id: &str,
+    pid: u32,
+    deadline: std::time::Instant,
+) -> Result<Option<std::time::Duration>, String> {
+    let Some(path) = owned_path_in(parent, id, pid)? else {
+        return Ok(None);
+    };
+    let Err(error) = remove_owned(&path) else {
+        return Ok(None);
+    };
+    #[cfg(windows)]
+    let sharing = matches!(error.raw_os_error(), Some(32 | 33));
+    #[cfg(not(windows))]
+    let sharing = false;
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if !sharing || remaining.is_zero() {
+        return Err(error.to_string());
+    }
+    Ok(Some(remaining.min(std::time::Duration::from_millis(10))))
 }
 
 fn read_marker(directory: &Path) -> Result<Marker, String> {
@@ -310,6 +334,17 @@ impl Directory {
             let _ = fs::remove_file(directory.join(OWNER_LOCK));
         }
         self.lock.take();
+    }
+
+    /// The desktop owner has stopped its process tree. A file can still be
+    /// closing after the tree is reported gone, so OS sharing errors are
+    /// retried until `deadline`, the owner's existing teardown budget, with
+    /// ownership rechecked each time. A failure keeps the owner record for
+    /// the next launch's recovery.
+    pub fn remove_stopped_until(mut self, deadline: std::time::Instant) -> Result<(), String> {
+        self.keep = true;
+        self.lock.take();
+        cleanup_stopped_blocking(&root(), &self.id, self.pid, deadline)
     }
 }
 
