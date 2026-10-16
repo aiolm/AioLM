@@ -338,6 +338,23 @@ D73: production14의 정상 GUI Unload와 모델을 올린 채 앱 Quit에서 �
 
 다음 production은 D72/D73를 포함한 source를 새로 빌드·고정한 뒤 다시 생성한 미지 flag로 검증한다. production14용 새 대량 옵션 fixture는 준비됐지만, 이 후속 수정의 최종 미지 옵션 성공으로 계산하지 않는다. W05 원래 복합 미디어 질문 실패와 필수 공통 기능/접근성/경합 검사, W08 별도 Windows 설치 세션의 차단은 남아 있으며 goal은 active다.
 
+## production15 고정과 독립 CLI 재검증
+
+D72/D73를 포함하는 source `3b3a121425a983112f90c7fd63cd5e6d497ba5d2`에서 Windows production 빌드가 exit 0(301,875ms)으로 끝났다. 입력 lockfile·도구 설정 해시와 clean Git/인계 커밋을 확인한 뒤 네 산출물을 보존했다. GUI SHA-256은 `52cf95af66c332c1472e961d9f7d70243c28e81372a98c4fae59973c370750cd`, CLI는 `4281322006f54c0eca64cec80546a36e07a4e016c61f9581de761ed1c730ca39`, NSIS는 `d9143daa3e8fb6b2897f461e7be659bba506026b64434938f48780a63f93a5c6`, MSI는 `c9a343e00a25b904fb7c23c3dca03cdd5af23997cce06f7d2dbe82dd478e2723`다. 설치 파일은 실행하지 않았다.
+
+| 항목 | 실행 근거와 판정 |
+| --- | --- |
+| 고정 후 미지 옵션 | **준비 pass, GUI 수락 unrun**. 고정 뒤 새 합성 v1/v2의 1,000개 옵션과 실제 개인 엔진 diagnostic flag를 생성하고, GUI/CLI의 UTF-8·UTF-16 bytes와 고정 source에 해당 flag가 없음을 확인했다. 이전 후보의 새 flag를 재사용하지 않았다 |
+| 실제 개인 엔진 CLI | **A01–A09 pass**. 같은 upstream `14310190cd0a0c831fe949ac8cbedd8abdc90695`의 diagnostic 전용 새 native build SHA-256 `d5fec992606e63fab0da5d7660f9ec2ee70bfb63952f454de0f579f9ce624705`와 원래 Qwen 모델을 사용했다. 실제 새 옵션 소비·답변 `5`/PP42·TG2·생성 취소·재시작·제거/미등록 거부·재등록·소유 PID 3개 종료·포트 종료·빈 staging·외부 파일 전체 해시 보존을 확인했다. 별도 새 홈의 production CLI 설정/이전/API 계약 smoke도 exit 0이다. GUI 여정 성공을 뜻하지 않는다 |
+| 원래 Strata CLI 회귀 | **정리 pass, 산술 세 요청 fail 유지**. 원래 runtime/model/deployment/descriptor를 유지한 517,902ms 실행에서 A01/A02/A04/A06/A08/A09가 pass다. 소유 PID 12개 종료·포트 종료·빈 staging·외부 파일 6개 전체 해시 보존을 확인했다. A03/A05/A07은 같은 32-token 요청에서 raw SSE가 reasoning만 출력하고 final content 없이 length로 끝났다. 질문·모델·한도·정답을 바꾸지 않았다 |
+| CPU portable | **가져오기/실행/정리 pass, 복합 미디어 내용 fail**. 현재 source로 빌드한 별도 debug `runtime-bundle` 도구로 기존 고정 CPU ZIP을 SDK 경로 없는 새 격리 홈에 가져오고 native 파일 13개 해시를 확인했다. 이어 production15 CLI에서 원래 SmolVLM256 Q8_0/f16 projector로 Ready·실제 HTTP/SSE 응답·usage·소유 PID/포트/state/staging 정리를 확인했다. 원래 복합 질문과 이미지, text-first·기록한 기본 system/sampling 제어 요청은 ` AiOLM 42.`/PP118·TG9로 답해 색상·도형 검사는 fail다. 이는 b11460 호환 runtime의 별도 CLI 제어이며 원래 b11617 GUI 요청과의 동등성이나 최종 GUI 수락을 뜻하지 않는다 |
+| 배포 파일 정적 확인 | **제한된 범위 pass**. 네 고정 파일에서 동적으로 구한 빌드 홈/작업 경로의 UTF-8·UTF-16 원시 패턴이 없었다. MSI는 Windows Installer DB를 읽기 전용 mode 0으로 열어 version 0.3.1·GUI/CLI 파일 두 개·shortcut 3개·registry 4개를 확인했다. 압축 내부의 모든 문자열 부재, 설치·업그레이드·제거·OS 통합 성공으로 확대하지 않는다 |
+| 최종 실제 GUI | **blocked/unrun**. 같은 검증 홈으로 새 GUI를 열었지만 Windows 작업 보기 화면이 가리고 키보드 포커스 전환을 거부했다. 한 번의 restore 후 실제 `window_not_focused`를 보존하고 사용자에게 전면 전환을 요청했다. 그동안 독립 CLI 검증을 계속했다. D72 긴 wizard의 pointer/keyboard 완료 안내와 D73 실제 Strata GUI Unload/Quit는 아직 unrun이다 |
+
+raw는 `package15-candidate.json`, `package15-unknown-engine-preparation/result.json`, `package15-private-cli-observed/results.json`, `strata-adapter-acceptance/package15-cli-observed/results.json`, `package15-strata-original-request-analysis.json`, `package15-cpu-portable-observed2/results.json`, `package15-msi-read-only-database.json`, `package15-distribution-path-byte-audit.json`에 있다. CPU portable 첫 시도는 SDK 없는 PATH에서 관측용 PowerShell을 찾지 못해 추론 전에 중단됐다. 원본을 보존하고 관측 도구만 OS 절대 경로로 수정했으며, 첫 시도의 비어 있는 descendant 목록은 소유 프로세스 검증 성공으로 채택하지 않는다.
+
+W05 원본 argv와 이력을 다시 대조하면 최초 실패 runtime은 b11617 CPU/revision `14310190c`이고 b11460 호환 runtime은 이후 도형 후속 검증이다. 두 실행을 혼동한 작업 메모는 정정했다. 원본 argv가 가리키는 현재 보존 실행 파일의 SHA-256은 `715f0ea98819f03fc596e9d352e989fc0ae093056282e0d73b2d657e7afa7d02`다. 도움말/소스 기반 요청 비교 도구는 합성 stub에서만 검사했으며 아직 실제 GUI HTTP body를 포착하지 않았다. `/slots`의 detokenized prompt와 노출 params 일치는 해당 관측 필드의 일치만 뜻한다. 이미지 embedding이나 전체 HTTP bytes의 동등성 또는 배타적 원인 증명이 아니다. 원래 미디어 fail·필수 GUI/공통 기능 unrun·W08 별도 설치 세션 blocked를 유지하고 goal은 active다.
+
 ## G01–G07과 후속 인계
 
 | ID | 상태 | 남은 실행 |
