@@ -137,6 +137,8 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
       />
     );
   }
+  // Change already parses and commits the draft. Recommitting it on blur
+  // restarts async option validation between pointer down and the save click.
   const commit = (next: string) => {
     setDraft(next);
     if (next === '' && (emptyMeans === 'inherit' || !textual(option))) {
@@ -158,14 +160,14 @@ function ValueInput({ inputId, option, value, label, disabled, emptyMeans, copy,
         ) : (
           <textarea id={id} name={label} className="app-textarea" value={draft} disabled={disabled} aria-label={ariaLabel}
             aria-describedby={describedByIds} aria-invalid={invalid || undefined}
-            onChange={event => commit(event.target.value)} onBlur={event => commit(event.target.value)} />
+            onChange={event => commit(event.target.value)} />
         )
       ) : (
         <input id={id} name={label} className="app-input" value={draft} disabled={disabled} aria-label={ariaLabel}
           type={hide ? 'password' : 'text'} inputMode={kind === 'integer' || kind === 'number' ? 'decimal' : 'text'}
           autoCorrect="off" autoCapitalize="off" spellCheck={false}
           aria-describedby={describedByIds} aria-invalid={invalid || undefined}
-          onChange={event => commit(event.target.value)} onBlur={event => commit(event.target.value)} />
+          onChange={event => commit(event.target.value)} />
       )}
       {sensitive && (
         <button type="button" className="app-button app-button--secondary" aria-pressed={revealed} disabled={disabled}

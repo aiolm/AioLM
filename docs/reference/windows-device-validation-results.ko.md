@@ -731,8 +731,17 @@ Linux/Mac의 실제 preflight 취소·다른 대상 보존·늦은 반환·다�
 
 고정18이 모르는 같은 개인17 엔진의 옵션을 새 namespace `custom.personal-g18`/`private-g18`로 등록했다. 새18 엔진을 별도로 빌드했다고 주장하지 않는다. 고정18 GUI/CLI와 해당 binary source에 옵션이 없음을 확인한 뒤 실행 파일·표시 이름·ID를 직접 입력하고 실제 help255개를 읽었다. 모델/호스트/포트/제공 이름 binding·환경 변수 인증·probe18개 argv·hash 대상 helper·GGUF·원래 CPU0 prefix/cwd를 명시했다. prefix/파일을 추가하자 help를 새로 탐색했고, 검토한 manifest의 `options`는 비어 있었다. 실제 등록 후 해당 런타임의 모델별 fresh probe가 Ready를 결정했다.
 
-고급 탭의 공통 옵션에서 새 값을 입력해 새 **G18 personal help options** 프로필로 저장하고 닫기/재열기에서 정확한 값을 확인했다. 처음 런타임·GPU 탭의 검색으로 옵션을 찾지 못한 것은 기존 탭 분류 때문이며, 실제 수락된 schema와 고급 탭에서 옵션·형식 미확정·help 근거를 확인했다. SaveAs의 일부 자동화 입력은 폼 효과가 확인되지 않아 성공으로 계산하지 않았다. 실제 native focus readback 후 정상 Return으로 폼을 열어 저장했으며 이전17에서도 기록한 같은 자동화 한계다.
+고급 탭의 공통 옵션에서 새 값을 입력해 새 **G18 personal help options** 프로필로 저장하고 닫기/재열기에서 정확한 값을 확인했다. 처음 런타임·GPU 탭의 검색으로 옵션을 찾지 못한 것은 기존 탭 분류 때문이며, 실제 수락된 schema와 고급 탭에서 옵션·형식 미확정·help 근거를 확인했다. SaveAs의 일부 자동화 입력은 폼 효과가 확인되지 않아 성공으로 계산하지 않았다. 실제 native focus readback 후 정상 Return으로 폼을 열어 저장했다. 당시 자동화 한계로 분류했으나, 이후 합성 엔진에서 같은 현상을 조사해 아래 D82의 중복 blur commit 결함을 확인했다. 원래 저장/재열기/argv/응답 근거는 유지하되 첫 클릭 성공 근거로 계산하지 않는다.
 
 실제 Windows argv에서 Unicode·따옴표·공백·세미콜론·ampersand가 있는 저장값은 정확히 하나의 인자로 전달됐다. 키가 argv에 없고 무인증 요청은401이었다. 원래 모델의 실제 산술 답변 `5`·PP34/TG2·stop을 확인했다. 이전42개 전체 프로필·세션 정의6개·production18 시작 전 이력/프로젝트/측정/MCP 파일53개의 전체 해시가 같다. 엔진별 Default와 새 검증 프로필을 추가해 총44개다. 원래 engine/model SHA256과 revision은 앞선 개인17 검증 그대로다.
 
 정상 언로드 후 새 소유 프로세스2개 종료·포트 닫힘·기존 GUI7개·원래 staging 로그를 확인했다. **새 고정18의 수동 등록→실제 help→공통 GUI→새 프로필/재열기→실제 argv→실제 응답/인증→정상 언로드 범위 pass**다. raw `package18-personal-manual-gui-argv-response-native-verdict.json`, `package18-personal-normal-unload-native-verdict.json`이다. 새 post-pin 합성 엔진/버전 변경과 최종 종료 등 나머지 검사는 계속하며 전체 goal 완료를 뜻하지 않는다.
+
+
+### D82: 옵션 편집 뒤 첫 프로필 저장 클릭이 유실되는 결함
+
+고정 production18에서 공통 옵션을 편집하고 검증 완료 후 새 프로필 저장을 눌러도 폼이 열리지 않았다. 같은 설정을 유지한 채 프로필 탭으로 이동해 입력 포커스를 먼저 해제한 후에는 정상 native Invoke 한 번으로 폼이 열렸다. 이 우회는 입력값을 수정하거나 검증을 생략하지 않았다. 새 합성 프로필을 보존한 뒤 이전44개 전체 프로필과 저장 세션6개가 같은지도 확인했다.
+
+원인은 공통 옵션 입력의 `onChange`와 `onBlur`가 같은 값을 각각 commit하는 것이다. blur가 새 cfg 객체를 만들며 이미 완료한 비동기 검증을 재시작하고, pointer down과 click 사이에 저장 버튼을 disabled로 바꾼다. 실제 설정 대화상자의 회귀 검사에서 입력→검증 완료→mouse down→blur→click 순서로 새 프로필 폼이 열리지 않는 red를 재현했다. 입력 변경에서 이미 수행한 파싱·commit을 blur에서 반복하지 않도록 input/textarea 두 경로만 수정했다. 검증·오류·Ready 조건을 제거하지 않았다.
+
+같은 회귀 검사는 첫 클릭으로 폼 열기와 정확한 옵션을 가진 프로필 저장까지 통과했다. 관련 UI132개, 전체 UI202파일/2151개, typecheck, lint가 통과했다. lint는 기존 `CustomSelect`의 변경하지 않은 의존성 경고1개가 있고 오류는 없다. raw `d82-saveas-regression-red.log`, `d82-related-ui-green.log`, `d82-full-ui.log`, `d82-typecheck.log`, `d82-lint.log`와 native `gui/1792184785732-d82-after-safe-blur-saveas.json`, `d82-before-native-red-preserved-data.json`을 보존한다. **수정 후 production Windows 실제 클릭 재검증은 아직 unrun이며 새 binary에서 실행한다.** 기존18 결과를 수정 후 성공으로 소급하지 않고 전체 goal은 active다.

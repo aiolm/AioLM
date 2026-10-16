@@ -11,7 +11,7 @@ import { appliedProfile, mergeProfileEditor, profileLibraryConfigPatch, Settings
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { resetProfileSettings } from './profileResetState';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
-import { effectiveSchema } from '../../testing/effectiveSchema';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -56,6 +56,35 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('keeps the first save-as click available when a checked runtime option loses focus', async () => {
+    const option = schemaOption({ key: 'fresh-label', flag: '--fresh-label', target: 'launch', group: 'advanced', kind: { type: 'text' } });
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [option]));
+    const check = vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    const { onProfileCommit } = mount({ initialSection: 'advanced' });
+    const field = await screen.findByLabelText(/^--fresh-label/);
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: 'quoted "label" ; & 공백' } });
+    const saveAs = screen.getByRole('button', { name: 'Save as new' });
+    await waitFor(() => expect(saveAs).toBeEnabled());
+    expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+      provider_options: expect.objectContaining({ 'llama.cpp': expect.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
+    }));
+    const checksBeforeBlur = check.mock.calls.length;
+    // A real pointer activation blurs the input between mouse down and click.
+    fireEvent.mouseDown(saveAs);
+    fireEvent.blur(field);
+    fireEvent.mouseUp(saveAs);
+    fireEvent.click(saveAs);
+    expect(screen.getByLabelText('Profile name')).toBeVisible();
+    expect(screen.queryByText('Checking runtime options…')).not.toBeInTheDocument();
+    expect(check).toHaveBeenCalledTimes(checksBeforeBlur);
+    fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Fresh runtime options' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create new profile' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({
+      provider_options: expect.objectContaining({ 'llama.cpp': expect.objectContaining({ 'fresh-label': 'quoted "label" ; & 공백' }) }),
+    }), expect.anything(), true);
+  });
   it.each(['vllm', 'mlx-vlm'] as const)('keeps an unedited %s profile clean and blocks saving while its option check is pending', async provider => {
     let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
     vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
