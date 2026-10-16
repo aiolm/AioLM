@@ -589,4 +589,58 @@ describe("session model settings", () => {
     expect(store.updateConfig).toHaveBeenCalledOnce();
     expect(store.cfg!.settings_profiles!.applied[profileTargetKey(definition.models.primary_model, definition.id)].profile_id).toBeTruthy();
   });
+  it.each(['success', 'failure'] as const)('keeps an unchanged session clean after profile preparation and launch %s', async outcome => {
+    const store = renderPanel();
+    if (outcome === 'failure') mocked.sessionStart.mockRejectedValueOnce(new Error('Engine launch failed'));
+    await selectWork();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New session' })).toBeEnabled());
+    expect(store.cfg!.sessions![0].execution).not.toEqual(definition.execution);
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Session name')).toHaveValue('');
+  });
+  it.each(['before loading', 'during preparation'] as const)('preserves an unsaved session name edited %s', async timing => {
+    const store = renderPanel();
+    let finish!: () => void;
+    if (timing === 'during preparation') {
+      vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise(resolve => {
+        finish = () => resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch));
+      }));
+    }
+    await selectWork();
+    if (timing === 'before loading') fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Keep my unsaved name' } });
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    if (timing === 'during preparation') {
+      await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+      fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Keep my unsaved name' } });
+      await act(async () => finish());
+    }
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New session' })).toBeEnabled());
+    expect(screen.getByLabelText('Session name')).toHaveValue('Keep my unsaved name');
+    expect(store.cfg!.sessions![0].name).toBe('Work session');
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeInTheDocument();
+  });
+  it('retains a later session selection while an earlier session finishes profile preparation', async () => {
+    const other = { ...structuredClone(definition), id: 'other', name: 'Other session' };
+    const store = renderPanel({ ...cfg, sessions: [definition, other] });
+    let finish!: () => void;
+    vi.mocked(store.updateConfig).mockImplementationOnce(patch => new Promise(resolve => {
+      finish = () => resolve(Object.assign(store.cfg!, typeof patch === 'function' ? patch(store.cfg!) : patch));
+    }));
+    await selectWork();
+    fireEvent.click(sessionRow().getByRole('button', { name: 'Load session' }));
+    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledOnce());
+    fireEvent.click(sessionRow('Other session').getByRole('button', { name: /Other session/ }));
+    fireEvent.change(screen.getByLabelText('Session name'), { target: { value: 'Later session edit' } });
+    await act(async () => finish());
+    await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New session' })).toBeEnabled());
+    expect(screen.getByLabelText('Session name')).toHaveValue('Later session edit');
+    expect(sessionRow('Other session').getByRole('button', { name: /Other session/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(store.cfg!.sessions!.find(item => item.id === 'other')).toEqual(other);
+  });
 });

@@ -258,6 +258,8 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
       return;
     }
     if (!cfg) return;
+    const editSnapshot = currentEdit.current;
+    const cleanEditor = editing?.id === runnableDefinition.id && !hasUnsavedChanges;
     let launchConfig = store.getConfig?.() ?? cfg;
     const loadOperation = {};
     currentLoad.current = loadOperation;
@@ -291,6 +293,13 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     });
     try {
       launchConfig = await prepareSessionProfile(store, runnableDefinition);
+      // Profile preparation persists resolved execution settings. Keep an untouched
+      // editor aligned with that save, while retaining user edits and later selections.
+      if (cleanEditor) {
+        const prepared = (store.getConfig?.() ?? store.cfg)?.sessions?.find(item => item.id === runnableDefinition.id);
+        if (prepared) setEditing(current => currentSelection.current === runnableDefinition.id
+          && JSON.stringify([runnableDefinition.id, current]) === editSnapshot ? structuredClone(prepared) : current);
+      }
       if (getTaskSnapshot().find(task => task.id === taskId)?.state !== 'running') throw new Error('Session load cancelled.');
       const loaded = await api.sessionStart(runnableDefinition.id, launchConfig, stopExisting);
       notifySessionStatusChanged();
