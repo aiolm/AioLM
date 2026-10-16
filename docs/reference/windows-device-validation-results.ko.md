@@ -367,6 +367,18 @@ D73는 원래 Strata revision `296b59d2f73c8f04a805df29c2fa97655adace78`, 모델
 
 따라서 D73의 실제 Windows GUI 정상 종료/CLI 정리 회귀는 pass다. 이전 production14의 staging 실패 원본과 production15 CLI의 원래 32-token 산술 실패는 유지한다. 이번 GUI 질문을 CLI 실패의 대체 성공으로 사용하지 않으며 MCP·생성 취소/Retry의 production14 근거와 이번 production15 종료 검사를 구분한다. 개인 엔진의 간편 등록 wizard, 남은 공통 기능·미디어 원인 조사·경합 검사와 별도 Windows 설치 세션은 남아 있다. goal은 active다.
 
+## production15 개인 엔진·프로젝트·CPU 번들과 D78
+
+고정한 같은 GUI에 개인 native 엔진을 간편 등록하는 전체 wizard를 실제 Windows에서 실행했다. setup을 가져온 뒤 기본값이 비어 있는 필수 실행 파일을 직접 선택하고, 실제 help 255개(형식 미확인 189개)를 확인했다. manifest의 `options`는 빈 배열이며 앱 고정 후 만든 진단 flag를 미리 선언하지 않았다. 명시한 binding/protocol/probe를 검토·등록하고 공통 옵션 GUI에서 한글·따옴표·공백·세미콜론·ampersand 값을 입력했다. 새 프로필 저장→닫기/재열기→새 모델 probe/Ready→실제 Windows 소유 프로세스 argv→답변 `5`/PP34·TG2를 대조해 **이 바이너리의 여정 범위 pass**다. 값은 정확히 한 인자였고 무인증 요청은 401로 거부됐다. 생성 중 취소의 부분 응답 보존 안내, 같은 질문으로 Retry 완료, 정상 Unload의 소유 PID·포트 종료도 확인했다. 취소 직후 이력 JSON의 별도 snapshot은 포착하지 않았으므로 Retry 전후 snapshot 동일성까지 주장하지 않는다.
+
+개인 엔진은 upstream revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`에 추론을 바꾸지 않는 diagnostic flag만 추가한 build이며 SHA-256 `d5fec992606e63fab0da5d7660f9ec2ee70bfb63952f454de0f579f9ce624705`다. Qwen 모델 revision `9217f5db79a29953eb74d5343926648285ec7e67`과 SHA-256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`는 기존 검증과 같다. 실제 등록 완료의 올바른 안내·포커스·Tab→Open→Enter 동작으로 D72의 긴 wizard도 pass다. 기존 프로필 10개·이력 10개와 예전 staging 파일 해시는 모두 보존됐다. raw `package15-private-gui-verdict.json`, `package15-private-gui-argv-verdict.json`, `package15-private-d72-tab-focus.json`에 연결한다.
+
+비기본 엔진에 연결한 프로젝트의 실제 native 내보내기→동명 독립 복사본 가져오기→재내보내기에서 schema·config·profileApplication이 동일했다. 복사본의 설명 수정이 원본에 영향을 주지 않았고 Apply도 engine/runtime/model 연결을 유지했다. 이는 프로젝트 왕복·적용 범위 pass이며 RAG 성공을 포함하지 않는다. 원래 b11617 CPU runtime의 실제 GUI ZIP 가져오기·내보내기도 manifest 파일 63개 해시 대조를 통과했다. 원래 native 파일 52개는 동일하고 추가 11개는 기존 exporter 계약의 VC 재배포 DLL이다. 두 ZIP 자체의 해시는 다르므로 byte-identical ZIP이라고 기록하지 않는다. 새 설정 홈·SDK 없는 실제 GUI 추론은 별도 unrun이다. raw `package15-project-native/verdict.json`, `package15-original-bundle-preparation/gui-import-export-verdict.json`이다.
+
+D78은 개인 엔진의 긴 manifest 검토에서 Register가 높이 4,285px의 파란 열로 늘어나 label이 화면 밖에 놓인 실제 제품 결함이다. 검토용 PRE와 버튼이 공통 grid의 같은 행을 차지한 것이 원인이었다. 검토 화면만 세로 흐름과 별도 action 행으로 바꾸고 전체 JSON을 줄바꿈해 표시했다. 실제 컴포넌트·전체 앱 CSS·같은 합성 manifest를 사용하는 headless 검사에서 원래 파일을 그대로 공급한 RED는 버튼 1,926px/label 화면 밖을 재현했다. GREEN은 1,100×760·360×520에서 버튼 33.5px, 전체 manifest, 가로 넘침 없음, 실제 pointer/Tab·Enter 등록 1회, 현재 완료 안내/Open 포커스, 등록 실패 후 재검토를 6개 시나리오 모두 통과했다. 이 렌더링은 **합성 IPC**이며 수정 후 production Windows GUI 수락을 대신하지 않는다. 관련 UI 64개·전체 `test:unit`(UI 202파일/2,137개)·typecheck·lint는 exit 0이다. lint의 기존 CustomSelect hook 경고 1개는 남고 오류는 0개다.
+
+raw는 `package15-private-review-layout-defect.json`, `root-d78/1792139343716-red-raw-cdp/results.json`, `root-d78/1792139511402-green-raw-cdp/results.json`과 각 PNG, `claude-g-repair/runs/1792139369348-d78-final-full-npm-unit/result.json`이다. 브라우저 시작·연결·개발 서버의 실패 실행과 잘못된 자동화 Enter 입력도 보존했으며 성공 근거에서 제외했다. D78 수정 후에는 새 production을 고정하고 그 뒤 새 미지 flag를 만들어 실제 GUI를 다시 검증해야 한다. 공통 기능·경합·원래 미디어 실패 조사와 별도 Windows 설치 세션도 남아 goal은 active다.
+
 ## G01–G07과 후속 인계
 
 | ID | 상태 | 남은 실행 |
