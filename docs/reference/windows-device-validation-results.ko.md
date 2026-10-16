@@ -555,16 +555,16 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 | W01 | pass | 마지막 제품 수정의 전체 UI 202파일/2,147개·typecheck·lint 및 고정17 native CLI smoke pass. 이후 문서만 변경했다. 제품을 다시 수정하면 영향 검사와 수정 후 production을 다시 실행한다. |
 | W02 | blocked | 기존 합성 migration·프로필/이력 보존과 새 앱 홈 onboarding은 각각 기록한 source에서 pass. 기존 설치의 실제 OS 계정 이전·자격 증명 검사는 별도 세션 부재로 blocked다. |
 | W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성17 v1/v2의 실제 GUI 등록·help/변경 diff·프로필·argv/echo·정상 언로드는 아래 범위 pass. 모델 probe 경합/취소·늦은 응답 보호는 남았다. |
-| W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI 실제 추론/usage·취소·재시작 pass. 최종 GUI의 새 개인 엔진과 Strata 전체 여정은 unrun이다. |
+| W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI와 아래 실제 GUI의 새 옵션/추론/usage·생성 중 취소·Retry·정상 언로드는 한정 pass. Strata 최종 GUI 전체 여정은 남았다. |
 | W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·MCP 후속/거부/취소·저장/재로드의 한정 성공은 보존한다. 최종17 GUI 관련 재검증이 남았다. |
-| W06 | unrun | production16의 실제 Strata+BGE RAG·Whisper STT·멀티 세션·gateway·CSV/XLSX는 위 source 범위 pass. D79/D80 수정 후 실제 이름/라우팅·깨끗한 세션 편집 상태 등 최종17 GUI가 남았다. |
+| W06 | unrun | production16의 실제 Strata+BGE RAG·Whisper STT·멀티 세션·gateway·CSV/XLSX는 위 source 범위 pass. 아래 최종17 D79의 깨끗한 세션/실제 미저장 보호와 D80 답변 세션 이름·응답은 한정 pass. 임베딩/STT 이름·라우팅과 Strata 공통 GUI는 남았다. |
 | W07 | unrun | 원래12 staging 실패는 유지하고 이후 수정된 CLI17 정상 소유 정리와16 GUI의 언로드/로드 중 정상 Quit 성공을 분리한다. 최종17 실제 GUI의 원래 Strata·실패 복구/경합/다른 세션 보호가 남았다. |
 | W08 | blocked | 고정17 네 target 생성·MSI/NSIS 읽기 전용 내부 application payload, 새 홈16 CPU bundle 실제 추론은 한정 pass. 별도 OS 계정의 실제 설치/업그레이드/제거·Credential Manager는 blocked이며, 최종 실제 GUI/OS 표시 검사는 남았다. |
 | G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 합성 미지 옵션의 GUI/저장/실제 argv·응답은 아래 범위 pass. 개인 실제 엔진과 전체 보존 확인은 남았다. |
 | G02 | unrun | help 수명/해시·cache/diff의 source별 근거 보존. 고정17 v2 stale/start 거부·실제 새/삭제/변경 diff·명시 복구는 아래 범위 pass. 탐색 취소·경합의 실제 GUI 확인은 남았다. |
 | G03 | unrun | parser/명시 metadata·미확정 정보 보호의 구현/관련 검사 보존. 실제17 합성 미지 flag 발견·미확정 표시·유지되는 미해석 값의 명시 복구는 아래 범위 pass. 실제 개인 엔진과 관련 경합은 남았다. |
 | G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 합성 v1/v2 프로필 재로드·negative/zero/arity2/repeat tuple/multiple/optional의 실제 OS argv 대조는 아래 범위 pass. 실제 개인 엔진·전체 공통 기능 보존 확인은 남았다. |
-| G05 | unrun | 빈 options와 필수 server 기본값 없는 개인17 setup 준비 완료. 실제 실행 파일 선택→help→명시 binding/probe→등록→응답을 수행해야 한다. |
+| G05 | unrun | 아래 빈 options/필수 server 기본값 없는 개인17 setup의 실제 실행 파일 선택→help→명시 binding/probe→등록→새 옵션 GUI/프로필→실제 응답은 한정 pass. 원래 Strata와 나머지 protocol/bridge 공통 기능의 최종17 확인은 남았다. |
 | G06 | unrun | 실제17 중립 runtime 목록을 관찰했다. 최종 공통 기능과 D79/D80 실제 수정 재검증이 남았다. |
 | G07 | unrun | 이전16의 긴 wizard·접근성·작은 창 및 source2147 검사 근거 보존. 최종17 대량 옵션·미지 엔진·오류/복구·경합을 실제 GUI로 확인해야 한다. |
 
@@ -598,3 +598,23 @@ v1/v2 각각 정상 GUI 언로드 뒤 사전 관찰 소유 프로세스 두 개�
 source는 계속 `1c95946186afccc3161b754ae952ee47e3a63649`, GUI/CLI 전체 해시는 앞선 고정17과 같다. v1/v2 script SHA256은 `59019e0f894cf4ca3d4610d3083464b2f8dc2415c264c60d50d480820bc701ee`, spec SHA256은 각각 `032163f8b64c53fdc359b3b20e67fa5a75999bcbcab017cd17caea917722767d` / `90d6074801687195f341325b59b3f6ded70ce7b83b5b452fa002e92106ee217b`, opaque model SHA256은 `8d0a5749b7319141d107980bfe59f5d0d4cca2425d13781dff77f1800c45a356`다. raw는 `package17r1-synthetic-v1-argv-echo-verdict.json`, `package17r1-synthetic-v2-argv-echo-verdict.json`, 각 `normal-unload.json`과 내부 native evidence 목록이다.
 
 다음 필수 실행은 빈 options/필수 server 기본값 없는 개인17 setup의 실제 실행 파일 선택→help→binding/probe→등록→실제 모델 응답/취소/Retry, 이후 D79/D80와 원래 Strata의 공통 GUI다. 기존 Strata/SmolVLM 내용 fail·W08 blocked는 유지하며 전체 goal은 active다. Linux/Mac 실제 검증은 별도 기기 인계로 유지한다.
+
+### production17의 실제 개인 엔진 GUI와 생성 중 취소·Retry
+
+같은 고정17에, **앱을 고정한 뒤 새 flag를 추가해 빌드한 개인 native 엔진**을 실제 GUI로 연결했다. 원래 upstream revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`에 추론을 바꾸지 않는 진단 옵션만 추가했으며 executable SHA256은 `9ee4de40ecd8f10f5fc6f27084e1f758d5418de64ef39c8e28e5fcce6bb4f909`다. 빈 `options`와 필수 server 기본값이 없는 setup을 native picker로 가져오고 실행 파일을 직접 선택했다. 실제 설치 정보 확인→실제 help의 새 flag 원문→모델/포트/호스트/모델 이름·환경 인증·probe 연결→manifest 검토→등록을 수행했다. 모델 Ready는 등록 후 별도 fresh probe로 확인했다.
+
+실제 help의 255개 옵션과 형식/arity 미확정 189개를 GUI에서 구분했다. 새 진단 옵션의 타입은 미확정이며, 앱이 도움말에 없는 타입이나 모델 능력을 확정한 것으로 기록하지 않는다. 공통 GUI에서 Unicode·따옴표·공백·shell 특수문자가 포함된 새 값을 입력하고 **새 프로필 저장→닫기/재열기→현재 help·정확한 값 확인→fresh Ready**를 거쳤다. 실제 소유 Windows 명령줄을 `CommandLineToArgvW`로 해석해 새 flag가 한 번, 값이 하나의 argv로 전달됨을 확인했다. 인증 값은 argv에 없고 인증 없는 모델 목록 요청은401이었다.
+
+원래 Qwen2.5 0.5B Q4_K_M(revision `9217f5db79a29953eb74d5343926648285ec7e67`, SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`)의 원래 단일 숫자 산술 질문은 실제 답변 `5`·PP34/TG2·cached0·stop과 두 메시지 이력으로 완료됐다. 이 결과는 **실제 엔진 추론 pass**이며 합성 parser echo와 구분한다. 기존 32개 프로필 전체 항목과 중복 경로를 정규화한 기존 config 외 파일 48개 해시가 모두 같았다. 새 엔진의 Default와 새 검증 프로필이 추가돼 총34개 프로필이다. 기존 항목을 덮어쓰지 않았다.
+
+같은 원래 숫자 나열 질문으로 실제 스트리밍 본문 23자를 관찰하고 enabled Stop을 한 번 실행했다. 653ms 시점의 실제 생성 관찰 뒤 취소됐으며, 부분164자·interrupted와 GUI의 부분 응답 보존 안내가 저장됐다. 별도 검증 기록을 보존한 뒤 **같은 user 메시지의 Retry**를 실행해 자연 완료 stop/TG3948·cached41·캐시 제외 PP1과 두 메시지 이력을 확인했다. 출력 길이나 내용의 정답 품질까지 주장하지 않는다. 모델·질문·제한·제품 timeout을 바꾸지 않았다. 정상 GUI 언로드 후 사전 관찰 native 프로세스와 포트가 없어졌으며 새 staging은 없고 원래 두 markerless 로그 해시는 같았다. GUI 정상 Quit 또는 Strata 취소 성공으로 확대하지 않는다.
+
+작업용 첫 native picker 경로의 `/` 구분자는 Windows가 거부했다. 두 오류 창을 정확한 소유권/오류 본문으로 확인해 정상 닫고, `\` 구분자 경로의 readback 뒤 가져오기를 완료했다. SaveAs의 접근성 Invoke 예외와 pointer 무효 동작도 보존했으며, 표준 SetFocus의 실제 지연 readback 후 Return으로 폼이 열렸다. 이 자동화 문제를 제품 결함으로 계산하지 않았다. raw는 `package17r1-private-gui-argv-response-verdict.json`, `package17r1-private-cancel-retry-verdict.json`, `package17r1-private-normal-unload.json` 및 각각의 native 근거다. 제품 소스·고정 binary와 원래 데이터/실패를 보존했다.
+
+### production17 D79 세션 편집과 D80 답변 대상의 실제 재검증
+
+새 검증 세션을 저장하고 실제로 로드했다. 로드 준비 과정이 null이던 실행 설정을 저장한 것을 확인한 뒤, 편집하지 않은 상태에서 **새 세션**을 선택하자 미저장 경고 없이 빈 편집기가 열렸다. 이어 실제 이름을 편집하고 새 세션을 누르자 미저장 경고가 나타났으며, 취소 후 정확한 편집값이 유지됐다. 검증용 미저장 이름만 원래 빈 값으로 되돌렸다. **D79의 성공 경로/실제 편집 보호 범위 pass**다. 실패/준비 중 경합의 자동 근거는 유지하며 이 단일 GUI 경로로 해당 실제 경합까지 입증했다고 확대하지 않는다.
+
+Chat 대화 설정에서 실행 중 세션이 저장한 **G17 private answer** 이름으로 표시됐고, 실제 선택 readback 뒤 같은 산술 질문의 답변 `5`·PP34/TG2·stop을 확인했다. 기본 서버는 중지된 채 별도 세션의 새 소유 native 프로세스가 응답했다. 기존 세션 정의 3개와 직전 프로필 34개 전체 항목 해시가 같고, 이번 세션의 해결된 실행 설정만 추가됐다. **D80의 답변 대상 이름/연결 범위 pass**이며 임베딩·STT 이름/라우팅은 최종17에서 아직 unrun이다. 세션 엔진은 다음 공통 검사에 사용하기 위해 실행 중이다. raw `package17r1-d79-d80-answer-native-verdict.json`이며 정상 종료 근거를 이 항목에 포함하지 않는다.
+
+고정 binary의 합성 엔진과 실제 개인 엔진에서 모두 help→공통 GUI→새 프로필→실제 argv→응답을 확인했다. 이 범위의 완료 근거를 전체 W/G 완료로 확대하지 않는다. 다음은 원래 Strata의 공통 GUI와 임베딩/STT 이름·라우팅, probe/help 경합·실패 복구·최종 정상 종료다. W08의 별도 OS 세션 차단과 원래 Strata/SmolVLM 내용 fail을 유지하고 goal은 active다.
