@@ -37,7 +37,7 @@ import { notifyRuntimeInventoryChanged, useRuntimeInventoryRevision } from '../.
 export type { BackendRow } from "./runtimesHelpers";
 
 type View = { kind: 'inventory' } | { kind: 'add' } | { kind: 'adapter'; id: ProviderId };
-type FocusTarget = 'context' | 'wizard' | 'add' | { adapter: ProviderId };
+type FocusTarget = 'context' | 'wizard' | 'add' | 'registered' | { adapter: ProviderId };
 
 function BackIcon() {
   return <svg aria-hidden="true" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4 6 10l6 6" /></svg>;
@@ -59,6 +59,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const contextHeading = useRef<HTMLHeadingElement>(null);
   const wizardHeading = useRef<HTMLHeadingElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
+  const registeredRef = useRef<HTMLDivElement>(null);
   const inventoryRef = useRef<HTMLDivElement>(null);
   const [providerRevision, setProviderRevision] = useState(0);
   const [providerBusy, setProviderBusy] = useState(false);
@@ -112,8 +113,12 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
     if (target === 'context') contextHeading.current?.focus();
     else if (target === 'wizard') wizardHeading.current?.focus();
     else if (target === 'add') addButton.current?.focus();
+    // Register is replaced at the end of a long review, so focus (and the
+    // scroll that follows it) moves to the result above, unless it arrived
+    // while the page was hidden.
+    else if (target === 'registered') { if (active) registeredRef.current?.focus(); }
     else [...(inventoryRef.current?.querySelectorAll<HTMLButtonElement>('[data-adapter]') ?? [])].find(button => button.dataset.adapter === target.adapter)?.focus();
-  }, [view]);
+  }, [view, registered, active]);
 
   const openAdapter = (id: ProviderId) => { if (busy) return; focusTarget.current = 'context'; setView({ kind: 'adapter', id }); };
   const openAdd = () => {
@@ -128,8 +133,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   // The catalog names an engine after one of its builds, so the announcement
   // keeps the identity the registration itself returned.
   const onRegistered = (engine: ProviderId, { runtime_id, display_name }: { runtime_id: string; display_name: string }) => {
-    wizardFinished.current = true; setRegistered({ engine, name: display_name, runtime: runtime_id }); setProviderRevision(value => value + 1);
+    wizardFinished.current = true; focusTarget.current = 'registered'; setRegistered({ engine, name: display_name, runtime: runtime_id }); setProviderRevision(value => value + 1);
   };
+  const registeredTitle = registered ? fillAdapterCopy(copy.registeredTitle, { engine: `${registered.name} · ${registered.runtime}` }) : '';
   const description = selected ? inventory.catalog.find(item => item.id === selected) : undefined;
   const empty = inventory.loaded && !inventory.error && inventory.runtimes.length === 0;
   const profilesLink = onOpenProfiles && <p className="runtime-profiles-link">{modelSettingsCopy[locale].title} → {modelSettingsCopy[locale].profiles} <button type="button" onClick={onOpenProfiles} className="app-link-button">{t("ui.executionProfiles")}</button></p>;
@@ -153,14 +159,16 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       </header>
 
       {registered && view.kind !== 'adapter' && (
-        <FeedbackBanner tone="success" title={fillAdapterCopy(copy.registeredTitle, { engine: `${registered.name} · ${registered.runtime}` })} className="mb-4" onDismiss={() => setRegistered(null)}>
-          <p>{copy.registeredNext}</p>
-          <span className="app-page-actions adapter-next">
-            <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => { setRegistered(null); openAdapter(registered.engine); }}>{fillAdapterCopy(copy.openEngine, { engine: registered.name })}</button>
-            {onOpenProfiles && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={onOpenProfiles}>{copy.openProfiles}</button>}
-            <button type="button" className="app-button app-button--secondary app-button--sm" onClick={openAdd}>{copy.addAnother}</button>
-          </span>
-        </FeedbackBanner>
+        <div ref={registeredRef} tabIndex={-1} role="group" aria-label={registeredTitle}>
+          <FeedbackBanner tone="success" title={registeredTitle} className="mb-4" onDismiss={() => setRegistered(null)}>
+            <p>{copy.registeredNext}</p>
+            <span className="app-page-actions adapter-next">
+              <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => { setRegistered(null); openAdapter(registered.engine); }}>{fillAdapterCopy(copy.openEngine, { engine: registered.name })}</button>
+              {onOpenProfiles && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={onOpenProfiles}>{copy.openProfiles}</button>}
+              <button type="button" className="app-button app-button--secondary app-button--sm" onClick={openAdd}>{copy.addAnother}</button>
+            </span>
+          </FeedbackBanner>
+        </div>
       )}
 
       {/* The inventory stays mounted so its search survives opening an adapter. */}

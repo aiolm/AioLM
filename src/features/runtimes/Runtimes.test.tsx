@@ -850,6 +850,72 @@ describe('neutral inference engine inventory', () => {
     });
   });
 
+  describe('a completed registration below a long reviewed manifest', () => {
+    // The announcement is inserted above the wizard while Register sits at the
+    // end of the reviewed manifest, and Register itself is replaced on success.
+    const reviewAndRegister = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
+      fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
+      fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue without help' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
+      fireEvent.change(modelFlag, { target: { value: '--model' } });
+      fireEvent.change(portFlag, { target: { value: '--port' } });
+      fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+      fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+      const register = await screen.findByRole('button', { name: 'Register' });
+      register.focus();
+      fireEvent.click(register);
+      return register;
+    };
+    beforeEach(() => vi.mocked(runtimeHelp.entrypointManifestPreview).mockResolvedValue(REGISTERED));
+
+    it('moves focus to the returned engine and its next actions, keeping the review and later refreshes alone', async () => {
+      vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockResolvedValue(REGISTERED);
+      render(panel({ onOpenProfiles: vi.fn() }));
+      await reviewAndRegister();
+      const result = await screen.findByRole('group', { name: 'Synthetic · build-1 is registered' });
+      await waitFor(() => expect(result).toHaveFocus());
+      expect(within(result).getByRole('button', { name: 'Open Synthetic' })).toBeVisible();
+      expect(within(result).getByRole('button', { name: 'Set up an execution profile' })).toBeVisible();
+      expect(screen.getByText(/"runtime_id": "build-1"/)).toBeInTheDocument();
+      const refresh = screen.getByRole('button', { name: 'Refresh list' });
+      const reads = mocked.providerCatalog.mock.calls.length;
+      refresh.focus();
+      fireEvent.click(refresh);
+      await waitFor(() => expect(mocked.providerCatalog.mock.calls.length).toBeGreaterThan(reads));
+      expect(refresh).toHaveFocus();
+    });
+
+    it('leaves focus on Register when the registration fails', async () => {
+      vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockRejectedValue(new Error('Synthetic probe refused'));
+      render(panel());
+      const register = await reviewAndRegister();
+      expect(await screen.findByText('Synthetic probe refused')).toBeVisible();
+      expect(register).toHaveFocus();
+      expect(screen.queryByRole('group', { name: /is registered/ })).not.toBeInTheDocument();
+    });
+
+    it('does not take focus for a registration that finished while the page was hidden', async () => {
+      let finish!: (value: runtimeHelp.RegisteredManifest) => void;
+      vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      const view = render(panel());
+      const register = await reviewAndRegister();
+      view.rerender(panel({ active: false }));
+      register.blur();
+      await act(async () => finish(REGISTERED));
+      view.rerender(panel({ active: true }));
+      const result = await screen.findByRole('group', { name: 'Synthetic · build-1 is registered' });
+      expect(result).not.toHaveFocus();
+      expect(document.body).toHaveFocus();
+    });
+  });
+
   it('opens an explicitly requested adapter and returns to the inventory after ordinary navigation', async () => {
     const view = render(panel({ active: false }));
     view.rerender(panel({ active: true, engineRequest: { provider: 'vllm', revision: 1 } }));
