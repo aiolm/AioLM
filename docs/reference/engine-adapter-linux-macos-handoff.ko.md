@@ -78,3 +78,12 @@ Strata17 원래 A04의 1,024-token 요청은 reasoning만 생성한 뒤 DONE에 
 | bundle·패키지·OS 저장소/통합 | W08: 새 홈 bundle 실제 추론과 별도 Windows 계정의 설치/업그레이드/제거·Credential Manager. 정적 MSI 검사와 실제 설치를 구분 | Linux L03/L04, Mac M03/M04 및 R06–R12 |
 
 각 수정은 code/test/doc을 필요한 경로만 검토·커밋하고, 이전 OS 재검증의 source·관련 검사·실제 GUI 근거를 그 수정 commit에 연결한다. 필수 실제 검사가 남아 있으면 인계 문서나 자동 검사 성공만으로 전체 완료를 선언하지 않는다.
+
+
+## D81 실행 전 검사 취소의 공통 후속 검증
+
+Windows 수정 source `cad44fd28819ad54f49ff9735cd0de8ca15f4006`은 요청별 preflight owner·정상 취소·앱 종료 정리와 진행 표시, 취소 이후 늦은 성공의 저장/실행 차단을 추가한다. cfg-only 기존 IPC도 보존한다. Windows production18의 원래 합성15초 probe 취소/다른 모델 복구, 최소360×520 논리 픽셀 창, 동시에 실행 중인 실제 개인 엔진 보존/답변 근거는 Windows 결과 문서의 D81에 연결돼 있다. 이 commit은 Windows 전체 완료 commit이 아니다.
+
+Linux L01/L02와 Mac M01/M02는 각 OS에서 새로 빌드한 production으로 다음을 확인한다. 실제 pending 검사에 진행 설명과 취소가 나타나고, 취소하면 해당 subprocess/자손만 정상 종료돼야 한다. 설정·프로필·기존 세션과 다른 실행 엔진의 생성 식별자/포트/응답을 보존한다. 원래 지연 이후 늦은 결과가 저장·실행·다른 모델 capability를 오염시키지 않는지 확인한다. 다른 모델로 새 owner를 만들어 재검사→Ready→실제 argv→응답→정상 언로드를 수행한다. 최소 창과 키보드/스크린리더의 진행 상태·취소/Retry도 직접 확인한다. 앱 정상 종료 중의 pending 검사 정리를 포함한다. 합성 취소와 실제 엔진 추론은 각각 별도 판정한다.
+
+후속 OS에서 이 공통 경계를 수정하면 Windows W03/W04/W07 및 G04–G07의 같은 취소·복구·다른 대상 보존을 새 source로 다시 검사한다. `launch_jobs` owner/queued cancellation, `preflight_launch` 기존 호출 호환/종료 시 거부, ModelSettingsProvider의 늦은 성공 무효화와 Dialog 진행/취소 관련 자동 검사를 함께 연결한다. 단순 timeout 확대나 validation/readiness 제거로 통과시키지 않는다.

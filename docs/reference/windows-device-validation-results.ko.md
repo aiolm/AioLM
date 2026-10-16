@@ -700,3 +700,20 @@ Strata·개인 엔진·Whisper와 gateway가 로드된 상태에서 원래 close
 - **최소 창과 다른 실제 실행 대상 보존 pass:** 실제 client360×520 논리 픽셀/DPI192에서 진행 설명과 활성 취소 버튼이 화면 안에 보였다. 다른 실제 개인 엔진 세션을 실행한 채 같은 모델B 검사를 취소했다. 새 검사 프로세스3개만 종료되고 기존9개 생성 식별자·개인 엔진 포트/health가 유지됐다. 원래15초보다 긴343초 뒤에도 취소한 probe 반환이 없었다. 창 크기를 정상 복원한 뒤 Chat에서 이름으로 해당 개인 세션을 선택해 원래 산술 질문에 실제 `5`·PP34/TG2·stop을 받았다. 기본 서버는 중지됐고 다른 엔진의 PID/생성 시각/포트가 바뀌지 않았다. 취소 직후와 실제 답변 후 모두 설정 전체 바이트·프로필41개·세션 정의6개가 같다. raw `D81-production18-minimum-other-target-native-verdict.json`이다.
 
 위 합성 probe/응답 성공과 개인 Qwen의 실제 추론 성공을 구분한다. 개인 executable/model은 앞선17의 같은 SHA256 `9ee4de40ecd8f10f5fc6f27084e1f758d5418de64ef39c8e28e5fcce6bb4f909`/`74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`이며 교체하지 않았다. D81 수정 범위는 pass지만 최종18의 나머지 Strata·공통 GUI/CLI·설치 패키지 검증은 아직 unrun이다. 원래 Strata/SmolVLM fail과 native STOP/DONE 확인 공백, W08 별도 OS 세션 차단을 유지한다. 전체 goal은 active다.
+
+
+### production18의 실제 CLI·패키지·Strata 후속 검증
+
+고정18 CLI의 격리 smoke를 통과했다. 같은 실제 개인 엔진과 원래 모델로 등록/probe·응답과 usage·실제 생성 취소·재시작·제거 후 시작 거부·재등록·정리·원본 파일 보존의 A01–A09를 모두 통과했다. 새 소유 probe 복사본만 변조한 별도 검사는 probe와 시작의 해시 불일치 거부·포트/staging 부재·제거·원본 복원/재등록·fresh probe까지 pass다. 원본 엔진·모델·helper를 변조하지 않았다. raw `package18-private-cli-observed/results.json`, `package18-private-integrity-cli/results.json`이다. CLI receipt의 checkout `b87e445`는 문서 추가 commit이고 실행 바이너리 source는 위의 `cad44fd`로 구분한다.
+
+MSI는 read-only database/CAB 추출, NSIS는 앞서 digest 검증한 같은 작업용 7-Zip의 list/extract만 수행했다. 내부 CLI가 고정 CLI와 같고, GUI 전체 바이트는 Tauri2.11.4의 기존 `UNK→MSI`/`UNK→NSS` 표시3바이트를 반영한 예상값과 일치했다. 내부 GUI SHA256은 MSI `fce80231aabd62068cd9117a3a7b492061b9243a1078ba3e0472662177f6b68e`, NSIS `53f69a37bb44cff37385400de15dd741dd2007cd7619eb76dc486211fa098d48`다. 개인 절대 경로 패턴은0개고 원래 고정 파일은 유지됐다. **패키지 payload 출처/보존 범위 pass**이며 installer·추출된 executable·plugin·제거 동작을 실행하지 않았다. raw `package18-msi-payload-readonly/results-assessment.json`, `package18-nsis-payload-readonly/results.json`이다. W08 실제 설치/업그레이드/제거/OS 저장소 검사의 대체 근거가 아니다.
+
+원래 Strata revision/model/deployment를 새 GUI에서 선택해 **G18 Strata original native validation**이라는 새 검증 프로필을 저장했다. 기존41개 전체 프로필 항목과 세션 정의6개가 같고 새 프로필의 settings/system prompt는 원래17과 정확히 같다. 실제 fresh probe→Ready→Windows native argv의 spec4·context131072·KV int8·resident32768→산술 질문의 실제 `5`·PP74/TG45·stop을 확인했다. probe accelerator의 `unverified`를 GPU 검증값으로 바꾸지 않았다. 다른 개인 세션의 프로세스 생성 식별자와 포트를 유지했다.
+
+같은 Strata의 실제 생성 중 정상 Stop은 reasoning820자/content819자의 interrupted 부분 이력을 보존했다. 같은 원래 질문의 Retry는 추가 재시도 없이67.593초 뒤 자연 stop·PP5/TG8156·cache77로 완료됐고 저장 content3892자가1–1000의 원래 수열과 일치했다. 한 read-only 검사가25초 시점에 아직 실행 중인 요청을 완료로 가정해 실패한 raw도 보존했다. 실제 자연 종료를 관찰해 판정했으며 모델·답변·제한·timeout을 바꾸지 않았다. raw `package18-strata-cancel-retry-native-verdict.json`이다. 원래 CLI의 max1024 요청 실패와 native STOP/DONE wire 확인 공백은 유지한다.
+
+Strata만 정상 언로드하자 소유 프로세스4개 종료·포트 닫힘·기존9개/개인 세션/원래 staging 로그 보존이 확인됐다. 같은 저장 프로필로 재시작한 새 native의 실제 Windows argv는 이전 native와 정확히 같았다. 다시 실제 `5`·PP74/TG45·stop이 완료됐다. 원래 모델 두 shard를 포함한6개 파일의 전체 해시도 다시 일치했다. raw `package18-strata-only-normal-unload-native-verdict.json`, `package18-strata-normal-restart-native-verdict.json`, `package18-strata-full-original-provenance.json`이다. 최종 loaded Quit와18의 새 등록/나머지 공통 GUI 검증은 별도다.
+
+원래 production15 GUI가 내보낸 CPU bundle은 별도 SDK-free 새 홈에서63개 payload 해시를 확인하고 고정18 CLI로 실제 `5`/usage·정상 종료·포트/staging 정리까지 pass다. 처음 이전 debug import helper 해시를 그대로 적용한 검사는 실행 전에 정확히 거부됐다. 기존 실패를 보존하고 현재 source의 helper를 명시적으로 새 빌드/고정한 별도 실행을 사용했다. 이는 **현재 source debug helper의 import와 production18 CLI 실행 범위**이며 production18 GUI import 성공으로 계산하지 않는다. 원래 ZIP/모델/runtime은 바꾸지 않았고 W05 원래 미디어 실패도 유지한다. raw `package18-runtime-bundle-helper-pin.json`, `package18-original-cpu-portable-text-current-helper/results.json`이다.
+
+Linux/Mac의 실제 preflight 취소·다른 대상 보존·늦은 반환·다른 모델 복구·최소 창/접근성·앱 종료 검사와 이후 공통 변경의 Windows 재검증은 [공통 후속 인계](engine-adapter-linux-macos-handoff.ko.md)의 D81 절로 연결한다. Windows 종료 commit과 전체 goal 완료는 아직 선언하지 않는다.
