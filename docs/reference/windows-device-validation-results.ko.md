@@ -675,4 +675,28 @@ Strata·개인 엔진·Whisper와 gateway가 로드된 상태에서 원래 close
 
 같은 실제 GUI에서 새 프로필로 모델A를 저장한 뒤 실행했다. 실제 preflight subprocess가 15초 대기하는 동안 설정 modal은 모델명·중지 상태·실행 footer만 표시했다. **취소 버튼과 진행 설명이 없어 사용자가 이 단계를 중단할 수 없었다.** native 검사는 취소 버튼0개를 확인해 입력하지 않았고, 검사 후 자연 완료한 preflight와 두 번째 시작 probe가 모델을 Ready로 만들었다. 이후 정상 언로드했다. 이것은 probe 취소 성공이나 플랫폼 unsupported가 아니라 **D81 제품 결함 fail**이다. raw `D81-preflight-cancel-red-native.json`, 해당 pending subprocess/GUI 근거를 보존한다.
 
-원인은 `ModelSettingsProvider.persist`가 `preflightLaunch`를 먼저 기다리고 그 뒤에만 launching/cancel을 노출하는 순서와, backend `preflight_launch`가 취소 owner 없이 validation을 실행하는 계약이었다. 새 회귀 검사는 기존45개 pass/새1개 fail로 같은 누락을 재현했다. 요청별 취소·진행 표시·늦은 성공의 저장/실행 차단을 수정 중이며, 수정 후 전체 자동 검사와 새 production의 실제 지연 probe 취소/복구·기존 엔진 재검증이 필수다. 고정17의 앞선 한정 pass를 새 수정 완료나 전체 goal 완료로 확대하지 않는다.
+원인은 `ModelSettingsProvider.persist`가 `preflightLaunch`를 먼저 기다리고 그 뒤에만 launching/cancel을 노출하는 순서와, backend `preflight_launch`가 취소 owner 없이 validation을 실행하는 계약이었다. 새 회귀 검사는 기존45개 pass/새1개 fail로 같은 누락을 재현했다. 요청별 취소·진행 표시·늦은 성공의 저장/실행 차단을 `cad44fd28819ad54f49ff9735cd0de8ca15f4006`에서 수정했다. 아래 production18의 실제 취소/복구 검증으로 연결한다. 고정17의 앞선 한정 pass를 새 수정 완료나 전체 goal 완료로 확대하지 않는다.
+
+
+### D81 수정과 production18의 실제 취소·복구 검증
+
+실행 전 검사 시작 전에 요청별 owner와 진행 상태를 노출하고 정상 취소 명령을 연결했다. backend는 같은 owner의 검사만 취소하며 기존 validation·readiness·해시 검증을 유지한다. 취소한 요청이 뒤늦게 성공해도 설정 저장이나 엔진 실행으로 이어지지 않는다. 기존 cfg-only IPC 호출은 호환된다. 엔진별 분기·모델·기본값·lockfile·timeout은 바꾸지 않았다.
+
+자동 검사는 frontend202개 파일/2,150개 테스트·typecheck·lint, 전체 Rust 검사와 Clippy all-targets/경고 오류 처리·no-default-features·fmt를 통과했다. Rust library는1,137개 pass/기존 opt-in6개 ignored이며 bin/integration 검사도 통과했다. 별도 실제 Python entry point·positional/secret 여정2개도 pass다. 전체 frontend 검사 뒤 진행 문구만 기존 footer summary로 옮겼고 해당 Dialog72개와 ESLint를 다시 통과했다. ignored 검사를 모두 실행했다고 주장하지 않는다.
+
+이 source에서 GUI·CLI·NSIS·MSI를 새로 빌드하고 원래17 복사본과 분리해 고정했다. source는 `cad44fd28819ad54f49ff9735cd0de8ca15f4006`, SHA256은 다음과 같다.
+
+| 산출물 | production18 SHA256 |
+| --- | --- |
+| GUI | `a7095810b4c4a4fcb3883402582e220ffd8e5da0c5bda3201411fcb0dd0ad1b8` |
+| CLI | `c54ba49f8427252060a84db3b17af72ec2f5280c7dc0ee581d6bf99ca26fe830` |
+| NSIS | `6559650452b9b7684132529cdd961d5d4e6c9b401e24d047fc77ab46e40f464f` |
+| MSI | `dadff4760716fe82f3a8d8fdbaca8cb56e7b1fd327339913a9680a86a8031ecf` |
+
+최종 Tauri 빌드가 만든 동일 output directory의 GUI/CLI와 설치 패키지를 짝지었다. 이전 output directory의 오래된 GUI나 먼저 만들어진 별도 CLI를 새 최종 바이너리로 계산하지 않았다. 설치 패키지는 실행하지 않았다.
+
+- **D81 원래 재현 경로 pass:**17에서 실패했던 같은15초 합성 preflight·모델A·argv 해시를 유지했다. 실제 검사 중 진행 문구와 취소가 나타났고, 정상 취소 후 새 소유 프로세스3개만 종료됐다. 기본 GUI7개·설정 전체 바이트·프로필40개·세션 정의6개가 같고 포트/Ready/늦은 반환이 없었다. 편집기와 재시도 경로가 유지됐다. raw `D81-production18-cancel-native-verdict.json`이다.
+- **다른 모델로 복구 pass:** GUI에서 모델B를 선택하고 새 검증 프로필을 저장했다. 새로운 preflight와 시작 probe를 각각 실제 수행해 Ready가 됐고 Windows argv 두 곳이 정확히 B를 가리켰다. 실제 합성 SSE 응답은 저장한 옵션을 echo하고 TG4·stop·이력으로 완료됐다. cache breakdown이 없는 fixture의 PP는 unknown으로 유지했다. 정상 언로드 후 포트가 닫히고 기본7개/기존 staging 로그가 유지됐다. 기존 프로필40개 전체 항목을 보존하고 새 항목을 추가해41개다. 첫 검사 도구의 잘못된 PP 필수값 가정 실패도 보존했으며 실제 응답이나 저장 지표를 수정하지 않았다. raw `D81-production18-model-b-recovery-native-verdict.json`이다.
+- **최소 창과 다른 실제 실행 대상 보존 pass:** 실제 client360×520 논리 픽셀/DPI192에서 진행 설명과 활성 취소 버튼이 화면 안에 보였다. 다른 실제 개인 엔진 세션을 실행한 채 같은 모델B 검사를 취소했다. 새 검사 프로세스3개만 종료되고 기존9개 생성 식별자·개인 엔진 포트/health가 유지됐다. 원래15초보다 긴343초 뒤에도 취소한 probe 반환이 없었다. 창 크기를 정상 복원한 뒤 Chat에서 이름으로 해당 개인 세션을 선택해 원래 산술 질문에 실제 `5`·PP34/TG2·stop을 받았다. 기본 서버는 중지됐고 다른 엔진의 PID/생성 시각/포트가 바뀌지 않았다. 취소 직후와 실제 답변 후 모두 설정 전체 바이트·프로필41개·세션 정의6개가 같다. raw `D81-production18-minimum-other-target-native-verdict.json`이다.
+
+위 합성 probe/응답 성공과 개인 Qwen의 실제 추론 성공을 구분한다. 개인 executable/model은 앞선17의 같은 SHA256 `9ee4de40ecd8f10f5fc6f27084e1f758d5418de64ef39c8e28e5fcce6bb4f909`/`74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`이며 교체하지 않았다. D81 수정 범위는 pass지만 최종18의 나머지 Strata·공통 GUI/CLI·설치 패키지 검증은 아직 unrun이다. 원래 Strata/SmolVLM fail과 native STOP/DONE 확인 공백, W08 별도 OS 세션 차단을 유지한다. 전체 goal은 active다.
