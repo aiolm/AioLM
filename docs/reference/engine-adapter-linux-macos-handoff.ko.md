@@ -87,3 +87,10 @@ Windows 수정 source `cad44fd28819ad54f49ff9735cd0de8ca15f4006`은 요청별 pr
 Linux L01/L02와 Mac M01/M02는 각 OS에서 새로 빌드한 production으로 다음을 확인한다. 실제 pending 검사에 진행 설명과 취소가 나타나고, 취소하면 해당 subprocess/자손만 정상 종료돼야 한다. 설정·프로필·기존 세션과 다른 실행 엔진의 생성 식별자/포트/응답을 보존한다. 원래 지연 이후 늦은 결과가 저장·실행·다른 모델 capability를 오염시키지 않는지 확인한다. 다른 모델로 새 owner를 만들어 재검사→Ready→실제 argv→응답→정상 언로드를 수행한다. 최소 창과 키보드/스크린리더의 진행 상태·취소/Retry도 직접 확인한다. 앱 정상 종료 중의 pending 검사 정리를 포함한다. 합성 취소와 실제 엔진 추론은 각각 별도 판정한다.
 
 후속 OS에서 이 공통 경계를 수정하면 Windows W03/W04/W07 및 G04–G07의 같은 취소·복구·다른 대상 보존을 새 source로 다시 검사한다. `launch_jobs` owner/queued cancellation, `preflight_launch` 기존 호출 호환/종료 시 거부, ModelSettingsProvider의 늦은 성공 무효화와 Dialog 진행/취소 관련 자동 검사를 함께 연결한다. 단순 timeout 확대나 validation/readiness 제거로 통과시키지 않는다.
+
+
+## D82 옵션 편집 후 첫 저장 클릭의 공통 후속 검증
+
+공통 GUI 수정 source `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`는 이미 입력 변경에서 파싱/commit한 값을 blur에서 다시 commit하지 않도록 한다. 중복 cfg 변경이 pointer down과 click 사이에 비동기 검증을 재시작해 SaveAs를 disabled로 만들던 결함이다. 검증·오류·Ready 조건은 보존한다. 실제 설정 대화상자의 red→green 회귀와 전체 UI2151개, production19의 합성·실제 개인 엔진에서 focused input→첫 pointer SaveAs→새 프로필/재열기→실제 argv/응답 근거는 Windows 결과 문서 D82에 연결한다. 이 source는 Windows 전체 종료 commit이 아니다.
+
+Linux L01/L02와 Mac M01/M02에서 일반 text·수치·JSON textarea·반복/복수 값의 편집 후 검증 완료→첫 pointer 저장과 키보드 이동/저장을 확인한다. 유효하지 않은 중간 입력은 저장을 계속 막아야 하고, 실제 변경은 새 검증을 수행해야 한다. 다른 탭 이동·미저장 보호·저장/재열기·기존 프로필/이력·런타임/모델 binding도 보존한다. 이 경계의 공통 코드를 후속 OS에서 수정하면 Windows W03/G03–G06의 같은 첫 클릭/보존/argv 흐름과 관련 자동 회귀를 새 source로 다시 실행한다. 저장 차단 제거나 검증 무시로 통과시키지 않는다.

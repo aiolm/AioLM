@@ -744,4 +744,30 @@ Linux/Mac의 실제 preflight 취소·다른 대상 보존·늦은 반환·다�
 
 원인은 공통 옵션 입력의 `onChange`와 `onBlur`가 같은 값을 각각 commit하는 것이다. blur가 새 cfg 객체를 만들며 이미 완료한 비동기 검증을 재시작하고, pointer down과 click 사이에 저장 버튼을 disabled로 바꾼다. 실제 설정 대화상자의 회귀 검사에서 입력→검증 완료→mouse down→blur→click 순서로 새 프로필 폼이 열리지 않는 red를 재현했다. 입력 변경에서 이미 수행한 파싱·commit을 blur에서 반복하지 않도록 input/textarea 두 경로만 수정했다. 검증·오류·Ready 조건을 제거하지 않았다.
 
-같은 회귀 검사는 첫 클릭으로 폼 열기와 정확한 옵션을 가진 프로필 저장까지 통과했다. 관련 UI132개, 전체 UI202파일/2151개, typecheck, lint가 통과했다. lint는 기존 `CustomSelect`의 변경하지 않은 의존성 경고1개가 있고 오류는 없다. raw `d82-saveas-regression-red.log`, `d82-related-ui-green.log`, `d82-full-ui.log`, `d82-typecheck.log`, `d82-lint.log`와 native `gui/1792184785732-d82-after-safe-blur-saveas.json`, `d82-before-native-red-preserved-data.json`을 보존한다. **수정 후 production Windows 실제 클릭 재검증은 아직 unrun이며 새 binary에서 실행한다.** 기존18 결과를 수정 후 성공으로 소급하지 않고 전체 goal은 active다.
+같은 회귀 검사는 첫 클릭으로 폼 열기와 정확한 옵션을 가진 프로필 저장까지 통과했다. 관련 UI132개, 전체 UI202파일/2151개, typecheck, lint가 통과했다. lint는 기존 `CustomSelect`의 변경하지 않은 의존성 경고1개가 있고 오류는 없다. raw `d82-saveas-regression-red.log`, `d82-related-ui-green.log`, `d82-full-ui.log`, `d82-typecheck.log`, `d82-lint.log`와 native `gui/1792184785732-d82-after-safe-blur-saveas.json`, `d82-before-native-red-preserved-data.json`을 보존한다. **이 자동 검사 단계에서는 수정 후 production Windows 실제 클릭 재검증이 unrun이었다. 이후 production19 결과를 아래에 별도로 기록한다.** 기존18 결과를 수정 후 성공으로 소급하지 않고 전체 goal은 active다.
+
+
+### production18 새 합성 엔진과 로드 상태 정상 종료
+
+앱 고정 뒤 만든 별도 namespace의 합성 엔진을 실제 GUI로 등록했다. manifest 옵션은 비어 있고 실제 help에서1014개 옵션을 수락했다. 공통 GUI에서 새로운 문자열·명시적 false·0·999번 옵션을 입력해 새 프로필로 보존하고 재열기→fresh model probe→Ready→Windows argv→parser echo를 확인했다. 문자열/false/0/마지막 값이 정확히 전달됐고 TG4, PP 미확정, 무인증401을 확인했다. 실제 LLM 추론이 아닌 합성 parser 검증 pass다. 첫 SaveAs는 D82의 안전한 탭 blur 우회를 사용했으므로 첫 클릭 성공으로 계산하지 않는다. 이전44개 전체 프로필·저장 세션6개·기존 이력/프로젝트/측정/MCP 파일53개는 같다. raw `package18-synthetic-v1-gui-argv-echo-verdict.json`이다.
+
+합성 엔진을 로드한 상태에서 정상 창 닫기로 전체10개 소유 프로세스 종료·포트49338 닫힘·새 staging 없음·기존2개 markerless 로그 보존을 확인했다. 실제 종료 직전의 유효한200개 persistent 파일 전체 해시·46개 전체 프로필·세션6개는 종료 뒤에도 같다. 기존 홈 밖으로 연결된 help 파일2개는 타깃을 읽지 않고 제외 사유를 유지했다. 첫 사전 검사는 명시적 SaveRun으로 자체 프로필 revision이1→2가 된 것을 전체 동일 조건으로 잘못 요구해 종료 전에 거부됐다. 변경 identity를 자체 프로필 하나로 확인하고 이전44개의 전체 해시는 엄격히 보존한 뒤 새 유효 기준을 기록하고 정상 종료했다. raw `package18-valid-before-loaded-final-normal-quit-data.json`, `package18-loaded-final-normal-quit-native-verdict.json`이다.
+
+### production19 D82 실제 첫 클릭·개인 엔진·패키지 재검증
+
+수정 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`다. 원래 lockfile/도구/설정 입력7개와 검토한 code/test/doc3개 해시를 보존한 clean source에서 새 GUI/CLI/NSIS/MSI를332842ms에 빌드하고 별도로 고정했다. 이전17·18 pin은 바꾸지 않았다.
+
+| production19 산출물 | SHA256 |
+| --- | --- |
+| GUI | `983a6f4f0175e90369d562ff9cfcfceedba0069c0be90d56d28e6221ea98b860` |
+| CLI | `22be42ed12addb927d7ecffc603beb0b9a726e153f7198b32432c79a78fd1b3d` |
+| NSIS | `330bf964e1b562777c258451b7073b72beec36bc20ec1fe22bad5c247264c441` |
+| MSI | `9854b42cd121c12102dfa9c06d2064a95148b46df4318fed057ab055f028665d` |
+
+새 stock Windows GUI를 같은 격리 홈에서 시작해 이전200개 파일 전체 해시·46개 전체 프로필·세션6개를 그대로 확인했다. 합성 flag와 개인 flag가 고정19 GUI/CLI/source에 없음을 검사했다. 실제 fresh help를 다시 탐색·수락하고 합성999번 옵션을 편집한 뒤 입력란의 실제 native 포커스와 검증 완료 상태에서 SaveAs를 **한 번만 pointer click**했다. 탭 blur 우회나 재클릭 없이 프로필 이름 폼이 열렸다. 새 **G19 synthetic first-click options** 저장·닫기/재열기·fresh model probe/Ready·실제 Windows argv·parser echo까지 같은 새 값을 확인했다. 이전46개 전체 프로필·세션6개·기존 persistent53개는 같았다. 합성 범위 pass이며 raw `D82-production19-synthetic-first-click-argv-echo-verdict.json`이다.
+
+같은 실제 개인17 엔진/원래 Qwen 모델을 새19 개인 빌드라고 바꾸어 부르지 않고 검사했다. 빈 manifest 옵션과 fresh help255개를 사용하는 공통 입력에서 새 Unicode·따옴표·공백·메타문자 값을 편집한 후 **첫 pointer SaveAs**로 바로 폼을 열었다. 새 **G19 personal first-click options** 저장·재열기·fresh probe/Ready·정확한 단일 Windows 인자·실제 답변 `5`·PP34/TG2·stop·무인증401을 확인했다. 원래 engine/model/probe/helper4개 전체 해시와 이전46개 프로필·세션6개·기존53개 파일을 보존했다. 실제 추론 범위 pass이며 raw `D82-production19-personal-first-click-argv-response-verdict.json`이다. 프로필은 자체 신규2개가 추가돼48개다. 두 엔진을 각각 정상 언로드해 GUI 기본7개/엔진 listener 없음까지 관찰했다.
+
+고정19 CLI smoke와 같은 실제 개인 엔진의 A01–A09는 모두 pass다. 관찰용 local harness의 자식 창만 숨겼고 질문·모델·응답·제한·timeout은 바꾸지 않았다. raw `package19-private-cli-observed/results.json`이다. NSIS/MSI는 설치나 추출 exe 실행 없이 payload를 읽었다. 전체 예상 GUI bytes와 정확한3-byte 패키지 표식 차이, CLI 고정 bytes 일치·개인 절대 경로 검색0개를 확인했다. 패키지 GUI의 전체 SHA256은 MSI `90b568b64a6090abe72695ba8a9cc1821f7bbb1a71ce43afbc3c0e66db1b913e`, NSIS `77dcf1f64b0cf843dc27b1c991674d77e4009c207f3c9c8a07d5282718d037b1`이다. raw `package19-msi-payload-readonly/results-assessment.json`, `package19-nsis-payload-readonly/results.json`이다. 이는 W08 실제 설치/업그레이드/제거/Vault의 대체가 아니다.
+
+**D82는 자동 회귀와 수정 후 production19의 합성·실제 개인 엔진 첫 클릭/저장/재열기/argv/응답 범위 pass다.** 런타임 v2 변경·잔여 관련 흐름·최종 종료/인계 검사는 계속한다. 원래 Strata CLI/미디어 content 실패와 별도 OS 계정이 없는 W08 blocked/unrun을 보존하며 전체 goal이나 Windows 종료 commit을 아직 complete로 선언하지 않는다.
