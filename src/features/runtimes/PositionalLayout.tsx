@@ -1,9 +1,10 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { staticCandidates, type ConfirmedSyntax, type EffectiveSchema, type PositionalRole } from '../../shared/api/runtimeHelp';
 import { useI18n } from '../../shared/i18n/i18n';
 import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import { sensitiveStaticIndices } from './sensitiveEntryTokens';
 
 const encode = (role?: PositionalRole): string =>
   !role ? '' : role.role === 'user' ? 'user' : role.role === 'binding' ? `binding:${role.name}` : `static:${role.index}`;
@@ -18,11 +19,14 @@ const decode = (value: string): PositionalRole | undefined => {
 /** Who fills each positional slot of the reviewed help, edited and saved as
  * one layout: help shows names and order, never whether the launch template
  * already fills a slot. The backend refuses incomplete or gapped layouts. */
-export default function PositionalLayout({ effective, disabled, onSave }: {
+export default function PositionalLayout({ effective, disabled, onSave, onDraftSecrets }: {
   effective: EffectiveSchema;
   disabled: boolean;
   /** Replace all confirmations for the accepted help. */
   onSave: (options: Record<string, ConfirmedSyntax>) => void;
+  /** Display-only report of unsaved draft secret indices for sibling
+   * command/preview projections. Never persisted or applied to launch. */
+  onDraftSecrets?: (indices: number[]) => void;
 }) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
@@ -44,19 +48,38 @@ export default function PositionalLayout({ effective, disabled, onSave }: {
     setBase(signature);
     setDraft(initial());
   }
+  // Unsaved draft secret indices, reported for sibling projections from the
+  // moment they are picked. Same sourced rule as the saved supplement:
+  // explicit static roles for known-sensitive slots only.
+  const draftSecretList = useMemo(() => {
+    const indices: number[] = [];
+    for (const slot of slots) {
+      if (slot.sensitive.certainty === 'unknown' || slot.sensitive.value !== true) continue;
+      const role = decode(draft[slot.key] ?? '');
+      if (role?.role === 'static') indices.push(role.index);
+    }
+    return indices;
+    // Slots derive from the same effective schema the signature pins.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, signature]);
+  useEffect(() => {
+    onDraftSecrets?.(draftSecretList);
+    // A new review, runtime switch or unmount drops the draft report.
+    return () => { onDraftSecrets?.([]); };
+  }, [draftSecretList, onDraftSecrets]);
   if (slots.length === 0) return null;
   const entry = effective.entry;
   const conflicts = (effective.supplement?.conflicts ?? []).filter(conflict => conflict.field === 'positional');
   const confirmable = effective.help_state === 'current' && !!effective.accepted_fingerprint && !!entry;
   // A stale role cannot configure launch, but still identifies a token we
   // already know to be sensitive. Keep that display-only protection while
-  // the new review starts with unmapped slots.
-  const secretTokens = new Set<number>();
+  // the new review starts with unmapped slots. Unsaved draft roles mask
+  // this component's own choices from the moment they are picked.
+  const secretTokens = sensitiveStaticIndices(effective);
   for (const slot of slots) {
     if (slot.sensitive.certainty === 'unknown' || slot.sensitive.value !== true) continue;
-    for (const role of [effective.supplement?.options[slot.key]?.positional, decode(draft[slot.key] ?? '')]) {
-      if (role?.role === 'static') secretTokens.add(role.index);
-    }
+    const role = decode(draft[slot.key] ?? '');
+    if (role?.role === 'static') secretTokens.add(role.index);
   }
   const choices = [
     { value: '', label: copy.positionalUnmapped },

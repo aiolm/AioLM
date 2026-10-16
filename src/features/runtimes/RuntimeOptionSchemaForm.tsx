@@ -473,7 +473,7 @@ export function OccurrenceOrder({ schema, values, disabled = false, onChange }: 
   );
 }
 
-export function maskPreview(argv: string[], schema: OptionSchema, values: Record<string, unknown>): string[] {
+export function maskPreview(argv: string[], schema: OptionSchema, values: Record<string, unknown>, entrySecrets: Iterable<string> = []): string[] {
   const secrets = new Set<string>();
   for (const option of schema.options) {
     if (supported(option.sensitive) !== true) continue;
@@ -484,6 +484,12 @@ export function maskPreview(argv: string[], schema: OptionSchema, values: Record
       }
     }
   }
+  // Literal entry prefix tokens a known-sensitive positional slot holds via
+  // an explicit static role. The launch itself keeps the real bytes; only
+  // this display projection masks them.
+  for (const secret of entrySecrets) {
+    if (secret) secrets.add(secret);
+  }
   return argv.map(token => {
     if (secrets.has(token)) return '•••';
     const equals = token.indexOf('=');
@@ -493,8 +499,9 @@ export function maskPreview(argv: string[], schema: OptionSchema, values: Record
 
 /** Mask review projections only. The pasted command, plan and stored values
  * keep their exact bytes. A sensitive flag with uncertain arity hides every
- * following review word instead of guessing where its value ends. */
-export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, values: Record<string, unknown>): Pick<ImportedPlan, 'managed' | 'unrecognized'> {
+ * following review word instead of guessing where its value ends. Known
+ * sensitive entry tokens pass through the same projection masking. */
+export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, values: Record<string, unknown>, entrySecrets: Iterable<string> = []): Pick<ImportedPlan, 'managed' | 'unrecognized'> {
   const reviewValues: Record<string, unknown> = { ...values };
   for (const option of schema.options) {
     if (supported(option.sensitive) !== true) continue;
@@ -515,7 +522,7 @@ export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, v
     }
     reviewValues[option.key] = { occurrences: rows };
   }
-  return { managed: maskPreview(imported.managed, schema, reviewValues), unrecognized: maskPreview(imported.unrecognized, schema, reviewValues) };
+  return { managed: maskPreview(imported.managed, schema, reviewValues, entrySecrets), unrecognized: maskPreview(imported.unrecognized, schema, reviewValues, entrySecrets) };
 }
 
 function isApplicable(option: OptionSchemaDefinition, scope: string[]): boolean {

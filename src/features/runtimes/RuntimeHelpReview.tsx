@@ -22,14 +22,18 @@ import RuntimeArgumentList from './RuntimeArgumentList';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 import RuntimeSchemaChanges from './RuntimeSchemaChanges';
 import HelpTextSettings, { type HelpTextChoice } from './HelpTextSettings';
+import { sensitiveStaticIndices } from './sensitiveEntryTokens';
 
 /** Discover, review and accept the selected runtime's help. Help runs only on
  * the explicit button; acceptance pins this exact runtime build. */
-export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted }: {
+export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted, draftPrefixSecrets }: {
   cfg: AppConfig;
   effective: EffectiveSchema;
   disabled: boolean;
   onAccepted: () => void;
+  /** Unsaved draft secret prefix indices from the positional layout sibling.
+   * Display-only, same sourced rule; never persisted or applied to launch. */
+  draftPrefixSecrets?: Iterable<number>;
 }) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
@@ -121,6 +125,19 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
     }
   };
   const summary = found ? helpSummary(found[1]) : null;
+  // Entry prefix tokens a known-sensitive positional slot holds (explicit
+  // static role, current or stale supplement, plus unsaved sibling draft
+  // roles) stay hidden here exactly as in the positional layout. The program
+  // is not a prefix index and is shown.
+  const secretPrefix = sensitiveStaticIndices(effective);
+  if (draftPrefixSecrets) {
+    for (const index of draftPrefixSecrets) {
+      if (Number.isInteger(index) && (index as number) >= 0) secretPrefix.add(index as number);
+    }
+  }
+  const commandTokens = target
+    ? [target.program, ...target.prefix.map((token, index) => (secretPrefix.has(index) ? '•••' : token))]
+    : [];
   return (
     <section className="app-card app-card--tight mt-3" aria-labelledby={`${id}-title`}>
       <h4 id={`${id}-title`}>{copy.helpTitle}</h4>
@@ -128,7 +145,7 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
       {state === 'stale' && effective.help_detail && <FeedbackBanner tone="warning">{effective.help_detail}</FeedbackBanner>}
       {target && (
         <p className="app-section-hint">
-          {copy.command}: {[target.program, ...target.prefix].map(token => JSON.stringify(token)).join(' ')}
+          {copy.command}: {commandTokens.map(token => JSON.stringify(token)).join(' ')}
         </p>
       )}
       {target && !target.fixed && (

@@ -2226,7 +2226,46 @@ pub fn sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
     keys
 }
 
-/// The argv text of every saved value of the selected runtime's secret keys.
+/// Literal entry prefix tokens a known-sensitive positional slot holds
+/// through an explicit static role in the saved supplement, current or
+/// stale. Display-only: a stale role never configures launch (see
+/// `build_effective`), but it still identifies an already-known secret.
+/// Unknown certainty, non-positional slots, slots outside the reviewed help
+/// and out-of-range indices contribute nothing; the program is not a prefix
+/// index.
+fn sensitive_entry_tokens(effective: &EffectiveSchema) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    let (Some(supplement), Some(entry)) = (&effective.supplement, &effective.entry) else {
+        return tokens;
+    };
+    for option in &effective.schema.options {
+        if option.position.is_none() || option.target != Target::Launch {
+            continue;
+        }
+        if !effective.help_keys.contains(&option.key) {
+            continue;
+        }
+        if option.sensitive.supported() != Some(&true) {
+            continue;
+        }
+        let role = supplement
+            .options
+            .get(&option.key)
+            .and_then(|syntax| syntax.positional.as_ref());
+        if let Some(PositionalRole::Static { index }) = role {
+            if let Some(token) = entry.prefix.get(*index) {
+                if !token.is_empty() {
+                    tokens.insert(token.clone());
+                }
+            }
+        }
+    }
+    tokens
+}
+
+/// The argv text of every saved value of the selected runtime's secret keys,
+/// plus literal entry prefix tokens that known-sensitive static roles hold.
+/// The launch argv itself is never changed.
 fn secret_texts(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
     let keys = sensitive_keys(root, cfg);
     let values = super::launch::provider_options(cfg, super::provider_of(cfg));
@@ -2235,12 +2274,20 @@ fn secret_texts(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
         .filter(|(key, _)| keys.contains(*key))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    runtime_help_store::overrides_from_map(&secret)
+    let mut secrets: BTreeSet<String> = runtime_help_store::overrides_from_map(&secret)
         .values()
         .flat_map(|row| row.occurrences.iter().flatten())
         .map(argv_text)
         .filter(|text| !text.is_empty())
-        .collect()
+        .collect();
+    // Entry prefix tokens are not saved option values, so the key lookup
+    // above cannot see them; add the ones static roles provably hold.
+    if let Ok(selected) = Selected::from_config(cfg) {
+        if let Ok(effective) = effective_for(root, cfg, &selected, false) {
+            secrets.extend(sensitive_entry_tokens(&effective));
+        }
+    }
+    secrets
 }
 
 /// A display or record copy of argv with the selected runtime's secret
@@ -3177,5 +3224,540 @@ mod tests {
         );
         assert!(strip_scope(vec!["--a".into(), "serve".into()], &scope).is_err());
         assert_eq!(strip_scope(vec!["--a".into()], &[]).unwrap(), vec!["--a"]);
+    }
+
+    /// Isolated-home fixture: AIOLM_HOME is process-global, so the
+    /// isolated-home tests below serialize on a lock. No other default-run
+    /// test swaps that variable (the one precedent is an ignored
+    /// live-environment test).
+    fn isolated_home_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ISOLATED_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        ISOLATED_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// An isolated adapters home holding one synthetic custom engine
+    /// whose entry prefix carries `secret`. Restores the process
+    /// environment and removes the home when the test settles.
+    struct IsolatedHomeGuard {
+        home: PathBuf,
+        original: Option<std::ffi::OsString>,
+    }
+    impl Drop for IsolatedHomeGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(home) => std::env::set_var("AIOLM_HOME", home),
+                None => std::env::remove_var("AIOLM_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
+    fn synthetic_engine_ids() -> (String, String, String) {
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        (
+            format!("custom.staticprefix{}", &tag[..24]),
+            format!("staticprefix-{}", &tag[..12]),
+            format!("synthetic-entry-amber-{}", &tag[..8]),
+        )
+    }
+
+    fn prefix_with_static_secret(secret: &str) -> Vec<String> {
+        ["-I", "engine.py", "serve", secret, "plain-token"]
+            .iter()
+            .map(|token| token.to_string())
+            .collect()
+    }
+
+    fn manifest_with_static_prefix(
+        engine: &str,
+        runtime: &str,
+        home: &Path,
+        secret: &str,
+    ) -> registry::RuntimeManifest {
+        let program = home
+            .join("static-prefix-engine.exe")
+            .to_string_lossy()
+            .into_owned();
+        let probe = home
+            .join("static-prefix-probe.exe")
+            .to_string_lossy()
+            .into_owned();
+        let mut args = prefix_with_static_secret(secret);
+        args.push("{model}".into());
+        args.push("--port".into());
+        args.push("{port}".into());
+        registry::RuntimeManifest {
+            command_layout: Some(super::super::runtime_command::CommandLayout {
+                version: 1,
+                subcommands: vec![2],
+                options: vec![super::super::runtime_command::PrefixOption {
+                    index: 0,
+                    values: 0,
+                }],
+            }),
+            schema_version: registry::VERSION,
+            adapter_version: registry::VERSION,
+            engine_id: super::ProviderId::parse(engine).unwrap(),
+            runtime_id: runtime.into(),
+            display_name: "Synthetic static-prefix engine".into(),
+            platforms: vec![registry::Platform {
+                os: "windows".into(),
+                arch: "x86_64".into(),
+            }],
+            protocol: "openai-v1".into(),
+            probe: registry::ProcessSpec {
+                program: probe,
+                args: vec!["{model}".into()],
+                env: BTreeMap::new(),
+                working_directory: None,
+            },
+            launch: registry::ProcessSpec {
+                program,
+                args,
+                env: BTreeMap::new(),
+                working_directory: None,
+            },
+            launch_bindings: Some(registry::LaunchBindings {
+                version: 1,
+                options_separator: None,
+                prefix_len: 5,
+                bindings: vec![
+                    registry::BoundArgument {
+                        name: "model".into(),
+                        argument: registry::ArgBinding::Positional,
+                    },
+                    registry::BoundArgument {
+                        name: "port".into(),
+                        argument: registry::ArgBinding::Flag {
+                            flag: "--port".into(),
+                            equals: false,
+                        },
+                    },
+                ],
+            }),
+            bridge_command: None,
+            launch_resources: None,
+            option_metadata: None,
+            options: vec![],
+            model_formats: vec!["unknown".into()],
+            models: vec![],
+            artifacts: vec![],
+            health_path: "/health".into(),
+            health_authenticated: false,
+        }
+    }
+
+    fn positional_slot(key: &str, position: u16, sensitive: Fact<bool>) -> OptionDefinition {
+        let mut option = blank(key, "options", Target::Launch);
+        option.position = Some(position);
+        option.sensitive = sensitive;
+        option.help = format!("{key} help");
+        option
+    }
+
+    fn documented_sensitive() -> Fact<bool> {
+        Fact {
+            value: Some(true),
+            certainty: Certainty::Documented,
+            source: Some(Source::Adapter {
+                id: "synthetic.role".into(),
+                revision: "1".into(),
+            }),
+        }
+    }
+
+    fn schema_with_sensitive_slot(
+        engine: &str,
+        runtime: &str,
+        fingerprint: &str,
+        marker_sensitive: Fact<bool>,
+    ) -> OptionSchema {
+        OptionSchema {
+            schema_version: SCHEMA_VERSION,
+            binding: super::super::runtime_options::SchemaBinding {
+                engine: engine.into(),
+                runtime: runtime.into(),
+                fingerprint: fingerprint.into(),
+            },
+            options: vec![
+                positional_slot(
+                    "modelslot",
+                    0,
+                    Fact {
+                        value: Some(false),
+                        certainty: Certainty::Documented,
+                        source: Some(Source::Adapter {
+                            id: "synthetic.role".into(),
+                            revision: "1".into(),
+                        }),
+                    },
+                ),
+                positional_slot("marker", 1, marker_sensitive),
+                positional_slot("plain", 2, Fact::default()),
+            ],
+            constraints: vec![],
+            raw_help: vec![],
+            end_of_options: Fact::default(),
+        }
+    }
+
+    fn complete_help_report(fingerprint: &str) -> super::super::runtime_help::HelpReport {
+        let output = |text: &str| super::super::runtime_help::TextOutput {
+            text: text.into(),
+            clean_text: text.into(),
+            encoding: "utf-8".into(),
+            decoding_loss: false,
+            truncated: false,
+            read_error: None,
+            raw_bytes_base64: None,
+        };
+        super::super::runtime_help::HelpReport {
+            identity: super::super::runtime_help::Identity {
+                fingerprint: fingerprint.into(),
+                executable_sha256: "e".repeat(64),
+                artifacts_sha256: BTreeMap::new(),
+                parser_version: super::super::runtime_help::PARSER_VERSION,
+            },
+            scope: vec![],
+            stdout: output("synthetic help"),
+            stderr: output(""),
+            exit_code: Some(0),
+            success: true,
+            cancelled: false,
+            timed_out: false,
+            error: None,
+            elapsed_ms: 1,
+        }
+    }
+
+    fn supplement_with_static_roles(fingerprint: &str) -> Supplement {
+        let mut options = BTreeMap::new();
+        options.insert(
+            "modelslot".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Binding {
+                    name: "model".into(),
+                }),
+            },
+        );
+        options.insert(
+            "marker".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 3 }),
+            },
+        );
+        options.insert(
+            "plain".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 4 }),
+            },
+        );
+        Supplement {
+            version: SUPPLEMENT_POSITIONAL_VERSION,
+            fingerprint: fingerprint.into(),
+            options,
+        }
+    }
+
+    /// Plant a manifest, accepted snapshot and supplement under an isolated
+    /// home, point AIOLM_HOME at it and hand back the adapters root plus a
+    /// config selecting the engine. `supplement_fp` equal to `snapshot_fp`
+    /// is current; different is stale.
+    fn isolated_engine_home(
+        snapshot_fp: &str,
+        supplement_fp: &str,
+        marker_sensitive: Fact<bool>,
+    ) -> (
+        IsolatedHomeGuard,
+        PathBuf,
+        AppConfig,
+        String,
+        String,
+        String,
+    ) {
+        let (engine, runtime, secret) = synthetic_engine_ids();
+        let home =
+            std::env::temp_dir().join(format!("aiolm-static-prefix-{}", uuid::Uuid::new_v4()));
+        let adapters = home.join("runtimes").join("adapters");
+        let manifest = manifest_with_static_prefix(&engine, &runtime, &home, &secret);
+        registry::validate_manifest(&manifest).unwrap();
+        let record = serde_json::json!({
+            "manifest": serde_json::to_value(&manifest).unwrap(),
+            "executable_sha256": "e".repeat(64),
+            "probe_sha256": "f".repeat(64),
+        });
+        let registration = adapters
+            .join(&engine)
+            .join(&runtime)
+            .join("registration.json");
+        std::fs::create_dir_all(registration.parent().unwrap()).unwrap();
+        std::fs::write(&registration, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let schema = schema_with_sensitive_slot(&engine, &runtime, snapshot_fp, marker_sensitive);
+        runtime_help_store::save_snapshot(
+            &adapters,
+            &engine,
+            &runtime,
+            &HelpSnapshot {
+                report: complete_help_report(snapshot_fp),
+                schema,
+            },
+        )
+        .unwrap();
+        write_accepted(
+            &adapters,
+            &engine,
+            &runtime,
+            &AcceptedHelp {
+                version: ACCEPTED_VERSION,
+                working_directory: None,
+                fingerprint: snapshot_fp.into(),
+                request: HelpRequest {
+                    encoding: None,
+                    locale: None,
+                    working_directory: None,
+                    program: None,
+                    args: vec!["--help".into()],
+                    scope: vec![],
+                },
+            },
+        )
+        .unwrap();
+        let supplement = supplement_with_static_roles(supplement_fp);
+        let dir = runtime_help_store::snapshot_root(&adapters, &engine, &runtime).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(SUPPLEMENT_FILE),
+            serde_json::to_vec(&supplement).unwrap(),
+        )
+        .unwrap();
+        let cfg = AppConfig {
+            active_provider: engine.clone(),
+            active_runtime: runtime.clone(),
+            ..Default::default()
+        };
+        let original = std::env::var_os("AIOLM_HOME");
+        std::env::set_var("AIOLM_HOME", &home);
+        (
+            IsolatedHomeGuard { home, original },
+            adapters,
+            cfg,
+            engine,
+            runtime,
+            secret,
+        )
+    }
+
+    #[test]
+    fn static_entry_prefix_secrets_are_masked_for_current_help() {
+        let _home_lock = isolated_home_lock();
+        let snapshot = "a".repeat(64);
+        let (_guard, root, cfg, engine, runtime, secret) =
+            isolated_engine_home(&snapshot, &snapshot, documented_sensitive());
+        // The stored registration is legal and keeps the real token.
+        let manifest =
+            registry::manifest(super::ProviderId::parse(&engine).unwrap(), &runtime).unwrap();
+        assert!(manifest.launch.args.contains(&secret));
+        assert_eq!(manifest.launch.args[3], secret);
+        let argv = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "-I".into(),
+            "engine.py".into(),
+            "serve".into(),
+            secret.clone(),
+            "plain-token".into(),
+            format!("--token={secret}"),
+        ];
+        let masked = mask_argv(&root, &cfg, argv.clone(), REDACTED);
+        let redacted_token = format!("--token={REDACTED}");
+        let expected = [
+            "C:\\synthetic\\static-prefix-engine.exe",
+            "-I",
+            "engine.py",
+            "serve",
+            REDACTED,
+            "plain-token",
+            redacted_token.as_str(),
+        ];
+        assert_eq!(
+            masked,
+            expected
+                .iter()
+                .map(|token| token.to_string())
+                .collect::<Vec<_>>()
+        );
+        // The input argv and the stored manifest keep their exact bytes.
+        assert!(argv.contains(&secret));
+        assert!(manifest.launch.args.contains(&secret));
+        // Current roles still configure launch.
+        let effective = effective(&root, &cfg, false).unwrap();
+        assert_eq!(
+            effective
+                .entry
+                .as_ref()
+                .unwrap()
+                .positional_roles
+                .get("marker"),
+            Some(&PositionalRole::Static { index: 3 })
+        );
+    }
+
+    #[test]
+    fn stale_static_roles_stay_masked_without_applying_launch() {
+        let _home_lock = isolated_home_lock();
+        let (_guard, root, cfg, _engine, _runtime, secret) =
+            isolated_engine_home(&"a".repeat(64), &"b".repeat(64), documented_sensitive());
+        let argv = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "serve".into(),
+            secret.clone(),
+            "plain-token".into(),
+        ];
+        let masked = mask_argv(&root, &cfg, argv.clone(), REDACTED);
+        let expected = [
+            "C:\\synthetic\\static-prefix-engine.exe",
+            "serve",
+            REDACTED,
+            "plain-token",
+        ];
+        assert_eq!(
+            masked,
+            expected
+                .iter()
+                .map(|token| token.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(argv.contains(&secret));
+        // A stale role never configures launch, only display copies.
+        let effective = effective(&root, &cfg, false).unwrap();
+        assert!(!effective.supplement.as_ref().unwrap().current);
+        assert!(effective
+            .entry
+            .as_ref()
+            .unwrap()
+            .positional_roles
+            .is_empty());
+    }
+
+    #[test]
+    fn unknown_sensitivity_never_masks_entry_tokens() {
+        let _home_lock = isolated_home_lock();
+        let snapshot = "a".repeat(64);
+        let (_guard, root, cfg, _engine, _runtime, secret) = isolated_engine_home(
+            &snapshot,
+            &snapshot,
+            Fact {
+                value: Some(true),
+                certainty: Certainty::Unknown,
+                source: None,
+            },
+        );
+        let argv = vec!["serve".into(), secret.clone(), "plain-token".into()];
+        assert_eq!(mask_argv(&root, &cfg, argv.clone(), REDACTED), argv);
+    }
+
+    #[test]
+    fn sensitive_entry_tokens_cover_only_proven_prefix_positions() {
+        let entry = CommandEntry {
+            version: 1,
+            program: "/synthetic/engine".into(),
+            prefix: prefix_with_static_secret("synthetic-entry-secret"),
+            layout: None,
+            separator: None,
+            positional_bindings: None,
+            positional_roles: BTreeMap::new(),
+        };
+        let mut options = BTreeMap::new();
+        options.insert(
+            "marker".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 3 }),
+            },
+        );
+        // Guessed roles for unproven slots must not widen the mask.
+        options.insert(
+            "guess".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 4 }),
+            },
+        );
+        options.insert(
+            "far".into(),
+            ConfirmedSyntax {
+                arity: None,
+                repeatable: None,
+                positional: Some(PositionalRole::Static { index: 99 }),
+            },
+        );
+        let view = |sensitive: Fact<bool>| {
+            let mut schema_options = vec![
+                positional_slot("marker", 1, sensitive),
+                positional_slot("guess", 2, Fact::default()),
+            ];
+            // A request-scoped secret is not a launch token.
+            let mut request = positional_slot("request", 3, documented_sensitive());
+            request.target = Target::Request;
+            schema_options.push(request);
+            // A non-positional launch secret has no prefix position.
+            let mut flag = positional_slot("flag", 4, documented_sensitive());
+            flag.position = None;
+            schema_options.push(flag);
+            EffectiveSchema {
+                schema: OptionSchema {
+                    schema_version: SCHEMA_VERSION,
+                    binding: super::super::runtime_options::SchemaBinding {
+                        engine: "custom.example".into(),
+                        runtime: "build-1".into(),
+                        fingerprint: "a".repeat(64),
+                    },
+                    options: schema_options,
+                    constraints: vec![],
+                    raw_help: vec![],
+                    end_of_options: Fact::default(),
+                },
+                scope: vec![],
+                help_state: HelpState::Current,
+                help_detail: String::new(),
+                accepted_fingerprint: Some("a".repeat(64)),
+                compat_keys: vec![],
+                help_keys: vec![
+                    "marker".into(),
+                    "guess".into(),
+                    "far".into(),
+                    "request".into(),
+                    "flag".into(),
+                ],
+                shadowed: vec![],
+                conflicts: vec![],
+                metadata: None,
+                supplement: Some(SupplementView {
+                    fingerprint: "a".repeat(64),
+                    options: options.clone(),
+                    current: true,
+                    applied: vec!["marker".into()],
+                    conflicts: vec![],
+                }),
+                supplement_error: None,
+                entry: Some(entry.clone()),
+            }
+        };
+        // Only the proven sensitive slot's token is covered; the program,
+        // the plain neighbour and every unproven role stay exact.
+        assert_eq!(
+            sensitive_entry_tokens(&view(documented_sensitive())),
+            BTreeSet::from(["synthetic-entry-secret".into()])
+        );
+        assert!(sensitive_entry_tokens(&view(Fact::default())).is_empty());
     }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
@@ -9,6 +9,7 @@ import EngineSelect from '../../shared/ui/EngineSelect';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
 import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
 import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, OccurrenceOrder } from '../runtimes/RuntimeOptionSchemaForm';
+import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
 import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
@@ -89,6 +90,41 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   // probe) while the options are valid; it informs but does not gate saving.
   const [previewError, setPreviewError] = useState('');
   useEffect(() => { setPreview(''); setPreviewError(''); }, [cfg]);
+  // Unsaved draft secret prefix indices reported by the positional layout
+  // sibling (display-only, never persisted). Projections generated before the
+  // linkage are cleared so no rendered copy keeps the raw secret.
+  const [draftSecretIndices, setDraftSecretIndices] = useState<number[]>([]);
+  const draftSecretsKey = JSON.stringify([...draftSecretIndices].sort((a, b) => a - b));
+  useEffect(() => { setPreview(''); setPreviewError(''); setImportReview(''); }, [draftSecretsKey]);
+  // Saved (current/stale supplement) plus unsaved draft entry secrets for
+  // display projections only. Draft indices resolve against this effective's
+  // own prefix; out-of-range indices contribute nothing.
+  const entrySecretsFor = (view: EffectiveSchema, indices: number[]) => {
+    const saved = sensitiveEntryTokenStrings(view);
+    const prefix = view.entry?.prefix ?? [];
+    const drafted = indices.map(index => prefix[index]).filter((token): token is string => !!token);
+    return [...saved, ...drafted];
+  };
+  // Late display responses mask with the newest secrets, not the ones known
+  // when the request started: a mapping made while the request was pending
+  // must not leak through its resolution. Application still uses the
+  // request-time snapshot; only the review projection refreshes.
+  const effectiveRef = useRef<EffectiveSchema | null>(null);
+  effectiveRef.current = effective;
+  const draftSecretsRef = useRef<number[]>([]);
+  draftSecretsRef.current = draftSecretIndices;
+  const liveEntrySecrets = () => {
+    const view = effectiveRef.current;
+    return view ? entrySecretsFor(view, draftSecretsRef.current) : [];
+  };
+  // The layout reports draft indices from a passive effect; a display
+  // response resolving between that commit and this parent's re-render must
+  // already see them, so the ref updates synchronously here as well.
+  // Stable across renders so the layout only reports changed drafts.
+  const reportDraftSecrets = useCallback((indices: number[]) => {
+    draftSecretsRef.current = indices;
+    setDraftSecretIndices(indices);
+  }, []);
   const values = cfg.provider_options?.[provider] ?? {};
   // An external engine's options come from the runtime's manifest, so there is
   // nothing to validate (or preview) until a runtime is chosen above.
@@ -164,7 +200,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
         if (!current()) return;
         let next: Record<string, unknown>;
         try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(String(cause)); return; }
-        const review = maskImportReview(result, effective.schema, values);
+        const review = maskImportReview(result, effective.schema, values, liveEntrySecrets());
         setError(''); setImportReview([...review.managed, ...review.unrecognized].join(' '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
       }).catch(cause => { if (current()) setError(String(cause)); });
@@ -230,7 +266,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       void api.providerCommandPreview(source).then(args => {
         if (!current()) return;
         setPreviewError('');
-        setPreview((effective ? maskPreview(args, effective.schema, values) : args).map(arg => JSON.stringify(arg)).join(' '));
+        setPreview((effective ? maskPreview(args, effective.schema, values, liveEntrySecrets()) : args).map(arg => JSON.stringify(arg)).join(' '));
       }).catch(cause => { if (current()) { setPreview(''); setPreviewError(String(cause)); } });
     }}>{copy.preview}</button>
     {preview && <pre className="overflow-auto whitespace-pre-wrap">{preview}</pre>}
@@ -241,9 +277,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}
       onDiscard={() => saveSyntax(() => api.runtimeHelpClearConfirmedSyntax(cfg))} />}
     {effective && <PositionalLayout effective={effective} disabled={disabled || syntaxBusy}
-      onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }} />}
+      onSave={options => { const fingerprint = effective.accepted_fingerprint; if (fingerprint) saveSyntax(() => api.runtimeHelpConfirmSyntax(cfg, fingerprint, options)); }}
+      onDraftSecrets={reportDraftSecrets} />}
     {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} schema={effective.schema} />}
-    {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
+    {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} draftPrefixSecrets={draftSecretIndices} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
     </>}
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
     {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
