@@ -569,3 +569,9 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 | G07 | unrun | 이전16의 긴 wizard·접근성·작은 창 및 source2147 검사 근거 보존. 최종17 대량 옵션·미지 엔진·오류/복구·경합을 실제 GUI로 확인해야 한다. |
 
 별도 OS 세션을 현재 제공할 수 없다는 답변은 보존한다. 기존 설치와 사용자 데이터를 바꾸어 이 차단을 우회하지 않는다. 남은 독립 실행을 계속하며 필수 blocked/unrun과 원래 fail이 있으므로 Windows 종료 commit과 goal complete는 지정하지 않는다.
+
+### Strata 연결 중단 로그 조사와 새 엔진 사전 실행
+
+별도 reasoning 중단 검사에서 이미 보존한 실제 서버 로그를 조사했다. 해당 단일 요청은 `[strata] done: 3 tokens in 2 s (61.8 tok/s) (disconnect, cancel=True)`로 기록됐다. 로그 SHA256은 `3157ff779a17331d4b531f149ba117a9938df57b99c6a63db6df3b4cf12db438`다. 서버 `serve/server.py`의 SHA256 `6c45c639e28a873b854606719d9ce2bb2e0df666f105164e78e2735878b9aa8f`는 이 실제 검사의 등록 기록에 포함된 artifact 해시와 같고, 현재 고정 Strata revision의 해당 파일에 변경이 없다. **서버가 연결 중단을 인지하고 cancellation을 설정한 범위 pass**다. 소스에는 HTTP 연결 감시→취소 설정→generator close, 지원을 알린 native 엔진의 STOP 전송/종료 응답 drain 경로가 있다. 이 소스 경로와 로그를 실제 native STOP/DONE 원문 교환이나 엔진별 finish telemetry를 직접 포착한 증거로 확대하지 않는다. 원래 A04 fail·최종17 GUI 중지/Retry의 unrun과 기존 raw 결과는 그대로 유지했다. 모델·질문을 다시 실행하거나 제한을 바꾸지 않고 기존 근거를 조사했다.
+
+고정17 이후 만든 합성 v1/v2도 Windows의 명시된 Python entry point에서 실제 `--help`와 같은 opaque 모델의 `--probe`를 실행했다. 두 모델 probe는 선언한 engine/runtime/version·모델 지원을 반환했고 tools는 false였다. 도움말은 각각 203,104/203,146바이트이며 SHA256은 `eca99e97843b40841b087ff88a4752108e0b5379b4f0df29c727c642255d9bda` / `d6745e37e74758d8f50eff2fd36fbae8361abf231205b6e884816afb9cd1869e`다. 실제 v2 출력의 기존 text flag 제거/새 flag 추가, count의 단일 값→두 값과 기본값17→[23,24], negative spelling·1,000개 목록의 마지막 flag를 확인했다. fixture·모델·고정 GUI 해시는 보존됐다. 이는 **새 엔진의 entry point/help/probe 실행 전제 검사 pass**이며 AioLM의 parser·cache/diff·공통 GUI·프로필·실제 argv/응답 성공이 아니다. 추론 서버나 GUI 등록은 실행하지 않았다. 두 조사 결과는 `package17-independent-engine-preflight/results.json`과 해당 stdout/stderr에 있으며 완료한 이 사전 검사를 GUI 재개 시 반복하지 않는다.
