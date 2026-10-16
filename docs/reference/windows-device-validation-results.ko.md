@@ -318,6 +318,26 @@ D71: 같은 privacy runtime을 r2로 재등록한 stale 화면에서는 명령�
 
 Linux/Mac 후속 담당자는 L02/M01에서 D70의 정상 종료·소유권 오류/기한 보존과 D71의 stale help/preview/launch 오류에 literal 인자가 나오지 않는지를 함께 확인한다. 현재 두 OS의 실제 실행·컴파일은 unrun이며 Windows 결과를 이식해 pass로 기록하지 않는다. W08 별도 OS 테스트 세션은 여전히 제공 불가이고, 독립적으로 실행할 Windows 검증과 수정이 남아 있어 goal은 active다.
 
+## production14 실제 여정과 D72/D73 후속 수정
+
+production14는 source `c112b7d68f3253e510ee70a3f6ebb7046aa0461f`에서 GUI·CLI·NSIS·MSI를 새로 빌드하고 고정했다. GUI SHA-256은 `ed9ce5c73fd157eaaef676ae2888024804f5e02bb23ec2d0c98432c658f20655`, CLI는 `eb35548182e77b0f92d18bbdda282733e13dea16e45df585801042cf93f3b1ba`다. 설치 파일은 실행하지 않았다. 아래 실제 결과와 이후 `645e530`·`bc4e53d`의 소스/자동 검사 결과를 구분한다.
+
+| 범위 | production14 실제 판정과 근거 |
+| --- | --- |
+| D71 동일 stale 상태 | **pass**. 기존 r1 accepted help·역할·프로필과 r2 등록을 그대로 불러와, 경고의 literal 인자가 사라지고 구조화한 명령의 마스킹과 plain 인자 표시는 유지됨을 화면으로 확인했다. Start는 엄격히 거부하고 저장값을 유지했다. cwd를 명시적으로 비운 뒤 r2의 새 옵션/diff를 검토·수락하고 역할을 다시 연결해, 새 프로필·Ready·원래 positional argv·해시만 담은 합성 응답·정상 Unload까지 복구했다. unknown-sensitive 반례는 아직 unrun이며 합성 응답은 추론이 아니다 |
+| 실제 개인 엔진 | **pass, 이 바이너리의 여정 범위**. 고정 후 생성한 새 diagnostic flag가 앱/source에 없음을 확인했다. upstream `14310190cd0a0c831fe949ac8cbedd8abdc90695`에 추론을 바꾸지 않는 flag만 추가한 native CPU build SHA-256 `6d91bc0b962fab7af15566788c3cb724d4bef533d50c47c7564c54230fde880b`를 사용했다. 실제 wizard 실행 파일→help 255개(미확정 189개)→명시적 binding/protocol/probe→등록→공통 옵션→새 프로필 저장/닫기/재열기→fresh probe/Ready→실제 argv→답변 `5`/PP34·TG2를 확인했다. manifest의 `options`에 새 flag를 미리 선언하지 않았다. 한글·공백·따옴표·세미콜론·ampersand 값이 한 token으로 전달되고 무인증 접근은 401이었다. 생성 중 취소·원래 질문 snapshot·Retry 완료·정상 Unload도 확인했다. Retry의 숫자 나열 답변 품질은 별도로 남기며 그 내용을 정답으로 보정하지 않았다. CLI A01–A09도 모두 pass다 |
+| 원래 Strata GUI | **공통 추론/도구 여정 pass, 정상 정리는 fail**. 기존 revision `296b59d2f73c8f04a805df29c2fa97655adace78`, native 0.1.44.1, deployment/model/spec4를 유지했다. 새 복사 프로필에서 Ready·실제 답변 `5`/PP74·TG45, 생성 취소·원래 snapshot Retry의 1–1000 응답과 usage, 재시작 뒤 새 답변을 확인했다. MCP 거부는 RPC 0건, 앱과 Windows의 일회 승인 뒤 `blue-2046` 입력→`amber-7319` 반환→실제 모델의 `amber-7319` 후속 답변을 확인했다. 느린 호출 중 취소 후 소유 MCP 두 PID가 사라졌고 89초 뒤에도 늦은 반환/이력 반영이 없었다. MCP 정의는 원래 바이트로 복원하고 이전 로그 해시도 보존했다 |
+| 원래 Strata CLI | **D70 정리 pass, 원래 산술 요청 fail 유지**. 취소·정상 stop·제거/미등록 실행 거부·재등록, 소유 PID 12개·포트·빈 staging을 확인했다. 원래 `max_tokens:32` 산술 요청 세 번의 raw SSE는 reasoning만 출력하고 final content 없이 `finish_reason:length`, 실제 completion 32 tokens로 끝났다. 요청·모델·한도·정답 검사를 바꾸지 않았으며 GUI의 다른 기존 요청 성공으로 이 실패를 대체하지 않는다 |
+| 저장 자료·외부 파일 | 기존 프로필 10개와 이전 이력 파일 10개가 모두 동일 해시였다. 새 검증 프로필만 추가했으며 전체 설정/이력 복사본을 만들지 않았다. GUI 종료 뒤 원래 Strata weight 두 파일·deployment·실행 파일·bridge·probe helper의 **전체 파일 SHA-256 6개가 모두 동일**했다 |
+
+개인 엔진 모델은 원래 Qwen revision `9217f5db79a29953eb74d5343926648285ec7e67`, GGUF SHA-256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`다. Strata 모델 revision `5348543e0147355ac9cbcb031184a3546350988e`과 두 weight 해시는 앞선 고정 기록과 동일하다. raw `package14-candidate.json`, `package14-d71-stale-native-verdict.json`, `package14-privacy-r2-recovery-verdict.json`, `package14-private-gui-verdict.json`, `package14-private-cli-observed/results.json`, `package14-mcp-approved-rpc-verdict.json`, `package14-mcp-inflight-cancel-verdict.json`, `package14-mcp-definition-restoration-verdict.json`, `strata-adapter-acceptance/package14-cli-observed/results.json`·`package14-post-gui-provenance/results.json`이 각 실행의 source/runtime/model/hash와 범위를 담는다.
+
+D72: 긴 manifest 검토 끝에서 Register를 누르면 새 엔진의 올바른 완료 안내/다음 동작은 위에 생기지만 화면은 JSON 안에 남고, 사라진 Register 버튼의 포커스가 body로 이동했다. 실제 Windows 화면으로 재현했고 `645e530`에서 현재 등록 성공의 안내 그룹에 포커스를 옮겨 브라우저가 다음 동작을 보여 주도록 수정했다. 실패·무관한 refresh·숨긴 페이지에 늦게 도착한 성공은 포커스를 가져가지 않는다. 실제 component/app CSS의 별도 합성 렌더는 수정 전 화면 밖/Tab→Previous, 수정 후 안내와 Open 동작이 보임/Tab→반환된 엔진 Open을 확인했다. 초기 잘못된 CSS harness의 원본은 worker가 삭제해 전사본만 남아 있고, 올바른 CSS의 before/after raw와 원래 native 실패는 보존했다. 관련 54개·typecheck·lint와 전체 `npm run test:unit`(UI 202 files/2,137 tests 및 contract/direct/script 포함)이 exit 0이다. 공통 frontend/script/test/package 619개 파일은 해당 전체 검사 전후 동일 bytes였다. 이 수정의 native production pointer/keyboard 재검증은 **unrun**이다.
+
+D73: production14의 정상 GUI Unload와 모델을 올린 채 앱 Quit에서 각각 소유 프로세스는 종료됐지만 새 staging의 **유효한 owner record·lock·engine.log**가 남았다. 두 예전 markerless 잔여와 구분하고 실패 원본 파일을 보존했다. 다음 Start가 유효한 소유 잔여만 자동 회수하는 것은 pass지만 정상 정리 실패를 pass로 바꾸지 않는다. 실제 원인은 desktop teardown이 tree 종료 확인 뒤 파일 정리를 한 번만 시도하던 경로다. 원래 실패 순간의 구체적인 파일 핸들 보유자는 입증하지 못했다. `bc4e53d`는 소유권을 매번 다시 확인하는 Windows 공유 오류 32/33의 재시도 단계를 CLI와 공유하고, GUI tree 대기와 정리를 **기존 하나의 10초 종료 예산 안에서** 수행한다. UUID/PID/reparse·소유 표식 마지막 삭제·실패 시 다음 시작 복구 계약을 유지한다. 기존 GUI bridge journey에서 실제 삭제를 막는 Windows 파일 핸들로 RED(exit101)→GREEN(exit0)을 확인했다. 전체 Rust는 Cargo 아티팩트 28개별 마지막 요약으로 **1,173 pass/0 fail/17 ignored**이며, worker 합계 1,178의 중복 child 요약 5개를 제외했다. fmt·Clippy(-D warnings)·no-default도 exit 0이다. raw `package14-strata-gui-first-unload-verdict.json`, `package14-strata-gui-normal-quit-verdict.json`, 두 `package14-failed-gui-*` 보존 폴더, `claude-d73/report.md`, `d73-final-rust-artifact-counts.json`에 연결한다. 수정 후 실제 Strata GUI Unload/Quit·CLI 회귀는 **unrun**이다.
+
+다음 production은 D72/D73를 포함한 source를 새로 빌드·고정한 뒤 다시 생성한 미지 flag로 검증한다. production14용 새 대량 옵션 fixture는 준비됐지만, 이 후속 수정의 최종 미지 옵션 성공으로 계산하지 않는다. W05 원래 복합 미디어 질문 실패와 필수 공통 기능/접근성/경합 검사, W08 별도 Windows 설치 세션의 차단은 남아 있으며 goal은 active다.
+
 ## G01–G07과 후속 인계
 
 | ID | 상태 | 남은 실행 |
@@ -347,6 +367,8 @@ Windows의 필수 구현·검증·작업별 commit이 끝나면 실제 종료 co
 D62의 Linux/Mac 분기는 이 Windows 기록으로 컴파일 성공을 추정하지 않는다. L01과 M01에서는 전체 native 빌드 뒤 `providers::launch_resources::tests::recovery_reclaims_only_staging_whose_owner_and_process_are_gone`를 직접 실행하고, OS 잠금·실행 중/재사용 PID·링크·확인할 수 없는 예전 디렉터리 보존을 확인한다. `headless_descendant_listener`와 잠긴 파일 삭제 거부 검사는 Windows 전용이므로 다른 OS에서 테스트 0개로 끝난 결과를 그 계약의 통과로 계산하지 않는다. 해당 OS의 실제 bridge/CLI에서 시작 중단→다음 launch의 소유 staging 복구, 정상 unload/restart/quit의 child·port 정리, 다른 세션/프로세스 보호를 실행한다. 공통 정리 코드를 고치면 Windows의 실제 Strata Unload/Quit 및 headless 지속 실행/중단 복구를 다시 검사한다.
 
 D68의 새 positional metadata 등록·관측 help·명시 역할·원문 argv와 current/stale 표시 보호도 L02/M01에서 해당 OS의 실제 interpreter로 실행한다. 같은 key의 flag/request/app binding 보호, 예전 flag 문서의 digest 보존, 조건부 Python 검사의 실제 실행을 구분한다. `runtime_positional_metadata_journey`는 test-fixtures가 활성화된 검사 대상이며 실제 엔진 추론을 뜻하지 않는다.
+
+D70/D73의 공통 정리 단계는 L01/M01에서 해당 OS의 native 빌드·실제 bridge stop/restart/quit으로 다시 검사한다. Windows 공유 오류 검사의 통과나 다른 OS의 조건부 검사 0개를 Linux/Mac 실행 근거로 사용하지 않는다. D72도 긴 검토 뒤 실제 pointer/keyboard 등록 완료 안내·다음 동작과 숨긴 페이지의 늦은 결과 포커스를 해당 GUI에서 확인한다. 공통 종료/포커스 코드를 수정하면 Windows의 원래 Strata GUI Unload/Quit·CLI 소유 수명주기와 긴 wizard 등록을 관련 재검증으로 연결한다.
 
 D63–D65의 공통 UI 수정도 해당 OS에서 current/stale/미저장 역할의 민감값 표시, 늦은 preview/import 응답, 원문·실제 argv 보존과 동일 engine의 새 build 등록 완료 이름/ID를 실제 GUI로 확인해야 한다. 새 flag와 대량 옵션은 그 OS의 고정 앱 이후에 다시 생성한다. 후속 결과에 실제 실행 source와 binary hash를 연결하며 Windows의 이전 바이너리 성공을 복사하지 않는다. 현재 이 항목들은 Linux/Mac `unrun` 인계다.
 
