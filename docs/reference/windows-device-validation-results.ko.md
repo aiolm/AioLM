@@ -554,10 +554,10 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 | --- | --- | --- |
 | W01 | pass | 마지막 제품 수정의 전체 UI 202파일/2,147개·typecheck·lint 및 고정17 native CLI smoke pass. 이후 문서만 변경했다. 제품을 다시 수정하면 영향 검사와 수정 후 production을 다시 실행한다. |
 | W02 | blocked | 기존 합성 migration·프로필/이력 보존과 새 앱 홈 onboarding은 각각 기록한 source에서 pass. 기존 설치의 실제 OS 계정 이전·자격 증명 검사는 별도 세션 부재로 blocked다. |
-| W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성17 v1/v2의 실제 GUI 등록·help/변경 diff·프로필·argv/echo·정상 언로드는 아래 범위 pass. 모델 probe 경합/취소·늦은 응답 보호는 남았다. |
+| W03 | fail | 고정17 CLI 변조 거부·제거/복원/재등록, 합성17 v1/v2 GUI/help/diff/프로필/argv·응답은 한정 pass. 추가 실제 지연 probe에서 D81 preflight 취소/진행 표시 누락을 재현했다. 수정과 새 production 실제 재검증이 필요하다. |
 | W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI/실제 GUI의 새 옵션·추론/usage·생성 취소·Retry·정상 언로드, Strata17 GUI의 실제 스트리밍 취소·같은 질문 Retry/usage는 한정 pass. 최종 재시작/로드 상태 종료는 남았다. |
 | W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·저장/재로드 근거 보존. 최종17 실제 Strata MCP의 거부/call0·승인/입력과 다른 도구 반환값 후속·호출 중 취소/늦은 결과 보호는 한정 pass. 최종17 미디어 관련 재검증이 남았다. |
-| W06 | unrun | 최종17 D79 편집 보호·D80 세 역할 이름/실제 응답·Strata+BGE RAG·Whisper STT·gateway 인증/라우팅·BGE만 중지/다른 세션 보존은 한정 pass. CSV/XLSX·공유·이력 재로드/최종 종료 등의 잔여 흐름은 남았다. 이전16 성공은 해당 source 범위로 유지한다. |
+| W06 | unrun | 고정17 D79/D80·RAG/STT·gateway·BGE만 중지와 아래 실제 이력 재로드/CSV/XLSX·공유 미리보기/로드 상태 종료는 한정 pass. D81 수정 후 영향 범위의 최종 production 재검증은 남았다. 이전16 성공은 해당 source 범위로 유지한다. |
 | W07 | unrun | 원래12 staging 실패는 유지하고 이후 수정된 CLI17 정상 소유 정리와16 GUI의 언로드/로드 중 정상 Quit 성공을 분리한다. 최종17 실제 GUI의 원래 Strata·실패 복구/경합/다른 세션 보호가 남았다. |
 | W08 | blocked | 고정17 네 target 생성·MSI/NSIS 읽기 전용 내부 application payload, 새 홈16 CPU bundle 실제 추론은 한정 pass. 별도 OS 계정의 실제 설치/업그레이드/제거·Credential Manager는 blocked이며, 최종 실제 GUI/OS 표시 검사는 남았다. |
 | G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 합성 미지 옵션과 실제 개인 엔진의 GUI/저장/실제 argv·응답은 아래 범위 pass. 전체 계약/기존 기능 보존의 잔여 확인은 남았다. |
@@ -566,7 +566,7 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 | G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 합성 v1/v2 프로필 재로드·negative/zero/arity2/repeat tuple/multiple/optional과 실제 개인 flag의 OS argv 대조는 아래 범위 pass. 전체 공통 기능 보존의 잔여 확인은 남았다. |
 | G05 | unrun | 빈 options/필수 server 기본값 없는 개인17 setup의 실제 파일 선택→help→명시 binding/probe→등록→새 옵션 GUI/프로필→실제 응답과 Strata/BGE/Whisper의 명시 protocol/bridge 공통 기능은 한정 pass. 최종 종료/실패 복구 등은 남았다. |
 | G06 | unrun | 실제17 중립 runtime 목록·미지 엔진 등록과 최종17 D79 성공/편집 보호, D80 세 역할의 이름/연결은 아래 범위 pass. 나머지 공통 기능 보존과 실제 경합 경로 확인은 남았다. |
-| G07 | unrun | 이전16의 긴 wizard·접근성·작은 창 및 source2147 검사 근거 보존. 최종17 대량 옵션·미지 엔진·오류/복구·경합을 실제 GUI로 확인해야 한다. |
+| G07 | fail | 이전16 긴 wizard·접근성·작은 창과 고정17 대량/미지 옵션 흐름의 근거 보존. 실제17 지연 preflight에서 D81을 재현했다. 취소/진행 표시 수정 후 관련 자동 검사와 새 production 실제 복구 확인이 필요하다. |
 
 별도 OS 세션을 현재 제공할 수 없다는 답변은 보존한다. 기존 설치와 사용자 데이터를 바꾸어 이 차단을 우회하지 않는다. 남은 독립 실행을 계속하며 필수 blocked/unrun과 원래 fail이 있으므로 Windows 종료 commit과 goal complete는 지정하지 않는다.
 
@@ -652,3 +652,27 @@ raw `package17r1-strata-rag-stt-native-verdict.json`, `package17r1-stt-original-
 원래 숫자 나열 질문 SHA256 `584b6df00db96e08c9e8a1f6e512bb6fbca9bbf1ed7576090a0c2bfdc955b288`으로 실제 추론 텍스트가 스트리밍되는 것을 GUI에서 확인했다. 정상 Stop 후 content0·reasoning1,751자의 중단된 부분과 interrupted 상태가 저장됐다. 이때의 별도 원본을 보존하고 같은 user 메시지의 Retry를 한 번 실행했다. 기존 GUI 제한·모델·질문·timeout을 바꾸지 않았다.
 
 Retry는 약33.29초 뒤 stop·PP5/TG4074·cached77로 정상 완료됐다. 실제 content3,892자는 1부터1000까지 한 줄씩인 원래 요구와 정확히 일치했고 reasoning674자·두 메시지 이력이 남았다. **실제 GUI 스트리밍 취소·부분 보존·Retry/usage 범위 pass**다. raw `package17r1-strata-cancel-retry-native-verdict.json`과 해당 native 근거다. GUI의 기존 출력 제한과 앞선 CLI의 max1024는 다른 검사 조건이므로 원래 CLI A04와 산술32의 content fail을 바꾸지 않는다. native STOP/DONE wire acknowledgement도 이 결과로 확정하지 않는다.
+
+### production17 정상 재시작·이력 재로드·로드 상태 종료
+
+실제 GUI에서 Strata만 정상 언로드했다. 사전 관찰한 소유 프로세스4개가 종료되고 포트가 닫혔으며, 나머지 소유 식별자12개·개인 엔진/Whisper/gateway 포트는 그대로였다. 새 Strata staging도 없어지고 원래 두 markerless 로그 해시는 같았다. 같은 프로필로 다시 실행해 새 소유 식별자와 Ready를 확인했다. 재시작 전후 native Windows argv가 전체적으로 같았으며 원래 두 spec4·모델·context·KV 조건도 유지됐다. 같은 GUI 산술 질문은 `5`·PP74/TG45·stop이었다. 짧은 CLI 제한의 기존 실패를 변경한 결과는 아니다.
+
+실제 대화 목록에서 이번17의 RAG·STT·승인 MCP 대화를 각각 다시 열었다. 답변·PP/TG가 각각229/231,124/160,82/70으로 복원됐고 세 저장 thread의 전체 해시가 기존 실행 기록과 같았다. 기존34개 프로필 전체 항목 해시를 유지하면서 총38개, 세션 정의6개를 보존했다. raw `package17r1-strata-only-normal-unload-verdict.json`, `package17r1-strata-restart-history-native-verdict.json`이다.
+
+Strata·개인 엔진·Whisper와 gateway가 로드된 상태에서 원래 close-to-tray=false 설정의 정상 Close를 실행했다. 사전 관찰한16개 소유 프로세스의 종료, 포트4개 닫힘, 새 staging0개, 원래 두 markerless 로그 전체 해시를 확인했다. GUI/WebView의 일부 종료 객체에 열린 handle이 남아 있었으므로 단순 OpenProcess 성공을 생존으로 판정한 첫 검사는 보존했다. 실제 프로세스 종료 신호와 exit0 또는 error87로 구분했으며 검사 도구의 강제 종료는 없었다. **로드 상태 정상 Quit의 소유권/정리 범위 pass**다. raw `package17r1-loaded-normal-quit-owned-verdict.json`이다.
+
+별도 종료 전 전체 파일 snapshot은 기존 help 경로2개가 홈 범위 밖으로 resolve되는 경계 검사에서 중단됐다. 다음 shell 명령의 정상 Close가 실행돼 그 snapshot을 종료 전후 전체 bytes 보존 근거로 사용하지 않았다. 범위 밖 원본은 읽거나 삭제하지 않았다. 기존 불투명 baseline의 config 외41개 파일·프로필34개를 다시 대조했고, 정상 종료 뒤 새로 고정한 범위 내113개 파일·프로필38개를 같은17 재실행 전후 대조해 변경0개였다. 범위 밖 두 항목은 제외 이유와 함께 보존했다. raw `package17r2-before-launch-data.json`과 재실행/native readback이다. 없는 종료 전 근거를 소급 생성하지 않는다.
+
+### production17 기존 측정 이력·CSV/XLSX·공유 미리보기
+
+같은17에서 원래16의 CPU/Qwen 완료 이력을 실제 선택했다. 원본 record SHA256 `c54af124d830965fb21eff1777c1c668035335210b4b6558827526c1225b545e`가 같았고, 실제 Windows 저장 창으로 새 CSV644바이트와 XLSX7,483바이트를 생성했다. CSV/XLSX의 열·값이 저장한 trial의 PP1024/TG128·지표와 정확히 일치했다. 공유 미리보기에서 모델/장치/조건/측정값 표시와 개인 경로·인증 정보 패턴 부재를 확인했다. 공개 게시·전송은 실행하지 않았다. **기존 측정의 재로드/내보내기·공유 미리보기 보존 범위 pass**이며 새17 benchmark 실행의 대체 근거가 아니다. raw `package17r1-benchmark-reload-export-native-verdict.json`이다.
+
+현재 Strata 외부 process v1에는 정확한 tokenizer·cold-cache benchmark 절차가 없다는 실제 GUI 안내/비활성 실행과 `providers/adapter.rs`의 `RuntimeFeature::ExactBenchmark`, `performance_bench.rs`의 같은 계약을 확인했다. **이 정확 측정 절차만 unsupported**다. Strata의 일반 추론·usage·저장 이력/내보내기 지원을 부정하거나 원래 실패를 바꾼 판정이 아니다.
+
+### D81: 모델 실행 전 preflight의 취소/진행 표시 누락
+
+고정17에 별도 합성 엔진 `custom.synthetic-g17-races`/`race-44ef58ce13fd`를 등록했다. 빈 options manifest SHA256 `7a9ce04ca56c3d5c4263bde0d39b17556840df11a9ef095efb8876b87be76f2f`, fixture executable script `6caf2658f2ca080693ec999dd541ada9ef8fbc555607924bf5cc137d58692522`, spec `da25fb082142f619f9ce23a731610917da9b07897c5fcc6cdedcc17e19c02939`를 고정했다. help/probe 지연15초는 이 fixture의 동작이며 제품 timeout이나 원래 엔진을 바꾸지 않았다. 실제 pending help의 정상 Cancel은 새 소유 프로세스3개 종료·기존7개 보존·원래 지연 뒤 늦은 반환0개·미수락 상태로 한정 pass다. 첫 자연 완료 이후 도착한 취소 검사는 입력 전에 거부됐고 성공으로 계산하지 않았다. raw `package17r2-help-cancel-native-verdict.json`이다.
+
+같은 실제 GUI에서 새 프로필로 모델A를 저장한 뒤 실행했다. 실제 preflight subprocess가 15초 대기하는 동안 설정 modal은 모델명·중지 상태·실행 footer만 표시했다. **취소 버튼과 진행 설명이 없어 사용자가 이 단계를 중단할 수 없었다.** native 검사는 취소 버튼0개를 확인해 입력하지 않았고, 검사 후 자연 완료한 preflight와 두 번째 시작 probe가 모델을 Ready로 만들었다. 이후 정상 언로드했다. 이것은 probe 취소 성공이나 플랫폼 unsupported가 아니라 **D81 제품 결함 fail**이다. raw `D81-preflight-cancel-red-native.json`, 해당 pending subprocess/GUI 근거를 보존한다.
+
+원인은 `ModelSettingsProvider.persist`가 `preflightLaunch`를 먼저 기다리고 그 뒤에만 launching/cancel을 노출하는 순서와, backend `preflight_launch`가 취소 owner 없이 validation을 실행하는 계약이었다. 새 회귀 검사는 기존45개 pass/새1개 fail로 같은 누락을 재현했다. 요청별 취소·진행 표시·늦은 성공의 저장/실행 차단을 수정 중이며, 수정 후 전체 자동 검사와 새 production의 실제 지연 probe 취소/복구·기존 엔진 재검증이 필수다. 고정17의 앞선 한정 pass를 새 수정 완료나 전체 goal 완료로 확대하지 않는다.
