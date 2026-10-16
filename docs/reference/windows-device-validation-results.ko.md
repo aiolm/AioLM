@@ -456,3 +456,22 @@ D63–D65의 공통 UI 수정도 해당 OS에서 current/stale/미저장 역할�
 | M02 | 원래 모델·호환 환경을 보존하고 실제 WKWebView에서 llama.cpp CPU/Metal·vllm-metal·MLX 및 지원 개인 엔진의 공통 여정을 실행한다. 앱 hash 고정 후 새 flag를 만드는 순서와 실제 media/MCP/usage/취소·Retry·종료 계약을 유지한다 | 엔진별 실제 결과와 준비된 probe/capability. 공통 변경은 Windows/Linux의 G·chat·gateway 관련 검사를 다시 실행 |
 | M03 | MAC-R01–R13을 각각 독립 판정한다. 원본 FP와 새 음성 3개, 원래 SmolVLM 질문, 개발 reload, 최신 DMG/호환 bundle, 별도 계정/Keychain/Finder, ffmpeg 부재, VoiceOver, Intel/구형 OS, 실제 개인 엔진 조건을 확보한다 | 원래 fail/blocked/unrun 보존. 다른 모델/기기의 성공으로 대체하지 않으며 필요한 자원과 다음 실행을 명시 |
 | M04 | 마지막 수정 후 production package/실제 GUI/CLI·기존 데이터 보존·정상 종료/복원을 확인하고 Mac 종료 source와 앞선 OS 관련 재검증을 고정한다 | OS별 최종 commit/hash·미해결 항목. 모든 OS 실행은 해당 기기에서 수행 |
+
+
+## production16 공통 연결과 세션 이름 수정
+
+이 절의 실제 GUI는 source `45cb369`와 위에 고정한 production16이다. 이후 D79·D80 소스 수정의 native 성공으로 소급하지 않는다.
+
+| 범위 | 판정과 실행 근거 |
+| --- | --- |
+| 별도 검색 엔진 + Strata 답변 | **pass, 현재 여정**. 원래 b11617 CPU/BGE revision `d32f8c040ea3b516330eeb75b72bcc2d3a780ab7`, 모델 SHA-256 `ec38e8da142596baa913124ae50550de284b6916bf59577ef2f0cb9660c2f514`를 명시적 embedding 모드의 새 세션/프로필로 저장했다. 실제 Chat에서 이 검색 대상을 선택하고 원래 Unicode·공백 경로 문서 두 개/순서/질문을 유지했다. 원래 고정 Strata가 Pim/teal heron을 답했고 vector score .6176/.4054·인용·PP229/TG165·저장 이력을 확인했다. reload는 별도 unrun |
+| 독립 세션·gateway | **pass, 현재 여정**. main Strata와 두 named 세션을 함께 실행했다. 실제 GUI가 시작한 gateway에서 누락/잘못된 key401, 실제 BGE embedding200/384차원/usage8, embedding 대상 chat400 `unsupported_task`, 미등록 모델404, 다른 실제 텍스트 세션의 답변5를 확인했다. BGE만 정상 중지한 뒤 같은 key로 모델 목록에서 제거/embedding404·다른 세션의 답변5/PP44·TG2를 확인했다. key는 메모리에서만 사용했고 파일에 저장하지 않았다. 원래 clipboard DataObject 복원 호출은 확인했으나 모든 형식의 바이트 일치를 주장하지 않는다 |
+| 별도 음성 엔진 + Strata 답변 | **pass, 현재 여정**. 원래 explicit Whisper bridge·revision `0c7be696371069e0baa2515ed7aa08d5a5473aa6`, CLI SHA-256 `21bfbad3dd5749b6f82e82786c30f8714a82a754d424af46903d4370f738d984`, tiny.en revision `5359861c739e955e79d9a303bcbc70fb988958b1`, 모델 SHA-256 `921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`를 유지했다. 실제 GUI 등록→새 named STT/프로필→원래 manifest의 정확한 모델 경로→fresh probe의 transcription task→명시적 음성 대상 선택→원래 JFK WAV/질문으로 실행했다. 실제 Whisper 전사와 별도 Strata 답변, PP124/TG160·stop·저장된 audio/transcription/응답 역할을 확인했다. reload·정상 Quit은 별도 unrun |
+| 경로/등록 제한 | **pass, 거부 계약**. 모델 실행 중 등록이 잠기는 기존 안내를 확인하고 해당 검증 모델을 정상 중지한 뒤 등록했다. 원래 bridge가 모델 경로 문자열을 엄격히 비교해 같은 파일의 별칭 경로를 거부한 결과를 보존했다. samefile/전체 해시로 동일 파일임을 확인하고 manifest에 선언된 원래 경로를 선택했으며 bridge·모델·해시 검사를 바꾸지 않았다 |
+| 원래 실패 보존 | **fail 유지**. 앞선 Qwen 첫 음성 답변의 추가 주장, Strata CLI의 원래 32-token 산술 실패, 원래 SmolVLM 이미지 내용 실패를 위 성공으로 지우지 않는다. Windows 실제 설치/업그레이드/제거/Credential Manager는 별도 로그인 계정/VM 부재로 blocked다 |
+
+raw는 `package16-strata-bge-rag-native-verdict.json`, `package16-gateway-native/phase1.json`, `phase2.json`, `package16-bge-independent-normal-stop.json`, `package16-whisper-strata-stt-native-verdict.json`, `package16-stt-original-model-path-identity.json`이다. 원래 Strata revision/model/deployment·두 spec4 인자는 그대로다. 원래 프로필 10개와 production16 시작 전 비설정 파일 29개의 해시 보존, 이후 프로필 전체의 익명 해시 기준을 기록했다. 설정/이력 원문을 복제하거나 커밋하지 않았다. 첫 Strata 정상 언로드의 자식/소유 staging 정리는 확인했지만 해당 시작의 listener를 미리 기록하지 않아 그 포트 정리는 unrun이다. 다음 Strata/Whisper 실행은 실제 소유 PID·listener·staging을 미리 관측했으며 종료 검증은 계속 필요하다.
+
+이 과정에서 **D80**을 재현했다. Sessions에서 저장한 이름이 Chat의 실행 중 답변·검색·음성 대상 메뉴에서 모델 파일명/생성된 이름으로 바뀌어, 여러 엔진의 역할을 찾기 어려웠다. `ce386ab`은 같은 세션 ID의 비어 있지 않은 저장 이름을 표시하고 실제 runtime의 URL·인증·모델·task·상태·ID는 보존한다. 이름이 없거나 공백이면 원래 runtime 이름을 사용한다. 새 engine ID 분기·저장/API 변경은 없다. RED에서 이름 누락 3개와 기존 fallback 통과 2개를 확인했고, 수정 후 관련 4파일/70개와 전체 UI 202파일/2,147개·typecheck·lint가 exit0이다(기존 CustomSelect 경고 1개/오류 0개). embedding 검사 최초 실패는 로드된 답변 fixture 누락으로 첨부가 비활성화된 검사 준비 오류이며, 실제 준비 fixture만 수정한 전후 로그를 보존했다. readiness를 제거하지 않았다. raw `root-d80/checkpoint.json`과 `claude-g-repair/runs/1792149678516-d80-running-session-names-red`, `1792149798741-d80-running-session-names-green-loaded-answer-fixture`, `1792149821774-d80-final-full-npm-unit`이다. **D79/D80 수정 후 production native는 unrun**이다.
+
+L02/M01에서는 해당 OS의 실제 GUI에서 새 named 답변·embedding·transcription 세션을 저장/로드하고, 편집하지 않은 세션의 이동과 실제 편집/선택 경합 보존(D79), 저장 이름의 세 메뉴 표시 및 실제 endpoint/model/auth 보존(D80)을 함께 확인한다. 공통 세션/Chat 코드를 바꾸면 Windows의 같은 새 세션·RAG·STT·gateway 경로를 재검증한다. 최종 Windows 종료 commit은 아직 확정하지 않았으며 goal은 active다.
