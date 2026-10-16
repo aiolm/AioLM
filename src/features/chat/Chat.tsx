@@ -76,8 +76,13 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   });
 
   const savedSessions = store.cfg?.sessions ?? [];
+  const savedSessionNames = new Map(savedSessions.map(definition => [definition.id, definition.name?.trim()]));
+  const namedSessions = sessions.map(session => {
+    const name = savedSessionNames.get(session.id);
+    return name && name !== session.name ? { ...session, name } : session;
+  });
   const availableSessions = [
-    ...sessions,
+    ...namedSessions,
     ...savedSessions.filter((definition) => !sessions.some((session) => session.id === definition.id)).map((definition): api.SessionStatus => ({
       id: definition.id, name: definition.name, state: "stopped", model: definition.models.primary_model,
       mmproj: definition.models.mmproj, draft_model: definition.models.draft_model,
@@ -93,7 +98,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
   }, [sessionsLoaded, selectedSessionAvailable]);
 
   const selectedStatus = selectedSession ?? store.status;
-  const embeddingCandidates = [{ ...store.status, id: 'default', name: t('ui.defaultSession') }, ...sessions];
+  const embeddingCandidates = [{ ...store.status, id: 'default', name: t('ui.defaultSession') }, ...namedSessions];
   const embeddingChoice = selectEmbeddingSession(embeddingCandidates, selectedSessionId, embeddingSelection);
   const embeddingCopy = embeddingTargetCopy[locale];
   const serverOn = isServerRunning(selectedStatus.state);

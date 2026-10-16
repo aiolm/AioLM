@@ -1099,3 +1099,81 @@ describe('ChatPanel recovery of replies without output and non-chat sessions', (
     expect(screen.queryByText(/not chat or text generation/)).not.toBeInTheDocument();
   });
 });
+
+describe('saved names for running chat targets', () => {
+  const definition = (id: string, name: string): api.SessionDefinition => ({
+    id, name, enabled: true, models: { primary_model: `models/${id}.gguf`, mmproj: '', draft_model: '' },
+    gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none', tensor_split: [], draft_gpu_id: null },
+  });
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.mocked(useModelSettings).mockReturnValue(null);
+    mocked.sessionList.mockResolvedValue([]);
+    mocked.chatStream.mockReset();
+    mocked.mcpListServers.mockResolvedValue([]);
+    mocked.mcpListTools.mockResolvedValue([]);
+    mocked.serverActivity.mockResolvedValue(undefined);
+    mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1, 0]));
+    setActiveProjectId(null);
+  });
+
+  it('routes an answer through the running session chosen by its saved name', async () => {
+    const saved = definition('work', 'My answer engine');
+    mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'runtime-generated-name', state: 'running', port: 8091,
+      model: saved.models.primary_model, url: 'http://127.0.0.1:8091', api_key: 'synthetic-answer-key' }]);
+    renderPanel(createTestStore({ ...cfg, sessions: [saved] }));
+    fireEvent.click(screen.getByText('Conversation settings'));
+    const picker = await screen.findByLabelText('Loaded sessions');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My answer engine · 8091 · running' }));
+    respondWithText('Named engine answer');
+    await sendMessage('Use my selected engine');
+    await screen.findByText('Named engine answer', { exact: true });
+    expect(mocked.chatStream.mock.calls.at(-1)?.slice(0, 3)).toEqual(['http://127.0.0.1:8091', 'synthetic-answer-key', saved.models.primary_model]);
+  });
+
+  it('uses the embedding endpoint selected by its saved session name', async () => {
+    const saved = definition('documents', 'My document index');
+    mocked.sessionList.mockResolvedValue([{ id: saved.id, name: 'runtime-embedding-file', state: 'running', port: 8092,
+      model: saved.models.primary_model, url: 'http://127.0.0.1:8092', api_key: 'synthetic-embedding-key',
+      engine: { provider: 'custom.documents', runtime_id: 'synthetic-build', upstream_model: 'native-embedding-model',
+        modalities: { text: true, image: false, audio: false, video: false }, tasks: ['embed'], request_fields: {},
+        embedding_model: 'native-embedding-model', embedding_namespace: 'synthetic/d80' } }]);
+    renderPanel({ ...createTestStore({ ...cfg, sessions: [saved] }), status: { ...store.status } });
+    fireEvent.click(screen.getByText('Conversation settings'));
+    const picker = await screen.findByLabelText('Document search embedding model');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My document index · native-embedding-model · documents' }));
+    await attachDocument('routing-notes.txt', SMALL_DOCUMENT);
+    respondWithText('Document answer');
+    await sendMessage('Search my notes');
+    await screen.findByText('Document answer', { exact: true });
+    expect(mocked.embedText.mock.calls.at(-1)?.slice(0, 3)).toEqual(['http://127.0.0.1:8092', 'synthetic-embedding-key', 'native-embedding-model']);
+  });
+
+  it('identifies a transcription target by the saved name while retaining its native model label', async () => {
+    const saved = definition('speech', 'My local speech engine');
+    mocked.sessionList.mockResolvedValue([{ id: saved.id, name: 'runtime-speech-file', state: 'running', port: 8093,
+      model: 'native-speech-model', url: 'http://127.0.0.1:8093', api_key: 'synthetic-speech-key',
+      engine: { provider: 'custom.speech', runtime_id: 'synthetic-build', upstream_model: 'native-speech-model',
+        modalities: { text: false, image: false, audio: false, video: false }, tasks: ['transcription'], request_fields: {} } }]);
+    renderPanel(createTestStore({ ...cfg, sessions: [saved] }));
+    fireEvent.click(screen.getByText('Media preprocessing'));
+    const picker = await screen.findByLabelText('Audio transcription session');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My local speech engine · native-speech-model' }));
+    expect(picker).toHaveTextContent('My local speech engine · native-speech-model');
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'blank'] as const)('retains the runtime name when the saved name is %s', async kind => {
+    mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'Runtime fallback', state: 'running', port: 8091,
+      model: 'models/work.gguf', url: 'http://127.0.0.1:8091', api_key: 'synthetic-answer-key' }]);
+    renderPanel(createTestStore({ ...cfg, sessions: kind === 'missing' ? [] : [definition('work', '   ')] }));
+    fireEvent.click(screen.getByText('Conversation settings'));
+    fireEvent.click(await screen.findByLabelText('Loaded sessions'));
+    expect(await screen.findByRole('option', { name: 'Runtime fallback · 8091 · running' })).toBeInTheDocument();
+  });
+});
