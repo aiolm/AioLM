@@ -293,10 +293,9 @@ pub fn manifest_help_command(
     }
     let prefix = registry::launch_prefix(manifest);
     if launch_program && !request.args.starts_with(&prefix) {
-        return Err(format!(
-            "help arguments must start with the registered entry point: {}",
-            prefix.join(" ")
-        ));
+        // Literal entry arguments may contain credentials. The caller can
+        // display its structured, masked command separately from this error.
+        return Err("help arguments must start with the registered entry point".into());
     }
     if launch_program
         && request.scope
@@ -3827,5 +3826,30 @@ mod tests {
             BTreeSet::from(["synthetic-entry-secret".into()])
         );
         assert!(sensitive_entry_tokens(&view(Fact::default())).is_empty());
+    }
+    #[test]
+    fn rejected_help_prefix_does_not_echo_literal_entry_arguments() {
+        let secret = "synthetic-static-credential";
+        let manifest = manifest_with_static_prefix(
+            "custom.help-diagnostic",
+            "build-2",
+            Path::new("/synthetic"),
+            secret,
+        );
+        let request: HelpRequest = serde_json::from_value(json!({
+            "program": null, "args": ["--help"], "scope": []
+        }))
+        .unwrap();
+        let error = manifest_help_command(&manifest, &request).unwrap_err();
+        assert!(error.contains("help arguments must start with the registered entry point"));
+        assert!(
+            !error.contains(secret),
+            "help errors are displayed while a replaced runtime's saved command is stale"
+        );
+        assert!(!error.contains("plain-token"));
+        assert_eq!(
+            manifest.launch.args[3], secret,
+            "validation must preserve the registered argv"
+        );
     }
 }
