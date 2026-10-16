@@ -548,24 +548,24 @@ MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 �
 
 ### 현재 후보의 W/G 잔여 판정
 
-다음은 앞선 source별 실행 결과를 유지하면서 **최종 수정 production17의 남은 필수 흐름**을 구분하는 표다. GUI 창이 다른 앱에 가려지고 표준 전면 전환이 거부된 동안에는 입력을 보내지 않았고 새 합성/개인 엔진의 GUI 등록을 실행했다고 기록하지 않았다. 독립 CLI·내부 패키지 검사를 진행했으며 전체 goal은 active다.
+다음은 앞선 source별 실행 결과를 유지하면서 **최종 수정 production17의 남은 필수 흐름**을 구분하는 표다. 초기 전면 전환 차단 중 독립 CLI·내부 패키지 검사를 진행했고, 이후 실제 GUI에서 새 합성/개인 엔진과 원래 Strata의 아래 흐름을 검증했다. 전체 goal은 active다.
 
 | ID | 현재 판정 | 고정한 근거와 다음 실행 |
 | --- | --- | --- |
 | W01 | pass | 마지막 제품 수정의 전체 UI 202파일/2,147개·typecheck·lint 및 고정17 native CLI smoke pass. 이후 문서만 변경했다. 제품을 다시 수정하면 영향 검사와 수정 후 production을 다시 실행한다. |
 | W02 | blocked | 기존 합성 migration·프로필/이력 보존과 새 앱 홈 onboarding은 각각 기록한 source에서 pass. 기존 설치의 실제 OS 계정 이전·자격 증명 검사는 별도 세션 부재로 blocked다. |
 | W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성17 v1/v2의 실제 GUI 등록·help/변경 diff·프로필·argv/echo·정상 언로드는 아래 범위 pass. 모델 probe 경합/취소·늦은 응답 보호는 남았다. |
-| W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI와 아래 실제 GUI의 새 옵션/추론/usage·생성 중 취소·Retry·정상 언로드는 한정 pass. Strata 최종 GUI 전체 여정은 남았다. |
-| W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·MCP 후속/거부/취소·저장/재로드의 한정 성공은 보존한다. 최종17 GUI 관련 재검증이 남았다. |
-| W06 | unrun | 아래 최종17 D79의 깨끗한 세션/실제 미저장 보호, D80 답변·임베딩·STT 이름/역할, 실제 Strata+BGE RAG·Whisper→Strata STT와 동시 세션 보존은 한정 pass. gateway·CSV/XLSX·공유·이력 재로드/최종 종료 등의 잔여 흐름은 남았다. 이전16 성공은 해당 source 범위로 유지한다. |
+| W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI/실제 GUI의 새 옵션·추론/usage·생성 취소·Retry·정상 언로드, Strata17 GUI의 실제 스트리밍 취소·같은 질문 Retry/usage는 한정 pass. 최종 재시작/로드 상태 종료는 남았다. |
+| W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·저장/재로드 근거 보존. 최종17 실제 Strata MCP의 거부/call0·승인/입력과 다른 도구 반환값 후속·호출 중 취소/늦은 결과 보호는 한정 pass. 최종17 미디어 관련 재검증이 남았다. |
+| W06 | unrun | 최종17 D79 편집 보호·D80 세 역할 이름/실제 응답·Strata+BGE RAG·Whisper STT·gateway 인증/라우팅·BGE만 중지/다른 세션 보존은 한정 pass. CSV/XLSX·공유·이력 재로드/최종 종료 등의 잔여 흐름은 남았다. 이전16 성공은 해당 source 범위로 유지한다. |
 | W07 | unrun | 원래12 staging 실패는 유지하고 이후 수정된 CLI17 정상 소유 정리와16 GUI의 언로드/로드 중 정상 Quit 성공을 분리한다. 최종17 실제 GUI의 원래 Strata·실패 복구/경합/다른 세션 보호가 남았다. |
 | W08 | blocked | 고정17 네 target 생성·MSI/NSIS 읽기 전용 내부 application payload, 새 홈16 CPU bundle 실제 추론은 한정 pass. 별도 OS 계정의 실제 설치/업그레이드/제거·Credential Manager는 blocked이며, 최종 실제 GUI/OS 표시 검사는 남았다. |
-| G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 합성 미지 옵션의 GUI/저장/실제 argv·응답은 아래 범위 pass. 개인 실제 엔진과 전체 보존 확인은 남았다. |
+| G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 합성 미지 옵션과 실제 개인 엔진의 GUI/저장/실제 argv·응답은 아래 범위 pass. 전체 계약/기존 기능 보존의 잔여 확인은 남았다. |
 | G02 | unrun | help 수명/해시·cache/diff의 source별 근거 보존. 고정17 v2 stale/start 거부·실제 새/삭제/변경 diff·명시 복구는 아래 범위 pass. 탐색 취소·경합의 실제 GUI 확인은 남았다. |
-| G03 | unrun | parser/명시 metadata·미확정 정보 보호의 구현/관련 검사 보존. 실제17 합성 미지 flag 발견·미확정 표시·유지되는 미해석 값의 명시 복구는 아래 범위 pass. 실제 개인 엔진과 관련 경합은 남았다. |
-| G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 합성 v1/v2 프로필 재로드·negative/zero/arity2/repeat tuple/multiple/optional의 실제 OS argv 대조는 아래 범위 pass. 실제 개인 엔진·전체 공통 기능 보존 확인은 남았다. |
-| G05 | unrun | 아래 빈 options/필수 server 기본값 없는 개인17 setup의 실제 실행 파일 선택→help→명시 binding/probe→등록→새 옵션 GUI/프로필→실제 응답은 한정 pass. 원래 Strata와 나머지 protocol/bridge 공통 기능의 최종17 확인은 남았다. |
-| G06 | unrun | 실제17 중립 runtime 목록을 관찰했다. 최종 공통 기능과 D79/D80 실제 수정 재검증이 남았다. |
+| G03 | unrun | parser/명시 metadata·미확정 정보 보호의 구현/관련 검사 보존. 실제17 합성/개인 엔진 미지 flag 발견·미확정 표시·유지되는 미해석 값의 명시 복구는 아래 범위 pass. 관련 취소/경합은 남았다. |
+| G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 합성 v1/v2 프로필 재로드·negative/zero/arity2/repeat tuple/multiple/optional과 실제 개인 flag의 OS argv 대조는 아래 범위 pass. 전체 공통 기능 보존의 잔여 확인은 남았다. |
+| G05 | unrun | 빈 options/필수 server 기본값 없는 개인17 setup의 실제 파일 선택→help→명시 binding/probe→등록→새 옵션 GUI/프로필→실제 응답과 Strata/BGE/Whisper의 명시 protocol/bridge 공통 기능은 한정 pass. 최종 종료/실패 복구 등은 남았다. |
+| G06 | unrun | 실제17 중립 runtime 목록·미지 엔진 등록과 최종17 D79 성공/편집 보호, D80 세 역할의 이름/연결은 아래 범위 pass. 나머지 공통 기능 보존과 실제 경합 경로 확인은 남았다. |
 | G07 | unrun | 이전16의 긴 wizard·접근성·작은 창 및 source2147 검사 근거 보존. 최종17 대량 옵션·미지 엔진·오류/복구·경합을 실제 GUI로 확인해야 한다. |
 
 별도 OS 세션을 현재 제공할 수 없다는 답변은 보존한다. 기존 설치와 사용자 데이터를 바꾸어 이 차단을 우회하지 않는다. 남은 독립 실행을 계속하며 필수 blocked/unrun과 원래 fail이 있으므로 Windows 종료 commit과 goal complete는 지정하지 않는다.
@@ -631,4 +631,24 @@ Chat에서 답변을 기본 Strata로, 임베딩을 위의 새 BGE 이름으로 
 
 이어 새 대화에서 원래 JFK WAV(`59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e`,352,078바이트)와 같은 질문을 전송했다. 원래 native Whisper CLI가 전사한 실제 새 기록은 한 개이며 exit0·전사106자다. 저장 오디오의 preparation은 새 STT 세션·모델·그 실제 전사와 일치했다. Strata는 나라가 자신을 위해 무엇을 할지 묻기보다 자신이 나라를 위해 무엇을 할지 물으라는 내용의 한 문장 답변을 PP124/TG160·stop으로 완료했다. 원래 Whisper revision `0c7be696371069e0baa2515ed7aa08d5a5473aa6`, CLI·모델·bridge 해시는 앞선 근거와 같다. 기존 bridge 로그 prefix 전체 해시도 보존됐다. **실제 STT→Strata 답변/usage·저장 역할과 D80 임베딩/STT 이름 반영 범위 pass**다. 가짜 전사나 합성 추론으로 대체하지 않았다.
 
-raw `package17r1-strata-rag-stt-native-verdict.json`, `package17r1-stt-original-path-identity.json`, `package17r1-four-engines-load-observed.json`과 각각의 native 근거에 입력/출력·revision·해시·역할이 있다. 프로세스 소유권은 부모 PID만 보지 않고 **실제 부모 이후에 생성된 자식**으로 검증해 이전 PID 재사용의 외부 프로세스를 제외했다. 원래 Strata CLI 산술 질문의 빈 content fail·SmolVLM 내용 fail은 유지한다. MCP·gateway·probe/help 경합·실패 복구·실제 이력 재로드·로드 상태 정상 Quit와 W08의 별도 OS 세션 차단이 남아 goal은 active다.
+raw `package17r1-strata-rag-stt-native-verdict.json`, `package17r1-stt-original-path-identity.json`, `package17r1-four-engines-load-observed.json`과 각각의 native 근거에 입력/출력·revision·해시·역할이 있다. 프로세스 소유권은 부모 PID만 보지 않고 **실제 부모 이후에 생성된 자식**으로 검증해 이전 PID 재사용의 외부 프로세스를 제외했다. 원래 Strata CLI 산술 질문의 빈 content fail·SmolVLM 내용 fail은 유지한다. 이후의 MCP·gateway·취소/Retry 결과는 다음 항목으로 분리한다. probe/help 경합·실패 복구·실제 이력 재로드·로드 상태 정상 Quit와 W08의 별도 OS 세션 차단이 남아 goal은 active다.
+
+### production17 Strata의 MCP 승인·거부·호출 중 취소
+
+같은 고정 GUI와 원래 Strata/model revision에서 원래 MCP 질문과 로컬 합성 도구를 사용했다. 도구 서버 정의 SHA256 `76c2900092ca8269ca4c86840ac653fbbb21eb38a0b5de163e1dd784b342cf70`과 fixture `671a31a297476a9a0bd2d9e7f6cb01f99720857f3f0c39f05d4be6dae5ead333`를 유지했다. 합성 도구의 응답과 실제 Strata의 후속 추론을 구분한다.
+
+거부 경로는 실제 승인 대화에서 거부 후 사용자 거부 오류를 표시했고 `tools/call`은 0개였다. 승인 경로는 앱의 일회 승인과 소유 Windows 확인 창을 거쳐 `blue-2046` 입력의 실제 RPC 한 번이 실행됐다. 도구는 입력과 다른 `amber-7319`를 반환했고, Strata의 최종 답변도 `amber-7319`·PP82/TG70·cached354·stop이었다. 원래 서버/fixture와 기존 trace prefix 해시가 같았다. 각각 **한정 pass**이며 raw `package17r1-mcp-denied-native-verdict.json`, `package17r1-mcp-approved-native-verdict.json`이다.
+
+지연 도구는 원래 `violet-6247` 입력·45초 지연을 유지했다. 실제 RPC가 도구에 도달하고 아직 결과가 없는 것을 확인한 뒤 GUI Stop을 실행했다. 취소 안내·저장 이력을 확인했으며 새로 생성된 MCP 소유 프로세스 3개가 없어지고 기존 엔진/GUI 소유 식별자 18개와 포트 4개는 그대로였다. 실제 호출 후106초에 응답이나 늦은 이력 변경이 없었다. 검사 도구의 강제 종료 없이 **호출 중 취소/늦은 결과 보호 범위 pass**다. raw `package17r1-mcp-inflight-cancel-native-verdict.json`이며 엔진의 native STOP/DONE wire 확인으로 확대하지 않는다.
+
+### production17 gateway와 한 세션만 정상 중지
+
+실제 GUI에서 loopback gateway를 시작했다. API 키는 실제 복사 동작으로 프로세스 메모리에서만 사용하고 원래 clipboard DataObject 복원을 호출했으며 키·인증 header를 저장하지 않았다. 모든 clipboard 형식의 바이트 동일성을 검증했다는 뜻은 아니다. 인증 누락/오류401, 모델 별칭 4개, BGE 실제 임베딩384차원·usage8, 잘못된 task400/`unsupported_task`, 없는 모델404를 확인했다. 개인 엔진 별칭의 원래 산술 요청은 `5`·PP44/TG2였고, 원래 JFK의 실제 multipart STT는106자·기존 전사 SHA256 `dfe1af694958a82c9d89d31bf0378075a10d40f715e670b6e5169042c8680cec`와 같았다. 이는 앞선 GUI STT 뒤 별도로 실행된 두 번째 실제 전사다.
+
+같은 키를 메모리에서 유지한 채 실제 GUI에서 BGE 세션만 정상 중지했다. BGE와 소유 conhost가 없어지고 해당 포트가 닫혔다. 나머지 소유 식별자16개·Strata/Whisper/개인 엔진/gateway 포트는 유지됐다. 같은 키의 모델 목록 요청은200이며 BGE 별칭은 사라져404, 다른 개인 엔진 요청은 계속 `5`였다. helper 정상 종료 후 메모리 키를 비웠다. 원래 두 markerless 로그 해시는 같고 BGE 정의·프로필도 유지됐다. **인증/공통 역할 라우팅·독립 정상 중지 범위 pass**이며 전체 GUI 종료 성공은 별도다. raw `package17r1-gateway-native/phase1.json`, `phase2.json`, `package17r1-bge-gateway-independent-stop-verdict.json`이다.
+
+### production17 Strata의 실제 생성 취소와 같은 질문 Retry
+
+원래 숫자 나열 질문 SHA256 `584b6df00db96e08c9e8a1f6e512bb6fbca9bbf1ed7576090a0c2bfdc955b288`으로 실제 추론 텍스트가 스트리밍되는 것을 GUI에서 확인했다. 정상 Stop 후 content0·reasoning1,751자의 중단된 부분과 interrupted 상태가 저장됐다. 이때의 별도 원본을 보존하고 같은 user 메시지의 Retry를 한 번 실행했다. 기존 GUI 제한·모델·질문·timeout을 바꾸지 않았다.
+
+Retry는 약33.29초 뒤 stop·PP5/TG4074·cached77로 정상 완료됐다. 실제 content3,892자는 1부터1000까지 한 줄씩인 원래 요구와 정확히 일치했고 reasoning674자·두 메시지 이력이 남았다. **실제 GUI 스트리밍 취소·부분 보존·Retry/usage 범위 pass**다. raw `package17r1-strata-cancel-retry-native-verdict.json`과 해당 native 근거다. GUI의 기존 출력 제한과 앞선 CLI의 max1024는 다른 검사 조건이므로 원래 CLI A04와 산술32의 content fail을 바꾸지 않는다. native STOP/DONE wire acknowledgement도 이 결과로 확정하지 않는다.
