@@ -531,3 +531,41 @@ D79/D80을 포함한 깨끗한 source `1c95946186afccc3161b754ae952ee47e3a63649`
 현재 같은17 GUI의 기존 검증 홈 재실행을 관찰했다. **새 합성/실제 개인 엔진의 최종 GUI help→옵션→프로필→argv→응답, v2 변경·경합·privacy/recovery, D79/D80과 원래 Strata 공통 기능의 수정 후 실제 GUI 재검증은 계속 필요하다.** GUI용 개인 setup은 필수 server 경로의 기본값과 옵션 사전 선언이 없는 별도 recipe이며, CLI용 선언 manifest를 GUI의 미지 옵션 발견 근거로 사용하지 않는다. W08 차단·원래 Strata CLI 및 이미지 내용 실패도 유지한다. 이 후보 고정과 한정된 CLI pass는 전체 Windows 종료 판정이 아니다.
 
 후속 OS의 구체적인 L01–L04/M01–M04·MAC-R01–R13 실행과 공통 수정의 Windows 재검증 연결은 [엔진 어댑터 Linux·Mac 후속 인계](engine-adapter-linux-macos-handoff.ko.md)에 기록했다. Windows 최종 종료 commit은 필수 검증 후 별도로 고정하며, 이 진행 중인 후보의 인계를 완료 선언으로 사용하지 않는다.
+
+## production17 Strata CLI·변조 거부·설치 파일 내부 검사
+
+이 절도 고정 production17/source `1c95946186afccc3161b754ae952ee47e3a63649`의 실제 실행이다. 원래 Strata revision `296b59d2f73c8f04a805df29c2fa97655adace78`, 실행 파일 `c4709f17ef974ffa34af4f0c357160a89249cabf6e9a698fbe6d0dc65a3243fa`, 모델 revision `5348543e0147355ac9cbcb031184a3546350988e`와 기존 deployment·두 shard·bridge 해시를 유지했다. 원래 CLI 수락의 A01/A02/A06/A08/A09는 pass, **A03/A04/A05/A07은 fail**이다. 세 산술 요청은 이전16과 본문 바이트가 같고 32-token 제한에서 HTTP200·DONE·length·PP65/TG32, reasoning113자와 빈 content를 반환했다. 실행·응답 전송을 산술 정답 성공으로 계산하지 않는다. 정상 중지 후 사전 관찰한 소유 PID 11개·포트·새 staging이 정리됐고 외부 파일 6개 해시가 그대로였다. raw `strata-adapter-acceptance/package17-cli-observed/results.json`과 `package17-cli-request-response-assessment.json`이다.
+
+원래 A04의 1,024-token 요청도 본문 바이트가 이전16과 같았다. 실제로 reasoning2,456자·빈 content·PP75/TG1024·DONE에 도달했으며, 기존 작업용 관찰기는 **content가 온 뒤에만** 중단하므로 취소를 실행하지 않았다. 이 A04 fail을 유지하고 GUI 취소 또는 엔진 측 취소 결함의 증거로 확대하지 않는다. 별도 검사는 **같은 원래 A04 요청·모델·1,024-token 제한**에서 실제 reasoning3자가 생성되고 DONE이 오기 전에 HTTP 요청을 중단했다. 요청 SHA256은 `a2747afe99acf5e25f6f042cd51e006568c5f39a07af8f8cdb4e2eb84db96f2f`다. 서버 유지와 이후 정상 stop, 사전 관찰 PID 4개·포트·staging 정리, 원래 해시 6개 보존은 **pass, 클라이언트 중단 범위**다. 엔진 내부의 취소 수신 확인은 증명하지 않았으며 원래 A04·답변 품질·실제 GUI 중지/Retry의 pass로 대체하지 않는다. raw `strata-adapter-acceptance/package17-reasoning-cancel-observed/results.json`이다. 실행 중 checkout에 문서 변경과 작업용 bytecode가 있어 원래 raw의 `source_dirty`는 유지한다. 고정 binary/source 연결은 별도 receipt로 확인했고 bytecode는 실행 종료 후 작업 raw 안에 보존했다.
+
+별도 빈 CLI 홈에서 개인17 엔진의 **작업용 probe 복사본에만 주석을 추가**했다. probe와 start 모두 `adapter artifact changed; register the updated build explicitly`로 거부됐다. 변조 상태의 제거·등록 누락 선택 거부·복원한 복사본의 재등록과 fresh probe는 pass이며, 원래 엔진·모델·helper·고정 CLI는 바꾸지 않았다. 이 결과는 GUI probe 경합의 대체 근거가 아니다. raw `package17-private-integrity-cli/results.json`이다.
+
+MSI 데이터베이스를 읽기 전용 mode0으로 열어 버전0.3.1·실행 파일 2개·shortcut 3개·registry 항목 4개를 확인했다. 이어 [Windows Installer의 embedded cabinet 계약](https://learn.microsoft.com/en-us/windows/win32/msi/media-table)과 [읽기 API](https://learn.microsoft.com/en-us/windows/win32/api/msiquery/nf-msiquery-msirecordreadstream)로 내부 CAB를 작업 디렉터리에 추출하고 Windows `expand.exe`로 풀었다. **설치 작업과 추출한 실행 파일은 실행하지 않았다.** CLI의 전체 SHA256은 고정 CLI와 같았다. MSI 안의 GUI SHA256은 `72942202725f9c53fdf2d7c62234b345e0da63d6f42fce825060925502de16d7`로 standalone GUI와 달랐다. 처음의 전체 동일성 검사는 fail로 보존했다. 실제 차이는 offset28,283,218의 3바이트 `UNK`→`MSI` 하나였으며 [사용 중인 Tauri CLI2.11.4의 포장 소스](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle.rs)와 실제 빌드 로그의 bundle-type patch/restore 동작에 일치했다. 메모리에서 그 명시적 marker만 적용한 예상 전체 bytes와 추출 파일을 완전히 대조했다. 바이너리·MSI 파일은 수정하지 않았고 각 전체 해시를 별도로 유지했다. **제한된 내부 payload provenance pass**이며 설치 GUI·업그레이드/제거·Credential Manager의 pass가 아니다. raw `package17-msi-read-only-database.json`, `package17-msi-gui-difference.json`, `package17-msi-payload-readonly/results-assessment.json`이다.
+
+고정 GUI/CLI/NSIS/MSI와 압축을 푼 MSI 실행 파일에서 실행 환경으로부터 구한 builder home/cache/repository 경로 패턴 4개의 UTF-8/UTF-16LE 일치는 없었다. 개인 경로 원문은 결과에 쓰지 않았다. 이 한정 검사를 모든 종류의 개인정보 부재나 NSIS 압축 내부 검사로 확대하지 않는다. raw `package17-distribution-path-byte-audit.json`과 위 payload assessment다.
+
+이후 NSIS도 설치 실행 없이 내부 application payload 두 개만 추출했다. 도구는 [공식 7-Zip26.04 release](https://github.com/ip7z/7zip/releases/tag/26.04)의 MSI를 공개 asset digest `0b01334a418654293513449f61d6bfc99e5196ca371e3c3dc961eda57cd535c6`로 검증하고 읽기 전용 CAB 추출로 작업 디렉터리에 준비했다. 도구 MSI를 설치하거나 PATH/registry를 바꾸지 않았다. NSIS 목록의 안전한 경로를 확인한 후 `aiolm.exe`와 `aiolm-cli.exe`만 풀었으며, installer·plugin·uninstaller와 추출 GUI/CLI는 실행하지 않았다. NSIS GUI 전체 SHA256은 `75186f89770d03bf932614b7a7cb1d83c5e2231445a19e6c840d6e7101203cca`이고, 위와 같은 bundle marker의 `UNK`→`NSS` 3바이트만 standalone과 달랐다. 명시 marker를 적용한 메모리의 예상 전체 bytes와 정확히 일치했고 CLI는 고정 CLI의 전체 해시와 같았다. 원래 installer·standalone 파일의 전체 해시도 유지했다. 추출한 두 파일의 같은 개인 경로 패턴 검사에 일치는 없었다. **NSIS 내부 application payload provenance의 제한된 pass**이며 실제 설치/업데이트 성공은 여전히 미실행이다. raw `package17-readonly-archive-tool/provenance.json`, `package17-nsis-payload-readonly/results.json`이다.
+
+### 현재 후보의 W/G 잔여 판정
+
+다음은 앞선 source별 실행 결과를 유지하면서 **최종 수정 production17의 남은 필수 흐름**을 구분하는 표다. GUI 창이 다른 앱에 가려지고 표준 전면 전환이 거부된 동안에는 입력을 보내지 않았고 새 합성/개인 엔진의 GUI 등록을 실행했다고 기록하지 않았다. 독립 CLI·내부 패키지 검사를 진행했으며 전체 goal은 active다.
+
+| ID | 현재 판정 | 고정한 근거와 다음 실행 |
+| --- | --- | --- |
+| W01 | pass | 마지막 제품 수정의 전체 UI 202파일/2,147개·typecheck·lint 및 고정17 native CLI smoke pass. 이후 문서만 변경했다. 제품을 다시 수정하면 영향 검사와 수정 후 production을 다시 실행한다. |
+| W02 | blocked | 기존 합성 migration·프로필/이력 보존과 새 앱 홈 onboarding은 각각 기록한 source에서 pass. 기존 설치의 실제 OS 계정 이전·자격 증명 검사는 별도 세션 부재로 blocked다. |
+| W03 | unrun | 고정17 CLI 변조 거부·제거/복원/재등록 pass. 새 합성 v1/v2의 실제 최종 GUI·모델 probe 경합/취소·늦은 응답 보호가 남았다. |
+| W04 | fail | 원래 Strata17 CLI의 빈 최종 content와 기존 원본 실패 유지. 개인17 CLI 실제 추론/usage·취소·재시작 pass. 최종 GUI의 새 개인 엔진과 Strata 전체 여정은 unrun이다. |
+| W05 | fail | 원래 SmolVLM 질문의 내용 fail 유지. production16 실제 본문/순서·동일 bytes 재전송·MCP 후속/거부/취소·저장/재로드의 한정 성공은 보존한다. 최종17 GUI 관련 재검증이 남았다. |
+| W06 | unrun | production16의 실제 Strata+BGE RAG·Whisper STT·멀티 세션·gateway·CSV/XLSX는 위 source 범위 pass. D79/D80 수정 후 실제 이름/라우팅·깨끗한 세션 편집 상태 등 최종17 GUI가 남았다. |
+| W07 | unrun | 원래12 staging 실패는 유지하고 이후 수정된 CLI17 정상 소유 정리와16 GUI의 언로드/로드 중 정상 Quit 성공을 분리한다. 최종17 실제 GUI의 원래 Strata·실패 복구/경합/다른 세션 보호가 남았다. |
+| W08 | blocked | 고정17 네 target 생성·MSI/NSIS 읽기 전용 내부 application payload, 새 홈16 CPU bundle 실제 추론은 한정 pass. 별도 OS 계정의 실제 설치/업그레이드/제거·Credential Manager는 blocked이며, 최종 실제 GUI/OS 표시 검사는 남았다. |
+| G01 | unrun | 공통 schema/descriptor의 구현·자동 검사와 이전 고정 GUI의 실제 argv 근거 보존. 새 고정17 미지 옵션의 최종 GUI/저장/argv 확인이 남았다. |
+| G02 | unrun | help 수명/해시·cache/diff의 source별 근거 보존. 고정17 v2 변경·탐색 취소·경합의 실제 GUI 확인이 남았다. |
+| G03 | unrun | parser/명시 metadata·미확정 정보 보호의 구현/관련 검사 보존. 실제17 미지 flag 발견·미해석 옵션 처리 확인이 남았다. |
+| G04 | unrun | 공통 renderer/validator/serializer·기존 순서/alias 보존 근거 유지. 새17 프로필 재로드와 실제 OS argv 대조가 남았다. |
+| G05 | unrun | 빈 options와 필수 server 기본값 없는 개인17 setup 준비 완료. 실제 실행 파일 선택→help→명시 binding/probe→등록→응답을 수행해야 한다. |
+| G06 | unrun | 실제17 중립 runtime 목록을 관찰했다. 최종 공통 기능과 D79/D80 실제 수정 재검증이 남았다. |
+| G07 | unrun | 이전16의 긴 wizard·접근성·작은 창 및 source2147 검사 근거 보존. 최종17 대량 옵션·미지 엔진·오류/복구·경합을 실제 GUI로 확인해야 한다. |
+
+별도 OS 세션을 현재 제공할 수 없다는 답변은 보존한다. 기존 설치와 사용자 데이터를 바꾸어 이 차단을 우회하지 않는다. 남은 독립 실행을 계속하며 필수 blocked/unrun과 원래 fail이 있으므로 Windows 종료 commit과 goal complete는 지정하지 않는다.
