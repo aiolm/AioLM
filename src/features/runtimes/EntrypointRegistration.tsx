@@ -97,7 +97,7 @@ function BindingField({ label, state, optional, documented, positionalDocumented
  * reviewed manifest → register. Nothing is inferred; a fresh model probe
  * after registration decides Ready. */
 export default function EntrypointRegistration({ locked, onRegistered, onBusyChange, titleRef, cfg }: {
-  locked: boolean; onRegistered: (engine: ProviderId) => void; onBusyChange?: (busy: boolean) => void; titleRef?: Ref<HTMLHeadingElement>;
+  locked: boolean; onRegistered: (engine: ProviderId, registered: { runtime_id: string; display_name: string }) => void; onBusyChange?: (busy: boolean) => void; titleRef?: Ref<HTMLHeadingElement>;
   cfg?: AppConfig;
 }) {
   const { locale } = useI18n();
@@ -266,7 +266,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
       const registered = await runtimeEntrypointRegister(next);
       if (generation.current !== ownGeneration) return;
       setDone(true);
-      onRegistered(registered.engine_id as ProviderId);
+      onRegistered(registered.engine_id as ProviderId, registered);
     } catch (cause) {
       if (generation.current === ownGeneration) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

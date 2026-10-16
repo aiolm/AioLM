@@ -21,7 +21,7 @@ describe('external engine registration', () => {
     const { selected, busy } = mount();
     fireEvent.change(screen.getByRole('textbox', { name: 'Runtime manifest path' }), { target: { value: '/synthetic/runtime.json' } });
     fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
-    await waitFor(() => expect(selected).toHaveBeenCalledWith('custom.synthetic'));
+    await waitFor(() => expect(selected).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic engine' })));
     expect(api.runtimeAdapterRegister).toHaveBeenCalledWith('/synthetic/runtime.json');
     expect(screen.getByRole('status')).toHaveTextContent('Synthetic engine · build-1');
     await waitFor(() => expect(busy).toHaveBeenLastCalledWith(false));
@@ -33,7 +33,7 @@ describe('external engine registration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Registered successfully, but inventory refresh failed.');
     expect(screen.getByRole('status')).toHaveTextContent('build-1');
-    expect(selected).toHaveBeenCalledWith('custom.synthetic');
+    expect(selected).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic engine' }));
   });
   it('locks registration while model resources are in use', () => {
     mount(true);

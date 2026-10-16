@@ -8,7 +8,7 @@ import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 /** Selecting a manifest registers external files; it never installs or removes them. */
-export default function ExternalRuntimeRegistration({ locked, onRegistered, onBusyChange }: { locked: boolean; onRegistered: (provider: api.ProviderId) => void; onBusyChange: (busy: boolean) => void }) {
+export default function ExternalRuntimeRegistration({ locked, onRegistered, onBusyChange }: { locked: boolean; onRegistered: (provider: api.ProviderId, registered: { runtime_id: string; display_name: string }) => void; onBusyChange: (busy: boolean) => void }) {
   const { locale, t } = useI18n();
   const copy = runtimeAdapterCopy[locale];
   const [path, setPath] = useState('');
@@ -31,7 +31,7 @@ export default function ExternalRuntimeRegistration({ locked, onRegistered, onBu
     try {
       const registered = await api.runtimeAdapterRegister(path.trim());
       notifyRuntimeInventoryChanged();
-      onRegistered(registered.engine_id);
+      onRegistered(registered.engine_id, registered);
       setResult(`${registered.display_name} · ${registered.runtime_id}`);
       finishTask(taskId, 'completed');
       try { await api.providerCatalog(true); }

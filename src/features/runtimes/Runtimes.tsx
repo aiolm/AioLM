@@ -65,7 +65,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const [adapterBusy, setAdapterBusy] = useState(false);
   const [wizardOpened, setWizardOpened] = useState(false);
   const [wizardKey, setWizardKey] = useState(0);
-  const [registered, setRegistered] = useState<ProviderId | null>(null);
+  const [registered, setRegistered] = useState<{ engine: ProviderId; name: string; runtime: string } | null>(null);
   const wizardFinished = useRef(false);
   const selected = view.kind === 'adapter' ? view.id : null;
   const llama = selected === 'llama.cpp';
@@ -125,8 +125,11 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
     focusTarget.current = view.kind === 'adapter' ? { adapter: view.id } : 'add';
     setView({ kind: 'inventory' });
   };
-  const onRegistered = (engine: ProviderId) => { wizardFinished.current = true; setRegistered(engine); setProviderRevision(value => value + 1); };
-  const registeredName = registered ? inventory.catalog.find(item => item.id === registered)?.engine ?? providerDisplayName(registered) : '';
+  // The catalog names an engine after one of its builds, so the announcement
+  // keeps the identity the registration itself returned.
+  const onRegistered = (engine: ProviderId, { runtime_id, display_name }: { runtime_id: string; display_name: string }) => {
+    wizardFinished.current = true; setRegistered({ engine, name: display_name, runtime: runtime_id }); setProviderRevision(value => value + 1);
+  };
   const description = selected ? inventory.catalog.find(item => item.id === selected) : undefined;
   const empty = inventory.loaded && !inventory.error && inventory.runtimes.length === 0;
   const profilesLink = onOpenProfiles && <p className="runtime-profiles-link">{modelSettingsCopy[locale].title} → {modelSettingsCopy[locale].profiles} <button type="button" onClick={onOpenProfiles} className="app-link-button">{t("ui.executionProfiles")}</button></p>;
@@ -150,10 +153,10 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       </header>
 
       {registered && view.kind !== 'adapter' && (
-        <FeedbackBanner tone="success" title={fillAdapterCopy(copy.registeredTitle, { engine: registeredName })} className="mb-4" onDismiss={() => setRegistered(null)}>
+        <FeedbackBanner tone="success" title={fillAdapterCopy(copy.registeredTitle, { engine: `${registered.name} · ${registered.runtime}` })} className="mb-4" onDismiss={() => setRegistered(null)}>
           <p>{copy.registeredNext}</p>
           <span className="app-page-actions adapter-next">
-            <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => { setRegistered(null); openAdapter(registered); }}>{fillAdapterCopy(copy.openEngine, { engine: registeredName })}</button>
+            <button type="button" className="app-button app-button--primary app-button--sm" onClick={() => { setRegistered(null); openAdapter(registered.engine); }}>{fillAdapterCopy(copy.openEngine, { engine: registered.name })}</button>
             {onOpenProfiles && <button type="button" className="app-button app-button--secondary app-button--sm" onClick={onOpenProfiles}>{copy.openProfiles}</button>}
             <button type="button" className="app-button app-button--secondary app-button--sm" onClick={openAdd}>{copy.addAnother}</button>
           </span>
@@ -181,7 +184,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
         <div className="runtimes-main" hidden={view.kind !== 'add'}>
           <div className="adapter-context">{backButton(adapterBusy)}</div>
           <EntrypointRegistration key={wizardKey} titleRef={wizardHeading} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy}
-            onRegistered={engine => { notifyRuntimeInventoryChanged(); onRegistered(engine); }} onBusyChange={setAdapterBusy} />
+            onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setAdapterBusy} />
           <details className="runtime-advanced">
             <summary>{copy.advancedManifest}</summary>
             <div className="runtime-advanced__body">

@@ -152,7 +152,7 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
     help: { fingerprint: report.identity.fingerprint, request: { encoding: 'cp949', locale: 'ko_KR.UTF-8' } } });
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Register' }));
-  await waitFor(() => expect(onRegistered).toHaveBeenCalledWith('custom.synthetic'));
+  await waitFor(() => expect(onRegistered).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic' })));
   expect(api.runtimeEntrypointRegister).toHaveBeenCalledWith(draft);
 });
 

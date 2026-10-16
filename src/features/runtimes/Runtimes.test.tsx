@@ -785,7 +785,7 @@ describe('neutral inference engine inventory', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Register' }));
 
-    expect(await screen.findByText('Synthetic is registered')).toBeVisible();
+    expect(await screen.findByText('Synthetic · build-1 is registered')).toBeVisible();
     expect(screen.getByText(/Registration alone does not make a model Ready/)).toBeVisible();
     expect(mocked.providerCatalog).toHaveBeenCalledWith(true);
     fireEvent.click(screen.getByRole('button', { name: 'Set up an execution profile' }));
@@ -794,6 +794,60 @@ describe('neutral inference engine inventory', () => {
     expect(screen.getByRole('heading', { name: 'Synthetic' })).toHaveFocus();
     expect(await screen.findByRole('group', { name: 'custom.synthetic · Runtime' })).toBeVisible();
     expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  describe('a new build of an already registered engine', () => {
+    // The catalog keeps naming the engine after its first registered build.
+    const OLD_BUILD = { ...SYNTHETIC, engine: 'Synthetic G11' } satisfies api.ProviderDescription;
+    const NEW_BUILD = { engine_id: 'custom.synthetic', runtime_id: 'build-2', display_name: 'Synthetic G12 1000 options' };
+    const refreshes = { refreshed: () => mocked.providerCatalog.mockResolvedValue([...BUILTINS, OLD_BUILD]), 'refresh fails': () => mocked.providerCatalog.mockRejectedValue(new Error('Synthetic inventory failure')) };
+    beforeEach(() => {
+      mocked.providerCatalog.mockResolvedValue([...BUILTINS, OLD_BUILD]);
+      mocked.providerRuntimes.mockResolvedValue([SYNTHETIC_RUNTIME]);
+    });
+    const expectNewBuildAnnounced = async (updateConfig: ReturnType<typeof vi.fn>) => {
+      expect(await screen.findByText('Synthetic G12 1000 options · build-2 is registered')).toBeVisible();
+      expect(screen.queryByText('Synthetic G11 is registered')).not.toBeInTheDocument();
+      expect(screen.getByText(/Registration alone does not make a model Ready/)).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Open Synthetic G12 1000 options' }));
+      expect(screen.getByRole('heading', { name: 'Synthetic G11' })).toHaveFocus();
+      expect(updateConfig).not.toHaveBeenCalled();
+    };
+
+    it.each(Object.keys(refreshes) as (keyof typeof refreshes)[])('announces the build the wizard registered when the inventory is %s', async refresh => {
+      const updateConfig = vi.fn();
+      vi.mocked(runtimeHelp.entrypointManifestPreview).mockResolvedValue({ ...REGISTERED, ...NEW_BUILD });
+      vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockImplementation(async () => { refreshes[refresh](); return { ...REGISTERED, ...NEW_BUILD }; });
+      render(panel({ store: { ...store, updateConfig } as unknown as AppStore }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
+      fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-2' } });
+      fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Continue without help' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
+      fireEvent.change(modelFlag, { target: { value: '--model' } });
+      fireEvent.change(portFlag, { target: { value: '--port' } });
+      fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+      fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Register' }));
+      await expectNewBuildAnnounced(updateConfig);
+    });
+
+    it.each(Object.keys(refreshes) as (keyof typeof refreshes)[])('announces the build an advanced manifest registered when the inventory is %s', async refresh => {
+      const updateConfig = vi.fn();
+      mocked.runtimeAdapterRegister.mockImplementation(async () => { refreshes[refresh](); return NEW_BUILD; });
+      render(panel({ store: { ...store, updateConfig } as unknown as AppStore }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      fireEvent.click(screen.getByText('Advanced: register a manifest manually'));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Runtime manifest path' }), { target: { value: '/synthetic/runtime.json' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
+      await expectNewBuildAnnounced(updateConfig);
+      expect(mocked.runtimeAdapterRegister).toHaveBeenCalledWith('/synthetic/runtime.json');
+    });
   });
 
   it('opens an explicitly requested adapter and returns to the inventory after ordinary navigation', async () => {
