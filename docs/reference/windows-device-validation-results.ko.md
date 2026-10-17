@@ -988,3 +988,13 @@ W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등
 portable GUI에서 같은 `LEGACY02`·원래 b11617 CPU runtime·원래 Qwen 모델을 Save profile & start로 실행했다. 새로운 대화의 같은 질문에서 실제 **5와 PP34/TG2**를 확인했다. 원래64개 runtime 파일 전체 hash/크기가 manifest와 같았고 엔진 argv의 모델·loopback·context4096·CPU device none·GPU layers0도 보존됐다. 정상 창 Close 전후72개 파일 전체 hash와 설정/프로필이 같았다. 실행 전71개 중 명시적 프로필 저장으로 바뀐 config 이외70개는 그대로이며 새 실제 대화 파일1개가 추가됐다. `LEGACY02` revision3→4 외 설정 값은 전부 같았다. GUI·엔진·WebView·콘솔 등9개를 PID/생성 시각으로 추적했고 종료 후 모두 사라졌으며 엔진 포트·임시 인증 파일·launch staging도 없었다. 종료 후 원래 모델 전체 hash도 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`와 같았다.
 
 첫 비교 스크립트는 프로필 라이브러리 revision이 한 번 증가한다고 가정해 실패했다. `profileEditor.ts::mergeProfileEditor`의 명시적 저장과 `useExecutionStore.ts::start`의 실행용 application 확정은 별도 저장이며, 관찰된 library5→7과 profile3→4를 구분했다. 최초 실패/스크립트를 보존하고 source 계약 및 나머지 프로필·적용 객체의 모든 값까지 비교한 후 한정 pass로 판정했다. `034–037-fresh-nsis-data.json`, `vm-portable20-verdict.json`, `vm-portable20-first-verifier-failure.json`과 실제 GUI·종료·모델 hash 화면을 연결한다. MSI 필수 실제 수락·잔여 OS 통합과 원래 Strata32/미디어 실패가 남아 W02/W08 전체 및 goal은 완료 처리하지 않는다.
+
+### portable의 OS 클립보드·한글 IME·트레이
+
+같은 고정20 portable을 재시작해 새 실제 대화의5·PP34/TG2와 기존 실제/합성 대화3개를 확인했다. 실제 응답의 Copy→설정 검색에 Windows Ctrl+V로5가 들어갔고 지웠다. 기존 한글 IME에서 `rkskek`가 `가나다`로 조합되고 Tab 후 조합이 확정되는 것을 관찰했다. 검색어를 지우고 입력 모드를 원래 A로 복원했다. `vm-portable20-clipboard-result.json`, `vm-portable20-ime-composition.json`, `vm-portable20-ime-committed.json`이 근거다. 편집 가능한 설정 검색에서 검사한 범위이며, 모델을 로드하지 않아 비활성화된 채팅 입력의 IME 검사로 주장하지 않는다.
+
+트레이 기능은 `src-tauri/src/tray.rs`의 실제 계약을 확인했다. 원래 꺼져 있던 Close to system tray를 켜고 같은 CPU/model/profile로 로드한 뒤 창 Close→숨김→실제 트레이 아이콘 클릭→로드 상태 복원→트레이 메뉴 Quit AioLM을 수행했다. 숨긴 동안 GUI/엔진 PID가 남았고, 복원 전후에는 PID와 생성 시각·전체 실행 파일 hash·listener가 같았다. 숨김 수집기는 생성 시각을 수집하지 않았으므로 그 구간의 PID만으로 별도 identity 보장을 주장하지 않는다. 숨김·복원·Quit 전후72개 파일 전체 hash와 프로필/설정 요약이 같았다. Quit 후 GUI/엔진·launch staging이 없었고 알려진 엔진 포트의 별도 실제 OS 조회도 listener0이었다.
+
+이후 재시작→설정에서 트레이 옵션을 원래 꺼짐으로 저장→일반 Close로 종료했다. 실제 저장 화면과 config의 `close_to_tray=False`를 확인했고 config 이외71개 파일은 변경되지 않았다. 모델 로드를 위한 명시적 Save profile & start에 따른 프로필 revision4→5와 library7→9 외 프로필 값·적용 객체는 같았다. `038–042-fresh-nsis-data.json`, `vm-portable20-tray-verdict.json`, `vm-portable20-tray-reset-final-result.json`이 근거다. 이전036/037의9개 자식 프로세스 기준은 재사용하지 않았으며 이번 트레이 관찰을 전체 자식 tree 검사로 확대하지 않는다.
+
+OS 통합의 위 범위만 한정 pass다. 실제 화면에서 exit 안내의 “Closing the desktop app”가 트레이 숨김과 혼동될 수 있어 D85로 기록하고 수정본의 production 화면 재검증을 이어간다. MSI 관리자 인증은 아직 제공되지 않았고 실제 MSI 설치·업그레이드·제거는 unrun이다. W02/W08 전체 및 goal을 완료 처리하지 않는다.
