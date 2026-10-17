@@ -872,3 +872,45 @@ raw `vm-guest-preflight-attempt2-readback.json`, `vm-preflight-verified-summary.
 **이 설치본의 실제 추론/저장·재로드/정상 종료·업그레이드/제거/자격 증명/설치 OS 통합의 수락 판정은 아직 남아 있다**. 이후 NSIS/MSI 업그레이드를 별도 시나리오로 수행한다. 호스트의 원래0.2 설치·설정·Credential Manager는 변경하지 않았다. 키 입력 도구의 호출 성공만으로 명령 실행을 판정하지 않는다.
 
 raw는 `vm-resume-*.json`, `vm-official-releases.json`, `vm-active-preparation.json`, `vm-acceptance/<run-id>/payload.json`, `original-msi-upgrade-identity.json`, `vm-prepare-admin-canceled.json`, `vm-original-host-install-before.json`, `vm-original-host-protected-hashes-corrected.json`이다. 원래 호스트 설치 경로의 인용부호 처리에 실패한 최초 부분 baseline도 보존하고, 수정된 읽기 전용 검사에서 원래 GUI와 기존 설정2개 전체 hash를 기록했다. 제한된 baseline이며 전체 개인 기록을 복제·검사했다고 주장하지 않는다. 준비 파일/스크립트·계정/기기 정보·화면·host 경로는 tmp에만 보존하고 커밋하지 않는다. 제품 source4a/고정19 binary와 D83 검사는 바뀌지 않았고 기존 W04/W05 내용 실패도 유지한다. 새로운 재개 실행이므로 이전 blocked 연속 횟수를 재사용하지 않는다.
+
+
+## D84 작은 Windows 화면의 최초 창 배치 수정과 production20
+
+최신 제품 source는 `bf48ba4366e1dd4f64a7ed23191190d1d0e55ca9`다. 앞의 production19 표는 이전 제품 source의 기준 결과이며, 이번 변경과 아래 현재 잔여 판정으로 갱신한다. Windows 시작 코드와 창 배치 모듈 두 파일만 변경했다. 추론 adapter/schema/protocol·Ready·설정/이력/API 계약은 변경하지 않았다. Windows 전체 종료 commit이나 goal complete를 지정하지 않는다.
+
+별도 VM의 실제 작업 영역은1024×720인데 기존 설치19의 일반 창은1044×788로 하단을 넘었다. 최초 실행과 정상 종료 후 재시작에서 하단 첨부/전송/앱 정보가 잘렸고, 수동 최대화로 표시됐다. native UI Automation/Screen 근거 `003/004/008-window-bounds.json`으로 재현했다. 기본1280×800 창에서 장식을 제거한 뒤 작업 영역을 확인하지 않고 표시하던 시작 경계가 원인이다.
+
+표시 전에 현재 monitor(없으면 primary)의 실제 work area와 outer size를 비교해, 유효한 작업 영역보다 큰 Windows 창만 OS 최대화한다. 저장 기본값·사용자 설정·화면 해상도를 변경하거나 DPI/장식 보정값을 하드코딩하지 않았다. monitor가 없으면 기존 표시를 계속한다. Rust lib1137 pass/0 fail/기존 opt-in6 ignored, Clippy all-targets `-D warnings`, locked no-default check, fmt가 pass다. lib 검사는 직접 Cargo 실행이었고 Clippy/no-default는 별도 임시 OS/app 홈 runner에서 수행했다.
+
+최초20 빌드는 GUI/CLI 컴파일 후 Tauri NSIS 생성의 unwrap panic으로 실패했다. 진단 bundle 실행도 같은 실패를 보존했다. 문서화된 `bundle.useLocalToolsDir=true`를 임시 packaging config로 선택하고 출력 target 경로를 실행별로 고정한 재실행은 GUI/CLI/NSIS/MSI 모두 exit0이었다. lockfile·제품 기본 config·toolchain은 유지했다. 실패를 skip/pass로 바꾸거나 패키징 도구/버전을 교체하지 않았다. raw `package20-build-context.json`, 첫 실행/진단/attempt2의 `result.json`, `package20-candidate.json`에 각 조건과 실제 출력을 구분한다.
+
+| 고정20 산출물 | 전체 SHA-256 |
+| --- | --- |
+| gui | `d7d74933cb776228576b686f7eb0aa28f59ca2e2c9f11f17ffa12a9579aee6c1` |
+| cli | `9a99a8f9b85cf4550a794cbb7f6685a3c52125ebe31a6bbe09f783683d0f5eca` |
+| nsis | `4b521c2dcf2cf9e93f72e6261eff83a8077b6e1f54eda68c4ba8043f3f309557` |
+| msi | `48cb5b6ad6cd098f68c6c727eaac8921f42b5f83f7e3622bb867e9c23e22ec6c` |
+| NSIS 내부 GUI | `364564c01b9d010c415bb726d8dc63602d7cd71602b42d7e6cf8de2f548430da` |
+| MSI 내부 GUI | `db65c1b7e91381c038066f308d50654ca69711d879a893889eaa495ba8ea600e` |
+
+NSIS/MSI를 실행하지 않는 별도 payload 검사도 pass다. 각각 전체 GUI bytes가 고정 standalone의 Tauri bundle marker3bytes만 치환한 값과 일치하고, CLI는 고정 파일 전체와 동일했다. UTF-8/UTF-16 개인 절대 경로 검색0건이며 원래19 고정 파일도 보존됐다. `package20-{nsis,msi}-payload-readonly/`에 별도 근거를 둔다. 이 정적 검사를 실제 설치 성공으로 세지 않는다.
+
+### VM의 실제 CPU 기준과 수정 후 검증
+
+기존19 NSIS 새 설치본에서 원래 CPU bundle을 GUI로 가져오고 같은 Qwen0.5B 모델·명시 runtime binding·새 프로필 `VM CPU acceptance`를 만들었다. import 후 runtime 폴더64개 파일의 전체 hash가 기존 기준과 같았다. runtime revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`, 실행 파일 SHA256 `715f0ea98819f03fc596e9d352e989fc0ae093056282e0d73b2d657e7afa7d02`, 모델 revision `9217f5db79a29953eb74d5343926648285ec7e67`/SHA256 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`다. 원래 질문의 실제 응답5·PP34/TG2·저장 이력과 정상 종료 후 재열기를 확인했다. GUI/엔진 종료·포트 닫힘·임시 인증 파일 제거·설정/대화 hash 보존은 `005–009` guest receipt 및 별도 baseline/quit assessment에 있다.
+
+새20 파일은 기존19 설치·데이터의 체크포인트를 만든 뒤 별도 폴더로 전달했고, 게스트에서 production 네 파일과 관찰 스크립트 한 개, 총5개 전체 hash를 확인했다. 최초20 실행에서 **수동 최대화 없이 Maximized**로 열렸다. work area1024×720, native outer1040×736/(−8,−8)은 정상 최대화 시 관측한 DWM 바깥 테두리와 같고, 실제 첨부/전송/앱 정보가 모두 보였다. 재시작 당시 설정·원래 대화·runtime66개 파일 전체 hash, 프로필/이력 객체가19와 동일했다. raw `011-fresh-nsis-data.json`, `package20-initial-window-preservation-verdict.json`이다.
+
+같은 프로필을 실제 GUI에서 다시 열어 원래 runtime/model binding을 확인하고 SaveRun→Loaded→새 대화→동일 질문의 실제 응답5·PP34/TG2를 확인했다. 원래 대화는 그대로 남았다. 명시적 저장으로 해당 프로필 revision2→3이 됐고, 네 프로필의 settings/coverage는 모두 같았다. 실제 CPU argv·소유 엔진/listener와 정상 창 Close 후 GUI/엔진/포트/인증 파일/staging 정리, 종료 전후67개 파일·두 대화·프로필의 보존을 확인했다. `012–014` guest receipt와 `package20-cpu-close-and-workarea-verdict.json`, `package20-profile-settings-preservation-verdict.json`에 연결한다. 종료 관찰 JSON의 첫 회수는 임시 수신기 만료로 실패했으며 원본 파일을 보존해 새 수신기로 회수했다. 제품 Quit을 다시 수행하거나 실패를 숨기지 않았다.
+
+큰 화면 분기도 같은20 파일을 별도 새 app/OS 홈에서 실제 실행했다. work area3840×2064에서 일반 창2586×1671/(49,49)로 열려 최대화되지 않았고 onboarding이 작업 영역 안에 표시됐다. 실제 Close 후 소유7개 프로세스가 모두 종료됐다. 호스트의 원래0.2 GUI와 두 기존 config의 제한된 전체 hash3개도 그대로였으며 원래 설치/Vault는 조작하지 않았다. `package20-larger-workarea/`와 `package20-host-original-protected-hashes-unchanged.json`이다. 전체 개인 기록을 검사했다는 의미는 아니다.
+
+| 이번 변경/잔여 ID | 현재 판정 | 범위 |
+| --- | --- | --- |
+| W01 | pass | D84 관련 Rust gates와20 production 네 target, 전체 payload/경로 검사. 변경되지 않은 frontend 전체 검사를 새로 반복했다고 주장하지 않는다. |
+| W02 | unrun | 별도 VM 새 설치·데이터/프로필/이력 보존은 한정 pass. 원래0.2 실제 이전·자격 증명 보존은 아직 필수 미실행이다. 이전의 VM 관리자 준비 blocked는 실제 해소됐다. |
+| W04/W05 | fail | 원래 Strata32와 SmolVLM 내용 실패를 유지한다. 별도 CPU 응답으로 대체하지 않는다. |
+| W07/G07의 D84 경계 | pass | 실제 작은 화면 red→최소 수정→같은 production의 작은/큰 work area·실제 추론·보존·정상 종료 재검증. 다른 기준 경계의 실행 근거는 앞의 source별 기록을 유지한다. |
+| W08 | unrun | 고정20 설치 패키지 생성/정적 검사와 standalone production GUI는 한정 pass. 현재 VM NSIS 재설치부터 계속하며 실제0.2 NSIS/MSI upgrade·MSI 새 설치·remove·Credential Manager·설치 identity의 OS 통합/알림 등 필수 수락은 남아 있다. |
+
+Windows goal은 active다. 이미 완료한 범위를 반복하지 않고 고정20 실제 설치본에서 관련 GUI/CLI·OS 통합을 이어간다. Linux/Mac 실제 검사는 이번 Windows 완료 조건에 추가하지 않으며, [Linux/Mac 인계](engine-adapter-linux-macos-handoff.ko.md)의 L01–L04/M01–M04/R01–R13을 같은 source 경계로 이어간다.

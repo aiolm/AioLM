@@ -109,3 +109,12 @@ Linux L01/L02와 Mac M01/M02에서 일반 text·수치·JSON textarea·반복/�
 W02/W08의 별도 VM은 설치 전 체크포인트·파일 복사 후 게스트 preflight까지 pass다. 실제 Windows11 Home build26300에서 payload10개의 전체 hash 일치, 기존 AioLM 설치/프로세스/기본 데이터 폴더 없음을 확인했다. 고정19 NSIS 새 설치 완료·실제 최초 onboarding/폴더 picker/채팅 진입·설치된 GUI/CLI의 전체 payload hash 일치와 CLI help exit0까지 한정 pass다. 실제 응답/저장·재로드/정상 종료·기존 설치 upgrade/remove·Credential Manager·설치 identity의 OS 통합/알림의 수락 판정은 여전히 남아 있다. Windows의 원래 Strata32/1024 content 실패와 SmolVLM 내용 실패도 유지한다. 원래 모델/질문/제한을 바꾸거나 실패를 unsupported로 바꾸지 않는다. Linux/Mac 기기에서 실행했다고 Windows 설치 성공으로 계산하지 않는다.
 
 Linux L01–L04와 이후 Mac M01–M04/R01–R13은 위 source 및 문서 checkpoint를 받은 뒤 각 OS에서 새로 빌드해 실행할 수 있도록 준비한다. 실제 이관/종료 commit은 필수 Windows 잔여의 상태를 확인해 다시 고정한다. D81/D82 또는 schema/help/protocol/저장·프로세스/패키지 경계에 후속 OS의 공통 수정이 생기면 위 재검증 표의 Windows W/G를 연결한다. Windows의 전부를 반복한 것으로 추정하지 않고 변경 파일·해당 기존 근거·새 source의 관련 실제 검증을 함께 남긴다.
+
+
+## D84 Windows 창 배치 수정과 production20 후속 인계
+
+현재 제품 source는 `bf48ba4366e1dd4f64a7ed23191190d1d0e55ca9`다. Windows 전용 startup에서 작업 영역보다 큰 최초 창만 표시 전 최대화하며, 기존 크기가 들어가는 큰 화면에서는 일반 창을 유지한다. Linux/Mac 시작 동작을 변경한 공통 화면 정책이 아니다. 실제 Windows VM1024×720 작업 영역의 red→수정20 자동 최대화/하단 버튼 표시, 호스트3840×2064의 일반 창/새 홈 onboarding, 같은 원래 CPU/runtime/model·프로필/이력·추론/usage·정상 종료/소유 자원 정리 근거가 Windows 결과 D84 절에 있다. 고정20 GUI/CLI/NSIS/MSI 전체 hash와 NSIS/MSI 내부 GUI 전체 hash도 그 절을 따른다.
+
+Windows 종료 commit은 아직 지정하지 않는다. 별도 VM의19 실제 NSIS 새 설치·원래 CPU import/응답·저장·재열기·정상 종료와20 standalone의 양쪽 화면/같은 프로필/실제 응답은 한정 pass다. 고정20의 실제 설치본 수락, 원래0.2 NSIS/MSI upgrade·MSI 새 설치·remove·Credential Manager·설치 identity OS 통합/알림 및 원래 Strata32/media 내용 실패는 남아 있다. Linux/Mac에서 대신 실행해 Windows pass로 바꾸지 않는다.
+
+Linux L01/L02와 Mac M01/M02에서 해당 OS의 최초 표시·작은/큰 화면·taskbar/dock/work area·배율/다중 monitor·기존 설정/프로필/이력 보존을 별도 기기에서 확인한다. Windows 전용 구현을 추정 이식하지 않고 실제 OS 결과에 따라 판단한다. 후속 OS의 공통 window/startup 변경이 필요하면 Windows W02/W07/W08/G07의20 작은/큰 화면·기존 데이터·실제 엔진 시작/정상 종료를 새 source로 재검증한다. L03/L04·M03/M04·R01–R13의 나머지 구체 작업과 이전 source의 재검증 연결은 기존 인계를 유지한다.
