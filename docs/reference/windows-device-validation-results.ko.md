@@ -801,14 +801,14 @@ CPU를 로드한 상태에서 정상 창 닫기로 소유9개 종료·51940 닫�
 
 ### production19 기준 W/G 판정과 남은 완료 조건
 
-아래 표가 앞선17의 잔여 표를 갱신한다. 제품 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`이고 이후 변경은 익명 결과/인계 문서뿐이다. `package19-preservation-source-boundary-audit.json`에17 이후 D81/D82 변경 파일과18 이후 Rust tree 동일 근거를 고정했다. 변경되지 않은 MCP/RAG/STT/gateway/media/측정·공유·이력/CSV/XLSX/저장 schema의 실제16/17 결과를19에서 전부 반복했다고 바꾸지 않는다. D81은18의 pending 취소/모델 복구/최소 창/다른 실제 엔진 보존, D82는19의 합성·실제 개인·수치 입력 첫 저장과 관련 실행·데이터 보존으로 재검증했다. pass는 해당 Windows 경계의 판정이며 전체 goal/모든 OS 완료가 아니다.
+아래 표가 앞선17의 잔여 표를 갱신한다. 제품 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`이며 이후 제품 Rust/GUI는 바뀌지 않았다. 뒤의 D83은 CLI 수락 검사·회귀 검사·문서 변경이다. `package19-preservation-source-boundary-audit.json`에17 이후 D81/D82 변경 파일과18 이후 Rust tree 동일 근거를 고정했다. 변경되지 않은 MCP/RAG/STT/gateway/media/측정·공유·이력/CSV/XLSX/저장 schema의 실제16/17 결과를19에서 전부 반복했다고 바꾸지 않는다. D81은18의 pending 취소/모델 복구/최소 창/다른 실제 엔진 보존, D82는19의 합성·실제 개인·수치 입력 첫 저장과 관련 실행·데이터 보존으로 재검증했다. pass는 해당 Windows 경계의 판정이며 전체 goal/모든 OS 완료가 아니다.
 
 | ID | 판정 | 실행 근거와 남는 범위 |
 | --- | --- | --- |
-| W01 | pass | 원래 환경/공통20명령 기준,18 Rust 전체/opt-in/Clippy·no-default·fmt와2150 UI, 마지막 D82 관련132/전체202파일2151 UI·typecheck·lint,19 production 네 target/CLI smoke·실제 CLI9항목. 마지막 수정 이후 Rust tree는 동일하다. 기존 lint 경고1개와 opt-in ignore의 실제 범위를 유지한다. |
+| W01 | pass | 원래 환경/공통20명령 기준,18 Rust 전체/opt-in/Clippy·no-default·fmt와2150 UI, D82 관련132/전체202파일2151 UI·typecheck·lint,19 production 네 target/CLI smoke·실제 CLI9항목. D83 검사 수정의 스크립트43개·관련 lint/typecheck도 pass다. 제품 Rust/GUI tree는 동일하다. 기존 전체 lint 경고1개와 opt-in ignore의 실제 범위를 유지한다. |
 | W02 | blocked | 합성 migration/backup/미등록 engine 값/미래 schema 거부와 실제18→19 전체200파일 보존, 새19 GUI onboarding은 pass. 기존0.2 설치의 실제 OS 계정 이전/자격 증명은 별도 세션 부재로 blocked다. |
 | W03 | pass | 원래 CLI 등록/변조/제거/재등록,18 D81 실제 취소·늦은 반환/다른 모델 복구·다른 엔진 보존,19 미지 개인 엔진과 합성 v1/v2의 fresh help/probe·diff·미해석 값 복구·실제 argv 근거. 합성 echo와 실제 추론은 분리했다. |
-| W04 | fail | 원래 Strata CLI A03/A05/A07의 제한32 최종 content 실패와, A04의 원래1024 요청에서 내용이 없어 취소 trigger에 도달하지 못한 실패는 유지한다. 실제 CPU/Vulkan/지원 ROCm·개인 엔진·Strata의 source별 추론/usage·생성 취소/Retry/restart와19 실제 개인/원래 Strata/CPU bundle 응답·로드 상태 정상 종료는 한정 pass다. 모델/제한/정답을 바꾸어 원래 실패를 닫지 않는다. |
+| W04 | fail | 원래 Strata CLI A03/A05/A07의 제한32 최종 content 실패는 유지한다. A04의 원래1024 요청에서 취소 trigger에 도달하지 못한 기록은 보존하며, D83에서 원인을 검사 코드의 content 전용 trigger로 재현·수정하고 같은 요청의 실제 reasoning 출력 후 abort/서버 정상 상태를 pass로 추가했다. 실제 CPU/Vulkan/지원 ROCm·개인 엔진·Strata의 source별 추론/usage·생성 취소/Retry/restart와19 실제 개인/원래 Strata/CPU bundle 응답·로드 상태 정상 종료는 한정 pass다. 모델/제한/정답을 바꾸어 원래 답변 실패를 닫지 않는다. |
 | W05 | fail | 원래 SmolVLM 내용 실패/같은 body 대조 실패는 유지한다. actual source별 첨부 순서·전달/저장/재로드,17 실제 MCP 거부/승인/입력과 다른 반환값 후속/호출 취소는 한정 pass다. 이후 해당 feature/프로토콜 코드는 바뀌지 않았다. |
 | W06 | pass |17 실제 프로젝트/RAG·BGE·Whisper STT·역할별 멀티 세션·gateway401/라우팅/task 거부·이력/CSV/XLSX/공유 미리보기 근거 유지. 관련18 owner 취소/다른 엔진 보존,19 기존53개 feature 데이터와50개 전체 프로필/세션6개 및 실제19 실행/종료 보존으로 변경 경계를 확인했다. 모든 기능을19에서 다시 실행한 의미는 아니다. |
 | W07 | pass | 원래12 markerless staging 실패는 보존하며 수정된 source의 새 소유 staging 정리와 구분한다. source별 install/build/help/probe/load/stream/tool/benchmark/import 실패·취소·Unicode/공백/긴 경로·shell 없는 argv,18 다른 엔진 보존과19 두 홈의 실제 loaded Quit/소유20개 종료/포트/staging/기존 로그·데이터 보존 pass다. |
@@ -824,3 +824,21 @@ CPU를 로드한 상태에서 정상 창 닫기로 소유9개 종료·51940 닫�
 Windows native 미지원인 MLX/표준 vLLM/Metal, 외부 v1의 정확 tokenizer/cold-cache benchmark·CPU reference deep·ABI portable은 실제 플랫폼/계약 근거 범위에서만 unsupported를 유지한다. 원래 지원 내용의 실패를 unsupported로 바꾸지 않는다. W04/W05 원본 실패와 W02/W08 필수 OS 검사가 남아 있으므로 **goal complete와 Windows 종료 commit을 지정하지 않는다.** 제품 결함 D81/D82의 수정 및 현재 실행 가능한 관련 검증을 마쳤다는 것과 전체 완료는 구분한다.
 
 W02/W08 재개 조건은 로그인된 별도 Windows 테스트 계정 또는 VM과 보호할 원래0.2 설치/합성 이전 데이터다. 사용자가 현재 제공 불가라고 답한 상태를 유지하며 다시 요청하거나 기존 설치/사용자 Vault를 바꾸어 우회하지 않는다. 그 조건이 갖춰지면 원래0.2와 고정19 installer의 버전/전체 해시를 확인하고, 새 설치와0.2→19 업그레이드를 각각 깨끗한 OS 스냅샷에서 실행한다. 새 설치→같은 원래 모델 응답/저장/재로드→정상 종료와, 원래0.2 설치/합성 이전 데이터 생성→고정19 실제 업그레이드→같은 모델 응답/데이터·자격 증명 보존을 구분한다. 설치 identity의 OS 통합/알림과 제거/잔여 데이터 정책을 NSIS/MSI별로 기록한다. 최신 source가 달라지면 영향받는 W/G를 재검증한다. Linux L01–L04 및 Mac M01–M04/R01–R13은 별도 인계의 구체 작업으로 남기며 Windows goal의 실제 기기 완료 조건으로 추가하지 않는다.
+
+### D83 — reasoning 생성 취소와 독립적인 CLI 검사 계속 실행
+
+검사 구현과 회귀/계약 문서는 `fdb48af66d66dff3f4b607c11ee28ba7c61830f0`에 고정했다. 제품 source4a와 고정19 네 binary hash는 그대로다. 아래 최초 D83 실행은5e79643 위의 검사 WIP에서 수행했으며 각 raw의 dirty 상태와 파일 hash를 보존했다.
+
+마지막에는 같은 원래 Strata를 **커밋된 검사 코드 그대로** 다시 실행했다(`d83-strata-committed-native/`). reasoning2문자/content0에서 취소·서버 running/health true, A01/A02/A04/A06/A08/A09 pass, A03/A05/A07의 원래 답변 fail/전체 exit1이 재현됐다. 실제 검사 파일 hash는 main `8cf61aa5087a84ab0600d67abb50f0e29d54f399922f92e49c35a1c6979c7746`, reader `c7ccfb8c0b70e7829b8caf88ba249e2cdc53795a6883e7cd73d28b867a6b8013`, 공통 parser `196aa9dda7da64e127f6b8134912ecaa929a1b7808a3b7144a76721b8eff9f3f`다. source dirty는 당시 결과/인계 문서와 새로 생성된 bytecode이며 검사/제품 소스는 커밋과 같았다. 소유 port의 bridge와 자손을 생성 식별자로 관찰해6개가 정상 정리된 것도 별도 확인했다(`d83-committed-native-descendants.json`). 처음부터 모든 세대의 모든 subprocess를 관찰했다고 확대하지 않는다. 원래6개 파일 전체 hash도 다시 전후 대조했다.
+
+재개 후 원래 CLI 실패와 검사 코드를 다시 대조해 수락 검사 결함을 발견했다. reader는 content만 출력으로 취급해 reasoning 중 취소하지 못했고, 취소하지 않은 채 EOF에 도달하면 숫자 나열 요청에도 산술 정답 검사를 적용했다. 또한 A03 답변 실패가 독립적인 A04–A07 실행까지 중단했다. 앱/엔진 결함과 구분한 **검사 코드 결함**이다.
+
+공통 SSE parser의 reasoning/content를 구분해 실제 생성 출력 후 abort하도록 수정했다. reasoning은 문자 수만 기록하며 최종 답변에 합치지 않는다. 출력 없는 종료·이미 받은 finish reason/DONE·잘못된 SSE를 취소 성공으로 만들지 않는다. 선행 provenance/등록/Ready/정상 제거 조건을 보존하면서 독립 검사를 계속하고, 원래 실패와 전체 nonzero exit를 유지한다. 결과에 검사 스크립트·reader·parser의 파일 hash도 추가했다. 질문·model·stream/usage 설정·32/1024 토큰 한도·산술/authoritative usage 검사는 변경하지 않았다.
+
+- 자동 회귀: 수정 전 9개 중7 fail/2 pass, 수정 후9 pass. reasoning 두 표현·content·미출력 종료·finish reason/DONE·잘못된 SSE·분할 Unicode/EOF·실제 loopback HTTP 연결 조기 종료/서버 재사용을 검사했다. 전체 `test:scripts`43 pass, 관련 lint/typecheck pass다.
+- 별도 합성 오답 fixture: 수정 전 A03에서 중단, 수정 후9항목 모두 기록했다. A03/A05/A07 오답은 fail, A04/A06/A08/A09는 pass이며 전체 exit1이다. 이는 추론 성공이 아니다. 시작에 실패한 기존 인증 필수 fixture는 A04/A05를 이유 있는 unrun으로 기록했고, 의도적으로 틀린 provenance는 등록/실행을 거부했다. 기존 fixture나 원본 실패를 고쳐 성공시키지 않았다.
+- 실제 Strata: 고정19 CLI SHA-256 `22be42ed12addb927d7ecffc603beb0b9a726e153f7198b32432c79a78fd1b3d`, 원래 manifest SHA-256 `9dd5ba78428cdf9eb2af8f15d10fcf586b16332e279978bb150b388f6036a0b4`, 엔진 revision `296b59d2f73c8f04a805df29c2fa97655adace78`, 모델 revision `5348543e0147355ac9cbcb031184a3546350988e`를 그대로 사용했다. A04는 reasoning2문자/content0에서 HTTP abort, 뒤의 status `running`/health true로 pass다. A01/A02/A06/A08/A09도 pass, 원래32토큰 산술 A03/A05/A07은 fail로 남아 전체 exit1이다. 외부6개 파일 전체 hash를 전후 대조했다. 이 실행의 HTTP abort와 기존18의 별도 native STOP→DONE ACK 근거를 합쳐 같은 실행의 wire ACK라고 부르지 않는다.
+- 실제 개인 엔진: 원래 엔진 SHA-256 `9ee4de40ecd8f10f5fc6f27084e1f758d5418de64ef39c8e28e5fcce6bb4f909`, 모델 revision `9217f5db79a29953eb74d5343926648285ec7e67`, 수정 전부터 사용한 올바른 probe manifest를 사용해9항목 pass/exit0이다. 산술 응답 `5`/usage와 content 생성 중 취소, 정상 재시작·제거/재등록·정리를 실제 확인했다.
+- 격리 홈에서만 실행했으며 주 검증 홈206개와 별도 SDK 검사 홈66개 기존 파일 hash를 다시 확인했다. Python isolated 실행이 새로 만든 helper bytecode는 원본 hash/생성 시각과 함께 tmp에 보관하고 소스 트리의 해당 생성물만 정리했다. 기존 로그·fixture·설정·이력·모델·고정19 binary는 보존했다.
+
+raw는 `d83-adapter-cancellation-{red,green}.log`, `d83-test-scripts.log`, `d83-eslint-green.log`, `d83-typecheck.log`, `d83-negative-failfast-red/`, `d83-negative-final-source/`, `d83-start-failure-prerequisites/`, `d83-provenance-refusal/`, `d83-strata-original-native/`, `d83-private-original-native/`, `d83-prior-gui-data-preservation.json`이다. 검사 변경은 생산 GUI/CLI 제품 source4a나19 binary를 바꾸지 않으며 새 GUI 실행 결과로 계산하지 않는다. W04/W05의 남은 답변/미디어 fail과 W02/W08의 실제 OS 계정 blocked 판정은 유지한다. 독립적인 D83 작업을 수행했으므로 이전 blocked 연속 횟수를 이어 붙이거나 goal을 완료로 바꾸지 않는다.
