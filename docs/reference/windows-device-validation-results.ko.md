@@ -968,3 +968,11 @@ W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등
 설치본 Settings→Notifications→Send test notification에서 요청 접수 안내와 **실제 Windows의 AioLM 테스트 toast 표시**를 각각 확인했다. `vm-upgraded20-test-notification-result.json`이며, 단순 API 접수 성공을 표시 성공으로 간주한 것이 아니다. 다른 앱이나 계정의 알림 설정은 바꾸지 않았다.
 
 이번 실제 추론·usage·알림·정상 종료/보존만 한정 pass다. 같은 설치본의 재시작 후 새 대화/프로필·Vault 재확인, MSI 새 설치/실제 업그레이드/제거와 잔여 OS 통합 검사는 남아 있으므로 W02/W08 전체 및 goal은 완료 처리하지 않는다. 원래 Strata32/미디어 및 이전0.2 CPU import fail도 유지한다.
+
+### 업그레이드 설치본 재시작과 NSIS 데이터 보존 제거
+
+같은 고정20 설치본을 정상 종료 후 다시 실행했다. 원래 실제 질문·응답5·PP34/TG2가 저장된 대화와 이전 합성 대화가 각각 표시됐고, `LEGACY02`의 원래 모델·명시적 managed CPU runtime binding도 재로드됐다. 설정을 다시 저장하거나 profile revision을 늘리지 않았다. Benchmark에서 기존 소유 항목의 백업을 새로운 로컬 작업 파일로 내보냈으며, 원래0.2·업그레이드 직후·재시작 후의 UUID·origin·비밀 값과 전체 파일 hash가 같았다. 비밀은 출력하거나 VM 밖으로 보내지 않았다. 두 번째 정상 Close 후71개 파일의 전체 hash와 설정/프로필 객체가 직전 기준과 같았고 현재 세션 앱·엔진·listener·staging도 없었다. `029–030-fresh-nsis-data.json`, `vm-upgraded20-restart-verdict.json`과 실제 재시작/프로필/Vault/종료 화면이 근거다.
+
+이어서 실제 설치 폴더의 NSIS 제거 프로그램을 실행했다. 테스트 계정의 사용자별 설치 경로와 **Delete the application data 미선택**을 확인하고 제거 완료 화면까지 진행했다. 제거 후 GUI·CLI·제거 실행 파일과 테스트 계정의 바탕 화면/시작 메뉴 AioLM 바로가기가 없었고, 현재 사용자 uninstall 등록의 정확한 DisplayName AioLM 항목 수도0이었다. 같은 계정의 데이터71개 파일 이름·크기·전체 SHA-256 및 프로필/설정은 제거 직전과 일치했다. `031-fresh-nsis-data.json`, `vm-upgraded20-nsis-remove-verdict.json`과 실제 제거·경로·등록 정보 화면을 연결한다. 파일 보존만으로 제거 후 OS Vault 재접근까지 통과했다고 주장하지 않는다.
+
+이 범위의 재시작·보존·NSIS 실제 제거만 한정 pass다. MSI 실제 새 설치/이전 버전 업그레이드/제거와 후속 설치본의 Vault 접근 등은 계속 검증한다. W02/W08 전체 및 goal은 완료 처리하지 않으며 원래 Strata32/미디어와 이전0.2 CPU import fail을 유지한다.
