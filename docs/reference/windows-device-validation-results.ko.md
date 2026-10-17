@@ -1056,3 +1056,11 @@ standalone과 읽기 전용 추출 payload는 개인 빌드 경로 검사 pass�
 개인 엔진이 로드된 채 정상 창 Close 후 소유9개 PID/생성 시각 전부 종료·listener/staging 없음·파일14개 전체 hash 보존을 확인했다. `package22-d86-personal-verdict.json`, `package22-normal-close-verdict.json`, `package22-cli-help-verdict.json`과 `gui22/`가 실제 근거다. **D86은 수정 후 관련 자동 검사와 production Windows 실제 제거/재등록·추론/종료 범위 pass**다. 합성 v1/v2의 전체 parser 검증은 앞선21 source의 근거와 구분한다.
 
 W03/G01–G07의 기존 한정 pass 근거에 위 재검증을 연결하지만 전체 goal은 완료되지 않았다. 최신22 GUI/CLI·NSIS/MSI·읽기 전용 관찰 PS5개는 해시·내용·구문 검토 후 VM의 새 package22 경로에 전달할 준비만 했다. 내부 호스트를 통한 실행 파일/스크립트 내용 전송의 명시적 허용을 요청했으며 서버 시작·전송·게스트 실행은 아직 하지 않았다. 실제 MSI 설치/공식0.2 upgrade/제거와 최신 설치본 수락, 원래 Strata32/미디어 내용 fail은 그대로 남아 있다. W02/W08은 전체 unrun, Windows 종료 commit은 미지정이다.
+
+같은 고정22에서 합성 v2의 전체 실행 연결도 추가로 확인했다. 정상 종료 뒤14개 파일을 보존해 재시작했고, 엔진 선택만으로는 모델이 없고 이전 v1 프로필의 삭제된 값이 유지돼 실행이 차단됐다. 기존 검사가 명시한 invalid draft 보호로 프로필 선택도 차단돼 있었다. 실제 모델 선택에서 미저장 초안만 명시적으로 버리자 그 모델의 **저장된 v2 프로필/새 replacement text/999번 값/current help**가 복원됐다. 값을 지우거나 프로필을 덮어써 복구한 것이 아니다. fresh probe/Ready→두 Python 프로세스의 Windows argv/trace 전체 일치→새 합성 echo/stop/TG4를 확인했다. PP는 미확정이며 실제 추론으로 계산하지 않는다. 기존8개 프로필은 선택 프로필의 명시적 시작 revision 증가 외 같고, 기존 이력4개와 나머지 파일12개가 보존됐다.
+
+첫 수집 비교는 등록 파일도 변경되지 않는다고 잘못 예상해 실패했다. 실제 `registry.rs::refresh`는 모델별 probe 결과와 fingerprint를 저장한다. 등록 파일은 직전21의 같은 모델 Ready 등록 파일 전체 hash `215fb8dceac58750c4f55b8e3a7bd4067bb716c7078ec439f209a6871b9623d1`와 정확히 같으며 manifest 전체/model_supported/모델·engine·runtime identity도 확인했다. 원래 실패와 스크립트를 보존하고 이 계약을 대조해 `package22-synthetic-reload-verdict.json`을 한정 pass로 기록했다. 무인증401 검사는 첫 실패의 앞 단계에서 완료됐으며 정상 종료 후 새 HTTP 검사를 했다고 주장하지 않는다. 정상 창 Close 뒤 소유10개 PID/생성 시각·listener/staging 정리, 파일15개 전체 hash 일치도 `package22s-normal-close-verdict.json`으로 pass다.
+
+### D87 opaque 모델의 미확정 크기 표시
+
+위 실제22 모델 선택 목록에서 opaque binding의 가중치 크기가 **0 B**로 표시되는 결함을 재현했다(`gui22s/model-tab.json`). 합성 binding 파일 자체는70바이트지만 실제 가중치가 아니며, 등록된 opaque binding은 엔진 설정/모델 alias일 수도 있다. 백엔드는 명시적으로 weight size unknown이라는 notes와 format unknown/size0을 반환하므로 작은 binding 파일을 stat해 가중치 크기로 사용하면 안 된다. 메인 모델 목록은 이미 같은 unknown format을 `—`로 표시한다. 모델 설정의 선택 목록에도 그 규칙을 적용하는 최소 표시 수정이다. 저장/API/probe/readiness·모델/추론은 변경하지 않는다. 수정 후 production 실제 검증은 별도 새 binary에서 이어가며 이 문서만으로 D87 해결이나 goal 완료를 판정하지 않는다.
