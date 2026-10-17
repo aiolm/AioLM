@@ -938,3 +938,19 @@ W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등
 **공식0.2의 실제 Windows Vault 기준은 한정 pass**다. 게스트의 로컬 테스트 계정에서 새 UUID와 임의32-byte 합성 키로 제품 계약에 맞는 백업 파일을 생성했다. 원래0.2 GUI의 Restore from backup file→소유 항목 표시→Save backup file→별도 새 파일 저장을 실제 수행했다. 로컬 비교에서 UUID·origin·비밀 값이 같았고 원본/앱 내보내기 전체 파일 hash도 일치했다. 복원·목록·내보내기 경로는 로컬 registry/OS Vault를 사용하며 공유 제출이나 외부 소유권 관리는 실행하지 않았다. 비밀 내용은 출력·호스트 회수·커밋하지 않았다. raw는 `018-fresh-nsis-installed.json`, `vm-original02-installed-vault-verdict.json`과 해당 실제 GUI capture 기록에 연결한다. 합성 파일 생성이나 비교 helper만으로 Vault 성공을 판정한 것이 아니다.
 
 원래0.2→고정20 실제 업그레이드와 그 전후 프로필/이력·자격 증명 보존은 아직 unrun이다. 별도 MSI 새 설치/업그레이드/제거, 최종 설치본 실제 추론·정상 종료·알림도 남아 있다. 표준 사용자의 MSI 권한 처리는 실제 설치 시점에 확인한다. 이번 격리·이전 설치·Vault 기준으로 W02/W08 전체나 goal을 완료 처리하지 않는다.
+
+### 공식0.2에서 고정20으로 실제 NSIS 업그레이드와 보존 확인
+
+앞 절의 업그레이드 미실행 상태를 다음 실제 결과로 갱신한다. 공식0.2.0 tag의 source는 `5231e8fb826ab65d59ded739e198981a60d31c1f`, 고정20 제품 source는 계속 `bf48ba4366e1dd4f64a7ed23191190d1d0e55ca9`다. 별도 VM 로컬 테스트 계정에서 이전 GUI로 모델 프로필 `LEGACY02`를 생성하고 GPU layers0/context4096을 저장했다. 정상 종료 후 실제 schema12 파일과 두 프로필을 확인했고, 재시작 GUI에서 같은 모델의 프로필을 다시 열었다.
+
+이전0.2 CPU ZIP import fail은 유지한다. 같은 원래 CPU bundle64개 파일의 전체 hash를 확인해 별도 작업 폴더에 풀고 이전 앱을 실행할 때 그 프로세스의 PATH에만 전달했으나, 실제 GUI picker는 system runtime을 제공하지 않았다. 이전 source의 `ModelSettingsDialog.test.tsx`도 managed runtime만 허용하도록 명시한다. 도움말 문구만으로 지원을 단정했던 가설은 이 소스와 실제 화면으로 기각했다. 원래 binary·등록·Ready 조건을 우회하지 않았으며, Windows나 고정20의 미지원 판정으로 바꾸지 않는다.
+
+이력 이전은 **명시적인 합성 데이터**로 검증했다. 이전 source의 conversation format1에 맞는 새 대화에 `[SYNTHETIC]` 제목, 실제 엔진 응답이 아니라는 본문, 한글을 포함한 두 메시지만 넣었다. 기존 파일을 덮어쓰지 않았다. 공식0.2 GUI가 이 대화를 읽고 실제 표시한 뒤 정상 종료했고, 설정·이력·소유권 등록 등 파일5개 전체 hash가 실행 전후 같았다. 실제 이전 GUI의 프로필 저장과 합성 이력의 출처를 구분하며, 이전 엔진 추론을 성공했다고 주장하지 않는다. `019–022-fresh-nsis-data.json`, `vm-original02-migration-baseline-verdict.json`에 연결한다.
+
+고정20 NSIS 전체 hash를 게스트에서 확인한 뒤 실행했다. 설치 프로그램이 **older version**을 감지했고, 기본 Uninstall before installing 절차에서 **Delete the application data를 선택하지 않았다**. 이전 제거 완료→같은 사용자별 설치 경로→설치 완료→Run AioLM을 실제 수행했다. 새 GUI는 수동 최대화 없이 열렸고 onboarding을 반복하지 않았으며 기존 합성 대화의 한글·두 메시지·합성 표시가 그대로 보였다. 설치 GUI/CLI 전체 hash는 위 고정20 NSIS payload와 일치했다. 같은0.3.1 재설치 결과와 구분되는 실제0.2→0.3.1 업그레이드다.
+
+실제 schema12→14 이전 후 원본 설정 백업은 이전 config 전체 hash와 같았고, 나머지 네 파일도 그대로였다. 원래 두 프로필의 ID·이름·revision·각 설정 값과 원래 모델 적용 기록이 보존됐다. 이전 Model profile이 같은 엔진에서 공유하는 Global scope로 바뀐 것은 `config/profiles.rs::share_profiles`의 이전 규칙이며, 원래 모델 적용 key/프로필 ID/값은 유지됐다. 이전의 빈 runtime backend/build는 `legacy_runtime`에 보존되고 임의 runtime으로 재연결되지 않았다. 기본 제공 엔진의 기본 프로필 두 개가 추가돼 총4개다. `023-fresh-nsis-data.json`, `vm-original02-upgraded20-data-verdict.json`의 실제 객체/파일 비교가 pass다.
+
+**업그레이드 전후 Windows Vault 보존도 한정 pass**다. 고정20에서 원래 등록 시각의 합성 소유 항목을 찾고, 재등록 없이 Save backup file→별도 새 파일 저장을 수행했다. 게스트 비교에서 원래0.2 내보내기와 UUID·origin·비밀 값 및 전체 파일 hash가 같았다. GUI의 실제 OS Vault 접근과 로컬 파일 비교를 각각 관찰했으며, comparator가 Vault를 대신 읽은 것이 아니다. 비밀 내용은 VM 밖으로 전송하거나 출력하지 않았다. `024-fresh-nsis-data.json`, `vm-original02-upgraded20-vault-verdict.json`과 실제 picker/저장/비교 capture가 근거다. 테스트 계정의 파일 메타데이터·프로필 설정을 호스트 임시 근거 폴더로 보내는 범위는 사용자에게 명시적으로 허용받았다.
+
+위 결과는 실제 NSIS 업그레이드와 초기 설정/합성 이력/Vault 보존의 범위만 pass다. 이 로컬 계정의 설치20 실제 추론/usage·재시작·정상 종료/소유 리소스 정리·OS 통합과 알림, MSI 새 설치/실제 업그레이드/제거는 이어서 수행한다. W02/W08 전체와 goal은 완료 처리하지 않는다. 원래 Strata32/미디어 fail, 이전0.2 CPU import fail도 유지한다.
