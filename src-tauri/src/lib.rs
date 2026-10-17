@@ -36,6 +36,8 @@ mod state;
 mod tray;
 pub mod tuning_defaults;
 pub mod verify;
+#[cfg(windows)]
+mod window_placement;
 
 pub use commands::launch::validate_launch_config;
 pub use commands::models::{deletable_model_path, delete_owned_snapshot};
@@ -313,6 +315,10 @@ pub fn run() {
                 #[cfg(any(windows, target_os = "linux"))]
                 if let Err(error) = window.set_decorations(false) {
                     eprintln!("could not remove the native title bar: {error}");
+                }
+                #[cfg(windows)]
+                if let Err(error) = window_placement::fit_initial_window(&window) {
+                    eprintln!("could not fit the initial window to its work area: {error}");
                 }
                 let _ = window.show();
                 let _ = window.set_focus();
