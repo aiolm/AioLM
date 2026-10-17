@@ -976,3 +976,15 @@ W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등
 이어서 실제 설치 폴더의 NSIS 제거 프로그램을 실행했다. 테스트 계정의 사용자별 설치 경로와 **Delete the application data 미선택**을 확인하고 제거 완료 화면까지 진행했다. 제거 후 GUI·CLI·제거 실행 파일과 테스트 계정의 바탕 화면/시작 메뉴 AioLM 바로가기가 없었고, 현재 사용자 uninstall 등록의 정확한 DisplayName AioLM 항목 수도0이었다. 같은 계정의 데이터71개 파일 이름·크기·전체 SHA-256 및 프로필/설정은 제거 직전과 일치했다. `031-fresh-nsis-data.json`, `vm-upgraded20-nsis-remove-verdict.json`과 실제 제거·경로·등록 정보 화면을 연결한다. 파일 보존만으로 제거 후 OS Vault 재접근까지 통과했다고 주장하지 않는다.
 
 이 범위의 재시작·보존·NSIS 실제 제거만 한정 pass다. MSI 실제 새 설치/이전 버전 업그레이드/제거와 후속 설치본의 Vault 접근 등은 계속 검증한다. W02/W08 전체 및 goal은 완료 처리하지 않으며 원래 Strata32/미디어와 이전0.2 CPU import fail을 유지한다.
+
+### MSI 인증 이후 중단과 portable의 제거 후 검증
+
+고정20 MSI SHA-256 `48cb5b6ad6cd098f68c6c727eaac8921f42b5f83f7e3622bb867e9c23e22ec6c`를 게스트에서 확인하고 실제 Welcome→Destination→Install까지 진행했다. MSI는 per-machine 권한을 요구했고 VM의 표준 사용자에게 관리자 인증 화면이 표시됐다. 이후 실제 화면은 Setup Wizard was interrupted였다. 정확한 취소/시간 초과 원인은 확정하지 않는다. Finish로 닫은 뒤 실행 파일3개, 원래0.2/고정20의 MSI ProductCode 등록 경로6개와 AioLM 바로가기 경로12개가 없었고 사용자/시스템 PATH에도 해당 설치 경로가 없었다. 데이터71개 파일 전체 hash와 설정/프로필은 시도 전과 같았다. `032–033-fresh-nsis-data.json`, `vm-msi20-installer-outcome.json`, `vm-msi20-interrupted-verdict.json`이 근거다. 수집기의 removed 모드는 부재 관찰용이며 실제 MSI 제거 성공을 뜻하지 않는다. 실제 MSI 새 설치·업그레이드·제거는 관리자 인증 후 다시 수행해야 한다.
+
+독립적으로 같은 로컬 계정에서 고정20 standalone GUI/CLI를 실행했다. GUI 전체 hash는 위 `d7d74933cb776228576b686f7eb0aa28f59ca2e2c9f11f17ffa12a9579aee6c1`, CLI는 `9a99a8f9b85cf4550a794cbb7f6685a3c52125ebe31a6bbe09f783683d0f5eca`, PE 버전은 둘 다0.3.1이었다. 실제 CLI `--help`는 exit0이었다. 저장된 CLI 관찰 자료의 최초 POST는 이미 종료된 수신기에 대해 timeout이 났다. VM 원본을 보존하고 새 수신기로 같은 파일을 회수했으며 CLI를 재실행하거나 timeout을 늘리지 않았다.
+
+**NSIS 제거 후 실제 OS Vault 접근도 한정 pass**다. portable GUI가 이전 등록 시각의 소유 항목을 읽었고, 재등록 없이 새 비공개 작업 파일로 백업을 내보냈다. 원래0.2 내보내기와 UUID·origin·비밀 값·전체 파일 hash가 같았다. 기존 실제 대화/usage와 합성 이력도 별도로 재로드됐다. 이 결과를 MSI 설치본의 Vault 접근 성공으로 대체하지 않는다.
+
+portable GUI에서 같은 `LEGACY02`·원래 b11617 CPU runtime·원래 Qwen 모델을 Save profile & start로 실행했다. 새로운 대화의 같은 질문에서 실제 **5와 PP34/TG2**를 확인했다. 원래64개 runtime 파일 전체 hash/크기가 manifest와 같았고 엔진 argv의 모델·loopback·context4096·CPU device none·GPU layers0도 보존됐다. 정상 창 Close 전후72개 파일 전체 hash와 설정/프로필이 같았다. 실행 전71개 중 명시적 프로필 저장으로 바뀐 config 이외70개는 그대로이며 새 실제 대화 파일1개가 추가됐다. `LEGACY02` revision3→4 외 설정 값은 전부 같았다. GUI·엔진·WebView·콘솔 등9개를 PID/생성 시각으로 추적했고 종료 후 모두 사라졌으며 엔진 포트·임시 인증 파일·launch staging도 없었다. 종료 후 원래 모델 전체 hash도 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`와 같았다.
+
+첫 비교 스크립트는 프로필 라이브러리 revision이 한 번 증가한다고 가정해 실패했다. `profileEditor.ts::mergeProfileEditor`의 명시적 저장과 `useExecutionStore.ts::start`의 실행용 application 확정은 별도 저장이며, 관찰된 library5→7과 profile3→4를 구분했다. 최초 실패/스크립트를 보존하고 source 계약 및 나머지 프로필·적용 객체의 모든 값까지 비교한 후 한정 pass로 판정했다. `034–037-fresh-nsis-data.json`, `vm-portable20-verdict.json`, `vm-portable20-first-verifier-failure.json`과 실제 GUI·종료·모델 hash 화면을 연결한다. MSI 필수 실제 수락·잔여 OS 통합과 원래 Strata32/미디어 실패가 남아 W02/W08 전체 및 goal은 완료 처리하지 않는다.
