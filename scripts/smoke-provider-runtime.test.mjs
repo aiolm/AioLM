@@ -1,4 +1,4 @@
-/* global process, Buffer, console, setTimeout */
+/* global process, Buffer, console, setTimeout, clearTimeout, AbortController, fetch */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -6,6 +6,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { ReadableStream } from "node:stream/web";
+import { TextEncoder } from "node:util";
+import { readRuntimeAdapterStream } from "./runtime-adapter-stream.mjs";
 import {
   CHECKS,
   STATUSES,
@@ -26,6 +29,108 @@ import {
   summarize,
   validateProbeRecord,
 } from "./smoke-provider-runtime.mjs";
+
+function adapterStream(frames) {
+  let read = 0, cancelled = false;
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({
+    pull(target) {
+      if (read === frames.length) target.close();
+      else target.enqueue(typeof frames[read] === 'string' ? encoder.encode(frames[read++]) : frames[read++]);
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  return { response: { body }, observed: () => ({ read, cancelled }) };
+}
+const adapterFrame = (delta, finish_reason = undefined) => `data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\n`;
+
+for (const field of ['reasoning_content', 'reasoning']) test(`registered adapter cancels on ${field} before final content`, async () => {
+  const stream = adapterStream([adapterFrame({ [field]: 'planning' }), 'data: [DONE]\n\n']);
+  const controller = new AbortController();
+  const result = await readRuntimeAdapterStream(stream.response, { controller, cancel: true });
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(result.streamAbortedAfterOutput, true);
+  assert.equal(result.streamAbortedAfterContent, false);
+  assert.equal(result.cancelledOn, 'reasoning');
+  assert.equal(result.reasoningChars, 8);
+  assert.equal(result.content, '');
+  assert.deepEqual(stream.observed(), { read: 1, cancelled: true });
+});
+
+test('registered adapter keeps content cancellation evidence accurate', async () => {
+  const stream = adapterStream([adapterFrame({ content: '1' }), 'data: [DONE]\n\n']);
+  const controller = new AbortController();
+  const result = await readRuntimeAdapterStream(stream.response, { controller, cancel: true });
+  assert.equal(result.streamAbortedAfterOutput, true);
+  assert.equal(result.streamAbortedAfterContent, true);
+  assert.equal(result.cancelledOn, 'content');
+  assert.equal(controller.signal.aborted, true);
+  assert.deepEqual(stream.observed(), { read: 1, cancelled: true });
+});
+
+test('registered adapter rejects a cancellation that never reached generation output', async () => {
+  const stream = adapterStream([adapterFrame({ role: 'assistant' }), 'data: [DONE]\n\n']);
+  const controller = new AbortController();
+  await assert.rejects(readRuntimeAdapterStream(stream.response, { controller, cancel: true }), /before cancellation/);
+  assert.equal(controller.signal.aborted, false);
+});
+
+for (const terminal of [adapterFrame({ content: '5' }, 'stop'), adapterFrame({ content: '5' }) + 'data: [DONE]\n\n']) {
+  test(`registered adapter refuses already completed cancellation (${terminal.includes('[DONE]') ? 'DONE' : 'finish reason'})`, async () => {
+    const stream = adapterStream([terminal]);
+    const controller = new AbortController();
+    await assert.rejects(readRuntimeAdapterStream(stream.response, { controller, cancel: true }), /before cancellation/);
+    assert.equal(controller.signal.aborted, false);
+  });
+}
+
+test('registered adapter preserves malformed-stream failures during cancellation', async () => {
+  const stream = adapterStream(['data: broken-json\n\n']);
+  const controller = new AbortController();
+  await assert.rejects(readRuntimeAdapterStream(stream.response, { controller, cancel: true }), /invalid SSE/);
+  assert.equal(controller.signal.aborted, false);
+});
+
+test('registered adapter keeps reasoning separate from final text and usage', async () => {
+  const encoded = new TextEncoder().encode(adapterFrame({ reasoning_content: 'planning' }) + adapterFrame({ content: '한글 5' }));
+  const split = encoded.indexOf(0xed) + 1;
+  assert.ok(split > 0);
+  const usage = { prompt_tokens: 3, completion_tokens: 4 };
+  const stream = adapterStream([encoded.slice(0, split), encoded.slice(split), `data: ${JSON.stringify({ usage, choices: [] })}`]);
+  const result = await readRuntimeAdapterStream(stream.response, { controller: new AbortController() });
+  assert.equal(result.content, '한글 5');
+  assert.equal(result.reasoningChars, 8);
+  assert.deepEqual(result.usage, usage);
+});
+
+test('registered adapter reasoning cancellation closes the actual HTTP stream and leaves the server usable', { timeout: 5000 }, async () => {
+  let naturalEnd = false, prematureClose = false;
+  let resolveClosed;
+  const closed = new Promise(resolve => { resolveClosed = resolve; });
+  const server = createServer((request, response) => {
+    if (request.url === '/health') { response.end('ready'); return; }
+    response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+    response.write(adapterFrame({ reasoning_content: 'planning' }));
+    const fallback = setTimeout(() => { naturalEnd = true; response.end('data: [DONE]\n\n'); }, 500);
+    response.on('close', () => { clearTimeout(fallback); prematureClose = !response.writableFinished; resolveClosed(); });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const controller = new AbortController();
+    const response = await fetch(url, { signal: controller.signal, headers: { Connection: 'close' } });
+    const result = await readRuntimeAdapterStream(response, { controller, cancel: true });
+    await closed;
+    assert.equal(result.cancelledOn, 'reasoning');
+    assert.equal(controller.signal.aborted, true);
+    assert.equal(prematureClose, true);
+    assert.equal(naturalEnd, false);
+    assert.equal(await (await fetch(`${url}/health`, { headers: { Connection: 'close' } })).text(), 'ready');
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
 
 test("chat acceptance uses fresh connections across same-port server replacement", async () => {
   const connections = [];
