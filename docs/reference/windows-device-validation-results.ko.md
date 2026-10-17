@@ -1033,3 +1033,26 @@ OS 통합의 위 범위만 한정 pass다. 실제 화면에서 exit 안내의 �
 개인 엔진이 로드된 상태에서 정상 창 Close 후 GUI/엔진/WebView/콘솔9개를 PID/생성 시각으로 추적해 전부 종료, 엔진 listener·staging 없음, 설정·프로필·이력·모델·등록·help13개 파일 전체 hash 보존을 확인했다. `package21-normal-close-verdict.json`이다. 이21 검증은 호스트의 격리 홈에서 수행했으며 VM 설치/이전 수락을 대체하지 않는다. W02/W08의 필수 잔여와 원래 Strata/미디어 fail을 유지한다.
 
 이 과정에서 등록 제거 직후 남은 외부 엔진 상세 화면이 **Built-in adapter**라고 잘못 표시되는 결함을 재현했다(`gui21/synth-v1-remove.json`). catalog descriptor가 없을 때도 기본 제공 문구로 fallback하는 것이 원인이다. 제거 후 복구 동선에서 외부 엔진이 내장형으로 바뀐 것처럼 보이는 표시 결함이며 수정과 새 production 재검증 전에는 해결됐다고 판정하지 않는다.
+
+### D86 제거된 외부 엔진 분류 수정과 production22 재검증
+
+source `4d67994e19f5b2e3a6cdcdeabef4ce9827e365fe`에서 catalog descriptor가 있을 때만 해당 어댑터 분류를 표시하도록 최소 수정했다. descriptor가 없는 제거 직후 화면은 기존 누락 안내와 목록으로 돌아가는 동선을 유지한다. runtime/protocol/probe/옵션/저장·Rust 코드는 변경하지 않았다. 기존 중립 inventory 검사에 catalog에서 외부 엔진이 사라지는 상태 전이를 연결해54개 UI 검사, typecheck, 관련 ESLint가 pass다. 첫 검사 정규식이 상단 소개의 복수형 `Built-in adapters`까지 잡은 실패 로그를 남기고 분류 문구 전체와 일치하도록 고쳤다.
+
+`--locked --no-default-features`로 실제 GUI·CLI·NSIS·MSI를 새로 빌드해 exit0/117,691ms와 입력/lockfile hash 보존을 확인했다. 이전20/21 고정 파일도 보존했다. 고정22의 전체 SHA256은 다음과 같다.
+
+| 대상 | SHA256 |
+| --- | --- |
+| GUI | `b5dff7241b73f72df3e47fd5e276f4196f31a3135f83c384285f5ef45958e2b5` |
+| CLI | `111f3cb4bd1a624c45b07e39e1aa84c7a668c4e8714aa06d46fb1e8b7b197a56` |
+| NSIS | `6a2ab7d09bf50a5f6a6e144174a7933ae01b6efa194bd18bcf24c4ab67826fc4` |
+| MSI | `799f9ec43dd391eee7c5a80a2b071458e80aafcdaf789f56f94ad4cf2b0a5828` |
+| NSIS 내부 GUI | `0ea5f63a1d309c138c73b0c926cb5cb9ea73745702ce4f349991a4e2522ac8a9` |
+| MSI 내부 GUI | `9a3437fb63930ed897b5878feccb6be449a316ba85d9f8b28d77422f6fa2907d` |
+
+standalone과 읽기 전용 추출 payload는 개인 빌드 경로 검사 pass이며, installer GUI는 기존의 정확한3바이트 bundle marker 외 전체 byte가 standalone과 같고 CLI는 전체 hash가 같았다. 설치 파일은 실행하지 않았다. 고정22 MSI ProductCode는 `{84DD554F-DC6E-4A65-9F9F-8672582872EE}`이며 공식0.2와 UpgradeCode가 같다. 첫 관찰 스크립트는 이전21 hash guard를 남겨 실행 전에 거부됐고, 원본을 보존한 뒤 정확한22 hash로 읽기 전용 조사했다. 실제 upgrade 성공 근거는 아니다.
+
+기존21 검증 홈의13개 파일을 보존한 채 고정22를 실행했다. 실제 GUI에서 같은 합성 외부 등록 제거→누락 안내/잘못된 분류 없음→목록→같은 manifest 재등록→정상 **Registered engine** 표시를 확인했다. 이 동선에서 예상된 등록 파일 외12개 파일 전체 hash가 그대로였고 실행 선택도 바꾸지 않았다. 이어 같은 개인21 엔진·같은 Qwen·기존 프로필의 새 진단 값과 current help를 재열기에서 확인하고 fresh probe/Ready→실제 Windows argv→새 Chat의 **5/stop/PP34/TG2/무인증401**을 확인했다. 기존8개 프로필은 명시적 시작의 선택 프로필 revision 증가 외 전부 같고 기존 이력3개도 그대로였다. 새22 CLI의 별도 격리 `--help`도 exit0이다.
+
+개인 엔진이 로드된 채 정상 창 Close 후 소유9개 PID/생성 시각 전부 종료·listener/staging 없음·파일14개 전체 hash 보존을 확인했다. `package22-d86-personal-verdict.json`, `package22-normal-close-verdict.json`, `package22-cli-help-verdict.json`과 `gui22/`가 실제 근거다. **D86은 수정 후 관련 자동 검사와 production Windows 실제 제거/재등록·추론/종료 범위 pass**다. 합성 v1/v2의 전체 parser 검증은 앞선21 source의 근거와 구분한다.
+
+W03/G01–G07의 기존 한정 pass 근거에 위 재검증을 연결하지만 전체 goal은 완료되지 않았다. 최신22 GUI/CLI·NSIS/MSI·읽기 전용 관찰 PS5개는 해시·내용·구문 검토 후 VM의 새 package22 경로에 전달할 준비만 했다. 내부 호스트를 통한 실행 파일/스크립트 내용 전송의 명시적 허용을 요청했으며 서버 시작·전송·게스트 실행은 아직 하지 않았다. 실제 MSI 설치/공식0.2 upgrade/제거와 최신 설치본 수락, 원래 Strata32/미디어 내용 fail은 그대로 남아 있다. W02/W08은 전체 unrun, Windows 종료 commit은 미지정이다.

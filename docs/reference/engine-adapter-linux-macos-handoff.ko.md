@@ -130,3 +130,13 @@ Linux L01/L02와 Mac M01/M02에서 해당 OS의 최초 표시·작은/큰 화면
 앞 절의 미실행 상태 중 고정20의 **실제0.2 NSIS 업그레이드·schema12→14/프로필/합성 이력 이전·Vault 보존·동일 원래 CPU/model 실제 추론/usage·재시작·정상 종료·데이터 보존 제거**는 이후 한정 pass로 갱신됐다. 제거 후 portable에서도 원래 소유 항목의 실제 Vault 내보내기 보존과 새 실제 추론/정상 종료를 확인했다. OS 테스트 알림·설정 검색에서의 native 클립보드/한글 IME·실제 트레이 숨김/복원/Quit/꺼짐 복원도20에서 한정 pass다. 이를21 설치본의 성공으로 대체하지 않는다. 고정21 VM 전송 허용과 MSI 관리자 인증은 대기 중이며 실제 MSI 새 설치/0.2 업그레이드/제거와21의 관련 최종 수락은 남아 있다. 원래 Strata32/미디어 fail은 유지하고 Windows 종료 commit은 지정하지 않는다.
 
 Linux L01/L02 및 Mac M01/M02에서는 해당 OS에서 새로 빌드한 production으로 종료/숨김 설명의4개 언어, 실제 tray/menu 또는 dock 동작, 작은 창/배율에서 설명과 설정의 접근성을 확인한다. tray를 제공하지 않는 Linux 세션에서는 기존 host 감지와 정상 종료 fallback을 실제로 검사한다. 이후 실제 엔진을 로드해 숨김 중 생성 identity/포트/응답 유지→복원→명시적 Quit의 정리와 데이터 보존을 구분한다. 공통 안내·설정·tray/lifecycle 코드를 수정하면 Windows W04/W07/W08/G07의 같은 흐름을 새 source로 재검증한다. L03/L04·Mac M03/M04 및 R01–R13의 기존 구체 작업은 유지하며 Linux/Mac 실제 기기 검증은 이번 Windows goal의 완료 조건으로 추가하지 않는다.
+
+## D86 외부 엔진 제거 후 분류와 production22 인계 checkpoint
+
+최신 제품 source는 `4d67994e19f5b2e3a6cdcdeabef4ce9827e365fe`다. 외부 등록을 제거해 catalog descriptor가 없어진 상세 화면에서 기본 제공 어댑터라고 표시하던 결함을 고쳤다. 실제 descriptor가 있을 때만 분류를 표시하며, 누락 안내·목록 복귀·다시 등록하는 동선을 유지한다. protocol/옵션/저장/Rust 경계는 바뀌지 않았다. 관련 UI54개/typecheck/ESLint, 고정22 GUI/CLI/NSIS/MSI 빌드·전체 payload/개인 경로 검사, 실제 Windows GUI의 제거→누락 안내→재등록→정상 분류와 같은 개인 엔진/Qwen/미지 옵션의 재열기·Ready·실제 argv·5/usage/401·정상 종료가 한정 pass다. 기존8개 프로필·3개 이력 보존 및 종료 전후14개 파일 전체 hash 일치는 [Windows 결과의 D86](windows-device-validation-results.ko.md)에 연결한다.
+
+앞선 고정21은 고정 후 만든 합성 엔진의 완전 수동 executable/entry point/help/binding/protocol/probe wizard→1,014개 공통 옵션/999번 검색→새 프로필/실제 argv/합성 echo, 같은 ID v2의 거부/stale/diff/미해석 값 유지/명시 복구, 새로 빌드한 실제 개인 native 엔진의 앱이 모르는 옵션→실제 응답/usage를 검증했다. 합성 응답과 실제 추론을 구분하며 고정22에서 같은 엔진을 새22 빌드라고 부르지 않는다. 새 flag는 고정22 GUI/CLI에도 없음을 검사했다.
+
+Linux L01/L02와 Mac M01/M02에서 해당 OS의 실제 임의 엔진을 등록하고, 실제 옵션이 있는 상태의 help/cache/profile/argv/response 외에 등록 제거 직후 상세 화면·목록의 검색 유지·등록 복구와 기본 제공/외부 분류를 확인한다. catalog 조회 실패나 갱신 중인 상태를 내장형이라는 사실로 확정하지 않는다. 이 공통 경계를 후속 OS에서 수정하면 Windows W03/G01/G05/G07의 같은 제거·재등록·보존·실제 실행 동선과 자동 검사를 새 source로 연결한다. L03/L04·M03/M04 및 R01–R13의 기존 작업을 유지한다.
+
+이 source는 Windows 전체 종료 commit이 아니다. 최신22 VM 파일 전송 동의와 실제 MSI 관리자 인증을 기다리며 최신 설치본 수락·실제 MSI 새 설치/공식0.2 upgrade/remove가 남아 있다. 원래 Strata32/미디어 fail도 유지한다. 후속 OS 실제 검증은 각 기기에서 새로 빌드해 수행할 작업이며 Windows pass를 대신하지 않는다.
