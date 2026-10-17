@@ -954,3 +954,17 @@ W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등
 **업그레이드 전후 Windows Vault 보존도 한정 pass**다. 고정20에서 원래 등록 시각의 합성 소유 항목을 찾고, 재등록 없이 Save backup file→별도 새 파일 저장을 수행했다. 게스트 비교에서 원래0.2 내보내기와 UUID·origin·비밀 값 및 전체 파일 hash가 같았다. GUI의 실제 OS Vault 접근과 로컬 파일 비교를 각각 관찰했으며, comparator가 Vault를 대신 읽은 것이 아니다. 비밀 내용은 VM 밖으로 전송하거나 출력하지 않았다. `024-fresh-nsis-data.json`, `vm-original02-upgraded20-vault-verdict.json`과 실제 picker/저장/비교 capture가 근거다. 테스트 계정의 파일 메타데이터·프로필 설정을 호스트 임시 근거 폴더로 보내는 범위는 사용자에게 명시적으로 허용받았다.
 
 위 결과는 실제 NSIS 업그레이드와 초기 설정/합성 이력/Vault 보존의 범위만 pass다. 이 로컬 계정의 설치20 실제 추론/usage·재시작·정상 종료/소유 리소스 정리·OS 통합과 알림, MSI 새 설치/실제 업그레이드/제거는 이어서 수행한다. W02/W08 전체와 goal은 완료 처리하지 않는다. 원래 Strata32/미디어 fail, 이전0.2 CPU import fail도 유지한다.
+
+### 업그레이드 설치본의 실제 CPU 추론·알림·정상 종료
+
+같은 고정20 NSIS 설치본에서 실제 CLI `--help`가 exit0으로 JSON 도움말을 반환했고 GUI/CLI 전체 hash와 PE 버전0.3.1이 기존 패키지와 일치했다. 관찰 스크립트가 추가로 요구했던 `--version`은 현재 CLI parser와 도움말에 정의되지 않아 unknown command/exit1이었다. 수집기 전체의 fail 원본을 보존하고, 실제 지원되는 help 및 설치 파일 identity만 한정 pass로 판정했다. `025-fresh-nsis-data.json`, `vm-upgraded20-installed-cli-verdict.json`과 `aiolm-cli.rs::parse_command`를 대조했다. 이 관찰 가정 때문에 제품 명령을 새로 추가하거나 실패를 숨기지 않았다.
+
+엔진 중립 목록에서 기본 제공 llama.cpp 관리 화면을 열고 Advanced→Portable runtime bundles로 **원래 b11617 CPU ZIP**을 가져왔다. Windows 파일 선택기에 `/` 경로를 입력한 첫 시도는 파일 이름 오류로 거부돼 가져오기가 시작되지 않았고, 대화상자를 취소한 뒤 같은 파일의 Windows 경로로 재시도했다. 실제 가져오기 완료와 b11617 managed runtime 표시를 확인했다. 원래 Qwen 모델의 이전 프로필 `LEGACY02`를 열어 이 runtime을 명시적으로 선택하고 Save profile & start→model loaded를 수행했다. 새 대화에서 원래 질문의 실제 응답 **5와 PP34/TG2**가 표시됐고, 이전의 명시적 합성 대화는 별도로 남았다.
+
+실제 엔진 argv는 원래 모델·CPU device none·GPU layers0·context4096·loopback bind를 유지했다. CPU 원본64개 파일 전체 hash/byte 수가 ZIP manifest와 일치했다. 정상 창 Close 전후 설정·프로필·원래 합성 이력·새 실제 대화·runtime 등 **71개 파일 전체 hash가 같았다**. `LEGACY02`의 모든 설정 값은 이전 직후와 같고, 명시적 저장에 따른 revision2→3 및 runtime binding을 확인했다. GUI·엔진·WebView·콘솔 자식 등9개를 PID와 생성 시각으로 추적했으며 정상 Close 후 모두 종료되고 엔진 listener와 launch staging도 없었다. `026–028-fresh-nsis-data.json`, `vm-upgraded20-cpu-close-verdict.json`이 근거다.
+
+수집 실패 두 건도 구분해 보존했다. 첫 관찰 JSON은68,315바이트여서 기존64KiB 수신 한도를 넘었다. 게스트 원본과 hash를 보존하고 같은 JSON 객체를17,429바이트로 공백 압축해 회수했으며 제한·timeout이나 제품 실행을 바꾸지 않았다. 다음 수집기는 Ready 중에도 임시 인증 파일이 존재해야 한다고 잘못 가정해 fail을 기록했다. 실제 제품은 `commands/server.rs`에서 readiness 성공 직후 그 파일을 삭제하며, 실제 관찰에서도 파일이 없었다. 이 fail과9개 프로세스 기준은 그대로 보존했고, 별도 정상 종료 관찰 및 종료 후 해당 경로의 부재를 확인했다. 종료 후 원래 모델 전체 SHA-256도 기존 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`와 같았다. 후속 관찰 화면은 `vm-upgraded20-model-auth-result.json`이다.
+
+설치본 Settings→Notifications→Send test notification에서 요청 접수 안내와 **실제 Windows의 AioLM 테스트 toast 표시**를 각각 확인했다. `vm-upgraded20-test-notification-result.json`이며, 단순 API 접수 성공을 표시 성공으로 간주한 것이 아니다. 다른 앱이나 계정의 알림 설정은 바꾸지 않았다.
+
+이번 실제 추론·usage·알림·정상 종료/보존만 한정 pass다. 같은 설치본의 재시작 후 새 대화/프로필·Vault 재확인, MSI 새 설치/실제 업그레이드/제거와 잔여 OS 통합 검사는 남아 있으므로 W02/W08 전체 및 goal은 완료 처리하지 않는다. 원래 Strata32/미디어 및 이전0.2 CPU import fail도 유지한다.
