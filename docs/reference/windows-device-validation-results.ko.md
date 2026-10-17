@@ -851,6 +851,24 @@ raw는 `d83-adapter-cancellation-{red,green}.log`, `d83-test-scripts.log`, `d83-
 
 고정19 GUI/CLI/NSIS/MSI, 원래 CPU bundle과 같은 원래 Qwen 모델의 전체 hash를 다시 확인하고, 원래0.2 설치 파일 및 읽기 전용 게스트 preflight를 합쳐11개 전달 파일을 준비했다. 준비 스크립트의 범위는 정확한 테스트 VM 확인→새 설치 전 체크포인트 생성→새 전용 폴더로 파일 복사다. 복사에 필요한 해당 VM의 guest file-copy 통합 서비스만 임시 사용하고 원래 상태로 되돌리며, 설치 프로그램/게스트 명령은 실행하지 않는다. 게스트 preflight는 전달 파일 hash·OS/CPU/RAM/graphics/WebView2·기존 AioLM 설치 여부를 실제 VM에서 확인하도록 준비돼 있다. 실행하지 않은 항목은 pass로 계산하지 않는다.
 
-직접 `Get-VM` 조회는 Hyper-V 관리 권한 부족으로 거부됐다. 이후 좁은 준비 스크립트를 관리자 권한으로 실행하도록 요청했으나 Windows의 RunAs가 취소로 종료해 elevated PID/준비 결과가 생성되지 않았다. **체크포인트·파일 복사·게스트 preflight·실제 설치/업그레이드/제거/자격 증명/설치 OS 통합은 모두 미실행**이다. 같은 권한 요청을 자동 반복하거나 다른 경로로 우회하지 않는다. 다음 실행은 호스트의 관리자 PowerShell7에서 검토된 준비 스크립트를 실행하는 것이다. 실제 결과와 체크포인트·전달된 파일 hash를 확인한 뒤 새 설치/NSIS 업그레이드/MSI 업그레이드를 각각 분리해 수행한다.
+첫 직접 `Get-VM` 조회는 Hyper-V 관리 권한 부족으로 거부됐고 최초 RunAs는 취소로 종료했다. 이후 명시적 재개에서 관리자 준비가 실제 실행됐다. 준비 코드의 존재하지 않는 `Get-VMTPM` 호출로 첫 실행이 중단됐으며, 그때 체크포인트·복사는 시작되지 않았음을 결과로 확인했다. 실패 기록을 보존하고 설치된 공식 `Get-VMSecurity`의 `TpmEnabled` 조회로 수정한 별도 실행은 성공했다. 이는 준비 검사 코드 수정이며 제품 수정이 아니다.
+
+실제 VM은 실행 중인 generation2·16 vCPU·할당 RAM16GiB였으며 가상 TPM은 활성 상태였다. 현재 `Standard` 정책을 바꾸지 않고 새 설치 전 체크포인트를 생성했다. 고정 전체 hash를 확인한11개 파일을 새로운 전용 게스트 폴더로 복사했고, 해당 VM의 file-copy 통합 서비스를 원래 비활성 상태로 복원했다. 이 host-to-guest 복사 성공은 게스트 hash 확인 또는 설치 성공을 뜻하지 않는다. 실제 근거는 raw `vm-acceptance/<run-id>/admin-preparation-{result,attempt2-result}.json`과 attempt2 이벤트 기록이다.
+
+게스트 preflight는 이후 실제 실행해 **pass**를 확인했다. 원래 실행 정책의 파일 실행 거부를 먼저 관측하고, 검토한 로컬 파일에 대해 새 PowerShell 프로세스의 `RemoteSigned`만 적용했다. 사용자/시스템 정책은 바꾸지 않았다. Hyper-V 가상 키보드 API로 명령을 전달했으며 화면의 실제 출력과 별도 요약을 대조했다. payload10개의 전체 SHA-256 대조가 통과했고 기존 AioLM 설치0개·프로세스0개·기본 데이터 폴더 없음이었다.
+
+| 게스트 환경 | 실제 관측값 |
+| --- | --- |
+| OS | Microsoft Windows11 Home, `10.0.26300`, build26300, x64 |
+| CPU | AMD EPYC4585PX16-Core Processor, 게스트8 cores/16 logical processors |
+| RAM | OS가 보고한 `16776084`KiB; Hyper-V 할당16GiB |
+| Graphics/driver | Microsoft Hyper-V 비디오, `10.0.26100.1150` |
+| PowerShell/WebView2 | `5.1.26100.9711` / `155.0.4283.62` |
+
+raw `vm-guest-preflight-attempt2-readback.json`, `vm-preflight-verified-summary.json` 및 게스트 전용 폴더의 `guest-preflight.json`이다. 이후 원본 JSON을 Hyper-V 내부 네트워크의 한정된 임시 receipt 수신기로 회수해 전달 목록의10개 hash와 다시 대조했다. 방화벽·네트워크 정책은 변경하지 않았다. `vm-acceptance/<run-id>/guest-receipts/001-preflight.json`이 원본이며 별도 transport receipt에 수신 bytes/hash를 남겼다.
+
+고정19 NSIS의 실제 새 설치 완료→설치 마법사의 Run AioLM→최초 onboarding→한국어·시스템 테마→원래 Qwen이 있는 검증 폴더를 실제 picker로 선택→채팅 화면 진입까지 **한정 pass**다. 설치된 GUI 전체 SHA-256은 `77dcf1f64b0cf843dc27b1c991674d77e4009c207f3c9c8a07d5282718d037b1`, CLI는 `22be42ed12addb927d7ecffc603beb0b9a726e153f7198b32432c79a78fd1b3d`로 앞서 읽기 전용 추출한 고정19 NSIS payload와 일치한다. 두 파일의 실제 version은0.3.1이고 설치된 CLI의 `--help`는 exit0/JSON 반환이다. 원래 홈이 없던 게스트에서 기본 `.aiolm` 생성과 설치 경로의 실제 GUI 프로세스를 확인했다. raw `002-fresh-nsis-installed.json`, `vm-fresh-nsis-install-result-ui.json`, `vm-fresh-main-after-onboarding.json`이다.
+
+**이 설치본의 실제 추론/저장·재로드/정상 종료·업그레이드/제거/자격 증명/설치 OS 통합의 수락 판정은 아직 남아 있다**. 이후 NSIS/MSI 업그레이드를 별도 시나리오로 수행한다. 호스트의 원래0.2 설치·설정·Credential Manager는 변경하지 않았다. 키 입력 도구의 호출 성공만으로 명령 실행을 판정하지 않는다.
 
 raw는 `vm-resume-*.json`, `vm-official-releases.json`, `vm-active-preparation.json`, `vm-acceptance/<run-id>/payload.json`, `original-msi-upgrade-identity.json`, `vm-prepare-admin-canceled.json`, `vm-original-host-install-before.json`, `vm-original-host-protected-hashes-corrected.json`이다. 원래 호스트 설치 경로의 인용부호 처리에 실패한 최초 부분 baseline도 보존하고, 수정된 읽기 전용 검사에서 원래 GUI와 기존 설정2개 전체 hash를 기록했다. 제한된 baseline이며 전체 개인 기록을 복제·검사했다고 주장하지 않는다. 준비 파일/스크립트·계정/기기 정보·화면·host 경로는 tmp에만 보존하고 커밋하지 않는다. 제품 source4a/고정19 binary와 D83 검사는 바뀌지 않았고 기존 W04/W05 내용 실패도 유지한다. 새로운 재개 실행이므로 이전 blocked 연속 횟수를 재사용하지 않는다.
