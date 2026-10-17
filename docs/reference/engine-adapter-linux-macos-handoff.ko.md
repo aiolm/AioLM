@@ -122,3 +122,11 @@ Linux L01/L02와 Mac M01/M02에서 해당 OS의 최초 표시·작은/큰 화면
 고정20의 VM NSIS 같은 버전 유지 관리 재설치도 실제 완료했다. 설치된 GUI/CLI의 전체 hash가 앞의 고정20 NSIS payload와 일치하고, 재설치 전후67개 설정/대화/runtime 파일·프로필·두 이력 객체가 동일했다. 설치본 startup Maximized, CLI help exit0, Start 메뉴의 `com.aiolm.desktop` 등록은 한정 pass다. 원래0.2 업그레이드나 OS 알림 표시를 확인한 것은 아니다. 실제 바탕 화면의 OneDrive 동기화를 확인해 제거/업그레이드용 VM 로컬 계정 준비를 요청했고 아직 새 로그인 검증 전이다. Windows 잔여와 기존 fail은 유지하며 종료 commit은 지정하지 않는다. 후속 OS도 동기화된 사용자 폴더가 있는 경우 설치/제거의 영향을 격리하고, 해당 OS의 실제 패키지 identity/알림/자격 증명 검사를 별도로 수행한다.
 
 이후 VM의 새 로컬 표준 사용자 계정에서 OneDrive 격리·기존 설치/데이터 없음과 새 체크포인트를 실제 확인했다. 공식0.2 NSIS 설치/최초 실행과 설치 GUI·CLI 전체 payload 대조, 이전0.2 GUI의 합성 소유권 백업 복원→OS Vault 읽기/내보내기→원본과 동일함까지 한정 pass다. 원래0.2의 같은 CPU ZIP import는 가속기 없음 오류로 fail이며, 고정19/20의 같은 bundle 성공과 구분한다. 원래0.2→고정20 실제 업그레이드·프로필/이력/자격 증명 이전은 아직 미실행이다. 후속 OS는 Windows Credential Manager의 내부 파일을 복사하지 않고 각 OS의 실제 저장소를 별도로 검증하며, 명시적 합성 복구 파일의 제품 계약과 upgrade 전후 보존을 확인한다. 비밀 백업 파일은 인계 문서/배포물에 포함하지 않는다.
+
+## D85 안내 수정과 현재 Windows 검증 경계
+
+최신 제품 source는 `2738587bce3ca3b1aa8cc4cdfed00e6c1dd168ac`이다. 실제 Windows 트레이 숨김에서 엔진이 유지되는 것과 설정의 “Closing the desktop app always stops” 설명 사이의 혼동을 줄이기 위해4개 언어의 설명만 수정했다. 앱 종료는 작업을 중지하고, 트레이 숨김/탭 이동은 작업을 유지한다고 구분한다. D84 이후 runtime/protocol/저장/프로세스 코드는 바뀌지 않았다. 관련 자동 검사, 고정21 전체 GUI/CLI/NSIS/MSI 빌드·읽기 전용 payload/개인 경로 검사와 호스트 새 격리 프로필의 실제 영어/한국어 GUI·작은 창 줄바꿈·CLI help·정상 Close가 한정 pass다. 정확한 전체 hash와 source별 근거는 [Windows 결과의 D85](windows-device-validation-results.ko.md)를 따른다.
+
+앞 절의 미실행 상태 중 고정20의 **실제0.2 NSIS 업그레이드·schema12→14/프로필/합성 이력 이전·Vault 보존·동일 원래 CPU/model 실제 추론/usage·재시작·정상 종료·데이터 보존 제거**는 이후 한정 pass로 갱신됐다. 제거 후 portable에서도 원래 소유 항목의 실제 Vault 내보내기 보존과 새 실제 추론/정상 종료를 확인했다. OS 테스트 알림·설정 검색에서의 native 클립보드/한글 IME·실제 트레이 숨김/복원/Quit/꺼짐 복원도20에서 한정 pass다. 이를21 설치본의 성공으로 대체하지 않는다. 고정21 VM 전송 허용과 MSI 관리자 인증은 대기 중이며 실제 MSI 새 설치/0.2 업그레이드/제거와21의 관련 최종 수락은 남아 있다. 원래 Strata32/미디어 fail은 유지하고 Windows 종료 commit은 지정하지 않는다.
+
+Linux L01/L02 및 Mac M01/M02에서는 해당 OS에서 새로 빌드한 production으로 종료/숨김 설명의4개 언어, 실제 tray/menu 또는 dock 동작, 작은 창/배율에서 설명과 설정의 접근성을 확인한다. tray를 제공하지 않는 Linux 세션에서는 기존 host 감지와 정상 종료 fallback을 실제로 검사한다. 이후 실제 엔진을 로드해 숨김 중 생성 identity/포트/응답 유지→복원→명시적 Quit의 정리와 데이터 보존을 구분한다. 공통 안내·설정·tray/lifecycle 코드를 수정하면 Windows W04/W07/W08/G07의 같은 흐름을 새 source로 재검증한다. L03/L04·Mac M03/M04 및 R01–R13의 기존 구체 작업은 유지하며 Linux/Mac 실제 기기 검증은 이번 Windows goal의 완료 조건으로 추가하지 않는다.

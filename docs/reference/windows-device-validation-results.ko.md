@@ -998,3 +998,24 @@ portable GUI에서 같은 `LEGACY02`·원래 b11617 CPU runtime·원래 Qwen 모
 이후 재시작→설정에서 트레이 옵션을 원래 꺼짐으로 저장→일반 Close로 종료했다. 실제 저장 화면과 config의 `close_to_tray=False`를 확인했고 config 이외71개 파일은 변경되지 않았다. 모델 로드를 위한 명시적 Save profile & start에 따른 프로필 revision4→5와 library7→9 외 프로필 값·적용 객체는 같았다. `038–042-fresh-nsis-data.json`, `vm-portable20-tray-verdict.json`, `vm-portable20-tray-reset-final-result.json`이 근거다. 이전036/037의9개 자식 프로세스 기준은 재사용하지 않았으며 이번 트레이 관찰을 전체 자식 tree 검사로 확대하지 않는다.
 
 OS 통합의 위 범위만 한정 pass다. 실제 화면에서 exit 안내의 “Closing the desktop app”가 트레이 숨김과 혼동될 수 있어 D85로 기록하고 수정본의 production 화면 재검증을 이어간다. MSI 관리자 인증은 아직 제공되지 않았고 실제 MSI 설치·업그레이드·제거는 unrun이다. W02/W08 전체 및 goal을 완료 처리하지 않는다.
+
+### D85 — 실제 종료와 트레이 숨김 안내 구분
+
+실제 고정20 설정 화면의 종료 설명은 “Closing the desktop app always stops”라고 안내했지만, 바로 아래 트레이 옵션은 창을 닫아도 서버가 실행된다고 설명했다. 실제 트레이 숨김에서 엔진이 유지되는 것을 관찰했으므로 사용자가 창 닫기를 작업 종료로 오해할 수 있었다. source `2738587bce3ca3b1aa8cc4cdfed00e6c1dd168ac`에서 영어·한국어·일본어·중국어 종료 설명만 앱 종료와 트레이 숨김/탭 이동을 명확히 구분하도록 수정했다. runtime·protocol·설정 저장·프로세스 계약은 바꾸지 않았다. 기존 설정 검사5개, i18n의4개 언어/713개 UI key, typecheck와 변경 파일 ESLint가 pass다.
+
+첫 CLI 사전 빌드는 compiler DLL의 LNK1104로 실패했다. 원본 로그를 보존했고 남은 빌드 프로세스·출력 폴더 쓰기·여유 공간·해당 파일의 보안 탐지를 조사했으나 정확한 원인은 확정하지 않았다. ACL·보안 설정·lockfile을 변경하지 않았다. 다음 실행은 기존에 성공한 Tauri의 전체 enabled binary/NSIS/MSI 빌드 경로에 `--locked --no-default-features`를 적용했고 exit0이었다. 네 target 모두 이번 빌드 시각 이후 생성된 것을 확인했다. `package21-build-result.json`, `package21-build-attempt2-result.json`, `package21-build-context.json`에 실패와 성공을 각각 남겼으며 고정20은 그대로 보존했다.
+
+| 고정21 target | 전체 SHA-256 |
+| --- | --- |
+| standalone GUI | `34ef6b47bfb5bf2a5b1140c9cdd112dd8bae1e0772471a3b4dfaa13b414b9a5e` |
+| CLI | `7f251f40fc83a707b632e2f7677f74bd2a0eb22570d29f3194f193ee1a8040b4` |
+| NSIS | `690138cbf76e90b6349265753b99e81770325ee6843c12cfe626ffbab56242d3` |
+| MSI | `6281e7a58a64ec88e481fd111673c95b4d8b522d1050e70e0e1d3c48dfe6fcf4` |
+| NSIS 내부 GUI | `1561e5f0889bc1b4e52853d9410e4436a167083065f3666789cfeebb65fc2da4` |
+| MSI 내부 GUI | `39255ab6ce8fdb728e7da369aa4f8b80d4eac00d594c53fd5d60bc8f163a088e` |
+
+고정21의 두 installer를 실행하지 않고 payload만 읽기 전용으로 추출했다. GUI는 기존 Tauri 계약의 정확한3바이트 bundle marker 외 모든 byte가 standalone과 같았고 CLI는 전체 hash가 같았다. standalone과 추출 payload의 개인 빌드 경로 검사도 pass다. `package21-candidate.json`, `package21-{nsis,msi}-payload-readonly/`가 근거이며 실제 설치/업그레이드/제거 성공을 뜻하지 않는다.
+
+**수정 문구의 실제 production GUI는 한정 pass**다. 호스트의 새 격리 앱/OS/WebView 프로필에서 고정21 최초3단계 onboarding을 완료했다. 설정→서버의 영어 문구와 실제 한국어 전환 후 새 문구를 접근성 tree와 화면에서 확인했다. 물리1304×1104 창에서도 한국어 설명이 겹치지 않고 줄바꿈됐으며 스크롤 후 트레이 설정에 접근할 수 있었다. 모델을 로드하지 않은 이 검사에서 추론 성공을 주장하지 않는다. 같은21 CLI의 별도 격리 `--help`는 exit0이었다. 정상 Close 전에 GUI/WebView 자식7개를 PID/생성 시각으로 기록했고 이후 모두 종료됐으며 config 전체 hash가 같았다. Close 직후 화면 조회의 FromHandle 오류는 보존하고 별도 프로세스 identity 검사로 종료를 확인했다. `host-package21-{server-copy,ko-server-copy,ko-small,ko-small-scrolled}.json`, `host-package21-copy-verdict.json`이 근거다.
+
+현재 W02는 고정20의 실제0.2 NSIS 이전/프로필·이력·Vault 보존까지 한정 pass이며, W08도20의 NSIS 설치/재설치/제거·실제 추론/usage/종료·알림/클립보드/IME/트레이 범위는 한정 pass다. 두 항목의 전체 판정은 계속 **unrun**이다. 고정21의 VM 바이너리/검증 스크립트 전송은 자동 승인 검토가 기존 메타데이터 전송 동의와 범위가 다르다며 거절해 명시적 허용을 요청했다. 새 파일 서버는 시작되지 않았고 우회 전송하지 않았다. 고정21 VM 실제 추론/보존/종료·설치본 수락과 실제 MSI 새 설치/0.2 업그레이드/제거는 각각 파일 전송 허용과 VM 관리자 인증 후 이어간다. 원래 Strata32/미디어 content fail을 유지하며 goal은 active이고 Windows 종료 commit은 아직 지정하지 않는다.
