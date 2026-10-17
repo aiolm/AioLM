@@ -926,3 +926,15 @@ raw는 `015-fresh-nsis-data.json`, `016-fresh-nsis-installed.json`, `package20-i
 VM의 현재 바탕 화면이 실제 OneDrive 동기화 경로이고 OneDrive 프로세스도 실행 중이었다. 바로가기 제거가 다른 기기로 전파될 가능성을 격리하기 위해, 기존 계정/동기화 설정은 보존하고 **이 VM의 OneDrive 미연결 로컬 테스트 계정**을 준비하도록 요청했다. 사용자가 생성 방법을 요청해 Microsoft의 계정 추가/유형 변경 절차를 안내했다. 새 계정의 실제 로그인·바탕 화면 경로·OneDrive 상태는 아직 확인하지 않았다. 계정 준비 중에는 VM 키 입력을 멈추고 수집된 영수증의 읽기 전용 비교를 수행했다.
 
 W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등록만 한정 pass이며, 설치20 실제 추론/정상 종료, 원래0.2 NSIS/MSI 업그레이드, MSI 새 설치/제거, Credential Manager 및 OS 알림 실제 표시는 남아 있다. 원래 Strata32/미디어 fail도 유지하며 goal을 complete로 바꾸지 않는다.
+
+### VM 로컬 계정 격리와 공식0.2 업그레이드 전 기준
+
+사용자가 새 VM 로컬 테스트 계정에 로그인한 뒤 실제 게스트에서 로컬 계정, OneDrive 밖의 바탕 화면, 현재 세션 OneDrive0개, 기존 사용자별/컴퓨터 전체 AioLM 설치0개·기본 데이터 폴더 없음·현재 세션 앱 없음과 전달한 관찰 도구 두 파일의 전체 hash를 확인했다. 이 계정은 실제 관리자 그룹 조회에서도 표준 사용자였다. 새 체크포인트를 만든 뒤 검증 도구 세 파일만 전달했으며 guest file-copy 통합 서비스는 원래 disabled로 복구했다. 호스트나 VM 기존 계정의 설치/Vault/OneDrive 설정은 변경하지 않았다. raw는 `017-preflight.json`, `local-account20-transfer-result.json`이다.
+
+공식0.2.0 NSIS SHA-256 `f680d9b59793db0d3983b1f5df01088b222d25dfc3b1d1fb00395bf1f76e9b21`를 게스트에서 다시 확인하고 실제 사용자별 기본 경로에 설치했다. 관리자 권한 요청 없이 설치 완료→Run AioLM→실제 최초 onboarding→원래 모델 전달 폴더 선택→Chat 진입을 확인했다. 이전 버전의 작은 창은 수동 최대화했으며, 수정20의 자동 최대화와 구분한다. 설치 GUI SHA-256 `21bae2a546b10bf47679a0a02e1e4200408fdee153407ddac8725cf6f45b3564`, CLI SHA-256 `744ff8e86ac63174ccf97263922b892fc45fac900f2c7db4ebbae56e06623282`와 버전0.2.0이 공식 NSIS의 읽기 전용 추출 파일 전체 hash/byte 수와 일치했다. 호스트에서는 이 설치 프로그램이나 추출된 실행 파일을 실행하지 않았다.
+
+**이전0.2 CPU bundle import는 fail**이다. 실제 GUI에서 Advanced→Portable runtime bundles→원래 CPU ZIP을 선택했으나 `llama-server --list-devices`의 가속기 없음 오류로 staged preflight가 실패했다. 같은 원래 bundle은 앞의 고정19/20에서 import와 실제 CPU 추론을 통과했다. 원래0.2 binary·bundle·readiness 조건을 바꾸지 않고 이전 실패를 보존한다. 이전 버전에서 실제 추론을 성공했다고 주장하거나 이 실패를 unsupported로 바꾸지 않는다. 원래0.2 runtime 화면의 긴 오류 문구가 좁은 열로 표시된 현상도 관찰했고, 기존 키보드 탐색으로 Advanced를 열어 실제 import picker에 도달했다. 이는 최신20에서 같은 결함을 재현했다는 의미가 아니다.
+
+**공식0.2의 실제 Windows Vault 기준은 한정 pass**다. 게스트의 로컬 테스트 계정에서 새 UUID와 임의32-byte 합성 키로 제품 계약에 맞는 백업 파일을 생성했다. 원래0.2 GUI의 Restore from backup file→소유 항목 표시→Save backup file→별도 새 파일 저장을 실제 수행했다. 로컬 비교에서 UUID·origin·비밀 값이 같았고 원본/앱 내보내기 전체 파일 hash도 일치했다. 복원·목록·내보내기 경로는 로컬 registry/OS Vault를 사용하며 공유 제출이나 외부 소유권 관리는 실행하지 않았다. 비밀 내용은 출력·호스트 회수·커밋하지 않았다. raw는 `018-fresh-nsis-installed.json`, `vm-original02-installed-vault-verdict.json`과 해당 실제 GUI capture 기록에 연결한다. 합성 파일 생성이나 비교 helper만으로 Vault 성공을 판정한 것이 아니다.
+
+원래0.2→고정20 실제 업그레이드와 그 전후 프로필/이력·자격 증명 보존은 아직 unrun이다. 별도 MSI 새 설치/업그레이드/제거, 최종 설치본 실제 추론·정상 종료·알림도 남아 있다. 표준 사용자의 MSI 권한 처리는 실제 설치 시점에 확인한다. 이번 격리·이전 설치·Vault 기준으로 W02/W08 전체나 goal을 완료 처리하지 않는다.
