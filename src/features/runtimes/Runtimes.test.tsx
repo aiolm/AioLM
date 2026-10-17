@@ -711,6 +711,14 @@ describe('neutral inference engine inventory', () => {
     fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
     expect(screen.getByRole('button', { name: 'Synthetic' })).toHaveFocus();
     expect(screen.getByRole('searchbox', { name: 'Search adapters' })).toHaveValue('synth');
+    fireEvent.click(screen.getByRole('button', { name: 'Synthetic' }));
+    mocked.providerCatalog.mockResolvedValue(BUILTINS);
+    mocked.providerRuntimes.mockResolvedValue([]);
+    act(() => notifyRuntimeInventoryChanged());
+    expect(await screen.findByText(/This engine is no longer listed/)).toBeVisible();
+    expect(screen.queryByText(/^(?:Built-in adapter|Registered engine · openai-v1)$/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
+    expect(screen.getByRole('searchbox', { name: 'Search adapters' })).toHaveValue('synth');
   });
 
   it('keeps llama.cpp installs, PR builds, portable bundles, hardware and deep verification inside its adapter, and Python adapters inside theirs', async () => {

@@ -207,7 +207,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
           <div className="adapter-context">
             {backButton(busy)}
             <h3 ref={contextHeading} tabIndex={-1} className="app-section-title">{description?.engine ?? providerDisplayName(selected)}</h3>
-            <p className="app-section-hint">{description?.kind === 'external-process' ? copy.customContext : copy.builtinContext}{description ? ` · ${description.managed_variant ?? description.server}` : ''}</p>
+            {description && <p className="app-section-hint">{description.kind === 'external-process' ? copy.customContext : copy.builtinContext}{` · ${description.managed_variant ?? description.server}`}</p>}
           </div>
           {inventory.loaded && !inventory.error && !description && isExternalProvider(selected)
             ? <FeedbackBanner tone="warning">{copy.missing}</FeedbackBanner>
