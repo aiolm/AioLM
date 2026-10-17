@@ -914,3 +914,15 @@ NSIS/MSI를 실행하지 않는 별도 payload 검사도 pass다. 각각 전체 
 | W08 | unrun | 고정20 설치 패키지 생성/정적 검사와 standalone production GUI는 한정 pass. 현재 VM NSIS 재설치부터 계속하며 실제0.2 NSIS/MSI upgrade·MSI 새 설치·remove·Credential Manager·설치 identity의 OS 통합/알림 등 필수 수락은 남아 있다. |
 
 Windows goal은 active다. 이미 완료한 범위를 반복하지 않고 고정20 실제 설치본에서 관련 GUI/CLI·OS 통합을 이어간다. Linux/Mac 실제 검사는 이번 Windows 완료 조건에 추가하지 않으며, [Linux/Mac 인계](engine-adapter-linux-macos-handoff.ko.md)의 L01–L04/M01–M04/R01–R13을 같은 source 경계로 이어간다.
+
+### 고정20 NSIS 실제 재설치와 설치본 보존 검사
+
+같은 제품 source `bf48ba4366e1dd4f64a7ed23191190d1d0e55ca9`의 고정20 NSIS를 VM에서 실행했다. 기존0.3.1을 발견한 유지 관리 화면에서 Add/Reinstall을 선택하고 실제 설치 완료→Run AioLM→설치된 GUI 실행을 관찰했다. 이는 **같은 버전 재설치**이며 원래0.2.0에서의 업그레이드 결과가 아니다. 완료 화면의 바탕 화면 바로가기 생성은 선택 해제했고 기존 바로가기는 보존했다.
+
+설치된 GUI SHA-256 `364564c01b9d010c415bb726d8dc63602d7cd71602b42d7e6cf8de2f548430da`, CLI SHA-256 `9a99a8f9b85cf4550a794cbb7f6685a3c52125ebe31a6bbe09f783683d0f5eca`와 버전0.3.1이 앞의 NSIS 전체 payload 검사와 일치했다. 실제 CLI help exit0, 설치본 최초 Maximized와 작업 영역1024×720, 엔진 미실행 상태를 확인했다. 재설치 직전 정상 종료 snapshot과 비교해 설정·두 대화·runtime의 **67개 파일 전체 hash**, 프로필 및 이력 객체가 모두 같았다. 사용자 Start 메뉴/바탕 화면의 AioLM 바로가기는 설치된 GUI를 가리키고, 실제 `Get-StartApps`의 AppID는 `com.aiolm.desktop`이었다. 이 등록 결과만으로 알림 표시나 모든 OS 통합을 통과했다고 판단하지 않는다.
+
+raw는 `015-fresh-nsis-data.json`, `016-fresh-nsis-installed.json`, `package20-installed-maintenance-verdict.json`과 검증 스크립트 `verify-package20-installed-maintenance.mjs`다. 관찰 명령 마지막 조각의 Hyper-V `TypeText`가32773으로 거부된 실패를 보존했다. 실제 화면에서 실행 전 입력 중단 지점을 확인하고 누락 조각만 다시 전달한 뒤 전체 명령을 한 번 실행해 두 영수증을 회수했다. 가상 키보드 API의 접수 자체를 제품 실행 성공으로 사용하지 않았다.
+
+VM의 현재 바탕 화면이 실제 OneDrive 동기화 경로이고 OneDrive 프로세스도 실행 중이었다. 바로가기 제거가 다른 기기로 전파될 가능성을 격리하기 위해, 기존 계정/동기화 설정은 보존하고 **이 VM의 OneDrive 미연결 로컬 테스트 계정**을 준비하도록 요청했다. 사용자가 생성 방법을 요청해 Microsoft의 계정 추가/유형 변경 절차를 안내했다. 새 계정의 실제 로그인·바탕 화면 경로·OneDrive 상태는 아직 확인하지 않았다. 계정 준비 중에는 VM 키 입력을 멈추고 수집된 영수증의 읽기 전용 비교를 수행했다.
+
+W02/W08 전체는 계속 unrun이다. 위 재설치·보존·설치 identity 등록만 한정 pass이며, 설치20 실제 추론/정상 종료, 원래0.2 NSIS/MSI 업그레이드, MSI 새 설치/제거, Credential Manager 및 OS 알림 실제 표시는 남아 있다. 원래 Strata32/미디어 fail도 유지하며 goal을 complete로 바꾸지 않는다.

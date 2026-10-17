@@ -118,3 +118,5 @@ Linux L01–L04와 이후 Mac M01–M04/R01–R13은 위 source 및 문서 check
 Windows 종료 commit은 아직 지정하지 않는다. 별도 VM의19 실제 NSIS 새 설치·원래 CPU import/응답·저장·재열기·정상 종료와20 standalone의 양쪽 화면/같은 프로필/실제 응답은 한정 pass다. 고정20의 실제 설치본 수락, 원래0.2 NSIS/MSI upgrade·MSI 새 설치·remove·Credential Manager·설치 identity OS 통합/알림 및 원래 Strata32/media 내용 실패는 남아 있다. Linux/Mac에서 대신 실행해 Windows pass로 바꾸지 않는다.
 
 Linux L01/L02와 Mac M01/M02에서 해당 OS의 최초 표시·작은/큰 화면·taskbar/dock/work area·배율/다중 monitor·기존 설정/프로필/이력 보존을 별도 기기에서 확인한다. Windows 전용 구현을 추정 이식하지 않고 실제 OS 결과에 따라 판단한다. 후속 OS의 공통 window/startup 변경이 필요하면 Windows W02/W07/W08/G07의20 작은/큰 화면·기존 데이터·실제 엔진 시작/정상 종료를 새 source로 재검증한다. L03/L04·M03/M04·R01–R13의 나머지 구체 작업과 이전 source의 재검증 연결은 기존 인계를 유지한다.
+
+고정20의 VM NSIS 같은 버전 유지 관리 재설치도 실제 완료했다. 설치된 GUI/CLI의 전체 hash가 앞의 고정20 NSIS payload와 일치하고, 재설치 전후67개 설정/대화/runtime 파일·프로필·두 이력 객체가 동일했다. 설치본 startup Maximized, CLI help exit0, Start 메뉴의 `com.aiolm.desktop` 등록은 한정 pass다. 원래0.2 업그레이드나 OS 알림 표시를 확인한 것은 아니다. 실제 바탕 화면의 OneDrive 동기화를 확인해 제거/업그레이드용 VM 로컬 계정 준비를 요청했고 아직 새 로그인 검증 전이다. Windows 잔여와 기존 fail은 유지하며 종료 commit은 지정하지 않는다. 후속 OS도 동기화된 사용자 폴더가 있는 경우 설치/제거의 영향을 격리하고, 해당 OS의 실제 패키지 identity/알림/자격 증명 검사를 별도로 수행한다.
