@@ -50,7 +50,7 @@ describe("desktop settings", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Server" }));
     expect(screen.queryByRole("switch", { name: "Unload model on app exit" })).not.toBeInTheDocument();
     expect(screen.getByText("Managed processes stop on exit")).toBeInTheDocument();
-    expect(screen.getByText(/Switching tabs does not stop them/)).toBeInTheDocument();
+    expect(screen.getByText(/switching tabs does not stop them/i)).toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
   });
 
