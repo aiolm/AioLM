@@ -806,13 +806,13 @@ CPU를 로드한 상태에서 정상 창 닫기로 소유9개 종료·51940 닫�
 | ID | 판정 | 실행 근거와 남는 범위 |
 | --- | --- | --- |
 | W01 | pass | 원래 환경/공통20명령 기준,18 Rust 전체/opt-in/Clippy·no-default·fmt와2150 UI, D82 관련132/전체202파일2151 UI·typecheck·lint,19 production 네 target/CLI smoke·실제 CLI9항목. D83 검사 수정의 스크립트43개·관련 lint/typecheck도 pass다. 제품 Rust/GUI tree는 동일하다. 기존 전체 lint 경고1개와 opt-in ignore의 실제 범위를 유지한다. |
-| W02 | blocked | 합성 migration/backup/미등록 engine 값/미래 schema 거부와 실제18→19 전체200파일 보존, 새19 GUI onboarding은 pass. 기존0.2 설치의 실제 OS 계정 이전/자격 증명은 별도 세션 부재로 blocked다. |
+| W02 | blocked | 합성 migration/backup/미등록 engine 값/미래 schema 거부와 실제18→19 전체200파일 보존, 새19 GUI onboarding은 pass. 이후 별도 VM의 Windows 바탕화면 진입을 확인했으나 관리자 권한 준비 요청이 취소되어, 설치 전 체크포인트·파일 전달·실제0.2 이전/자격 증명 검사는 아직 blocked/unrun이다. 아래 VM 재개 기록을 따른다. |
 | W03 | pass | 원래 CLI 등록/변조/제거/재등록,18 D81 실제 취소·늦은 반환/다른 모델 복구·다른 엔진 보존,19 미지 개인 엔진과 합성 v1/v2의 fresh help/probe·diff·미해석 값 복구·실제 argv 근거. 합성 echo와 실제 추론은 분리했다. |
 | W04 | fail | 원래 Strata CLI A03/A05/A07의 제한32 최종 content 실패는 유지한다. A04의 원래1024 요청에서 취소 trigger에 도달하지 못한 기록은 보존하며, D83에서 원인을 검사 코드의 content 전용 trigger로 재현·수정하고 같은 요청의 실제 reasoning 출력 후 abort/서버 정상 상태를 pass로 추가했다. 실제 CPU/Vulkan/지원 ROCm·개인 엔진·Strata의 source별 추론/usage·생성 취소/Retry/restart와19 실제 개인/원래 Strata/CPU bundle 응답·로드 상태 정상 종료는 한정 pass다. 모델/제한/정답을 바꾸어 원래 답변 실패를 닫지 않는다. |
 | W05 | fail | 원래 SmolVLM 내용 실패/같은 body 대조 실패는 유지한다. actual source별 첨부 순서·전달/저장/재로드,17 실제 MCP 거부/승인/입력과 다른 반환값 후속/호출 취소는 한정 pass다. 이후 해당 feature/프로토콜 코드는 바뀌지 않았다. |
 | W06 | pass |17 실제 프로젝트/RAG·BGE·Whisper STT·역할별 멀티 세션·gateway401/라우팅/task 거부·이력/CSV/XLSX/공유 미리보기 근거 유지. 관련18 owner 취소/다른 엔진 보존,19 기존53개 feature 데이터와50개 전체 프로필/세션6개 및 실제19 실행/종료 보존으로 변경 경계를 확인했다. 모든 기능을19에서 다시 실행한 의미는 아니다. |
 | W07 | pass | 원래12 markerless staging 실패는 보존하며 수정된 source의 새 소유 staging 정리와 구분한다. source별 install/build/help/probe/load/stream/tool/benchmark/import 실패·취소·Unicode/공백/긴 경로·shell 없는 argv,18 다른 엔진 보존과19 두 홈의 실제 loaded Quit/소유20개 종료/포트/staging/기존 로그·데이터 보존 pass다. |
-| W08 | blocked |19 네 target·MSI/NSIS 읽기 전용 전체 payload/개인 경로 검사·실제 GUI 새 홈 CPU ZIP import/실제 추론/종료는 pass. source별 IME/clipboard/picker/tray 근거는 보존한다. 설치된 package의 실제 upgrade/remove/최초 OS 계정 실행·Credential Manager·설치 identity의 OS 통합/알림은 별도 Windows 계정/VM이 없어 blocked/unrun이다. |
+| W08 | blocked |19 네 target·MSI/NSIS 읽기 전용 전체 payload/개인 경로 검사·실제 GUI 새 홈 CPU ZIP import/실제 추론/종료는 pass. source별 IME/clipboard/picker/tray 근거는 보존한다. 이후 새 VM의 바탕화면과 원래0.2 공식 설치 파일/업그레이드 식별자를 확인했다. VM 관리자 준비는 권한 요청 취소로 미실행이며 실제 upgrade/remove/최초 OS 계정 실행·Credential Manager·설치 identity의 OS 통합/알림도 아직 blocked/unrun이다. |
 | G01 | pass | versioned sourced schema/descriptor와 실제19의 앱이 모르는 빈-options 엔진이 공통 표시·검증·새 프로필·실제 argv·응답으로 연결된다. 기존 내장/외부 데이터 계약과 미확정 사실의 구분을 보존했다. |
 | G02 | pass | 소유 help/probe의 제한·취소·cache/identity/늦은 반환 자동 검사,17 실제 help Cancel/탭 context 종료,18 pending preflight 취소/다른 모델 복구,19 같은 ID v2 stale/정상 실행 거부/fresh 탐색/diff 근거. |
 | G03 | pass | parser·명시 metadata/encoding/locale·민감 값·예약 옵션/arity/alias/scope의 source별 자동/실제 근거,19 알려지지 않은 타입 표시·삭제값 보존·명시적 반복 확인·변경 arity 복구. help에서 API 능력을 추정하지 않았다. |
@@ -823,7 +823,7 @@ CPU를 로드한 상태에서 정상 창 닫기로 소유9개 종료·51940 닫�
 
 Windows native 미지원인 MLX/표준 vLLM/Metal, 외부 v1의 정확 tokenizer/cold-cache benchmark·CPU reference deep·ABI portable은 실제 플랫폼/계약 근거 범위에서만 unsupported를 유지한다. 원래 지원 내용의 실패를 unsupported로 바꾸지 않는다. W04/W05 원본 실패와 W02/W08 필수 OS 검사가 남아 있으므로 **goal complete와 Windows 종료 commit을 지정하지 않는다.** 제품 결함 D81/D82의 수정 및 현재 실행 가능한 관련 검증을 마쳤다는 것과 전체 완료는 구분한다.
 
-W02/W08 재개 조건은 로그인된 별도 Windows 테스트 계정 또는 VM과 보호할 원래0.2 설치/합성 이전 데이터다. 사용자가 현재 제공 불가라고 답한 상태를 유지하며 다시 요청하거나 기존 설치/사용자 Vault를 바꾸어 우회하지 않는다. 그 조건이 갖춰지면 원래0.2와 고정19 installer의 버전/전체 해시를 확인하고, 새 설치와0.2→19 업그레이드를 각각 깨끗한 OS 스냅샷에서 실행한다. 새 설치→같은 원래 모델 응답/저장/재로드→정상 종료와, 원래0.2 설치/합성 이전 데이터 생성→고정19 실제 업그레이드→같은 모델 응답/데이터·자격 증명 보존을 구분한다. 설치 identity의 OS 통합/알림과 제거/잔여 데이터 정책을 NSIS/MSI별로 기록한다. 최신 source가 달라지면 영향받는 W/G를 재검증한다. Linux L01–L04 및 Mac M01–M04/R01–R13은 별도 인계의 구체 작업으로 남기며 Windows goal의 실제 기기 완료 조건으로 추가하지 않는다.
+W02/W08은 원래 PC의0.2 설치/사용자 Vault를 보존한 별도 Windows 테스트 환경과 합성 이전 데이터를 사용한다. 이전의 환경 제공 불가 상태는 아래 새 VM 재개 기록으로 갱신한다. 원래0.2와 고정19 installer의 버전/전체 해시를 확인하고, 새 설치와0.2→19 업그레이드를 각각 깨끗한 OS 스냅샷에서 실행한다. 새 설치→같은 원래 모델 응답/저장/재로드→정상 종료와, 원래0.2 설치/합성 이전 데이터 생성→고정19 실제 업그레이드→같은 모델 응답/데이터·자격 증명 보존을 구분한다. 설치 identity의 OS 통합/알림과 제거/잔여 데이터 정책을 NSIS/MSI별로 기록한다. MSI는 컴퓨터 전체 설치이므로 기존 PC에 계정만 추가해 실제 업그레이드/제거를 수행하지 않는다. 최신 source가 달라지면 영향받는 W/G를 재검증한다. Linux L01–L04 및 Mac M01–M04/R01–R13은 별도 인계의 구체 작업으로 남기며 Windows goal의 실제 기기 완료 조건으로 추가하지 않는다.
 
 ### D83 — reasoning 생성 취소와 독립적인 CLI 검사 계속 실행
 
@@ -842,3 +842,15 @@ W02/W08 재개 조건은 로그인된 별도 Windows 테스트 계정 또는 VM�
 - 격리 홈에서만 실행했으며 주 검증 홈206개와 별도 SDK 검사 홈66개 기존 파일 hash를 다시 확인했다. Python isolated 실행이 새로 만든 helper bytecode는 원본 hash/생성 시각과 함께 tmp에 보관하고 소스 트리의 해당 생성물만 정리했다. 기존 로그·fixture·설정·이력·모델·고정19 binary는 보존했다.
 
 raw는 `d83-adapter-cancellation-{red,green}.log`, `d83-test-scripts.log`, `d83-eslint-green.log`, `d83-typecheck.log`, `d83-negative-failfast-red/`, `d83-negative-final-source/`, `d83-start-failure-prerequisites/`, `d83-provenance-refusal/`, `d83-strata-original-native/`, `d83-private-original-native/`, `d83-prior-gui-data-preservation.json`이다. 검사 변경은 생산 GUI/CLI 제품 source4a나19 binary를 바꾸지 않으며 새 GUI 실행 결과로 계산하지 않는다. W04/W05의 남은 답변/미디어 fail과 W02/W08의 실제 OS 계정 blocked 판정은 유지한다. 독립적인 D83 작업을 수행했으므로 이전 blocked 연속 횟수를 이어 붙이거나 goal을 완료로 바꾸지 않는다.
+
+### W02/W08 재개 준비 — 새 VM 바탕화면 확인, 관리 권한 준비 미실행
+
+사용자가 Hyper-V VM을 만든 뒤 goal을 active로 재개했다. 실제 VM 연결 창과 Hyper-V 관리자에서2세대를 확인했고, 설치 화면을 지나 게스트의 Windows 바탕화면/설정 화면에 진입한 것을 관찰했다. 호스트 foreground 프로세스가 VM 연결이며 호스트 설정 앱은 실행 중이 아님을 확인해 게스트 화면과 구분했다. 이 관찰은 VM의 OS build·CPU/RAM·WebView2·TPM 조회나 설치 수락 결과를 대신하지 않는다. 원래 PC의0.2.0 설치도 읽기 전용으로 확인했으며 해당 앱이나 설치 프로그램·Vault를 실행하지 않았다.
+
+공식 [v0.2.0 release](https://github.com/aiolm/AioLM/releases/tag/v0.2.0)에서 NSIS/MSI와 checksum을 내려받아 GitHub 배포 metadata의 byte 수/SHA-256와 대조했다. NSIS는 `f680d9b59793db0d3983b1f5df01088b222d25dfc3b1d1fb00395bf1f76e9b21`, MSI는 `cd1f9cf999f2626719d423d2a62e62ea7ec4b430039511dc05926ac952a2d40d`다. 원래0.2 MSI와 고정19 MSI를 Windows Installer `OpenDatabase` mode0으로 읽어 각각0.2.0/0.3.1, 같은 UpgradeCode·서로 다른 ProductCode·양쪽 `ALLUSERS=1`을 확인했다. 실제 설치/업그레이드 성공이 아닌 정적 선행 근거다. MSI의 컴퓨터 전체 범위 때문에 새 사용자 계정만으로 호스트의 기존 설치를 격리할 수 없으며, 실제 수락은 별도 VM/기기에서 진행한다.
+
+고정19 GUI/CLI/NSIS/MSI, 원래 CPU bundle과 같은 원래 Qwen 모델의 전체 hash를 다시 확인하고, 원래0.2 설치 파일 및 읽기 전용 게스트 preflight를 합쳐11개 전달 파일을 준비했다. 준비 스크립트의 범위는 정확한 테스트 VM 확인→새 설치 전 체크포인트 생성→새 전용 폴더로 파일 복사다. 복사에 필요한 해당 VM의 guest file-copy 통합 서비스만 임시 사용하고 원래 상태로 되돌리며, 설치 프로그램/게스트 명령은 실행하지 않는다. 게스트 preflight는 전달 파일 hash·OS/CPU/RAM/graphics/WebView2·기존 AioLM 설치 여부를 실제 VM에서 확인하도록 준비돼 있다. 실행하지 않은 항목은 pass로 계산하지 않는다.
+
+직접 `Get-VM` 조회는 Hyper-V 관리 권한 부족으로 거부됐다. 이후 좁은 준비 스크립트를 관리자 권한으로 실행하도록 요청했으나 Windows의 RunAs가 취소로 종료해 elevated PID/준비 결과가 생성되지 않았다. **체크포인트·파일 복사·게스트 preflight·실제 설치/업그레이드/제거/자격 증명/설치 OS 통합은 모두 미실행**이다. 같은 권한 요청을 자동 반복하거나 다른 경로로 우회하지 않는다. 다음 실행은 호스트의 관리자 PowerShell7에서 검토된 준비 스크립트를 실행하는 것이다. 실제 결과와 체크포인트·전달된 파일 hash를 확인한 뒤 새 설치/NSIS 업그레이드/MSI 업그레이드를 각각 분리해 수행한다.
+
+raw는 `vm-resume-*.json`, `vm-official-releases.json`, `vm-active-preparation.json`, `vm-acceptance/<run-id>/payload.json`, `original-msi-upgrade-identity.json`, `vm-prepare-admin-canceled.json`, `vm-original-host-install-before.json`, `vm-original-host-protected-hashes-corrected.json`이다. 원래 호스트 설치 경로의 인용부호 처리에 실패한 최초 부분 baseline도 보존하고, 수정된 읽기 전용 검사에서 원래 GUI와 기존 설정2개 전체 hash를 기록했다. 제한된 baseline이며 전체 개인 기록을 복제·검사했다고 주장하지 않는다. 준비 파일/스크립트·계정/기기 정보·화면·host 경로는 tmp에만 보존하고 커밋하지 않는다. 제품 source4a/고정19 binary와 D83 검사는 바뀌지 않았고 기존 W04/W05 내용 실패도 유지한다. 새로운 재개 실행이므로 이전 blocked 연속 횟수를 재사용하지 않는다.
