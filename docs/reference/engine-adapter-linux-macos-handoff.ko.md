@@ -140,3 +140,13 @@ Linux L01/L02 및 Mac M01/M02에서는 해당 OS에서 새로 빌드한 producti
 Linux L01/L02와 Mac M01/M02에서 해당 OS의 실제 임의 엔진을 등록하고, 실제 옵션이 있는 상태의 help/cache/profile/argv/response 외에 등록 제거 직후 상세 화면·목록의 검색 유지·등록 복구와 기본 제공/외부 분류를 확인한다. catalog 조회 실패나 갱신 중인 상태를 내장형이라는 사실로 확정하지 않는다. 이 공통 경계를 후속 OS에서 수정하면 Windows W03/G01/G05/G07의 같은 제거·재등록·보존·실제 실행 동선과 자동 검사를 새 source로 연결한다. L03/L04·M03/M04 및 R01–R13의 기존 작업을 유지한다.
 
 이 source는 Windows 전체 종료 commit이 아니다. 최신22 VM 파일 전송 동의와 실제 MSI 관리자 인증을 기다리며 최신 설치본 수락·실제 MSI 새 설치/공식0.2 upgrade/remove가 남아 있다. 원래 Strata32/미디어 fail도 유지한다. 후속 OS 실제 검증은 각 기기에서 새로 빌드해 수행할 작업이며 Windows pass를 대신하지 않는다.
+
+## D87 미확정 가중치 크기와 production23 checkpoint
+
+최신 제품 source는 `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`이다. opaque adapter 모델 binding은 가중치 파일 대신 설정 파일이나 alias일 수 있다. 백엔드의 format unknown/size0/unknown weight size를0바이트의 가중치로 표시하지 않도록 모델 설정의 선택 목록도 메인 모델 목록과 같은 `—` 규칙을 적용했다. 작은 binding 파일의 실제 바이트 수로 가중치 크기를 대신 계산하지 않는다. 표시 한 곳만 변경했으며 저장/API/probe/readiness/Rust/추론 계약은 유지한다.
+
+기존 UI127개/typecheck/ESLint, 새 고정23 GUI/CLI/NSIS/MSI 빌드·payload·개인 경로 검사가 pass다. 실제 Windows에서 opaque 크기 `—`와 같은 Qwen의468.6 MiB, 같은 합성/실제 개인 엔진의 저장 옵션 재로드/current help/Ready/실제 argv/응답, 합성 언로드와 실제 엔진이 로드된 정상 Quit를 확인했다. 기존8개 프로필·5개 이력, 정상 Quit 전후17개 파일 전체 hash 보존의 범위와 정확한 source/binary/engine/model hash는 [Windows 결과의 D87](windows-device-validation-results.ko.md)에 있다. 합성 echo와 실제5/PP34/TG2를 구분한다.
+
+Linux L01/L02와 Mac M01/M02에서 opaque 설정/alias binding의 미확정 가중치 크기와 실제로 검사된 GGUF/snapshot 크기를 구분해 표시하는지 확인한다. 크기나 미디어/API 능력을 help·작은 설정 파일·엔진 이름만으로 추정하지 않는다. 해당 공통 model picker/catalog/metadata 경계를 수정하면 Windows W03/W05/G03/G06/G07의 같은 unknown/known 모델 표시·binding·저장 옵션·실제 argv/응답을 새 source로 재검증한다. 나머지 L03/L04·M03/M04·R01–R13은 기존 인계를 유지한다.
+
+Windows 종료 commit은 여전히 미지정이다. 최신23의 준비된9개 VM 파일 전송 허용·관리자 인증 이후 실제 최신 설치본/공식0.2 MSI upgrade/remove를 이어간다. 원래 Strata32/미디어 fail은 유지하며, Linux/Mac 실제 기기 검증은 후속 범위다.

@@ -1064,3 +1064,26 @@ W03/G01–G07의 기존 한정 pass 근거에 위 재검증을 연결하지만 �
 ### D87 opaque 모델의 미확정 크기 표시
 
 위 실제22 모델 선택 목록에서 opaque binding의 가중치 크기가 **0 B**로 표시되는 결함을 재현했다(`gui22s/model-tab.json`). 합성 binding 파일 자체는70바이트지만 실제 가중치가 아니며, 등록된 opaque binding은 엔진 설정/모델 alias일 수도 있다. 백엔드는 명시적으로 weight size unknown이라는 notes와 format unknown/size0을 반환하므로 작은 binding 파일을 stat해 가중치 크기로 사용하면 안 된다. 메인 모델 목록은 이미 같은 unknown format을 `—`로 표시한다. 모델 설정의 선택 목록에도 그 규칙을 적용하는 최소 표시 수정이다. 저장/API/probe/readiness·모델/추론은 변경하지 않는다. 수정 후 production 실제 검증은 별도 새 binary에서 이어가며 이 문서만으로 D87 해결이나 goal 완료를 판정하지 않는다.
+
+### D87 수정 후 production23 실제 재검증
+
+source `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`의 변경은 위 표시 조건 한 곳이며, 기존 모델 설정/런타임 UI127개·typecheck·관련 ESLint가 pass다. 새 `--locked --no-default-features` production GUI/CLI/NSIS/MSI 빌드 exit0/132,830ms, 입력/lockfile·이전 고정20–22 보존과 개인 빌드 경로 검사도 pass다. 전체 SHA256은 다음과 같다.
+
+| 대상 | SHA256 |
+| --- | --- |
+| GUI | `518b8298aeb987c80841bccfc845d63429cd8bd814b93b505ae16d639dcbbc97` |
+| CLI | `54d1c8e61d4041cf2e74dd450f97119551cde40b3ab6acffed6e1efd1ecc08cf` |
+| NSIS | `33385d1cd4bffe98087bdf21d83bf749385ad53a23f2577cdbc1994a6d215e4d` |
+| MSI | `aa3c79b6e31240f3a777eae0e2c0c612a5b3cfb95dc1b3758b594728307e3400` |
+| NSIS 내부 GUI | `a045451f638605946cb6c1736800cd7f80bbb6ff0c873b68b2d31808d2a2375f` |
+| MSI 내부 GUI | `be5d58a27469e5b8c4b335a322df4516e418854dcaf00cd081c3259019c7906c` |
+
+읽기 전용 payload 검사에서 GUI의 정확한3바이트 bundle marker 외 전체 byte 일치·CLI 전체 hash 일치·개인 경로 없음이 pass다. MSI ProductCode `{D6E9B690-D7B4-4A21-B78D-D8977EF1B802}`와 공식0.2의 동일 UpgradeCode/ALLUSERS1도 읽기 전용으로 확인했다. installer는 실행하지 않았으며 실제 upgrade 성공이 아니다.
+
+고정23은 같은 검증 홈의15개 파일을 보존해 시작했다. 실제 모델 설정 목록에서 opaque binding은 **unknown · · —**로 표시되고 이전22의 **0 B**가 사라졌다. 실제 Qwen은 기존 **468.6 MiB**로 표시돼 알려진 크기를 숨기지 않았다. 합성 v2 프로필의 Unicode/따옴표/공백 replacement text·999번 값/current help→fresh probe/Ready→두 Python Windows argv와 trace 전체 일치→새 합성 echo/stop/TG4를 확인했다. PP는 미확정이며 실제 추론이 아니다. 정상 GUI 언로드 후 엔진/콘솔3개와 listener가 없어지고 파일16개 hash가 같았다.
+
+이어 모델 선택에서 현재 초안만 명시적으로 버리고 같은 Qwen/개인21 엔진의 저장 프로필·새 진단 flag 값을 복원했다. current help→fresh 모델 probe/Ready→실제 Windows argv→원래 질문의 새 **5/stop/PP34/TG2/무인증401**이 pass다. 기존8개 프로필은 두 명시적 시작의 해당 revision 증가 외 같고 기존 이력5개·기타14개 파일 hash도 보존됐다. 두 엔진의 flag는 고정23 GUI/CLI에도 없었다. `package23-d87-both-engines-verdict.json`, `gui23/model-tab.json`, `gui23/personal-model-list.json`이 근거다.
+
+개인 엔진이 로드된 상태의 정상 창 Close 후 소유9개 PID/생성 시각 전부 종료·listener/staging 없음·파일17개 전체 hash 일치와 새 격리 CLI help exit0도 pass다(`package23-normal-close-verdict.json`, `package23-cli-help-verdict.json`). **D87은 관련 자동 검사와 수정 후 production Windows 실제 표시/두 엔진/정리 범위 pass**다. 전체 goal이나 설치 수락은 아니다.
+
+최신23 GUI/CLI·NSIS/MSI·읽기 전용 검증 PS5개를 해시/구문/실제 변경 내용까지 검토해 새 VM 폴더용으로 준비했다. 기존 메타데이터 동의와 다른 실행 파일/스크립트 내용 전송의 허용을 요청했으며 파일 서버 시작·전송·게스트 실행은 아직 하지 않았다. 앞선21/22도 전송하지 않았다. W02/W08의 최신 설치본 수락·실제 MSI 새 설치/공식0.2 upgrade/제거와 원래 Strata32/미디어 fail을 유지하고 Windows 종료 commit은 미지정이다.
