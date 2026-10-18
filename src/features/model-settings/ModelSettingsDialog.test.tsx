@@ -56,6 +56,26 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('shows external schema options together without assuming performance or reasoning categories', async () => {
+    const provider = 'custom.unfamiliar';
+    const options = [
+      schemaOption({ key: 'fresh-cache', flag: '--fresh-cache', target: 'launch', group: 'memory', kind: { type: 'integer' } }),
+      schemaOption({ key: 'fresh-policy', flag: '--fresh-policy', target: 'launch', group: 'engine-specific', kind: { type: 'text' } }),
+      schemaOption({ key: 'fresh-budget', flag: '--fresh-budget', target: 'launch', group: 'reasoning', kind: { type: 'integer' } }),
+    ];
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], options));
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'specific-build' }, initialSection: 'reasoning' });
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Model', 'Runtime connection', 'Runtime options', 'Conversation instructions', 'Profiles']);
+    const tab = screen.getByRole('tab', { name: 'Runtime options' });
+    expect(tab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab.id);
+    for (const flag of ['--fresh-cache', '--fresh-policy', '--fresh-budget']) expect(await screen.findByLabelText(new RegExp(`^${flag}`))).toBeVisible();
+    expect(screen.queryByLabelText('Default system prompt')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Conversation instructions' }));
+    expect(screen.getByLabelText('Default system prompt')).toBeVisible();
+    expect(screen.getByText(/AioLM conversation instructions/)).toBeVisible();
+  });
   it('offers an external unknown model to launch validation without claiming compatibility', async () => {
     const provider = 'custom.unfamiliar';
     const candidate: api.GgufModel = { name: 'Unverified family model', path: 'models/unverified.gguf', size_mb: 1, is_vision: false,
