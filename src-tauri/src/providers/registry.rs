@@ -1357,16 +1357,18 @@ pub fn assess(
     artifact: &super::artifacts::ModelArtifact,
     engine: ProviderId,
 ) -> super::compat::ModelCompatibility {
-    let compatible = registrations().into_iter().any(|r| {
-        r.manifest.engine_id == engine
-            && r.manifest.model_formats.contains(
-                &serde_json::to_value(artifact.format)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_owned))
-                    .unwrap_or_default(),
-            )
-    });
-    super::compat::ModelCompatibility { provider:engine, status:if compatible { super::compat::CompatStatus::Partial } else { super::compat::CompatStatus::Unknown }, tasks:vec![], modalities:Modalities::default(), reasons:vec![], limitations:vec!["Format declaration only: selecting this model requires a fresh model-specific adapter probe.".into()], readiness:artifact.missing.clone(), evidence:"adapter-manifest" }
+    // Container formats do not establish architecture/tokenizer/deployment
+    // support. Only the selected model/runtime probe can establish those facts.
+    super::compat::ModelCompatibility {
+        provider: engine,
+        status: super::compat::CompatStatus::Unknown,
+        tasks: vec![],
+        modalities: Modalities::default(),
+        reasons: vec![],
+        limitations: vec!["Model compatibility is unverified. Select a binding and run a fresh model-specific adapter probe; file format alone does not establish support.".into()],
+        readiness: artifact.missing.clone(),
+        evidence: "adapter-manifest",
+    }
 }
 
 /// Explicit option scopes alter command placement. Omitted legacy scopes
@@ -1431,10 +1433,41 @@ fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
 }
 
 pub fn registered_models() -> Vec<super::artifacts::ModelArtifact> {
+    model_bindings(registrations().into_iter().map(|r| r.manifest), None)
+}
+
+pub fn registered_models_for(
+    engine: ProviderId,
+    runtime: &str,
+) -> Vec<super::artifacts::ModelArtifact> {
+    model_bindings(
+        registrations().into_iter().map(|r| r.manifest),
+        Some((engine, runtime)),
+    )
+}
+
+pub fn registered_provider_ids() -> Vec<ProviderId> {
+    registrations()
+        .into_iter()
+        .map(|r| r.manifest.engine_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn model_bindings(
+    manifests: impl IntoIterator<Item = RuntimeManifest>,
+    selection: Option<(ProviderId, &str)>,
+) -> Vec<super::artifacts::ModelArtifact> {
     let mut models = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for registration in registrations() {
-        for model in registration.manifest.models {
+    for manifest in manifests {
+        if selection.is_some_and(|(engine, runtime)| {
+            manifest.engine_id != engine || manifest.runtime_id != runtime
+        }) {
+            continue;
+        }
+        for model in manifest.models {
             if !seen.insert(model.path.clone()) {
                 continue;
             }
@@ -2010,6 +2043,53 @@ pub fn check_draft_against_help(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovery_scopes_bindings_to_the_selected_installation_without_format_claims() {
+        let area =
+            std::env::temp_dir().join(format!("aiolm-model-selection-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&area).unwrap();
+        let deployment = area.join("deployment.json");
+        fs::write(&deployment, b"{}").unwrap();
+        let mut selected = example();
+        selected.model_formats = vec!["gguf".into()];
+        selected.models = vec![ModelBinding {
+            path: deployment.to_string_lossy().into_owned(),
+            name: "Selected deployment".into(),
+        }];
+        let mut other_build = selected.clone();
+        other_build.runtime_id = "build-2".into();
+        other_build.models[0].name = "Other build's label".into();
+        let mut other_engine = selected.clone();
+        other_engine.engine_id = ProviderId::parse("custom.other").unwrap();
+        other_engine.models[0].name = "Other engine's label".into();
+        let models = model_bindings(
+            [other_build, other_engine, selected.clone()],
+            Some((selected.engine_id, "build-1")),
+        );
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "Selected deployment");
+        assert!(models[0].missing.is_empty());
+        let mut gguf = models[0].clone();
+        gguf.format = super::super::artifacts::ArtifactFormat::Gguf;
+        let result = assess(&gguf, selected.engine_id);
+        assert_eq!(result.status, super::super::compat::CompatStatus::Unknown);
+        assert!(!result.loadable());
+        assert!(result.tasks.is_empty());
+        assert!(!result.modalities.text);
+        assert!(model_bindings(
+            [selected.clone()],
+            Some((selected.engine_id, "not-installed"))
+        )
+        .is_empty());
+        fs::remove_file(&deployment).unwrap();
+        let missing = model_bindings([selected.clone()], Some((selected.engine_id, "build-1")));
+        assert_eq!(missing[0].missing, ["registered model binding is missing"]);
+        assert_eq!(
+            assess(&missing[0], selected.engine_id).readiness,
+            missing[0].missing
+        );
+        fs::remove_dir(&area).unwrap();
+    }
     fn example() -> RuntimeManifest {
         let root = std::env::temp_dir().join("aiolm-synthetic-adapter");
         let probe = root.join("probe");

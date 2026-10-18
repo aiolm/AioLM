@@ -101,6 +101,7 @@ export interface ModelMetadata {
 export interface ModelScanResult {
   models: GgufModel[];
   truncated: boolean;
+  selection?: import('./providers').ModelCatalogSelection;
 }
 
 export interface HfModel {

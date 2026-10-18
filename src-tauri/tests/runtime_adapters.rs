@@ -112,6 +112,30 @@ async fn external_engine_registration_preserves_identity_and_owns_only_its_proce
         .unwrap_err()
         .contains("already registered"));
     assert_eq!(providers::ProviderId::ALL.len(), 3);
+    // An advertised container is not a model-family compatibility result.
+    // Discovery keeps this candidate visible; the selected model probe below
+    // is still responsible for proving that it can actually run.
+    let catalog = aiolm_lib::scan_model_catalog(
+        area.path.to_str().unwrap(),
+        &std::sync::atomic::AtomicBool::new(false),
+        Some((engine, "fixture-1".into())),
+    )
+    .unwrap();
+    let discovered = catalog
+        .models
+        .iter()
+        .find(|entry| entry.artifact.path == model.to_string_lossy())
+        .unwrap();
+    let unverified = discovered
+        .compatibility
+        .iter()
+        .find(|entry| entry.provider == engine)
+        .unwrap();
+    assert_eq!(unverified.status, providers::compat::CompatStatus::Unknown);
+    assert!(!unverified.loadable());
+    let view = catalog.selection.unwrap();
+    assert_eq!(view.runtime, "fixture-1");
+    assert_eq!(view.binding_paths, [model.to_string_lossy().into_owned()]);
     assert!(providers::list_runtime_instances()
         .iter()
         .any(|runtime| runtime.provider == engine && runtime.id == "fixture-1"));

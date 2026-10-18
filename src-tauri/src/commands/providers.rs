@@ -246,6 +246,16 @@ pub struct CatalogModel {
 pub struct ModelCatalog {
     pub models: Vec<CatalogModel>,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<ModelCatalogSelection>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ModelCatalogSelection {
+    pub provider: ProviderId,
+    pub runtime: String,
+    pub source: &'static str,
+    pub binding_paths: Vec<String>,
 }
 
 pub fn inspect_catalog(
@@ -253,11 +263,46 @@ pub fn inspect_catalog(
     cancel: &std::sync::atomic::AtomicBool,
     selection: Option<(ProviderId, String)>,
 ) -> Result<ModelCatalog, String> {
+    inspect_catalog_view(root, cancel, selection, true)
+}
+
+fn inspect_catalog_view(
+    root: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+    selection: Option<(ProviderId, String)>,
+    include_library: bool,
+) -> Result<ModelCatalog, String> {
+    if cancel.load(Ordering::Acquire) {
+        return Err("model scan cancelled".into());
+    }
+    let selected_bindings = selection
+        .as_ref()
+        .filter(|(id, _)| id.is_custom())
+        .map(|(id, runtime)| providers::registry::registered_models_for(*id, runtime));
+    let binding_paths = selected_bindings
+        .as_ref()
+        .map(|bindings| {
+            bindings
+                .iter()
+                .map(|model| model.path.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // This is a discovery view, not an exhaustive allowlist. Unlisted models
+    // remain available through explicit library exploration and manual paths.
+    let bindings_only = !include_library && !binding_paths.is_empty();
     let probe = selection
         .as_ref()
         .and_then(|(provider, id)| providers::python_env::read(*provider, id).ok())
         .and_then(|runtime| runtime.probe);
-    let scan = crate::models::scan_cancellable(root, cancel)?;
+    let scan = if bindings_only {
+        crate::models::ModelScan {
+            models: vec![],
+            truncated: false,
+        }
+    } else {
+        crate::models::scan_cancellable(root, cancel)?
+    };
     let mut artifacts: Vec<ModelArtifact> = scan
         .models
         .iter()
@@ -272,7 +317,11 @@ pub fn inspect_catalog(
             )
         })
         .collect();
-    let mut pending = vec![(PathBuf::from(root), 0)];
+    let mut pending = if bindings_only {
+        vec![]
+    } else {
+        vec![(PathBuf::from(root), 0)]
+    };
     let mut entries_seen = 0usize;
     let mut truncated = scan.truncated;
     while let Some((dir, depth)) = pending.pop() {
@@ -306,21 +355,21 @@ pub fn inspect_catalog(
         .map(|artifact| artifact.path.clone())
         .collect::<std::collections::HashSet<_>>();
     artifacts.extend(
-        providers::registry::registered_models()
+        selected_bindings
+            .unwrap_or_else(providers::registry::registered_models)
             .into_iter()
             .filter(|artifact| seen.insert(artifact.path.clone())),
     );
+    artifacts.sort_by_key(|artifact| !binding_paths.contains(&artifact.path));
+    // Discovery does not need each runtime's binary-integrity/availability
+    // check, especially not once per model. Launch/probe still enforce it.
+    let mut ids = ProviderId::ALL.to_vec();
+    ids.extend(providers::registry::registered_provider_ids());
+    ids.sort();
+    ids.dedup();
     let models = artifacts
         .into_iter()
         .map(|artifact| {
-            let mut ids = ProviderId::ALL.to_vec();
-            ids.extend(
-                providers::registry::runtime_instances()
-                    .into_iter()
-                    .map(|r| r.provider),
-            );
-            ids.sort();
-            ids.dedup();
             let compatibility = ids
                 .iter()
                 .map(|id| {
@@ -350,7 +399,23 @@ pub fn inspect_catalog(
             }
         })
         .collect();
-    Ok(ModelCatalog { models, truncated })
+    let selection = selection
+        .filter(|(id, _)| id.is_custom())
+        .map(|(provider, runtime)| ModelCatalogSelection {
+            provider,
+            runtime,
+            source: if bindings_only {
+                "runtime-bindings"
+            } else {
+                "library"
+            },
+            binding_paths,
+        });
+    Ok(ModelCatalog {
+        models,
+        truncated,
+        selection,
+    })
 }
 
 #[tauri::command]
@@ -360,6 +425,7 @@ pub(crate) async fn list_model_artifacts(
     scan_id: Option<String>,
     provider_id: Option<String>,
     runtime_id: Option<String>,
+    include_library: Option<bool>,
 ) -> Result<ModelCatalog, String> {
     let selection = provider_id
         .map(|value| provider(&value))
@@ -375,7 +441,16 @@ pub(crate) async fn list_model_artifacts(
             models_dir
         };
         match job {
+            Some(job) if include_library == Some(false) => {
+                inspect_catalog_view(&root, &job.cancel, selection, false)
+            }
             Some(job) => inspect_catalog(&root, &job.cancel, selection),
+            None if include_library == Some(false) => inspect_catalog_view(
+                &root,
+                &std::sync::atomic::AtomicBool::new(false),
+                selection,
+                false,
+            ),
             None => inspect_catalog(&root, &std::sync::atomic::AtomicBool::new(false), selection),
         }
     })

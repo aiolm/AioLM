@@ -84,6 +84,18 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setSessionActivity('work', false); setSessionActivity('default', false); });
 
 describe('model settings target application', () => {
+  it('requires an external candidate to pass the selected runtime preflight before saving or launching', async () => {
+    const store = createTestStore({ active_provider: 'custom.example', active_runtime: 'specific-build', active_model: 'deployment.json' });
+    const dialog = await open(store, { target: { kind: 'default' } });
+    const before = structuredClone(store.cfg);
+    mocks.preflightLaunch.mockRejectedValueOnce(new Error('Selected runtime rejected this model'));
+    await expect(apply(dialog, dialog.initialConfig, 'start')).rejects.toThrow('Selected runtime rejected this model');
+    expect(mocks.preflightLaunch).toHaveBeenCalledWith(expect.objectContaining({ active_provider: 'custom.example', active_runtime: 'specific-build', active_model: 'deployment.json' }), expect.any(String));
+    expect(store.cfg).toEqual(before);
+    expect(store.updateConfig).not.toHaveBeenCalled();
+    expect(store.start).not.toHaveBeenCalled();
+    expect(mocks.sessionStart).not.toHaveBeenCalled();
+  });
   it('cancels the pending preflight without saving its late result or stopping another target, then retries with a new owner', async () => {
     const store = createTestStore({ sessions: [namedSession()] });
     const dialog = await open(store, { target: { kind: 'default' } });

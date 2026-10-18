@@ -56,6 +56,27 @@ function numeric(key: string) { return document.querySelector<HTMLInputElement>(
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('offers an external unknown model to launch validation without claiming compatibility', async () => {
+    const provider = 'custom.unfamiliar';
+    const candidate: api.GgufModel = { name: 'Unverified family model', path: 'models/unverified.gguf', size_mb: 1, is_vision: false,
+      compatibility: [{ provider, status: 'unknown' as const, tasks: [], modalities: { text: false, image: false, audio: false, video: false },
+        reasons: [], limitations: [], readiness: [], evidence: 'adapter-manifest' }] };
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'Unfamiliar engine', server: 'openai-v1', options: [], availability: { supported: true, detail: '' } }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([{ id: 'specific-build', provider, engine: 'Unfamiliar engine', server: 'openai-v1', accelerator: 'unverified', installation: 'external', location: 'synthetic', available: true, problems: [] }]);
+    vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    const onApply = vi.fn(async () => { throw new Error('This installed engine cannot load this model.'); });
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [candidate], truncated: false });
+    const { onClose } = mount({ initialConfig: { ...cfg, active_model: '', active_provider: provider, active_runtime: 'specific-build' }, initialSection: 'model', onApply });
+    const row = await screen.findByRole('button', { name: /Unverified family model/ });
+    expect(api.modelLoadable(candidate, provider)).toBe(false);
+    fireEvent.click(row);
+    const start = screen.getByRole('button', { name: 'Save profile & start' });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ active_provider: provider, active_runtime: 'specific-build', active_model: candidate.path }), 'start', expect.anything()));
+    expect(await screen.findByText(/This installed engine cannot load this model/)).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+  });
   it('keeps the first save-as click available when a checked runtime option loses focus', async () => {
     const option = schemaOption({ key: 'fresh-label', flag: '--fresh-label', target: 'launch', group: 'advanced', kind: { type: 'text' } });
     vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [option]));

@@ -291,12 +291,12 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceKey]);
   const sections = (['model', 'profiles', 'runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'] as const).filter(value => !benchmark || !['sampling', 'reasoning'].includes(value));
-  const models = catalog.models.filter(model => api.modelLoadable(model, provider) && `${model.name} ${normalizeDisplayPath(model.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const models = catalog.models.filter(model => api.modelSelectable(model, provider) && `${model.name} ${normalizeDisplayPath(model.path)}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const selected = catalog.models.find(model => model.path === cfg.active_model);
   const compatibility = selected?.compatibility?.find(item => item.provider === provider);
   const supportedInputs = compatibility && ['supported', 'partial'].includes(compatibility.status)
     ? Object.entries(compatibility.modalities).filter(([, supported]) => supported).map(([name]) => name).join(', ') || '—' : '—';
-  const incompatible = !!compatibility && !api.modelLoadable(selected!, provider);
+  const incompatible = !!compatibility && !api.modelSelectable(selected!, provider);
   const compatibilityBlocked = incompatible || !!compatibility?.readiness.length;
   const incomplete = !!selected?.shards?.missing.length || !!selected?.artifact?.incomplete || !!selected?.artifact?.missing.length;
   // What still has to be chosen before the start button can do anything. The
@@ -356,6 +356,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <div hidden={section !== 'model'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.model}</h3><button type="button" className="app-button app-button--ghost app-button--sm" data-icon="refresh" onClick={catalog.refresh}>{copy.refresh}</button></div>
               <p id={`${id}-model-help`} className="app-section-hint">{help.model}</p>
+              {api.isExternalProvider(provider) && <p className="app-section-hint">{catalog.selection?.source === 'runtime-bindings' ? copy.runtimeBindings : copy.unverifiedCatalog}</p>}
+              {catalog.selection?.source === 'runtime-bindings' && <button type="button" className="app-button app-button--secondary" onClick={catalog.exploreLibrary}>{copy.exploreModels}</button>}
               <input type="search" className="app-input" value={query} onChange={event => setQuery(event.target.value)} placeholder={copy.search} aria-label={copy.search} />
               {catalog.error && <FeedbackBanner tone="error">{normalizeDisplayText(catalog.error)}</FeedbackBanner>}
               {catalog.loading && <p role="status">{t('extra.loading')}</p>}
@@ -367,9 +369,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
                 event.preventDefault(); buttons[next]?.focus();
               }}>{models.map(model => <li key={model.path}><button type="button" className={`app-list-row${cfg.active_model === model.path ? ' is-selected' : ''}`} disabled={!!model.shards?.missing.length || !!model.artifact?.incomplete || !!model.artifact?.missing.length}
-                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} artifact={model.artifact} /><small>{model.artifact?.format} · {model.artifact ? Object.entries(model.artifact.modalities).filter(([, enabled]) => enabled).map(([name]) => name).join(", ") : ""} · {model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small></span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
+                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} artifact={model.artifact} /><small>{model.artifact?.format} · {model.artifact ? Object.entries(model.artifact.modalities).filter(([, enabled]) => enabled).map(([name]) => name).join(", ") : ""} · {model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small>{api.isExternalProvider(provider) && !api.modelLoadable(model, provider) && <small>{copy.unverifiedModel}</small>}</span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
-              <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{help.path}</span></label>
+              <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{api.isExternalProvider(provider) ? copy.externalModelPath : help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} data-icon="open" onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
             </div>
             <div hidden={section !== 'runtime'} className="model-settings-fields">

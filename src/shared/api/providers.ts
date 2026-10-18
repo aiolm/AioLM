@@ -2,7 +2,7 @@ import { invoke } from './transport.ts';
 import type { AppConfig, GgufModel } from './types.ts';
 import type { CommandSyntax } from './runtimeHelp.ts';
 
-import { PROVIDERS, type ProviderId } from './providerIdentity.ts';
+import { PROVIDERS, isExternalProvider, type ProviderId } from './providerIdentity.ts';
 export { PROVIDERS, isProviderId, isExternalProvider } from './providerIdentity.ts';
 export type { ProviderId, BuiltinProviderId } from './providerIdentity.ts';
 const optionSchemas = new Map<string, ProviderOption[]>();
@@ -29,6 +29,8 @@ export interface ModelCompatibility {
   reasons: Array<{ code: string; detail: string }>; evidence: string;
 }
 export interface CatalogModel { artifact: ModelArtifact; compatibility: ModelCompatibility[]; shards?: GgufModel['shards'] }
+export interface ModelCatalogSelection { provider: ProviderId; runtime: string; source: 'runtime-bindings' | 'library'; binding_paths: string[] }
+export interface ModelCatalogRequest { provider: ProviderId; runtime: string; includeLibrary?: boolean }
 export interface RuntimeInstance {
   provider: ProviderId; id: string; engine: string; server: string; version?: string;
   accelerator: string; installation: string; location: string; available: boolean;
@@ -115,9 +117,10 @@ export async function providerImportCommand(providerId: ProviderId, command: str
   ];
   return { ...result, issues };
 }
-export async function listModelArtifacts(modelsDir: string, scanId?: string, selection?: { provider: ProviderId; runtime: string }) {
-  const catalog = await invoke<{ models: CatalogModel[]; truncated: boolean }>('list_model_artifacts', { modelsDir, scanId: scanId ?? null,
-    providerId: selection?.provider ?? null, runtimeId: selection?.runtime ?? null });
+export async function listModelArtifacts(modelsDir: string, scanId?: string, selection?: ModelCatalogRequest) {
+  const catalog = await invoke<{ models: CatalogModel[]; truncated: boolean; selection?: ModelCatalogSelection }>('list_model_artifacts', { modelsDir, scanId: scanId ?? null,
+    providerId: selection?.provider ?? null, runtimeId: selection?.runtime ?? null,
+    ...(selection?.includeLibrary === undefined ? {} : { includeLibrary: selection.includeLibrary }) });
   const models: GgufModel[] = catalog.models.map(({ artifact, compatibility, shards }) => {
     // Snapshot basenames can be revisions. The native inspector separately
     // records repository identity from its manifest or the HF cache layout.
@@ -129,7 +132,7 @@ export async function listModelArtifacts(modelsDir: string, scanId?: string, sel
       is_vision: artifact.role === 'projector', artifact, compatibility, ...(shards ? { shards } : {}),
     };
   });
-  return { models, truncated: catalog.truncated };
+  return { models, truncated: catalog.truncated, ...(catalog.selection ? { selection: catalog.selection } : {}) };
 }
 export function modelLoadable(model: GgufModel, provider: ProviderId, task?: 'generate' | 'embed'): boolean {
   const result = model.compatibility?.find(value => value.provider === provider);
@@ -137,8 +140,16 @@ export function modelLoadable(model: GgufModel, provider: ProviderId, task?: 'ge
     : provider === 'llama.cpp' && !model.is_vision;
 }
 
+/** A candidate can be selected for a probe without claiming that it can run. */
+export function modelSelectable(model: GgufModel, provider: ProviderId): boolean {
+  return isExternalProvider(provider)
+    ? model.compatibility?.find(value => value.provider === provider)?.status !== 'unsupported'
+    : modelLoadable(model, provider);
+}
+
 /** Library filters include companions that are configured alongside a primary model. */
 export function modelCompatibleForLibrary(model: GgufModel, provider: ProviderId): boolean {
+  if (isExternalProvider(provider)) return modelSelectable(model, provider);
   if (model.is_vision || model.artifact?.role === 'projector') return provider === 'llama.cpp' && (!model.artifact || model.artifact.format === 'gguf');
   return modelLoadable(model, provider);
 }

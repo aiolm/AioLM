@@ -290,3 +290,11 @@ Manifest 옵션은 선택적 `scope`로 위치를 명시할 수 있다. `[]`는 
 GUI command preview는 실제 실행과 같은 InferenceRuntimeAdapter.launch 계획을 표시하고 기존 마스킹을 적용한다. CLI doctor는 어댑터의 refresh를 공통으로 호출하며 native의 기존 no-op 동작을 유지한다. CLI 옵션 저장 검증도 adapter/configuration.rs에 위임하며 선택한 runtime의 effective schema, 미선택 catalog·등록 설정의 기존 편집 정책과 오류를 보존한다. 공개 runtime 표시 ID와 help snapshot의 기존 native ID 순서가 다르므로 각각의 이전 표현을 유지한다. 기존 runtime_schema::RuntimeKey·Selected 및 runtime_metadata::builtin 공개 경로는 호환 wrapper/re-export로 유지한다. 저장 자료형·metadata digest·기본 help argv·protocol/readiness 계약은 변경하지 않는다.
 
 기본 제공 vLLM·MLX의 managed/external interpreter help argv·scope와 공통 effective schema를 기존 catalog와 대조하고 native help/metadata/ID를 확인한다. 이는 합성 command/schema 계약 검사이며 Windows에서 실제 vLLM·MLX 실행 성공으로 계산하지 않는다. 등록 엔진의 실제 subprocess·bridge·model probe·소유 인수 여정은 별도 검사로 유지하며 최종 production 실제 엔진 검증은 계속 필요하다.
+
+## 외부 엔진 모델 후보와 호환성의 구분
+
+외부 엔진의 `model_formats`는 모델 구조·토크나이저·배포 설정의 지원을 보장하지 않는다. 카탈로그의 외부 엔진 호환성은 `unknown`으로 유지하며, 선택한 모델과 런타임의 실제 probe가 실행 가능 여부를 결정한다. `--help`·확장자·파일 이름을 모델 지원 근거로 승격하지 않는다.
+
+모델 설정은 선택한 외부 런타임에 `models` 바인딩이 있으면 그 경로를 먼저 표시한다. 이는 완전한 지원 목록이 아니며, 다른 로컬 후보 탐색과 직접 경로 입력을 제공한다. 바인딩이 없으면 로컬 후보를 미확인 상태로 표시한다. 미확인 후보를 선택할 수 있어도 실행 전 probe·readiness·파일 무결성 검사는 그대로 적용한다. 내장 어댑터의 모델·프로젝터·작업별 필터는 유지한다.
+
+`list_model_artifacts`의 선택적 `includeLibrary: false`는 선택한 런타임의 바인딩이 있으면 관련 없는 라이브러리 탐색을 생략한다. 생략 시 기존 전체 탐색 동작을 유지한다. 외부 런타임 응답의 선택적 `selection`은 `provider`·`runtime`·`source`(`runtime-bindings` 또는 `library`)·`binding_paths`를 제공한다. UI는 다른 런타임의 응답을 적용하지 않으며 런타임 변경·취소 시 이전 결과를 폐기한다. 저장된 설정·프로필 형식은 변경하지 않는다.

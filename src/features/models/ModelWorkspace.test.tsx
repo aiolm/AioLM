@@ -87,6 +87,13 @@ describe('model management and settings', () => {
     expect(base.start).not.toHaveBeenCalled(); expect(base.stop).not.toHaveBeenCalled(); expect(base.updateConfig).not.toHaveBeenCalled();
     expect(stored).not.toHaveBeenCalled(); stored.mockRestore();
   });
+  it('preserves the selected external runtime when a local candidate needs a model probe', async () => {
+    const base = createTestStore({ active_provider: 'custom.example', active_runtime: 'selected-build', active_model: '' });
+    mount(base);
+    fireEvent.click(await findModelButton('b.gguf'));
+    expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'custom.example', active_runtime: 'selected-build', active_model: 'b.gguf' }) }));
+    expect(base.updateConfig).not.toHaveBeenCalled();
+  });
   it('previews remembered settings without altering model memory', async () => {
     const base = createTestStore({ active_model: 'a.gguf', ctx_size: 4096 });
     rememberExecution({ ...base.cfg!, active_model: 'b.gguf', ctx_size: 8192, temperature: 0.25 });

@@ -1,4 +1,4 @@
-import { registeredProviderIds, modelLoadable, providerOf } from '../../shared/api/providers';
+import { registeredProviderIds, modelLoadable, modelSelectable, providerOf } from '../../shared/api/providers';
 import { useState } from 'react';
 import type { AppStore } from '../../shared/state/store';
 import type { ViewId } from '../../shared/types/navigation';
@@ -19,8 +19,8 @@ export default function ModelWorkspace({ store, onSelectModel, active }: Props) 
     if (!store.cfg || model.shards?.missing.length) return;
     try {
       if (settings) settings.open({ target: { kind: 'default' }, config: { ...store.cfg, ...previewExecution(store.cfg, model.path), active_model: model.path,
-        active_provider: modelLoadable(model, providerOf(store.cfg)) ? providerOf(store.cfg) : registeredProviderIds().find(provider => modelLoadable(model, provider)) ?? providerOf(store.cfg),
-        active_runtime: modelLoadable(model, providerOf(store.cfg)) ? store.cfg.active_runtime : '' } });
+        active_provider: modelSelectable(model, providerOf(store.cfg)) ? providerOf(store.cfg) : registeredProviderIds().find(provider => modelLoadable(model, provider)) ?? providerOf(store.cfg),
+        active_runtime: modelSelectable(model, providerOf(store.cfg)) ? store.cfg.active_runtime : '' } });
       else await onSelectModel(model.path);
     } catch (cause) { setError(String(cause)); }
   };

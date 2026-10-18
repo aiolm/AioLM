@@ -1,4 +1,8 @@
 const en = {
+  runtimeBindings: 'Models linked to the selected runtime. A fresh model check is still required.',
+  unverifiedCatalog: 'Local candidates are not confirmed compatible with this engine.',
+  exploreModels: 'Browse local candidates (compatibility unverified)', unverifiedModel: 'Compatibility requires a model check',
+  externalModelPath: 'Enter the file, folder or deployment path accepted by this engine. Format or filename alone does not establish compatibility.',
   preflightChecking: 'Checking the selected engine and model…', preflightCancelling: 'Cancelling the engine and model check…',
   clearGpu: 'Clear GPU assignment',
   saveConfirmAction: 'Save changes',
@@ -24,6 +28,10 @@ const en = {
 };
 type Copy = { [K in keyof typeof en]: string };
 const ko: Copy = {
+  runtimeBindings: '선택한 런타임에 연결된 모델입니다. 실행 전 실제 모델 확인이 필요합니다.',
+  unverifiedCatalog: '이 엔진과의 호환성이 확인되지 않은 로컬 후보입니다.',
+  exploreModels: '다른 로컬 후보 탐색 (호환성 미확인)', unverifiedModel: '실제 모델 확인 필요',
+  externalModelPath: '이 엔진이 받는 파일·폴더·배포 설정 경로를 입력하세요. 파일 형식이나 이름만으로 호환성을 판단하지 않습니다.',
   preflightChecking: '선택한 엔진과 모델을 확인하고 있습니다…', preflightCancelling: '엔진과 모델 확인을 취소하고 있습니다…',
   clearGpu: 'GPU 할당 해제',
   saveConfirmTitle: '이 변경을 “{name}” 프로필에 저장할까요?', saveConfirmUnchanged: '이 프로필에서 바뀌는 항목이 없습니다.',
@@ -48,6 +56,10 @@ const ko: Copy = {
   options: '런타임 옵션', optionSearch: '런타임 옵션 검색', optionApply: '편집기에 반영', unavailable: '사용 불가',
 };
 const ja: Copy = {
+  runtimeBindings: '選択したランタイムに関連付けられたモデルです。起動前のモデル確認が必要です。',
+  unverifiedCatalog: 'このエンジンとの互換性が未確認のローカル候補です。',
+  exploreModels: '他のローカル候補を探す（互換性未確認）', unverifiedModel: 'モデルの確認が必要',
+  externalModelPath: 'このエンジンが受け付けるファイル・フォルダー・配備設定のパスを入力してください。形式や名前だけでは互換性を判断できません。',
   preflightChecking: '選択したエンジンとモデルを確認しています…', preflightCancelling: 'エンジンとモデルの確認をキャンセルしています…',
   clearGpu: 'GPU 割り当てを解除',
   saveConfirmTitle: 'この変更を「{name}」に保存しますか？', saveConfirmUnchanged: 'このプロファイルで変わる項目はありません。',
@@ -71,6 +83,10 @@ const ja: Copy = {
   gpu: 'GPU 配置', automatic: '自動', tensorSplit: 'テンソル分割（カンマ区切りの重み）', truncated: 'モデル一覧が省略されています。フォルダーを絞るかパスを入力してください。', failureDetails: '詳細', options: 'ランタイムオプション', optionSearch: 'オプションを検索', optionApply: 'エディターを更新', unavailable: '利用不可',
 };
 const zh: Copy = {
+  runtimeBindings: '与所选运行时关联的模型。启动前仍需实际检查模型。',
+  unverifiedCatalog: '这些本地候选与此引擎的兼容性尚未确认。',
+  exploreModels: '浏览其他本地候选（兼容性未确认）', unverifiedModel: '需要实际检查模型',
+  externalModelPath: '请输入此引擎接受的文件、文件夹或部署配置路径。仅凭格式或文件名无法确定兼容性。',
   preflightChecking: '正在检查所选引擎和模型…', preflightCancelling: '正在取消引擎和模型检查…',
   clearGpu: '清除 GPU 分配',
   saveConfirmTitle: '将这些更改保存到“{name}”吗？', saveConfirmUnchanged: '此配置档没有任何项目会改变。',
