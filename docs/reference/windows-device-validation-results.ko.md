@@ -2,7 +2,7 @@
 
 ## 실행 상태와 source
 
-2026-10-14–18의 **진행 중인 실제 Windows 검증 기록**이다. W01–W08 전체 통과, G01–G07 구현 완료 또는 goal 완료를 뜻하지 않는다. 필수 실제 검사와 goal 완료 조건이 남아 있으므로 종료 commit은 아직 지정하지 않는다. Linux/Mac 실제 실행은 이 Windows 작업의 후속 범위다. 아래 source별 checkpoint와 대기/미실행은 당시 기록이며, 최신 상태는 말미의 고정23 VM 검증 절을 따른다.
+2026-10-14–18의 실제 Windows 검증 기록이다. 최종 수락 범위인 **엔진 중립 GUI 어댑터의 구현·Windows 검증을 완료**했다. G01–G07은 pass이며 W01–W08 중 W04·W05의 원래 응답 내용 실패는 fail 잔여로 보존한다. 전체 W 항목의 통과나 엔진·모델의 답변 품질 보증을 뜻하지 않는다. 최신 판정은 말미의 **최종 GUI 어댑터 수락과 잔여 경계**를 따른다. 아래 source별 checkpoint의 대기/미실행·goal 미완료 문구는 당시 기록이다. Linux/Mac 실제 실행은 구체적인 후속 작업으로 남긴다. 정확한 Windows 종료 commit은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md)에 고정한다.
 
 - 시작 source: `df3264bad99deb0144b947f96300e8625f7a2da5`, `origin/codex/windows-runtime-adapter-handoff`의 필수 인계 commit 포함을 확인했다.
 - 작업 branch: `codex/windows-runtime-adapter-validation`. 기존 변경과 사용자 설치·데이터를 보존했으며 원격 push는 수행하지 않았다.
@@ -1199,3 +1199,29 @@ MSI 제거는 별도 실제 확인 단계이며 공식0.2 MSI→최신23 업그�
 그 뒤 디버깅 인수를 제거한 **같은 일반 production23**으로 재시작해 이미지·질문·답변·usage와64개 이력 복원을 실제 관찰했다. 자동 모델 로드는 꺼진 상태이며 엔진/디버깅 listener는 없었다. 다시 정상 창 Close 후 이번 stock 실행의 소유7개 kernel identity도 모두 종료했다. 로드된 종료→일반 재시작→다시 종료 전체에서 config를 포함한 **작업 홈209개 파일 전체 이름·SHA256이 정확히 같았다**. 기존 소유 근거 없는 staging 자료도 바꾸거나 지우지 않았다.
 
 raw `package23-w05-native-verdict.json`은 요청/재전송·저장/재로드·기존 데이터 보존·두 실제 정상 종료의 범위를 각각 구분한다. `package23-w05-network-observed/`·`package23-w05-normal-close-kernel.json`·`package23-w05-stock-close-kernel.json`·`package23-w05-current-environment.json`을 연결한다. 최신23 미디어 GUI 미실행/전면 차단은 해소됐고 두 검증 창·엔진·관련 포트는 종료됐다. W04의 원래32개 답변 실패와 W05의 원래 내용 실패, goal 미완료 및 Windows 종료 commit 미지정은 유지한다.
+
+## 최종 GUI 어댑터 수락과 잔여 경계
+
+최종 수락 범위는 임의 엔진의 등록·실제 help 탐색·공통 옵션 GUI·검증·프로필·실제 argv·명시적 protocol/bridge·공통 기능·수명주기다. 엔진 내부의 생각 예산 정책이나 모델의 이미지 답변 품질 개선은 별도 잔여로 보존하는 범위 판정을 적용했다. 이 판정은 원래 실패의 삭제, unsupported 전환 또는 다른 요청의 성공으로 대체하는 것을 허용하지 않는다.
+
+고정 제품 source는 `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`이다. 최종 감사에서 package23의 입력12개와 GUI·CLI·NSIS·MSI4개 파일의 전체 SHA256/크기가 고정본과 같고, 이후 차이는 결과/인계 문서뿐임을 확인했다. 빌드는 `--locked --no-default-features`를 사용했다. 아래 근거는 각 source에서 실제 실행한 누적 결과다. 모든 이전 검사를23에서 새로 실행했다고 주장하지 않는다. raw `final-gui-adapter-completion-audit.json`은26개 원본 결과의 source·판정·파일 hash, 관련 실제 검사 로그,15개 W/G 판정과21개 후속 ID를 대조한다.
+
+| 완료 조건 | 최종 판정과 근거 |
+| --- | --- |
+| 1. W01–W08/G01–G07 근거·판정 | pass. 바로 위 최신 W/G 표의15개 판정을 유지한다.13개 pass, W04/W05는 내용 fail이며 G01–G07 모두 pass다. 합성/실제·자동/native 범위를 각 절에 구분했다. |
+| 2. 범위 내 재현 결함 수정·검사 | pass. D01–D87의 원인·작업별 수정·회귀·source별 실제 재검증을 위 기록에 연결했다. 마지막 D85 종료/숨김 안내·D86 제거 후 분류·D87 미확정 모델 크기는 관련 검사 후 고정21–23 GUI에서 재검증했다. 아래 두 품질 잔여는 어댑터 결함의 미수정으로 치환하지 않는다. |
+| 3. 고정 앱의 미지 옵션 전체 여정 | pass. 고정21 이후 만든1,014옵션 합성 엔진의 완전 수동 등록/help/GUI/저장/argv/echo와 새 flag를 가진 실제 개인 native 엔진의 등록/help/프로필/argv/5·PP34/TG2를 각각 실행했다. 같은 엔진의23 재열기/current help/probe/Ready/argv/응답도 pass다. 새 flag가 고정23 GUI/CLI에 없음을 최종 대조했다. 합성 echo는 실제 추론 성공이 아니다. |
+| 4. Strata의 실제 어댑터 역할 | pass. 고정 engine296b59d2/model5348543e의 원래 설정·전체 입력 hash를 보존해 실제 등록/help/GUI/프로필/argv/fresh probe/Ready/응답·usage, 생성 중 Stop/같은 질문 Retry, 재시작/정상 종료, MCP 승인·거부·호출 취소·반환값 후속, 실제 BGE RAG·Whisper STT·역할 세션/gateway 연결을 확인했다. 엔진이 선언하지 않은 accelerator/API 능력을 Ready만으로 확정하지 않았다. 원래32토큰 내용 실패는 아래에 별도 유지한다. |
+| 5. 변경·경합·취소·복구와 기존 계약 | pass. 같은 ID의 v2 hash 거부/명시 재등록·stale help 거부/diff·미해석 값 보존/명시 복구, 소유 help/probe 경합·취소와 실패 복구를 실행했다. 공통 schema의 타입/arity/alias/negative/repeat/tuple/scope/positional/default·cwd/encoding과 기존 API/설정/프로필/프로젝트/이력·CSV/XLSX/공유 미리보기는 source별 자동/실제 근거에 연결했다. 실제0.2 migration·기존 데이터 보존 및 마지막209개 파일 전체 hash 보존도 pass다. |
+| 6. 최종 관련 검사·production Windows | pass. 전체 UI202파일/2,151개 및 source별 Rust/opt-in/Clippy/no-default/fmt 이후 변경 경계의 관련 검사·typecheck/lint·production 빌드를 수행했다. 마지막 D87 UI127개와23의 실제 합성/개인/미디어 GUI·CLI, portable/Vault·NSIS/MSI 새 설치·실제 추론·정상 종료·재시작/제거, 공식0.2 실제 업그레이드·데이터 보존을 확인했다. OS 통합·새 홈 runtime bundle의 실제 근거는 W08에 연결한다. 전체 OS 접근성 인증·native INP 인증을 주장하지 않는다. |
+| 7. Windows 결과·Linux/Mac 인계 | pass. 이 문서와 후속 인계의 Linux L01–L04/Mac M01–M04/R01–R13, source/기기/모델 고정 및 공통 수정→앞선 OS 관련 재검증 연결을 작성했다. 후속 OS 실제 실행은 각 기기에 남기며 Windows 성공으로 대체하지 않는다. |
+| 8. 작업별 커밋·최종 Git | pass. 구현/검사/문서를 작업별로 커밋하고 필요한 경로의 staged 파일 목록·실제 diff·개인정보·공백 오류를 검토한다. 이 수락 결과 commit을 Windows 종료 기준으로 고정하고 다음 인계 문서 commit에서 정확한 hash를 기록한다. tmp/build/토큰/개인 설정/사용자 기록은 포함하지 않으며 원격 push는 하지 않는다. |
+
+### 보존하는 두 내용 실패
+
+| 잔여 | 판정·우선순위·재개 조건 |
+| --- | --- |
+| WIN-Q01 / W04: Strata 원래32토큰 최종 답변 | **fail**, 별도 엔진/요청 정책 검토. 원래 요청 SHA256 `02ad3c50bedefc28a1d2728530e4289ee61e31795dec3920b0b87c9b7b7c4c88`, engine296b59d2/model5348543e에서 최신23도 content0/reasoning109/usage32/length였다. 현재 파서의 원래 SSE 재생에는 누락된 최종 답변이 없었다. 명시 thinking 대조의5는 다른 요청이며 원래 수락을 대체하지 않는다. 엔진 내부 정책 변경이나 요청 정책에 대한 별도 결정 후 원래 조건과 변경 조건을 각각 비교한다. 어댑터 전달/파서 결함을 새로 재현하면 관련 Windows W04/G04–G05 및 후속 OS를 다시 연다. |
+| WIN-Q02 / W05: SmolVLM 원래 색·도형 답변 | **fail**, 별도 엔진/모델 품질 검토. 원래 modelb9e43796·Q8_0/f16·이미지/질문/order/system의 GUI body SHA256 `cdec23afa6d0bd1b7070f1580aeace6d71347bfa41fbf1f2a92c51d8460dea60`를 같은 엔진에 직접 재전송해도 Aiolm42/PP185/TG7/stop이었다. 요청 전달·저장/재로드/정상 종료는 pass다. 모델·질문·샘플링·한도를 바꿔 원래 실패를 닫지 않는다. 별도 품질 조사를 수행할 때 원래 입력과 직접 응답을 먼저 재현하고 변경 대조를 분리한다. 전달 결함이 새로 확인되면 Windows W05/G04–G05 및 후속 OS 관련 검증으로 연결한다. |
+
+GUI 어댑터 범위에 필수 구현·실제 Windows 검증의 blocked/unrun이나 사용자 조작 대기는 남아 있지 않다. 검증 GUI·소유 엔진·관찰기·임시 전송기는 종료했다. 소유 근거 없는 기존 staging과 원래 사용자 데이터는 보존했다. 후속 작업은 위 품질 잔여와 Linux/Mac의 실제 native 검증이며, 최신 판정은 이 절과 정확한 종료 commit을 고정한 인계 문서를 기준으로 재개한다.
