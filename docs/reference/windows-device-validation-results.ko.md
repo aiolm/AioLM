@@ -1173,3 +1173,13 @@ MSI 제거는 별도 실제 확인 단계이며 공식0.2 MSI→최신23 업그�
 | G07 | pass | source별 재현 결함의 수정/실제 재검증·작은 창/키보드/tree·대량 옵션/탐색 경합/취소/실패 복구. native INP 인증은 주장하지 않는다. |
 
 현재 실행 가능한 다음 작업은 원래 Strata32·SmolVLM 내용 실패의 추가 원인 대조와 필요한 제품 수정/재검증이다. MSI 전송·설치·제거 인증 대기는 해소됐다. 실패를 unsupported로 바꾸거나 모델/질문/제한을 바꾼 성공으로 닫지 않는다. Linux L01–L04, 이후 Mac M01–M04/R01–R13은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md)에 남긴 각 기기의 실제 작업이며 Windows goal의 실제 실행 완료를 대신하지 않는다.
+
+### 최신23 CLI의 실제 Strata thinking 대조
+
+같은 고정23 CLI에서 별도 임시 홈을 사용해 원래 Strata revision `296b59d2f73c8f04a805df29c2fa97655adace78`·모델 revision `5348543e0147355ac9cbcb031184a3546350988e`와 원래 manifest를 등록/선택하고 fresh probe→Ready를 확인했다. 원래6개 입력의 전체 SHA256을 실행 전후 모두 대조했다. 엔진·모델·deployment·bridge·질문·최대 출력32개를 바꾸지 않았다.
+
+원래 요청 bytes(SHA256 `02ad3c50bedefc28a1d2728530e4289ee61e31795dec3920b0b87c9b7b7c4c88`)를 대조 전후 두 번 전송하자 모두 content0/reasoning109/usage32/`length`였다. **원래 답변 수락 실패는 유지**한다. 별도 표시한 `reasoning_effort=none` 요청은 content `5`/생각0/생성2개/`stop`, `reasoning_budget_tokens=8` 요청은 content `5`/생성28개/`stop`였다. 두 대조도 최대32개·같은 질문/모델을 유지했지만 추가 필드가 있는 다른 요청이다. 원래 검사의 통과나 앱의 기본값 변경으로 계산하지 않는다.
+
+고정 소스의 생각 예산/답변 예약 계약과 이 실제 대조는 생각을 사용하는 방식이 이 요청의 최종 답변 도달에 영향을 준다는 근거다. 직접 HTTP 요청의 경계이며 GUI 요청의 모든 조건이나 모델의 개별 토큰 생성 원인 전체를 증명하지는 않는다. 앱이 reasoning을 답변으로 바꾸거나 자동으로 thinking을 끄는 수정은 하지 않았다.
+
+정상 CLI stop 직후 최초 관찰에는 같은 생성 시각의 native child1개가 남아 있어 새 검사 도구가 exit1을 반환했다. 첫 결과와 실패를 보존했다. 후속 독립 관찰에서 소유4개·포트·launch staging이 모두 없어졌고 원래6개 입력의 전체 hash가 같았다. 최초 관찰과 후속 관찰 사이의 정확한 종료 지연 또는 동기식 종료를 입증했다고 확대하지 않으며, 강제 종료나 timeout 변경은 없었다. raw `strata23-reasoning-control/`의 원래 `results.json`과 보충 `diagnosis-verdict.json`을 함께 읽는다. 이 결과는 **실제 원인 대조와 후속 정리 관찰 한정 pass**이며 W04/W05와 goal의 미완료를 유지한다.
