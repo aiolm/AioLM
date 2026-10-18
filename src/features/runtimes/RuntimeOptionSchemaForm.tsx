@@ -543,6 +543,8 @@ export interface RuntimeOptionSchemaFormProps {
   onChange: (next: Record<string, unknown>) => void;
   /** Embedded in settings: fields only; validation and preview come from the host. */
   compact?: boolean;
+  /** Show the complete option list without a separate expansion step. */
+  showAll?: boolean;
   filter?: (option: OptionSchemaDefinition) => boolean;
   inheritLabel?: (option: OptionSchemaDefinition) => string | undefined;
   hint?: (option: OptionSchemaDefinition) => string | undefined;
@@ -554,7 +556,7 @@ export interface RuntimeOptionSchemaFormProps {
 }
 
 /** Generic runtime-scoped option renderer, validator and argv preview. */
-export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
+export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const formId = useId();
@@ -611,7 +613,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   const reviewedImport = useMemo(() => imported ? maskImportReview(imported, schema, values) : null, [imported, schema, values]);
   const unknownKeys = useMemo(() => Object.keys(values).filter(key => key !== ORDER_KEY && !schema.options.some(option => option.key === key)), [schema, values]);
 
-  const fields = visible.slice(0, limit).map((option, index) => (
+  const fields = (showAll ? visible : visible.slice(0, limit)).map((option, index) => (
     <div key={option.key} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
       <SchemaOptionField option={option} stored={values[option.key]} disabled={disabled} applicable={isApplicable(option, scope)}
         inheritLabel={inheritLabel?.(option)} hint={hint?.(option)} onStore={(next, origins) => update(option.key, next, origins)} onInvalid={onInvalid}
@@ -632,7 +634,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
           </label>
         </fieldset>
   );
-  const more = visible.length > limit && <button type="button" className="app-button app-button--secondary" disabled={disabled}
+  const more = !showAll && visible.length > limit && <button type="button" className="app-button app-button--secondary" disabled={disabled}
     onClick={() => setLimit(current => current + 64)}>{copy.more} ({visible.length - limit})</button>;
   if (compact) return <div className="model-settings-fields">{navigation}{fields}{more}{visible.length === 0 && <p>{copy.noMatch}</p>}</div>;
 

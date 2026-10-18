@@ -82,11 +82,11 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const latest = useRef(cfg); latest.current = cfg;
   const [requestedSection, setSection] = useState(normalizeSection(initialSection));
   const sections = external
-    ? (['model', 'runtime', 'options', 'prompt', 'profiles'] as const).filter(value => mode !== 'benchmark' || value !== 'prompt')
+    ? (['model', 'options', 'prompt', 'profiles'] as const).filter(value => mode !== 'benchmark' || value !== 'prompt')
     : (['model', 'profiles', 'runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'] as const).filter(value => mode !== 'benchmark' || !['sampling', 'reasoning'].includes(value));
   // Existing deep links keep working when an external runtime has no native
   // tuning categories. Derive a valid panel during engine switches as well.
-  const mappedSection = external && ['tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(requestedSection)
+  const mappedSection = external && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(requestedSection)
     ? 'options' : !external && requestedSection === 'prompt' ? 'sampling' : requestedSection;
   const section = sections.find(value => value === mappedSection) ?? (external ? 'options' : 'model');
   const body = useRef<HTMLDivElement>(null);
@@ -341,12 +341,15 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         <header className="model-settings-header"><div><span className="app-eyebrow">{targetLabel}{stateText ? ` · ${stateText}` : ''}</span><h2 id={`${id}-title`} ref={heading} tabIndex={-1}>{copy.title}</h2><p title={normalizeDisplayPath(cfg.active_model)}><ModelIcon model={cfg.active_model} />{<ModelName model={cfg.active_model} empty={copy.model} />}</p><ModelBadges mode="detail" model={cfg.active_model} metadata={selectedMetadata} artifact={selected?.artifact} /></div>
           <button type="button" className="app-icon-button" aria-label={copy.close} disabled={disabled} onClick={() => guarded(onClose)}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></header>
         <div className="model-settings-layout" inert={!!pending || confirmSave || disabled}>
-          <TabNav items={sections.map(value => ({ id: value, label: value === 'runtime' && external ? copy.runtimeConnection : value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
+          <TabNav items={sections.map(value => ({ id: value, label: value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
             tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />
           <div className="model-settings-content">
             <div className="model-settings-context">
               <div className="model-settings-runtime-selection">
               <ProviderRuntimeControl compact cfg={cfg} disabled={disabled} onProvider={chooseProvider} onChange={change} onReady={setProviderReady} revision={resourceRevision} />
+              {external && onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" disabled={disabled} onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}
+              {external && runtimeSelected && runtimeKnown && runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
+              {external && resourceError && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => setResourceRevision(value => value + 1) }}>{normalizeDisplayText(resourceError)}</FeedbackBanner>}
               </div>
               <div ref={setProfileBannerTarget} />
             </div>
@@ -382,13 +385,13 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{api.isExternalProvider(provider) ? copy.externalModelPath : help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} data-icon="open" onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
             </div>
-            <div hidden={section !== 'runtime'} className="model-settings-fields">
-              <div className="model-settings-section-heading"><h3>{external ? copy.runtimeConnection : copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}</div>
+            {!external && <div hidden={section !== 'runtime'} className="model-settings-fields">
+              <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{onManageRuntimes && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={() => onManageRuntimes(structuredClone(cfg))}>{copy.manageRuntime}</button>}</div>
 
               {runtimeSelected && runtimeKnown && runtimeMissing && <FeedbackBanner tone="warning">{copy.missingRuntime}</FeedbackBanner>}
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
               {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} onInvalid={setFieldInvalid} />}
-            </div>
+            </div>}
             {!benchmark && (external ? section === 'prompt' : section === 'sampling') && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} className="app-textarea app-textarea--editable" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small className="app-section-hint">{external ? copy.promptScope : profileCopy.promptHint}</small></div>}
             <div hidden={!llama || !['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
               <div hidden={section !== 'adapters'} className="model-settings-fields">
@@ -404,7 +407,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 onResetDrafts={() => { setTuningRevision(value => value + 1); setInvalid(previous => new Set([...previous].filter(key => key.startsWith('gpu_')))); }} />
             </div>
             <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
-            {external && section === 'options' && <><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></>}
+            {external && section === 'options' && <><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></>}
             {!llama && !external && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(section) && <ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             {llama && section === 'advanced' && <ProviderOptions key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </SettingsProfileControl>
@@ -424,9 +427,9 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                   {gap === 'runtimeMissing' && onManageRuntimes && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="settings" onClick={() => onManageRuntimes(structuredClone(cfg))}>{executionCopy.manageRuntime}</button>}
                 </li>)}
               </ul></FeedbackBanner>}</div>
-            <div className="model-settings-footer-bar">
+            {(!external || supportedInputs !== '—') && <div className="model-settings-footer-bar">
               {llama ? <ResourceEstimatePanel cfg={cfg} options={runtime.options} verified={runtime.verified} runtimeDevices={runtime.capabilities?.devices} open={open} invalid={invalid.size > 0 || pathPending} benchmark={benchmark} /> : <span>{providerCopy[locale].modalities}: {supportedInputs}</span>}
-            </div>
+            </div>}
           </div>
           <div className="model-settings-actions">
             {!benchmark && mode !== 'project' && (live

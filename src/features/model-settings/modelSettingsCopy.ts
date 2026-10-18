@@ -1,5 +1,5 @@
 const en = {
-  runtimeConnection: 'Runtime connection', promptSection: 'Conversation instructions',
+  optionTools: 'Command and help tools', managedArguments: 'App-managed arguments', promptSection: 'Conversation instructions',
   externalOptions: 'Options come from the selected runtime’s help and explicitly declared metadata. Engine-specific groups remain available in the option filter.',
   promptScope: 'AioLM conversation instructions. These are saved in the profile and sent with conversations, rather than passed as engine launch options.',
   runtimeBindings: 'Models linked to the selected runtime. A fresh model check is still required.',
@@ -31,7 +31,7 @@ const en = {
 };
 type Copy = { [K in keyof typeof en]: string };
 const ko: Copy = {
-  runtimeConnection: '런타임 연결', promptSection: '대화 지침',
+  optionTools: '명령어·도움말 도구', managedArguments: '앱이 관리하는 인수', promptSection: '대화 지침',
   externalOptions: '선택한 런타임의 도움말과 명시적 메타데이터에 있는 옵션을 표시합니다. 엔진별 그룹은 옵션 필터에서 확인할 수 있습니다.',
   promptScope: 'AioLM의 대화 지침입니다. 프로필에 저장해 대화와 함께 전달하며 엔진 실행 옵션으로 넘기지 않습니다.',
   runtimeBindings: '선택한 런타임에 연결된 모델입니다. 실행 전 실제 모델 확인이 필요합니다.',
@@ -62,7 +62,7 @@ const ko: Copy = {
   options: '런타임 옵션', optionSearch: '런타임 옵션 검색', optionApply: '편집기에 반영', unavailable: '사용 불가',
 };
 const ja: Copy = {
-  runtimeConnection: 'ランタイム接続', promptSection: '会話の指示',
+  optionTools: 'コマンド・ヘルプツール', managedArguments: 'アプリ管理の引数', promptSection: '会話の指示',
   externalOptions: '選択したランタイムのヘルプと明示的なメタデータに基づくオプションです。エンジン固有のグループはオプションの絞り込みで確認できます。',
   promptScope: 'AioLM の会話の指示です。プロファイルに保存し、エンジン起動オプションではなく会話と一緒に送信します。',
   runtimeBindings: '選択したランタイムに関連付けられたモデルです。起動前のモデル確認が必要です。',
@@ -92,7 +92,7 @@ const ja: Copy = {
   gpu: 'GPU 配置', automatic: '自動', tensorSplit: 'テンソル分割（カンマ区切りの重み）', truncated: 'モデル一覧が省略されています。フォルダーを絞るかパスを入力してください。', failureDetails: '詳細', options: 'ランタイムオプション', optionSearch: 'オプションを検索', optionApply: 'エディターを更新', unavailable: '利用不可',
 };
 const zh: Copy = {
-  runtimeConnection: '运行时连接', promptSection: '对话指令',
+  optionTools: '命令和帮助工具', managedArguments: '应用管理的参数', promptSection: '对话指令',
   externalOptions: '选项来自所选运行时的帮助和明确声明的元数据。可在选项筛选中查看引擎特定的分组。',
   promptScope: '这是 AioLM 的对话指令。它保存在预设中并随对话发送，不作为引擎启动选项传递。',
   runtimeBindings: '与所选运行时关联的模型。启动前仍需实际检查模型。',

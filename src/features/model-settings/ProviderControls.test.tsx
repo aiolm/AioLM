@@ -57,6 +57,33 @@ describe('runtime inventory readiness', () => {
 });
 
 describe('runtime-specific option controls', () => {
+  it('shows every external option without preview or waiting for the unrelated runtime inventory', async () => {
+    const provider = 'custom.discovered';
+    const options = Array.from({ length: 70 }, (_, index) => schemaOption({ key: `fresh-${index}`, flag: `--fresh-${index}`, target: 'launch', group: 'engine-specific', kind: { type: 'integer' } }));
+    options.push({ ...schemaOption({ key: 'owned-model', flag: '--owned-model', target: 'launch', group: 'engine-specific', kind: { type: 'path' } }), managed: 'model' });
+    vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], options));
+    vi.mocked(api.providerRuntimes).mockReturnValue(new Promise(() => undefined));
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue([]);
+    const onChecking = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'installed-one' }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
+    expect(await screen.findByLabelText(/^--fresh-69/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^--fresh-0\s/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Show more options/ })).not.toBeInTheDocument();
+    const previewButton = screen.getByRole('button', { name: 'Command preview' });
+    expect(previewButton).not.toBeVisible();
+    expect(screen.getByRole('region', { name: 'App-managed arguments' })).not.toBeVisible();
+    const tools = previewButton.closest('details')!;
+    expect(tools).not.toHaveAttribute('open');
+    expect(preview).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    fireEvent.click(screen.getByText('Command and help tools'));
+    expect(tools).toHaveAttribute('open');
+    expect(previewButton).toBeVisible();
+    expect(screen.getByRole('region', { name: 'App-managed arguments' })).toBeVisible();
+    fireEvent.click(previewButton);
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+  });
   it('renders an installed native build option through the same schema and retains other engine values', async () => {
     const extra = schemaOption({ key: 'fresh-native', flag: '--fresh-native', target: 'launch', group: 'runtime', kind: { type: 'integer' } });
     vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], [extra]));

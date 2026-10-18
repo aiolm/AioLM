@@ -66,7 +66,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], options));
     vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
     mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'specific-build' }, initialSection: 'reasoning' });
-    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Model', 'Runtime connection', 'Runtime options', 'Conversation instructions', 'Profiles']);
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Model', 'Runtime options', 'Conversation instructions', 'Profiles']);
     const tab = screen.getByRole('tab', { name: 'Runtime options' });
     expect(tab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab.id);
@@ -75,6 +75,15 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Conversation instructions' }));
     expect(screen.getByLabelText('Default system prompt')).toBeVisible();
     expect(screen.getByText(/AioLM conversation instructions/)).toBeVisible();
+  });
+  it('opens external runtime setup directly at options and keeps runtime management beside the selectors', async () => {
+    const onManageRuntimes = vi.fn();
+    mount({ initialConfig: { ...cfg, active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }, initialSection: 'setup', onManageRuntimes });
+    expect(screen.queryByRole('tab', { name: 'Runtime connection' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runtime options' })).toHaveAttribute('aria-selected', 'true');
+    const context = document.querySelector<HTMLElement>('.model-settings-runtime-selection')!;
+    fireEvent.click(within(context).getByRole('button', { name: 'Manage runtimes' }));
+    expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }));
   });
   it('offers an external unknown model to launch validation without claiming compatibility', async () => {
     const provider = 'custom.unfamiliar';

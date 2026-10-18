@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
@@ -8,13 +8,14 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import EngineSelect from '../../shared/ui/EngineSelect';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
 import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
-import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, OccurrenceOrder } from '../runtimes/RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, OccurrenceOrder, SchemaOptionField } from '../runtimes/RuntimeOptionSchemaForm';
 import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
 import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
 import PositionalLayout from '../runtimes/PositionalLayout';
 import { ORDER_KEY } from '../runtimes/optionOrder';
+import { modelSettingsCopy } from './modelSettingsCopy';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -54,13 +55,15 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   </div>;
 }
 
-export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section }: {
+export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section, collapseTools = false }: {
   cfg: api.AppConfig; disabled: boolean; onChange: (patch: Partial<api.AppConfig>) => void; onInvalid: (key: string, invalid: boolean) => void;
   onChecking?: (checking: boolean) => void;
   section?: string;
+  collapseTools?: boolean;
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const provider = api.providerOf(cfg);
+  const external = api.isExternalProvider(provider);
   // The selected runtime's effective schema (catalog/manifest + accepted
   // help) drives the common renderer; the catalog list is only the preview
   // before a runtime exists. Typed settings keep their dedicated controls;
@@ -146,7 +149,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     let active = true; setSchema([]); setEffective(null); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError(''); setImportReview('');
     importRequest.current += 1; previewRequest.current += 1; syntaxRequest.current += 1; setSyntaxBusy(false);
     void Promise.all([
-      api.providerCatalog(), api.providerRuntimes(),
+      api.providerCatalog(),
+      // External schemas have their own verified runtime identity. Inventory
+      // checks for unrelated installations must not delay these option fields.
+      external ? Promise.resolve<api.RuntimeInstance[]>([]) : api.providerRuntimes(),
       provider !== 'llama.cpp' && cfgRef.current.active_runtime ? api.providerRuntimeOptions(provider, cfgRef.current.active_runtime) : Promise.resolve(undefined),
       usesEffective ? api.providerOptionSchema(cfgRef.current) : Promise.resolve(null),
     ]).then(([catalog, runtimes, runtimeOptions, schemaView]) => {
@@ -159,7 +165,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       }
     }).catch(cause => { if (active) { setSchemaError(String(cause)); setLoadingSchema(false); } });
     return () => { active = false; };
-  }, [provider, cfg.active_runtime, cfg.active_backend, cfg.active_build, selectedRuntime, usesEffective, effectiveRevision]);
+  }, [provider, external, cfg.active_runtime, cfg.active_backend, cfg.active_build, selectedRuntime, usesEffective, effectiveRevision]);
   // Until the schema answers, absence from this list is not evidence that a
   // saved option is unsupported. Do not offer destructive resets while probing.
   const known = (key: string) => effective ? effective.schema.options.some(option => option.key === key) : schema.some(option => option.key === key);
@@ -232,15 +238,16 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   };
   const adapters = !section || section === 'adapters';
   const advanced = !section || section === 'advanced';
+  const managedOptions = collapseTools ? effective?.schema.options.filter(option => option.managed && option.managed !== 'discovery') ?? [] : [];
   return <div className="model-settings-fields">
-    <h3>{copy.options}</h3>
+    {!collapseTools && <h3>{copy.options}</h3>}
     {loadingSchema && <p role="status">{copy.loading}</p>}
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
-    {effective && <RuntimeOptionSchemaForm compact schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
+    {effective && <RuntimeOptionSchemaForm compact showAll={external} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
       onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })}
-      filter={option => inGroupSection(option.group) && (option.target === 'request' || !runtimeFlags || !effective.compat_keys.includes(option.key)
+      filter={option => (!collapseTools || !option.managed || option.managed === 'discovery') && inGroupSection(option.group) && (option.target === 'request' || !runtimeFlags || !effective.compat_keys.includes(option.key)
         || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined)}
       inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
       hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
@@ -251,7 +258,11 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
     {adapters && showBinding && <OptionField option={{ key: bindingKey, target: provider === 'vllm' ? 'request' : 'launch', group: 'adapters', kind: { type: 'text' } }} value={values[bindingKey]} disabled={disabled} onChange={value => update(bindingKey, value)} onInvalid={onInvalid} />}
-    {advanced && <>
+    {advanced && <OptionTools collapsed={collapseTools} label={modelSettingsCopy[locale].optionTools}>
+    {managedOptions.length > 0 && <section aria-label={modelSettingsCopy[locale].managedArguments}>
+      <h4>{modelSettingsCopy[locale].managedArguments}</h4>
+      {managedOptions.map(option => <SchemaOptionField key={option.key} option={option} stored={values[option.key]} disabled onStore={value => update(option.key, value)} />)}
+    </section>}
     {provider !== 'llama.cpp' && !api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
     <label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
     <label>{commandImportCopy[locale].syntax}<CustomSelect<api.CommandSyntax | ''> ariaLabel={commandImportCopy[locale].syntax}
@@ -281,12 +292,18 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       onDraftSecrets={reportDraftSecrets} />}
     {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} schema={effective.schema} />}
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} draftPrefixSecrets={draftSecretIndices} onAccepted={() => setEffectiveRevision(current => current + 1)} />}
-    </>}
+    </OptionTools>}
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
     {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
     {importReview && <FeedbackBanner tone="warning">{importReview}</FeedbackBanner>}
   </div>;
+}
+
+function OptionTools({ collapsed, label, children }: { collapsed: boolean; label: string; children: ReactNode }) {
+  return collapsed
+    ? <details><summary>{label}</summary><div className="model-settings-fields">{children}</div></details>
+    : <>{children}</>;
 }
 
 function OptionField({ option, value, disabled, automaticTelemetry = false, onChange, onInvalid }: { option: api.ProviderOption; value: unknown; disabled: boolean; automaticTelemetry?: boolean; onChange: (value: unknown) => void; onInvalid: (key: string, invalid: boolean) => void }) {
