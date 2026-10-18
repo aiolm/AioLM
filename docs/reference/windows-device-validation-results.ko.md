@@ -1183,3 +1183,19 @@ MSI 제거는 별도 실제 확인 단계이며 공식0.2 MSI→최신23 업그�
 고정 소스의 생각 예산/답변 예약 계약과 이 실제 대조는 생각을 사용하는 방식이 이 요청의 최종 답변 도달에 영향을 준다는 근거다. 직접 HTTP 요청의 경계이며 GUI 요청의 모든 조건이나 모델의 개별 토큰 생성 원인 전체를 증명하지는 않는다. 앱이 reasoning을 답변으로 바꾸거나 자동으로 thinking을 끄는 수정은 하지 않았다.
 
 정상 CLI stop 직후 최초 관찰에는 같은 생성 시각의 native child1개가 남아 있어 새 검사 도구가 exit1을 반환했다. 첫 결과와 실패를 보존했다. 후속 독립 관찰에서 소유4개·포트·launch staging이 모두 없어졌고 원래6개 입력의 전체 hash가 같았다. 최초 관찰과 후속 관찰 사이의 정확한 종료 지연 또는 동기식 종료를 입증했다고 확대하지 않으며, 강제 종료나 timeout 변경은 없었다. raw `strata23-reasoning-control/`의 원래 `results.json`과 보충 `diagnosis-verdict.json`을 함께 읽는다. 이 결과는 **실제 원인 대조와 후속 정리 관찰 한정 pass**이며 W04/W05와 goal의 미완료를 유지한다.
+
+### 최신23의 원래 미디어 요청·재전송·저장·재시작과 정상 종료
+
+호스트 AioLM 창의 전면 차단이 해소된 뒤 같은 고정23 GUI/source908a2fb에서 실제 검증했다. 이번 호스트 환경은 Windows 11 Pro 26H2 `26300.9711`이며 Win32 OS 조회와 실제 .NET OS build26300이 일치했다. CPU는 EPYC 4585PX 16코어/32스레드, GPU2개의 driver는 `32.0.31036.15`다. WebView2의 실제 Network 관찰 버전은 `155.0.4283.62`다. 앞선25H2 `26200.9711`/WebView2 `.45` 기록이나 VM 게스트 환경과 구분하며 시스템 설정은 변경하지 않았다.
+
+기존 G16 미디어 프로필을 불러와 **설정과 system prompt가 정확히 같은 새 G23 프로필**로 저장했다. 기존50개 프로필 전체 값·revision은 그대로이고 새 항목만 추가됐다. 원래 b11617 CPU/revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`·SmolVLM256 Q8_0/f16 projector를 선택하고 fresh probe→Loaded를 관찰했다. 엔진·runtime payload63개·모델·projector의 전체 hash를 확인했다. 기존 원본의 engine/model/projector revision과 SHA256은 위 W05 기록과 같다.
+
+실제 파일 선택기로 원래 이미지(SHA256 `18f3d506bbcfb8d098782883c6553ec7f9a8c69643884e5d8c2d92a61fd15dc3`)를 첨부하고 **원래 복합 질문을 한 번 전송**했다. 별도 읽기 전용 Network 관찰은 GUI JSON body가 이전16과 정확히 같은 **11,629바이트/SHA256 `cdec23afa6d0bd1b7070f1580aeace6d71347bfa41fbf1f2a92c51d8460dea60`**임을 확인했다. 질문 hash·text-first 순서·이미지 bytes·28바이트 system 메시지와 요청 필드가 같고 추가 tools/document context는 없다. 원래 질문·모델·system·샘플링·한도·순서를 바꾸지 않았다.
+
+실제 GUI 답변은 `Aiolm 42`/PP185/TG7/cache0/`stop`이었다. 메모리에 보존한 같은 요청 bytes를 같은 소유 엔진에 직접 재전송해도 같은 content hash와 PP185/TG7/`stop`을 반환했다(cache184). **색·도형을 답하지 못한 원래 내용 검사는 fail로 유지**한다. 두 응답 모두 정상 종료된 내용 실패이며, body 전달·동일 bytes 재전송의 pass가 답변 품질 pass를 뜻하지 않는다. HTTP framing·모든 header bytes·cache/RNG 상태나 개별 토큰 원인 전체가 동일하다고 주장하지 않는다. 비밀 값·전체 body·system 원문은 관찰 결과에 저장하지 않았다.
+
+저장된 새 대화의 원래 질문·이미지 ref/전체 hash·답변 hash·usage/지표를 대조했다. 기존50개 프로필과207개 비설정 파일 전체 hash가 그대로였고 새 대화1개만 추가됐다. 모델이 로드된 채 실제 창 Close 후 미리 연 **소유9개 프로세스의 정확한 Windows kernel 생성 identity/종료 handle**을 대조해 모두 종료, 엔진·디버깅 포트 없음, 알려진 인증 임시 파일 없음을 확인했다. 관찰기는 다른 프로세스를 종료하지 않으며 기존10초 종료 경계를 유지했다. CIM의 microsecond 시각과 kernel100ns 시각을 실제 조회로 구분하고 정확한 kernel identity를 보존했다. 이 CPU 종료 근거를 앞선 Strata의 즉시 CIM 관찰/exit1에 소급 적용하지 않는다.
+
+그 뒤 디버깅 인수를 제거한 **같은 일반 production23**으로 재시작해 이미지·질문·답변·usage와64개 이력 복원을 실제 관찰했다. 자동 모델 로드는 꺼진 상태이며 엔진/디버깅 listener는 없었다. 다시 정상 창 Close 후 이번 stock 실행의 소유7개 kernel identity도 모두 종료했다. 로드된 종료→일반 재시작→다시 종료 전체에서 config를 포함한 **작업 홈209개 파일 전체 이름·SHA256이 정확히 같았다**. 기존 소유 근거 없는 staging 자료도 바꾸거나 지우지 않았다.
+
+raw `package23-w05-native-verdict.json`은 요청/재전송·저장/재로드·기존 데이터 보존·두 실제 정상 종료의 범위를 각각 구분한다. `package23-w05-network-observed/`·`package23-w05-normal-close-kernel.json`·`package23-w05-stock-close-kernel.json`·`package23-w05-current-environment.json`을 연결한다. 최신23 미디어 GUI 미실행/전면 차단은 해소됐고 두 검증 창·엔진·관련 포트는 종료됐다. W04의 원래32개 답변 실패와 W05의 원래 내용 실패, goal 미완료 및 Windows 종료 commit 미지정은 유지한다.
