@@ -1102,4 +1102,26 @@ source `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`의 변경은 위 표시 조건
 
 같은 격리 로컬 계정에서 최신23 CLI help exit0, GUI/CLI PE0.3.1·전체 payload hash를 확인했다. 이전20 정상 종료의 **72개 파일 전체 이름·크기·SHA256과 기존 프로필/설정이 정확히 같았다**(`vm23-preinstall-baseline-verdict.json`). 새 관찰 도구가 추가 노출한 `close_to_tray=false` 필드 때문에 최초 요약 비교가 실패한 기록도 보존했다. 이전 도구의 모든 요약 필드 일치와 새 필드false를 별도 확인했으며, config 파일 자체를 포함한72개 전체 hash 비교를 완화하지 않았다. Vault 내용은 수집하지 않았다.
 
-설치 전 관찰에서 설치 파일·정확한 구/신 MSI 등록·알려진 바로가기와 설치 PATH 항목이 없었다. 이 수집기의 `removed` 모드는 관찰 분류이며 최신23 실제 제거를 뜻하지 않는다. 최초 작업용 msiexec 명령은 경로의 `/` 때문에 MSI 로그에 Error1324·return2/패키지 열기 실패를 남겼다. 같은 해시의 MSI에 Windows 경로 구분자와 별도 로그를 사용하자 설치 마법사가 열렸고, 실제 대상이 현재 테스트 계정의 LocalAppData/AioLM임을 확인했다. 원래 실패 로그는 유지한다. Install 이후 관리자 인증 처리를 요청한 상태이며 **실제 설치 완료·설치본 GUI·공식0.2 MSI upgrade/remove는 아직 unrun**이다. W04/W05 원래 실패와 전체 goal 미완료 판정은 유지한다.
+설치 전 관찰에서 설치 파일·정확한 구/신 MSI 등록·알려진 바로가기와 설치 PATH 항목이 없었다. 이 수집기의 `removed` 모드는 관찰 분류이며 최신23 실제 제거를 뜻하지 않는다. 최초 작업용 msiexec 명령은 경로의 `/` 때문에 MSI 로그에 Error1324·return2/패키지 열기 실패를 남겼다. 같은 해시의 MSI에 Windows 경로 구분자와 별도 로그를 사용하자 설치 마법사가 열렸고, 실제 대상이 현재 테스트 계정의 LocalAppData/AioLM임을 확인했다. 원래 실패 로그는 유지한다.
+
+사용자가 인증 창이 나타나지 않았거나 이미 사라졌다고 알린 후 실제 MSI 화면은 **설치 중단**이었다. 기존 마법사만 Finish로 닫았고, 해당 로그의 UserExit/MainEngineThread1602를 확인했다. 인증 거절·시간 초과 중 어느 원인인지는 이 근거만으로 확정하지 않는다. 이후 설치 파일·구/신 MSI 등록·바로가기·PATH 항목 없음과 기존72개 전체 hash 보존을 확인했다(`vm23-msi-interrupted-verdict.json`). **실제 MSI 새 설치·설치본 GUI·공식0.2 MSI upgrade/remove는 아직 unrun**이며 설치 성공으로 계산하지 않는다.
+
+그 뒤 원래 로그의 관련 구간을 추가 조사해 `MSI_LUA: Elevation required to install product, will prompt for credentials`와 `Credential Request return = 0x800704C7`, 이어 사용자 취소/1602를 확인했다. 설치 privilege 요청에서 취소된 근거이며, 사용자가 직접 취소했는지 시스템이 요청을 닫았는지까지 구분하는 근거는 아니다. AlwaysInstallElevated는 사용자·기기 모두0이고 정책을 변경하지 않았다. 같은 MSI의 이후 재시도는 이 원인 조사와 분리된 새 로그를 사용하며 실제 관리자 인증과 설치 완료 관찰이 필요하다.
+
+### 최신23 VM portable의 추론·자격 증명·정상 종료
+
+같은 고정23 GUI를 별도 검증 경로에서 실행해 기존 대화3개를 복원했다. 기존 LEGACY02·원래 CPU b11617/revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`·Qwen revision `9217f5db79a29953eb74d5343926648285ec7e67`을 그대로 사용했다. 실제 GUI의 Save profile & start→Loaded→새 대화에서 원래 산술 질문의 **5/PP34/TG2**를 확인했다. 이전 Strata32·미디어 내용 실패를 대체하는 성공이 아니다.
+
+사용자가 VM 내부의 새 백업 파일1개 생성을 명시적으로 허용한 후, GUI에서 기존 자격 증명을 재등록 없이 백업으로 저장했다. VM 내부 비교의 동일 여부와 전체 백업 hash가 기존 공식0.2/20 결과와 일치했다. 호스트에는 동일 여부·hash 두 필드만 전송했고 복구 키는 VM 밖으로 보내지 않았다. 추가 식별자가 포함된 최초 비교 객체 전송은 자동 검토에서 실행 전에 거절됐으며 해당 입력을 취소하고 승인된 두 필드로 제한했다. 재등록이나 비밀 대체로 통과시킨 것이 아니다.
+
+엔진이 로드된 채 실제 창 Close 후 소유 GUI/WebView/엔진/콘솔9개를 PID·생성 시각으로 추적해 모두 종료, listener·인증 staging·launch staging 없음과 **종료 전후73개 파일 전체 hash 일치**를 확인했다. 기존71개 비설정 파일·대화3개·CPU payload64개가 모두 보존됐고 새 대화1개만 추가됐다. 명시적 프로필 저장/시작에 따른 library revision+2·LEGACY02 revision+1·적용 revision+1 외 기존 설정은 같다. `vm-portable23-verdict.json`과 receipt048–051이 이 범위의 pass 근거다. 관찰 도구가 기대한 임시 alias 파일이 없었던 문제는 승인된 동일 observer를 기존 파일 덮어쓰기 없이 복사해 해결했고 full-hash guard는 유지했다.
+
+### 최신23 NSIS 설치 검증 진행
+
+같은 고정 NSIS 전체 hash를 게스트에서 다시 확인하고 실제 Welcome→기본 LocalAppData 대상→설치 완료→Finish를 수행했다. 기존 설치가 없는 상태의 새 설치이며 관리자 인증은 요구되지 않았다. 첫 실행을 잠시 해제해 설치 파일과 데이터부터 확인했다. 설치 GUI 전체 SHA256 `a045451f638605946cb6c1736800cd7f80bbb6ff0c873b68b2d31808d2a2375f`, CLI `54d1c8e61d4041cf2e74dd450f97119551cde40b3ab6acffed6e1efd1ecc08cf`가 읽기 전용 payload 기준과 같고, 설치 CLI help exit0·사용자 바탕 화면/시작 메뉴 바로가기 대상과 작업 경로가 정확하다. 기존 데이터73개 전체 이름·크기·hash도 그대로다(receipt052–054). CLI 결과 전송은 유한 수신기 만료로 실패했지만 원래 결과를 보존해 새 수신기로 전송했으며 CLI를 반복 실행하거나 timeout을 늘리지 않았다.
+
+설치된 바탕 화면 바로가기로 첫 GUI를 열어 기존 대화4개·최근 응답/usage·LEGACY02·같은 CPU/Qwen을 복원했다. 실제 Save profile & start→Loaded→새 대화5번째에서 같은 원래 질문에 새 **5/PP34/TG2/TTFT0.05초/요청0.06초**를 확인했다. 엔진 전체 hash와 실제 Windows argv·부모 GUI 관계, 소유 프로세스9개·포트·인증 staging 제거를 수집했다. 로드된 채 정상 창 Close 후9개 PID/생성 시각 모두 종료·포트/launch staging 없음·데이터74개 전체 hash 보존이 pass다.
+
+설치된 uninstaller 전체 hash를 확인한 뒤 실제 제거 화면의 **Delete the application data 해제**를 확인하고 Uninstall→Uninstallation Complete→Close를 수행했다. 설치 GUI/CLI/uninstaller·알려진 바로가기가 사라지고 PATH 항목이 없으며, 기존74개 데이터 파일 전체 이름·크기·hash와 설정·프로필·이력이 정상 종료 시점 그대로였다. 명시적 저장/시작의 프로필 revision 증가 외 이전 설정을 유지했고 새 대화1개만 추가됐다. `vm-nsis23-verdict.json`과 receipt052–058이 **최신23 NSIS 새 설치·설치 CLI/바로가기 GUI·원래 CPU 추론·정상 종료·데이터를 보존한 제거 한정 pass** 근거다. 설치본에서 새 Vault 백업을 만든 것으로 기록하지 않으며 위 portable23의 실제 자격 증명 비교와 구분한다.
+
+MSI용 관찰기 원본을 보존하고 NSIS의 정확한 GUI hash와 별도 결과 경로를 적용한 읽기 전용 사본을 VM 내부에서 만들었다. host/guest 사본 전체 hash·구문과 내부 observer full-hash guard를 확인했으며 프로세스·데이터 수집/검증 조건은 유지했다. W02/W08의 필수 MSI 실제 새 설치·공식0.2 MSI upgrade/remove와 goal은 미완료이고 W04/W05 원래 실패도 유지한다.
