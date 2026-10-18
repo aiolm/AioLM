@@ -2,9 +2,9 @@
 
 ## 기준과 현재 경계
 
-현재 Windows production23의 고정 제품 source는 `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`이며 작업 브랜치는 `codex/windows-runtime-adapter-validation`이다. 필수 조상은 `df3264bad99deb0144b947f96300e8625f7a2da5`다. 이 문서는 **진행 중인 Windows 검증에서 준비한 후속 실행 지침**이며 Windows 종료 선언이나 Linux/Mac 실행 결과가 아니다. 고정23의 실제 GUI/CLI·합성/개인 엔진, VM portable·NSIS·MSI 새 설치/추론/정상 종료/보존 제거와 공식0.2 MSI→최신23 실제 패키지 업그레이드는 아래와 [Windows 결과](windows-device-validation-results.ko.md)의 명시 범위에서 pass다. 원래 W04/W05 content 실패는 남아 있다. 실제 이관 시 최종 source·종료 commit·잔여 판정을 다시 고정한다. 후보 source를 최종 종료 commit으로 바꾸어 부르지 않는다.
+Windows GUI 어댑터 검증의 **종료 commit은 `53df1491cbb6dc790e9594221c3191a6c210937e`**다. production23의 고정 제품 source는 `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`이며 작업 브랜치는 `codex/windows-runtime-adapter-validation`이다. 필수 조상은 `df3264bad99deb0144b947f96300e8625f7a2da5`다. 종료 commit은 최종 수락 결과를 포함하며 이후 이 인계 문서의 hash 고정은 제품 변경이 아니다. 수신 기기는 종료 commit과 이 최종 인계 문서를 포함한 후속 문서 commit을 함께 받는다. [Windows 결과의 최종 수락](windows-device-validation-results.ko.md)에 따라 G01–G07은 pass, W01–W08은6개 pass/원래 W04·W05 내용2개 fail이다. 어댑터 범위에 필수 구현·실제 Windows 검증의 blocked/unrun은 남아 있지 않다. 두 품질 실패는 WIN-Q01/WIN-Q02로 보존하며 이 문서는 Linux/Mac 실제 실행 결과가 아니다.
 
-아래 production19–22 및 D81–D86 절은 당시 checkpoint의 구현·검증·남은 작업을 보존한 기록이다. 그 절의 대기/미실행을 최신 상태로 해석하지 않는다. 최신23의 VM 전송 허용과 설치 인증은 이미 제공됐으며 반복 요청하지 않는다. 최신 실행 범위는 D87 절과 Windows 결과의 최신23 MSI 절을 따른다.
+아래 production19–23 및 D81–D87 절은 당시 checkpoint의 구현·검증·남은 작업을 보존한 기록이다. 그 절의 대기/미실행·종료 commit 미지정·goal 미완료 문구를 최신 상태로 해석하지 않는다. 최신23의 VM 전송 허용과 설치 인증은 이미 제공됐으며 반복 요청하지 않는다. 최종 상태는 위 종료 기준과 Windows 결과의 최종 수락 절을 따른다.
 
 원격 push는 수행하지 않았다. 다음 기기는 사용자가 공유한 정확한 commit을 받은 뒤 시작한다. 이전 브랜치, 공개 0.3.1 binary, Windows `node_modules`·`dist`·실행 파일·Python 환경을 복사해 최신 소스 검증으로 계산하지 않는다. 기존 checkout·동명 작업 브랜치·모델·설정·기록은 보존한다.
 
@@ -14,6 +14,7 @@ git rev-parse HEAD
 git merge-base --is-ancestor df3264bad99deb0144b947f96300e8625f7a2da5 HEAD
 git merge-base --is-ancestor 908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1 HEAD
 git merge-base --is-ancestor fdb48af66d66dff3f4b607c11ee28ba7c61830f0 HEAD
+git merge-base --is-ancestor 53df1491cbb6dc790e9594221c3191a6c210937e HEAD
 ```
 
 시작 전 `AGENTS.md`, 존재하는 `tmp/AGENTS.local.md`, [Windows 인계의 L/M 정의](windows-device-handoff.ko.md), [공통 adapter 계약](runtime-adapter-handoff.ko.md), [외부 runtime 계약](pluggable-inference-runtimes.ko.md), [실제 엔진 수락](provider-native-acceptance.md)을 읽는다. 이 문서의 L01–L04/M01–M04는 Windows goal의 후속 단계다. 과거 [Linux 기기 인계](linux-device-handoff.ko.md)의 L01–L11 및 Mac의 옛 M01–M12 결과와 ID 범위를 합치지 않는다.
@@ -160,3 +161,13 @@ Windows 종료 commit은 여전히 미지정이다. 최신23의9개 VM 파일 �
 최신23의 원래 SmolVLM Q8_0/f16 미디어 GUI도 실제 재검증했다. 이번 호스트 OS는26H2 `26300.9711`, 실제 WebView2는 `.62`이며 이전25H2/`.45` 및 VM 환경과 구분한다. 원래 질문·이미지·system·text-first 순서의 실제 GUI body가16의 원본과 같은11,629바이트/전체 hash였고 동일 bytes를 같은 엔진에 재전송해도 `Aiolm 42`/PP185/TG7/stop으로 색·도형 **fail**을 유지했다. 새 프로필만 추가하고 기존50개 프로필·207개 비설정 파일을 보존했다. 로드된 실제 Close의9개·일반 production 재시작 후 Close의7개 kernel identity 종료와209개 파일 전체 hash 보존·이미지/답변/usage 재로드는 별도 pass다. 전면 차단/미디어 GUI 미실행은 해소됐고 검증 앱·엔진·포트는 종료됐다. `package23-w05-native-verdict.json`과 Windows 결과의 최신 미디어 절이 근거다.
 
 L02/M02의 원래 미디어 대조에서도 모델/질문/이미지/order/system을 그대로 두고 실제 요청 내용·엔진 직접 응답·저장/재로드와 품질 판정을 분리한다. 명시적으로 다른 옵션을 조사하면 별도 대조로 기록한다. Linux/Mac에서는 해당 OS의 native 엔진을 새로 빌드하며 Windows binary나 Windows kernel-handle 결과를 해당 OS의 수락으로 계산하지 않는다. 기존 L01–L04/M01–M04/R01–R13과 공통 수정 후 앞선 OS 재검증 연결은 유지한다.
+
+## 종료 기준에서 다음 기기로 재개
+
+1. 종료 commit `53df1491cbb6dc790e9594221c3191a6c210937e`와 이 문서를 포함한 후속 문서 commit을 확보하고 위 조상 검사를 실행한다. Windows 제품 source908a2fb와 그 이후 문서만 변경된 범위를 확인한다. 기존 변경이 있으면 보존하고 동명 작업 브랜치를 초기화하지 않는다.
+2. Linux 기기에서 L01부터 시작한다. 실제 환경/도구를 기록하고 lockfile을 유지해 의존성·GUI/CLI/package·native 엔진을 새로 빌드한다. 이어 L02의 새 flag 전체 여정/Strata·공통 역할, L03의 desktop/패키지/OS 통합, L04의 재현 결함 수정·Windows 관련 재검증·Linux 종료 commit을 순서대로 수행한다.
+3. 그 Linux 종료 commit을 포함해 Mac M01–M04와 R01–R13을 실제 지원 기기에서 수행한다. OS별 원래/호환 모델·runtime 환경과 실행 근거를 구분한다. 앞선 OS 공통 경계를 수정하면 위 재검증 연결표의 실제 흐름을 다시 실행한다.
+
+WIN-Q01/WIN-Q02는 각각 원래 Strata32 최종 답변과 SmolVLM 색·도형의 **fail/P2 후속 품질 잔여**다. 엔진 내부/요청 정책 또는 모델 품질의 별도 작업이며 GUI 어댑터 수락을 막는 미실행 항목으로 바꾸지 않는다. 원래 요청·모델·제한·실제 직접 응답과 source/hash를 유지하고, 명시적인 변경 대조가 필요하면 원래 실패와 분리한다. 후속 검증에서 어댑터 전달·파서·수명주기의 새 결함이 재현되면 해당 구현과 앞선 OS 관련 검증을 다시 연다. Windows의 두 fail을 다른 모델/요청 성공이나 unsupported로 덮지 않는다.
+
+Windows production23의 GUI/CLI·설치 파일 hash는 결과 문서에 고정돼 있다. 실제 마지막 감사에서 입력12개·배포4개가 그대로였으며, 마지막 미디어 흐름의 기존50개 프로필·207개 비설정 파일 및 정상 종료/일반 재시작 전후209개 파일 전체 hash가 보존됐다. 검증 앱·소유 엔진·관찰기·임시 전송기는 종료됐고 사용자 조작 대기는 없다. raw와 개인정보는 이 로컬 작업 홈에만 남기며 후속 OS에는 필요한 익명화 결과와 검토한 source/계약만 전달한다. 원격 push는 별도 요청 전에는 수행하지 않는다.
