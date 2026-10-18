@@ -150,3 +150,5 @@ Linux L01/L02와 Mac M01/M02에서 해당 OS의 실제 임의 엔진을 등록�
 Linux L01/L02와 Mac M01/M02에서 opaque 설정/alias binding의 미확정 가중치 크기와 실제로 검사된 GGUF/snapshot 크기를 구분해 표시하는지 확인한다. 크기나 미디어/API 능력을 help·작은 설정 파일·엔진 이름만으로 추정하지 않는다. 해당 공통 model picker/catalog/metadata 경계를 수정하면 Windows W03/W05/G03/G06/G07의 같은 unknown/known 모델 표시·binding·저장 옵션·실제 argv/응답을 새 source로 재검증한다. 나머지 L03/L04·M03/M04·R01–R13은 기존 인계를 유지한다.
 
 Windows 종료 commit은 여전히 미지정이다. 최신23의 준비된9개 VM 파일 전송 허용·관리자 인증 이후 실제 최신 설치본/공식0.2 MSI upgrade/remove를 이어간다. 원래 Strata32/미디어 fail은 유지하며, Linux/Mac 실제 기기 검증은 후속 범위다.
+
+원래 Strata32 실패는 보존한3개 SSE의 현재 파서 오프라인 재생에서도 content0/reasoning113/usage32/length로 일치했다. 고정 엔진의 순수 함수 대조상 원래 요청은 thinking 기본값을 유지하며 양수 reasoning budget에 한정된 답변 예약 조건을 적용하지 않는다. 직접 HTTP 수락 검사와 앱 Chat 직렬화의 경계를 구분한다. 이 진단을 답변 성공이나 새 엔진 실행으로 계산하지 않는다. L02/M02의 같은 원래 요청·모델·제한과 raw reasoning/content/usage/finish reason을 각각 보존하고, 명시적으로 다른 설정을 조사한다면 별도 대조로 기록한다. reasoning만 나온 스트림을 최종 답변으로 바꾸거나 원래 실패를 지우지 않는다. 소스/요청 hash와 범위는 [Windows 결과의 Strata32 경계 확인](windows-device-validation-results.ko.md)에 연결한다.

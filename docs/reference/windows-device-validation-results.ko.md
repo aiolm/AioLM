@@ -1087,3 +1087,11 @@ source `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`의 변경은 위 표시 조건
 개인 엔진이 로드된 상태의 정상 창 Close 후 소유9개 PID/생성 시각 전부 종료·listener/staging 없음·파일17개 전체 hash 일치와 새 격리 CLI help exit0도 pass다(`package23-normal-close-verdict.json`, `package23-cli-help-verdict.json`). **D87은 관련 자동 검사와 수정 후 production Windows 실제 표시/두 엔진/정리 범위 pass**다. 전체 goal이나 설치 수락은 아니다.
 
 최신23 GUI/CLI·NSIS/MSI·읽기 전용 검증 PS5개를 해시/구문/실제 변경 내용까지 검토해 새 VM 폴더용으로 준비했다. 기존 메타데이터 동의와 다른 실행 파일/스크립트 내용 전송의 허용을 요청했으며 파일 서버 시작·전송·게스트 실행은 아직 하지 않았다. 앞선21/22도 전송하지 않았다. W02/W08의 최신 설치본 수락·실제 MSI 새 설치/공식0.2 upgrade/제거와 원래 Strata32/미디어 fail을 유지하고 Windows 종료 commit은 미지정이다.
+
+### 원래 Strata32 실패의 요청·reasoning·파서 경계 확인
+
+원래17의 산술 요청3개를 현재 D83 검사 파일의 전체 hash와 대조하고, 보존한 SSE 원본을 현재 공통 파서로 오프라인 재생했다. 세 요청의 SHA256은 모두 `02ad3c50bedefc28a1d2728530e4289ee61e31795dec3920b0b87c9b7b7c4c88`이며, 모두 content0자/reasoning113자/completion32/finish reason length로 재현됐다. 원본 SSE에도 최종 content가 없다. 이 검사는 앱 Chat 직렬화를 거치지 않고 직접 HTTP 요청을 보내므로 앱이 최종 답변을 누락했다는 근거가 아니다. raw `strata-original32-current-parser-replay.json`의 pass는 **오프라인 재생 일치**만 뜻하며 새 엔진 추론 성공이 아니다. 첫 작업용 재생 스크립트는 reader의 필수 options 인수를 빠뜨려 실패했다. 원본을 보존하고 호출만 수정했으며 제품 reader는 변경하지 않았다.
+
+고정 Strata revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 깨끗한 `serve/server.py`/`serve/frontend.py` 전체 SHA256은 각각 `6c45c639e28a873b854606719d9ce2bb2e0df666f105164e78e2735878b9aa8f`/`54e7c1e2bc7f2ea52fe05cdd6d5b62d9ef83ef2e2bf8919db8ec417d3cb0713e`다. 해당 소스의 순수 budget/effort 함수만 AST로 분리 실행했다. 원래 요청과 deployment에는 reasoning 제어가 없고, 이 경우 thinking 기본값은 켜짐·별도 reasoning budget 없음이며 양수 budget을 요구하는 답변 토큰 예약 조건은 동작하지 않는다. budget0도 thinking 비활성화를 뜻하지 않는다. 별도 제어값은 격리 함수의 대조에만 사용했고 엔진에 보내지 않았다(`pinned-strata-reasoning-contract-audit.json`).
+
+이 결과는 원래 reasoning-only/length 응답과 일치하는 소스 계약 근거이며, 모델이 각 토큰을 생성한 원인 전부를 입증하지는 않는다. **A03/A05/A07과 W04는 fail로 유지**한다. 모델·질문·토큰 제한·저장 설정을 바꾸지 않았고 제품 수정이나 새 production 검증으로 계산하지 않는다. 제품 source908a2fb와 고정23 binary도 그대로다.
