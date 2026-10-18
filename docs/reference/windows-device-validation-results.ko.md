@@ -2,7 +2,7 @@
 
 ## 실행 상태와 source
 
-2026-10-14–16의 **진행 중인 실제 Windows 검증 기록**이다. W01–W08 전체 통과, G01–G07 구현 완료 또는 goal 완료를 뜻하지 않는다. 필수 실제 검사와 구조 구현이 남아 있으므로 종료 commit은 아직 지정하지 않는다. Linux/Mac 실제 실행은 이 Windows 작업의 후속 범위다.
+2026-10-14–18의 **진행 중인 실제 Windows 검증 기록**이다. W01–W08 전체 통과, G01–G07 구현 완료 또는 goal 완료를 뜻하지 않는다. 필수 실제 검사와 goal 완료 조건이 남아 있으므로 종료 commit은 아직 지정하지 않는다. Linux/Mac 실제 실행은 이 Windows 작업의 후속 범위다. 아래 source별 checkpoint와 대기/미실행은 당시 기록이며, 최신 상태는 말미의 고정23 VM 검증 절을 따른다.
 
 - 시작 source: `df3264bad99deb0144b947f96300e8625f7a2da5`, `origin/codex/windows-runtime-adapter-handoff`의 필수 인계 commit 포함을 확인했다.
 - 작업 branch: `codex/windows-runtime-adapter-validation`. 기존 변경과 사용자 설치·데이터를 보존했으며 원격 push는 수행하지 않았다.
@@ -1125,3 +1125,51 @@ source `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`의 변경은 위 표시 조건
 설치된 uninstaller 전체 hash를 확인한 뒤 실제 제거 화면의 **Delete the application data 해제**를 확인하고 Uninstall→Uninstallation Complete→Close를 수행했다. 설치 GUI/CLI/uninstaller·알려진 바로가기가 사라지고 PATH 항목이 없으며, 기존74개 데이터 파일 전체 이름·크기·hash와 설정·프로필·이력이 정상 종료 시점 그대로였다. 명시적 저장/시작의 프로필 revision 증가 외 이전 설정을 유지했고 새 대화1개만 추가됐다. `vm-nsis23-verdict.json`과 receipt052–058이 **최신23 NSIS 새 설치·설치 CLI/바로가기 GUI·원래 CPU 추론·정상 종료·데이터를 보존한 제거 한정 pass** 근거다. 설치본에서 새 Vault 백업을 만든 것으로 기록하지 않으며 위 portable23의 실제 자격 증명 비교와 구분한다.
 
 MSI용 관찰기 원본을 보존하고 NSIS의 정확한 GUI hash와 별도 결과 경로를 적용한 읽기 전용 사본을 VM 내부에서 만들었다. host/guest 사본 전체 hash·구문과 내부 observer full-hash guard를 확인했으며 프로세스·데이터 수집/검증 조건은 유지했다. W02/W08의 필수 MSI 실제 새 설치·공식0.2 MSI upgrade/remove와 goal은 미완료이고 W04/W05 원래 실패도 유지한다.
+
+### 최신23 MSI 새 설치·실제 추론·정상 종료와 재시작
+
+사용자가 MSI 인증 완료를 알린 후 기존 재시도의 로그에서 `Credential Request return = 0x0`, `MainEngineThread is returning 0`과 설치 성공을 실제 확인했다. 앞선 경로 오류/인증 취소1602 기록을 보존하며 새 성공으로 이전 실패를 바꾸지 않는다. 설치 GUI 전체 SHA256은 `be5d58a27469e5b8c4b335a322df4516e418854dcaf00cd081c3259019c7906c`, CLI는 `54d1c8e61d4041cf2e74dd450f97119551cde40b3ab6acffed6e1efd1ecc08cf`로 고정23 MSI payload와 같다. 실제 설치 CLI help exit0, 새 MSI ProductCode의 HKLM 등록/0.3.1/WindowsInstaller=1, 공용 바탕 화면·시작 메뉴 바로가기의 정확한 대상/작업 경로를 확인했고 사용자·기기 PATH를 변경하지 않았다. NSIS uninstaller는 존재하지 않는다.
+
+설치와 첫 실행 이후에도 이전 NSIS 제거 직후의 **74개 파일 전체 이름·크기·SHA256이 정확히 일치**했다. GUI에서 기존 대화5개와 마지막 응답/usage, LEGACY02·원래 CPU b11617/revision `14310190cd0a0c831fe949ac8cbedd8abdc90695`·같은 Qwen revision `9217f5db79a29953eb74d5343926648285ec7e67`을 복원했다. 실제 Save profile & start→Loaded→새 대화6번째에서 같은 원래 산술 질문에 새 **5/PP34/TG2/TTFT0.05초/요청0.05초**를 확인했다. 엔진 전체 hash·Windows argv·부모 GUI, 소유 프로세스9개·포트와 인증용 staging 파일 제거를 수집했다.
+
+모델이 로드된 채 정상 창 Close 후9개 PID·생성 시각이 모두 사라지고 포트·launch/auth staging이 없으며 **75개 데이터 파일 전체 hash가 종료 전후 일치**했다. 공용 바탕 화면 바로가기로 재시작해 새 대화/응답/usage와 이전 이력6개가 복원되는 것을 확인했다. Benchmark의 기존 Vault 등록 상태·같은 원래 등록 시각도 표시됐으며 재등록하거나 새 백업을 저장하지 않았다. 이 관찰을 MSI 설치본의 새 비밀 내보내기/동일 여부 비교로 확대하지 않는다. 다시 정상 Close 후 앱/엔진/포트/staging 없음과 같은75개 전체 hash·설정/프로필을 확인했다.
+
+이전73개 비설정 파일·대화5개·CPU payload64개를 보존했고 새 대화1개만 추가됐다. 명시적 저장/시작의 library revision+2·LEGACY02 revision+1·적용 revision+1 외 프로필의 모든 기존 값은 같다. 첫 검사기의 바로가기 작업 경로 문자열 비교는 MSI가 남긴 끝 역슬래시 때문에 실패했다. 최초 검사기를 보존하고 실제 절대 Windows 경로를 정규화해 동일 디렉터리인지 대조했으며 파일/설정 hash나 다른 검증 조건을 완화하지 않았다. receipt059–064와 `vm-msi23-fresh-verdict.json`이 **MSI 새 설치·설치 CLI/GUI 실제 추론·정상 종료/재시작·기존 데이터 보존 한정 pass** 근거다. 제품 source908a2fb와 고정23 binary는 변경하지 않았다.
+
+MSI 제거는 별도 실제 확인 단계이며 공식0.2 MSI→최신23 업그레이드도 아직 unrun이다. W02/W08 전체·goal을 완료 처리하지 않으며 원래 Strata32/미디어 내용 fail과 후속 OS의 실제 검증 경계를 유지한다.
+
+### 최신23 MSI 제거와 공식0.2 MSI의 실제 업그레이드
+
+이후 사용자의 제거·인증 완료를 확인하고 원래 제거 로그의 인증 성공/Removal completed successfully/종료0을 관찰했다. 설치 GUI/CLI·구/신 MSI 등록·공용 바로가기 없음, PATH 항목 없음과 **75개 파일 전체 hash·설정·프로필 보존**을 확인했다(receipt065–066). 정적 MSI 검사만으로 제거를 수락한 것이 아니다.
+
+이미 VM에 있던 공식0.2 MSI의 전체 SHA256 `cd1f9cf999f2626719d423d2a62e62ea7ec4b430039511dc05926ac952a2d40d`를 다시 확인해 같은 테스트 계정의 기존 설치 경로에 실제 설치했다. 사용자 인증 후 설치 로그 종료0, 설치 GUI/CLI PE0.2.0·전체 hash와 구버전 ProductCode의 HKLM 등록을 확인했다. 완료 뒤 자동 실행된 구버전은 새 설정의 `provider` 필드를 알 수 없다는 오류를 표시했다. 해당 창을 정상 종료했고 Retry·설정 교체 없이 기존75개 파일 전체 hash가 그대로임을 확인했다(receipt067–068). 구버전의 새 schema 역방향 읽기 실패를 최신 앱의 복구 실패나 구버전의 정상 추론 성공으로 기록하지 않는다.
+
+고정23 MSI의 전체 hash guard를 통과한 뒤 **공식0.2가 실제 설치·등록된 상태에서 최신23으로 업그레이드**했다. 사용자 인증 후 원래 업그레이드 로그의 설치 성공/종료0, 구버전 등록 제거와 최신 ProductCode/0.3.1 단일 등록, 정확한 최신 MSI GUI/CLI payload·설치 CLI help exit0·같은 공용 바로가기를 확인했다. 업그레이드/최초 실행 전후에도75개 전체 파일 이름·크기·hash가 정확히 같았다(receipt069–071). 이것은 실제 MSI 패키지 업그레이드와 기존 데이터 보존 검사다. schema12→14 이전은 앞선 공식0.2→고정20 NSIS의 실제 근거와 구분하며 MSI에서 새로 반복한 것으로 계산하지 않는다.
+
+업그레이드된 최신23 GUI에서 기존6개 이력/응답/usage·LEGACY02·같은 CPU/Qwen을 복원하고 Save profile & start→Loaded→새 대화7번째에서 원래 질문의 새 **5/PP34/TG2/TTFT0.05초/요청0.06초**를 확인했다. 로드된 정상 Close 후 이번 실행에서 새로 관찰한 소유9개 PID/생성 시각 모두 종료·포트/인증 staging/launch staging 없음과 **76개 파일 전체 hash 보존**을 확인했다(receipt072–073). 기존 baseline을 재사용하거나 덮어쓰지 않도록 읽기 전용 소유 관찰기의 baseline 파일명만 새 이름으로 바꾼 사본을 VM 내부에 만들었다. host/guest 사본 전체 SHA256 `945dfd2a8a94320fc6ba15ac788b7426013f42dd4bb34e8aecfd6e4967cc6d4d`가 같고 나머지 원본 bytes와 내부 hash/소유권/데이터 검증 조건은 그대로다.
+
+업그레이드 설치본도 사용자 인증을 거쳐 실제 제거했다. 제거 로그의 인증 성공/종료0, 설치 파일·구/신 등록·알려진 바로가기/PATH 항목 없음과76개 파일 전체 이름·크기·hash·설정/프로필 보존이 pass다(receipt074–075). 엔진 SHA256은 `715f0ea98819f03fc596e9d352e989fc0ae093056282e0d73b2d657e7afa7d02`이고, 정상 종료 후 원래 Qwen 파일을 다시 계산한 SHA256도 `74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db`로 같았다. `vm-msi23-upgrade-remove-verdict.json`은 위 범위의 pass이며 최신 설치본의 새 Vault 비밀 내보내기를 주장하지 않는다. 제품 source908a2fb와 고정23 binary는 계속 같다.
+
+### 최신23까지의 W/G 판정과 남은 실행
+
+아래는 누적 근거를 최신 checkpoint에 대조한 판정이다. source별 과거 실패와 pass의 실행 범위는 위에 보존하며, 모든 이전 검사를23에서 반복한 의미가 아니다. 고정20 source `bf48ba4`부터23까지의 제품 변경은 종료/숨김 안내·외부 엔진 분류·모델 크기 표시와 관련 UI 검사뿐이다. Rust·migration·Vault·protocol·이력·패키지 설정은 동일하며 변경된 GUI 경계의 관련 자동 검사와 새 production 검증은 D85–D87에 연결돼 있다. Windows 종료 commit과 goal complete는 아직 지정하지 않는다.
+
+| ID | 판정 | 최신 근거와 실제 범위 |
+| --- | --- | --- |
+| W01 | pass | 앞선 공통 검사/전체 Rust·UI 및 이후 D83–D87 관련 자동 검사, 각 고정 production 네 target·CLI/전체 payload 대조. 변경되지 않은 검사를 새 실행으로 계산하지 않는다. |
+| W02 | pass | 합성 migration/backup/미등록 값/미래 schema 거부, 공식0.2→20 실제 schema12→14·프로필/이력/Vault 이전,23 최초 설치/재시작 및 실제 MSI 패키지 업그레이드의 전체 파일 보존. MSI에서 schema12 이전을 다시 실행한 것은 아니다. |
+| W03 | pass | 기존 변조 거부/제거/재등록,19–23 미지 합성·개인 엔진 help/GUI/프로필/argv·v2 stale/diff/미해석 값 복구와 D81 취소/경합 근거. |
+| W04 | fail | 원래 Strata32 A03/A05/A07 content0/length 실패 유지. 실제 source별 엔진/bridge 추론·usage·취소/Retry/재시작/종료와23 VM 설치 CPU 추론은 별도 pass이며 원래 실패를 대체하지 않는다. |
+| W05 | fail | 원래 SmolVLM 내용 실패 유지. source별 실제 첨부 전달/순서·저장/재로드·MCP 승인/거부/호출 취소/실제 도구 반환값 후속은 별도 pass다. |
+| W06 | pass | 기존 실제 프로젝트/RAG·BGE·STT·역할별 세션·gateway401/라우팅/task 거부·이력/CSV/XLSX/공유 미리보기와 이후 변경 경계의 보존 근거. |
+| W07 | pass | 기존 argv/Unicode/공백/긴 경로·실패/취소/소유권 복구와 수정 후 실제 소유 정리,23 portable/NSIS/MSI 및 MSI 업그레이드의 loaded 정상 Close·포트/staging/파일 보존. |
+| W08 | pass | source별 새 홈 runtime bundle 실제 추론/OS picker·IME·clipboard·tray·알림·Vault,23 portable/NSIS/MSI 설치본의 실제 추론/재로드/종료/데이터 보존 제거와 공식0.2 NSIS/MSI 실제 업그레이드. 전체 OS 접근성 인증이나 새 MSI 비밀 export를 주장하지 않는다. |
+| G01 | pass | 공통 sourced schema/descriptor와 고정 앱이 모르는 실제 help 옵션의 GUI/검증/저장/argv 연결. |
+| G02 | pass | 소유 help/probe·fingerprint/cache·늦은 결과/탐색 취소·runtime 변경/diff·복구 근거. |
+| G03 | pass | 타입/arity/alias/negative/repeat/tuple/scope/positional/default·명시 metadata/encoding/locale와 미확정 사실 구분. |
+| G04 | pass | 같은 renderer/검증/serializer·새/기존 프로필 저장/재열기·순서/복수 값·D82 첫 저장 클릭 실제 재검증. |
+| G05 | pass | 실행 파일/entry point→help→명시 binding/protocol 또는 Strata native bridge→fresh probe/Ready→실제 argv/응답. |
+| G06 | pass | 중립 목록/Add/검색·기본 제공/외부 adapter 분류·실제 개인 엔진과 공통 기능/역할/이력 보존, D86–D87 수정 후 production. |
+| G07 | pass | source별 재현 결함의 수정/실제 재검증·작은 창/키보드/tree·대량 옵션/탐색 경합/취소/실패 복구. native INP 인증은 주장하지 않는다. |
+
+현재 실행 가능한 다음 작업은 원래 Strata32·SmolVLM 내용 실패의 추가 원인 대조와 필요한 제품 수정/재검증이다. MSI 전송·설치·제거 인증 대기는 해소됐다. 실패를 unsupported로 바꾸거나 모델/질문/제한을 바꾼 성공으로 닫지 않는다. Linux L01–L04, 이후 Mac M01–M04/R01–R13은 [후속 인계](engine-adapter-linux-macos-handoff.ko.md)에 남긴 각 기기의 실제 작업이며 Windows goal의 실제 실행 완료를 대신하지 않는다.

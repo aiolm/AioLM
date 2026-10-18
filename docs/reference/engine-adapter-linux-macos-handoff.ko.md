@@ -2,7 +2,9 @@
 
 ## 기준과 현재 경계
 
-현재 Windows production19의 고정 제품 source는 `4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2`이며 작업 브랜치는 `codex/windows-runtime-adapter-validation`이다. 필수 조상은 `df3264bad99deb0144b947f96300e8625f7a2da5`다. 이 문서는 **진행 중인 Windows 검증에서 준비한 후속 실행 지침**이며 Windows 종료 선언이나 Linux/Mac 실행 결과가 아니다. D81/D82 수정과 관련 production19 실제 GUI·원래 Strata·새 홈 bundle 수락은 완료했고 W02/W08 설치/OS 계정 검증 및 원래 W04/W05 content 실패가 남아 있으므로 실제 이관 시 [Windows 결과](windows-device-validation-results.ko.md)의 최종 source·종료 commit·잔여 판정을 다시 고정한다. 후보 source를 최종 종료 commit으로 바꾸어 부르지 않는다.
+현재 Windows production23의 고정 제품 source는 `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`이며 작업 브랜치는 `codex/windows-runtime-adapter-validation`이다. 필수 조상은 `df3264bad99deb0144b947f96300e8625f7a2da5`다. 이 문서는 **진행 중인 Windows 검증에서 준비한 후속 실행 지침**이며 Windows 종료 선언이나 Linux/Mac 실행 결과가 아니다. 고정23의 실제 GUI/CLI·합성/개인 엔진, VM portable·NSIS·MSI 새 설치/추론/정상 종료/보존 제거와 공식0.2 MSI→최신23 실제 패키지 업그레이드는 아래와 [Windows 결과](windows-device-validation-results.ko.md)의 명시 범위에서 pass다. 원래 W04/W05 content 실패는 남아 있다. 실제 이관 시 최종 source·종료 commit·잔여 판정을 다시 고정한다. 후보 source를 최종 종료 commit으로 바꾸어 부르지 않는다.
+
+아래 production19–22 및 D81–D86 절은 당시 checkpoint의 구현·검증·남은 작업을 보존한 기록이다. 그 절의 대기/미실행을 최신 상태로 해석하지 않는다. 최신23의 VM 전송 허용과 설치 인증은 이미 제공됐으며 반복 요청하지 않는다. 최신 실행 범위는 D87 절과 Windows 결과의 최신23 MSI 절을 따른다.
 
 원격 push는 수행하지 않았다. 다음 기기는 사용자가 공유한 정확한 commit을 받은 뒤 시작한다. 이전 브랜치, 공개 0.3.1 binary, Windows `node_modules`·`dist`·실행 파일·Python 환경을 복사해 최신 소스 검증으로 계산하지 않는다. 기존 checkout·동명 작업 브랜치·모델·설정·기록은 보존한다.
 
@@ -10,7 +12,7 @@
 git status --short
 git rev-parse HEAD
 git merge-base --is-ancestor df3264bad99deb0144b947f96300e8625f7a2da5 HEAD
-git merge-base --is-ancestor 4a7fa53daf595c36b5b0e50d26f12d5e61afaaf2 HEAD
+git merge-base --is-ancestor 908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1 HEAD
 git merge-base --is-ancestor fdb48af66d66dff3f4b607c11ee28ba7c61830f0 HEAD
 ```
 
@@ -20,7 +22,7 @@ git merge-base --is-ancestor fdb48af66d66dff3f4b607c11ee28ba7c61830f0 HEAD
 
 Windows D83 검사 commit은 `fdb48af66d66dff3f4b607c11ee28ba7c61830f0`이며 제품 binary 변경 없이 공통 CLI 수락 검사의 reasoning 취소와 독립 검사 실행을 수정했다. 후속 기기는 이 수정이 포함된 최신 검사 소스를 사용해 같은 원래 모델/질문/32·1024 한도를 유지하고, reasoning 또는 content 출력 후 실제 HTTP abort/서버 정상 상태와 엔진 내부 취소 ACK를 별도로 기록한다. A03의 답변 실패가 A04–A07을 가리지 않게 하되 실제 선행 조건이 실패한 항목은 이유 있는 unrun으로 남기고 전체 실패 exit를 보존한다. `npm run test:scripts`의 실제 연결 회귀와 [D83 결과](windows-device-validation-results.ko.md)를 함께 확인한다. Windows에서 남은 산술/미디어 fail을 새 검사 성공으로 지우지 않는다.
 
-W02/W08은 이후 새 Windows VM을 준비했고, 명시적 재개에서 설치 전 체크포인트·고정11개 파일의 host-to-guest 복사·게스트 preflight까지 실제 성공했다. 최초 취소와 준비 코드의 잘못된 TPM 조회 실패 기록은 보존했다. 실제 설치/이전의 수락 판정은 아직 남아 있다. 원래0.2 공식 MSI와 고정19 MSI의 읽기 전용 대조에서 같은 UpgradeCode·서로 다른 ProductCode·`ALLUSERS=1`을 확인했다. Windows MSI의 컴퓨터 전체 설치는 새 사용자 계정만으로 격리하지 않고 별도 VM/기기에서 검증한다. 후속 OS도 실제 패키지 설치 범위와 기존 사용자 데이터/설치의 격리 범위를 확인한다. 원래 Windows 설치를 VM 준비나 정적 MSI 대조만으로 수락 완료 처리하지 않는다.
+W02/W08은 별도 Windows VM과 OneDrive에 연결하지 않은 로컬 테스트 계정에서 실제 검증했다. 최신23의 허용된9개 파일은 게스트 전체 hash·크기가 고정본과 일치했다. portable의 원래 CPU/Qwen 추론·Vault 동일 여부, NSIS·MSI 새 설치/설치본 추론/정상 종료/데이터 보존 제거와 MSI 재시작·공식0.2 MSI→최신23 패키지 업그레이드/구버전 등록 제거/실제 추론/정상 종료/76개 파일 보존 제거는 명시 범위에서 pass다. 원래0.2→고정20 NSIS의 schema12→14/프로필/이력/Vault 이전은 별도 근거이며, MSI 업그레이드에서 같은 schema 이전을 다시 실행했다고 주장하지 않는다. 최초 취소·TPM 조회 오류·MSI 경로 오류와 인증 취소/1602 기록도 보존했다. MSI는 같은 UpgradeCode·서로 다른 ProductCode·`ALLUSERS=1`이며 컴퓨터 전체 설치를 새 사용자 계정만으로 격리하지 않는다. 후속 OS도 실제 패키지 범위와 기존 데이터/설치의 격리 범위를 확인하고, 정적 패키지 대조를 실제 설치 성공으로 계산하지 않는다.
 
 - 실제 OS/architecture·CPU·RAM·장치/driver·WebKitGTK 또는 WKWebView·도구 버전과 source를 기록한다. `package.json`, `rust-toolchain.toml`, `src-tauri/Cargo.toml`의 요구에 맞춰 대상 OS에서 의존성과 binary를 새로 만든다. lockfile을 임의로 갱신하지 않는다.
 - 실제 엔진·모델·projector·bridge·환경의 revision과 전체 hash를 고정한다. 새 홈 검사는 해당 OS의 이전 경로까지 격리하고, Keychain/Secret Service·실제 업그레이드/제거는 별도 OS 테스트 계정에서 수행한다. 앱 홈 변경만으로 OS 계정 검증을 대체하지 않는다.
@@ -149,6 +151,6 @@ Linux L01/L02와 Mac M01/M02에서 해당 OS의 실제 임의 엔진을 등록�
 
 Linux L01/L02와 Mac M01/M02에서 opaque 설정/alias binding의 미확정 가중치 크기와 실제로 검사된 GGUF/snapshot 크기를 구분해 표시하는지 확인한다. 크기나 미디어/API 능력을 help·작은 설정 파일·엔진 이름만으로 추정하지 않는다. 해당 공통 model picker/catalog/metadata 경계를 수정하면 Windows W03/W05/G03/G06/G07의 같은 unknown/known 모델 표시·binding·저장 옵션·실제 argv/응답을 새 source로 재검증한다. 나머지 L03/L04·M03/M04·R01–R13은 기존 인계를 유지한다.
 
-Windows 종료 commit은 여전히 미지정이다. 최신23의 준비된9개 VM 파일 전송 허용·관리자 인증 이후 실제 최신 설치본/공식0.2 MSI upgrade/remove를 이어간다. 원래 Strata32/미디어 fail은 유지하며, Linux/Mac 실제 기기 검증은 후속 범위다.
+Windows 종료 commit은 여전히 미지정이다. 최신23의9개 VM 파일 전송·전체 hash 대조와 portable의 실제 추론/Vault/73개 파일 정상 종료 보존, NSIS의 새 설치/설치 CLI/바로가기 GUI/같은 실제 추론/정상 종료/74개 파일을 보존한 제거를 확인했다. MSI도 사용자 인증 후 실제 설치 로그의 인증 성공·종료0, 정확한 payload/등록/공용 바로가기·설치 CLI help0, 설치 전후74개 전체 파일 보존·실제 CPU/Qwen 추론/usage·로드된 정상 Close/소유9개 종료/포트·staging 정리·바로가기 재시작/75개 파일 보존 및 실제 제거를 확인했다. 공식0.2 MSI의 실제 설치/0.2 등록→최신23 업그레이드/구버전 등록 제거·같은 실제 추론/정상 종료/76개 파일을 보존한 제거도 pass다. 설치된 MSI의 Vault 등록 상태·기존 등록 시각은 복원됐지만 새로운 MSI 백업의 비밀 동일 여부 검증으로 확대하지 않는다. 원래 Strata32/미디어 fail과 goal 미완료는 유지하며, Linux/Mac 실제 기기 검증은 후속 범위다. 정확한 source·hash·receipt059–075 및 `vm-msi23-fresh-verdict.json`·`vm-msi23-upgrade-remove-verdict.json`의 범위는 Windows 결과에 연결한다.
 
 원래 Strata32 실패는 보존한3개 SSE의 현재 파서 오프라인 재생에서도 content0/reasoning113/usage32/length로 일치했다. 고정 엔진의 순수 함수 대조상 원래 요청은 thinking 기본값을 유지하며 양수 reasoning budget에 한정된 답변 예약 조건을 적용하지 않는다. 직접 HTTP 수락 검사와 앱 Chat 직렬화의 경계를 구분한다. 이 진단을 답변 성공이나 새 엔진 실행으로 계산하지 않는다. L02/M02의 같은 원래 요청·모델·제한과 raw reasoning/content/usage/finish reason을 각각 보존하고, 명시적으로 다른 설정을 조사한다면 별도 대조로 기록한다. reasoning만 나온 스트림을 최종 답변으로 바꾸거나 원래 실패를 지우지 않는다. 소스/요청 hash와 범위는 [Windows 결과의 Strata32 경계 확인](windows-device-validation-results.ko.md)에 연결한다.
