@@ -1095,3 +1095,11 @@ source `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`의 변경은 위 표시 조건
 고정 Strata revision `296b59d2f73c8f04a805df29c2fa97655adace78`의 깨끗한 `serve/server.py`/`serve/frontend.py` 전체 SHA256은 각각 `6c45c639e28a873b854606719d9ce2bb2e0df666f105164e78e2735878b9aa8f`/`54e7c1e2bc7f2ea52fe05cdd6d5b62d9ef83ef2e2bf8919db8ec417d3cb0713e`다. 해당 소스의 순수 budget/effort 함수만 AST로 분리 실행했다. 원래 요청과 deployment에는 reasoning 제어가 없고, 이 경우 thinking 기본값은 켜짐·별도 reasoning budget 없음이며 양수 budget을 요구하는 답변 토큰 예약 조건은 동작하지 않는다. budget0도 thinking 비활성화를 뜻하지 않는다. 별도 제어값은 격리 함수의 대조에만 사용했고 엔진에 보내지 않았다(`pinned-strata-reasoning-contract-audit.json`).
 
 이 결과는 원래 reasoning-only/length 응답과 일치하는 소스 계약 근거이며, 모델이 각 토큰을 생성한 원인 전부를 입증하지는 않는다. **A03/A05/A07과 W04는 fail로 유지**한다. 모델·질문·토큰 제한·저장 설정을 바꾸지 않았고 제품 수정이나 새 production 검증으로 계산하지 않는다. 제품 source908a2fb와 고정23 binary도 그대로다.
+
+### 최신23 VM 전송과 설치 전 보존 기준선
+
+사용자의 명시적 최신23 전송·검증 허용 후, 위 고정23 GUI/CLI/NSIS/MSI와 준비된 읽기 전용 PowerShell5개를 별도 VM 검증 폴더에 전달했다. 게스트에서 직접 계산한 **9개 전체 SHA256·크기가 호스트 고정본과 모두 일치**했다(`vm23-nine-file-transfer-verdict.json`). 첫 비교 도구의 PowerShell 배열 개수 처리 실패를 보존하고 실제 JSON 배열9개를 각각 엄격히 대조했다. 전송 identity 성공이며 설치나 추론 성공은 아니다.
+
+같은 격리 로컬 계정에서 최신23 CLI help exit0, GUI/CLI PE0.3.1·전체 payload hash를 확인했다. 이전20 정상 종료의 **72개 파일 전체 이름·크기·SHA256과 기존 프로필/설정이 정확히 같았다**(`vm23-preinstall-baseline-verdict.json`). 새 관찰 도구가 추가 노출한 `close_to_tray=false` 필드 때문에 최초 요약 비교가 실패한 기록도 보존했다. 이전 도구의 모든 요약 필드 일치와 새 필드false를 별도 확인했으며, config 파일 자체를 포함한72개 전체 hash 비교를 완화하지 않았다. Vault 내용은 수집하지 않았다.
+
+설치 전 관찰에서 설치 파일·정확한 구/신 MSI 등록·알려진 바로가기와 설치 PATH 항목이 없었다. 이 수집기의 `removed` 모드는 관찰 분류이며 최신23 실제 제거를 뜻하지 않는다. 최초 작업용 msiexec 명령은 경로의 `/` 때문에 MSI 로그에 Error1324·return2/패키지 열기 실패를 남겼다. 같은 해시의 MSI에 Windows 경로 구분자와 별도 로그를 사용하자 설치 마법사가 열렸고, 실제 대상이 현재 테스트 계정의 LocalAppData/AioLM임을 확인했다. 원래 실패 로그는 유지한다. Install 이후 관리자 인증 처리를 요청한 상태이며 **실제 설치 완료·설치본 GUI·공식0.2 MSI upgrade/remove는 아직 unrun**이다. W04/W05 원래 실패와 전체 goal 미완료 판정은 유지한다.
