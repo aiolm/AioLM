@@ -935,11 +935,14 @@ pub async fn run_runtime_tool(
 
 /// Keep a failure message readable without losing the operative last lines.
 fn tail_lines(text: &str, count: usize) -> String {
-    let lines = text
+    let mut lines = text
         .lines()
+        .rev()
         .filter(|line| !line.trim().is_empty())
+        .take(count)
         .collect::<Vec<_>>();
-    lines[lines.len().saturating_sub(count)..].join(" | ")
+    lines.reverse();
+    lines.join(" | ")
 }
 
 /// Names every spawned child may inherit, on every platform: enough of the OS
