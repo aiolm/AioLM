@@ -6,26 +6,219 @@ The launch remains a direct owned child; this helper only inspects the selected
 build and loader inputs. Strata's installed deployment JSON is its model binding.
 """
 import argparse
+import codecs
 import hashlib
+import io
 import json
 import os
 import platform
 from pathlib import Path
 import re
+import selectors
 import struct
 import subprocess
 import sys
+import time
 
 
 LIMIT = 262144
+_CAPTURE_LIMIT = 65536
+_CAPTURE_TIMEOUT = 15
+_CAPTURE_CHUNK = 65536
 SHARED_LIBRARY = re.compile(r"\.(dll|dylib|so)(\.\d+)*$", re.IGNORECASE)
 
 
+class _CapturedStream:
+    def __init__(self, stream, encoding, errors):
+        decoder = codecs.getincrementaldecoder(encoding)(
+            errors=errors if errors is not None else "strict"
+        )
+        self.stream = stream
+        self.decoder = io.IncrementalNewlineDecoder(decoder, translate=True)
+        self.retained_chars = 0
+        self.prefix = []
+        self.error = None
+        self.closed = False
+
+    def _retain(self, chunk):
+        if self.retained_chars < _CAPTURE_LIMIT:
+            keep = chunk[:_CAPTURE_LIMIT - self.retained_chars]
+            self.prefix.append(keep)
+            self.retained_chars += len(keep)
+
+    def read(self, available=None):
+        try:
+            size = _CAPTURE_CHUNK if available is None else min(available, _CAPTURE_CHUNK)
+            data = os.read(self.stream.fileno(), size)
+        except OSError as error:
+            if os.name == "nt" and getattr(error, "winerror", None) == 109:
+                self.finish()
+                self.closed = True
+                return
+            self.error = error
+            self.closed = True
+            return
+        if not data:
+            self.finish()
+            self.closed = True
+            return
+        if self.error is None:
+            try:
+                self._retain(self.decoder.decode(data, final=False))
+            except UnicodeError as error:
+                # Keep draining raw bytes so the real exit status remains
+                # observable and a malformed tail cannot block the child.
+                self.error = error
+
+    def finish(self):
+        if self.error is None:
+            try:
+                self._retain(self.decoder.decode(b"", final=True))
+            except UnicodeError as error:
+                self.error = error
+
+    def text(self):
+        return "".join(self.prefix)
+
+
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+
+    _PEEK_NAMED_PIPE = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+    _PEEK_NAMED_PIPE.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    _PEEK_NAMED_PIPE.restype = ctypes.c_int
+
+
+def _windows_pipe_available(stream):
+    # Peek first because synchronous anonymous-pipe reads block on Windows.
+    available = ctypes.c_uint32()
+    handle = ctypes.c_void_p(msvcrt.get_osfhandle(stream.fileno()))
+    if _PEEK_NAMED_PIPE(handle, None, 0, None, ctypes.byref(available), None):
+        return available.value
+    error = ctypes.get_last_error()
+    if error == 109:  # broken pipe
+        return None
+    if error == 232:  # no data while the writer remains connected
+        return 0
+    raise ctypes.WinError(error)
+
+
+def _terminate_capture_process(process):
+    try:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.wait()
+    except OSError:
+        pass
+
+
+def _close_capture_pipes(streams):
+    for captured in streams:
+        if captured.stream is not None:
+            try:
+                captured.stream.close()
+            except (OSError, ValueError):
+                pass
+
+
+def _capture_prefix(streams):
+    stdout = streams[0].text()
+    if len(stdout) >= _CAPTURE_LIMIT:
+        return stdout[:_CAPTURE_LIMIT]
+    stderr = streams[1].text()
+    return stdout + stderr[:_CAPTURE_LIMIT - len(stdout)]
+
+
 def capture(args, cwd=None, env=None):
-    result = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, timeout=15)
-    if result.returncode != 0:
+    process = None
+    streams = []
+    selector = None
+    deadline = None
+    timed_out = False
+    returncode = None
+    try:
+        process = subprocess.Popen(
+            args,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for pipe in (process.stdout, process.stderr):
+            encoding, errors = pipe.encoding, pipe.errors
+            buffered = pipe.detach()
+            streams.append(_CapturedStream(buffered.detach(), encoding, errors))
+        if os.name != "nt":
+            selector = selectors.DefaultSelector()
+            for captured in streams:
+                selector.register(captured.stream.fileno(), selectors.EVENT_READ, captured)
+        deadline = time.monotonic() + _CAPTURE_TIMEOUT
+        while True:
+            if all(stream.closed for stream in streams) and process.poll() is not None:
+                returncode = process.wait()
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                _terminate_capture_process(process)
+                break
+            if selector is not None:
+                for event, _ in selector.select(min(0.01, remaining)):
+                    captured = event.data
+                    captured.read()
+                    if captured.closed:
+                        selector.unregister(event.fileobj)
+            else:
+                progress = False
+                for captured in streams:
+                    if captured.closed:
+                        continue
+                    available = _windows_pipe_available(captured.stream)
+                    if available is None:
+                        captured.finish()
+                        captured.closed = True
+                        progress = True
+                    elif available:
+                        captured.read(available)
+                        progress = True
+                if not progress:
+                    time.sleep(min(0.01, remaining))
+    except BaseException:
+        if process is not None:
+            _terminate_capture_process(process)
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        if process is not None:
+            if process.poll() is None:
+                _terminate_capture_process(process)
+        _close_capture_pipes(streams)
+
+    if timed_out:
+        raise subprocess.TimeoutExpired(
+            args,
+            _CAPTURE_TIMEOUT,
+            output=_capture_prefix(streams),
+            stderr=streams[1].text(),
+        )
+    if returncode != 0:
         raise ValueError("runtime version/help probe failed; inspect the selected installation")
-    return (result.stdout + result.stderr)[:65536]
+    failure = next((stream.error for stream in streams if stream.error is not None), None)
+    if failure is not None:
+        raise failure
+    return _capture_prefix(streams)
 
 
 def file_path(value):
