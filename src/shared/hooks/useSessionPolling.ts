@@ -8,13 +8,15 @@ const sessions = createSessionPoller(async details => api.normalizeSessionList(
 
 /** Callback changes update the next delivery without restarting polling. */
 export function useSessionPolling({ active, onData, onError, intervalMs, details }: SessionSubscriber & { active: boolean }): () => Promise<void> {
-  const latest = useRef({ onData, onError });
-  latest.current = { onData, onError };
+  const onDataRef = useRef(onData);
+  const onErrorRef = useRef(onError);
+  onDataRef.current = onData;
+  onErrorRef.current = onError;
   useEffect(() => {
     if (!active) return;
     return sessions.subscribe({
-      onData: value => latest.current.onData(value),
-      onError: error => latest.current.onError?.(error),
+      onData: value => onDataRef.current(value),
+      onError: error => onErrorRef.current?.(error),
       intervalMs,
       details,
     });
