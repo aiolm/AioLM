@@ -527,10 +527,11 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('dialog', { name: 'Model & settings' })).not.toBeInTheDocument();
   });
 
-  it('offers reset and save only after selecting the profile', () => {
+  it('offers reset and save in the profile selection detail and keeps them in option editing', () => {
     mount({ initialSection: 'profiles' });
-    expect(screen.queryByRole('button', { name: 'Save profile' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reset all to defaults' })).not.toBeInTheDocument();
+    const current = within(screen.getByRole('region', { name: 'Current values' }));
+    expect(current.getByRole('button', { name: 'Save profile' })).toBeVisible();
+    expect(current.getByRole('button', { name: 'Reset all to defaults' })).toBeVisible();
     openOptions();
     const banner = screen.getByRole('button', { name: 'Save profile' }).closest('.settings-profile-banner')!;
     expect(within(banner as HTMLElement).getAllByRole('button').map(button => button.textContent)).toEqual([
@@ -542,10 +543,10 @@ describe('model settings editor', { timeout: 45000 }, () => {
     mount({ initialConfig: { ...cfg, active_model: '' }, initialSection: 'profiles' });
     expect(document.querySelectorAll('.settings-profile-chip')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Default · Selected · Default profile' }));
-    const preview = within(screen.getByRole('region', { name: 'Preview' }));
-    expect(preview.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
-    expect(preview.queryByRole('button', { name: 'Select this profile' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Save profile' })).not.toBeInTheDocument();
+    const current = within(screen.getByRole('region', { name: 'Current values' }));
+    expect(current.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
+    expect(current.queryByRole('button', { name: 'Select this profile' })).not.toBeInTheDocument();
+    expect(current.getByRole('button', { name: 'Save profile' })).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Preset profiles' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
@@ -610,6 +611,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.change(numeric('temperature'), { target: { value: '0.9' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     expect(screen.getByText('The running model was started from this profile. Stop it, or save to another profile, to change these settings.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save as new' })).toBeEnabled();
   });
 
   it('leaves inherited numeric and text values unchanged when navigating through their inputs', async () => {
@@ -1109,6 +1113,51 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(edit.application).toMatchObject({ profile_id: source.id, profile_name: source.name, system_prompt: 'Keep this prompt',
       settings: { request_timeout_seconds: 123, provider_options: { [provider]: {} } } });
     expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('resets and saves the selected external profile from profile selection without starting the engine', async () => {
+    const provider = 'custom.profile-edit';
+    const external = { ...cfg, active_provider: provider as api.ProviderId, active_runtime: 'synthetic', provider_options: { [provider]: { workers: 8 } } };
+    const source = captureProfile(external, 'Editable engine profile', 'global', 'Saved prompt');
+    const application = materializeProfileApplication(external, 'Saved prompt', source);
+    const saved = { ...external, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(external.active_model)]: application } } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'profiles' });
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Save profile' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
+    expect(screen.getByRole('region', { name: 'Current values' })).toHaveTextContent('Reset to defaults.');
+    expect(getSaved()).toEqual(saved); expect(onProfileCommit).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: external.active_model });
+    expect(draft.provider_options?.[provider]).toEqual({});
+    expect(edit.application).toMatchObject({ profile_id: source.id, profile_name: source.name, system_prompt: '' });
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+  });
+
+  it.each(['custom.profile-edit', 'vllm'] as const)('validates %s options before saving from profile selection without visiting the option tab', async provider => {
+    let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
+    const check = vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const { onProfileCommit, onApply } = mount({ initialSection: 'profiles', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
+    await waitFor(() => expect(check).toHaveBeenCalled());
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save as new' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reset all to defaults' })).toBeEnabled();
+    await act(async () => { finish([{ key: 'workers', code: 'synthetic-review', message: 'Synthetic option needs review' }]); });
+    expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
+    check.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled());
   });
 
   it('saves a full reset and empty prompt into the selected profile without detaching its identity', async () => {

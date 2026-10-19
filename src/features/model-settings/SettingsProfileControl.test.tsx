@@ -32,6 +32,25 @@ function openCreate() {
 }
 
 describe('settings profile workspace', () => {
+  it('offers draft editing actions in the profile selection detail without duplicating the picker', () => {
+    const props = mount({ selectionOnly: true, state: 'working', saveAction: <button type="button">Save selected profile</button> });
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(document.querySelector('.settings-profile-banner')).not.toBeInTheDocument();
+    const current = within(screen.getByRole('region', { name: 'Current values' }));
+    expect(current.getByRole('button', { name: 'Save selected profile' })).toBeEnabled();
+    expect(current.getByRole('button', { name: 'Save as new' })).toBeEnabled();
+    fireEvent.click(current.getByRole('button', { name: 'Reset all to defaults' }));
+    expect(props.onReset).toHaveBeenCalledOnce();
+    expect(current.getByRole('status')).toHaveTextContent('Reset to defaults.');
+    preview('Creative');
+    expect(screen.queryByRole('button', { name: 'Reset all to defaults' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save selected profile' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revert' })).toBeEnabled();
+    expect(props.onApply).not.toHaveBeenCalled();
+    preview('Precise · Selected · Editing');
+    expect(screen.getByRole('region', { name: 'Current values' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save selected profile' })).toBeVisible();
+  });
   it('uses the selected runtime schema in current values, preview and defaults without exposing saved secrets', async () => {
     const provider = 'custom.profile-engine';
     const window = schemaOption({ key: 'window', flag: '--window', target: 'launch', group: 'custom-group', kind: { type: 'integer' }, runtime_default: '12' });

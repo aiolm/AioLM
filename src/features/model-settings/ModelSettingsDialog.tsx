@@ -432,7 +432,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               onApply={selectProfile}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
-              saveAction={step === 'options' && <><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
+              saveAction={step !== 'runtime' && <><span id={`${id}-save-target`} className="sr-only">{saveTarget}</span><button type="button" className="app-button app-button--primary app-button--sm" aria-describedby={`${id}-save-target`} disabled={disabled || providerOptionsPending || invalid.size > 0 || profileDirty || pathPending || profileInUse} onClick={() => setConfirmSave(true)}>{applying ? copy.pending : copy.save}</button></>}>
             <div hidden={step !== 'options'}>
             {running && !liveMatches && <p className="model-settings-profile-status">{serverChanged ? profileCopy.next : profileCopy.request}</p>}
             {benchmark && <FeedbackBanner tone="info" className="model-settings-scope">{copy.benchmarkControlled}</FeedbackBanner>}
@@ -477,8 +477,10 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 onResetDrafts={() => { setTuningRevision(value => value + 1); setInvalid(previous => new Set([...previous].filter(key => key.startsWith('gpu_')))); }} />
             </div>
             <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
-            {external && section === 'options' && <><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></>}
-            {!llama && !external && ['runtime', 'tuning', 'sampling', 'reasoning', 'adapters', 'advanced'].includes(section) && <ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
+            {/* Profile selection can save before an option tab is visited. Keep
+                provider validation active and retain field drafts across tabs. */}
+            {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
+            {!llama && !external && <div hidden={section === 'model'}><ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
             {llama && section === 'advanced' && <ProviderOptions key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </div>
             </SettingsProfileControl>

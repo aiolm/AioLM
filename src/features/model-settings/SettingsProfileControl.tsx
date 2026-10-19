@@ -226,6 +226,11 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
 
   if (!active) return null;
 
+  const draftActions = <>
+    {(full || lockSelection) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
+    {saveAction}
+    <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
+  </>;
   const banner = <div className={`settings-profile-banner settings-profile-banner--${state}${bannerTarget ? ' settings-profile-banner--compact' : ` app-card app-card--tight${state === 'working' ? ' app-card--warning' : ''}`}`}>
       <span className="settings-profile-state-dot" aria-hidden="true" />
       <div className="settings-profile-banner-text"><div className="settings-profile-title-line" aria-live="polite"><h3 ref={bannerRef} id={labelId} tabIndex={-1}>{title}</h3>{isDefault(active) && <Badge tone="info" className="settings-profile-default-badge">{copy.defaultProfile}</Badge>}</div><p role="status" aria-atomic="true" className={resetFeedback ? 'settings-profile-feedback' : undefined}><span key={resetFeedback?.sequence ?? 0}>{resetFeedback ? resetFeedback.changed ? copy.resetDone : copy.resetUnchanged : subtitle}</span></p></div>
@@ -233,9 +238,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
         {lockSelection ? <span className="settings-profile-selected-name">{active.name}{state === 'working' ? ` · ${copy.editing}` : ''}</span> : <CustomSelect className="settings-profile-picker" ariaLabel={copy.profiles} size="sm" value={active.id}
           disabled={mutationLocked || blocked} options={items.map(item => ({ value: item.id, label: `${copy[item.scope]} · ${item.name}${bannerTarget && state === 'working' && item.id === active.id ? ` · ${copy.editing}` : ''}` }))}
           onChange={id => { if (id !== active.id) void run(() => onApply(id), () => setPreviewId(null)); }} />}
-        {(full || lockSelection) && !selectionOnly && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
-        {saveAction}
-        {!selectionOnly && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>}
+        {draftActions}
         {state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
       </div>
     </div>;
@@ -271,7 +274,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
               const isActive = active?.id === item.id;
               const isEditing = isActive && state === 'working';
               const isPreview = preview?.id === item.id;
-              return <button key={item.id} type="button" className={`app-button app-button--secondary app-button--sm settings-profile-chip${isActive ? ' settings-profile-chip--active' : ''}`} disabled={mutationLocked} aria-pressed={isPreview} aria-label={`${item.name}${isActive ? ` · ${copy.active}` : ''}${isEditing ? ` · ${copy.editing}` : ''}${isDefault(item) ? ` · ${copy.defaultProfile}` : ''}`} aria-controls={detailId} onClick={event => { originRef.current = event.currentTarget; setPreviewId(isPreview ? null : item.id); setError(''); }}>
+              return <button key={item.id} type="button" className={`app-button app-button--secondary app-button--sm settings-profile-chip${isActive ? ' settings-profile-chip--active' : ''}`} disabled={mutationLocked} aria-pressed={isPreview || selectionOnly && !preview && isActive} aria-label={`${item.name}${isActive ? ` · ${copy.active}` : ''}${isEditing ? ` · ${copy.editing}` : ''}${isDefault(item) ? ` · ${copy.defaultProfile}` : ''}`} aria-controls={detailId} onClick={event => { originRef.current = event.currentTarget; setPreviewId(isPreview || selectionOnly && isActive ? null : item.id); setError(''); }}>
                 {isActive && <span aria-hidden="true">✓</span>}<span>{item.name}</span>{isEditing && <Badge tone="warning" aria-hidden="true">{copy.editing}</Badge>}{isDefault(item) && <Badge tone="info" className="settings-profile-default-badge" aria-hidden="true">{copy.defaultProfile}</Badge>}
               </button>;
             }) : <span className="settings-profile-hint">{copy[group.empty]}</span>}</div>
@@ -280,7 +283,8 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
       </div>
       <section id={detailId} className={`settings-profile-detail app-card${preview ? ' app-card--accent' : ''}`} aria-label={preview ? copy.preview : copy.current}>
         <div className="settings-profile-detail-heading">
-          <div>{preview && <p className="settings-profile-eyebrow">{copy.preview}</p>}<h3>{preview?.name ?? copy.current}</h3>
+          <div>{preview && <p className="settings-profile-eyebrow">{copy.preview}</p>}<h3>{preview?.name ?? (selectionOnly ? title : copy.current)}</h3>
+            {selectionOnly && !preview && <p role="status" aria-atomic="true" className={resetFeedback ? 'settings-profile-feedback' : undefined}><span key={resetFeedback?.sequence ?? 0}>{resetFeedback ? resetFeedback.changed ? copy.resetDone : copy.resetUnchanged : subtitle}</span></p>}
             {preview && <div className="settings-profile-badges">
               <Badge>{copy[preview.scope]}</Badge>
               {isDefault(preview) && <Badge>{copy.defaultProfile}</Badge>}
@@ -289,6 +293,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
             </div>}
           </div>
           <div className="settings-profile-buttons">
+            {selectionOnly && !preview && draftActions}
             {selectionOnly && state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
             {preview && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={closePreview}>{copy.closePreview}</button>}
             {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked} onClick={() => void run(() => onApply(preview.id), () => setPreviewId(null))}>{copy.apply}</button>}
