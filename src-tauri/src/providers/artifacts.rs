@@ -290,7 +290,7 @@ pub fn metal_gguf_problem(artifact: &ModelArtifact) -> Option<String> {
                 "vllm-metal does not load sharded GGUF files; merge the shards first".into(),
             );
         }
-        let facts = crate::gguf::read_model_facts(path)?;
+        let (facts, tensor_types) = crate::gguf::read_model_facts_and_tensor_types(path)?;
         if facts.split_count.is_some_and(|count| count > 1) {
             return Err("vllm-metal does not load sharded GGUF files".into());
         }
@@ -332,7 +332,7 @@ pub fn metal_gguf_problem(artifact: &ModelArtifact) -> Option<String> {
         {
             return Err("Metal GGUF requires a matching local tokenizer beside the weights".into());
         }
-        let tensors = crate::gguf::read_tensor_types(path)?;
+        let tensors = tensor_types?;
         let mut names = BTreeSet::new();
         for (name, kind) in &tensors {
             if !names.insert(name.as_str()) {
@@ -936,6 +936,13 @@ mod tests {
         assert!(metal_gguf_problem(&model).unwrap().contains("tokenizer"));
         write(&dir, "tokenizer.json", b"{}");
         assert!(metal_gguf_problem(&model).is_none());
+        let mut truncated = bytes.clone();
+        truncated.truncate(truncated.len() - 4_096);
+        fs::write(&path, truncated).unwrap();
+        write(&dir, "config.json", br#"{"model_type":"llama"}"#);
+        assert!(metal_gguf_problem(&model).unwrap().contains("match"));
+        fs::write(&path, &bytes).unwrap();
+        write(&dir, "config.json", br#"{"model_type":"qwen3"}"#);
         assert!(super::super::compat::assess_for_platform(
             &model,
             super::super::ProviderId::Vllm,
