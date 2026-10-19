@@ -7,6 +7,7 @@ import * as api from '../../shared/api';
 import { ProviderOptions, ProviderRuntimeControl } from './ProviderControls';
 import { providerTelemetryCopy } from './providerTelemetry';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
+import { ORDER_KEY } from '../runtimes/optionOrder';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -57,6 +58,85 @@ describe('runtime inventory readiness', () => {
 });
 
 describe('runtime-specific option controls', () => {
+  it('restores declared external options by omission, keeping connections, unknown values and other engine settings', async () => {
+    const provider = 'custom.defaults';
+    const options = [
+      schemaOption({ key: 'workers', flag: '--workers', group: 'memory', target: 'launch', kind: { type: 'integer' }, runtime_default: '4' }),
+      schemaOption({ key: 'cache', flag: '--cache', group: 'memory', target: 'launch', kind: { type: 'toggle' } }),
+      schemaOption({ key: 'label', flag: '--label', group: 'other', target: 'launch', kind: { type: 'text' } }),
+      { ...schemaOption({ key: 'model-binding', flag: '--model', group: 'connection', target: 'launch', kind: { type: 'path' } }), managed: 'model' as const },
+      { ...schemaOption({ key: 'other-scope', flag: '--other', group: 'other', target: 'launch', kind: { type: 'text' } }), scope: ['other'] },
+      { ...schemaOption({ key: 'input', flag: '', group: 'other', target: 'launch', kind: { type: 'path' } }), position: 0 },
+      schemaOption({ key: 'temperature', flag: '--temperature', group: 'other', target: 'request', kind: { type: 'number' } }),
+    ];
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], options));
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const onChange = vi.fn();
+    const values = { workers: 0, cache: false, temperature: 0.7, input: 'synthetic/input', label: { occurrences: [['a'], ['b']] }, 'model-binding': 'synthetic/model', 'other-scope': 'keep', retired: 'retain',
+      [ORDER_KEY]: { version: 1, occurrences: [{ key: 'label' }, { key: 'workers' }, { key: 'other-scope' }, { key: 'label' }, { key: 'retired' }] } };
+    render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build',
+      provider_options: { [provider]: values, 'llama.cpp': { unchanged: 12 } } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled());
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search options' }), { target: { value: 'workers' } });
+    fireEvent.click(reset);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ provider_options: {
+      [provider]: { 'model-binding': 'synthetic/model', 'other-scope': 'keep', input: 'synthetic/input', retired: 'retain',
+        [ORDER_KEY]: { version: 1, occurrences: [{ key: 'other-scope' }, { key: 'retired' }] } }, 'llama.cpp': { unchanged: 12 },
+    } });
+    expect(values.workers).toBe(0); expect(values.cache).toBe(false);
+  });
+  it('discards an invalid local numeric draft when restoring inherited defaults', async () => {
+    const provider = 'custom.defaults';
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' }, runtime_default: '4' })]));
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const onInvalid = vi.fn();
+    function Draft() {
+      const [cfg, setCfg] = useState<api.AppConfig>({ ...testConfig, active_provider: provider, active_runtime: 'build' });
+      return <ProviderOptions collapseTools cfg={cfg} disabled={false} onChange={patch => setCfg(current => ({ ...current, ...patch }))} onInvalid={onInvalid} />;
+    }
+    render(<I18nProvider initialLocale="en"><Draft /></I18nProvider>);
+    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled());
+    fireEvent.change(screen.getByLabelText(/^--workers/), { target: { value: 'invalid' } });
+    expect(screen.getByLabelText(/^--workers/)).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(reset);
+    await waitFor(() => expect(screen.getByLabelText(/^--workers/)).toHaveValue(''));
+    expect(screen.getByLabelText(/^--workers/)).not.toHaveAttribute('aria-invalid', 'true');
+    expect(onInvalid).toHaveBeenCalledWith('schema:workers', false);
+    expect(screen.getByText('Runtime option overrides cleared in this draft. Save the profile to keep the change.')).toHaveAttribute('role', 'status');
+  });
+  it.each(['stale', 'unchecked'] as const)('does not reset options using a %s runtime schema', async help_state => {
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [], { help_state }));
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const onChecking = vi.fn(); const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: 'custom.defaults', active_runtime: 'build' }} disabled={false} onChange={onChange} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
+    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
+    const reset = screen.getByRole('button', { name: 'Reset runtime options to defaults' });
+    expect(reset).toBeDisabled(); fireEvent.click(reset);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+  it('retains an unrecognized saved order record and asks for review before resetting', async () => {
+    const provider = 'custom.defaults';
+    vi.mocked(api.providerCatalog).mockResolvedValue([]);
+    vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    vi.mocked(api.providerOptionIssues).mockResolvedValue([]);
+    const onChange = vi.fn();
+    const values = { workers: 2, [ORDER_KEY]: { version: 2, occurrences: [{ key: 'workers' }] } };
+    render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build', provider_options: { [provider]: values } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
+    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled()); fireEvent.click(reset);
+    expect(await screen.findByText('Review the saved option order before resetting options.')).toBeVisible();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(values).toEqual({ workers: 2, [ORDER_KEY]: { version: 2, occurrences: [{ key: 'workers' }] } });
+  });
   it('shows every external option without preview or waiting for the unrelated runtime inventory', async () => {
     const provider = 'custom.discovered';
     const options = Array.from({ length: 70 }, (_, index) => schemaOption({ key: `fresh-${index}`, flag: `--fresh-${index}`, target: 'launch', group: 'engine-specific', kind: { type: 'integer' } }));

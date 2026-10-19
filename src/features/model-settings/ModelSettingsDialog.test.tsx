@@ -1084,6 +1084,33 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Already using defaults.');
   });
 
+  it('saves external option defaults only on explicit profile save, keeping the model, runtime and conversation settings', async () => {
+    const provider = 'custom.defaults';
+    const external = { ...cfg, active_provider: provider as api.ProviderId, active_runtime: 'synthetic', request_timeout_seconds: 123,
+      provider_options: { [provider]: { workers: 8 }, 'llama.cpp': { keep: 9 } } };
+    const source = captureProfile(external, 'Engine options', 'model', 'Keep this prompt');
+    const application = materializeProfileApplication(external, 'Keep this prompt', source);
+    const saved = { ...external, settings_profiles: { ...emptyProfileLibrary(), entries: [source], applied: { [profileTargetKey(external.active_model)]: application } } };
+    vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' }, runtime_default: '4' })]));
+    const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
+    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    await waitFor(() => expect(reset).toBeEnabled()); fireEvent.click(reset);
+    expect(screen.getByLabelText(/^--workers/)).toHaveValue('');
+    expect(getSaved()).toEqual(saved);
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    const [draft, edit] = vi.mocked(onProfileCommit).mock.calls[0];
+    expect(draft).toMatchObject({ active_provider: provider, active_runtime: 'synthetic', active_model: external.active_model,
+      request_timeout_seconds: 123, provider_options: { [provider]: {}, 'llama.cpp': { keep: 9 } } });
+    expect(draft.provider_options).toEqual({ [provider]: {}, 'llama.cpp': { keep: 9 } });
+    expect(edit.application).toMatchObject({ profile_id: source.id, profile_name: source.name, system_prompt: 'Keep this prompt',
+      settings: { request_timeout_seconds: 123, provider_options: { [provider]: {} } } });
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
   it('saves a full reset and empty prompt into the selected profile without detaching its identity', async () => {
     const source = captureProfile({ ...cfg, ctx_size: 12288 }, 'Source settings', 'model', 'Saved prompt');
     const application = materializeProfileApplication(cfg, 'Saved prompt', source);

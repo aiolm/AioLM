@@ -18,6 +18,8 @@ import { ORDER_KEY } from '../runtimes/optionOrder';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { settingsFlowCopy } from './settingsFlowCopy';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
+import { clearRuntimeOptionOverrides } from '../runtimes/runtimeOptionDefaults';
+import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0 }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -84,6 +86,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const provider = api.providerOf(cfg);
   const external = api.isExternalProvider(provider);
+  const defaultsCopy = runtimeDefaultsCopy[locale];
+  const [defaultsRevision, setDefaultsRevision] = useState(0);
+  const [defaultsRestored, setDefaultsRestored] = useState(false);
   // The selected runtime's effective schema (catalog/manifest + accepted
   // help) drives the common renderer; the catalog list is only the preview
   // before a runtime exists. Typed settings keep their dedicated controls;
@@ -167,6 +172,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const usesEffective = !!selectedRuntime;
   useEffect(() => {
     let active = true; setSchema([]); setEffective(null); setRuntimeFlags(undefined); setLoadingSchema(true); setSchemaKnown(false); setSchemaError(''); setImportReview('');
+    setDefaultsRestored(false);
     importRequest.current += 1; previewRequest.current += 1; syntaxRequest.current += 1; setSyntaxBusy(false);
     void Promise.all([
       api.providerCatalog(),
@@ -204,6 +210,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     return () => { onChecking?.(false); onInvalid('provider-options', false); };
   }, [unknownCount, issues, checking, error, schemaError, onInvalid, onChecking]);
   const update = (key: string, value: unknown) => {
+    setDefaultsRestored(false);
     const next = { ...values }; if (value === undefined) delete next[key]; else next[key] = value;
     onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
   };
@@ -261,12 +268,24 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const managedOptions = collapseTools ? effective?.schema.options.filter(option => option.managed && option.managed !== 'discovery') ?? [] : [];
   return <div className="model-settings-fields">
     {!collapseTools && <h3>{copy.options}</h3>}
+    {external && <div>
+      <button type="button" className="app-button app-button--secondary" disabled={disabled || checking || !effective || ['stale', 'unchecked'].includes(effective.help_state)} onClick={() => {
+        if (!effective) return;
+        try {
+          const next = clearRuntimeOptionOverrides(effective.schema, values, effective.scope);
+          onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
+          setDefaultsRevision(value => value + 1); setDefaultsRestored(true); setError('');
+        } catch { setError(defaultsCopy.order); }
+      }}>{defaultsCopy.reset}</button>
+      <p className="app-section-hint">{defaultsCopy.hint}</p>
+      {defaultsRestored && <p role="status">{defaultsCopy.done}</p>}
+    </div>}
     {loadingSchema && <p role="status">{copy.loading}</p>}
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
-    {effective && <RuntimeOptionSchemaForm compact showAll={external} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
-      onChange={next => onChange({ provider_options: { ...cfg.provider_options, [provider]: next } })}
+    {effective && <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
+      onChange={next => { setDefaultsRestored(false); onChange({ provider_options: { ...cfg.provider_options, [provider]: next } }); }}
       filter={option => (!collapseTools || !option.managed || option.managed === 'discovery') && inGroupSection(option.group) && (option.target === 'request' || !runtimeFlags || !effective.compat_keys.includes(option.key)
         || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined)}
       inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
