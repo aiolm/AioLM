@@ -79,11 +79,12 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   </div>;
 }
 
-export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section, collapseTools = false }: {
+export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section, collapseTools = false, hideDefaultsReset = false }: {
   cfg: api.AppConfig; disabled: boolean; onChange: (patch: Partial<api.AppConfig>) => void; onInvalid: (key: string, invalid: boolean) => void;
   onChecking?: (checking: boolean) => void;
   section?: string;
   collapseTools?: boolean;
+  hideDefaultsReset?: boolean;
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const provider = api.providerOf(cfg);
@@ -271,7 +272,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const managedOptions = collapseTools ? effective?.schema.options.filter(option => option.managed && option.managed !== 'discovery') ?? [] : [];
   return <div className="model-settings-fields">
     {!collapseTools && <h3>{copy.options}</h3>}
-    {external && <div>
+    {external && !hideDefaultsReset && <div>
       <button type="button" className="app-button app-button--secondary" disabled={disabled || checking || !effective || ['stale', 'unchecked'].includes(effective.help_state)} onClick={() => {
         if (!effective) return;
         try {

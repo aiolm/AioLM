@@ -28,7 +28,8 @@ import { useProfileEditor } from './useProfileEditor';
 import { appliedProfile, SettingsDeliveryError, type ProfileEditorResult, type ProfileCommitResult } from './profileEditor';
 import { defaultSettingsProfileEntry, profileDeletionReason, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { profileDisplayName } from '../../shared/i18n/profileNames';
-import { resetProfileSettings } from './profileResetState';
+import { resetProfileOptions, resetProfileSettings } from './profileResetState';
+import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { profileFieldLabel } from './profileControlCopy';
 import { useModelCatalog } from './useModelCatalog';
@@ -278,11 +279,12 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     setBaseline(executionSettings(config)); profiles.acceptMetadata(config, application);
   };
   const resetProfile = () => {
-    if (disabled || applyLock.current) return false;
-    const defaults = resetProfileSettings(cfg, benchmark);
-    const changed = !settingsEqual(cfg, defaults) || (!benchmark && profiles.systemPrompt !== '') || invalid.size > 0 || pathPending;
+    if (disabled || applyLock.current || (!llama && (runtimeSchema.pending || !runtimeSchema.view || ['stale', 'unchecked'].includes(runtimeSchema.view.help_state)))) return;
+    let defaults: api.AppConfig;
+    try { defaults = resetProfileOptions(cfg, benchmark, runtimeSchema.view); }
+    catch { setError(runtimeDefaultsCopy[locale].order); return; }
+    const changed = !settingsEqual(cfg, defaults) || invalid.size > 0 || pathPending;
     setSettings(executionSettings(defaults));
-    if (!benchmark) profiles.setSystemPrompt('');
     setInvalid(new Set()); setPathDraft(normalizeDisplayPath(cfg.active_model)); setEditorRevision(value => value + 1); setError('');
     return changed;
   };
@@ -438,7 +440,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
               showBanner={step !== 'runtime'} lockSelection={step === 'options'} selectionOnly={step === 'profile'} onPreviewChange={setProfilePreview}
               defaultProfileId={defaultSettingsProfileEntry(profiles.library, provider).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
               modelPath={cfg.active_model} currentSettings={settings} runtimeConfig={cfg} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={step === 'profile'}
-              disabled={disabled} blocked={providerOptionsPending || invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
+              disabled={disabled} resetDisabled={!llama && (runtimeSchema.pending || !runtimeSchema.view || ['stale', 'unchecked'].includes(runtimeSchema.view.help_state))} blocked={providerOptionsPending || invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
               onApply={selectProfile}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
               onRename={(id, name) => commitProfile(() => profiles.prepareRename(id, name))} onDelete={id => commitProfile(() => profiles.prepareDelete(id))} onRevert={revertProfile} onReset={resetProfile}
@@ -489,7 +491,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
             {/* Profile selection can save before an option tab is visited. Keep
                 provider validation active and retain field drafts across tabs. */}
-            {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
+            {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools hideDefaultsReset key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
             {!llama && !external && <div hidden={section === 'model'}><ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
             {llama && section === 'advanced' && <ProviderOptions key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </div>

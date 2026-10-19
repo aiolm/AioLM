@@ -39,11 +39,11 @@ describe('settings profile workspace', () => {
     const current = within(screen.getByRole('region', { name: 'Current values' }));
     expect(current.getByRole('button', { name: 'Save selected profile' })).toBeEnabled();
     expect(current.getByRole('button', { name: 'Save as new' })).toBeEnabled();
-    fireEvent.click(current.getByRole('button', { name: 'Reset all to defaults' }));
+    fireEvent.click(current.getByRole('button', { name: 'Reset options to defaults' }));
     expect(props.onReset).toHaveBeenCalledOnce();
-    expect(current.getByRole('status')).toHaveTextContent('Reset to defaults.');
+    expect(current.getByRole('status')).toHaveTextContent('Options reset to defaults.');
     preview('Creative');
-    expect(screen.queryByRole('button', { name: 'Reset all to defaults' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset options to defaults' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save selected profile' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Revert' })).toBeEnabled();
     expect(props.onApply).not.toHaveBeenCalled();
@@ -170,26 +170,26 @@ describe('settings profile workspace', () => {
   it('resets the selected profile draft without applying the preview or changing saved profiles', () => {
     const props = mount({ blocked: true });
     preview('Creative');
-    const reset = screen.getByRole('button', { name: 'Reset all to defaults' });
-    expect(reset).not.toHaveAttribute('aria-describedby');
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
+    expect(reset).toHaveAccessibleDescription('Model and connection settings and conversation instructions are kept. Engine options that need review are kept too.');
     expect(screen.queryByText(/Reset all options in the selected profile/)).not.toBeInTheDocument();
     fireEvent.click(reset);
     expect(props.onReset).toHaveBeenCalledOnce();
-    expect(screen.getByRole('status')).toHaveTextContent('Reset to defaults.');
+    expect(screen.getByRole('status')).toHaveTextContent('Options reset to defaults.');
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
     expect(props.onApply).not.toHaveBeenCalled();
     expect(props.onSaveAs).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['en', true, 'Reset all to defaults', 'Reset to defaults.'],
-    ['en', false, 'Reset all to defaults', 'Already using defaults.'],
-    ['ko', true, '전체 기본값으로 초기화', '기본값으로 초기화했습니다.'],
-    ['ko', false, '전체 기본값으로 초기화', '이미 기본값입니다.'],
-    ['ja', true, 'すべて既定値に戻す', '既定値に戻しました。'],
-    ['ja', false, 'すべて既定値に戻す', 'すでに既定値です。'],
-    ['zh', true, '全部重置为默认值', '已重置为默认值。'],
-    ['zh', false, '全部重置为默认值', '已在使用默认值。'],
+    ['en', true, 'Reset options to defaults', 'Options reset to defaults.'],
+    ['en', false, 'Reset options to defaults', 'Options already use defaults.'],
+    ['ko', true, '옵션을 기본값으로 되돌리기', '옵션을 기본값으로 되돌렸습니다.'],
+    ['ko', false, '옵션을 기본값으로 되돌리기', '옵션이 이미 기본값입니다.'],
+    ['ja', true, 'オプションを既定値に戻す', '既定値に戻しました。'],
+    ['ja', false, 'オプションを既定値に戻す', 'オプションはすでに既定値です。'],
+    ['zh', true, '将选项恢复为默认值', '已将选项恢复为默认值。'],
+    ['zh', false, '将选项恢复为默认值', '选项已在使用默认值。'],
   ] as const)('announces reset results in %s when values changed is %s', (locale, changed, label, message) => {
     const props = mount({ onReset: vi.fn(() => changed) }, locale);
     expect(screen.queryByText(message)).not.toBeInTheDocument();
@@ -204,16 +204,16 @@ describe('settings profile workspace', () => {
     vi.useFakeTimers();
     try {
       const props = mount({ onReset: vi.fn(() => false) });
-      const reset = screen.getByRole('button', { name: 'Reset all to defaults' });
+      const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
       fireEvent.click(reset);
-      expect(screen.getByRole('status')).toHaveTextContent('Already using defaults.');
+      expect(screen.getByRole('status')).toHaveTextContent('Options already use defaults.');
       act(() => vi.advanceTimersByTime(3000));
       fireEvent.click(reset);
       act(() => vi.advanceTimersByTime(3000));
-      expect(screen.getByRole('status')).toHaveTextContent('Already using defaults.');
+      expect(screen.getByRole('status')).toHaveTextContent('Options already use defaults.');
       expect(props.onReset).toHaveBeenCalledTimes(2);
       act(() => vi.advanceTimersByTime(1000));
-      expect(screen.queryByText('Already using defaults.')).not.toBeInTheDocument();
+      expect(screen.queryByText('Options already use defaults.')).not.toBeInTheDocument();
       expect(screen.getByText('Global profile · selected for this model')).toBeVisible();
     } finally {
       vi.useRealTimers();

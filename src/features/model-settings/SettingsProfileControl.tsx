@@ -37,6 +37,7 @@ export interface ProfileViewItem {
 }
 
 export interface SettingsProfileControlProps {
+  resetDisabled?: boolean;
   bannerTarget?: HTMLElement | null;
   saveAction?: ReactNode;
   children?: ReactNode;
@@ -67,7 +68,7 @@ export interface SettingsProfileControlProps {
   onDelete: (id: string) => Promise<void>;
   onSetDefault: (id: string) => Promise<void>;
   onRevert: () => Promise<void>;
-  onReset: () => boolean;
+  onReset: () => boolean | void;
   onEditingChange?: (dirty: boolean) => void;
 }
 
@@ -136,7 +137,7 @@ function SettingsValues({ settings, provider, schema, prompt, runtime, gpuDevice
   </div>;
 }
 
-export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, runtimeConfig, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, showBanner = true, lockSelection = false, selectionOnly = false, onPreviewChange, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
+export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, runtimeConfig, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, resetDisabled = false, blocked = false, full, showBanner = true, lockSelection = false, selectionOnly = false, onPreviewChange, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const provider = providerOf(currentSettings);
@@ -227,7 +228,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
   if (!active) return null;
 
   const draftActions = <>
-    {(full || lockSelection) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
+    {(full || lockSelection) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked || resetDisabled} aria-describedby={`${labelId}-reset-hint`} onClick={() => { const changed = onReset(); if (changed === undefined) return; setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
     {saveAction}
     <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
   </>;
@@ -245,6 +246,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
 
   return <section className={`settings-profile-control${full ? ' settings-profile-control--full' : ''}`} aria-label={copy.profiles} onKeyDown={handleEscape} aria-busy={pending}>
     {showBanner && !selectionOnly && (bannerTarget ? createPortal(banner, bannerTarget) : banner)}
+    {(full || lockSelection) && <p id={`${labelId}-reset-hint`} className="app-section-hint">{copy.resetHint}</p>}
 
     {action && action.kind !== 'delete' && <div className="settings-profile-action app-card app-card--tight" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
       <>

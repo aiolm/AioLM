@@ -4,7 +4,8 @@ import { MODEL_PROFILE_KEYS, profileSettingsSnapshot, settingsSnapshot, type Set
 import { RUNTIME_DEFAULT_KEYS } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { testConfig } from '../../testing/appStore';
-import { BENCHMARK_CONTROLLED_KEYS, resetProfileSettings } from './profileResetState';
+import { BENCHMARK_CONTROLLED_KEYS, resetProfileOptions, resetProfileSettings } from './profileResetState';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 const manualSettings = {
   provider_options: {}, runtime_defaults: ['temperature'],
@@ -24,6 +25,35 @@ const manualSettings = {
 const customConfig = (): AppConfig => ({ ...structuredClone(testConfig), active_backend: 'vulkan', active_build: 'custom-build', ...structuredClone(manualSettings) });
 
 describe('full profile defaults', () => {
+  it('keeps model bindings, connection settings and saved instructions when resetting editable options', () => {
+    const cfg = customConfig();
+    const reset = resetProfileOptions(cfg, false);
+    expect(reset).toMatchObject({ active_model: cfg.active_model, active_backend: cfg.active_backend, active_build: cfg.active_build,
+      mmproj: cfg.mmproj, spec_draft_model: cfg.spec_draft_model, lora_adapters: cfg.lora_adapters,
+      request_timeout_seconds: cfg.request_timeout_seconds, sleep_idle_seconds: cfg.sleep_idle_seconds,
+      ctx_size: tuningResetValues().ctx_size });
+    expect(reset.runtime_defaults).toContain('ctx_size');
+    expect(reset.runtime_defaults).not.toContain('request_timeout_seconds');
+    expect(cfg).toEqual(customConfig());
+  });
+
+  it.each(['custom.synthetic', 'vllm', 'mlx-vlm'] as const)('resets only scoped, checked %s options and retains managed and unknown values', provider => {
+    const option = (key: string) => schemaOption({ key, flag: `--${key}`, group: 'other', target: 'launch', kind: { type: 'integer' } });
+    const view = effectiveSchema([], [
+      option('workers'),
+      { ...option('model'), managed: 'model' as const },
+      { ...option('other_command'), scope: ['other'] },
+    ]);
+    const cfg = { ...customConfig(), active_provider: provider, active_runtime: 'synthetic',
+      provider_options: { [provider]: { workers: 8, model: 'native/model', future: 'keep', other_command: 3 } } };
+    const reset = resetProfileOptions(cfg, false, view);
+    expect(reset.provider_options?.[provider]).toEqual({ model: 'native/model', future: 'keep', other_command: 3 });
+    expect({ ...reset, provider_options: cfg.provider_options }).toEqual(cfg);
+    expect(cfg.provider_options[provider].workers).toBe(8);
+    expect(() => resetProfileOptions(cfg, false, { ...view, help_state: 'stale' })).toThrow();
+    expect(() => resetProfileOptions(cfg, false)).toThrow();
+  });
+
   it('resets every profile field while retaining the selected model', () => {
     const cfg = customConfig();
     const reset = resetProfileSettings(cfg, false);

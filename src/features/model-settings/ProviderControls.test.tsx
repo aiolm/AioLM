@@ -78,7 +78,7 @@ describe('runtime-specific option controls', () => {
       [ORDER_KEY]: { version: 1, occurrences: [{ key: 'label' }, { key: 'workers' }, { key: 'other-scope' }, { key: 'label' }, { key: 'retired' }] } };
     render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build',
       provider_options: { [provider]: values, 'llama.cpp': { unchanged: 12 } } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
-    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    const reset = await screen.findByRole('button', { name: 'Reset options to defaults' });
     await waitFor(() => expect(reset).toBeEnabled());
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search options' }), { target: { value: 'workers' } });
     fireEvent.click(reset);
@@ -100,7 +100,7 @@ describe('runtime-specific option controls', () => {
       return <ProviderOptions collapseTools cfg={cfg} disabled={false} onChange={patch => setCfg(current => ({ ...current, ...patch }))} onInvalid={onInvalid} />;
     }
     render(<I18nProvider initialLocale="en"><Draft /></I18nProvider>);
-    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    const reset = await screen.findByRole('button', { name: 'Reset options to defaults' });
     await waitFor(() => expect(reset).toBeEnabled());
     fireEvent.change(screen.getByLabelText(/^--workers/), { target: { value: 'invalid' } });
     expect(screen.getByLabelText(/^--workers/)).toHaveAttribute('aria-invalid', 'true');
@@ -118,7 +118,7 @@ describe('runtime-specific option controls', () => {
     const onChecking = vi.fn(); const onChange = vi.fn();
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: 'custom.defaults', active_runtime: 'build' }} disabled={false} onChange={onChange} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
     await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
-    const reset = screen.getByRole('button', { name: 'Reset runtime options to defaults' });
+    const reset = screen.getByRole('button', { name: 'Reset options to defaults' });
     expect(reset).toBeDisabled(); fireEvent.click(reset);
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -131,7 +131,7 @@ describe('runtime-specific option controls', () => {
     const onChange = vi.fn();
     const values = { workers: 2, [ORDER_KEY]: { version: 2, occurrences: [{ key: 'workers' }] } };
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build', provider_options: { [provider]: values } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
-    const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
+    const reset = await screen.findByRole('button', { name: 'Reset options to defaults' });
     await waitFor(() => expect(reset).toBeEnabled()); fireEvent.click(reset);
     expect(await screen.findByText('Check the saved option order, then try resetting again.')).toBeVisible();
     expect(onChange).not.toHaveBeenCalled();
