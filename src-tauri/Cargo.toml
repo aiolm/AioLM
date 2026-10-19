@@ -159,3 +159,8 @@ zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-cr
 
 [dev-dependencies]
 tokio = { version = "1", features = ["signal"] }
+
+# Keep full executable/artifact verification responsive in development too.
+# The version matches Cargo.lock; release already optimizes this dependency.
+[profile.dev.package."sha2:0.10.9"]
+opt-level = 3

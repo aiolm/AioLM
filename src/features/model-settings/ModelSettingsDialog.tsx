@@ -32,6 +32,7 @@ import { resetProfileSettings } from './profileResetState';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { useModelCatalog } from './useModelCatalog';
 import { useSelectedModelMetadata } from './useModelContextLimit';
+import { ProfileRuntimeSchemaContext, useProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
 import { formatMebibytes } from '../../shared/lib/units';
@@ -80,6 +81,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const provider = api.providerOf(cfg);
   const llama = provider === 'llama.cpp';
   const external = api.isExternalProvider(provider);
+  const runtimeSchema = useProfileRuntimeSchema(cfg, open && !llama);
   const providerDrafts = useRef<Partial<Record<api.ProviderId, { settings: ExecutionSettings; prompt: string }>>>({});
   const [providerReady, setProviderReady] = useState<boolean | null>(null);
   const [profileBannerTarget, setProfileBannerTarget] = useState<HTMLDivElement | null>(null);
@@ -392,7 +394,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
     <input className="app-input" aria-label={`${label} — ${copy.path}`} aria-describedby={`${id}-${key}-help`} value={normalizeDisplayPath(cfg[key])} disabled={disabled} onChange={event => change({ [key]: restoreDisplayPath(cfg[key], event.target.value) })} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
   </label>;
-  return <dialog ref={dialog} className="app-dialog model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
+  return <ProfileRuntimeSchemaContext.Provider value={llama ? null : runtimeSchema}><dialog ref={dialog} className="app-dialog model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
     onKeyDown={event => {
       if (event.key !== 'Tab') return;
       const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])'))
@@ -532,7 +534,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         confirmLabel={copy.saveConfirmAction} cancelLabel={copy.cancel} tone="primary" busy={disabled}
         onCancel={() => setConfirmSave(false)} onConfirm={() => { setConfirmSave(false); void apply('save'); }} />}
     </OverlayContainerContext.Provider>
-  </dialog>;
+  </dialog></ProfileRuntimeSchemaContext.Provider>;
 }
 
 /** A launch failure shows a short summary first; the raw server log stays one click away. */

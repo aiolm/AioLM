@@ -7,6 +7,8 @@ import { testConfig } from '../../testing/appStore';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import RuntimeProfileValues from './RuntimeProfileValues';
 import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
+import { StrictMode } from 'react';
+import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
 
 beforeEach(() => vi.restoreAllMocks());
 
@@ -18,6 +20,39 @@ function View({ cfg, reference = false, enabled = true }: { cfg: api.AppConfig; 
 }
 
 describe('runtime profile projection', () => {
+  it('shares one pending verification across effect replay and rechecks an installation replaced under the same id', async () => {
+    let finish!: (view: EffectiveSchema) => void;
+    const read = vi.spyOn(api, 'providerOptionSchema').mockReturnValueOnce(new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue(effectiveSchema([], [{ ...option, spellings: [{ flag: '--replacement-limit' }] }]));
+    render(<StrictMode><View cfg={config} /></StrictMode>);
+    expect(read).toHaveBeenCalledOnce();
+    await act(async () => finish(effectiveSchema([], [option])));
+    expect(await screen.findByText('--limit')).toBeVisible();
+    act(() => notifyRuntimeInventoryChanged());
+    expect(screen.queryByText('--limit')).not.toBeInTheDocument();
+    expect(await screen.findByText('--replacement-limit')).toBeVisible();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+  it('keeps the checked schema while profile values change instead of restarting runtime verification', async () => {
+    const read = vi.spyOn(api, 'providerOptionSchema').mockResolvedValue(effectiveSchema([], [option]));
+    const { rerender } = render(<View cfg={config} />);
+    expect(await screen.findByText('--limit')).toBeVisible();
+    rerender(<View cfg={{ ...config, request_timeout_seconds: 42, provider_options: { 'custom.profile': { limit: 9 } } }} />);
+    expect(screen.getByText('--limit')).toBeVisible();
+    expect(screen.getByText('9')).toBeVisible();
+    expect(screen.queryByText(/Checking the selected runtime/)).not.toBeInTheDocument();
+    expect(read).toHaveBeenCalledOnce();
+  });
+  it('finishes the original verification when a profile edit arrives before its answer', async () => {
+    let finish!: (view: EffectiveSchema) => void;
+    const read = vi.spyOn(api, 'providerOptionSchema').mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const { rerender } = render(<View cfg={config} />);
+    rerender(<View cfg={{ ...config, provider_options: { 'custom.profile': { limit: 7 } } }} />);
+    await act(async () => finish(effectiveSchema([], [option])));
+    expect(await screen.findByText('--limit')).toBeVisible();
+    expect(screen.getByText('7')).toBeVisible();
+    expect(read).toHaveBeenCalledOnce();
+  });
   it('rejects a late schema after a runtime switch and hides unverifiable saved values', async () => {
     let first!: (view: EffectiveSchema) => void; let second!: (view: EffectiveSchema) => void;
     vi.spyOn(api, 'providerOptionSchema').mockImplementationOnce(() => new Promise(resolve => { first = resolve; }))

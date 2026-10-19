@@ -1143,6 +1143,25 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
   });
 
+  it('shares one runtime verification across profile details, option edits, full reset and save confirmation', async () => {
+    const provider = 'custom.shared-schema';
+    const read = vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [schemaOption({ key: 'workers', flag: '--workers', group: 'other', target: 'launch', kind: { type: 'integer' } })]));
+    read.mockClear();
+    const { onProfileCommit } = mount({ initialSection: 'profiles', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic', provider_options: { [provider]: { workers: 2 } } } });
+    expect(await within(screen.getByRole('region', { name: 'Current values' })).findByText('--workers')).toBeVisible();
+    expect(read).toHaveBeenCalledOnce();
+    openOptions();
+    fireEvent.change(screen.getByLabelText(/^--workers/), { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('9')).toBeVisible();
+    expect(read).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled()); fireEvent.click(save);
+    expect(screen.getByRole('dialog', { name: /^Save these changes/ })).toBeVisible();
+    expect(read).toHaveBeenCalledOnce(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+
   it.each(['custom.profile-edit', 'vllm'] as const)('validates %s options before saving from profile selection without visiting the option tab', async provider => {
     let finish!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
     const check = vi.spyOn(api, 'providerOptionIssues').mockReturnValue(new Promise(resolve => { finish = resolve; }));
