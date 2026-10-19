@@ -217,6 +217,11 @@ impl OwnedChild {
                 let _ = child.wait();
                 return Err(error);
             }
+            if let Err(error) = job.capture_members(None) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
         }
         let tree = std::sync::Arc::new(ProcessTree {
             terminated: std::sync::atomic::AtomicBool::new(false),
@@ -574,6 +579,11 @@ impl TransientChild {
         #[cfg(windows)]
         if let Err(error) = job.assign(child.raw_handle().expect("new child has a process handle"))
         {
+            let _ = child.start_kill();
+            return Err(error);
+        }
+        #[cfg(windows)]
+        if let Err(error) = job.capture_members(None) {
             let _ = child.start_kill();
             return Err(error);
         }
@@ -1043,6 +1053,68 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(tree.wait_exited(std::time::Duration::from_secs(10)));
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(descendant.exited());
+    }
+
+    #[test]
+    fn waiting_on_a_live_tree_with_no_budget_is_not_exited() {
+        let mut command = std_command("cmd");
+        command
+            .args(["/c", "ping -n 60 127.0.0.1 > nul"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut owned = OwnedChild::spawn(&mut command).unwrap();
+        let tree = owned.process_handle().unwrap();
+        assert!(!tree.wait_exited(std::time::Duration::ZERO));
+        owned.terminate();
+        drop(owned);
+        assert!(tree.wait_exited(std::time::Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn waiting_after_termination_with_no_members_is_exited() {
+        let mut command = std_command("cmd");
+        command
+            .args(["/c", "exit 0"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let mut owned = OwnedChild::spawn(&mut command).unwrap();
+        let tree = owned.process_handle().unwrap();
+        assert!(owned.wait().unwrap().success());
+        owned.terminate();
+        drop(owned);
+        assert!(tree.wait_exited(std::time::Duration::from_secs(10)));
+        assert!(tree.wait_exited(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn waiting_after_root_exit_covers_remaining_job_members() {
+        use std::io::BufRead;
+        let mut command = std_command("powershell");
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$child = Start-Process ping.exe -ArgumentList @('-n','60','127.0.0.1') -WindowStyle Hidden -PassThru; [Console]::Out.WriteLine($child.Id); exit 0",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let mut owned = OwnedChild::spawn(&mut command).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(owned.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant_pid = line.trim().parse().unwrap();
+        let descendant = ProcessExitProbe::open(descendant_pid).unwrap();
+        let tree = owned.process_handle().unwrap();
+        assert!(owned.wait().unwrap().success());
+        owned.terminate();
+        drop(owned);
+        assert!(tree.wait_exited(std::time::Duration::from_secs(10)));
         assert!(descendant.exited());
     }
 
