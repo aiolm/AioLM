@@ -97,6 +97,17 @@ export function serverOptionChoices(option: ServerOption): string[] {
   return option.arity === 1 ? documentedChoices(option.description) : [];
 }
 
+/** Index only a multi-option edit; a single argument needs no full catalog copy. */
+function optionArityLookup(options: readonly ServerOption[], multiple: boolean): (flag: string) => number | undefined {
+  if (!multiple) return flag => options.find(option => option.flags.includes(flag))?.arity;
+  const arities = new Map<string, number>();
+  for (const option of options) {
+    // Help can repeat an alias. Keep the first match, as the linear reader did.
+    for (const flag of option.flags) if (!arities.has(flag)) arities.set(flag, option.arity);
+  }
+  return flag => arities.get(flag);
+}
+
 /**
  * One option per line, the way llama.cpp documents it: `--load-mode none`.
  *
@@ -109,13 +120,15 @@ export function serverOptionChoices(option: ServerOption): string[] {
  */
 export function serverArgsFromText(text: string, options: readonly ServerOption[]): string[] {
   const args: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/);
+  const arityOf = optionArityLookup(options, lines.length > 1);
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const flag = trimmed.split(/\s/, 1)[0];
     const rest = trimmed.slice(flag.length).trim();
     // An unlisted flag from a custom build takes the rest as its single value.
-    const arity = options.find(option => option.flags.includes(flag))?.arity ?? (rest ? 1 : 0);
+    const arity = arityOf(flag) ?? (rest ? 1 : 0);
     if (arity === 0) {
       if (rest) throw new Error(`${flag} does not take a value: ${rest}`);
       args.push(flag);
@@ -144,10 +157,11 @@ function splitValues(rest: string, arity: number): string[] {
 /** Render an argument vector back into the one-option-per-line text form. */
 export function serverArgsToText(args: readonly string[], options: readonly ServerOption[]): string {
   const lines: string[] = [];
+  const arityOf = optionArityLookup(options, args.length > 2);
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     // Mirror the parser: an unlisted flag from a custom build takes one value.
-    const arity = options.find(item => item.flags.includes(flag))?.arity ?? 1;
+    const arity = arityOf(flag) ?? 1;
     const values: string[] = [];
     // A negative number is a value, while a following switch starts another option.
     while (values.length < arity && index + 1 < args.length && !FLAG.test(args[index + 1])) {

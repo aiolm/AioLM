@@ -71,6 +71,18 @@ describe('runtime server option catalog', () => {
     expect(serverArgsFromText('--future-pr-option 7\n--future-pr-switch', options)).toEqual(['--future-pr-option', '7', '--future-pr-switch']);
     expect(serverArgsToText(['--future-pr-option', '7', '--future-pr-switch'], options)).toBe('--future-pr-option 7\n--future-pr-switch');
   });
+  it('keeps the first alias definition and reads changed help on the next conversion', () => {
+    const options = [option('--shared'), option('--shared VALUE'), option('--custom-path FILE')];
+    const text = '--shared\n--custom-path 한글 경로/cache.bin';
+    const args = ['--shared', '--custom-path', '한글 경로/cache.bin'];
+    expect(serverArgsFromText(text, options)).toEqual(args);
+    expect(serverArgsToText(args, options)).toBe(text);
+    options[0].arity = 1;
+    expect(() => serverArgsFromText(text, options)).toThrow('needs 1 value(s)');
+    options[0].flags = ['--new-flag'];
+    const changed = '--shared -1\n--custom-path 한글 경로/cache.bin';
+    expect(serverArgsToText(serverArgsFromText(changed, options), options)).toBe(changed);
+  });
   it('replaces both sides of a toggle and restores inheritance without affecting adjacent args', () => {
     const mmap = option('--mmap, --no-mmap');
     const args = ['--mmap', '--cache-ram', '-1', '--no-mmap', '--jinja'];
