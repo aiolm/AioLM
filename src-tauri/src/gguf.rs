@@ -196,7 +196,10 @@ impl<R: Read + Seek> Reader<R> {
         self.inner
             .read_exact(&mut buffer)
             .map_err(|error| format!("unreadable GGUF header: {error}"))?;
-        Ok(String::from_utf8_lossy(&buffer).into_owned())
+        Ok(match String::from_utf8(buffer) {
+            Ok(value) => value,
+            Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+        })
     }
 }
 
@@ -1365,8 +1368,12 @@ mod tests {
     use std::io::{Cursor, Write};
 
     fn string(value: &str) -> Vec<u8> {
+        raw_string(value.as_bytes())
+    }
+
+    fn raw_string(value: &[u8]) -> Vec<u8> {
         let mut out = (value.len() as u64).to_le_bytes().to_vec();
-        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(value);
         out
     }
 
@@ -1377,6 +1384,19 @@ mod tests {
         out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
         for (key, kind, value) in entries {
             out.extend_from_slice(&string(key));
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(value);
+        }
+        out
+    }
+
+    fn raw_header(entries: &[(Vec<u8>, u32, Vec<u8>)]) -> Vec<u8> {
+        let mut out = b"GGUF".to_vec();
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+        for (key, kind, value) in entries {
+            out.extend_from_slice(&raw_string(key));
             out.extend_from_slice(&kind.to_le_bytes());
             out.extend_from_slice(value);
         }
@@ -1552,6 +1572,53 @@ mod tests {
         );
         assert_eq!(metadata.expert_count, Some(128));
         assert_eq!(metadata.expert_used_count, Some(8));
+    }
+
+    #[test]
+    fn metadata_strings_preserve_ascii_unicode_and_lossy_bytes() {
+        let metadata = read(&raw_header(&[
+            (b"general.architecture".to_vec(), 8, raw_string(b"llama")),
+            (
+                b"general.organization".to_vec(),
+                8,
+                raw_string("Synthetic \u{D55C}\u{AE00}".as_bytes()),
+            ),
+            (
+                b"general.author".to_vec(),
+                8,
+                raw_string(&[b'A', 0xff, b'B', 0xc3]),
+            ),
+            (vec![0xff, b'k', 0xfe], 4, 7u32.to_le_bytes().to_vec()),
+        ]))
+        .unwrap();
+        assert_eq!(metadata.architecture.as_deref(), Some("llama"));
+        assert_eq!(
+            metadata.organization.as_deref(),
+            Some("Synthetic \u{D55C}\u{AE00}")
+        );
+        assert_eq!(metadata.author.as_deref(), Some("A\u{FFFD}B\u{FFFD}"));
+    }
+
+    #[test]
+    fn metadata_string_budget_accepts_exact_payload_and_rejects_one_more() {
+        fn entries(extra_key_bytes: usize) -> Vec<(String, fixture::Value)> {
+            let mut entries = (0..1_953)
+                .map(|index| {
+                    (
+                        format!("synthetic-{index:04}-{}", "k".repeat(1_009)),
+                        fixture::Value::U32(index as u32),
+                    )
+                })
+                .collect::<Vec<_>>();
+            entries.push(("x".repeat(128 + extra_key_bytes), fixture::Value::U32(0)));
+            entries
+        }
+
+        assert!(read(&fixture::file(&entries(0), &[])).is_ok());
+        assert_eq!(
+            read(&fixture::file(&entries(1), &[])).unwrap_err(),
+            "GGUF header declares implausible string data"
+        );
     }
 
     #[test]
