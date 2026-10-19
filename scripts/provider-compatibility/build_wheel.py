@@ -7,7 +7,6 @@ its local version and wheel provenance distinguish it from upstream packages.
 import argparse
 import base64
 import csv
-import copy
 import hashlib
 import io
 import json
@@ -319,7 +318,7 @@ def build_wheel(source, output_directory, expected_sha256, provider):
         if len(names) != len(set(names)) or any("\\" in name or PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts for name in names):
             raise ValueError("unsafe or duplicate wheel members")
         files = {name: archive.read(name) for name in names if not name.endswith("/")}
-        attributes = {name: copy.copy(archive.getinfo(name)) for name in files}
+        attributes = {name: archive.getinfo(name) for name in files}
     metadata_paths = [name for name in files if name.endswith(".dist-info/METADATA")]
     if len(metadata_paths) != 1:
         raise ValueError("wheel requires exactly one distribution metadata directory")
