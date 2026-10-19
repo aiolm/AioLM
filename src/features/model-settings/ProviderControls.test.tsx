@@ -108,7 +108,7 @@ describe('runtime-specific option controls', () => {
     await waitFor(() => expect(screen.getByLabelText(/^--workers/)).toHaveValue(''));
     expect(screen.getByLabelText(/^--workers/)).not.toHaveAttribute('aria-invalid', 'true');
     expect(onInvalid).toHaveBeenCalledWith('schema:workers', false);
-    expect(screen.getByText('Runtime option overrides cleared in this draft. Save the profile to keep the change.')).toHaveAttribute('role', 'status');
+    expect(screen.getByText('Options restored to the engine’s defaults. Save the profile to keep this change.')).toHaveAttribute('role', 'status');
   });
   it.each(['stale', 'unchecked'] as const)('does not reset options using a %s runtime schema', async help_state => {
     vi.mocked(api.providerCatalog).mockResolvedValue([]);
@@ -133,7 +133,7 @@ describe('runtime-specific option controls', () => {
     render(<I18nProvider initialLocale="en"><ProviderOptions cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build', provider_options: { [provider]: values } }} disabled={false} onChange={onChange} onInvalid={vi.fn()} /></I18nProvider>);
     const reset = await screen.findByRole('button', { name: 'Reset runtime options to defaults' });
     await waitFor(() => expect(reset).toBeEnabled()); fireEvent.click(reset);
-    expect(await screen.findByText('Review the saved option order before resetting options.')).toBeVisible();
+    expect(await screen.findByText('Check the saved option order, then try resetting again.')).toBeVisible();
     expect(onChange).not.toHaveBeenCalled();
     expect(values).toEqual({ workers: 2, [ORDER_KEY]: { version: 2, occurrences: [{ key: 'workers' }] } });
   });

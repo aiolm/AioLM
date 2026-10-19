@@ -69,7 +69,7 @@ describe('settings profile workspace', () => {
     expect(await detail.findByText('--window')).toBeVisible();
     expect(detail.getByText('5')).toBeVisible();
     expect(detail.getByText('Retired')).toBeVisible();
-    expect(detail.getByText(/Support unverified/)).toBeVisible();
+    expect(detail.getByText(/Needs a compatibility check/)).toBeVisible();
     preview('Engine saved · Selected · Default profile');
     expect(detail.getByText('--window')).toBeVisible();
     expect(detail.getByText('9')).toBeVisible();

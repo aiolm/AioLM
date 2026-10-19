@@ -50,7 +50,7 @@ describe('benchmark execution environment', () => {
       provider_options: { [provider]: { max_tokens: 512 }, 'llama.cpp': { stale: 'native-only' } } }));
     expect(term('Inference engine')).toHaveTextContent(provider === 'vllm' ? 'vLLM' : 'MLX');
     expect(term('Runtime')).toHaveTextContent('Choose a runtime');
-    expect(term('Maximum output tokens')).toHaveTextContent('Support unverified');
+    expect(term('Maximum output tokens')).toHaveTextContent('Needs a compatibility check');
     expect(screen.queryByText('512')).not.toBeInTheDocument();
     expect(term('Selected GPU')).toHaveTextContent('Runtime selects the GPU at launch');
     expect(screen.queryByText('GPU layers')).not.toBeInTheDocument();

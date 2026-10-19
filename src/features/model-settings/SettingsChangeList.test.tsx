@@ -101,7 +101,7 @@ describe('profile save change list', () => {
     /></I18nProvider>);
     expect(container).not.toHaveTextContent('OLD-PRIVATE');
     expect(container).not.toHaveTextContent('NEW-PRIVATE');
-    expect(container).toHaveTextContent('Support unverified');
+    expect(container).toHaveTextContent('Needs a compatibility check');
   });
   it('shows declared option changes while masking old and new secrets and unrecognized values', async () => {
     const provider = 'custom.review';

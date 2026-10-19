@@ -40,7 +40,7 @@ describe('runtime profile projection', () => {
     rerender(<View cfg={{ ...config, request_timeout_seconds: 42, provider_options: { 'custom.profile': { limit: 9 } } }} />);
     expect(screen.getByText('--limit')).toBeVisible();
     expect(screen.getByText('9')).toBeVisible();
-    expect(screen.queryByText(/Checking the selected runtime/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Checking the options available/)).not.toBeInTheDocument();
     expect(read).toHaveBeenCalledOnce();
   });
   it('finishes the original verification when a profile edit arrives before its answer', async () => {
@@ -70,7 +70,7 @@ describe('runtime profile projection', () => {
     const read = vi.spyOn(api, 'providerOptionSchema').mockRejectedValueOnce(new Error('PRIVATE-BACKEND-DIAGNOSTIC')).mockResolvedValueOnce(effectiveSchema([], [option]));
     const before = structuredClone(config);
     const { container } = render(<View cfg={config} />);
-    expect(await screen.findByText(/could not be verified/)).toBeVisible();
+    expect(await screen.findByText(/Could not check/)).toBeVisible();
     expect(container).not.toHaveTextContent('PRIVATE-BACKEND-DIAGNOSTIC');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('--limit')).toBeVisible();
@@ -82,13 +82,13 @@ describe('runtime profile projection', () => {
     const read = vi.spyOn(api, 'providerOptionSchema').mockResolvedValueOnce(effectiveSchema([], variants, { help_state: 'stale' }));
     const cfg = { ...config, provider_options: { 'custom.profile': { limit: 12, reserved: 'RESERVED-PRIVATE', elsewhere: 'SCOPED-PRIVATE' } } };
     const { container, rerender } = render(<View cfg={cfg} />);
-    expect(await screen.findByText(/Runtime help needs review/)).toBeVisible();
+    expect(await screen.findByText(/options need to be checked again/)).toBeVisible();
     expect(screen.queryByText('--limit')).not.toBeInTheDocument();
     read.mockResolvedValueOnce(effectiveSchema([], variants));
     rerender(<View cfg={{ ...cfg, active_runtime: 'reviewed' }} />);
     expect(await screen.findByText('--limit')).toBeVisible();
     expect(container).not.toHaveTextContent('RESERVED-PRIVATE'); expect(container).not.toHaveTextContent('SCOPED-PRIVATE');
-    expect(screen.getAllByText(/Support unverified/)).toHaveLength(2);
+    expect(screen.getAllByText(/Needs a compatibility check/)).toHaveLength(2);
   });
   it('shows declared zero defaults and preserves masking across occurrences and duplicated values', async () => {
     const secret = { ...option, key: 'credential', spellings: [{ flag: '--credential' }], sensitive: { certainty: 'documented' as const, value: true },
