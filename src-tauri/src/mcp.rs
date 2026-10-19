@@ -15,6 +15,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RPC_LINE: usize = 1024 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 256 * 1024;
 const MAX_APPROVAL_DESCRIPTION_BYTES: usize = 4096;
+const APPROVAL_TRUNCATION_SUFFIX: &str = "\n…";
 const PROTOCOL_VERSION: &str = "2024-11-05";
 /// An unanswered approval must not hold its MCP server open indefinitely.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -505,28 +506,47 @@ fn validate_tool_arguments(schema: &Value, arguments: &Value) -> Result<(), Stri
     Ok(())
 }
 
-fn tool_approval_description(server: &McpServer, name: &str, arguments: &Value) -> String {
-    let serialized = serde_json::to_string(arguments).unwrap_or_else(|_| "<unserializable>".into());
-    let description = format!(
-        "Server: {} ({})\nTool: {}\nArguments: {}\n\nAllow this one-time MCP tool call?",
-        server.name, server.id, name, serialized
-    );
-    if description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES {
+fn push_bounded(output: &mut String, value: &str, limit: usize) -> bool {
+    let remaining = limit.saturating_sub(output.len());
+    let take = value.floor_char_boundary(value.len().min(remaining));
+    output.push_str(&value[..take]);
+    take == value.len()
+}
+
+fn tool_approval_description(server: &McpServer, name: &str, serialized: &str) -> String {
+    let parts = [
+        "Server: ",
+        server.name.as_str(),
+        " (",
+        server.id.as_str(),
+        ")\nTool: ",
+        name,
+        "\nArguments: ",
+        serialized,
+        "\n\nAllow this one-time MCP tool call?",
+    ];
+    let full_len: usize = parts.iter().map(|part| part.len()).sum();
+    if full_len <= MAX_APPROVAL_DESCRIPTION_BYTES {
+        let mut description = String::with_capacity(full_len);
+        for part in parts {
+            description.push_str(part);
+        }
         return description;
     }
-    let mut bounded = description;
-    let limit = MAX_APPROVAL_DESCRIPTION_BYTES.saturating_sub("\n…".len());
-    bounded.truncate(bounded.floor_char_boundary(limit));
-    bounded.push_str("\n…");
+
+    let limit = MAX_APPROVAL_DESCRIPTION_BYTES.saturating_sub(APPROVAL_TRUNCATION_SUFFIX.len());
+    let mut bounded = String::with_capacity(MAX_APPROVAL_DESCRIPTION_BYTES);
+    for part in parts {
+        if !push_bounded(&mut bounded, part, limit) {
+            break;
+        }
+    }
+    bounded.push_str(APPROVAL_TRUNCATION_SUFFIX);
     bounded
 }
 
-async fn confirm_tool_call(
-    server: &McpServer,
-    name: &str,
-    arguments: &Value,
-) -> Result<(), String> {
-    let description = tool_approval_description(server, name, arguments);
+async fn confirm_tool_call(server: &McpServer, name: &str, serialized: &str) -> Result<(), String> {
+    let description = tool_approval_description(server, name, serialized);
     // Windows: the prompt belongs to this future, so a Stop, the approval
     // timeout or shutdown closes the dialog and ends its thread.
     #[cfg(windows)]
@@ -575,9 +595,9 @@ pub async fn call_tool_with_id(
     if !arguments.is_object() {
         return Err("MCP tool arguments must be a JSON object".into());
     }
-    let argument_bytes = serde_json::to_vec(&arguments)
+    let serialized_arguments = serde_json::to_string(&arguments)
         .map_err(|error| format!("cannot encode MCP tool arguments: {error}"))?;
-    if argument_bytes.len() > MAX_TOOL_ARGUMENT_BYTES {
+    if serialized_arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
         return Err("MCP tool arguments exceed the 256 KiB safety limit".into());
     }
     let server = cancel
@@ -591,7 +611,7 @@ pub async fn call_tool_with_id(
         name,
         &arguments,
         cancel,
-        || confirm_tool_call(&server, name, &arguments),
+        || confirm_tool_call(&server, name, &serialized_arguments),
         APPROVAL_TIMEOUT,
     )
     .await
@@ -1508,8 +1528,9 @@ input.on('line', line => {
 
     #[test]
     fn approval_description_is_bounded_and_binds_server_and_tool_identity() {
-        let description =
-            tool_approval_description(&server("npx"), "search", &json!({"query": "llama"}));
+        let arguments = json!({"query": "llama"});
+        let serialized = serde_json::to_string(&arguments).unwrap();
+        let description = tool_approval_description(&server("npx"), "search", &serialized);
         assert!(description.contains("Test server"));
         assert!(description.contains("search"));
         assert!(description.contains("llama"));
@@ -1517,7 +1538,7 @@ input.on('line', line => {
     }
 
     #[test]
-    fn approval_description_truncates_multibyte_arguments_on_utf8_boundaries() {
+    fn approval_description_matches_full_text_truncation_at_utf8_boundaries() {
         let mut candidate = server("npx");
         candidate.name = "한글 서버".into();
         for character in ["é", "가", "🦙"] {
@@ -1527,13 +1548,26 @@ input.on('line', line => {
                     "x".repeat(padding),
                     character.repeat(MAX_APPROVAL_DESCRIPTION_BYTES)
                 );
-                let description =
-                    tool_approval_description(&candidate, "문서검색", &json!({"query": query}));
-                assert!(
-                    description.starts_with("Server: 한글 서버 (test-server)\nTool: 문서검색\n")
+                let arguments = json!({"query": query});
+                let serialized = serde_json::to_string(&arguments).unwrap();
+                let full = format!(
+                    "Server: {} ({})\nTool: {}\nArguments: {}\n\nAllow this one-time MCP tool call?",
+                    candidate.name, candidate.id, "문서검색", serialized
                 );
-                assert!(description.ends_with("\n…"));
-                assert!(description.len() <= MAX_APPROVAL_DESCRIPTION_BYTES);
+                let expected = if full.len() <= MAX_APPROVAL_DESCRIPTION_BYTES {
+                    full
+                } else {
+                    let mut bounded = full;
+                    let limit = MAX_APPROVAL_DESCRIPTION_BYTES
+                        .saturating_sub(APPROVAL_TRUNCATION_SUFFIX.len());
+                    bounded.truncate(bounded.floor_char_boundary(limit));
+                    bounded.push_str(APPROVAL_TRUNCATION_SUFFIX);
+                    bounded
+                };
+                assert_eq!(
+                    tool_approval_description(&candidate, "문서검색", &serialized),
+                    expected
+                );
             }
         }
     }
