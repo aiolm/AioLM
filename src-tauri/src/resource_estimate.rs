@@ -51,7 +51,7 @@ use crate::gguf::{self, ModelFacts, TensorBytes};
 use crate::hardware::{self, GpuVendor};
 use crate::tuning_defaults;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
@@ -937,38 +937,96 @@ struct CachedFacts {
     facts: Result<Arc<ModelFacts>, String>,
 }
 
+#[derive(Default)]
+struct FactsCache {
+    entries: HashMap<PathBuf, CachedFacts>,
+    order: VecDeque<PathBuf>,
+}
+
 /// Header facts by canonical path. An entry is reused only while the file
 /// keeps its size and modification time, so a replaced model is read again.
-static FACTS: LazyLock<Mutex<HashMap<PathBuf, CachedFacts>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static FACTS: LazyLock<Mutex<FactsCache>> = LazyLock::new(|| Mutex::new(FactsCache::default()));
+
+fn touch_facts(cache: &mut FactsCache, canonical: &Path) {
+    if cache.order.back().is_some_and(|path| path == canonical) {
+        return;
+    }
+    if let Some(position) = cache.order.iter().position(|path| path == canonical) {
+        let path = cache
+            .order
+            .remove(position)
+            .expect("cache order position exists");
+        cache.order.push_back(path);
+    } else {
+        cache.order.push_back(canonical.to_path_buf());
+    }
+}
+
+impl FactsCache {
+    fn hit(
+        &mut self,
+        canonical: &Path,
+        len: u64,
+        modified: Option<SystemTime>,
+    ) -> Option<Result<Arc<ModelFacts>, String>> {
+        let hit = self.entries.get(canonical).and_then(|entry| {
+            (entry.len == len && entry.modified == modified).then(|| entry.facts.clone())
+        });
+        if hit.is_some() {
+            touch_facts(self, canonical);
+        }
+        hit
+    }
+
+    fn insert(
+        &mut self,
+        canonical: &Path,
+        len: u64,
+        modified: Option<SystemTime>,
+        facts: Result<Arc<ModelFacts>, String>,
+    ) {
+        if self.entries.len() >= MAX_CACHED_FACTS && !self.entries.contains_key(canonical) {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(
+            canonical.to_path_buf(),
+            CachedFacts {
+                len,
+                modified,
+                facts,
+            },
+        );
+        touch_facts(self, canonical);
+    }
+}
+
+fn cached_facts_in(
+    cache: &Mutex<FactsCache>,
+    canonical: &Path,
+    len: u64,
+    modified: Option<SystemTime>,
+) -> Result<Arc<ModelFacts>, String> {
+    if let Ok(mut cache) = cache.lock() {
+        let hit = cache.hit(canonical, len, modified);
+        if let Some(facts) = hit {
+            return facts;
+        }
+    }
+    let facts = gguf::read_model_facts(canonical).map(Arc::new);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(canonical, len, modified, facts.clone());
+    }
+    facts
+}
 
 fn cached_facts(
     canonical: &Path,
     len: u64,
     modified: Option<SystemTime>,
 ) -> Result<Arc<ModelFacts>, String> {
-    if let Ok(cache) = FACTS.lock() {
-        if let Some(entry) = cache.get(canonical) {
-            if entry.len == len && entry.modified == modified {
-                return entry.facts.clone();
-            }
-        }
-    }
-    let facts = gguf::read_model_facts(canonical).map(Arc::new);
-    if let Ok(mut cache) = FACTS.lock() {
-        if cache.len() >= MAX_CACHED_FACTS && !cache.contains_key(canonical) {
-            cache.clear();
-        }
-        cache.insert(
-            canonical.to_path_buf(),
-            CachedFacts {
-                len,
-                modified,
-                facts: facts.clone(),
-            },
-        );
-    }
-    facts
+    cached_facts_in(&FACTS, canonical, len, modified)
 }
 
 fn load_model(path: &str, disk: &mut Disk, auxiliary: bool) -> Loaded {
@@ -2307,6 +2365,36 @@ mod tests {
 
     fn size(path: &Path) -> u64 {
         std::fs::metadata(path).unwrap().len()
+    }
+
+    #[test]
+    fn facts_cache_keeps_recent_models_when_capacity_is_exceeded() {
+        let cache = Mutex::new(FactsCache::default());
+
+        let scratch = Scratch::new();
+        let (values, tensors) = plain("llama");
+        let bytes = fixture::file(&values, &tensors);
+        let hot = scratch.write("hot.gguf", &bytes);
+        let cold: Vec<_> = (0..64)
+            .map(|index| scratch.write(&format!("cold-{index}.gguf"), &bytes))
+            .collect();
+
+        let read = |path: &Path| {
+            let mut disk = Disk::default();
+            let (canonical, len, modified) = disk.count(path, false).unwrap();
+            assert!(cached_facts_in(&cache, &canonical, len, modified).is_ok());
+        };
+        read(&hot);
+        for path in &cold {
+            read(path);
+            read(&hot);
+        }
+
+        let canonical = std::fs::canonicalize(hot).unwrap();
+        let cache = cache.lock().unwrap();
+        assert_eq!(cache.entries.len(), MAX_CACHED_FACTS);
+        assert!(cache.entries.contains_key(&canonical));
+        assert_eq!(cache.order.back(), Some(&canonical));
     }
 
     #[test]
