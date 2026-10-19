@@ -5,6 +5,7 @@ use crate::{
     state::AppState,
 };
 use std::{
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::atomic::Ordering,
 };
@@ -266,6 +267,21 @@ pub fn inspect_catalog(
     inspect_catalog_view(root, cancel, selection, true)
 }
 
+fn catalog_indexes<'scan, 'bindings>(
+    scan: &'scan crate::models::ModelScan,
+    binding_paths: &'bindings [String],
+) -> (
+    HashMap<&'scan str, &'scan crate::models::GgufModel>,
+    HashSet<&'bindings str>,
+) {
+    let mut scan_by_path = HashMap::with_capacity(scan.models.len());
+    for model in &scan.models {
+        scan_by_path.entry(model.path.as_str()).or_insert(model);
+    }
+    let binding_path_set = binding_paths.iter().map(String::as_str).collect();
+    (scan_by_path, binding_path_set)
+}
+
 fn inspect_catalog_view(
     root: &str,
     cancel: &std::sync::atomic::AtomicBool,
@@ -303,6 +319,7 @@ fn inspect_catalog_view(
     } else {
         crate::models::scan_cancellable(root, cancel)?
     };
+    let (scan_by_path, binding_path_set) = catalog_indexes(&scan, &binding_paths);
     let mut artifacts: Vec<ModelArtifact> = scan
         .models
         .iter()
@@ -353,14 +370,14 @@ fn inspect_catalog_view(
     let mut seen = artifacts
         .iter()
         .map(|artifact| artifact.path.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<HashSet<_>>();
     artifacts.extend(
         selected_bindings
             .unwrap_or_else(providers::registry::registered_models)
             .into_iter()
             .filter(|artifact| seen.insert(artifact.path.clone())),
     );
-    artifacts.sort_by_key(|artifact| !binding_paths.contains(&artifact.path));
+    artifacts.sort_by_key(|artifact| !binding_path_set.contains(artifact.path.as_str()));
     // Discovery does not need each runtime's binary-integrity/availability
     // check, especially not once per model. Launch/probe still enforce it.
     let mut ids = ProviderId::ALL.to_vec();
@@ -387,10 +404,8 @@ fn inspect_catalog_view(
                     )
                 })
                 .collect();
-            let shards = scan
-                .models
-                .iter()
-                .find(|model| model.path == artifact.path)
+            let shards = scan_by_path
+                .get(artifact.path.as_str())
                 .and_then(|model| model.shards.clone());
             CatalogModel {
                 artifact,
@@ -416,6 +431,90 @@ fn inspect_catalog_view(
         truncated,
         selection,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{GgufModel, ModelScan, ModelShards};
+
+    fn model(path: &str, shards: Option<&str>) -> GgufModel {
+        GgufModel {
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            path: path.into(),
+            size_mb: 1.0,
+            is_vision: false,
+            shards: shards.map(|marker| ModelShards {
+                files: vec![format!("{marker}.gguf")],
+                total: 2,
+                missing: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn catalog_indexes_preserve_first_shards_and_stable_binding_priority() {
+        let scan = ModelScan {
+            models: vec![
+                model("/models/none-first.gguf", None),
+                model("/models/none-first.gguf", Some("later-some")),
+                model("/models/some-first.gguf", Some("first-some")),
+                model("/models/some-first.gguf", None),
+                model("/models/unbound.gguf", None),
+            ],
+            truncated: false,
+        };
+        let binding_paths = vec![
+            "/models/some-first.gguf".into(),
+            "/models/some-first.gguf".into(),
+            "/models/absent.gguf".into(),
+            "/models/./unbound.gguf".into(),
+        ];
+        let (scan_by_path, binding_path_set) = catalog_indexes(&scan, &binding_paths);
+
+        assert!(scan_by_path["/models/none-first.gguf"].shards.is_none());
+        assert_eq!(
+            scan_by_path["/models/some-first.gguf"]
+                .shards
+                .as_ref()
+                .and_then(|shards| shards.files.first())
+                .map(String::as_str),
+            Some("first-some.gguf")
+        );
+        assert!(binding_path_set.contains("/models/some-first.gguf"));
+        assert!(binding_path_set.contains("/models/absent.gguf"));
+        assert!(!binding_path_set.contains("/models/unbound.gguf"));
+        assert!(binding_path_set.contains("/models/./unbound.gguf"));
+
+        let mut paths = vec![
+            "/models/unbound.gguf".to_owned(),
+            "/models/some-first.gguf".to_owned(),
+            "/models/none-first.gguf".to_owned(),
+            "/models/./unbound.gguf".to_owned(),
+        ];
+        paths.sort_by_key(|path| !binding_path_set.contains(path.as_str()));
+        assert_eq!(
+            paths,
+            vec![
+                "/models/some-first.gguf",
+                "/models/./unbound.gguf",
+                "/models/unbound.gguf",
+                "/models/none-first.gguf",
+            ]
+        );
+        assert!(!paths.iter().any(|path| path == "/models/absent.gguf"));
+    }
+
+    #[test]
+    fn catalog_indexes_accept_empty_scan_and_bindings() {
+        let scan = ModelScan {
+            models: vec![],
+            truncated: false,
+        };
+        let (scan_by_path, binding_path_set) = catalog_indexes(&scan, &[]);
+        assert!(scan_by_path.is_empty());
+        assert!(binding_path_set.is_empty());
+    }
 }
 
 #[tauri::command]
