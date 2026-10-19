@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import { defaultPreferences, type AppPreferences } from "../../shared/config/preferences";
 import * as notifications from "../../shared/lib/notifications";
@@ -17,12 +17,46 @@ const mount = (preferences: AppPreferences = defaultPreferences(), locale: AppPr
   render(<I18nProvider initialLocale={locale}><SettingsPanel preferences={preferences} update={update} reset={vi.fn()} /></I18nProvider>);
   return update;
 };
+function resetCategory(value: string) {
+  fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
+  const dialog = screen.getByRole('dialog', { name: 'Reset settings' });
+  fireEvent.click(within(dialog).getByDisplayValue(value));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Reset settings' }));
+}
 const choose = (combobox: string, option: string) => {
   fireEvent.click(screen.getByRole("combobox", { name: combobox }));
   fireEvent.click(screen.getByRole("option", { name: option }));
 };
 
 describe("typography preferences", () => {
+  it.each(['chat', 'server', 'appearance', 'advanced', 'notifications'] as const)('confirms only the %s preference scope and leaves other settings untouched', scope => {
+    const preferences = defaultPreferences();
+    const original = structuredClone(preferences);
+    const update = vi.fn(); const reset = vi.fn();
+    render(<I18nProvider initialLocale="en"><SettingsPanel preferences={preferences} update={update} reset={reset} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+    expect(screen.queryByRole('button', { name: 'Reset chat' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset notifications' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reset settings' }));
+    const dialog = screen.getByRole('dialog', { name: 'Reset settings' });
+    fireEvent.click(within(dialog).getByDisplayValue(scope));
+    expect(update).not.toHaveBeenCalled(); expect(reset).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(update).not.toHaveBeenCalled(); expect(reset).not.toHaveBeenCalled();
+    resetCategory(scope);
+    expect(update).toHaveBeenCalledExactlyOnceWith(scope === 'appearance'
+      ? { appearance: original.appearance, theme: original.theme } : { [scope]: original[scope] });
+    expect(reset).not.toHaveBeenCalled();
+    expect(preferences).toEqual(original);
+  });
+
+  it('restores all app preferences only when that scope is confirmed', () => {
+    const update = vi.fn(); const reset = vi.fn();
+    render(<I18nProvider initialLocale="en"><SettingsPanel preferences={defaultPreferences()} update={update} reset={reset} /></I18nProvider>);
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+    resetCategory('all');
+    expect(reset).toHaveBeenCalledOnce(); expect(update).not.toHaveBeenCalled();
+  });
   it("patches the app and code fonts and previews them immediately", () => {
     const update = mount({ ...defaultPreferences(), appearance: { ...defaultPreferences().appearance, fontFamily: "serif", codeFontFamily: "system" } });
     fireEvent.click(screen.getByRole("tab", { name: "Appearance" }));
@@ -55,9 +89,9 @@ describe("typography preferences", () => {
   it("resets typography through the existing appearance and chat resets", () => {
     const update = mount();
     fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset appearance" }));
+    resetCategory('appearance');
     expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ appearance: expect.objectContaining({ fontFamily: "default", codeFontFamily: "default" }) }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset chat" }));
+    resetCategory('chat');
     expect(update).toHaveBeenLastCalledWith({ chat: expect.objectContaining({ lineSpacing: "normal" }) });
   });
 });
@@ -160,7 +194,7 @@ describe("notification preferences", () => {
   it("resets notification categories to off", () => {
     const update = mount({ ...defaultPreferences(), notifications: { chat: true, downloads: true, benchmark: true } });
     fireEvent.click(screen.getByRole("tab", { name: "Advanced" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset notifications" }));
+    resetCategory('notifications');
     expect(update).toHaveBeenLastCalledWith({ notifications: { chat: false, downloads: false, benchmark: false } });
   });
 

@@ -19,6 +19,7 @@ import AppUpdateSettings from "../updates/AppUpdateSettings";
 import PersonalizationSettings, { usePersonalizationEditor } from "./PersonalizationSettings";
 import { personalizationText } from "../../shared/i18n/personalizationText";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
+import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
 
 interface Props { preferences: AppPreferences; update: (patch: Partial<AppPreferences>) => void; reset: () => void; store?: AppStore; updateRequest?: number; }
 
@@ -121,6 +122,8 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const search = searchText[locale];
   const [confirmReset, setConfirmReset] = useState(false);
+  const [resetScope, setResetScope] = useState<'all' | 'chat' | 'server' | 'appearance' | 'advanced' | 'notifications'>('all');
+  const resetCopy = controlChoiceCopy[locale];
   const [ioError, setIoError] = useState<string | null>(null);
   const [saveState, showSaved] = useFlashMessage(1800);
   const [confirmWipe, setConfirmWipe] = useState(false);
@@ -167,6 +170,14 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
   const patch = (next: Partial<AppPreferences>) => {
     update(next);
     showSaved("saved");
+  };
+  const restorePreferences = () => {
+    if (resetScope === 'all') reset();
+    else {
+      const defaults = defaultPreferences();
+      patch(resetScope === 'appearance' ? { appearance: defaults.appearance, theme: defaults.theme } : { [resetScope]: defaults[resetScope] });
+    }
+    setConfirmReset(false);
   };
   const toggle = (key: "enterToSend" | "showTimestamps" | "streamResponses" | "compactMessages", value: boolean) => patch({ chat: { ...preferences.chat, [key]: value } });
   const bool = (id: string, checked: boolean, onChange: (value: boolean) => void) => <Switch id={id} checked={checked} onChange={onChange} />;
@@ -276,10 +287,10 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
           <h3>{t("settings.advanced")}</h3>
           <Row id="settings-developer-mode" label={t("settings.developerMode")} description={t("settings.developerModeDesc")}>{bool("settings-developer-mode", preferences.advanced.developerMode, (value) => patch({ advanced: { ...preferences.advanced, developerMode: value } }))}</Row>
           <Row id="settings-confirm-destructive" label={t("settings.confirmDestructive")} description={t("settings.confirmDestructiveDesc")}>{bool("settings-confirm-destructive", preferences.advanced.confirmDestructiveActions, (value) => patch({ advanced: { ...preferences.advanced, confirmDestructiveActions: value } }))}</Row>
-          <div className="settings-danger app-card app-card--tight"><strong>{t("settings.reset")}</strong><p>{t("settings.resetDesc")}</p><button type="button" className="app-button app-button--danger" data-icon="reset" onClick={() => setConfirmReset(true)}>{t("settings.resetAction")}</button></div>
+          <div className="settings-danger app-card app-card--tight"><strong>{t("settings.resetAction")}</strong><p>{resetCopy.resetHint}</p><button type="button" className="app-button app-button--danger" data-icon="reset" onClick={() => { setResetScope('all'); setConfirmReset(true); }}>{t("settings.resetAction")}</button></div>
           {ioError && !normalizedQuery && <FeedbackBanner tone="error" className="m-3">{normalizeDisplayText(ioError)}</FeedbackBanner>}
           <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("settings.backupTitle")}</strong><p>{t("settings.backupDescription")}</p><div className="mt-3 flex flex-wrap gap-2.5"><button type="button" className="app-button app-button--secondary" data-icon="upload" onClick={downloadExport}>{t("settings.export")}</button><label data-icon="upload" className="app-button app-button--secondary cursor-pointer">{t("settings.import")}
-<input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label><button type="button" className="app-button app-button--warning" data-icon="reset" onClick={() => update({ chat: defaultPreferences().chat })}>{t("settings.resetChat")}</button><button type="button" className="app-button app-button--warning" data-icon="reset" onClick={() => update({ server: defaultPreferences().server })}>{t("settings.resetServer")}</button><button type="button" className="app-button app-button--warning" data-icon="reset" onClick={() => update({ appearance: defaultPreferences().appearance, theme: defaultPreferences().theme })}>{t("settings.resetAppearance")}</button><button type="button" className="app-button app-button--warning" data-icon="reset" onClick={() => update({ advanced: defaultPreferences().advanced })}>{t("settings.resetAdvanced")}</button><button type="button" className="app-button app-button--warning" data-icon="reset" onClick={() => update({ notifications: defaultPreferences().notifications })}>{prefCopy.resetNotifications}</button></div></div>
+<input type="file" accept="application/json,.json" className="sr-only" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label></div></div>
           <div className="settings-danger app-card app-card--tight"><strong>{t("ui.wipeDataTitle")}</strong><p>{t("ui.wipeDataDescription")}</p><button type="button" className="app-button app-button--danger" data-icon="delete" disabled={wiping} onClick={() => setConfirmWipe(true)}>{t("ui.wipeDataAction")}</button></div>
           <div className="settings-note app-card app-card--muted app-card--tight"><strong>{t("settings.nativeTitle")}</strong><p>{t("settings.nativeMessage")}</p></div>
         </>}
@@ -300,6 +311,12 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
       onConfirm={() => void wipeConversationData()}
       onCancel={() => { if (!wiping) setConfirmWipe(false); }}
     />
-    <ConfirmDialog open={confirmReset} title={t("settings.resetTitle")} description={t("settings.resetMessage")} confirmLabel={t("settings.resetAction")} onConfirm={() => { reset(); setConfirmReset(false); }} onCancel={() => setConfirmReset(false)} />
+    <ConfirmDialog open={confirmReset} title={t("settings.resetAction")} description={<>
+      <p>{resetCopy.resetHint}</p><fieldset className="grid gap-2 mt-3"><legend>{resetCopy.scope}</legend>
+        {(['all', 'chat', 'server', 'appearance', 'advanced', 'notifications'] as const).map(scope => <label key={scope} className="flex items-center gap-2">
+          <input type="radio" name="settings-reset-scope" value={scope} checked={resetScope === scope} onChange={() => setResetScope(scope)} />{resetCopy[scope]}
+        </label>)}
+      </fieldset>
+    </>} confirmLabel={t("settings.resetAction")} onConfirm={restorePreferences} onCancel={() => setConfirmReset(false)} />
   </div>;
 }
