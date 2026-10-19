@@ -201,8 +201,10 @@ export function estimateTextTokens(text: string): number {
   let nonAscii = 0;
   let cjk = 0;
   for (const character of text) {
-    if (/^[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]$/u.test(character)) cjk += 1;
-    else if (character.codePointAt(0)! <= 0x7f) ascii += 1;
+    const code = character.codePointAt(0)!;
+    if ((code >= 0x3400 && code <= 0x9fff) || (code >= 0x3040 && code <= 0x30ff)
+      || (code >= 0xac00 && code <= 0xd7af)) cjk += 1;
+    else if (code <= 0x7f) ascii += 1;
     else nonAscii += 1;
   }
   return Math.max(1, Math.ceil(ascii / 4 + nonAscii / 2.5 + cjk / 1.8));

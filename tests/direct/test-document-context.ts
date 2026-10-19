@@ -34,6 +34,16 @@ const vectorChunks = splitDocumentChunks([vectorDocument], 6);
 const vectorContext = buildVectorDocumentContext(vectorChunks, [[1, 0], [0, 1], [0, 1]], 2, 500);
 assert.ok(vectorContext?.includes("second"));
 assert.ok(estimateTextTokens("한글 테스트") > estimateTextTokens("test"));
+assert.equal(estimateTextTokens(''), 0);
+for (const [code, tokens] of [
+  [0x7f, 4], [0x80, 6], [0x303f, 6], [0x3040, 8], [0x30ff, 8], [0x3100, 6],
+  [0x33ff, 6], [0x3400, 8], [0x9fff, 8], [0xa000, 6],
+  [0xabff, 6], [0xac00, 8], [0xd7af, 8], [0xd7b0, 6], [0xd800, 6], [0x1f600, 6],
+]) {
+  assert.equal(estimateTextTokens(String.fromCodePoint(code).repeat(13)), tokens,
+    `Token estimates preserve character weighting at U+${code.toString(16).toUpperCase()}.`);
+}
+assert.equal(estimateTextTokens('A'.repeat(4) + 'é'.repeat(5) + '한'.repeat(9) + '😀'.repeat(5)), 10);
 
 // A document past the 64-chunk (~115KB at the default 1800-char chunk size)
 // vector-search limit must be flagged so the UI can warn the user instead of
