@@ -132,6 +132,12 @@ fn valid_row(row: &Value) -> bool {
 }
 
 fn files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut paths = files_unsorted(root)?;
+    paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
+    Ok(paths)
+}
+
+fn files_unsorted(root: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = match fs::read_dir(root.join("runs")) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -140,19 +146,21 @@ fn files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| error.to_string())?;
-        if entry
+        if !entry
             .file_type()
             .map_err(|error| error.to_string())?
             .is_file()
-            && entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "jsonl")
         {
-            paths.push(entry.path());
+            continue;
+        }
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
+            paths.push(path);
         }
     }
-    paths.sort_unstable_by(|left, right| right.file_name().cmp(&left.file_name()));
     Ok(paths)
 }
 
@@ -250,7 +258,7 @@ fn record_digest(record: &Value) -> String {
 }
 
 fn existing_digests(root: &Path) -> Result<HashSet<String>, String> {
-    Ok(files(root)?
+    Ok(files_unsorted(root)?
         .into_iter()
         .filter_map(|path| {
             path.file_name()
