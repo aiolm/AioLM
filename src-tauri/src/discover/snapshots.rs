@@ -324,11 +324,17 @@ pub fn installed_snapshots(
         {
             continue;
         }
-        let Some(manifest) = read_snapshot_manifest(&entry.path().join(SNAPSHOT_MANIFEST))? else {
+        let Some(observed) =
+            read_snapshot_manifest_observation(&entry.path().join(SNAPSHOT_MANIFEST))?
+        else {
             continue;
         };
-        if manifest.repository == repo && manifest.revision == revision {
-            artifacts.push(crate::providers::artifacts::inspect_snapshot(&entry.path()));
+        if observed.manifest.repository == repo && observed.manifest.revision == revision {
+            artifacts.push(crate::providers::artifacts::inspect_snapshot_with_manifest(
+                &entry.path(),
+                observed.manifest,
+                &observed.bytes,
+            ));
         }
     }
     artifacts.sort_by(|left, right| right.revision.cmp(&left.revision));
@@ -359,9 +365,14 @@ pub(crate) fn snapshot_path(directory: &Path, relative: &str) -> PathBuf {
         .fold(directory.to_path_buf(), |path, part| path.join(part))
 }
 
-/// Read a snapshot ownership manifest without following a link or reading an
-/// unbounded file. `None` means there is no manifest at `path`.
-pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, String> {
+struct SnapshotManifestObservation {
+    manifest: SnapshotManifest,
+    bytes: Vec<u8>,
+}
+
+fn read_snapshot_manifest_observation(
+    path: &Path,
+) -> Result<Option<SnapshotManifestObservation>, String> {
     use std::io::Read;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -410,7 +421,13 @@ pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManif
     {
         return Err("snapshot manifest lists an unsafe path".into());
     }
-    Ok(Some(manifest))
+    Ok(Some(SnapshotManifestObservation { manifest, bytes }))
+}
+
+/// Read a snapshot ownership manifest without following a link or reading an
+/// unbounded file. `None` means there is no manifest at `path`.
+pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, String> {
+    Ok(read_snapshot_manifest_observation(path)?.map(|observed| observed.manifest))
 }
 
 /// Accept a file already at a snapshot destination only when it is a regular
@@ -798,6 +815,17 @@ mod tests {
         }
         let artifacts = installed_snapshots(root.to_str().unwrap(), "owner/model").unwrap();
         assert_eq!(artifacts.len(), 3);
+        assert_eq!(
+            artifacts
+                .iter()
+                .map(|artifact| artifact.revision.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Some("c".repeat(40)),
+                Some("b".repeat(40)),
+                Some("a".repeat(40))
+            ]
+        );
         assert!(artifacts.iter().any(|artifact| artifact.format
             == crate::providers::artifacts::ArtifactFormat::Mlx
             && artifact.ready_files()));
@@ -883,6 +911,18 @@ mod tests {
                 size: 1,
                 oid: None,
             }],
+            vec![
+                SnapshotFile {
+                    path: "config.json".into(),
+                    size: 1,
+                    oid: None,
+                },
+                SnapshotFile {
+                    path: "CONFIG.json".into(),
+                    size: 1,
+                    oid: None,
+                },
+            ],
         ] {
             fs::write(
                 &path,
@@ -895,6 +935,10 @@ mod tests {
             .unwrap();
             assert!(read_snapshot_manifest(&path).is_err());
         }
+        fs::write(&path, b"{broken").unwrap();
+        assert!(read_snapshot_manifest(&path)
+            .unwrap_err()
+            .contains("invalid"));
         fs::write(
             &path,
             serde_json::to_vec(&SnapshotManifest {
