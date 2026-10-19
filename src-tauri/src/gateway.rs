@@ -119,6 +119,16 @@ impl GatewayHandle {
 
 const MAX_RESPONSES: usize = 128;
 
+/// Return one complete SSE line and advance a cursor without moving the
+/// buffered suffix. The caller compacts the consumed prefix once per chunk.
+fn take_sse_line<'a>(pending: &'a str, cursor: &mut usize) -> Option<&'a str> {
+    let relative = pending[*cursor..].find('\n')?;
+    let end = *cursor + relative;
+    let line = pending[*cursor..end].trim_end_matches('\r');
+    *cursor = end + 1;
+    Some(line)
+}
+
 #[derive(Clone)]
 struct StoredResponse {
     response: Value,
@@ -980,6 +990,7 @@ async fn stream_responses(
     .await?;
     let mut state = ResponseStreamState::default();
     let mut pending = String::new();
+    let mut pending_cursor = 0;
     let mut body_stream = response.bytes_stream();
     while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk =
@@ -988,9 +999,7 @@ async fn stream_responses(
         if pending.len() > MAX_STREAM_PENDING_BYTES {
             return Err("upstream SSE line exceeded the 4 MiB limit".into());
         }
-        while let Some(index) = pending.find('\n') {
-            let line = pending[..index].trim_end_matches('\r').to_string();
-            pending.drain(..=index);
+        while let Some(line) = take_sse_line(&pending, &mut pending_cursor) {
             if let Some(data) = line.strip_prefix("data:") {
                 if data.trim() == "[DONE]" {
                     continue;
@@ -999,6 +1008,10 @@ async fn stream_responses(
                     state.apply(&value, stream).await?;
                 }
             }
+        }
+        if pending_cursor > 0 {
+            pending.drain(..pending_cursor);
+            pending_cursor = 0;
         }
     }
     if !pending.trim().is_empty() {
@@ -1095,6 +1108,7 @@ async fn stream_response(
     write_event(stream, "message_start", json!({"type":"message_start","message":{"id":message_id,"type":"message","role":"assistant","model":request.get("model").and_then(Value::as_str).unwrap_or("local-model"),"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}})).await?;
     let mut parser = OpenAiStream::default();
     let mut pending = String::new();
+    let mut pending_cursor = 0;
     let mut body_stream = response.bytes_stream();
     while let Some(chunk) = unless_client_leaves(stream, body_stream.next()).await? {
         let chunk = chunk.map_err(|error| format!("upstream SSE read failed: {error}"))?;
@@ -1102,9 +1116,7 @@ async fn stream_response(
         if pending.len() > MAX_STREAM_PENDING_BYTES {
             return Err("upstream SSE line exceeded the 4 MiB limit".into());
         }
-        while let Some(index) = pending.find('\n') {
-            let line = pending[..index].trim_end_matches('\r').to_string();
-            pending.drain(..=index);
+        while let Some(line) = take_sse_line(&pending, &mut pending_cursor) {
             if let Some(data) = line.strip_prefix("data:") {
                 if data.trim() == "[DONE]" {
                     break;
@@ -1113,6 +1125,10 @@ async fn stream_response(
                     parser.apply(&value, stream).await?;
                 }
             }
+        }
+        if pending_cursor > 0 {
+            pending.drain(..pending_cursor);
+            pending_cursor = 0;
         }
     }
     if !pending.trim().is_empty() && pending.trim() != "data: [DONE]" {

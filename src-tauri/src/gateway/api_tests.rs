@@ -106,6 +106,13 @@ fn delta(text: &str) -> Chunk {
     sse_data(json!({"choices":[{"delta":{"content":text},"finish_reason":null}]}))
 }
 
+fn delta_line(text: &str, line_ending: &str) -> String {
+    format!(
+        "data: {}{line_ending}{line_ending}",
+        json!({"choices":[{"delta":{"content":text},"finish_reason":null}]}),
+    )
+}
+
 fn finish() -> Chunk {
     sse_data(
         json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}),
@@ -1178,6 +1185,135 @@ async fn anthropic_streams_are_translated_event_by_event() {
     assert_eq!(events[2].1["delta"]["text"], "Hel");
     assert_eq!(events[5].1["delta"]["stop_reason"], "end_turn");
     eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn responses_stream_parser_handles_dense_lines_and_continues_after_done() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::spawn(|_| {
+        let mut body = String::new();
+        for _ in 0..256 {
+            body.push_str(&delta_line("x", "\n"));
+        }
+        body.push_str("data: [DONE]\n\n");
+        body.push_str(&delta_line("tail", "\n"));
+        Reply::sse(vec![Chunk::Data(body)])
+    })
+    .await;
+    api.load_default(&upstream, "worker", "m.gguf");
+
+    let mut response = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","stream":true,"input":"hi"}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let events = sse_events(&drain(&mut response).await);
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter(|(name, _)| name == "response.output_text.delta")
+        .map(|(_, value)| value["delta"].as_str().unwrap())
+        .collect();
+    assert_eq!(deltas.len(), 257);
+    assert_eq!(deltas[..256], vec!["x"; 256]);
+    assert_eq!(deltas[256], "tail");
+    assert_eq!(
+        events.last().unwrap().1["response"]["output_text"],
+        format!("{}tail", "x".repeat(256))
+    );
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn anthropic_stream_parser_preserves_crlf_chunk_boundaries_and_done_leftovers() {
+    let api = TestApi::start().await;
+    let gate = Arc::new(Notify::new());
+    let held = gate.clone();
+    let before = delta_line("before", "\r\n");
+    let after_value = json!({
+        "choices":[{"delta":{"content":"after"},"finish_reason":null}]
+    });
+    let first = format!("{before}data: [DONE]\r\n\r\ndata: {after_value}",);
+    let finish_line = format!(
+        "data: {}\r\n\r\n",
+        json!({"choices":[{"delta":{},"finish_reason":"stop"}]})
+    );
+    let second = format!("\r\n\r\n{finish_line}data: [DONE]\r\n\r\n");
+    let first_output = first.clone();
+    let second_output = second.clone();
+    let upstream = Upstream::spawn(move |_| {
+        Reply::sse(vec![
+            Chunk::Data(first_output.clone()),
+            Chunk::Wait(held.clone()),
+            Chunk::Data(second_output.clone()),
+        ])
+    })
+    .await;
+    api.load_default(&upstream, "worker", "m.gguf");
+
+    let mut response = api
+        .post_messages(&json!({
+            "model":"m.gguf","max_tokens":16,"stream":true,
+            "messages":[{"role":"user","content":"hi"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let mut body = String::new();
+    while !body.contains("\"text\":\"before\"") {
+        body.push_str(&next_chunk(&mut response).await.unwrap());
+    }
+    gate.notify_one();
+    body.push_str(&drain(&mut response).await);
+    let events = sse_events(&body);
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter(|(name, _)| name == "content_block_delta")
+        .map(|(_, value)| value["delta"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(deltas, ["before", "after"]);
+    assert_eq!(
+        events.last().map(|(_, value)| value["type"].as_str()),
+        Some(Some("message_stop"))
+    );
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn oversized_sse_lines_close_streams_without_completing_them() {
+    for route in ["messages", "responses"] {
+        let api = TestApi::start().await;
+        let upstream = Upstream::spawn(|_| {
+            Reply::sse(vec![Chunk::Data(format!(
+                "data: {}",
+                "x".repeat(MAX_STREAM_PENDING_BYTES + 1)
+            ))])
+        })
+        .await;
+        api.load_default(&upstream, "worker", "m.gguf");
+
+        let mut response = request_for(&api, route, true).send().await.unwrap();
+        assert_eq!(response.status(), 200, "{route}");
+        let body = drain(&mut response).await;
+        assert!(
+            body.contains(if route == "messages" {
+                "event: message_start"
+            } else {
+                "event: response.created"
+            }),
+            "{route}: {body}"
+        );
+        assert!(!body.contains("event: message_stop"), "{route}: {body}");
+        assert!(
+            !body.contains("event: response.completed"),
+            "{route}: {body}"
+        );
+        eventually(|| api.active() == 0).await;
+    }
 }
 
 #[tokio::test]
