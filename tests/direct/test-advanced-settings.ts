@@ -1,29 +1,6 @@
 import assert from "node:assert/strict";
 import { buildChatRequestBody } from "../../src/shared/api/index.ts";
-import { QWEN38_CHAT_OPTIONS, QWEN38_DEFAULTS, QWEN38_SERVER_ARGS } from "../../src/shared/config/qwenDefaults.ts";
 import { assertUnmanagedServerArgs, parseChatOptions } from "../../src/shared/config/tuningValidation.ts";
-
-assert.equal(QWEN38_DEFAULTS.ctx_size, 131072);
-assert.equal(QWEN38_DEFAULTS.batch_size, 1024);
-assert.equal(QWEN38_DEFAULTS.ubatch_size, 512);
-assert.equal(QWEN38_DEFAULTS.cache_type_k, "q8_0");
-assert.equal(QWEN38_DEFAULTS.cache_type_v, "q8_0");
-assert.equal(QWEN38_DEFAULTS.temperature, 1);
-assert.equal(QWEN38_DEFAULTS.top_p, 0.95);
-assert.equal(QWEN38_DEFAULTS.top_k, 20);
-assert.equal(QWEN38_DEFAULTS.spec_type, "draft-mtp");
-assert.equal(QWEN38_DEFAULTS.spec_draft_n_max, 5);
-assert.equal(QWEN38_DEFAULTS.reasoning_effort, "xhigh");
-assert.equal(QWEN38_DEFAULTS.mmproj, "");
-assert.deepEqual(QWEN38_SERVER_ARGS.slice(0, 2), ["--cache-ram", "16384"]);
-assert.ok(QWEN38_SERVER_ARGS.includes("--jinja"));
-assert.ok(QWEN38_SERVER_ARGS.includes("--spec-draft-type-k"));
-assert.ok(QWEN38_SERVER_ARGS.includes("--spec-draft-type-v"));
-assert.ok(QWEN38_SERVER_ARGS.includes("--spec-draft-backend-sampling"));
-assert.deepEqual(QWEN38_CHAT_OPTIONS.chat_template_kwargs, {
-  enable_thinking: true,
-  preserve_thinking: true,
-});
 
 assert.deepEqual(
   assertUnmanagedServerArgs(["--min-p", "0.05", "--chat-template", "qwen"]),
@@ -109,11 +86,20 @@ assert.deepEqual(
     "selected-model",
     [{ role: "user", content: "hello" }],
     {
-      temperature: QWEN38_DEFAULTS.temperature,
-      top_p: QWEN38_DEFAULTS.top_p,
-      top_k: QWEN38_DEFAULTS.top_k,
+      temperature: 1,
+      top_p: 0.95,
+      top_k: 20,
       reasoning_effort: "high",
-      options: QWEN38_CHAT_OPTIONS,
+      options: {
+        min_p: 0.0,
+        repeat_penalty: 1.0,
+        presence_penalty: 0.0,
+        max_tokens: 131072,
+        chat_template_kwargs: {
+          enable_thinking: true,
+          preserve_thinking: true,
+        },
+      },
     },
   ).chat_template_kwargs,
   {

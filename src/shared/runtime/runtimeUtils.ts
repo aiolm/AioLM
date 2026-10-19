@@ -129,13 +129,6 @@ export function readLoadingProfiles(key = "aiolm.loading-profiles.v1"): LoadingP
   }
 }
 
-export function writeLoadingProfiles(profiles: LoadingProfile[], key = "aiolm.loading-profiles.v1"): void {
-  try {
-    const storage = localStorageSafe();
-    if (storage) storage.setItem(key, JSON.stringify(profiles.filter(validLoadingProfile).slice(0, 20)));
-  } catch { /* restricted WebView */ }
-}
-
 /**
  * Backends a local pull-request build can honestly produce. Mirrors
  * `SOURCE_BUILD_BACKENDS` in `src-tauri/src/runtime.rs`, which refuses the

@@ -4,7 +4,7 @@ import type { AppStore } from "../../shared/state/store";
 import { buildMultimodalContent, capMaxTokens, estimateChatTokens, estimateMessageTokens, MAX_SEARCHABLE_DOCUMENT_CHUNKS, trimChatHistory, type DocumentAttachment, type ImageAttachment } from "./chatUtils";
 import { CHAT_WORKSPACE_CLEAR_EVENT, chatRetrySnapshot, isChatWorkspaceClearing, savedRetry, toolTurn, type ChatHistoryMessage, type ChatThread, type ChatWorkspaceClearDetail } from "./chatHistory";
 import { matchRetryTools, retryTools } from "./chatRetryTools";
-import { QWEN38_DEFAULTS } from "../../shared/config/qwenDefaults";
+import { CHAT_REQUEST_FALLBACKS } from "../../shared/config/chatRequestFallbacks";
 import type { ModelProfile } from "../model-settings/profileEditor";
 import { appliedProfile, requestProfileFromApplication } from "../model-settings/profileEditor";
 import { chatContextBudget } from './providerChatContext';
@@ -380,12 +380,12 @@ export function useChatSend({
         provider_options: requestConfig?.provider_options?.[requestConfig.active_provider ?? 'llama.cpp'],
         engine: turn.engine,
         max_tokens_limit: runtimeContext ? undefined : Math.max(1, Math.floor(contextSize - promptTokens - 64)),
-        temperature: requestConfig?.temperature ?? QWEN38_DEFAULTS.temperature,
+        temperature: requestConfig?.temperature ?? CHAT_REQUEST_FALLBACKS.temperature,
         runtime_defaults: requestConfig?.runtime_defaults,
-        top_p: requestConfig?.top_p ?? QWEN38_DEFAULTS.top_p,
-        top_k: requestConfig?.top_k ?? QWEN38_DEFAULTS.top_k,
-        reasoning: requestConfig?.reasoning ?? QWEN38_DEFAULTS.reasoning,
-        reasoning_effort: requestConfig?.reasoning_effort ?? QWEN38_DEFAULTS.reasoning_effort,
+        top_p: requestConfig?.top_p ?? CHAT_REQUEST_FALLBACKS.top_p,
+        top_k: requestConfig?.top_k ?? CHAT_REQUEST_FALLBACKS.top_k,
+        reasoning: requestConfig?.reasoning ?? CHAT_REQUEST_FALLBACKS.reasoning,
+        reasoning_effort: requestConfig?.reasoning_effort ?? CHAT_REQUEST_FALLBACKS.reasoning_effort,
         options: chatOptions,
         tools: turn.tools,
       };

@@ -82,11 +82,6 @@ export function settingDefaultInfo(key: string, options: readonly ServerOption[]
   return format(request ? { value: request.value, source: 'reference' } : { value: null, source: 'unknown' }, false);
 }
 
-export function serverDefaultLabel(option: ServerOption, options: readonly ServerOption[], verified: boolean, locale: Locale, display: DefaultDisplay = {}): string {
-  const value = serverDefaultInfo(option, options, verified, locale, display);
-  return display.compact ? `${value.value} · ${value.badge}` : value.description;
-}
-
 export function settingDefaultLabel(key: string, options: readonly ServerOption[], verified: boolean, locale: Locale, display: DefaultDisplay = {}): string {
   const value = settingDefaultInfo(key, options, verified, locale, display);
   return display.compact ? `${value.value} · ${value.badge}` : value.description;
