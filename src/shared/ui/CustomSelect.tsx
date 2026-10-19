@@ -79,19 +79,26 @@ export function CustomSelect<T extends string | number = string>({
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const editable = !!onInputChange;
+  const normalizedQuery = query ? query.toLocaleLowerCase() : '';
   const visibleOptions = editable && query
-    ? options.filter(option => normalizeDisplayText(option.label).toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+    ? options.filter(option => normalizeDisplayText(option.label).toLocaleLowerCase().includes(normalizedQuery))
     : options;
   const open = isOpen && !disabled && visibleOptions.length > 0;
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement | HTMLInputElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
+  const setTriggerRef = useCallback((element: HTMLButtonElement | HTMLInputElement | null) => {
+    triggerRef.current = element;
+  }, []);
   const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
+  const menuMounted = menuPosition !== null;
+  const boundLabelsRef = useRef<HTMLLabelElement[]>([]);
   const [labelName, setLabelName] = useState<string>();
   const selected = options.find((opt) => opt.value === value) || options[0];
   const generatedId = useId();
   const listboxId = `${id ?? generatedId}-listbox`;
   const selectedIndex = visibleOptions.findIndex((opt) => opt.value === value);
+  const canObserveResize = typeof ResizeObserver !== 'undefined';
   const [highlightedIndex, setHighlightedIndex] = useState(selectedIndex);
   const typeaheadRef = useRef<{ query: string; timer: ReturnType<typeof setTimeout> | null }>({ query: "", timer: null });
   const controlDisabled = () => disabled || !!triggerRef.current?.matches(':disabled');
@@ -103,24 +110,48 @@ export function CustomSelect<T extends string | number = string>({
 
   useEffect(() => { if (disabled) setIsOpen(false); }, [disabled]);
 
-  useLayoutEffect(() => {
+  const focusFromLabel = useCallback((event: MouseEvent) => {
     const trigger = triggerRef.current;
     if (!trigger) return;
-    const labels = Array.from(trigger.labels ?? []);
-    const focusFromLabel = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node) || trigger.contains(target)) return;
-      const element = target instanceof Element ? target : target.parentElement;
-      if (element?.closest("button, input, select, textarea, a[href], summary, [contenteditable='true']")) return;
+    const target = event.target;
+    if (!(target instanceof Node) || trigger.contains(target)) return;
+    const element = target instanceof Element ? target : target.parentElement;
+    if (element?.closest("button, input, select, textarea, a[href], summary, [contenteditable='true']")) return;
 
-      // Labels retain their accessible name and focus behavior without forwarding
-      // a second activation to the dropdown button.
-      event.preventDefault();
-      if (!trigger.matches(':disabled')) trigger.focus();
-    };
-    labels.forEach((label) => label.addEventListener("click", focusFromLabel));
-    return () => labels.forEach((label) => label.removeEventListener("click", focusFromLabel));
+    // Labels retain their accessible name and focus behavior without forwarding
+    // a second activation to the dropdown button.
+    event.preventDefault();
+    if (!trigger.matches(':disabled')) trigger.focus();
+  }, []);
+
+  // This intentionally runs after every commit: associated labels can be replaced
+  // without changing the control props, so dependency-based binding misses them.
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    const labels = trigger ? Array.from(trigger.labels ?? []) : [];
+    const previousLabels = boundLabelsRef.current;
+    const labelsChanged = labels.length !== previousLabels.length || labels.some((label) => !previousLabels.includes(label));
+    if (labelsChanged) {
+      previousLabels.forEach((label) => {
+        if (!labels.includes(label)) label.removeEventListener("click", focusFromLabel);
+      });
+      labels.forEach((label) => {
+        if (!previousLabels.includes(label)) label.addEventListener("click", focusFromLabel);
+      });
+      boundLabelsRef.current = labels;
+    }
   });
+
+  useLayoutEffect(() => () => {
+    boundLabelsRef.current.forEach((label) => label.removeEventListener("click", focusFromLabel));
+    boundLabelsRef.current = [];
+  }, [focusFromLabel]);
+
+  const clampMenuLeft = useCallback((left: number) => {
+    const menu = menuRef.current;
+    if (!menu) return Math.max(MENU_EDGE, left);
+    return Math.max(MENU_EDGE, Math.min(Math.max(MENU_EDGE, left), window.innerWidth - MENU_EDGE - menu.getBoundingClientRect().width));
+  }, []);
 
   const updateMenuPosition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -137,10 +168,10 @@ export function CustomSelect<T extends string | number = string>({
     const viewportWidth = Math.max(0, window.innerWidth - edge * 2);
     const minWidth = Math.min(rect.width, viewportWidth);
 
-    setMenuPosition({
+    const nextPosition: DropdownPosition = {
       top: opensAbove ? rect.top - gap : rect.bottom + gap,
       // Aligned with the trigger until the rendered width is known (see below).
-      left: Math.max(edge, rect.left),
+      left: clampMenuLeft(rect.left),
       // A narrow trigger must not squeeze long options into a column a few
       // characters wide: the menu grows to its longest option, up to a readable
       // line length and never beyond the viewport.
@@ -148,18 +179,61 @@ export function CustomSelect<T extends string | number = string>({
       maxWidth: `max(${minWidth}px, min(${viewportWidth}px, ${MENU_READABLE_WIDTH}))`,
       maxHeight,
       opensAbove,
+    };
+    setMenuPosition(previous => previous
+      && previous.top === nextPosition.top
+      && previous.left === nextPosition.left
+      && previous.minWidth === nextPosition.minWidth
+      && previous.maxWidth === nextPosition.maxWidth
+      && previous.maxHeight === nextPosition.maxHeight
+      && previous.opensAbove === nextPosition.opensAbove
+      ? previous
+      : nextPosition);
+  }, [clampMenuLeft]);
+
+  const alignMenuLeft = useCallback(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+    const leftLimit = window.innerWidth - MENU_EDGE - menu.getBoundingClientRect().width;
+    setMenuPosition(previous => {
+      if (!previous) return previous;
+      const left = Math.max(MENU_EDGE, Math.min(Math.max(MENU_EDGE, previous.left), leftLimit));
+      return left === previous.left ? previous : { ...previous, left };
     });
   }, []);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+  }, [className, editable, menuClassName, open, overlayContainer, portalContainer, size, triggerClassName, updateMenuPosition, value]);
+
   // The menu's width follows its options, so its far edge is only known once it
   // is rendered: shift it toward the start just enough to stay inside the viewport.
-  // This runs after every render because options can arrive while it is open.
   useLayoutEffect(() => {
-    const menu = menuRef.current;
-    if (!menu || !menuPosition) return;
-    const left = Math.max(MENU_EDGE, Math.min(menuPosition.left, window.innerWidth - MENU_EDGE - menu.getBoundingClientRect().width));
-    if (left !== menuPosition.left) setMenuPosition({ ...menuPosition, left });
+    if (!open || !menuPosition || !canObserveResize) return;
+    alignMenuLeft();
+  }, [alignMenuLeft, canObserveResize, menuPosition, open]);
+
+  // Legacy WebViews without ResizeObserver need the original render-driven
+  // measurement path because mutable option arrays and CSS-only changes have no observer signal.
+  // This intentionally has no dependency list so same-reference option mutations are measured.
+  useLayoutEffect(() => {
+    if (!open || !menuPosition || canObserveResize) return;
+    updateMenuPosition();
   });
+
+  useLayoutEffect(() => {
+    if (!open || !menuMounted || !canObserveResize) return;
+    const trigger = triggerRef.current;
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+    const observer = new ResizeObserver(() => {
+      updateMenuPosition();
+    });
+    observer.observe(trigger);
+    observer.observe(menu);
+    return () => observer.disconnect();
+  }, [canObserveResize, menuMounted, open, updateMenuPosition]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -194,7 +268,6 @@ export function CustomSelect<T extends string | number = string>({
       copy.querySelectorAll(".app-custom-select-container").forEach((element) => element.remove());
       return copy.textContent?.trim();
     }).filter(Boolean).join(" ") || undefined);
-    updateMenuPosition();
     const handleViewportChange = () => updateMenuPosition();
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("scroll", handleViewportChange, true);
@@ -319,7 +392,7 @@ export function CustomSelect<T extends string | number = string>({
     >
       {name && <input type="hidden" name={name} value={value} disabled={disabled} />}
       {editable ? <div className="app-custom-select-editable">
-        <input {...accessibility} ref={element => { triggerRef.current = element; }}
+        <input {...accessibility} ref={setTriggerRef}
           className={`${triggerClasses} app-custom-select-input`} aria-autocomplete="list" autoComplete="off"
           value={normalizeDisplayText(String(value))} placeholder={placeholder} spellCheck={spellCheck}
           onClick={() => { if (!controlDisabled()) { setQuery(''); setIsOpen(true); } }}
@@ -334,7 +407,7 @@ export function CustomSelect<T extends string | number = string>({
           onMouseDown={event => event.preventDefault()} onClick={toggle}>{chevron}</button>
       </div> : <button
         {...accessibility}
-        ref={element => { triggerRef.current = element; }}
+        ref={setTriggerRef}
         type="button"
         title={selected?.title ? normalizeDisplayText(selected.title) : undefined}
         onClick={toggle}
