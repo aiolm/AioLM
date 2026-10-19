@@ -522,10 +522,16 @@ fn read_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
         options.custom_flags(libc::O_NONBLOCK);
     }
     let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(not_a_file());
     }
-    let mut bytes = Vec::new();
+    // The opened handle's length is only an allocation hint; the bounded read
+    // still observes the current bytes and enforces the limit below.
+    let capacity = usize::try_from(metadata.len())
+        .unwrap_or(MAX_FILE_BYTES + 1)
+        .min(MAX_FILE_BYTES + 1);
+    let mut bytes = Vec::with_capacity(capacity);
     file.take(MAX_FILE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_FILE_BYTES {
