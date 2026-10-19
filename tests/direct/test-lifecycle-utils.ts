@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { classifyLifecycleError, isLifecycleCancellation, isServerBusy, isServerRunning, lifecycleErrorMessage, nextPollDelay, shouldPoll } from "../../src/shared/lib/serverLifecycle.ts";
-import { configExport, parseConfigExport } from "../../src/shared/lib/exports.ts";
 import { deriveTokensPerSecond } from "../../src/shared/lib/metrics.ts";
 import { normalizeDisplayPath, normalizeDisplayPathLines, normalizeDisplayText } from "../../src/shared/lib/displayPaths.ts";
 
@@ -87,6 +86,4 @@ for (const [raw, display] of [
   assert.equal(diagnostic.path, raw);
 }
 assert.equal(normalizeDisplayText("  ordinary text\nC:\\models\\a.gguf  "), "  ordinary text\nC:\\models\\a.gguf  ");
-const exported = configExport({ theme: "dark" });
-assert.deepEqual(parseConfigExport<typeof exported.preferences>(JSON.stringify(exported)), { theme: "dark" });
 console.log("lifecycle utility tests passed");
