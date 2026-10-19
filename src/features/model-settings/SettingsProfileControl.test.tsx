@@ -4,6 +4,8 @@ import { I18nProvider, type Locale } from '../../shared/i18n/i18n';
 import SettingsProfileControl, { type ProfileViewItem, type SettingsProfileControlProps } from './SettingsProfileControl';
 import * as api from '../../shared/api';
 import { parseRuntimeHelp } from '../../shared/config/serverOptions';
+import { testConfig } from '../../testing/appStore';
+import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 
 vi.mock('../../shared/api', async original => ({ ...await original<typeof api>(), rtProbe: vi.fn() }));
 
@@ -30,6 +32,38 @@ function openCreate() {
 }
 
 describe('settings profile workspace', () => {
+  it('uses the selected runtime schema in current values, preview and defaults without exposing saved secrets', async () => {
+    const provider = 'custom.profile-engine';
+    const window = schemaOption({ key: 'window', flag: '--window', target: 'launch', group: 'custom-group', kind: { type: 'integer' }, runtime_default: '12' });
+    const credential = schemaOption({ key: 'credential', flag: '--credential', target: 'launch', group: 'custom-group', kind: { type: 'text' } });
+    credential.sensitive = { certainty: 'documented', value: true };
+    credential.runtime_default = { certainty: 'documented', value: { literal: 'DEFAULT-SECRET' } };
+    vi.spyOn(api, 'providerOptionSchema').mockResolvedValue(effectiveSchema([], [window, credential]));
+    const runtimeConfig = { ...testConfig, active_provider: provider, active_runtime: 'build-one', temperature: 0.7, top_p: 0.9,
+      provider_options: { [provider]: { window: 5, credential: 'CURRENT-SECRET', retired: 'RETIRED-SECRET' } } } satisfies api.AppConfig;
+    const saved: ProfileViewItem = { id: 'saved-engine', name: 'Engine saved', provider, scope: 'global', settings: {
+      provider_options: { [provider]: { window: 9, credential: 'PREVIEW-SECRET' } } } };
+    const { container, onApply, onReset } = mount({ items: [saved], activeId: saved.id, defaultProfileId: saved.id,
+      currentSettings: runtimeConfig, defaults: { ...runtimeConfig, provider_options: { [provider]: {} } }, runtimeConfig });
+    const detail = within(container.querySelector('.settings-profile-detail') as HTMLElement);
+    expect(detail.queryByText('Temperature')).not.toBeInTheDocument();
+    expect(await detail.findByText('--window')).toBeVisible();
+    expect(detail.getByText('5')).toBeVisible();
+    expect(detail.getByText('Retired')).toBeVisible();
+    expect(detail.getByText(/Support unverified/)).toBeVisible();
+    preview('Engine saved · Selected · Default profile');
+    expect(detail.getByText('--window')).toBeVisible();
+    expect(detail.getByText('9')).toBeVisible();
+    fireEvent.click(container.querySelector('.settings-profile-defaults > summary')!);
+    const defaults = within(container.querySelector('.settings-profile-defaults') as HTMLElement);
+    expect(defaults.getByText('--window')).toBeVisible();
+    expect(defaults.getByText('12')).toBeVisible();
+    expect(defaults.queryByText('Temperature')).not.toBeInTheDocument();
+    for (const secret of ['CURRENT-SECRET', 'PREVIEW-SECRET', 'RETIRED-SECRET', 'DEFAULT-SECRET']) expect(container).not.toHaveTextContent(secret);
+    expect(api.providerOptionSchema).toHaveBeenCalledWith(runtimeConfig);
+    expect(onApply).not.toHaveBeenCalled(); expect(onReset).not.toHaveBeenCalled();
+    expect(runtimeConfig.provider_options[provider].credential).toBe('CURRENT-SECRET');
+  });
   it('selects a profile directly from the persistent banner before a model is chosen', async () => {
     const { onApply } = mount({ full: false, modelPath: '' });
     const picker = screen.getByRole('combobox', { name: 'Settings profiles' });

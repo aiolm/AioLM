@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { providerOf, providerDisplayName } from '../../shared/api/providers';
-import type { GpuDevice } from '../../shared/api/types';
+import type { AppConfig, GpuDevice } from '../../shared/api/types';
+import type { ProviderId } from '../../shared/api/providers';
 import type { ExecutionSettings } from '../../shared/config/executionSettings';
 import { useI18n } from '../../shared/i18n/i18n';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -17,11 +18,14 @@ import { SERVER_OPTIONS, type ServerOption } from '../../shared/config/serverOpt
 import { useServerOptions } from '../tuning/useServerOptions';
 import GpuPlacementSummary from './GpuPlacementSummary';
 import ServerArgumentsSummary from './ServerArgumentsSummary';
+import RuntimeProfileValues from './RuntimeProfileValues';
+import { useProfileRuntimeSchema, type ProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { runtimeGpuDevices } from '../../shared/runtime/sessionUtils';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../../shared/runtime/installedRuntimes';
 import './settings-profile.css';
 
 export interface ProfileViewItem {
+  provider?: ProviderId;
   id: string;
   name: string;
   scope: 'preset' | 'global' | 'model';
@@ -43,6 +47,7 @@ export interface SettingsProfileControlProps {
   defaultProfileId: string;
   modelPath: string;
   currentSettings: Partial<ExecutionSettings>;
+  runtimeConfig?: AppConfig;
   currentPrompt: string;
   defaults: Partial<ExecutionSettings>;
   runtimeOptions?: readonly ServerOption[];
@@ -79,11 +84,10 @@ const settingGroups = [
 
 type DefaultRuntime = { options: readonly ServerOption[]; verified: boolean; backend?: string; build?: string };
 
-function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; prompt?: string; runtime: DefaultRuntime; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
+function SettingsValues({ settings, provider, schema, prompt, runtime, gpuDevices, mode = 'current' }: { settings: Partial<ExecutionSettings>; provider: ProviderId; schema: ProfileRuntimeSchema; prompt?: string; runtime: DefaultRuntime; gpuDevices: readonly GpuDevice[]; mode?: 'current' | 'preview' | 'reference' }) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const renderValue = valueRenderer(locale);
-  const provider = providerOf(settings);
   const llama = provider === 'llama.cpp';
   const installedRuntimes = useInstalledRuntimes(llama);
   const backend = settings.active_backend ?? runtime.backend ?? '';
@@ -95,13 +99,9 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
   const source = sameRuntime ? runtime : previewRuntime;
   const displayDevices = sameRuntime ? gpuDevices
     : previewRuntime.capabilities?.backend === backend ? runtimeGpuDevices(backend, previewRuntime.capabilities.devices) : [];
+  if (!llama) return <RuntimeProfileValues settings={settings} provider={provider} prompt={prompt} mode={mode} schema={schema} />;
   const keys = new Set([...Object.keys(settings), ...(settings.runtime_defaults ?? [])]);
-  const shared = ['active_provider', 'active_runtime', 'temperature', 'top_p', 'top_k', 'reasoning_effort', 'request_timeout_seconds'];
-  const entries: [string, unknown][] = [...keys].filter(key => key !== 'active_model' && key !== 'runtime_defaults' && key !== 'chat_options' && key !== 'provider_options' && (llama ? key !== 'active_runtime' : shared.includes(key))).map(key => [key, settings[key as keyof ExecutionSettings]]);
-  if (!llama) for (const entry of Object.entries(settings.provider_options?.[provider] ?? {})) {
-    const index = entries.findIndex(([key]) => key === entry[0]);
-    if (index < 0) entries.push(entry); else entries[index] = entry;
-  }
+  const entries: [string, unknown][] = [...keys].filter(key => !['active_model', 'runtime_defaults', 'chat_options', 'provider_options', 'active_runtime'].includes(key)).map(key => [key, settings[key as keyof ExecutionSettings]]);
   const rendered = new Set(settingGroups.flatMap(group => [...group.keys]) as string[]);
   const extra = [...entries.filter(([key]) => !rendered.has(key)), ...Object.entries(settings.chat_options ?? {})];
   return <div className="settings-profile-values">
@@ -132,9 +132,11 @@ function SettingsValues({ settings, prompt, runtime, gpuDevices, mode = 'current
   </div>;
 }
 
-export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
+export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, runtimeConfig, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
+  const provider = providerOf(currentSettings);
+  const schema = useProfileRuntimeSchema(runtimeConfig, full && provider !== 'llama.cpp');
   const runtime = { options: runtimeOptions, verified: runtimeVerified, backend: currentSettings.active_backend, build: currentSettings.active_build };
   const labelId = useId();
   const detailId = useId();
@@ -294,10 +296,10 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
         {detailItem && isDefault(detailItem) && <p id={`${detailId}-delete-hint`} className="settings-profile-hint">{copy.defaultDeleteHint}</p>}
         {preview && <p className="settings-profile-hint">{copy.previewHint}</p>}
         {preview?.description && <p className="settings-profile-hint">{preview.description}</p>}
-        <SettingsValues settings={preview?.settings ?? currentSettings} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
+        <SettingsValues settings={preview?.settings ?? currentSettings} provider={preview?.provider ?? preview?.settings.active_provider ?? provider} schema={schema} prompt={preview ? preview.system_prompt : currentPrompt} runtime={runtime} gpuDevices={gpuDevices} mode={preview ? 'preview' : 'current'} />
       </section>
       <details className="settings-profile-defaults app-card app-card--tight"><summary>{copy.defaults}<Badge>{copy.readonly}</Badge></summary>
-        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} runtime={runtime} gpuDevices={gpuDevices} mode="reference" />
+        <p className="settings-profile-hint">{copy.defaultsSummary}</p><SettingsValues settings={defaults} provider={provider} schema={schema} runtime={runtime} gpuDevices={gpuDevices} mode="reference" />
       </details>
     </>}
     {children && <div className="settings-profile-editor">{children}</div>}

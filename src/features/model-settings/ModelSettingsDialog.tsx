@@ -356,7 +356,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <div className="model-settings-body" ref={body} id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${section}`}>
             <SettingsProfileControl bannerTarget={profileBannerTarget} items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
               defaultProfileId={defaultSettingsProfileEntry(profiles.library, provider).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
-              modelPath={cfg.active_model} currentSettings={settings} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={section === 'profiles'}
+              modelPath={cfg.active_model} currentSettings={settings} runtimeConfig={cfg} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={section === 'profiles'}
               disabled={disabled} blocked={providerOptionsPending || invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
               onApply={id => commitProfile(() => { const profile = profiles.available.find(item => item.id === id); if (!profile) throw new Error('This profile is no longer available.'); return profiles.prepareApply(profile); })}
               onSaveAs={(name, scope) => commitProfile(() => profiles.prepareSaveAs(name, scope))}
@@ -447,7 +447,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         description={changeCount(baseline, settings, profiles.savedApplication.system_prompt, profiles.systemPrompt) === 0
           ? copy.saveConfirmUnchanged
           : <SettingsChangeList saved={baseline} current={settings} savedPrompt={profiles.savedApplication.system_prompt} currentPrompt={profiles.systemPrompt}
-            runtimeOptions={runtime.options} runtimeVerified={runtime.verified} />}
+            runtimeOptions={runtime.options} runtimeVerified={runtime.verified} runtimeConfig={cfg} />}
         scrollableDescription
         confirmLabel={copy.saveConfirmAction} cancelLabel={copy.cancel} tone="primary" busy={disabled}
         onCancel={() => setConfirmSave(false)} onConfirm={() => { setConfirmSave(false); void apply('save'); }} />}

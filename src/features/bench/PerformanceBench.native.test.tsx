@@ -9,6 +9,7 @@ import type { AppStore } from '../../shared/state/store';
 import type { PerformanceBenchmarkRecord } from './performanceRecords';
 import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import { modelArtifact, type ModelArtifact } from '../../shared/api/providers';
+import { effectiveSchema } from '../../testing/effectiveSchema';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null }));
 vi.mock('../../shared/api/transport', () => ({ isNativeRuntimeAvailable: () => true }));
@@ -31,6 +32,7 @@ vi.mock('../../shared/api/index', () => ({
   deviceProfile: vi.fn(async () => null),
   rtProbe: vi.fn(async () => ({ backend: 'cpu', build: 'b123', devices: [], diagnostics: [], server_help: '' })),
   providerRuntimes: vi.fn(async () => []),
+  providerOptionSchema: vi.fn(async () => effectiveSchema([])),
   onPerformanceBenchmarkProgress: vi.fn(async () => () => undefined),
   runPerformanceBench: vi.fn(),
 }));

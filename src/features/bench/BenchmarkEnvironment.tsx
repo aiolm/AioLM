@@ -15,6 +15,8 @@ import { benchmarkEnvironmentCopy } from './benchmarkEnvironmentCopy';
 import { providerOf, providerDisplayName } from '../../shared/api/providers';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import RuntimeSelectionLabel from '../../shared/ui/RuntimeSelectionLabel';
+import RuntimeProfileValues from '../model-settings/RuntimeProfileValues';
+import { useProfileRuntimeSchema } from '../model-settings/useProfileRuntimeSchema';
 
 export function BenchmarkEnvironment({ config, application, device, runtimes, active, busy }: {
   config: AppConfig; application: ProfileApplication; device: DeviceReport | null;
@@ -27,6 +29,7 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
   const llama = provider === 'llama.cpp';
   const runtime = useServerOptions(config.active_backend, config.active_build,
     llama && active && !busy && !!config.active_backend && !!config.active_build && isNativeRuntimeAvailable());
+  const schema = useProfileRuntimeSchema(config, !llama && active && !busy);
   const profile = config.settings_profiles?.entries.find(entry => entry.id === application.profile_id);
   const profileName = profile ? profileDisplayName(profile, locale) : application.profile_name || copy.unknown;
   const value = (key: 'ngl' | 'threads' | 'batch_size' | 'ubatch_size' | 'cache_type_k' | 'cache_type_v' | 'flash_attn') => {
@@ -78,16 +81,13 @@ export function BenchmarkEnvironment({ config, application, device, runtimes, ac
       <div><dt>{copy.runtime}</dt><dd>{llama ? config.active_backend ? `${config.active_backend} · ${runtimeVersionLabel(runtimes, config.active_backend, config.active_build)}` : copy.unknown : <RuntimeSelectionLabel config={config} />}</dd></div>
     </dl>
     <h4 id={`${id}-settings`} className="sr-only">{copy.settings}</h4>
-    <dl className="performance-environment-settings" aria-labelledby={`${id}-settings`}>
-      {llama ? <>
+    {llama ? <dl className="performance-environment-settings" aria-labelledby={`${id}-settings`}>
       <div><dt>{copy.gpuLayers}</dt><dd>{value('ngl')}</dd></div>
       <div><dt>{copy.threads}</dt><dd>{value('threads')}</dd></div>
       <div><dt>{copy.batch}</dt><dd>{value('batch_size')} / {value('ubatch_size')}</dd></div>
       <div><dt>{copy.cache}</dt><dd>{value('cache_type_k')} / {value('cache_type_v')}</dd></div>
       <div><dt>{copy.flash}</dt><dd>{value('flash_attn')}</dd></div>
-      </> : Object.entries(config.provider_options?.[provider] ?? {}).map(([key, selected]) => <div key={key}><dt>{key}</dt><dd>{normalizeDisplayText(typeof selected === 'object' ? JSON.stringify(selected) : String(selected))}</dd></div>)}
-      {!llama && !Object.keys(config.provider_options?.[provider] ?? {}).length && <div><dt>{copy.settings}</dt><dd>{providerCopy[locale].inherit}</dd></div>}
-    </dl>
+    </dl> : <RuntimeProfileValues settings={config} provider={provider} schema={schema} mode="current" showRuntime={false} />}
     <h4 id={`${id}-hardware`} className="sr-only">{copy.hardware}</h4>
     <dl className="performance-environment-hardware" aria-labelledby={`${id}-hardware`}>
       <div><dt>{copy.gpu}</dt><dd className="performance-environment-devices">{!llama ? copy.automaticGpu : cpuOnly ? copy.cpuOnly : <>{!ids.length && <span>{copy.automaticGpu}</span>}{devices}{draftCpu && <span>{copy.cpuOnly} · {copy.draft}</span>}</>}</dd></div>
