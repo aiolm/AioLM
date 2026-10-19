@@ -17,6 +17,61 @@ beforeEach(() => {
 });
 
 describe('MCP catalog refresh selection', () => {
+  it('reuses derived values while an unrelated refresh state changes', async () => {
+    const { result } = setup();
+    await act(async () => { await result.current.refreshMcpTools(); });
+    const initialDefinitions = result.current.mcpDefinitions;
+    const initialEntries = result.current.mcpEntryByFunctionName;
+    act(() => result.current.toggleMcpTool('catalog:lookup'));
+    expect(result.current.mcpDefinitions).not.toBe(initialDefinitions);
+    expect(result.current.mcpEntryByFunctionName).not.toBe(initialEntries);
+    const definitions = result.current.mcpDefinitions;
+    const entries = result.current.mcpEntryByFunctionName;
+    let loaded!: (value: api.McpServer[]) => void;
+    vi.mocked(api.mcpListServers).mockImplementationOnce(() => new Promise(resolve => { loaded = resolve; }));
+    let refreshing!: Promise<unknown>;
+    act(() => { refreshing = result.current.refreshMcpTools(); });
+    await waitFor(() => expect(api.mcpListServers).toHaveBeenCalledTimes(2));
+    expect(result.current.loadingMcpTools).toBe(true);
+    expect(result.current.mcpDefinitions).toBe(definitions);
+    expect(result.current.mcpEntryByFunctionName).toBe(entries);
+    await act(async () => { loaded([{ id: 'catalog', name: 'Catalog', enabled: true, command: 'synthetic', args: [] }]); await refreshing; });
+    expect(result.current.mcpDefinitions).not.toBe(definitions);
+    expect(result.current.mcpEntryByFunctionName).not.toBe(entries);
+  });
+
+  it('does not reread tool definitions during an unrelated refresh rerender', async () => {
+    let schemaReads = 0;
+    const tool: api.McpTool = {
+      name: 'counted',
+      get input_schema() { schemaReads += 1; return {}; },
+    };
+    vi.mocked(api.mcpListTools).mockResolvedValue([tool]);
+    const { result } = setup();
+    await act(async () => { await result.current.refreshMcpTools(); });
+    const readsAfterDiscovery = schemaReads;
+    let loaded!: (value: api.McpServer[]) => void;
+    vi.mocked(api.mcpListServers).mockImplementationOnce(() => new Promise(resolve => { loaded = resolve; }));
+    let refreshing!: Promise<unknown>;
+    act(() => { refreshing = result.current.refreshMcpTools(); });
+    await waitFor(() => expect(api.mcpListServers).toHaveBeenCalledTimes(2));
+    expect(schemaReads).toBe(readsAfterDiscovery);
+    await act(async () => { loaded([{ id: 'catalog', name: 'Catalog', enabled: true, command: 'synthetic', args: [] }]); await refreshing; });
+  });
+
+  it('preserves catalog order and collision suffixes while pruning missing selections', async () => {
+    const first = { name: 'same', input_schema: { type: 'object', properties: { first: { type: 'string' } } } };
+    const second = { name: 'same', input_schema: { type: 'object', properties: { second: { type: 'number' } } } };
+    vi.mocked(api.mcpListTools).mockResolvedValue([second, first, { name: 'other', input_schema: { type: 'object' } }]);
+    const { result } = setup();
+    act(() => result.current.setSelectedMcpTools(['catalog:other', 'catalog:same', 'catalog:missing']));
+    await act(async () => { await result.current.refreshMcpTools(); });
+    expect(result.current.selectedMcpTools).toEqual(['catalog:other', 'catalog:same']);
+    expect(result.current.mcpDefinitions.map(definition => definition.function.name)).toEqual(['catalog__same', 'catalog__same_2', 'catalog__other']);
+    expect(result.current.mcpDefinitions.map(definition => definition.function.parameters)).toEqual([second.input_schema, first.input_schema, { type: 'object' }]);
+    expect([...result.current.mcpEntryByFunctionName.keys()]).toEqual(['catalog__same', 'catalog__same_2', 'catalog__other']);
+  });
+
   it('keeps deselected tools off and does not select newly discovered tools on refresh', async () => {
     const { result } = setup();
     await act(async () => { await result.current.refreshMcpTools(); });

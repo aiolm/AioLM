@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as api from "../../shared/api/index";
 import { I18nProvider } from "../../shared/i18n/i18n";
@@ -11,6 +11,38 @@ vi.mock("../../shared/api/index", () => ({
 
 describe("MCP path presentation", () => {
   beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); Element.prototype.scrollIntoView = vi.fn(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("serializes the selected schema once across argument validation and approval rerenders", async () => {
+    const server = { id: "schema-cache", name: "Synthetic schema cache", command: "node", args: [], enabled: true };
+    const tool = { name: "echo", input_schema: { type: "object", properties: { message: { type: "string" } } } };
+    vi.mocked(api.mcpListServers).mockResolvedValue([server]);
+    vi.mocked(api.mcpListTools).mockResolvedValue([tool]);
+    const stringify = vi.spyOn(JSON, "stringify");
+    const schemaSerializationCount = () => stringify.mock.calls.filter(([value]) => value === tool.input_schema).length;
+    render(<I18nProvider initialLocale="en"><McpPanel store={createTestStore()} /></I18nProvider>);
+    fireEvent.click((await screen.findByText(server.name)).closest("button")!);
+    fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
+    const beforePrepare = schemaSerializationCount();
+    fireEvent.click(await screen.findByRole("button", { name: "Prepare call: echo" }));
+    const afterPrepare = schemaSerializationCount();
+    const schema = screen.getByLabelText("Required input format (JSON Schema)");
+    const displayedSchema = schema.textContent;
+    expect(JSON.parse(displayedSchema!)).toEqual(tool.input_schema);
+    expect(afterPrepare).toBeGreaterThan(beforePrepare);
+    fireEvent.change(screen.getByLabelText("JSON arguments"), { target: { value: "invalid" } });
+    expect(schema.textContent).toBe(displayedSchema);
+    expect(schemaSerializationCount()).toBe(afterPrepare);
+    fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
+    expect(schemaSerializationCount()).toBe(afterPrepare);
+    expect(screen.getByText(/Unexpected token/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("JSON arguments"), { target: { value: "{}" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
+    expect(screen.getByRole("button", { name: "Approve and run once" })).toBeInTheDocument();
+    expect(schemaSerializationCount()).toBe(afterPrepare);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(schemaSerializationCount()).toBe(afterPrepare);
+  });
 
   it.each([
     ["Executable / command", "/synthetic/tools/mcp--fixture"],

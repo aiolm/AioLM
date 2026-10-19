@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import * as api from "../../shared/api/index";
 import { buildMcpFunctionNames } from "../mcp/mcpUtils";
 
@@ -81,10 +81,15 @@ export function useChatMcpTools() {
     setSelectedMcpTools((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   };
 
-  const selectedMcpEntries = mcpCatalog.filter((entry) => selectedMcpTools.includes(`${entry.serverId}:${entry.tool.name}`));
-  const generatedMcpNames = buildMcpFunctionNames(selectedMcpEntries.map((entry) => ({ serverId: entry.serverId, toolName: entry.tool.name })));
-  const mcpEntryByFunctionName = new Map(generatedMcpNames.map((name, index) => [name, selectedMcpEntries[index]]));
-  const mcpDefinitions: api.ChatToolDefinition[] = selectedMcpEntries.map((entry, index) => mcpToolDefinition(entry, generatedMcpNames[index]));
+  const { mcpEntryByFunctionName, mcpDefinitions } = useMemo(() => {
+    const selectedKeys = new Set(selectedMcpTools);
+    const selectedMcpEntries = mcpCatalog.filter((entry) => selectedKeys.has(`${entry.serverId}:${entry.tool.name}`));
+    const generatedMcpNames = buildMcpFunctionNames(selectedMcpEntries.map((entry) => ({ serverId: entry.serverId, toolName: entry.tool.name })));
+    return {
+      mcpEntryByFunctionName: new Map(generatedMcpNames.map((name, index) => [name, selectedMcpEntries[index]])),
+      mcpDefinitions: selectedMcpEntries.map((entry, index) => mcpToolDefinition(entry, generatedMcpNames[index])),
+    } satisfies { mcpEntryByFunctionName: Map<string, ChatMcpTool>; mcpDefinitions: api.ChatToolDefinition[] };
+  }, [mcpCatalog, selectedMcpTools]);
 
   return {
     mcpCatalog, mcpCatalogLoaded, selectedMcpTools, setSelectedMcpTools, mcpSelectionRevision, loadingMcpTools, mcpError,
