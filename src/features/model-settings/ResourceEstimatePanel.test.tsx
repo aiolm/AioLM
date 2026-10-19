@@ -24,6 +24,27 @@ const details = () => screen.getByText('Estimate details').closest('details')!;
 describe('pre-load resource estimates', () => {
   beforeEach(() => { vi.resetAllMocks(); vi.mocked(api.estimateModelResources).mockResolvedValue(estimate); });
 
+  it('reuses unchanged settings while estimates and details update, and requests edited settings immediately', async () => {
+    const stringify = vi.spyOn(JSON, 'stringify');
+    const settingsSerializations = () => stringify.mock.calls.filter(([value]) => value && typeof value === 'object'
+      && 'active_model' in value && value.active_model === cfg.active_model).length;
+    try {
+      const view = render(panel());
+      await waitFor(() => expect(screen.getByTestId('resource-vram')).toHaveTextContent('5.00 GiB'));
+      expect(settingsSerializations()).toBe(1);
+      fireEvent.click(screen.getByText('Estimate details'));
+      await waitFor(() => expect(screen.getByText(/estimated values for this configuration, not measurements/)).toBeVisible());
+      expect(settingsSerializations()).toBe(1);
+      expect(api.estimateModelResources).toHaveBeenCalledTimes(1);
+      view.rerender(panel({ ...cfg, ctx_size: 8192 }));
+      expect(api.estimateModelResources).toHaveBeenLastCalledWith(expect.objectContaining({ ctx_size: 8192 }), []);
+      await waitFor(() => expect(screen.getByTestId('resource-vram')).toHaveTextContent('5.00 GiB'));
+      expect(settingsSerializations()).toBe(2);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it('separates runtime RAM from offload and shows their sum in details', async () => {
     const large = 22.5 * GiB;
     vi.mocked(api.estimateModelResources).mockResolvedValue({ ...estimate, vram_bytes: large, required_vram_bytes: large, vram_capacity_bytes: 24 * GiB });

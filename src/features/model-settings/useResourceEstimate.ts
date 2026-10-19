@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import * as api from '../../shared/api';
 import type { ServerOption } from '../../shared/config/serverOptions';
 import { defaultScalar } from '../../shared/config/tuningResetValues';
@@ -23,7 +23,7 @@ export function resourceEstimateConfig(cfg: api.AppConfig, options: readonly Ser
 
 export function useResourceEstimate(cfg: api.AppConfig, options: readonly ServerOption[], verified: boolean, enabled: boolean, runtimeDevices: readonly string[] = []) {
   const [revision, setRevision] = useState(0);
-  const configKey = JSON.stringify(resourceEstimateConfig(cfg, options, verified));
+  const configKey = useMemo(() => JSON.stringify(resourceEstimateConfig(cfg, options, verified)), [cfg, options, verified]);
   const devicesKey = JSON.stringify(runtimeDevices);
   const key = `${revision}:${configKey}:${devicesKey}`;
   const [result, setResult] = useState<{ key: string; estimate?: api.ResourceEstimate; error?: boolean }>();
