@@ -263,11 +263,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
                 locale={locale}
                 t={t}
                 capabilities={rt.capabilities}
-                probeBusy={rt.probeBusy}
                 runtimeBusy={rt.runtimeBusy}
                 serverRunning={rt.serverRunning}
                 probeTarget={rt.probeTarget}
-                onProbe={() => { if (rt.probeTarget) void rt.probe(rt.probeTarget.backend, rt.probeTarget.build); }}
               />
               <RuntimePullRequestCard
                 t={t}

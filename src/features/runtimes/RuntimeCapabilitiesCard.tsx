@@ -1,4 +1,3 @@
-import StableLabel from "../../shared/ui/StableLabel";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import DeepVerificationControls, { type DeepVerificationState } from './DeepVerificationControls';
 import type * as api from "../../shared/api/types";
@@ -13,17 +12,15 @@ interface Props {
   locale?: Locale;
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   capabilities: api.RuntimeCapabilities | null;
-  probeBusy: boolean;
   runtimeBusy?: boolean;
   serverRunning: boolean;
-  /** The build the shown capabilities describe, and the one a re-probe reads. */
+  /** The build the shown capabilities describe. Probing belongs to its build row. */
   probeTarget: { backend: string; build: string } | null;
-  onProbe: () => void;
   /** The opt-in deep check of this runtime against the selected model. */
   deepVerify?: DeepVerificationState;
 }
 
-export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities, probeBusy, runtimeBusy = false, serverRunning, probeTarget, onProbe, deepVerify }: Props) {
+export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities, runtimeBusy = false, serverRunning, probeTarget, deepVerify }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   const targetVersion = useRuntimeVersionLabel(probeTarget?.backend ?? "", probeTarget?.build ?? "");
@@ -36,7 +33,6 @@ export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities
           <h2 id="runtime-capabilities-heading" className="app-section-title">{t("section.runtimes")}</h2>
           <p className="app-section-hint">{t("ui.probeHint")}</p>
         </div>
-        <button type="button" onClick={onProbe} disabled={!probeTarget || probeBusy || runtimeBusy || serverRunning} title={serverRunning ? t("ui.stopBeforeSelect") : undefined} className="app-button app-button--primary app-button--sm shrink-0"><StableLabel value={probeBusy ? t("ui.probing") : t("ui.probeAgain")} labels={[t("ui.probing"), t("ui.probeAgain")]} /></button>
       </div>
       {deepVerify && <DeepVerificationControls t={t} state={deepVerify} runtimeBusy={runtimeBusy} serverRunning={serverRunning} />}
       <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>

@@ -230,7 +230,7 @@ describe("RuntimesPanel pull-request builds", () => {
     const advanced = (await screen.findByText("Advanced")).closest("details")!;
     fireEvent.click(advanced.querySelector("summary")!);
     expect(advanced).toHaveTextContent("Choose an installed build to probe.");
-    expect(screen.getByRole("button", { name: "Probe again" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Probe again" })).not.toBeInTheDocument();
     expect(mocked.rtProbe).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
@@ -238,8 +238,9 @@ describe("RuntimesPanel pull-request builds", () => {
     await act(async () => finish({ backend: "cuda", build: "b10638", executable: "test/llama-server", state: "available", version: "test", flags: ["--ctx-size"], devices: ["CUDA1: Test GPU (8192 MiB)"], diagnostics: [], bench_available: true }));
 
     expect(advanced).toHaveTextContent("Showing cuda b10638.");
-    // A re-probe repeats the same build rather than picking one for the user.
-    fireEvent.click(screen.getByRole("button", { name: "Probe again" }));
+    // The build row remains the single entrance for checking that build again.
+    expect(screen.queryByRole("button", { name: "Probe again" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Probe: CUDA (NVIDIA) b10638" }));
     await waitFor(() => expect(mocked.rtProbe).toHaveBeenCalledTimes(2));
     expect(mocked.rtProbe).toHaveBeenLastCalledWith("cuda", "b10638");
   });

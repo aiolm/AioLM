@@ -33,7 +33,7 @@ describe("runtime version labels", () => {
       version: "version: 0.3.0-dev (build 10638, commit bf9421646)\nbuilt with Clang 20.1.8 for x86_64",
       flags: [], devices: [], diagnostics: [],
     };
-    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} probeBusy={false} serverRunning={false} probeTarget={null} onProbe={vi.fn()} />);
+    const { container } = render(<RuntimeCapabilitiesCard t={t} capabilities={capabilities} serverRunning={false} probeTarget={null} />);
     expect(screen.getAllByText("0.3.0-dev(10638)", { exact: false }).length).toBeGreaterThan(0);
     expect(container.textContent).not.toContain("built with");
     expect(container.textContent).not.toContain("commit bf9421646");

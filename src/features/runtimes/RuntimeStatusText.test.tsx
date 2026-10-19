@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { I18nProvider, translate } from '../../shared/i18n/i18n';
 import RuntimeCapabilitiesCard from './RuntimeCapabilitiesCard';
 import PullRequestProvenance from './RuntimePullRequestProvenance';
@@ -7,14 +7,12 @@ import type { PullRequestPreview, RuntimeCapabilities } from '../../shared/api/t
 
 describe('runtime status explanations', () => {
   it('translates a failed executable check without removing its diagnostic or enabling a locked probe', () => {
-    const onProbe = vi.fn();
     const capabilities: RuntimeCapabilities = { backend: 'cpu', build: 'synthetic-build', executable: 'synthetic-server',
       state: 'failed preflight', version: '', flags: [], devices: [], diagnostics: ['Synthetic binary fingerprint changed'] };
     const { container } = render(<I18nProvider initialLocale="ko"><RuntimeCapabilitiesCard locale="ko" t={(key, vars) => translate('ko', key, vars)}
-      capabilities={capabilities} probeBusy={false} serverRunning probeTarget={{ backend: 'cpu', build: 'synthetic-build' }} onProbe={onProbe} /></I18nProvider>);
+      capabilities={capabilities} serverRunning probeTarget={{ backend: 'cpu', build: 'synthetic-build' }} /></I18nProvider>);
     expect(screen.getByText('실행 파일 점검 실패')).toBeVisible();
-    expect(screen.getByRole('button', { name: '다시 점검' })).toBeDisabled();
-    expect(onProbe).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '다시 점검' })).not.toBeInTheDocument();
     const diagnostic = container.querySelector('details')!;
     expect(diagnostic).not.toHaveAttribute('open');
     fireEvent.click(diagnostic.querySelector('summary')!);
