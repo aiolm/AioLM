@@ -24,7 +24,8 @@ if recorded != commit:
 wheel = dist.read_text("WHEEL") or ""
 if "Root-Is-Purelib: true" not in wheel:
     raise RuntimeError("portable mlx-lm capture requires a pure Python installed wheel")
-files, hashes = {}, {}
+files, digests = {}, {}
+total_bytes = 0
 dist_info = None
 scripts_dir = pathlib.Path(sysconfig.get_path("scripts")).resolve()
 script_names = {entry.name for entry in dist.entry_points if entry.group == "console_scripts"}
@@ -51,16 +52,24 @@ for entry in dist.files or []:
         raise RuntimeError("mlx-lm contains an unreadable or oversized distribution file")
     data = source.read_bytes()
     name = relative.as_posix()
+    digest = hashlib.sha256(data).digest()
+    total_bytes += len(data) - len(files.get(name, b""))
     files[name] = data
-    hashes[name] = hashlib.sha256(data).hexdigest()
-    if len(files) > 10000 or sum(map(len, files.values())) > 256 * 1024 * 1024:
+    digests[name] = digest
+    if len(files) > 10000 or total_bytes > 256 * 1024 * 1024:
         raise RuntimeError("mlx-lm installed wheel exceeds capture bounds")
-if not dist_info or len(files) > 10000 or sum(map(len, files.values())) > 256 * 1024 * 1024:
+if not dist_info or len(files) > 10000 or total_bytes > 256 * 1024 * 1024:
     raise RuntimeError("mlx-lm installed wheel is incomplete or exceeds capture bounds")
-files[dist_info + "/aiolm_portable_source.json"] = json.dumps({"format": 1, "distribution": "mlx-lm", "commit": commit, "files": hashes}, sort_keys=True).encode()
+source_record = dist_info + "/aiolm_portable_source.json"
+files[source_record] = json.dumps(
+    {"format": 1, "distribution": "mlx-lm", "commit": commit,
+     "files": {name: digest.hex() for name, digest in digests.items()}},
+    sort_keys=True,
+).encode()
+digests[source_record] = hashlib.sha256(files[source_record]).digest()
 rows = []
 for name, data in files.items():
-    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip("=")
+    digest = base64.urlsafe_b64encode(digests[name]).decode().rstrip("=")
     rows.append([name, "sha256=" + digest, str(len(data))])
 record = dist_info + "/RECORD"
 rows.append([record, "", ""])
