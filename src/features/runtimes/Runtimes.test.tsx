@@ -245,6 +245,27 @@ describe("RuntimesPanel pull-request builds", () => {
     expect(mocked.rtProbe).toHaveBeenLastCalledWith("cuda", "b10638");
   });
 
+  it("groups installed runtimes at row-update time after the published inventory can change", async () => {
+    localStorage.setItem("aiolm.show-all-backends.v1", "1");
+    const installed = [{ backend: "cuda", build: "b10638", dir: "C:/runtimes/cuda-b10638", size_mb: 512 }] satisfies api.InstalledRuntime[];
+    let releaseLatest!: () => void;
+    const latestReady = new Promise<void>(resolve => { releaseLatest = resolve; });
+    mocked.rtList.mockResolvedValue(installed);
+    mocked.rtLatest.mockImplementation(async (backend: string) => {
+      await latestReady;
+      return { build: "b10638", file_name: `llama-b10638-bin-win-${backend}-x64.zip`, url: "https://example.invalid/runtime.zip" };
+    });
+
+    renderPanel();
+    await waitFor(() => expect(mocked.rtLatest).toHaveBeenCalledTimes(7));
+    installed.push({ backend: "cpu", build: "b20638", dir: "C:/runtimes/cpu-b20638", size_mb: 256 });
+    await act(async () => { releaseLatest(); await latestReady; });
+
+    const cpuSection = (await screen.findByRole("heading", { name: "CPU-only" })).closest("section");
+    expect(cpuSection).not.toBeNull();
+    expect(within(cpuSection as HTMLElement).getByText("b20638")).toBeVisible();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();

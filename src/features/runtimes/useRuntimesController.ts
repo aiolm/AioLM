@@ -101,14 +101,31 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
       const installed = await api.rtList();
       if (generation !== refreshGeneration.current) return;
       publishInstalledRuntimes(installed);
+      const updateRows = (
+        latestFor: (backend: string) => api.LatestInfo | null,
+        latestErrorFor: (backend: string) => string | null,
+      ) => setRows((previous) => {
+        // The published list is shared and mutable; observe it when React
+        // applies the row update, not before the latest probes await.
+        const installedByBackend = new Map<string, api.InstalledRuntime[]>();
+        for (const item of installed) {
+          const backendItems = installedByBackend.get(item.backend);
+          if (backendItems) backendItems.push(item);
+          else installedByBackend.set(item.backend, [item]);
+        }
+        return mergeBackendRows(previous, installed).map((row) => ({
+          ...row,
+          installed: installedByBackend.get(row.backend) ?? [],
+          latest: latestFor(row.backend),
+          latestErr: latestErrorFor(row.backend),
+        }));
+      });
       const cached = force ? null : readLatestCache();
       if (cached) {
-        setRows((previous) => mergeBackendRows(previous, installed).map((row) => ({
-          ...row,
-          installed: installed.filter((item) => item.backend === row.backend),
-          latest: cached.infos[row.backend] ?? null,
-          latestErr: cached.infos[row.backend] ? null : cached.errors?.[row.backend] ?? null,
-        })));
+        updateRows(
+          backend => cached.infos[backend] ?? null,
+          backend => cached.infos[backend] ? null : cached.errors?.[backend] ?? null,
+        );
         return;
       }
       const probes = await Promise.all(BACKENDS.map(async (backend) => {
@@ -121,17 +138,17 @@ export function useRuntimesController(store: AppStore, active: boolean, native =
       if (generation !== refreshGeneration.current) return;
       const infos: Record<string, api.LatestInfo> = {};
       const errors: Record<string, string> = {};
+      const latestErrors = new Map<string, string | null>();
       for (const probeResult of probes) {
+        if (!latestErrors.has(probeResult.backend)) latestErrors.set(probeResult.backend, probeResult.error);
         if (probeResult.info) infos[probeResult.backend] = probeResult.info;
         else if (probeResult.error) errors[probeResult.backend] = probeResult.error;
       }
       if (Object.keys(infos).length > 0 || Object.keys(errors).length > 0) writeLatestCache(infos, errors);
-      setRows((previous) => mergeBackendRows(previous, installed).map((row) => ({
-        ...row,
-        installed: installed.filter((item) => item.backend === row.backend),
-        latest: infos[row.backend] ?? null,
-        latestErr: probes.find((probeResult) => probeResult.backend === row.backend)?.error ?? null,
-      })));
+      updateRows(
+        backend => infos[backend] ?? null,
+        backend => latestErrors.get(backend) ?? null,
+      );
     } catch (error) {
       if (generation !== refreshGeneration.current) return;
       const message = error instanceof Error ? error.message : String(error);
