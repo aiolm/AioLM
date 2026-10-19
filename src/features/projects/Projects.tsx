@@ -96,7 +96,11 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   // config, and that must wait until the server is fully stopped, not just idle.
   const serverRunning = isServerBusy(store.status.state);
   const selected = useMemo(() => projects.find((project) => project.id === selectedId) ?? null, [projects, selectedId]);
-  const draftDirty = savedDraft !== '' && savedDraft !== projectDraftSignature(name, description, systemPrompt, configSnapshot, profileApplication, selectedTools, documents);
+  const draftSignature = useMemo(
+    () => savedDraft === '' ? '' : projectDraftSignature(name, description, systemPrompt, configSnapshot, profileApplication, selectedTools, documents),
+    [savedDraft, name, description, systemPrompt, configSnapshot, profileApplication, selectedTools, documents],
+  );
+  const draftDirty = savedDraft !== '' && savedDraft !== draftSignature;
   const draftDirtyRef = useRef(draftDirty);
   draftDirtyRef.current = draftDirty;
 
@@ -364,9 +368,12 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   };
 
   const snapshot = configSnapshot ?? cfg;
-  const displayedProfile = profileApplication && snapshot
-    ? resolveProfileForExecution(snapshot, profileLibrary(store.getConfig() ?? snapshot), profileApplication).application : undefined;
-  const displayConfig = displayedProfile && snapshot ? { ...snapshot, ...profileApplicationConfig(displayedProfile) } : snapshot;
+  const liveConfig = profileApplication && snapshot ? store.getConfig() ?? snapshot : null;
+  const { displayedProfile, displayConfig } = useMemo(() => {
+    if (!profileApplication || !snapshot || !liveConfig) return { displayedProfile: undefined, displayConfig: snapshot };
+    const displayedProfile = resolveProfileForExecution(snapshot, profileLibrary(liveConfig), profileApplication).application;
+    return { displayedProfile, displayConfig: { ...snapshot, ...profileApplicationConfig(displayedProfile) } };
+  }, [snapshot, profileApplication, liveConfig]);
   const displayedPrompt = displayedProfile?.system_prompt ?? systemPrompt;
   const displayedProfileName = displayedProfile?.profile_name ?? profileApplication?.profile_name ?? null;
   const displayedProfileRevision = displayedProfile?.profile_revision ?? profileApplication?.profile_revision ?? null;
@@ -374,8 +381,11 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   const toolCount = selectedTools.length;
   const docCount = documents.length;
   const isActiveSelection = selected ? activeProjectId() === selected.id : false;
-  const catalogKeys = new Set(mcpCatalog.map((entry) => entry.key));
-  const staleTools = selectedTools.filter((key) => !catalogKeys.has(key));
+  const { selectedToolKeys, staleTools } = useMemo(() => {
+    const catalogKeys = new Set(mcpCatalog.map((entry) => entry.key));
+    const selectedToolKeys = new Set(selectedTools);
+    return { selectedToolKeys, staleTools: selectedTools.filter((key) => !catalogKeys.has(key)) };
+  }, [mcpCatalog, selectedTools]);
 
   const loadMcpCatalog = async (silent: boolean) => {
     if (mcpLoading) return;
@@ -525,7 +535,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
                 <div role="group" aria-labelledby="project-mcp-heading" className="mt-2 max-h-48 flex-1 space-y-1 overflow-auto app-card app-card--tight">
                   {mcpCatalog.length === 0 && !mcpLoading && <p className="px-1 py-1 text-xs ui-color-faint">{t("ui.projectNoMcpTools")}</p>}
                   {mcpCatalog.map((entry) => {
-                    const checked = selectedTools.includes(entry.key);
+                    const checked = selectedToolKeys.has(entry.key);
                     const label = `${normalizeDisplayText(entry.serverName)} · ${normalizeDisplayText(entry.toolName)}`;
                     return <label key={entry.key} className="flex max-w-full items-center gap-1.5 text-xs ui-color-muted"><input type="checkbox" checked={checked} onChange={() => toggleTool(entry.key)} /><span className="max-w-52 app-text-wrap" title={entry.key}>{label}</span></label>;
                   })}

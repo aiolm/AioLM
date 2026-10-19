@@ -522,6 +522,60 @@ describe("Project configuration snapshots", () => {
     expect(store.start).not.toHaveBeenCalled();
   });
 
+  it('does not reclone a large profile library for metadata or export-notice rerenders', async () => {
+    mockedApi.isNativeRuntimeAvailable.mockReturnValue(true);
+    mockedApi.projectExportJson.mockResolvedValue(true);
+    const store = createTestStore({ active_model: 'models/synthetic.gguf' });
+    const syntheticProfiles = Array.from({ length: 1000 }, (_, index) => ({
+      ...captureProfile({ ...store.cfg!, temperature: index / 1000 }, `Synthetic ${index}`, 'model', `Prompt ${index}`),
+      id: `synthetic-${index}`,
+      revision: 1,
+    }));
+    const selectedProfile = syntheticProfiles[500];
+    store.cfg!.settings_profiles = {
+      ...emptyProfileLibrary(),
+      default_profile_id: defaultSettingsProfile().id,
+      entries: [defaultSettingsProfile(), ...syntheticProfiles],
+      applied: {},
+    };
+    const application = materializeProfileApplication(store.cfg!, selectedProfile.system_prompt!, selectedProfile);
+    store.cfg!.settings_profiles.applied[profileTargetKey(store.cfg!.active_model)] = application;
+    const project = projectFromConfig('Synthetic project', application.system_prompt, store.cfg!, [], [], '', 100, application);
+    writeProjects([project]); setActiveProjectId(project.id);
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    await screen.findByText('Synthetic project');
+    const profileLibraryClones = () => clone.mock.calls.filter(([value]) => value === store.cfg!.settings_profiles).length;
+    const initialClones = profileLibraryClones();
+    expect(initialClones).toBe(1);
+    fireEvent.change(screen.getByDisplayValue('Synthetic project'), { target: { value: 'Renamed project' } });
+    expect(profileLibraryClones()).toBe(initialClones);
+    fireEvent.click(screen.getByRole('button', { name: 'Export JSON' }));
+    await screen.findByText('Saved');
+    expect(profileLibraryClones()).toBe(initialClones);
+    view.unmount();
+  });
+
+  it('refreshes the displayed profile when the live configuration revision changes', () => {
+    const store = createTestStore({ active_model: 'models/revision.gguf' });
+    const profile = captureProfile(store.cfg!, 'Revision setup', 'model', 'Original profile prompt');
+    const application = materializeProfileApplication(store.cfg!, profile.system_prompt!, profile);
+    store.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile], applied: { [profileTargetKey(store.cfg!.active_model)]: application } };
+    const project = projectFromConfig('Revision project', application.system_prompt, store.cfg!, [], [], '', 100, application);
+    writeProjects([project]); setActiveProjectId(project.id);
+    let revision = 1;
+    store.getConfig = () => store.cfg;
+    store.getConfigRevision = () => revision;
+    const view = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Original profile prompt');
+    const revised = { ...profile, revision: 2, system_prompt: 'Revised profile prompt' };
+    store.cfg = { ...store.cfg!, settings_profiles: { ...store.cfg!.settings_profiles!, revision: 2, entries: [defaultSettingsProfile(), revised] } };
+    revision = 2;
+    view.rerender(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByLabelText('System prompt')).toHaveTextContent('Revised profile prompt');
+    view.unmount();
+  });
+
   it("hides prefixes in restored document editors and model tooltips while preserving saved paths", () => {
     const model = String.raw`\\?\C:\models\test.gguf`;
     const document = String.raw`\\?\UNC\server\share\notes.md`;
