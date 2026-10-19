@@ -11,12 +11,23 @@ function queryTerms(query: string): string[] {
 
 const DOCUMENT_CHUNK_SIZE = 1800;
 
+/** Query terms are literal text; count non-overlapping matches without match arrays. */
+function countTerm(text: string, term: string): number {
+  let count = 0;
+  let offset = 0;
+  while ((offset = text.indexOf(term, offset)) !== -1) {
+    count += 1;
+    offset += term.length;
+  }
+  return count;
+}
+
 export function rankDocumentChunks(documents: DocumentAttachment[], query = ""): DocumentChunk[] {
   const terms = queryTerms(query);
   return splitDocumentChunks(documents)
     .map((chunk) => {
       const lower = chunk.text.toLocaleLowerCase();
-      const score = terms.reduce((total, term) => total + (lower.match(new RegExp(escapeRegExp(term), "gu"))?.length ?? 0), 0);
+      const score = terms.reduce((total, term) => total + countTerm(lower, term), 0);
       return { ...chunk, score };
     })
     .sort((left, right) => right.score - left.score || left.document.name.localeCompare(right.document.name) || left.order - right.order);
@@ -128,24 +139,27 @@ function cosineSimilarity(left: number[], right: number[]): number {
   return leftNorm > 0 && rightNorm > 0 ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function buildDocumentContext(documents: DocumentAttachment[], maxChars = 12_000, query = ""): string {
   const budget = Math.max(256, Math.floor(maxChars));
   let used = 0;
   let context = "";
-  const chunks = documents.length === 0 ? [] : documents.flatMap((document) => document.text.length <= budget ? [{ document, text: document.text, score: 0, order: 0, offset: 0 }] : rankDocumentChunks([document], query));
-  for (const chunk of chunks) {
-    const prefix = `\n\n[Attached document: ${chunk.document.name}]\n`;
+  for (const document of documents) {
+    const prefix = `\n\n[Attached document: ${document.name}]\n`;
     const suffix = "\n[/Attached document]";
-    const remaining = budget - used - prefix.length - suffix.length;
-    if (remaining <= 0) break;
-    const text = chunk.text.slice(0, remaining);
-    const truncated = text.length < chunk.text.length || chunk.document.text.length > chunk.text.length ? "\n[document excerpt truncated]" : "";
-    context += `${prefix}${text}${truncated}${suffix}`;
-    used = context.length;
+    // Preserve attachment order, but do not rank later documents once no part
+    // of them can enter the bounded request context.
+    if (budget - used - prefix.length - suffix.length <= 0) return context;
+    const chunks = document.text.length <= budget
+      ? [{ document, text: document.text, score: 0, order: 0, offset: 0 }]
+      : rankDocumentChunks([document], query);
+    for (const chunk of chunks) {
+      const remaining = budget - used - prefix.length - suffix.length;
+      if (remaining <= 0) return context;
+      const text = chunk.text.slice(0, remaining);
+      const truncated = text.length < chunk.text.length || chunk.document.text.length > chunk.text.length ? "\n[document excerpt truncated]" : "";
+      context += `${prefix}${text}${truncated}${suffix}`;
+      used = context.length;
+    }
   }
   return context;
 }

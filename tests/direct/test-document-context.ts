@@ -13,6 +13,22 @@ assert.ok(context.length < 500);
 assert.match(context, /Attached document: notes\.md/);
 const ranked = rankDocumentChunks([{ ...long, text: "unrelated ".repeat(250) + "needle " + "other ".repeat(250) }], "needle");
 assert.equal(ranked[0].text.includes("needle"), true);
+const frequencies: DocumentAttachment[] = [
+  { name: 'a.txt', path: '/synthetic/a.txt', text: 'aaaa DATA_1 data-2 한글 𐐀𐐁' },
+  { name: 'b.txt', path: '/synthetic/b.txt', text: 'aa data_1 DATA-2 한글 한글 𐐨𐐩' },
+];
+const frequenciesBefore = structuredClone(frequencies);
+assert.deepEqual(rankDocumentChunks(frequencies, 'AA data_1 DATA-2 한글 𐐀𐐁 aa').map(chunk => [chunk.document.name, chunk.score]), [
+  ['a.txt', 6], ['b.txt', 6],
+], 'Literal terms keep case folding, non-overlapping counts, deduplication and stable tie ordering.');
+assert.deepEqual(rankDocumentChunks(frequencies, '').map(chunk => chunk.score), [0, 0]);
+assert.deepEqual(frequencies, frequenciesBefore, 'Ranking must not change attachments.');
+const filledContext = buildDocumentContext([long], 100, 'needle');
+let laterDocumentReads = 0;
+const laterDocument: DocumentAttachment = { name: 'later.txt', path: '/synthetic/later.txt',
+  get text() { laterDocumentReads += 1; return 'needle '.repeat(10000); } };
+assert.equal(buildDocumentContext([long, laterDocument], 100, 'needle'), filledContext);
+assert.equal(laterDocumentReads, 0, 'Documents excluded by the filled context budget need no ranking or text reads.');
 const vectorDocument: DocumentAttachment = { name: "vector.md", path: "C:/safe/vector.md", text: "first\nsecond" };
 const vectorChunks = splitDocumentChunks([vectorDocument], 6);
 const vectorContext = buildVectorDocumentContext(vectorChunks, [[1, 0], [0, 1], [0, 1]], 2, 500);
