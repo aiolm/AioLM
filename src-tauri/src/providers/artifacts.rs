@@ -195,15 +195,6 @@ impl ModelArtifact {
 }
 
 fn read_json(path: &Path, limit: u64) -> Option<Result<Value, String>> {
-    read_json_bytes(path, limit).map(|result| {
-        result.and_then(|bytes| {
-            serde_json::from_slice(&bytes)
-                .map_err(|error| format!("{} is not valid JSON: {error}", path.display()))
-        })
-    })
-}
-
-fn read_json_bytes(path: &Path, limit: u64) -> Option<Result<Vec<u8>, String>> {
     let metadata = fs::metadata(path).ok()?;
     if !metadata.is_file() {
         return None;
@@ -211,34 +202,14 @@ fn read_json_bytes(path: &Path, limit: u64) -> Option<Result<Vec<u8>, String>> {
     if metadata.len() > limit {
         return Some(Err(format!("{} is too large to inspect", path.display())));
     }
-    Some(fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display())))
-}
-
-fn read_inspected_manifest(
-    path: &Path,
-    observed: Option<(SnapshotManifest, &[u8])>,
-) -> Option<Result<SnapshotManifest, String>> {
-    match observed {
-        None => read_json(path, MAX_INDEX_BYTES).map(|result| {
-            result.and_then(|value| {
-                serde_json::from_value(value)
-                    .map_err(|error| format!("snapshot manifest is invalid: {error}"))
-            })
-        }),
-        Some((manifest, observed_bytes)) => read_json_bytes(path, MAX_INDEX_BYTES).map(|result| {
-            result.and_then(|bytes| {
-                if bytes == observed_bytes {
-                    return Ok(manifest);
-                }
+    Some(
+        fs::read(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))
+            .and_then(|bytes| {
                 serde_json::from_slice(&bytes)
                     .map_err(|error| format!("{} is not valid JSON: {error}", path.display()))
-                    .and_then(|value| {
-                        serde_json::from_value(value)
-                            .map_err(|error| format!("snapshot manifest is invalid: {error}"))
-                    })
-            })
-        }),
-    }
+            }),
+    )
 }
 
 /// A directory is a snapshot candidate when it has a model configuration and
@@ -593,24 +564,6 @@ fn declared_snapshot_name(dir: &Path) -> Option<String> {
 /// Inspect a snapshot directory. Never fails: unreadable parts become notes
 /// and missing files, so an unknown artifact stays visible in the library.
 pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
-    inspect_snapshot_with_manifest_data(dir, None)
-}
-
-/// Inspect a snapshot after an app-owned manifest identity read. The manifest
-/// is still reopened and compared byte-for-byte before its parsed value is
-/// reused, so replacement or mutation keeps the old observation boundary.
-pub(crate) fn inspect_snapshot_with_manifest(
-    dir: &Path,
-    manifest: SnapshotManifest,
-    manifest_bytes: &[u8],
-) -> ModelArtifact {
-    inspect_snapshot_with_manifest_data(dir, Some((manifest, manifest_bytes)))
-}
-
-fn inspect_snapshot_with_manifest_data(
-    dir: &Path,
-    observed_manifest: Option<(SnapshotManifest, &[u8])>,
-) -> ModelArtifact {
     let mut notes = Vec::new();
     let mut missing = Vec::new();
     let name = dir
@@ -769,37 +722,45 @@ fn inspect_snapshot_with_manifest_data(
         repository = Some(repo);
         ownership = "hf-cache";
     }
-    match read_inspected_manifest(&dir.join(SNAPSHOT_MANIFEST), observed_manifest) {
-        Some(Ok(manifest)) => {
-            ownership = "app";
-            if !manifest.complete {
-                incomplete = true;
-            }
-            for file in &manifest.files {
-                if file.path.is_empty()
-                    || Path::new(&file.path).is_absolute()
-                    || file.path.contains('\\')
-                    || Path::new(&file.path)
-                        .components()
-                        .any(|part| !matches!(part, std::path::Component::Normal(_)))
-                {
+    match read_json(&dir.join(SNAPSHOT_MANIFEST), MAX_INDEX_BYTES) {
+        Some(Ok(value)) => match serde_json::from_value::<SnapshotManifest>(value) {
+            Ok(manifest) => {
+                ownership = "app";
+                if !manifest.complete {
                     incomplete = true;
-                    notes.push("snapshot manifest contains an invalid relative file path".into());
-                    continue;
                 }
-                let path = dir.join(&file.path);
-                match fs::metadata(&path) {
-                    Ok(metadata) if metadata.len() == file.size => {}
-                    Ok(_) => {
+                for file in &manifest.files {
+                    if file.path.is_empty()
+                        || Path::new(&file.path).is_absolute()
+                        || file.path.contains('\\')
+                        || Path::new(&file.path)
+                            .components()
+                            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+                    {
                         incomplete = true;
-                        notes.push(format!("{} does not have the downloaded size", file.path));
+                        notes.push(
+                            "snapshot manifest contains an invalid relative file path".into(),
+                        );
+                        continue;
                     }
-                    Err(_) => missing.push(file.path.clone()),
+                    let path = dir.join(&file.path);
+                    match fs::metadata(&path) {
+                        Ok(metadata) if metadata.len() == file.size => {}
+                        Ok(_) => {
+                            incomplete = true;
+                            notes.push(format!("{} does not have the downloaded size", file.path));
+                        }
+                        Err(_) => missing.push(file.path.clone()),
+                    }
                 }
+                revision = Some(manifest.revision);
+                repository = Some(manifest.repository);
             }
-            revision = Some(manifest.revision);
-            repository = Some(manifest.repository);
-        }
+            Err(error) => {
+                incomplete = true;
+                notes.push(format!("snapshot manifest is invalid: {error}"));
+            }
+        },
         Some(Err(error)) => {
             incomplete = true;
             notes.push(error);
@@ -1235,104 +1196,6 @@ mod tests {
         assert_eq!(artifact.quantization.as_deref(), Some("mlx 4-bit g64"));
         assert_eq!(artifact.modalities, Modalities::text_only());
         assert!(artifact.ready_files());
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn observed_manifest_rechecks_mutation_replacement_and_bounds() {
-        let dir = temp_dir("manifest-recheck");
-        let config = br#"{"model_type":"llama","architectures":["LlamaForCausalLM"]}"#;
-        write(&dir, "config.json", config);
-        write(&dir, "model.safetensors", b"x");
-        write(&dir, "tokenizer.json", b"{}");
-        let make_manifest =
-            |repository: &str, revision: &str, complete: bool, size: u64| SnapshotManifest {
-                format: 1,
-                repository: repository.into(),
-                revision: revision.into(),
-                files: vec![
-                    SnapshotFile {
-                        path: "config.json".into(),
-                        size,
-                        oid: None,
-                    },
-                    SnapshotFile {
-                        path: "model.safetensors".into(),
-                        size: 1,
-                        oid: None,
-                    },
-                    SnapshotFile {
-                        path: "tokenizer.json".into(),
-                        size: 2,
-                        oid: None,
-                    },
-                ],
-                complete,
-            };
-        let original = make_manifest("owner/model", &"a".repeat(40), true, config.len() as u64);
-        let original_bytes = serde_json::to_vec(&original).unwrap();
-        write(&dir, SNAPSHOT_MANIFEST, &original_bytes);
-
-        let changed = make_manifest(
-            "other/model",
-            &"b".repeat(40),
-            false,
-            config.len() as u64 + 1,
-        );
-        write(
-            &dir,
-            SNAPSHOT_MANIFEST,
-            &serde_json::to_vec(&changed).unwrap(),
-        );
-        assert_eq!(
-            inspect_snapshot_with_manifest(&dir, original.clone(), &original_bytes),
-            inspect_snapshot(&dir),
-            "a changed manifest is parsed at the second observation"
-        );
-        assert_eq!(
-            inspect_snapshot(&dir).repository.as_deref(),
-            Some("other/model")
-        );
-
-        let replacement = dir.join("replacement.json");
-        let replacement_manifest = make_manifest(
-            "replacement/model",
-            &"c".repeat(40),
-            true,
-            config.len() as u64,
-        );
-        write(
-            &dir,
-            "replacement.json",
-            &serde_json::to_vec(&replacement_manifest).unwrap(),
-        );
-        fs::remove_file(dir.join(SNAPSHOT_MANIFEST)).unwrap();
-        fs::rename(&replacement, dir.join(SNAPSHOT_MANIFEST)).unwrap();
-        assert_eq!(
-            inspect_snapshot_with_manifest(&dir, original.clone(), &original_bytes),
-            inspect_snapshot(&dir),
-            "a replaced manifest is not hidden by the first observation"
-        );
-        assert_eq!(
-            inspect_snapshot(&dir).repository.as_deref(),
-            Some("replacement/model")
-        );
-
-        write(&dir, SNAPSHOT_MANIFEST, b"{broken");
-        assert_eq!(
-            inspect_snapshot_with_manifest(&dir, original.clone(), &original_bytes),
-            inspect_snapshot(&dir),
-            "a malformed replacement keeps inspection notes and readiness"
-        );
-
-        let oversized = fs::File::create(dir.join(SNAPSHOT_MANIFEST)).unwrap();
-        oversized.set_len(32 * 1024 * 1024 + 1).unwrap();
-        drop(oversized);
-        assert_eq!(
-            inspect_snapshot_with_manifest(&dir, original.clone(), &original_bytes),
-            inspect_snapshot(&dir),
-            "an oversized replacement keeps the bounded inspection error"
-        );
         fs::remove_dir_all(dir).unwrap();
     }
 

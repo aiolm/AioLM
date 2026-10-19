@@ -324,17 +324,11 @@ pub fn installed_snapshots(
         {
             continue;
         }
-        let Some(observed) =
-            read_snapshot_manifest_observation(&entry.path().join(SNAPSHOT_MANIFEST))?
-        else {
+        let Some(manifest) = read_snapshot_manifest(&entry.path().join(SNAPSHOT_MANIFEST))? else {
             continue;
         };
-        if observed.manifest.repository == repo && observed.manifest.revision == revision {
-            artifacts.push(crate::providers::artifacts::inspect_snapshot_with_manifest(
-                &entry.path(),
-                observed.manifest,
-                &observed.bytes,
-            ));
+        if manifest.repository == repo && manifest.revision == revision {
+            artifacts.push(crate::providers::artifacts::inspect_snapshot(&entry.path()));
         }
     }
     artifacts.sort_by(|left, right| right.revision.cmp(&left.revision));
@@ -365,14 +359,9 @@ pub(crate) fn snapshot_path(directory: &Path, relative: &str) -> PathBuf {
         .fold(directory.to_path_buf(), |path, part| path.join(part))
 }
 
-struct SnapshotManifestObservation {
-    manifest: SnapshotManifest,
-    bytes: Vec<u8>,
-}
-
-fn read_snapshot_manifest_observation(
-    path: &Path,
-) -> Result<Option<SnapshotManifestObservation>, String> {
+/// Read a snapshot ownership manifest without following a link or reading an
+/// unbounded file. `None` means there is no manifest at `path`.
+pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, String> {
     use std::io::Read;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -421,13 +410,7 @@ fn read_snapshot_manifest_observation(
     {
         return Err("snapshot manifest lists an unsafe path".into());
     }
-    Ok(Some(SnapshotManifestObservation { manifest, bytes }))
-}
-
-/// Read a snapshot ownership manifest without following a link or reading an
-/// unbounded file. `None` means there is no manifest at `path`.
-pub(crate) fn read_snapshot_manifest(path: &Path) -> Result<Option<SnapshotManifest>, String> {
-    Ok(read_snapshot_manifest_observation(path)?.map(|observed| observed.manifest))
+    Ok(Some(manifest))
 }
 
 /// Accept a file already at a snapshot destination only when it is a regular
@@ -624,6 +607,56 @@ mod tests {
                     .unwrap()
             })
             .collect()
+    }
+
+    fn manifest_with_unknown(
+        repository: &str,
+        revision: &str,
+        root_value: Option<&str>,
+        file_value: Option<&str>,
+    ) -> Vec<u8> {
+        let root_field =
+            root_value.map_or(String::new(), |value| format!(r#","metadata":{value}"#));
+        let file_field =
+            file_value.map_or(String::new(), |value| format!(r#","metadata":{value}"#));
+        format!(
+            r#"{{"format":1,"repository":"{repository}","revision":"{revision}","files":[{{"path":"config.json","size":59{file_field}}},{{"path":"model.safetensors","size":1}},{{"path":"tokenizer.json","size":2}}],"complete":true{root_field}}}"#
+        )
+        .into_bytes()
+    }
+
+    fn noncanonical_manifest_with_unknown_file(repository: &str, revision: &str) -> Vec<u8> {
+        format!(
+            r#"{{  "complete" : true, "files" : [ {{ "size" : 59, "path" : "config.json", "metadata" : [ 1, 2, 3 ] }}, {{ "path" : "model.safetensors", "size" : 1 }}, {{ "size" : 2, "path" : "tokenizer.json" }} ], "revision" : "{revision}", "repository" : "{repository}", "format" : 1 }}"#
+        )
+        .into_bytes()
+    }
+
+    fn write_manifest_snapshot(root: &Path, revision: &str, manifest: &[u8]) -> PathBuf {
+        let directory = root
+            .join("hf")
+            .join("owner")
+            .join("model")
+            .join("snapshots")
+            .join(revision);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("config.json"),
+            br#"{"model_type":"llama","architectures":["LlamaForCausalLM"]}"#,
+        )
+        .unwrap();
+        fs::write(directory.join("model.safetensors"), b"x").unwrap();
+        fs::write(directory.join("tokenizer.json"), b"{}").unwrap();
+        fs::write(directory.join(SNAPSHOT_MANIFEST), manifest).unwrap();
+        directory
+    }
+
+    fn deep_unknown_value(depth: usize) -> String {
+        let mut value = String::from("null");
+        for _ in 0..depth {
+            value = format!(r#"{{"nested":{value}}}"#);
+        }
+        value
     }
 
     #[test]
@@ -839,6 +872,149 @@ mod tests {
             .unwrap()
             .is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn installed_snapshots_match_ordinary_inspection_for_manifest_unknown_values() {
+        let root = temporary("manifest-unknown-values");
+        let invalid_values = [
+            ("numeric", String::from("1e999")),
+            ("surrogate", String::from(r#""\uD800""#)),
+            ("deep", deep_unknown_value(130)),
+        ];
+        let mut invalid_results = Vec::new();
+        for (value_name, value) in invalid_values {
+            for (location, root_value, file_value) in [
+                ("root", Some(value.as_str()), None),
+                ("file", None, Some(value.as_str())),
+            ] {
+                let label = format!("{location}-{value_name}");
+                let case_root = root.join(&label);
+                let revision = "a".repeat(40);
+                let manifest =
+                    manifest_with_unknown("owner/model", &revision, root_value, file_value);
+                let directory = write_manifest_snapshot(&case_root, &revision, &manifest);
+                let installed =
+                    installed_snapshots(case_root.to_str().unwrap(), "owner/model").unwrap();
+                let ordinary_directory = directory.canonicalize().unwrap();
+                let ordinary = crate::providers::artifacts::inspect_snapshot(&ordinary_directory);
+                invalid_results.push((label, installed, ordinary));
+            }
+        }
+        let mut mismatches = Vec::new();
+        for (label, installed, ordinary) in invalid_results {
+            if installed.len() != 1 {
+                mismatches.push(format!(
+                    "{label}: expected one listed artifact, installed={installed:?}"
+                ));
+            }
+            if !ordinary.incomplete || ordinary.ownership != "external" || ordinary.notes.is_empty()
+            {
+                mismatches.push(format!(
+                    "{label}: ordinary inspection did not preserve invalid-manifest behavior: {ordinary:?}"
+                ));
+            }
+            if installed.first() != Some(&ordinary) {
+                mismatches.push(format!(
+                    "{label}: installed={installed:?}; ordinary={ordinary:?}"
+                ));
+            }
+        }
+
+        let valid_cases = [
+            (
+                "root-valid",
+                manifest_with_unknown(
+                    "owner/model",
+                    &"b".repeat(40),
+                    Some(r#"{"source":"fixture"}"#),
+                    None,
+                ),
+            ),
+            (
+                "file-valid",
+                manifest_with_unknown(
+                    "owner/model",
+                    &"c".repeat(40),
+                    None,
+                    Some(r#"{"source":"fixture","count":1}"#),
+                ),
+            ),
+            (
+                "file-noncanonical",
+                noncanonical_manifest_with_unknown_file("owner/model", &"d".repeat(40)),
+            ),
+        ];
+        let mut valid_results = Vec::new();
+        for (label, manifest) in valid_cases {
+            let case_root = root.join(label);
+            let revision = match label {
+                "root-valid" => "b".repeat(40),
+                "file-valid" => "c".repeat(40),
+                "file-noncanonical" => "d".repeat(40),
+                _ => unreachable!(),
+            };
+            let directory = write_manifest_snapshot(&case_root, &revision, &manifest);
+            let installed =
+                installed_snapshots(case_root.to_str().unwrap(), "owner/model").unwrap();
+            let ordinary_directory = directory.canonicalize().unwrap();
+            let ordinary = crate::providers::artifacts::inspect_snapshot(&ordinary_directory);
+            valid_results.push((label, installed, ordinary));
+        }
+        for (label, installed, ordinary) in valid_results {
+            if installed.len() != 1 {
+                mismatches.push(format!(
+                    "{label}: expected one listed artifact, installed={installed:?}"
+                ));
+            }
+            if !ordinary.ready_files() || ordinary.ownership != "app" || !ordinary.notes.is_empty()
+            {
+                mismatches.push(format!(
+                    "{label}: ordinary inspection did not preserve valid-manifest behavior: {ordinary:?}"
+                ));
+            }
+            if installed.first() != Some(&ordinary) {
+                mismatches.push(format!(
+                    "{label}: installed={installed:?}; ordinary={ordinary:?}"
+                ));
+            }
+        }
+
+        let nonmatching_repo_root = root.join("nonmatching-repository");
+        let revision = "e".repeat(40);
+        write_manifest_snapshot(
+            &nonmatching_repo_root,
+            &revision,
+            &manifest_with_unknown("other/model", &revision, Some("1e999"), None),
+        );
+        let nonmatching_revision_root = root.join("nonmatching-revision");
+        let directory_revision = "f".repeat(40);
+        write_manifest_snapshot(
+            &nonmatching_revision_root,
+            &directory_revision,
+            &manifest_with_unknown("owner/model", &"0".repeat(40), Some("1e999"), None),
+        );
+        let nonmatching_repo =
+            installed_snapshots(nonmatching_repo_root.to_str().unwrap(), "owner/model").unwrap();
+        if !nonmatching_repo.is_empty() {
+            mismatches.push(format!(
+                "nonmatching-repository: expected skip, installed={nonmatching_repo:?}"
+            ));
+        }
+        let nonmatching_revision =
+            installed_snapshots(nonmatching_revision_root.to_str().unwrap(), "owner/model")
+                .unwrap();
+        if !nonmatching_revision.is_empty() {
+            mismatches.push(format!(
+                "nonmatching-revision: expected skip, installed={nonmatching_revision:?}"
+            ));
+        }
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            mismatches.is_empty(),
+            "snapshot manifest behavior mismatches:\n{}",
+            mismatches.join("\n")
+        );
     }
 
     fn temporary(label: &str) -> PathBuf {
