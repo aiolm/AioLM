@@ -9,7 +9,7 @@ export const MODEL_DOWNLOAD_TASK_ID = "model-download";
 const MAX_SPEED_SAMPLES = 30;
 
 /** Turn one progress event into the fields the task row shows. */
-export function downloadTaskPatch(
+function downloadTaskPatch(
   next: api.ModelDownloadProgress,
   samples: DownloadSample[],
 ): Partial<Omit<AppTask, "id">> {
