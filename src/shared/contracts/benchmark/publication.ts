@@ -20,7 +20,7 @@ export { validateDescriptionMd, validatePublicationRequest, normalizePublication
 
 /** Once-serialized exact request bytes plus identity; retry reuses body so the hash stays stable. */
 export function createPublicationBody(request: BenchmarkPublicationRequest): { body: string; submissionId: string } {
-  const normalized = validatePublicationRequest(request);
+  const normalized = normalizePublicationInput(request);
   const body = serializePublicationRequest(normalized);
   return { body, submissionId: normalized.benchmark.submission_id };
 }
