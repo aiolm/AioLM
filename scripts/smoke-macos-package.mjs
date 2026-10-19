@@ -111,8 +111,9 @@ try {
   // signature verifies strictly instead of reporting missing resources.
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", source]);
   const signature = path => spawnSync("/usr/bin/codesign", ["--display", "--verbose=4", path], { encoding: "utf8" }).stderr;
-  assert.match(signature(source), /Signature=adhoc/);
-  assert.match(signature(source), /Sealed Resources version=/);
+  const signatureOutput = signature(source);
+  assert.match(signatureOutput, /Signature=adhoc/);
+  assert.match(signatureOutput, /Sealed Resources version=/);
   for (const name of ["aiolm", "aiolm-cli"]) assert.match(signature(join(source, "Contents/MacOS", name)), /Signature=adhoc/);
 
   const home = join(root, "synthetic home 한글");
