@@ -141,6 +141,19 @@ async function startPullRequestBuild() {
 }
 
 describe("RuntimesPanel pull-request builds", () => {
+  it('reports an active runtime operation to its enclosing settings modal', async () => {
+    mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vLLM', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
+    let finish!: () => void;
+    mocked.providerInstall.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+    const onBusyChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimesPanel store={store} engineRequest={{ provider: 'vllm', revision: 1 }} onBusyChange={onBusyChange} /></I18nProvider>);
+    const install = await screen.findByRole('button', { name: 'Install isolated environment' });
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+    fireEvent.click(install);
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+    await act(async () => { finish(); });
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+  });
   it('locks runtime changes while a session command is pending before the native status poll catches up', async () => {
     mocked.providerCatalog.mockResolvedValue([{ id: 'vllm', engine: 'vLLM', server: 'vllm', availability: { supported: true, detail: '' }, options: [] }]);
     const selectedStore = { ...store, cfg: { active_provider: 'vllm' } } as unknown as AppStore;

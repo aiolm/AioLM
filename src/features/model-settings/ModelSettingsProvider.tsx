@@ -16,12 +16,13 @@ import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { loadedModelPath } from '../../shared/runtime/loadedModel';
-import { modelSettingsContext as Context, MANAGE_MODEL_RUNTIMES, type ModelSettingsRequest } from './modelSettingsContext';
+import { modelSettingsContext as Context, type ModelSettingsRequest } from './modelSettingsContext';
 
 export { MANAGE_MODEL_RUNTIMES, useModelSettings } from './modelSettingsContext';
 export type { ExecutionTarget, ModelSettingsRequest, ModelSettingsContext } from './modelSettingsContext';
 
 const ModelSettingsDialog = lazy(() => import('./ModelSettingsDialog'));
+const RuntimesPanel = lazy(() => import('../runtimes/Runtimes'));
 
 function assignedTarget(config: api.AppConfig, application?: ProfileApplication, sessionId = 'default'): ProfileCommitResult {
   const library = application?.profile_id && config.settings_profiles ? ensureProfileLibrary(config.settings_profiles) : profileLibrary(config);
@@ -355,6 +356,6 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
       preflightState={preflightState ?? undefined}
       onCancelStart={preflightState ? cancelPreflight : launching ? stopTarget : undefined} onStop={stopTarget}
-      onManageRuntimes={cfg => { setSuspended(true); window.dispatchEvent(new CustomEvent(MANAGE_MODEL_RUNTIMES, { detail: { provider: providerOf(cfg ?? editor.initial) } })); }} /></Suspense>}
+      renderRuntimeManager={({ config, revision, active, onBusyChange }) => <RuntimesPanel store={store} active={active} engineRequest={{ provider: providerOf(config), revision }} onBusyChange={onBusyChange} />} /></Suspense>}
   </Context.Provider>;
 }

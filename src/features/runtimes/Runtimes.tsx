@@ -47,7 +47,7 @@ function BackIcon() {
  * not change execution selection; only an explicit request (a model's
  * "manage runtimes" action) opens one adapter directly, and ordinary
  * navigation back to this page returns to the inventory. */
-export default function RuntimesPanel({ store, active = true, onOpenProfiles, engineRequest }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; engineRequest?: { provider: ProviderId; revision: number } }) {
+export default function RuntimesPanel({ store, active = true, onOpenProfiles, engineRequest, onBusyChange }: { store: AppStore; active?: boolean; onOpenProfiles?: () => void; engineRequest?: { provider: ProviderId; revision: number }; onBusyChange?: (busy: boolean) => void }) {
   const { t, locale } = useI18n();
   const copy = adapterCatalogCopy[locale];
   const addHeadingId = useId();
@@ -76,6 +76,8 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const deviceSummary = deviceSummaryOf(locale, rt.device);
   const deepVerify = useDeepVerification(store, locale);
   const busy = rt.runtimeBusy || rt.probeBusy || providerBusy || adapterBusy || deepVerify.busy;
+  const operationBusy = busy || rt.prReviewBusy || rt.uninstallBusy || rt.cancelBusy;
+  useEffect(() => { onBusyChange?.(operationBusy); }, [operationBusy, onBusyChange]);
   const inventoryRevision = useRuntimeInventoryRevision();
   const [inventory, setInventory] = useState<{ catalog: ProviderDescription[]; runtimes: RuntimeInstance[]; loaded: boolean; error: string }>({ catalog: [], runtimes: [], loaded: false, error: '' });
   useEffect(() => {

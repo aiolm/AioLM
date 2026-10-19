@@ -29,9 +29,9 @@ describe('runtime inventory readiness', () => {
     const onChange = vi.fn();
     render(<I18nProvider initialLocale="en"><ProviderRuntimeControl cfg={{ ...testConfig, active_provider: provider, active_runtime: 'build-one' }} disabled={false} onProvider={vi.fn()} onChange={onChange} onReady={vi.fn()} /></I18nProvider>);
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
-    expect(screen.getByRole('option', { name: /build-one/ })).toBeVisible();
-    fireEvent.click(screen.getByRole('option', { name: /build-two/ }));
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /build-one/ })).toBeChecked();
+    fireEvent.click(screen.getByRole('radio', { name: /build-two/ }));
     expect(onChange).toHaveBeenLastCalledWith({ active_runtime: 'build-two' });
     expect(onChange).toHaveBeenCalledTimes(1);
   });

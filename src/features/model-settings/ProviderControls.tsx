@@ -5,7 +5,7 @@ import { providerCopy } from '../../shared/i18n/providerCopy';
 import { commandImportCopy } from '../../shared/i18n/commandImportCopy';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
-import EngineSelect from '../../shared/ui/EngineSelect';
+import { useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
 import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
 import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, OccurrenceOrder, SchemaOptionField } from '../runtimes/RuntimeOptionSchemaForm';
@@ -16,13 +16,17 @@ import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
 import PositionalLayout from '../runtimes/PositionalLayout';
 import { ORDER_KEY } from '../runtimes/optionOrder';
 import { modelSettingsCopy } from './modelSettingsCopy';
+import { settingsFlowCopy } from './settingsFlowCopy';
+import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 
-export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0, compact = false }: {
+export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0 }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
   onChange: (patch: Partial<api.AppConfig>) => void; onReady: (ready: boolean | null) => void; revision?: number;
-  compact?: boolean;
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
+  const flowCopy = settingsFlowCopy[locale];
+  const groupId = useId();
+  const inventoryRevision = useRuntimeInventoryRevision();
   const provider = api.providerOf(cfg);
   const [descriptions, setDescriptions] = useState<api.ProviderDescription[]>([]);
   const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>([]);
@@ -31,24 +35,40 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   useEffect(() => {
     let active = true;
     setInventoryState('loading'); setError('');
-    void Promise.all([api.providerCatalog(), api.providerRuntimes()]).then(([catalog, runtimes]) => {
+    void Promise.all([api.providerCatalog(inventoryRevision > 0), api.providerRuntimes()]).then(([catalog, runtimes]) => {
       if (active) { setDescriptions(catalog); setRuntimes(runtimes); setInventoryState('ready'); }
     }).catch(cause => { if (active) { setError(String(cause)); setInventoryState('error'); } });
     return () => { active = false; };
-  }, [revision]);
+  }, [revision, inventoryRevision]);
   const selected = provider === 'llama.cpp' ? cfg.active_build && cfg.active_backend ? `${cfg.active_build}-${cfg.active_backend}` : '' : cfg.active_runtime ?? '';
   const description = descriptions.find(item => item.id === provider);
   const entries = runtimes.filter(item => item.provider === provider);
+  const engines = [...new Set([...api.PROVIDERS, ...descriptions.map(item => item.id), provider])];
+  const selectRuntime = (item?: api.RuntimeInstance) => onChange(provider === 'llama.cpp'
+    ? { active_backend: item?.backend ?? '', active_build: item?.build ?? '' } : { active_runtime: item?.id ?? '' });
   // A pending or failed inventory cannot establish that the selected runtime is absent.
   const ready = inventoryState === 'ready' ? description?.availability.supported === true && entries.some(item => item.id === selected && item.available) : null;
   useEffect(() => onReady(ready), [ready, onReady]);
-  return <div className="model-settings-fields">
-    <EngineSelect value={provider} disabled={disabled} onChange={onProvider} size={compact ? 'sm' : 'md'} />
-    <label>{copy.runtime}<CustomSelect ariaLabel={copy.runtime} value={selected} disabled={disabled || description?.availability.supported === false} size={compact ? 'sm' : 'md'}
-      options={[{ value: '', label: copy.choose }, ...entries.map(item => ({ value: item.id, label: api.runtimeLabel(item), disabled: !item.available })),
-        ...(!entries.some(item => item.id === selected) && selected ? [{ value: selected, label: selected, disabled: true }] : [])]}
-      onChange={value => { const item = entries.find(item => item.id === value); onChange(provider === 'llama.cpp'
-        ? { active_backend: item?.backend ?? '', active_build: item?.build ?? '' } : { active_runtime: value }); }} /></label>
+  return <div className="model-settings-fields runtime-selection-cards">
+    <fieldset disabled={disabled} className="runtime-choice-group"><legend>{copy.engine}</legend>
+      {engines.map(engine => {
+        const metadata = descriptions.find(item => item.id === engine);
+        const label = api.isExternalProvider(engine) ? metadata?.engine ?? api.providerDisplayName(engine) : api.providerDisplayName(engine);
+        return <label key={engine} className={`runtime-choice${engine === provider ? ' is-selected' : ''}`}>
+          <input type="radio" name={`${groupId}-engine`} checked={engine === provider} onChange={() => onProvider(engine)} />
+          <span><strong>{label}</strong>{metadata?.availability.detail && <small>{normalizeDisplayText(metadata.availability.detail)}</small>}</span>
+        </label>;
+      })}
+    </fieldset>
+    <fieldset disabled={disabled || description?.availability.supported === false} className="runtime-choice-group"><legend>{copy.runtime}</legend>
+      {entries.map(item => <label key={item.id} className={`runtime-choice${item.id === selected ? ' is-selected' : ''}`}>
+        <input type="radio" name={`${groupId}-runtime`} checked={item.id === selected} disabled={!item.available} onChange={() => selectRuntime(item)} />
+        <span><strong>{api.runtimeLabel(item)}</strong><small>{item.server}</small>{item.problems.length > 0 && <small>{normalizeDisplayText(item.problems.join('; '))}</small>}</span>
+      </label>)}
+      {inventoryState === 'ready' && !entries.length && <p className="app-section-hint">{flowCopy.noRuntimes}</p>}
+      {selected && !entries.some(item => item.id === selected) && <p className="app-section-hint">{selected}</p>}
+      {selected && <button type="button" className="app-button app-button--ghost app-button--sm" onClick={() => selectRuntime()}>{copy.reset}</button>}
+    </fieldset>
     {description?.availability.supported === false && <FeedbackBanner tone="warning">{copy.unsupported} {description.availability.detail}</FeedbackBanner>}
     {inventoryState === 'loading' && <p role="status">{copy.loading}</p>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}

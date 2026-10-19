@@ -25,7 +25,18 @@
 .model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); }
 .model-settings-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 28px; overscroll-behavior: contain; }
 .model-settings-runtime-selection { min-width: 0; margin-block-end: 6px; }
-.model-settings-runtime-selection > .model-settings-fields { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 10px; }
+.model-settings-runtime-selection > .model-settings-fields { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); align-items: start; gap: 20px; }
+.runtime-choice-group { display: grid; align-content: start; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.runtime-choice-group legend { margin-bottom: 10px; font-weight: 650; }
+.runtime-choice-group .runtime-choice { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; padding: 14px; border: 1px solid var(--ui-border); border-radius: 8px; cursor: pointer; }
+.runtime-choice.is-selected { border-color: var(--ui-ink); background: var(--ui-surface-muted); }
+.runtime-choice:has(input:disabled) { cursor: default; color: var(--ui-muted); }
+.runtime-choice input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--ui-ink); }
+.runtime-choice > span { min-width: 0; }
+.runtime-choice strong, .runtime-choice small { display: block; overflow-wrap: anywhere; }
+.runtime-choice small { margin-top: 5px; color: var(--ui-muted); }
+.model-settings-runtime-manager { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.model-settings-manager-actions { flex-shrink: 0; padding: 12px 24px; border-bottom: 1px solid var(--ui-border); }
 .model-settings-runtime-selection .model-settings-fields > label { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
 .model-settings-runtime-selection label > .app-custom-select-container { flex: 1; min-width: 0; }
 .model-settings-context .app-custom-select-trigger { width: 100%; }
@@ -87,7 +98,7 @@
   .model-settings-body { padding: 16px; }
   .model-settings-content { flex: 1; }
   .model-settings-context { padding: 8px 16px; }
-  .model-settings-runtime-selection > .model-settings-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .model-settings-runtime-selection > .model-settings-fields { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .model-settings-context .settings-profile-picker { flex-basis: 100%; }
   .model-settings-grid, .model-settings-gpus { grid-template-columns: minmax(0, 1fr); }
   .model-settings-lora { grid-template-columns: minmax(0, 1fr) 80px; }

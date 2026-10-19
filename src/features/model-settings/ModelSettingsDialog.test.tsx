@@ -93,6 +93,50 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
     expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_backend: '', active_build: '' }));
   });
+  it('manages runtimes inside the same modal, retains both drafts and waits for active operations', async () => {
+    const inventory = vi.spyOn(api, 'providerRuntimes');
+    const onManageRuntimes = vi.fn();
+    function Manager({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
+      return <div><input aria-label="Registration draft" defaultValue="" />
+        <button type="button" onClick={() => onBusyChange(true)}>Begin operation</button>
+        <button type="button" onClick={() => { inventory.mockResolvedValue([
+          { id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
+          { id: 'b456-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b456', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
+        ]); onBusyChange(false); }}>Finish operation</button></div>;
+    }
+    const { onClose, onApply, onProfileCommit } = mount({ initialSection: 'tuning', onManageRuntimes,
+      renderRuntimeManager: ({ onBusyChange }) => <Manager onBusyChange={onBusyChange} /> });
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.blur(numeric('ctx_size'));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    const modal = screen.getByRole('dialog', { name: 'Model & settings' });
+    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+    expect(screen.getByRole('dialog', { name: 'Manage runtimes' })).toBe(modal);
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    const registration = screen.getByLabelText('Registration draft');
+    registration.focus();
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(registration).toHaveFocus();
+    fireEvent.change(screen.getByLabelText('Registration draft'), { target: { value: 'Unsaved entry point' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Begin operation' }));
+    expect(screen.getByRole('button', { name: 'Back to runtime' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent(modal, new Event('cancel', { cancelable: true }));
+    expect(screen.getByLabelText('Registration draft')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Finish operation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to runtime' }));
+    expect(await screen.findByRole('radio', { name: /^b456/ })).toBeVisible();
+    expect(screen.getByRole('radio', { name: /^b123/ })).toBeChecked();
+    openOptions();
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+    expect(screen.getByLabelText('Registration draft')).toHaveValue('Unsaved entry point');
+    fireEvent(modal, new Event('cancel', { cancelable: true }));
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(onManageRuntimes).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
   it('keeps the option draft on backward navigation and confirms before replacing it with another profile', async () => {
     const alternate = captureProfile({ ...cfg, ctx_size: 12288 }, 'Alternate settings', 'global', '');
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg,
@@ -149,16 +193,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     openOptions();
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose runtime' })).toHaveFocus());
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
-    await screen.findByRole('option', { name: 'build-two · synthetic · external' });
-    expect(screen.getByRole('combobox', { name: 'Runtime' })).toBeEnabled();
-    // Async inventory and schema updates can replace the portalled list.
-    fireEvent.click(screen.getByRole('option', { name: 'build-two · synthetic · external' }));
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Runtime' })).toHaveTextContent('build-two'));
+    await screen.findByRole('radio', { name: /^build-two · synthetic · external/ });
+    expect(screen.getByRole('radio', { name: /^build-two/ })).toBeEnabled();
+    // Use the latest inventory after the asynchronous refresh.
+    fireEvent.click(screen.getByRole('radio', { name: /^build-two · synthetic · external/ }));
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^build-two/ })).toBeChecked());
     expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
-    fireEvent.click(screen.getByRole('option', { name: 'build-one · synthetic · external' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^build-one · synthetic · external/ }));
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
     openOptions();
     expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
@@ -320,8 +362,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onApply } = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
-    fireEvent.click(screen.getByRole('option', { name: 'narrow · synthetic · external' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^narrow · synthetic · external/ }));
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
     openOptions();
     await waitFor(() => expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible());
@@ -342,23 +383,19 @@ describe('model settings editor', { timeout: 45000 }, () => {
     mount({ initialSection: 'sampling' });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved llama prompt' } });
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
-    fireEvent.click(screen.getByRole('option', { name: 'vLLM' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^vLLM/ }));
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
-    fireEvent.click(await screen.findByRole('option', { name: 'synthetic · synthetic · external' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /^synthetic · synthetic · external/ }));
     openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue(''));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved vLLM prompt' } });
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
-    fireEvent.click(screen.getByRole('option', { name: 'llama.cpp' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^llama\.cpp/ }));
     openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved llama prompt'));
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
-    fireEvent.click(screen.getByRole('option', { name: 'vLLM' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^vLLM/ }));
     openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved vLLM prompt'));
   });
@@ -631,14 +668,13 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('requires a managed runtime before starting and never offers a system runtime', async () => {
     mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' } });
     await waitFor(() => expect(api.rtList).toHaveBeenCalled());
-    expect(screen.getByRole('combobox', { name: 'Runtime' })).toHaveTextContent('Choose a runtime');
-    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
-    const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
-    expect(options).toContain('b123 (b123-cpu) · cpu · managed');
+    expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
+    const options = within(screen.getByRole('group', { name: 'Runtime' })).getAllByRole('radio').map(option => option.closest('label')?.textContent ?? '');
+    expect(options.some(option => option.startsWith('b123 (b123-cpu) · cpu · managed'))).toBe(true);
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(screen.getByText('No runtime is selected.')).toBeVisible();
-    expect(screen.getByRole('combobox', { name: 'Runtime' })).toBeVisible();
+    expect(screen.getByRole('radio', { name: /^b123/ })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
   });
 

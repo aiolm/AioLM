@@ -21,6 +21,7 @@ vi.mock('./ModelSettingsDialog', () => ({ default: (props: ModelSettingsDialogPr
   mocks.dialog = props;
   return <div data-testid="settings-dialog" />;
 } }));
+vi.mock('../runtimes/Runtimes', () => ({ default: ({ engineRequest }: { engineRequest: { provider: string } }) => <p>Inline runtime manager: {engineRequest.provider}</p> }));
 vi.mock('../../shared/i18n/i18n', () => ({ useI18n: () => ({ locale: 'en' }) }));
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => false,
@@ -146,10 +147,11 @@ describe('model settings target application', () => {
     const listener = vi.fn();
     window.addEventListener(MANAGE_MODEL_RUNTIMES, listener);
     try {
-      act(() => dialog.onManageRuntimes?.({ ...store.cfg!, active_provider: 'vllm', active_runtime: 'synthetic-metal' }));
-      expect(listener).toHaveBeenCalledOnce();
-      expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ provider: 'vllm' });
-      expect(context.suspended).toBe(true);
+      const manager = dialog.renderRuntimeManager?.({ config: { ...store.cfg!, active_provider: 'vllm', active_runtime: 'synthetic-metal' }, revision: 1, active: true, onBusyChange: vi.fn() });
+      await act(async () => { render(manager); });
+      expect(await screen.findByText('Inline runtime manager: vllm')).toBeVisible();
+      expect(listener).not.toHaveBeenCalled();
+      expect(context.suspended).toBe(false);
       expect(store.updateConfig).not.toHaveBeenCalled();
     } finally { window.removeEventListener(MANAGE_MODEL_RUNTIMES, listener); }
   });
