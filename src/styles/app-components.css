@@ -12,7 +12,7 @@
 .app-button--secondary:hover:not(:disabled) { background: var(--ui-action-secondary-fill-hover); color: var(--ui-action-ink-hover); border-color: transparent; }
 /* Text-only secondary actions keep an idle link cue when no verb glyph is
    supplied, including states revealed after content loads or a task starts. */
-.app-button--secondary:where(:not([data-icon], :has(svg, img, .model-icon), :disabled, [aria-disabled="true"])) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.app-button--secondary:where(:not([data-icon], :has(svg, img), :disabled, [aria-disabled="true"])) { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .app-button--danger { background: var(--tone-error-bg); color: var(--tone-error-ink); border-color: transparent; }
 .app-button--danger:hover:not(:disabled) { background: var(--ui-danger-hover); border-color: transparent; }
 .app-button--ghost, .app-icon-button { background: transparent; color: var(--ui-muted); }
@@ -33,8 +33,8 @@
 .app-button--lg { min-height: 36px; padding: 7px 16px; }
 .app-button[aria-disabled="true"]:not(:disabled) { opacity: .8; }
 /* Pressed is the secondary tint plus an accent edge (a state, never idle) and ink text. */
-.app-button--selected, .app-button[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-action-secondary-fill-hover); color: var(--ui-ink); }
-.app-button--selected:hover:not(:disabled), .app-button[aria-pressed="true"]:hover:not(:disabled) { background: var(--ui-action-secondary-fill-hover); }
+.app-button[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-action-secondary-fill-hover); color: var(--ui-ink); }
+.app-button[aria-pressed="true"]:hover:not(:disabled) { background: var(--ui-action-secondary-fill-hover); }
 /* Semantic verb glyph drawn in the flex flow before the label (never over it),
    in the button's own ink. */
 .app-button[data-icon]::before { content: ""; flex-shrink: 0; width: 16px; height: 16px; background-color: currentColor; mask: var(--app-button-icon) center / 16px 16px no-repeat; }
@@ -73,7 +73,7 @@
 .app-tab, .app-nav-item { display: inline-flex; align-items: center; gap: 8px; min-width: 0; min-height: var(--ui-control); padding: var(--ui-control-pad-block) var(--ui-control-pad-inline); border: 1px solid transparent; border-radius: var(--ui-radius-control); background: transparent; color: var(--ui-muted); font-size: var(--ui-text); font-weight: 500; line-height: 1.5; text-align: start; }
 .app-tab:hover:not(:disabled), .app-nav-item:hover:not(:disabled) { background: var(--ui-surface-muted); color: var(--ui-ink); }
 /* Selection is a tinted fill, a 2px accent bar and bold ink text, never accent text alone. */
-.app-tab[aria-selected="true"], .app-nav-item[aria-current]:not([aria-current="false"]), .app-nav-item.is-active { background: var(--ui-accent-soft); box-shadow: inset 2px 0 0 var(--ui-accent); color: var(--ui-ink); font-weight: 600; }
+.app-tab[aria-selected="true"], .app-nav-item[aria-current]:not([aria-current="false"]) { background: var(--ui-accent-soft); box-shadow: inset 2px 0 0 var(--ui-accent); color: var(--ui-ink); font-weight: 600; }
 .app-tab[aria-selected="true"] { box-shadow: inset 0 -2px 0 var(--ui-accent); }
 .app-tab:disabled, .app-nav-item:disabled { color: var(--ui-faint); cursor: not-allowed; }
 .app-switch { position: relative; width: 34px; height: 20px; border: 1px solid var(--ui-border-strong); border-radius: 10px; background: var(--ui-surface-muted); padding: 0; flex-shrink: 0; }
@@ -167,16 +167,8 @@
 /* A selected content row is a tinted fill with an accent bar and ink text.
    (Rail selection is a separate solid fill owned by app-shell.) */
 .app-list-row.is-selected, .app-list-row[aria-pressed="true"] { background: var(--ui-accent-soft); border-color: var(--ui-border-accent); box-shadow: inset 2px 0 0 var(--ui-accent); color: var(--ui-ink); }
-.app-soft-accent { background: var(--ui-accent-soft); border-color: var(--ui-border-accent); color: var(--ui-accent); }
 .app-list-row__action { display: flex; align-items: center; flex: 1; min-width: 0; padding: 6px 8px; border: 0; border-radius: var(--ui-radius-sm); background: transparent; color: inherit; font: inherit; text-align: start; }
 .app-list-row:focus-within { border-color: var(--ui-border-accent); }
-.app-bg-muted, .app-bg-elevated { background: var(--ui-surface-muted); }
-.app-bg-elevated-strong { background: var(--ui-border); }
-.app-bg-accent-solid { background: var(--ui-accent-solid); color: var(--ui-on-accent); }
-.app-border-accent { border-color: var(--ui-border-accent); }
-.app-border-success { border-color: var(--tone-success-border); }
-.app-border-strongest { border-color: var(--ui-border-strongest); }
-.app-bg-danger-strong { background: var(--ui-danger-solid); color: white; }
 .app-custom-select-container { position: relative; min-width: 0; }
 /* Select, combobox and disclosure share one closed/hover/open/focus language:
    a filled trigger with no resting stroke and an always-visible chevron at

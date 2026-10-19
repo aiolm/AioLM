@@ -1,14 +1,4 @@
 /* Shared list/detail pages and the parameter editor. */
-.workspace-page-heading { gap: 16px; margin-bottom: 12px; }
-.workspace-page-heading h2 { margin: 0; }
-.workspace-page-heading p { margin-top: 8px; color: var(--ui-muted); }
-.profiles-page { margin-inline: 0; }
-.profile-snapshot-grid { gap: 12px; }
-.profile-snapshot { border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); padding: 16px; background: var(--ui-panel); }
-.profile-snapshot h3 { font-size: var(--ui-text-section); }
-.profile-snapshot-hint, .profile-model-name, .profile-snapshot-status { color: var(--ui-muted); font-size: var(--ui-text-support); margin: 4px 0 8px; }
-.profile-snapshot-actions, .profile-name-form { gap: 8px; margin-top: 12px; }
-.model-target-button { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .discover-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; min-width: 0; margin-bottom: 16px; }
 .discover-toolbar-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; font-size: var(--ui-text-support); }
 .discover-toolbar > .engine-select { max-width: 100%; }
@@ -18,12 +8,6 @@
 .discover-progress-bytes, .discover-progress-actions { max-width: 100%; }
 .discover-progress-bytes { min-width: 0; overflow-wrap: anywhere; }
 .discover-progress-rate { min-width: min(120px, 100%); max-width: 100%; overflow-wrap: anywhere; }
-.model-target-button > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-config-snapshot { padding: 12px; margin-top: 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-panel); background: var(--ui-surface-muted); }
-.project-config-snapshot p { margin: 4px 0 8px; color: var(--ui-muted); }
-.project-config-snapshot dl, .project-config-snapshot dl > div { gap: 12px; }
-.project-config-snapshot dt { color: var(--ui-muted); }
-.project-config-snapshot dd { margin: 0; }
 /* Runtimes: the backend list beside a narrow side column with the detected
    device and list filters; the column stacks above the list on narrow pages.
    Backends read as open sections separated by hairlines (name, fit, status |

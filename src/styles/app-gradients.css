@@ -63,11 +63,9 @@
 .app-button--danger:hover:not(:disabled) { background: var(--tone-error-action-hover); color: var(--tone-error-action-ink); }
 .app-button--ghost.app-button--danger:not(:disabled) { background: transparent; color: var(--tone-error-ink); }
 .app-button--ghost.app-button--danger:hover:not(:disabled) { background: var(--tone-error-gradient); color: var(--tone-error-ink); }
-.app-button--warning:not(:disabled) { border-color: transparent; background: var(--tone-warning-action-gradient); color: var(--tone-warning-action-ink); }
-.app-button--warning:hover:not(:disabled) { background: var(--tone-warning-action-hover); }
 :root .app-textarea:not(:disabled, [readonly]) { background-position: right 10px top 10px, center; }
 @media (forced-colors: active) {
-  :root :is(.app-button--danger, .app-button--warning):not(:disabled), :root .app-button--ghost.app-button--danger:hover:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+  :root .app-button--danger:not(:disabled), :root .app-button--ghost.app-button--danger:hover:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
 }
 /* Recovery actions use the action palette; the enclosing notice carries status. */
 .app-feedback .app-feedback-action:not(:disabled) { background: var(--ui-action-secondary-gradient); color: var(--ui-action-ink); }
@@ -82,10 +80,9 @@
  :root .app-icon-button:hover:not(:disabled) { background-color: var(--ui-action-secondary-fill-hover); }
  :root .app-icon-button--danger:hover:not(:disabled) { background-color: var(--tone-error-bg); }
  :root .app-feedback-dismiss:hover:not(:disabled) { background-color: var(--ui-accent-soft); }
- :root .app-button--selected:not(:disabled), :root .app-button[aria-pressed="true"]:not(:disabled),
- :root .settings-profile-chip--active { background-color: var(--ui-action-secondary-fill-hover); }
- :root .app-empty-icon, :root .app-soft-accent, :root .models-list-count,
- :root .project-config-snapshot, :root .ui-background-accent-soft { background-color: var(--ui-accent-soft); }
+  :root .app-button[aria-pressed="true"]:not(:disabled),
+  :root .settings-profile-chip--active { background-color: var(--ui-action-secondary-fill-hover); }
+  :root .app-empty-icon, :root .models-list-count { background-color: var(--ui-accent-soft); }
  :root .app-custom-dropdown-item.is-highlighted,
  :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-color: var(--ui-accent-soft); }
  :root .performance-chip > span { background-color: var(--ui-field-fill); }
@@ -107,10 +104,10 @@
 @media (forced-colors: none) {
  :root .app-button--secondary:not(:disabled) { background-image: var(--ui-action-secondary-gradient); }
  :root .app-button--secondary:hover:not(:disabled), :root .app-button--ghost:not(.app-button--danger):hover:not(:disabled), :root .app-icon-button:hover:not(:disabled) { background-image: var(--ui-action-secondary-gradient-hover); }
- :root .app-badge--info, :root .ui-background-info-bg { background-image: var(--tone-info-gradient); }
- :root .app-badge--success, :root .ui-background-success-bg { background-image: var(--tone-success-gradient); }
- :root .app-badge--warning, :root .ui-background-warning-bg { background-image: var(--tone-warning-gradient); }
- :root .app-badge--danger, :root .ui-background-error-bg, :root .app-icon-button--danger:hover:not(:disabled) { background-image: var(--tone-error-gradient); }
+  :root .app-badge--info { background-image: var(--tone-info-gradient); }
+  :root .app-badge--success { background-image: var(--tone-success-gradient); }
+  :root .app-badge--warning { background-image: var(--tone-warning-gradient); }
+  :root .app-badge--danger, :root .app-icon-button--danger:hover:not(:disabled) { background-image: var(--tone-error-gradient); }
  :root .app-feedback { background-image: var(--tone-info-gradient); }
  :root .app-feedback--success { background-image: var(--tone-success-gradient); }
  :root .app-feedback--warning { background-image: var(--tone-warning-gradient); }
@@ -118,8 +115,8 @@
  :root .app-feedback .app-feedback-action:not(:disabled) { background-image: var(--ui-action-secondary-gradient); }
  :root .app-feedback .app-feedback-action:hover:not(:disabled) { background-image: var(--ui-action-secondary-gradient-hover); }
  :root .app-feedback-dismiss:hover:not(:disabled) { background-image: var(--ui-soft-gradient); }
- :root .app-button--selected:not(:disabled), :root .app-button[aria-pressed="true"]:not(:disabled), :root .settings-profile-chip--active { background-image: var(--ui-action-secondary-gradient-hover); }
- :root .app-empty-icon, :root .app-soft-accent, :root .models-list-count, :root .project-config-snapshot, :root .ui-background-accent-soft, :root .app-badge--neutral { background-image: var(--ui-soft-gradient); }
+  :root .app-button[aria-pressed="true"]:not(:disabled), :root .settings-profile-chip--active { background-image: var(--ui-action-secondary-gradient-hover); }
+  :root .app-empty-icon, :root .models-list-count, :root .app-badge--neutral { background-image: var(--ui-soft-gradient); }
  :root .model-publishers .app-badge--neutral { background-image: var(--ui-secondary-gradient); }
  :root .app-custom-dropdown-item.is-highlighted, :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-image: var(--ui-soft-gradient); }
  :root .app-custom-select-trigger:not(:disabled), :root .app-input:not(:disabled), :root .app-textarea:not(:disabled), :root .performance-chip > span { background-image: var(--ui-field-rest-gradient); }

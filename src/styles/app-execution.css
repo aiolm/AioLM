@@ -30,47 +30,6 @@
 .models-model-path { grid-area: path; min-width: 0; padding-inline: 8px; color: var(--ui-muted); font-size: var(--ui-text-support); overflow-wrap: anywhere; }
 .models-file-actions { grid-area: files; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 4px; }
 .models-model-actions .app-status-badge { gap: 6px; padding: 0; border: 0; background: transparent; font-size: var(--ui-text-support); font-weight: 500; }
-.models-model-actions .app-status-badge--success .app-status-badge__dot, .models-model-actions .app-badge--success .app-status-badge__dot { background: var(--ui-status-success-dot); }
+.models-model-actions .app-badge--success .app-status-badge__dot { background: var(--ui-status-success-dot); }
 .models-file-actions .app-button, .models-model-actions .app-button { min-height: 32px; padding: 4px 10px; font-size: var(--ui-text-support); }
-.execution-setup { max-width: 1040px; }
-.execution-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
-.execution-heading h2 { margin: 4px 0; font-size: var(--ui-text-title); line-height: 1.35; font-weight: 650; overflow-wrap: break-word; }
-.execution-heading p { color: var(--ui-muted); font-size: var(--ui-text-support); }
-.execution-heading > div { min-width: 0; }
-.execution-heading > .app-status-badge { flex-shrink: 0; margin-top: 6px; }
-.execution-runtime { margin-bottom: 20px; }
-.execution-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; font-size: var(--ui-text); font-weight: 600; }
-.execution-error-detail { display: block; overflow-wrap: break-word; font-size: var(--ui-text-support); }
-.execution-profiles .profiles-page { width: 100%; padding: 0; }
-.profiles-page--compact .workspace-page-heading { margin-bottom: 10px; }
-.profiles-page--compact .workspace-page-heading h2 { font-size: 14px; }
-.profiles-page--compact .workspace-page-heading p, .profiles-page--compact .profile-snapshot-hint { display: none; }
-.profiles-page--compact .profile-snapshot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.profiles-page--compact .profile-snapshot { padding: 12px; border-radius: 8px; min-width: 0; }
-.profiles-page--compact .profile-snapshot h3 { font-size: var(--ui-text-support); font-weight: 600; }
-.profiles-page--compact .profile-model-name, .profiles-page--compact .profile-snapshot-status { font-size: var(--ui-text-support); overflow-wrap: anywhere; }
-.profiles-page--compact .profile-snapshot-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.profiles-page--compact .profile-name-form { display: grid; }
-.execution-quick { border-top: 1px solid var(--ui-border); margin-top: 24px; padding-top: 20px; }
-.execution-quick > h3 { font-size: var(--ui-text); font-weight: 600; margin-bottom: 14px; }
-.execution-numeric-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
-.execution-numeric-fields .tuning-slider-field__controls { grid-template-columns: minmax(0, 1fr) 90px; }
-.execution-numeric-fields .tuning-slider-field__number { width: 90px; max-width: 100%; }
-.execution-disclosure { border-top: 1px solid var(--ui-border); padding-block: 16px; }
-.execution-disclosure > summary { cursor: pointer; font-weight: 600; font-size: var(--ui-text); }
-.execution-disclosure > summary:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 4px; }
-.execution-disclosure .models-panel { overflow: visible; padding-inline: 0; }
-.execution-projector { display: grid; gap: 8px; margin-top: 16px; font-size: var(--ui-text-support); }
-.execution-footer { position: sticky; bottom: -24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 8px; padding: 16px 0; background: var(--ui-panel); border-top: 1px solid var(--ui-border); z-index: 2; }
-.execution-footer p { color: var(--ui-muted); font-size: var(--ui-text-support); flex: 1; min-width: 140px; }
-.execution-footer > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .runtime-return { flex-shrink: 0; padding: 12px 16px 0; }
-@media (max-width: 1150px) {
-  .execution-numeric-fields { grid-template-columns: minmax(0, 1fr); }
-  .execution-footer { bottom: -18px; }
-}
-@media (max-width: 760px) {
-  .execution-heading h2 { font-size: var(--ui-text-section); }
-  .profiles-page--compact .profile-snapshot-grid { grid-template-columns: minmax(0, 1fr); }
-  .execution-footer { bottom: 0; }
-}

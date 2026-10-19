@@ -13,7 +13,6 @@
 }
 @media (max-width: 639px) {
  :root { --ui-page-padding: 16px; --ui-canvas-padding: 16px; }
- .profile-snapshot { padding: 16px; }
  .settings-row { padding: var(--ui-row-space) 12px; }
  /* Phone width: location and server state on the first line, the model pill
     gets the full second line so its name stays readable. */
@@ -31,7 +30,6 @@
 /* Break at the width of the page, after sidebar, padding and scrollbar space. */
 @container workspace (min-width: 720px) {
  .app-master-detail { grid-template-columns: clamp(224px,26%,280px) minmax(0,1fr); }
- .app-balanced-columns { grid-template-columns: repeat(2,minmax(0,1fr)); }
  .discover-columns { grid-template-columns: minmax(0,.85fr) minmax(0,1.15fr); }
  .chat-thread-sidebar { display: flex; position: relative; inset: auto; z-index: auto; width: 224px; box-shadow: none; }
  .chat-thread-toggle, .chat-thread-close { display: none; }
