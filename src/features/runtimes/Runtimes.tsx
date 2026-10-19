@@ -260,6 +260,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
             <summary>{t("settings.advanced")}</summary>
             <div className="runtime-advanced__body">
               <RuntimeCapabilitiesCard
+                locale={locale}
                 t={t}
                 capabilities={rt.capabilities}
                 probeBusy={rt.probeBusy}
@@ -303,7 +304,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       <ConfirmDialog
         open={rt.prPreview !== null}
         title={t("ui.prConfirmTitle")}
-        description={rt.prPreview ? <PullRequestProvenance t={t} preview={rt.prPreview.preview} backend={rt.prPreview.backend} /> : ""}
+        description={rt.prPreview ? <PullRequestProvenance t={t} locale={locale} preview={rt.prPreview.preview} backend={rt.prPreview.backend} /> : ""}
         confirmLabel={t("ui.prConfirmAction")}
         tone="primary"
         busy={rt.prBusy}

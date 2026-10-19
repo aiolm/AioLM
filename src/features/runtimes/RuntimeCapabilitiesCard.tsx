@@ -3,11 +3,14 @@ import StatusBadge from "../../shared/ui/StatusBadge";
 import DeepVerificationControls, { type DeepVerificationState } from './DeepVerificationControls';
 import type * as api from "../../shared/api/types";
 import type { UnifiedKey, TranslationVars } from "../../shared/i18n/i18nUnified";
-import { capabilityLabel, formatRecordedRuntimeVersion } from "../../shared/runtime/runtimeUtils";
+import { formatRecordedRuntimeVersion } from "../../shared/runtime/runtimeUtils";
+import type { Locale } from '../../shared/i18n/i18n';
+import { capabilityStateText } from '../../shared/i18n/statusDisplayCopy';
 import { useRuntimeVersionLabel } from "../../shared/runtime/installedRuntimes";
 import { normalizeDisplayText } from "../../shared/lib/displayPaths";
 
 interface Props {
+  locale?: Locale;
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   capabilities: api.RuntimeCapabilities | null;
   probeBusy: boolean;
@@ -20,7 +23,7 @@ interface Props {
   deepVerify?: DeepVerificationState;
 }
 
-export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, runtimeBusy = false, serverRunning, probeTarget, onProbe, deepVerify }: Props) {
+export default function RuntimeCapabilitiesCard({ t, locale = 'en', capabilities, probeBusy, runtimeBusy = false, serverRunning, probeTarget, onProbe, deepVerify }: Props) {
   const displayFlags = normalizeDisplayText(capabilities?.flags.join(", ") ?? "");
   const displayDevices = normalizeDisplayText(capabilities?.devices.join(" · ") ?? "");
   const targetVersion = useRuntimeVersionLabel(probeTarget?.backend ?? "", probeTarget?.build ?? "");
@@ -39,7 +42,7 @@ export default function RuntimeCapabilitiesCard({ t, capabilities, probeBusy, ru
       <p className="mt-3 text-xs ui-color-faint" >{probeTarget ? t("ui.probeTarget", { backend: probeTarget.backend, build: targetVersion }) : t("ui.probeChooseBuild")}</p>
       {capabilities && (
         <div className="mt-3.5 grid gap-2.5 app-summary-grid">
-          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeState")}</div><div className="mt-1"><StatusBadge label={capabilityLabel(capabilities.state)} tone={capabilities.state === "available" ? "success" : "warning"} /></div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {probedVersion}</div></div>
+          <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeState")}</div><div className="mt-1"><StatusBadge label={capabilityStateText(capabilities.state, locale)} tone={capabilities.state === "available" ? "success" : "warning"} /></div><div className="mt-1 text-xs tabular-nums ui-color-faint" >{capabilities.backend} · {probedVersion}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeVersion")}</div><div className="mt-1 text-xs tabular-nums ui-color-ink" >{probedVersion}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeFlags")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.flagsDiscovered", { count: capabilities.flags.length })}</div><div className="mt-1 max-h-20 overflow-auto app-text-wrap font-mono text-xs ui-color-faint" >{displayFlags || t("ui.none")}</div></div>
           <div className="app-card app-card--muted app-card--tight"><div className="app-eyebrow">{t("ui.probeDevices")}</div><div className="mt-1 text-xs ui-color-ink" >{t("ui.devicesVisible", { count: capabilities.devices.length })}</div><div className="mt-1 app-text-wrap text-xs ui-color-faint"  title={displayDevices}>{displayDevices || t("ui.noDevicesReported")}</div></div>

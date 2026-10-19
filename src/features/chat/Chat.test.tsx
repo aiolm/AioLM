@@ -399,9 +399,24 @@ describe("ChatPanel document context warning", () => {
     renderPanel();
 
     const selector = await screen.findByLabelText("Loaded sessions");
-    fireEvent.click(selector); await screen.findByRole("option", { name: "Vision · 8091 · running" });
-    fireEvent.click(screen.getByRole("option", { name: "Vision · 8091 · running" }));
-    expect(selector).toHaveTextContent("Vision · 8091 · running");
+    fireEvent.click(selector); await screen.findByRole("option", { name: "Vision · 8091 · Running" });
+    fireEvent.click(screen.getByRole("option", { name: "Vision · 8091 · Running" }));
+    expect(selector).toHaveTextContent("Vision · 8091 · Running");
+  });
+
+  it('translates session states while keeping transition locks and session routing unchanged', async () => {
+    mocked.sessionList.mockResolvedValue([
+      { id: 'work', name: 'Synthetic work', state: 'running', port: 8091, model: 'work.gguf' },
+      { id: 'closing', name: 'Synthetic closing', state: 'stopping', port: 8092, model: 'closing.gguf' },
+    ]);
+    render(<I18nProvider initialLocale="ko"><ChatPanel store={store} /></I18nProvider>);
+    const picker = await screen.findByLabelText('로드된 세션');
+    fireEvent.click(picker);
+    expect(await screen.findByRole('option', { name: 'Synthetic closing · 8092 · 중지 중' })).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('option', { name: 'Synthetic work · 8091 · 실행 중' }));
+    expect(picker).toHaveTextContent('Synthetic work · 8091 · 실행 중');
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
   });
 
   it("uses the selected session's live request settings and activity identity", async () => {
@@ -411,7 +426,7 @@ describe("ChatPanel document context warning", () => {
     }]);
     renderPanel();
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · Running" }));
     expect(screen.getByText('work.gguf')).toBeInTheDocument();
     respondWithText("Session answer");
     await sendMessage("Hello");
@@ -500,7 +515,7 @@ describe("ChatPanel document context warning", () => {
     const panelStore = createTestStore({ ...cfg, sessions: [definition], stop_existing_sessions_on_load: false });
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · Stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/work.gguf", ctx_size: 8192, temperature: 0.2 }), false));
     expect(panelStore.start).not.toHaveBeenCalled();
@@ -512,7 +527,7 @@ describe("ChatPanel document context warning", () => {
     const entries = structuredClone(panelStore.cfg!.settings_profiles!.entries);
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · Stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({
       active_model: "models/work.gguf", ctx_size: 16384, temperature: 0.5, ngl: 17,
@@ -533,7 +548,7 @@ describe("ChatPanel document context warning", () => {
     vi.mocked(panelStore.updateConfig).mockRejectedValueOnce(new Error("Profile save failed"));
     renderPanel(panelStore);
     fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-    fireEvent.click(await screen.findByRole("option", { name: "Work · — · stopped" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · — · Stopped" }));
     fireEvent.click(await screen.findByRole("button", { name: "Load model" }));
     expect(await screen.findByText(/Profile save failed/)).toBeInTheDocument();
     expect(mocked.sessionStart).not.toHaveBeenCalled();
@@ -549,9 +564,9 @@ describe("ChatPanel document context warning", () => {
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "Keep this draft" } });
     const picker = screen.getByLabelText("Loaded sessions");
     fireEvent.click(picker);
-    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · running" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Work · 8091 · Running" }));
 
-    expect(picker).toHaveTextContent("Work · 8091 · running");
+    expect(picker).toHaveTextContent("Work · 8091 · Running");
     expect(screen.getByLabelText("Chat message")).toHaveValue("Keep this draft");
     expect(screen.getByText("notes.txt")).toBeInTheDocument();
   });
@@ -743,12 +758,12 @@ describe("ChatPanel document context warning", () => {
     renderPanel();
 
     const selector = await screen.findByLabelText("Loaded sessions");
-    fireEvent.click(selector); await screen.findByRole("option", { name: "Worker · 8092 · running" });
+    fireEvent.click(selector); await screen.findByRole("option", { name: "Worker · 8092 · Running" });
 
     mocked.sessionList.mockResolvedValue([{ id: "worker", name: "Worker", state: "crashed", port: 8092, model: "worker.gguf" }]);
     window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT));
 
-    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · crashed" })).not.toHaveAttribute("aria-disabled", "true"));
+    await waitFor(() => expect(screen.getByRole("option", { name: "Worker · 8092 · Crashed" })).not.toHaveAttribute("aria-disabled", "true"));
   });
 
   it("shares one session list request with other open session views", async () => {
@@ -771,7 +786,7 @@ describe("ChatPanel document context warning", () => {
     try {
       renderPanel();
       fireEvent.click(await screen.findByLabelText("Loaded sessions"));
-      await screen.findByRole("option", { name: "Worker · 8092 · running" });
+      await screen.findByRole("option", { name: "Worker · 8092 · Running" });
       const calls = mocked.sessionList.mock.calls.length;
 
       visibility.mockReturnValue("hidden");
@@ -780,7 +795,7 @@ describe("ChatPanel document context warning", () => {
       visibility.mockReturnValue("visible");
       act(() => { document.dispatchEvent(new Event("visibilitychange")); });
 
-      await screen.findByRole("option", { name: "Worker · 8092 · crashed" });
+      await screen.findByRole("option", { name: "Worker · 8092 · Crashed" });
       expect(mocked.sessionList).toHaveBeenCalledTimes(calls + 1);
     } finally {
       visibility.mockRestore();
@@ -1126,7 +1141,7 @@ describe('saved names for running chat targets', () => {
     fireEvent.click(screen.getByText('Conversation settings'));
     const picker = await screen.findByLabelText('Loaded sessions');
     fireEvent.click(picker);
-    fireEvent.click(await screen.findByRole('option', { name: 'My answer engine · 8091 · running' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'My answer engine · 8091 · Running' }));
     respondWithText('Named engine answer');
     await sendMessage('Use my selected engine');
     await screen.findByText('Named engine answer', { exact: true });
@@ -1174,6 +1189,6 @@ describe('saved names for running chat targets', () => {
     renderPanel(createTestStore({ ...cfg, sessions: kind === 'missing' ? [] : [definition('work', '   ')] }));
     fireEvent.click(screen.getByText('Conversation settings'));
     fireEvent.click(await screen.findByLabelText('Loaded sessions'));
-    expect(await screen.findByRole('option', { name: 'Runtime fallback · 8091 · running' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Runtime fallback · 8091 · Running' })).toBeInTheDocument();
   });
 });

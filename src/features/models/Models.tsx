@@ -26,6 +26,7 @@ import { executionText } from '../../shared/i18n/executionI18n';
 import { forgetExecution } from './modelExecutionState';
 import { useSessionPolling } from '../../shared/hooks/useSessionPolling';
 import { startModelScan } from '../../shared/runtime/modelScan';
+import { memorySourceText, statusDisplayCopy } from '../../shared/i18n/statusDisplayCopy';
 import { formatMebibytes } from '../../shared/lib/units';
 import { runSetupGapMessage, runSetupGaps } from '../../shared/runtime/runReadiness';
 import { MANAGE_MODEL_RUNTIMES, useModelSettings } from '../model-settings/ModelSettingsProvider';
@@ -153,6 +154,17 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   });
   const liveModel = loadedModelPath(store.status);
   const serverRunning = isServerBusy(store.status.state);
+  const statusCopy = statusDisplayCopy[locale];
+  const memory = store.status.memory;
+  const memoryLine = memory ? memory.source === 'unknown' ? statusCopy.memoryUnavailable
+    : t('ui.modelsMemoryLine', { total: formatMebibytes(memory.total_mb), model: formatMebibytes(memory.model_mb), kv: formatMebibytes(memory.kv_mb), source: memorySourceText(memory.source, locale) }) : undefined;
+  const lifecycle = store.status.lifecycle;
+  const lifecycleLine = lifecycle ? t('ui.modelsSlotsLine', {
+    parallel: lifecycle.parallel || statusCopy.automatic,
+    sleep: lifecycle.sleep_idle_seconds < 0 ? statusCopy.off : `${lifecycle.sleep_idle_seconds} s`,
+    idle: lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0,
+    requests: lifecycle.active_requests ?? store.status.active_requests ?? 0,
+  }) : undefined;
   // Starting a row applies its own model, so the only setup a row can be
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
@@ -370,11 +382,11 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             <details className="models-runtime-details mt-1" open>
             <summary>{t("section.diagnostics")}</summary>
             <div className="models-runtime-details-content">
-            <div className="models-status-line" title={store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : undefined}>
-              {store.status.memory ? t("ui.modelsMemoryLine", { total: formatMebibytes(store.status.memory.total_mb), model: formatMebibytes(store.status.memory.model_mb), kv: formatMebibytes(store.status.memory.kv_mb), source: store.status.memory.source }) : "—"}
+            <div className="models-status-line" title={memoryLine}>
+              {memoryLine ?? "—"}
             </div>
-            <div className="models-status-line mt-1" title={store.status.lifecycle ? t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds} s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 }) : undefined}>
-              {store.status.lifecycle ? <>{t("ui.modelsSlotsLine", { parallel: store.status.lifecycle.parallel || "auto", sleep: store.status.lifecycle.sleep_idle_seconds < 0 ? "off" : `${store.status.lifecycle.sleep_idle_seconds} s`, idle: store.status.lifecycle.idle_seconds ?? store.status.idle_seconds ?? 0, requests: store.status.lifecycle.active_requests ?? store.status.active_requests ?? 0 })}{store.status.lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
+            <div className="models-status-line mt-1" title={lifecycleLine}>
+              {lifecycle ? <>{lifecycleLine}{lifecycle.auto_unload_due ? ` · ${t("ui.autoUnloadDue")}` : ""}</> : "—"}
             </div>
             </div>
             </details>
@@ -383,12 +395,13 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
             {serverRunning && <button type="button" onClick={() => void api.unloadModel().then(() => notify(t("ui.unloadedOk"))).catch((error) => notify(`${t("ui.unloadFailed")}: ${error instanceof Error ? error.message : String(error)}`))} disabled={store.busy} className="app-button app-button--secondary app-button--sm">{t("ui.unloadModel")}</button>}
           </div>
         </div>
-        {(store.status.state === "failed" || store.status.state === "crashed") && store.status.error && (
-          <FeedbackBanner tone="error" title={t("ui.serverFailedTitle", { state: store.status.state })} className="mt-3 max-h-48 overflow-auto">
+      </div>}
+
+        {!compact && (store.status.state === "failed" || store.status.state === "crashed") && store.status.error && (
+          <FeedbackBanner tone="error" title={t("ui.serverFailedTitle", { state: copy[store.status.state] })} className="mt-3 max-h-48 overflow-auto">
             <pre className="whitespace-pre-wrap break-words">{normalizeDisplayText(store.status.error)}</pre>
           </FeedbackBanner>
         )}
-      </div>}
 
       </>}
 

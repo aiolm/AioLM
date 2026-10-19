@@ -41,6 +41,7 @@ import { projectChatBindingCopy } from './projectChatBindingCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import PanelFeedback from '../../shared/ui/PanelFeedback';
 import { displayChatTitle } from './chatThreadTitle';
+import { executionText } from '../../shared/i18n/executionI18n';
 
 export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiagnostics, active = true }: { store: AppStore; preferences?: AppPreferences; onOpenModels?: () => void; onOpenDiagnostics?: () => void; active?: boolean }) {
   const { t, locale } = useI18n();
@@ -311,7 +312,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         sessionLabel={t("ui.sessionsTitle")}
         sessionOptions={[
           { id: "default", label: t("ui.defaultSession") },
-          ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
+          ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
         ]}
         selectedSessionId={selectedSessionId}
         embedding={selectedStatus.engine || embeddingSessions(embeddingCandidates).length ? {

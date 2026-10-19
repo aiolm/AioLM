@@ -34,3 +34,39 @@ describe('model library replacement launches', () => {
     expect(store.status).toMatchObject({ state: 'running', model: 'models/current.gguf' });
   });
 });
+
+describe('model library status explanations', () => {
+  it.each(['failed', 'crashed'] as const)('shows the original diagnostic after the model is %s without offering unload', state => {
+    const store = createTestStore({ models_dir: '' });
+    store.status = { state, error: 'Synthetic engine startup diagnostic' };
+    render(<I18nProvider initialLocale="ko"><ModelsPanel store={store} /></I18nProvider>);
+    expect(screen.getByRole('alert')).toHaveTextContent('Synthetic engine startup diagnostic');
+    expect(screen.getByRole('alert')).toHaveTextContent(state === 'failed' ? '모델 실패' : '모델 비정상 종료');
+    expect(screen.queryByRole('button', { name: '모델 언로드' })).toBeNull();
+    expect(store.start).not.toHaveBeenCalled();
+    expect(store.stop).not.toHaveBeenCalled();
+  });
+
+  it('does not present unavailable estimates as zero memory while a different engine is running', () => {
+    const store = createTestStore({ models_dir: '', active_provider: 'custom.synthetic' });
+    store.status = { state: 'running', model: 'synthetic-deployment.json', memory: {
+      model_mb: 2048, context_mb: 0, kv_mb: 0, projector_mb: 0, adapters_mb: 0, total_mb: 0, source: 'unknown',
+    } };
+    const before = structuredClone(store.status.memory);
+    render(<I18nProvider initialLocale="ko"><ModelsPanel store={store} /></I18nProvider>);
+    expect(screen.getByText('메모리 예상값을 확인할 수 없습니다.')).toBeVisible();
+    expect(screen.queryByText(/예상 메모리: 0/)).toBeNull();
+    expect(store.status.memory).toEqual(before);
+  });
+
+  it('keeps a valid zero estimate distinct from unavailable and explains automatic and disabled settings', () => {
+    const store = createTestStore({ models_dir: '' });
+    store.status = { state: 'running', model: 'synthetic.gguf', memory: {
+      model_mb: 0, context_mb: 0, kv_mb: 0, projector_mb: 0, adapters_mb: 0, total_mb: 0, source: 'metadata',
+    }, lifecycle: { parallel: 0, sleep_idle_seconds: -1, request_timeout_seconds: 60, auto_unload_due: false, active_requests: 0, idle_seconds: 0 } };
+    render(<I18nProvider initialLocale="ko"><ModelsPanel store={store} /></I18nProvider>);
+    expect(screen.getByText(/예상 메모리: 0.*모델 정보 기준 추정/)).toBeVisible();
+    expect(screen.queryByText('메모리 예상값을 확인할 수 없습니다.')).toBeNull();
+    expect(screen.getByText(/슬롯: 자동 · 유휴 절전: 사용 안 함/)).toBeVisible();
+  });
+});
