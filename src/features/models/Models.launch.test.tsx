@@ -3,18 +3,21 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { defaultPreferences, savePreferences } from '../../shared/config/preferences';
 import { createTestStore } from '../../testing/appStore';
+import * as api from '../../shared/api/index';
 import ModelsPanel from './Models';
 
 vi.mock('../model-settings/ModelSettingsProvider', () => ({ useModelSettings: () => null, MANAGE_MODEL_RUNTIMES: 'synthetic-manage-runtimes' }));
 vi.mock('../../shared/api/index', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api/index')>(),
-  isNativeRuntimeAvailable: () => false,
+  isNativeRuntimeAvailable: vi.fn(() => false),
   listModels: vi.fn(async () => ({ models: [{ name: 'next.gguf', path: 'models/next.gguf', size_mb: 1, is_vision: false }], truncated: false })),
+  sessionList: vi.fn(async () => []),
 }));
 
 describe('model library replacement launches', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(false);
     const preferences = defaultPreferences();
     preferences.advanced.confirmDestructiveActions = false;
     savePreferences(preferences);
@@ -32,6 +35,24 @@ describe('model library replacement launches', () => {
     if (failure === 'save') expect(store.start).not.toHaveBeenCalled();
     else expect(store.start).toHaveBeenCalledWith(expect.objectContaining({ active_model: 'models/next.gguf' }), true);
     expect(store.status).toMatchObject({ state: 'running', model: 'models/current.gguf' });
+  });
+
+  it('explains why Delete is disabled when a model is running in a named session while the default server is stopped', async () => {
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+    vi.mocked(api.sessionList).mockResolvedValueOnce([
+      {
+        id: 'secondary',
+        name: 'Secondary',
+        state: 'running',
+        model: 'models/next.gguf',
+      },
+    ]);
+    const store = createTestStore({ active_model: '', models_dir: 'models' });
+    store.status = { state: 'stopped' };
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={store} /></I18nProvider>);
+    const deleteBtn = await screen.findByRole('button', { name: 'Delete: next.gguf' });
+    await waitFor(() => expect(deleteBtn).toBeDisabled());
+    expect(deleteBtn).toHaveAttribute('title', 'Unload the model before deleting a model.');
   });
 });
 

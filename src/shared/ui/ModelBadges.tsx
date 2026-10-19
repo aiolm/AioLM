@@ -21,7 +21,7 @@ const badgeLabels = {
   tag: 'ui.modelBadgeTag',
 } as const;
 
-const unknownFormat = { en: 'Format not identified', ko: '형식 미확인', ja: '形式未確認', zh: '格式未确认' };
+export const unknownFormat = { en: 'Format not identified', ko: '형식 미확인', ja: '形式未確認', zh: '格式未确认' };
 
 /** Names provide hints only; a GGUF architecture takes precedence over family hints. */
 export function modelBadges(model: string, metadata?: ModelMetadata, tags: string[] = []): ModelBadge[] {

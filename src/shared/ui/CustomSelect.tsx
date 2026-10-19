@@ -8,6 +8,7 @@ export const OverlayContainerContext = createContext<HTMLElement | null>(null);
 export interface CustomSelectOption<T extends string | number = string> {
   value: T;
   label: string;
+  title?: string;
   icon?: React.ReactNode;
   disabled?: boolean;
 }
@@ -335,6 +336,7 @@ export function CustomSelect<T extends string | number = string>({
         {...accessibility}
         ref={element => { triggerRef.current = element; }}
         type="button"
+        title={selected?.title ? normalizeDisplayText(selected.title) : undefined}
         onClick={toggle}
         className={triggerClasses}
       >
@@ -363,6 +365,7 @@ export function CustomSelect<T extends string | number = string>({
                 key={String(opt.value)}
                 id={`${listboxId}-option-${index}`}
                 role="option"
+                title={opt.title ? normalizeDisplayText(opt.title) : undefined}
                 aria-selected={isSelected}
                 aria-disabled={opt.disabled}
                 onMouseDown={event => event.preventDefault()}

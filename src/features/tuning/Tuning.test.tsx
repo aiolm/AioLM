@@ -211,4 +211,32 @@ describe("Tuning defaults controls", () => {
     await waitFor(() => expect(test.config().runtime_defaults).toContain("ngl"));
     expect(screen.getByRole("button", { name: "Reset all tuning" })).toBeEnabled();
   });
+
+  it("localizes the All server options category in Korean and records human-readable labels when resetting a server field", async () => {
+    const base = store();
+    let latest = { ...cfg, ngl: 99 } as AppConfig;
+    function LiveKo() {
+      const [current, setCurrent] = useState(latest);
+      return <I18nProvider initialLocale="ko"><TuningPanel store={{
+        ...base,
+        cfg: current,
+        status: { state: "running" },
+        updateConfig: async (patch) => {
+          latest = { ...latest, ...withManualOverrides(latest, typeof patch === "function" ? patch(latest) : patch) };
+          setCurrent(latest);
+          return latest;
+        },
+      }} /></I18nProvider>;
+    }
+    render(<LiveKo />);
+    fireEvent.click(screen.getByRole("tab", { name: "고급" }));
+    expect(screen.getByRole("button", { name: "전체 서버 옵션" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "All server options" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "런타임" }));
+    fireEvent.click(screen.getByRole("button", { name: "GPU 레이어 (ngl) 기본값으로 초기화" }));
+    expect(await screen.findByText(/서버 설정 1개 변경됨/)).toBeVisible();
+    expect(await screen.findByText(/GPU 레이어 ·/)).toBeVisible();
+    expect(screen.queryByText(/\bngl ·/)).not.toBeInTheDocument();
+  });
 });

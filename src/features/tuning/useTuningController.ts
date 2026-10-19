@@ -382,7 +382,13 @@ export function useTuningController(store: AppStore, options: readonly ServerOpt
       setAdvancedError(null);
       // Even a request reset can remove a raw server-side sampling override.
       setPhase("dirty");
-      setChangedServerFields((fields) => [...new Set([...fields, key ?? t("ui.runtimeDefaultsTitle")])]);
+      const resetLabel = !key ? t("ui.runtimeDefaultsTitle")
+        : key.startsWith("raw-server:") || key.startsWith("raw-chat:") ? key.replace(/^raw-(?:server|chat):/, "")
+        : key === "flash_attn" ? t("ui.flashAttention")
+        : key in SERVER_FIELD_LABEL_KEYS ? t(`ui.${SERVER_FIELD_LABEL_KEYS[key as NumericKey]}` as never)
+        : key in SERVER_TEXT_LABEL_KEYS ? t(`ui.${SERVER_TEXT_LABEL_KEYS[key as ServerTextKey]}` as never)
+        : ADVANCED_SAMPLING_FIELDS.find(item => item.key === key)?.label ?? key;
+      setChangedServerFields((fields) => [...new Set([...fields, resetLabel])]);
       notify(t("ui.runtimeDefaultsSaved"));
     } catch (error) {
       setPhase("failed");

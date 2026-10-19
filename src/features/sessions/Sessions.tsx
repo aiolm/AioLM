@@ -249,7 +249,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const load = async (definition: api.SessionDefinition) => {
     if (sessionHasActivity(definition.id) || (stopExisting && anySessionActivity())) {
-      setFailure("Stop the active response before loading a model.");
+      setFailure(t("ui.sessionActiveResponseLoad"));
       return;
     }
     const runnableDefinition = definition;
@@ -340,7 +340,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
 
   const stop = async (id: string, unload = false) => {
     if (sessionHasActivity(id)) {
-      setFailure("Stop the active response before unloading its model.");
+      setFailure(t("ui.sessionActiveResponseUnload"));
       return;
     }
     setBusyId(id);
@@ -386,7 +386,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
   const remove = async (definition: api.SessionDefinition) => {
     if (definition.id === DEFAULT_SESSION_ID) return;
     if (sessionHasActivity(definition.id)) {
-      setFailure("Stop the active response before removing its session.");
+      setFailure(t("ui.sessionActiveResponseRemove"));
       return;
     }
     setBusyId(definition.id);
@@ -507,7 +507,7 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
                     ? <LocalTaskCancelButton taskId={`session-load-${definition.id}`} className="app-button app-button--secondary app-button--sm" onClick={() => void cancelLoad(definition.id)} disabled={busyId !== null && busyId !== definition.id}>{t("common.cancel")}</LocalTaskCancelButton>
                     : rowState === "running"
                       ? <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="stop" onClick={() => void stop(definition.id)} disabled={controlsDisabled}>{t("ui.sessionStop")}</button>
-                      : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
+                      : <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="play" onClick={() => void load(rowDefinition)} disabled={controlsDisabled || rowState === "stopping" || !rowDefinition.models.primary_model.trim()} title={!rowDefinition.models.primary_model.trim() ? t("ui.sessionNoModel") : undefined}>{rowState === "stopping" ? t("status.working") : t("ui.sessionStart")}</button>}
                 </div>
               </div>
               {rowStatus?.error && <FeedbackBanner tone="error" className="session-entry-error">{normalizeDisplayText(rowStatus.error)}</FeedbackBanner>}

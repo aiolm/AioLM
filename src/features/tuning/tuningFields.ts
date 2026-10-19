@@ -147,7 +147,7 @@ export const TUNING_CATEGORIES: readonly TuningCategory[] = [
     keywords: ["vision", "image", "video", "projector", "mmproj"],
   },
   {
-    id: "options", label: "All server options", labelKey: "", description: "Search and edit every runtime option.", descriptionKey: "",
+    id: "options", label: "All server options", labelKey: "tuningCategoryOptions", description: "Search and edit every runtime option.", descriptionKey: "tuningCategoryOptionsDesc",
     section: "options", modes: ["quick", "advanced"], keywords: ["all", "mmap", "mlock", "load-mode", "전체", "모든", "메모리"],
   },
   {

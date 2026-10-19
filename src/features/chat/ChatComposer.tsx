@@ -101,7 +101,7 @@ export default function ChatComposer({
         <button type="button" data-icon="close" className="chat-mcp-close app-button app-button--secondary app-button--sm absolute right-2 top-2" onClick={event => { const details = event.currentTarget.closest("details"); if (details) { details.open = false; details.querySelector("summary")?.focus(); } }}>{ct("close")}</button>
         <div className="flex flex-wrap items-center gap-2 pr-16">
           <button type="button" data-icon="refresh" onClick={refreshMcpTools} disabled={disabled || controlsLocked || loadingMcpTools} className="app-button app-button--secondary app-button--sm"><StableLabel value={loadingMcpTools ? ct("loadingMcpTools") : ct("loadMcpTools")} labels={[ct("loadingMcpTools"), ct("loadMcpTools")]} /></button>
-          <span className="text-xs ui-color-faint"><StableLabel value={`${mcpDefinitions.length} tools · ${ct("mcpApproval")}`} labels={[`9999 tools · ${ct("mcpApproval")}`]} /></span>
+          <span className="text-xs ui-color-faint"><StableLabel value={`${ct("mcpToolsCount").replace("{count}", String(mcpDefinitions.length))} · ${ct("mcpApproval")}`} labels={[`${ct("mcpToolsCount").replace("{count}", "9999")} · ${ct("mcpApproval")}`]} /></span>
         </div>
         <p className="mt-2 text-xs ui-color-faint">{ct("mcpOptional")}</p>
         {mcpCatalog.length > 0 && (

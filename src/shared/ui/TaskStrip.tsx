@@ -11,7 +11,7 @@ import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./Diag
 import FeedbackBanner from "./FeedbackBanner";
 
 function hasPanelCancellation(task: AppTask): boolean {
-  return (task.kind === "runtime" && task.id === "runtime-operation")
+  return (task.kind === "runtime" && (task.id === "runtime-operation" || task.id === "deep-verification"))
     || (task.kind === "benchmark" && task.id === "performance-benchmark-active")
     || (task.kind === "other" && /^session-load-.+/.test(task.id))
     || (task.kind === "other" && /^mcp-tool-call-.+/.test(task.id))

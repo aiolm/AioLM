@@ -9,6 +9,7 @@ import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import Badge from '../../shared/ui/Badge';
 import { providerDisplayName, isExternalProvider } from '../../shared/api/providers';
 import { notifyRuntimeInventoryChanged } from '../../shared/runtime/runtimeInventoryEvents';
+import { buildPhaseLabelKey } from '../../shared/runtime/runtimeUtils';
 import { adapterCatalogCopy } from '../../shared/i18n/adapterCatalogCopy';
 import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 
@@ -43,11 +44,12 @@ export default function ProviderEnvironments({ active, provider: selectedProvide
     let closed = false; let unlisten: (() => void) | undefined;
     void import('@tauri-apps/api/event').then(({ listen }) => listen<{ phase: string; line: string }>('provider-install-progress', event => {
       if (closed || !operationLock.current) return;
-      setProgress(`${event.payload.phase}: ${event.payload.line}`);
-      updateTask(TASK_ID, { phase: event.payload.phase, detail: event.payload.line });
+      const phase = t(`ui.${buildPhaseLabelKey(event.payload.phase)}`);
+      setProgress(`${phase}: ${event.payload.line}`);
+      updateTask(TASK_ID, { phase, detail: event.payload.line });
     })).then(stop => { if (closed) stop(); else unlisten = stop; }).catch(cause => setError(String(cause)));
     return () => { closed = true; unlisten?.(); };
-  }, [active, busy]);
+  }, [active, busy, t]);
   const cancelOperation = async (currentOperation = operationLock.current) => {
     if (!currentOperation || operationLock.current !== currentOperation || currentOperation.cancelRequested) return;
     currentOperation.cancelRequested = true;

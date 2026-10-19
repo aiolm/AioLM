@@ -39,6 +39,16 @@ export function modelDisplayName(value: string): string {
   return total > 1 && index > 0 && index <= total ? `${shard[1]}${shard[4] ?? ""}` : name;
 }
 
+/** Recognises explicit path syntax for display only. Bare relative strings and
+ * model IDs remain intact; a file extension does not establish a local path. */
+export function isModelFilePath(value: string): boolean {
+  const path = normalizeDisplayPath(value);
+  if (!path) return false;
+  if (/^[A-Za-z]:[\\/]/.test(path) || /^(?:[\\/]|~[\\/]|\.\.?[\\/])/.test(path)) return true;
+  if (/^file:\/\//i.test(path)) return true;
+  return !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path) && path.includes('\\');
+}
+
 /** Removes Windows verbatim path prefixes from arbitrary displayed text. */
 export function normalizeDisplayText(value: string): string {
   return value

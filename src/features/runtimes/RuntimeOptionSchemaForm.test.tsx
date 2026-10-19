@@ -50,10 +50,17 @@ beforeEach(() => {
 describe('generic runtime option renderer', () => {
   it('renders flags with labels, help and runtime defaults without guessing', async () => {
     const current = schema([textOption('threads'), textOption('label')]);
-    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{}} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    const onChange = vi.fn();
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{}} scope={[]} onChange={onChange} /></I18nProvider>);
     expect(screen.getByText('--threads', { exact: false })).toBeInTheDocument();
     expect(screen.getByText('--label', { exact: false })).toBeInTheDocument();
     await waitFor(() => expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalled());
+    const header = screen.getByText('--threads', { exact: true }).parentElement!;
+    expect(header).toHaveTextContent('Engine default not confirmed.');
+    expect(header).not.toHaveTextContent('Runtime default: Runtime default');
+    fireEvent.change(screen.getByLabelText(/^--threads/), { target: { value: '7' } });
+    expect(onChange).toHaveBeenLastCalledWith({ threads: '7' });
+    expect(current.options[0].kind.certainty).toBe('unknown');
   });
 
   it('masks sensitive values in the argv preview', async () => {

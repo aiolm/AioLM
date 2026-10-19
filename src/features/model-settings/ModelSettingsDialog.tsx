@@ -1,5 +1,5 @@
 import ModelName from '../../shared/ui/ModelName';
-import ModelBadges from '../../shared/ui/ModelBadges';
+import ModelBadges, { unknownFormat } from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
 import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
@@ -30,6 +30,7 @@ import { defaultSettingsProfileEntry, profileDeletionReason, settingsEqual, type
 import { profileDisplayName } from '../../shared/i18n/profileNames';
 import { resetProfileSettings } from './profileResetState';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
+import { profileFieldLabel } from './profileControlCopy';
 import { useModelCatalog } from './useModelCatalog';
 import { useSelectedModelMetadata } from './useModelContextLimit';
 import { ProfileRuntimeSchemaContext, useProfileRuntimeSchema } from './useProfileRuntimeSchema';
@@ -63,6 +64,13 @@ export interface ModelSettingsDialogProps {
 }
 
 const normalizeSection = (section = 'model') => ({ setup: 'runtime', gpu: 'runtime', lora: 'adapters', server: 'tuning', options: 'advanced', escape: 'advanced' }[section] ?? section);
+
+const modalityLabel: Record<Locale, Record<string, string>> = {
+  en: { text: 'text', image: 'image', audio: 'audio', video: 'video' },
+  ko: { text: '텍스트', image: '이미지', audio: '오디오', video: '비디오' },
+  ja: { text: 'テキスト', image: '画像', audio: '音声', video: '動画' },
+  zh: { text: '文本', image: '图像', audio: '音频', video: '视频' },
+};
 
 /** A target-scoped editor. No configuration or model-profile writes happen on preview. */
 export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, initialSection, onApply, onProfileCommit, onReloadProfile, onClose, onManageRuntimes, renderRuntimeManager,
@@ -454,7 +462,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
                 event.preventDefault(); buttons[next]?.focus();
               }}>{models.map(model => <li key={model.path}><button type="button" className={`app-list-row${cfg.active_model === model.path ? ' is-selected' : ''}`} disabled={!!model.shards?.missing.length || !!model.artifact?.incomplete || !!model.artifact?.missing.length}
-                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} artifact={model.artifact} /><small>{model.artifact?.format} · {model.artifact ? Object.entries(model.artifact.modalities).filter(([, enabled]) => enabled).map(([name]) => name).join(", ") : ""} · {model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small>{api.isExternalProvider(provider) && !api.modelLoadable(model, provider) && <small>{copy.unverifiedModel}</small>}</span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
+                onClick={() => chooseModel(model.path)} aria-describedby={`${id}-model-help`} aria-pressed={cfg.active_model === model.path} title={normalizeDisplayPath(model.path)}><span><strong><ModelIcon model={model.name} />{normalizeDisplayText(model.name)}</strong><ModelBadges mode="compact" model={model.name} localPath={model.path === cfg.active_model ? undefined : model.path} metadata={model.path === cfg.active_model ? selectedMetadata : undefined} artifact={model.artifact} /><small>{model.artifact?.format === 'unknown' ? unknownFormat[locale] : model.artifact?.format} · {model.artifact ? Object.entries(model.artifact.modalities).filter(([, enabled]) => enabled).map(([name]) => Object.prototype.hasOwnProperty.call(modalityLabel[locale], name) ? modalityLabel[locale][name] : name).join(", ") : ""} · {model.artifact?.format === 'unknown' ? '—' : formatMebibytes(model.size_mb)}{model.shards?.missing.length ? ` · ${t('ui.modelShardsMissing', { count: model.shards.missing.length, total: model.shards.total })}` : ''}</small>{api.isExternalProvider(provider) && !api.modelLoadable(model, provider) && <small>{copy.unverifiedModel}</small>}</span>{cfg.active_model === model.path && <Badge tone="info">{copy.selected}</Badge>}</button></li>)}</ul>
               {!catalog.loading && !models.length && <p className="app-section-hint">{copy.empty}</p>}
               <label>{copy.path}<input className="app-input" aria-label={copy.path} aria-describedby={`${id}-path-help`} value={pathDraft} onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); chooseModel(enteredPath); } }} /><span id={`${id}-path-help`} className="app-section-hint">{api.isExternalProvider(provider) ? copy.externalModelPath : help.path}</span></label>
               {pathPending && <button type="button" className="app-button app-button--secondary" disabled={!pathDraft.trim()} data-icon="open" onClick={() => chooseModel(enteredPath)}>{copy.load}</button>}
@@ -498,8 +506,16 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           <div className="model-settings-footer-summary" tabIndex={0}>
             {preflightState && <p className="app-section-hint" role="status">{preflightState === 'checking' ? copy.preflightChecking : copy.preflightCancelling}</p>}
             {providerOptionsPending && <p className="app-section-hint" role="status">{copy.checkingOptions}</p>}
-            <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
-              {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || compatibility?.status}</FeedbackBanner>}
+            <div className="model-settings-notices">{profileInUse && <FeedbackBanner tone="info">{copy.profileInUse}</FeedbackBanner>}{profileDirty && <FeedbackBanner tone="warning">{copy.profilePending}</FeedbackBanner>}{pathPending && <FeedbackBanner tone="warning">{copy.pathPending}</FeedbackBanner>}{executionNotice}{error && <LaunchFailureNotice text={error} locale={locale} />}{invalid.size > 0 && <FeedbackBanner tone="error">{copy.invalid} ({[...invalid].map(key => {
+              if (key === 'provider-options') return profileFieldLabel('provider_options', locale);
+              if (key === 'gpu_tensor_split') return profileFieldLabel('tensor_split', locale);
+              if (key.startsWith('provider:') || key.startsWith('schema:')) {
+                const rawKey = key.replace(/^(?:provider|schema):/, '');
+                return runtimeSchema.view?.schema.options.find(option => option.key === rawKey)?.spellings[0]?.flag ?? rawKey;
+              }
+              return key.startsWith('-') ? key : profileFieldLabel(key, locale);
+            }).join(', ')})</FeedbackBanner>}{incomplete && <FeedbackBanner tone="error">{selected?.shards ? t('ui.modelShardsMissing', { count: selected.shards.missing.length, total: selected.shards.total }) : providerCopy[locale].files}</FeedbackBanner>}
+              {compatibilityBlocked && <FeedbackBanner tone="error">{providerCopy[locale].compatibility}: {[...(compatibility?.reasons.map(reason => reason.detail) ?? []), ...(compatibility?.readiness ?? [])].join('; ') || (compatibility?.status === 'unknown' ? copy.unverifiedModel : copy.unavailable)}</FeedbackBanner>}
               {step === 'options' && !benchmark && mode !== 'project' && !live && setupGaps.length > 0 && <FeedbackBanner tone="warning" title={executionCopy.blockedTitle}><ul className="model-settings-blocked" aria-label={executionCopy.blockedTitle}>
                 {setupGaps.map(gap => <li key={gap}><span>{runSetupGapMessage(gap, locale)}</span>
                   {gap === 'model' && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="open" onClick={() => showSection('model')}>{executionCopy.needModelAction}</button>}

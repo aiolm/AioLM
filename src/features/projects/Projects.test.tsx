@@ -599,4 +599,17 @@ describe("Project configuration snapshots", () => {
     expect(await screen.findByText("4096 (using app default)")).toBeVisible();
     expect(screen.queryByText("default", { exact: true })).not.toBeInTheDocument();
   });
+
+  it("localizes the fallback tools/docs summary and profile version label in Korean without raw rN shorthand", () => {
+    const store = createTestStore();
+    const profile = { ...captureProfile(store.cfg!, "Shared setup", "model", "Prompt"), revision: 2 };
+    const application = materializeProfileApplication(store.cfg!, "Prompt", profile);
+    store.cfg!.settings_profiles = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), profile], applied: { [profileTargetKey(store.cfg!.active_model)]: application } };
+    const project = projectFromConfig("Research", "Prompt", store.cfg!, [{ name: "notes.md", path: "notes.md" }], ["docs:search"], "", 100, application);
+    writeProjects([project]); setActiveProjectId(project.id);
+    render(<I18nProvider initialLocale="ko"><ProjectsPanel store={store} /></I18nProvider>);
+    expect(screen.getByText("도구 1개 · 문서 1개")).toBeVisible();
+    expect(screen.getByText("Shared setup · 버전 2")).toBeVisible();
+    expect(screen.queryByText(/· r2/)).not.toBeInTheDocument();
+  });
 });

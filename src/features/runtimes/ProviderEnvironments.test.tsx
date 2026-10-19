@@ -10,8 +10,19 @@ import TaskStrip from '../../shared/ui/TaskStrip';
 
 vi.mock('../../shared/lib/notifications', () => ({ notifyCompletion: vi.fn(async () => undefined) }));
 
+const progressListeners: Array<(event: { payload: { phase: string; line: string } }) => void> = [];
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (_event: string, handler: (event: { payload: { phase: string; line: string } }) => void) => {
+    progressListeners.push(handler);
+    return () => {
+      const index = progressListeners.indexOf(handler);
+      if (index >= 0) progressListeners.splice(index, 1);
+    };
+  }),
+}));
+
 vi.mock('../../shared/api/index', () => ({
-  isNativeRuntimeAvailable: () => false,
+  isNativeRuntimeAvailable: vi.fn(() => false),
   providerCatalog: vi.fn(),
   providerRuntimes: vi.fn(),
   providerInstall: vi.fn(),
@@ -52,6 +63,8 @@ function renderPanel(resourcesInUse = false, onBusyChange?: (busy: boolean) => v
 
 beforeEach(() => {
   vi.clearAllMocks();
+  progressListeners.length = 0;
+  mocked.isNativeRuntimeAvailable.mockReturnValue(false);
   mocked.providerCatalog.mockResolvedValue(catalog());
   mocked.providerRuntimes.mockResolvedValue([runtime()]);
   mocked.rtCancel.mockResolvedValue(undefined);
@@ -334,5 +347,21 @@ describe('provider environment installation', () => {
     await waitFor(() => expect(environmentTask()?.state).toBe('cancelled'));
     expect(screen.queryByRole('alert')).toBeNull();
     expect(notifyCompletion).not.toHaveBeenCalled();
+  });
+
+  it('translates provider-install-progress phases while keeping the raw progress line intact', async () => {
+    mocked.isNativeRuntimeAvailable.mockReturnValue(true);
+    const install = deferred<unknown>();
+    mocked.providerInstall.mockReturnValue(install.promise);
+    render(createElement(I18nProvider, { initialLocale: 'ko', children: createElement(ProviderEnvironments, { active: true }) }));
+    fireEvent.click(await screen.findByRole('button', { name: '격리 환경에 설치 0.31.0' }));
+    await waitFor(() => expect(progressListeners.length).toBeGreaterThan(0));
+    act(() => {
+      for (const listener of progressListeners) listener({ payload: { phase: 'preparing', line: 'Creating isolated venv' } });
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('준비 중: Creating isolated venv');
+    expect(environmentTask()).toMatchObject({ phase: '준비 중', detail: 'Creating isolated venv' });
+    await act(async () => install.resolve(runtime()));
+    expect(environmentTask()?.state).toBe('completed');
   });
 });

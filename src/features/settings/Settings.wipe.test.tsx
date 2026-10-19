@@ -58,7 +58,10 @@ function mount() {
 
 async function erase() {
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+  expect(screen.getByText('Deletes saved conversations, attached document text copies, and document search data stored in AioLM. Original files on your computer and exported backups are kept.')).toBeVisible();
+  expect(screen.queryByText(/no residue/i)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Delete all conversation data' }));
+  expect(screen.getByRole('dialog', { name: 'Delete every conversation?' })).toHaveTextContent('All saved conversations, attached document text copies, and document search data stored in AioLM will be deleted. Original files and exported backups are kept.');
   fireEvent.click(screen.getAllByRole('button', { name: 'Delete all conversation data' }).at(-1)!);
   await screen.findByText('Conversation and document data deleted.');
 }

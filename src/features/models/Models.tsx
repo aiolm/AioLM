@@ -491,7 +491,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
               <code className="models-model-path">{normalizeDisplayPath(model.path)}</code>
               <div className="models-file-actions">
                   <button type="button" data-icon="copy" onClick={() => void copyPath(model.path)} aria-label={`${t("panel.copyPath")}: ${displayName}`} className="app-button app-button--ghost app-button--sm">{t("panel.copyPath")}</button>
-                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={serverRunning ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
+                  <button type="button" data-icon="delete" onClick={() => void removeModel(model)} disabled={running || store.busy || serverRunning} title={(running || serverRunning) ? t("ui.stopBeforeDelete") : undefined} aria-label={`${t("panel.delete")}: ${displayName}`} className="app-button app-button--ghost app-button--danger app-button--sm">{t("panel.delete")}</button>
               </div>
             </div>
           );

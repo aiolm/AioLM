@@ -369,7 +369,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
   const displayConfig = displayedProfile && snapshot ? { ...snapshot, ...profileApplicationConfig(displayedProfile) } : snapshot;
   const displayedPrompt = displayedProfile?.system_prompt ?? systemPrompt;
   const displayedProfileName = displayedProfile?.profile_name ?? profileApplication?.profile_name ?? null;
-  const displayedProfileRevision = displayedProfile?.profile_revision ?? profileApplication?.profile_revision;
+  const displayedProfileRevision = displayedProfile?.profile_revision ?? profileApplication?.profile_revision ?? null;
 
   const toolCount = selectedTools.length;
   const docCount = documents.length;
@@ -476,7 +476,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
           <div className="px-2 py-2 text-xs ui-color-faint" >{t("ui.savedProjectsCount")} · {projects.length}</div>
           <div className="space-y-1 overflow-auto">
             {projects.length === 0 && <EmptyState title={t("panel.noProjects")} description={t("ui.projectsEmptyHint")} />}
-            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); }} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{<ModelName model={project.config.active_model} empty={t("ui.noModelShort")} />}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || `tools ${project.toolIds.length} · docs ${project.documentBindings.length}`}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
+            {projects.map((project) => <div key={project.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${project.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => { if (project.id !== selectedId) switchEditor(() => loadProject(project)); }} aria-current={project.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium ui-color-ink" >{project.name}</span><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" ><ModelIcon model={project.config.active_model} />{<ModelName model={project.config.active_model} empty={t("ui.noModelShort")} />}</span><ModelBadges mode="compact" model={project.config.active_model} localPath={project.config.active_model} /><span className="mt-0.5 block app-text-wrap text-xs ui-color-faint" >{project.description || t("ui.projectToolsDocsSummary", { tools: project.toolIds.length, docs: project.documentBindings.length })}</span></button>{project.id === activeProjectId() && <Badge tone="success" className="mr-1">{t("ui.active")}</Badge>}</div>)}
           </div>
         </aside>
         <section className="min-w-0 app-card" >
@@ -494,7 +494,7 @@ export default function ProjectsPanel({ store, onOpenTuning }: { store: AppStore
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium ui-color-ink">
                 {displayedProfileName ?? t("ui.projectNoProfile")}
-                {typeof displayedProfileRevision === "number" ? <span className="ml-1 ui-color-faint">r{displayedProfileRevision}</span> : null}
+                {displayedProfileName && displayedProfileRevision ? ` · ${t("ui.projectProfileRevision", { revision: displayedProfileRevision })}` : ""}
               </span>
               <button type="button" data-icon="edit" onClick={openProjectEditor} disabled={modelSettings ? !cfg : !onOpenTuning} className="app-button app-button--secondary app-button--sm">{t("ui.projectEditPrompt")}</button>
             </div>

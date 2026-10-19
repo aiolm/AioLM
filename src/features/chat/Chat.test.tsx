@@ -1183,6 +1183,77 @@ describe('saved names for running chat targets', () => {
     expect(mocked.sessionStart).not.toHaveBeenCalled();
   });
 
+  it.each(['openai/whisper-large-v3', 'acme/voice.gguf', 'acme/voice.bin', 'https://example.invalid/models/voice.bin'])(
+    'shortens explicit transcription paths while retaining native identifier %s', async modelId => {
+    const localSaved = definition('speech-local', 'My local speech engine');
+    const orgSaved = definition('speech-org', 'Cloud speech engine');
+    mocked.sessionList.mockResolvedValue([
+      {
+        id: localSaved.id,
+        name: 'runtime-speech-file',
+        state: 'running',
+        port: 8093,
+        model: 'C:/models/whisper-large-v3.gguf',
+        url: 'http://127.0.0.1:8093',
+        api_key: 'synthetic-speech-key',
+        engine: {
+          provider: 'custom.speech',
+          runtime_id: 'synthetic-build',
+          upstream_model: 'C:/models/whisper-large-v3.gguf',
+          modalities: { text: false, image: false, audio: false, video: false },
+          tasks: ['transcription'],
+          request_fields: {},
+        },
+      },
+      {
+        id: orgSaved.id,
+        name: 'runtime-speech-org',
+        state: 'running',
+        port: 8094,
+        model: modelId,
+        url: 'http://127.0.0.1:8094',
+        api_key: 'synthetic-speech-key-2',
+        engine: {
+          provider: 'custom.speech',
+          runtime_id: 'synthetic-build',
+          upstream_model: modelId,
+          modalities: { text: false, image: false, audio: false, video: false },
+          tasks: ['transcription'],
+          request_fields: {},
+        },
+      },
+    ]);
+    renderPanel(createTestStore({ ...cfg, sessions: [localSaved, orgSaved] }));
+    fireEvent.click(screen.getByText("How to send audio and video"));
+    const picker = await screen.findByLabelText("Session for converting audio to text");
+    fireEvent.click(picker);
+    const fileOption = await screen.findByRole('option', { name: 'My local speech engine · whisper-large-v3.gguf' });
+    expect(fileOption).toHaveAttribute('title', 'C:/models/whisper-large-v3.gguf');
+    const orgOption = await screen.findByRole('option', { name: `Cloud speech engine · ${modelId}` });
+    expect(orgOption).toBeInTheDocument();
+    fireEvent.click(fileOption);
+    expect(picker).toHaveTextContent('My local speech engine · whisper-large-v3.gguf');
+    expect(picker).toHaveAttribute('title', 'C:/models/whisper-large-v3.gguf');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: `Cloud speech engine · ${modelId}` }));
+    expect(picker).toHaveTextContent(`Cloud speech engine · ${modelId}`);
+    expect(picker).not.toHaveAttribute('title');
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    expect(mocked.chatStream).not.toHaveBeenCalled();
+  });
+
+  it('localizes the loaded MCP tool count badge in Korean', async () => {
+    mocked.mcpListServers.mockResolvedValue([{ id: 'srv1', name: 'Test Server', command: 'node', args: [], enabled: true }]);
+    mocked.mcpListTools.mockResolvedValue([{ name: 'test_tool', description: 'A test tool.', input_schema: { type: 'object', properties: {} } }]);
+    render(createElement(I18nProvider, { initialLocale: 'ko', children: createElement(ChatPanel, { store }) }));
+    fireEvent.click(screen.getByText('MCP 도구'));
+    fireEvent.click(await screen.findByRole('button', { name: 'MCP 도구 불러오기' }));
+    const checkbox = await screen.findByRole('checkbox', { name: /Test Server · test_tool/ });
+    expect(checkbox).toBeChecked();
+    expect(await screen.findByText(/도구 1개 ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/1 tools/)).not.toBeInTheDocument();
+  });
+
   it.each(['missing', 'blank'] as const)('retains the runtime name when the saved name is %s', async kind => {
     mocked.sessionList.mockResolvedValue([{ id: 'work', name: 'Runtime fallback', state: 'running', port: 8091,
       model: 'models/work.gguf', url: 'http://127.0.0.1:8091', api_key: 'synthetic-answer-key' }]);

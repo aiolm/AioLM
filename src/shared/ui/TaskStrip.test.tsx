@@ -11,7 +11,7 @@ function clearTasks() {
 }
 
 function task(id: string, cancel = vi.fn()) {
-  const kind = id === "runtime-operation" ? "runtime" : id === "performance-benchmark-active" ? "benchmark" : "other";
+  const kind = id === "runtime-operation" || id === "deep-verification" ? "runtime" : id === "performance-benchmark-active" ? "benchmark" : "other";
   registerTask({ id, kind, label: "Preparing model", phase: "Loading weights", received: 25, total: 100, interruptible: true, cancel });
   return cancel;
 }
@@ -42,7 +42,7 @@ describe("task cancellation ownership", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it.each(["runtime-operation", "performance-benchmark-active", "session-load-work"])("keeps progress visible with only the mounted workspace cancellation for %s", (id) => {
+  it.each(["runtime-operation", "deep-verification", "performance-benchmark-active", "session-load-work"])("keeps progress visible with only the mounted workspace cancellation for %s", (id) => {
     const globalCancel = task(id);
     const localCancel = vi.fn();
     render(<View taskId={id} onCancel={localCancel} />);

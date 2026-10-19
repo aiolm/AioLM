@@ -643,4 +643,21 @@ describe("session model settings", () => {
     expect(sessionRow('Other session').getByRole('button', { name: /Other session/ })).toHaveAttribute('aria-expanded', 'true');
     expect(store.cfg!.sessions!.find(item => item.id === 'other')).toEqual(other);
   });
+  it("localizes active-response guard alerts and explains why Load session is disabled when no model is selected", async () => {
+    const emptyModelSession: api.SessionDefinition = { ...definition, id: "empty", name: "Empty session", models: { primary_model: "", mmproj: "", draft_model: "" } };
+    const current = structuredClone({ ...cfg, stop_existing_sessions_on_load: true, sessions: [definition, emptyModelSession] });
+    const store = { cfg: current, getConfig: vi.fn(() => current), status: { state: "stopped" }, busy: false,
+      updateConfig: vi.fn(async (patch: Parameters<AppStore['updateConfig']>[0]) => Object.assign(current, typeof patch === 'function' ? patch(current) : patch)), start: vi.fn(), stop: vi.fn(), refreshStatus: vi.fn(),
+    } as unknown as AppStore;
+    render(<I18nProvider initialLocale="ko"><SessionsPanel store={store} /></I18nProvider>);
+    const emptyLoad = sessionRow("Empty session").getByRole("button", { name: "세션 로드" });
+    expect(emptyLoad).toBeDisabled();
+    expect(emptyLoad).toHaveAttribute("title", "주 모델이 선택되지 않음");
+
+    setSessionActivity("default", true);
+    fireEvent.click(sessionRow("Work session").getByRole("button", { name: "세션 로드" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("모델을 로드하기 전에 진행 중인 응답을 중지하세요.");
+    expect(mocked.sessionStart).not.toHaveBeenCalled();
+    setSessionActivity("default", false);
+  });
 });

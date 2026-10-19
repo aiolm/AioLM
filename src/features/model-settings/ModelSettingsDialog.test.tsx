@@ -1322,11 +1322,46 @@ describe('context size bounds', () => {
     expect(numeric('ctx_size')).toHaveValue(262144);
   });
 
-  it('still refuses an entry that is garbage rather than large', async () => {
+  it('still refuses an entry that is garbage rather than large and names the field in plain language', async () => {
     mount({ initialSection: 'tuning' });
     await waitFor(() => expect(numeric('ctx_size')).toBeInTheDocument());
     fireEvent.change(numeric('ctx_size'), { target: { value: '99999999' } });
-    await waitFor(() => expect(screen.getByText(/Correct invalid fields/)).toBeVisible());
+    await waitFor(() => expect(screen.getByText('Correct invalid fields before applying. (Context size)')).toBeVisible());
+    expect(screen.queryByText(/ctx_size/)).not.toBeInTheDocument();
+  });
+
+  it('localizes invalid field names, unknown model format badges, and model picker modalities in Korean while preserving unknown modality keys', async () => {
+    vi.mocked(api.listModels).mockResolvedValueOnce({
+      models: [{
+        name: 'mystery.bin',
+        path: 'models/mystery.bin',
+        size_mb: 500,
+        is_vision: false,
+        artifact: {
+          name: 'mystery.bin',
+          path: 'models/mystery.bin',
+          format: 'unknown',
+          role: 'model',
+          size_bytes: 500 * 1024 * 1024,
+          file_count: 1,
+          modalities: Object.assign({ text: true, image: true, audio: false, video: false }, { depth: true, constructor: true }),
+          incomplete: false,
+          missing: [],
+          architectures: [],
+          ownership: 'external',
+          notes: [],
+        },
+      }],
+      truncated: false,
+    });
+    mount({ initialSection: 'model', initialConfig: { ...cfg, active_model: 'models/mystery.bin' } }, 'ko');
+    expect((await screen.findAllByText(/형식 미확인/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/형식 미확인 · 텍스트, 이미지, depth, constructor · —/)).toBeVisible();
+    expect(screen.queryByText('unknown', { exact: true })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: '성능·메모리' }));
+    await waitFor(() => expect(numeric('ctx_size')).toBeInTheDocument());
+    fireEvent.change(numeric('ctx_size'), { target: { value: '99999999' } });
+    await waitFor(() => expect(screen.getByText('잘못 입력된 항목을 수정한 뒤 적용하세요. (컨텍스트 크기)')).toBeVisible());
   });
 
   it('bounds the control at what the model states it was trained for', async () => {

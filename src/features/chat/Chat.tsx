@@ -22,6 +22,7 @@ import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessi
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
 import { prepareSessionProfile } from "../model-settings/prepareSessionProfile";
 import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
+import { isModelFilePath, modelDisplayName, normalizeDisplayPath } from "../../shared/lib/displayPaths";
 import { titleFromMessage, unfinishedReply } from "./chatHistory";
 import { chatRetryCopy, chatRetryToolsCopy } from "./chatRetryCopy";
 import { diagnoseRetryTools, restorableRetryTools } from "./chatRetryTools";
@@ -119,7 +120,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   const requireIdle = () => {
     if (phase === "idle" && !pendingToolCall) return true;
-    setError("Stop the current response first.");
+    setError(ct("stopCurrentResponseFirst"));
     return false;
   };
 
@@ -177,14 +178,14 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     const latest = store.getConfig?.() ?? store.cfg;
     if (!latest) return;
     if (sessionHasActivity(selectedSessionId) || ((latest.stop_existing_sessions_on_load ?? true) && anySessionActivity())) {
-      setError("Stop the active response before loading a model.");
+      setError(ct("stopActiveResponseBeforeLoad"));
       return;
     }
     setStartingSession(true);
     setError(null);
     try {
       const definition = latest.sessions?.find((item) => item.id === selectedSessionId) ?? selectedDefinition;
-      if (!definition) throw new Error("Save this session's model settings before starting it.");
+      if (!definition) throw new Error(ct("saveSessionBeforeStart"));
       const prepared = await prepareSessionProfile(store, definition);
       await api.sessionStart(selectedSessionId, prepared, prepared.stop_existing_sessions_on_load ?? true);
       notifySessionStatusChanged();
@@ -337,7 +338,16 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           <CustomSelect value={audioSessionId} disabled={phase !== 'idle' || pendingToolCall !== null}
             onChange={setAudioSessionId} ariaLabel={mediaCopy.audio}
             options={[{ value: '', label: mediaCopy.native },
-              ...speechSessions.map(session => ({ value: session.id, label: `${session.name || session.id} · ${session.model}` })),
+              ...speechSessions.map(session => {
+                const rawModel = session.model ?? '';
+                const shortened = isModelFilePath(rawModel);
+                const modelLabel = shortened ? modelDisplayName(rawModel) || rawModel : rawModel;
+                return {
+                  value: session.id,
+                  label: `${session.name || session.id} · ${modelLabel}`,
+                  title: shortened ? normalizeDisplayPath(rawModel) : undefined,
+                };
+              }),
               ...(audioSessionId && !speechSessions.some(session => session.id === audioSessionId)
                 ? [{ value: audioSessionId, label: `${audioSessionId} · ${t('ui.sessionStopped')}`, disabled: true }] : [])]} />
         </label>

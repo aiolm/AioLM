@@ -180,6 +180,11 @@ const BUILD_PHASE_LABELS = {
   building: "buildPhaseBuilding",
   packaging: "buildPhasePackaging",
   preflight: "buildPhasePreflight",
+  preparing: "buildPhasePreparing",
+  installing: "buildPhaseInstalling",
+  verifying: "buildPhaseVerifying",
+  exporting: "buildPhaseExporting",
+  importing: "buildPhaseImporting",
   installed: "buildPhaseInstalled",
   "cleaning up": "buildPhaseCleaningUp",
 } as const;
