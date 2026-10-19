@@ -38,8 +38,11 @@ class BridgeTests(unittest.TestCase):
                                           "adapter": {"id": "old", "revision": bridge.REVISION}, "options": []}}
             args = argparse.Namespace(root=str(root), config=str(config), revision=bridge.REVISION,
                                       engine_id="custom.recipe", runtime_id="r1", name="Synthetic recipe", python=sys.executable)
-            with patch.object(setup.adapter, "build_manifest", return_value=common), \
-                    patch.object(setup.adapter, "strata_config", return_value=({}, Path(sys.executable))):
+            snapshot = setup.adapter._StrataConfigSnapshot(
+                config, b"{}", {}, Path(sys.executable), ()
+            )
+            with patch.object(setup.adapter, "_build_manifest_with_snapshot",
+                              return_value=(common, snapshot)):
                 result = setup.prepare(args)
             self.assertEqual(result["program"], sys.executable)
             self.assertEqual(result["models"], common["models"])

@@ -15,10 +15,11 @@ def prepare(args):
         raise ValueError("select the full Strata revision reviewed by this adapter recipe")
     args.kind = "strata"
     args.server = args.model = args.served_model = None
-    common = adapter.build_manifest(args)
+    common, snapshot = adapter._build_manifest_with_snapshot(args)
+    adapter._verify_strata_config(snapshot)
     root = Path(args.root).absolute()
-    config_path = adapter.file_path(args.config)
-    config, executable = adapter.strata_config(root, config_path)
+    config_path = snapshot.path
+    executable = snapshot.executable
     python = common["probe"]["program"]
     script = Path(__file__).with_name("strata_bridge.py").absolute()
     metadata = common["option_metadata"]

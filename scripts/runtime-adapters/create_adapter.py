@@ -228,15 +228,30 @@ def file_path(value):
     return path
 
 
-def read_json(path):
+def _read_json_bytes(path):
     with path.open("rb") as stream:
         raw = stream.read(LIMIT + 1)
     if len(raw) > LIMIT:
         raise ValueError("deployment config exceeds 256 KiB")
+    return raw
+
+
+def _parse_json(raw):
     value = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(value, dict):
         raise ValueError("deployment config must be an object")
     return value
+
+
+class _StrataConfigSnapshot:
+    __slots__ = ("path", "raw", "config", "executable", "tokenizer_files")
+
+    def __init__(self, path, raw, config, executable, tokenizer_files):
+        self.path = path
+        self.raw = raw
+        self.config = config
+        self.executable = executable
+        self.tokenizer_files = tokenizer_files
 
 
 def gguf_metadata(path):
@@ -295,8 +310,9 @@ def gguf_metadata(path):
     return fields
 
 
-def strata_config(root, path):
-    config = read_json(path)
+def _strata_config_snapshot(root, path):
+    raw = _read_json_bytes(path)
+    config = _parse_json(raw)
     cwd = Path(config.get("cwd") or root)
     if not cwd.is_absolute():
         cwd = root / cwd
@@ -310,13 +326,28 @@ def strata_config(root, path):
     tokenizer = Path(config.get("tokenizer") or root / "pack/full/tokenizer")
     if not tokenizer.is_absolute():
         tokenizer = root / tokenizer
-    for name in ("vocab.json", "merges.txt", "token_type.json"):
-        file_path(tokenizer / name)
+    tokenizer_files = tuple(tokenizer / name for name in ("vocab.json", "merges.txt", "token_type.json"))
+    for candidate in tokenizer_files:
+        file_path(candidate)
     if config.get("lazy_load") or config.get("api_key"):
         raise ValueError("Use a dedicated preloaded Strata config without a saved API key; AioLM supplies its own key")
     if config.get("mcp_servers") or config.get("before_load"):
         raise ValueError("Use a dedicated Strata config without independent MCP servers or before_load commands")
-    return config, executable
+    return _StrataConfigSnapshot(path, raw, config, executable, tokenizer_files)
+
+
+def strata_config(root, path):
+    snapshot = _strata_config_snapshot(root, path)
+    return snapshot.config, snapshot.executable
+
+
+def _verify_strata_config(snapshot):
+    file_path(snapshot.path)
+    if _read_json_bytes(snapshot.path) != snapshot.raw:
+        raise ValueError("deployment config changed during validation")
+    file_path(snapshot.executable)
+    for candidate in snapshot.tokenizer_files:
+        file_path(candidate)
 
 
 def strata_engine_env(config):
@@ -352,8 +383,14 @@ def probe(args):
         help_text = capture([sys.executable, "-m", "serve.server", "--help"], root)
         if not all(flag in help_text for flag in ("--engine", "--config", "--host", "--port")):
             raise ValueError("this Strata version lacks the adapter's server CLI contract")
-        _, registered_executable = strata_config(root, file_path(args.config))
-        config, executable = strata_config(root, file_path(model or args.config))
+        registered = _strata_config_snapshot(root, file_path(args.config))
+        if model:
+            selected = _strata_config_snapshot(root, file_path(model))
+            config, executable = selected.config, selected.executable
+        else:
+            _verify_strata_config(registered)
+            config, executable = registered.config, registered.executable
+        registered_executable = registered.executable
         if executable.resolve() != registered_executable.resolve():
             raise ValueError("selected deployment uses another Strata engine build; register it separately")
         engine_version = capture([str(executable), "--version"], config.get("cwd") or root,
@@ -375,10 +412,11 @@ def probe(args):
     print(json.dumps(result))
 
 
-def build_manifest(args):
+def _build_manifest_with_snapshot(args):
     if not re.fullmatch(r"custom\.[a-z0-9][a-z0-9._-]{0,56}", args.engine_id):
         raise ValueError("engine ID must use the custom.* namespace")
     helper, python = Path(__file__).absolute(), file_path(args.python or sys.executable)
+    strata_snapshot = None
     common = {"schema_version":1,"adapter_version":1,"engine_id":args.engine_id,"runtime_id":args.runtime_id,
               "display_name":args.name or args.engine_id,"protocol":"openai-v1","health_path":"/health",
               "health_authenticated":False,"options":[
@@ -406,7 +444,8 @@ def build_manifest(args):
         root, config = Path(args.root).absolute(), file_path(args.config)
         if not re.fullmatch(r"[0-9a-f]{40}",args.revision or ""):
             raise ValueError("pin a full Strata source revision before registration")
-        installed, executable = strata_config(root, config)
+        strata_snapshot = _strata_config_snapshot(root, config)
+        installed, executable = strata_snapshot.config, strata_snapshot.executable
         # The serving layer documents these switches, but AioLM owns their
         # lifecycle and tool behavior. State this as adapter data; generic
         # help discovery must not infer reservations from option names.
@@ -445,7 +484,11 @@ def build_manifest(args):
         selected = file_path(args.model)
         common["models"] = [{"path":str(selected),"name":selected.name}]
     common["probe"] = {"program":str(python),"args":probe_args, **({"working_directory":str(root)} if args.kind == "strata" else {})}
-    return common
+    return common, strata_snapshot
+
+
+def build_manifest(args):
+    return _build_manifest_with_snapshot(args)[0]
 
 
 def create(args):
