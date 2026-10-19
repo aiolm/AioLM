@@ -26,7 +26,7 @@ vi.mock('../../shared/api/benchmarkSharing', () => ({
   benchmarkSharingSubmit: vi.fn(),
   benchmarkSharingCancel: vi.fn(async () => undefined),
 }));
-vi.mock('../../shared/sharing/benchmarkOutbox', () => ({ listQueuedBenchmarks: vi.fn(async () => []), enqueuePublicBenchmark: vi.fn(), enqueuePublicationBenchmark: vi.fn(), getQueuedBenchmark: vi.fn(async () => undefined), dispatchSelectedBenchmark: vi.fn(async () => 0), removeQueuedBenchmark: vi.fn(), retryQueuedBenchmark: vi.fn() }));
+vi.mock('../../shared/sharing/benchmarkOutbox', () => ({ enqueuePublicationBenchmark: vi.fn(), getQueuedBenchmark: vi.fn(async () => undefined), dispatchSelectedBenchmark: vi.fn(async () => 0), retryQueuedBenchmark: vi.fn() }));
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => true,
   deviceProfile: vi.fn(async () => null),

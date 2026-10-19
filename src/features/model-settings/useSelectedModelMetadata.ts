@@ -23,7 +23,3 @@ export function useSelectedModelMetadata(modelPath: string, open: boolean): api.
 
   return open && result?.path === modelPath ? result.metadata : undefined;
 }
-
-export function useModelContextLimit(modelPath: string, open: boolean): number | undefined {
-  return useSelectedModelMetadata(modelPath, open)?.context_length;
-}

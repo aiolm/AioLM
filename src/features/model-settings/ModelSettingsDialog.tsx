@@ -34,7 +34,7 @@ import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
 import { describeLaunchFailure, profileStatusCopy } from './profileStatusCopy';
 import { profileFieldLabel } from './profileControlCopy';
 import { useModelCatalog } from './useModelCatalog';
-import { useSelectedModelMetadata } from './useModelContextLimit';
+import { useSelectedModelMetadata } from './useSelectedModelMetadata';
 import { ProfileRuntimeSchemaContext, useProfileRuntimeSchema } from './useProfileRuntimeSchema';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
