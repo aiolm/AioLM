@@ -108,7 +108,13 @@ T02는 runtime의 버전·도움말 출력을 전부 보관한 다음 잘라내�
 
 최종 Python runtime-adapter 검사 21개가 통과했다. 대량 출력·Unicode 문자 제한·개행·한도 뒤 디코딩 오류·비정상 종료·시간 제한과 direct child 정리를 포함한다. 최종 native `--lib --bins --examples`도 라이브러리 1,158개·CLI 15개와 다른 binary·예제 test target 빌드를 통과했고 기존 ignored 6개·1개는 유지한다. integration을 포함한 Cargo 실행은 실행 중인 개발 GUI의 파일 잠금으로 실패했다. GUI를 종료하지 않고, Cargo로 최신 라이브러리와 fixture만 빌드한 뒤 원본 `runtime_adapter_setup`·`runtime_adapters` 테스트 소스를 해당 산출물에 직접 컴파일해 실행한 두 검사는 통과했다. 이 직접 실행을 전체 `cargo test` 성공으로 기록하지 않는다. 설정 파일 전체·프로필 7개·대화 파일 8개의 해시도 같다. Linux/macOS의 실제 출력 수집 검사는 수행하지 않았다.
 
-Python helper와 플랫폼 보조 스크립트는 실제 embedded 호출·CI·운영자 도구로 연결돼 있어 미사용으로 삭제하지 않았다. Strata 설정 중복 검증은 별도 후속 후보이며, probe·빌드 identity·취소·프로세스 정리 계약을 검증하기 전에는 합치지 않는다.
+T03은 Strata 준비와 모델 미선택 probe에서 같은 설정의 JSON 해석·정책 검증을 2회에서 1회로 줄였다(`b8c9e4e`). 두 번째 원문 읽기와 실행 파일·tokenizer 존재 확인은 유지한다. 다른 모델 설정을 지정한 probe는 계속 두 설정을 각각 검증하고 native build를 비교한다. 사용하지 않게 된 내부 JSON 래퍼와 setup의 설정 지역 변수도 제거했다. CLI·manifest·draft·모델·옵션·argv·artifact 순서는 유지하며, 출력 수집 코드는 바꾸지 않았다.
+
+실제 준비·probe 함수의 합성 비교에서 정상 출력·오류 10개 사례가 같았다. 약 360바이트 설정과 인자 1,000개를 넣은 약 19KiB 설정 모두 읽기·파일 확인·하위 명령 실행 횟수는 같고 JSON 해석만 줄었다. 준비 도중 설정 파일을 교체하면 예전 구현은 서로 다른 시점의 정보를 섞어 반환할 수 있었다. 수정 후에는 원문 차이를 감지해 거부한다. 최초 검증 후 실행 파일이나 tokenizer가 사라지는 경우도 실제 임시 파일로 재현해 후속 동작 전에 실패하는지 확인했다.
+
+최종 Python runtime-adapter 검사 27개와 구문 검사가 통과했다. 독립 검증은 보관된 정규화 JSON의 해시와 전체 결과를 다시 계산하고, 다른 모델의 별도 검증 및 출력 수집 코드의 바이트 보존도 확인했다. Git revision만 고정한 fixture를 사용했으며, 도움말용 합성 모듈과 Python 버전 명령은 실제 subprocess로 실행했다. 실제 Strata 추론·사용자 모델·다른 OS 실행이나 지연 시간·RSS 개선을 입증한 결과는 아니다.
+
+Python helper와 플랫폼 보조 스크립트는 실제 embedded 호출·CI·운영자 도구로 연결돼 있어 미사용으로 삭제하지 않았다. 검증 시점이 다른 읽기는 임의로 합치지 않는다.
 
 빌드·패키징 helper 다섯 개도 package script·workflow·플랫폼 분기·운영 문서까지 추적했다. 이 파일들에서 삭제할 미사용 내부 코드는 확인하지 못했다. 대신 Linux release의 사전 검사와 `package:tauri`가 CLI release 빌드를 두 번 호출하는 것을 확인해, 중간 검사에서 사용하지 않는 앞선 호출 한 줄을 제거했다(`24efa45`). CLI 빌드 → frontend 빌드 → GUI packaging 순서와 path remap·fixture 제외·모든 검사·다른 OS의 명령은 유지한다. 기존 YAML parser를 통한 workflow 판독·명령 보존 확인과 Node packaging 검사 3개가 통과했다. 실제 Linux CI·패키지 생성·설치는 실행하지 않았으며 빌드 시간 개선을 측정한 결과도 아니다.
 
