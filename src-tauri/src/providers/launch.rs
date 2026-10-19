@@ -48,14 +48,29 @@ fn schema_view(options: &Map<String, Value>) -> Map<String, Value> {
 
 /// Catalog values without a saved command-line position.
 fn unordered(
+    provider: ProviderId,
     options: &Map<String, Value>,
     recorded: &std::collections::BTreeSet<String>,
 ) -> Map<String, Value> {
-    options
+    let mut selected = options::schema(provider)
         .iter()
-        .filter(|(key, _)| !recorded.contains(*key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
+        .filter(|spec| {
+            spec.target == options::OptionTarget::Launch
+                && !BINDING_KEYS.contains(&spec.key)
+                && !recorded.contains(spec.key)
+        })
+        .filter_map(|spec| {
+            options
+                .get(spec.key)
+                .map(|value| (spec.key.to_owned(), value.clone()))
+        })
+        .collect::<Map<_, _>>();
+    if !recorded.contains(options::EXTRA_ARGS_KEY) {
+        if let Some(value) = options.get(options::EXTRA_ARGS_KEY) {
+            selected.insert(options::EXTRA_ARGS_KEY.into(), value.clone());
+        }
+    }
+    selected
 }
 
 fn valid_adapter_name(name: &str) -> bool {
@@ -444,6 +459,7 @@ fn vllm_has_raw_flag(options: &Map<String, Value>, flag: &str) -> bool {
 /// own defaults, and disabled engine statistics preclude per-request timing.
 fn enable_supported_vllm_telemetry(
     runtime: &PythonRuntimeManifest,
+    saved_options: &Map<String, Value>,
     launch_options: &mut Map<String, Value>,
 ) {
     let Some(flags) = probed_flags(runtime) else {
@@ -456,10 +472,10 @@ fn enable_supported_vllm_telemetry(
         ),
         ("enable_per_request_metrics", "--enable-per-request-metrics"),
     ] {
-        if !launch_options.contains_key(key)
+        if !saved_options.contains_key(key)
             && flags.iter().any(|supported| supported == flag)
             && (key != "enable_per_request_metrics"
-                || !vllm_has_raw_flag(launch_options, "--disable-log-stats"))
+                || !vllm_has_raw_flag(saved_options, "--disable-log-stats"))
         {
             launch_options.insert(key.into(), Value::Bool(true));
         }
@@ -1068,9 +1084,13 @@ pub fn engine_command(
     api_key: &str,
 ) -> Result<EngineCommand, String> {
     let provider = runtime.provider;
-    let options = provider_options(cfg, provider);
+    let empty_options = Map::new();
+    let options = cfg
+        .provider_options
+        .get(provider.as_str())
+        .unwrap_or(&empty_options);
     let catalog = catalog_keys(runtime);
-    let issues = saved_option_issues(cfg, runtime, &options);
+    let issues = saved_option_issues(cfg, runtime, options);
     if !issues.is_empty() {
         return Err(format!(
             "{} settings need attention before starting: {}",
@@ -1089,10 +1109,10 @@ pub fn engine_command(
     argument_path("model", model)?;
     let metal = provider == ProviderId::Vllm && compat::is_metal(runtime.probe.as_ref());
     if metal {
-        validate_metal_model_options(Path::new(model), runtime, &options)?;
+        validate_metal_model_options(Path::new(model), runtime, options)?;
     }
     let primary_embedding = embedding_only(Path::new(model), runtime);
-    let adapters = lora_adapters(&options)?;
+    let adapters = lora_adapters(options)?;
     let max_rank = options.get("max_lora_rank").and_then(Value::as_i64);
     for adapter in &adapters {
         argument_path("adapter", &adapter.path)?;
@@ -1119,7 +1139,7 @@ pub fn engine_command(
     let mut env = Vec::new();
     // Values a saved order record positions are emitted after the catalog's
     // own arguments, in that order, by the common resolver.
-    let recorded = super::runtime_ordered::recorded_keys(&options);
+    let recorded = super::runtime_ordered::recorded_keys(options);
     let (upstream_model, readiness) = match provider {
         ProviderId::Vllm => {
             let served = served_model_name(model);
@@ -1146,8 +1166,8 @@ pub fn engine_command(
                         .map(|adapter| format!("{}={}", adapter.name, adapter.path)),
                 );
             }
-            let mut launch_options = schema_view(&options);
-            enable_supported_vllm_telemetry(runtime, &mut launch_options);
+            let mut launch_options = unordered(provider, options, &recorded);
+            enable_supported_vllm_telemetry(runtime, options, &mut launch_options);
             if metal {
                 env.extend([
                     // vLLM applies this allowlist to platform plugins too;
@@ -1172,14 +1192,14 @@ pub fn engine_command(
                         companion,
                     ]);
                 }
-                if launch_options.contains_key("speculative_config") {
+                if options.contains_key("speculative_config") {
                     args.push("--no-async-scheduling".into());
                 }
             }
             // vLLM picks the runner from the architecture when it is `auto`;
             // an embedding-only model is named explicitly so the launched
             // runner always matches the task the session advertises.
-            let runner = launch_options
+            let runner = options
                 .get("runner")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
@@ -1196,10 +1216,7 @@ pub fn engine_command(
                 launch_options.remove("runner");
                 args.extend(["--runner".into(), "pooling".into()]);
             }
-            args.extend(options::launch_args(
-                provider,
-                &unordered(&launch_options, &recorded),
-            ));
+            args.extend(options::launch_args(provider, &launch_options));
             if !api_key.is_empty() {
                 env.push(("VLLM_API_KEY".into(), api_key.into()));
             }
@@ -1257,7 +1274,7 @@ pub fn engine_command(
             }
             args.extend(options::launch_args(
                 provider,
-                &unordered(&schema_view(&options), &recorded),
+                &unordered(provider, options, &recorded),
             ));
             // mlx-vlm 0.7.6 constructs RuntimeConfig while importing the
             // server package, before its CLI sets MAX_KV_SIZE. Seed the same
@@ -1289,7 +1306,7 @@ pub fn engine_command(
         &super::registry::root(),
         cfg,
         &super::runtime_schema::Selected::python(runtime)?,
-        &options,
+        options,
         &catalog,
     )?);
     // Every flag the command carries, dedicated bindings included, must be one
@@ -1524,11 +1541,64 @@ mod tests {
             ProviderId::Vllm,
             json!({"speculative_config":{"method":"draft_model","model":draft.to_string_lossy(),"num_speculative_tokens":3}}),
         );
-        cfg.active_model = dir.to_string_lossy().into_owned();
-        assert!(engine_command(&cfg, &runtime, 2, "")
-            .unwrap()
-            .args
-            .contains(&"--no-async-scheduling".into()));
+        let model_arg = dir.to_string_lossy().into_owned();
+        let draft_arg = draft.to_string_lossy().into_owned();
+        cfg.active_model = model_arg.clone();
+        let unordered = engine_command(&cfg, &runtime, 2, "").unwrap();
+        assert!(unordered.args.contains(&"--no-async-scheduling".into()));
+        cfg.provider_options.get_mut("vllm").unwrap().insert(
+            "@option_order".into(),
+            json!({"version":1,"occurrences":[{"key":"speculative_config"}]}),
+        );
+        let command = engine_command(&cfg, &runtime, 2, "").unwrap();
+        let served = served_model_name(&model_arg);
+        let speculative = json!({
+            "method": "draft_model",
+            "model": draft_arg,
+            "num_speculative_tokens": 3
+        })
+        .to_string();
+        assert_eq!(command.program, PathBuf::from(&runtime.python));
+        assert_eq!(
+            command.args,
+            vec![
+                "-I".into(),
+                "-m".into(),
+                "vllm.entrypoints.cli.main".into(),
+                "serve".into(),
+                model_arg,
+                "--host".into(),
+                "127.0.0.1".into(),
+                "--port".into(),
+                "2".into(),
+                "--served-model-name".into(),
+                served.clone(),
+                "--no-async-scheduling".into(),
+                "--speculative-config".into(),
+                speculative,
+            ]
+        );
+        assert_eq!(
+            command.env,
+            vec![
+                ("VLLM_PLUGINS".into(), "metal,gguf_metal".into()),
+                ("VLLM_MLX_DEVICE".into(), "gpu".into()),
+                ("VLLM_METAL_MULTIMODAL_MODE".into(), "auto".into()),
+                ("VLLM_USE_V2_MODEL_RUNNER".into(), "0".into()),
+                ("HF_HUB_OFFLINE".into(), "1".into()),
+                ("TRANSFORMERS_OFFLINE".into(), "1".into()),
+            ]
+        );
+        assert_eq!(command.working_directory, None);
+        assert_eq!(command.upstream_model, served.clone());
+        assert_eq!(
+            command.readiness,
+            Readiness {
+                health_path: "/health".into(),
+                health_authenticated: false,
+                expected_model: served,
+            }
+        );
         metal_snapshot(
             &draft,
             "qwen3",
