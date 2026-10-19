@@ -259,12 +259,14 @@ fn read_instructions(root: &Path, source: Source) -> Result<AgentInstructionsFil
         }
         Err(error) => return Err(file_error(&path, error)),
     };
+    let file_digest = Sha256::digest(&bytes);
+    let content = decode(&path, bytes)?;
     Ok(AgentInstructionsFile {
         source,
         path: display,
         exists: true,
-        content: decode(&path, &bytes)?,
-        revision: Some(revision(&bytes)),
+        content,
+        revision: Some(format!("{file_digest:x}")),
     })
 }
 
@@ -472,7 +474,7 @@ fn read_skill_file(folder: &Path) -> Result<String, String> {
         ));
     }
     let bytes = read_bounded(&file).map_err(|error| file_error(&display, error))?;
-    decode(&display, &bytes)
+    decode(&display, bytes)
 }
 
 /// `<source>:<folder>` when that is a safe id, otherwise `<source>:#` and the
@@ -589,9 +591,11 @@ fn file_error(path: &Path, error: std::io::Error) -> String {
 }
 
 /// UTF-8 text, with a leading byte-order mark removed.
-fn decode(path: &Path, bytes: &[u8]) -> Result<String, String> {
-    String::from_utf8(bytes.strip_prefix(BOM).unwrap_or(bytes).to_vec())
-        .map_err(|_| format!("{} is not UTF-8 text.", path.display()))
+fn decode(path: &Path, mut bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.starts_with(BOM) {
+        drop(bytes.drain(..BOM.len()));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text.", path.display()))
 }
 
 fn revision(bytes: &[u8]) -> String {
@@ -910,6 +914,24 @@ mod tests {
         assert_eq!(agents.revision.as_deref(), Some(revision(shared).as_str()));
         assert_eq!(loaded.instructions[1].source, Source::Aiolm);
         assert_eq!(loaded.instructions[1].content, "AioLM rules.");
+    }
+
+    #[test]
+    fn decoded_text_preserves_empty_bom_and_utf8_error_behavior() {
+        let path = Path::new("AGENTS.md");
+        assert_eq!(decode(path, Vec::new()).unwrap(), "");
+        assert_eq!(
+            decode(path, b"Plain text.".to_vec()).unwrap(),
+            "Plain text."
+        );
+        assert_eq!(
+            decode(path, [BOM, b"Marked text."].concat()).unwrap(),
+            "Marked text."
+        );
+        assert_eq!(
+            decode(path, vec![0xff]),
+            Err("AGENTS.md is not UTF-8 text.".to_string())
+        );
     }
 
     #[test]
