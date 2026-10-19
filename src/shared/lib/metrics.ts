@@ -102,8 +102,3 @@ export function sanitizeResponseMetrics(value: unknown): ResponseMetrics | undef
   return Object.keys(result.pp).length || Object.keys(result.tg).length || Object.keys(result).length > 2
     ? result : undefined;
 }
-
-export function deriveTokensPerSecond(completionTokens?: number, totalMs?: number): number | null {
-  if (!completionTokens || !totalMs || totalMs <= 0) return null;
-  return completionTokens / (totalMs / 1000);
-}

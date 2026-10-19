@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { classifyLifecycleError, isLifecycleCancellation, isServerBusy, isServerRunning, lifecycleErrorMessage, nextPollDelay, shouldPoll } from "../../src/shared/lib/serverLifecycle.ts";
-import { deriveTokensPerSecond } from "../../src/shared/lib/metrics.ts";
 import { normalizeDisplayPath, normalizeDisplayPathLines, normalizeDisplayText } from "../../src/shared/lib/displayPaths.ts";
 
 assert.equal(isServerRunning("running"), true);
@@ -69,7 +68,6 @@ assert.equal(nextPollDelay(1000, 0), 1000);
 assert.equal(nextPollDelay(1000, 5), 10000);
 assert.equal(shouldPoll("hidden"), false);
 assert.equal(shouldPoll("visible"), true);
-assert.equal(deriveTokensPerSecond(100, 2000), 50);
 assert.equal(normalizeDisplayPath("\\\\?\\C:\\models\\model.gguf"), "C:\\models\\model.gguf");
 assert.equal(normalizeDisplayPath("\\\\?\\UNC\\server\\share\\model.gguf"), "\\\\server\\share\\model.gguf");
 assert.equal(normalizeDisplayText("--model=\\\\?\\C:\\models\\model.gguf"), "--model=C:\\models\\model.gguf");
