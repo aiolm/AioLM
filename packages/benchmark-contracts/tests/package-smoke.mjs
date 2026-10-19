@@ -68,8 +68,9 @@ try {
 
   writeFileSync(join(consumer, 'node-smoke.mjs'), `
     import assert from 'node:assert/strict';
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
+    const row = payload.measurements.rows[0];
     assert.equal(validatePublicBenchmark(payload), payload);
     for (const [name, format] of [['vllm', 'hf-safetensors'], ['mlx-vlm', 'mlx']]) {
       const python = { ...payload, schema_version: 2, runtime: { ...payload.runtime, name }, model: { ...payload.model, format } };
@@ -110,8 +111,63 @@ try {
     assert.throws(() => validateDescriptionMd('x'.repeat(4001)));
     assert.throws(() => validateDescriptionMd(42));
     const body = serializePublicationRequest(publication);
+    assert.equal(body, JSON.stringify({ benchmark: payload, description_md: 'Hello **world**' }));
+    assert.equal(utf8ByteLength(body), new TextEncoder().encode(body).length);
+    const originalStringify = JSON.stringify;
+    let publicationStringifications = 0;
+    JSON.stringify = function(value, ...rest) {
+      if (value?.benchmark === payload) publicationStringifications++;
+      return originalStringify.call(this, value, ...rest);
+    };
+    try {
+      assert.equal(serializePublicationRequest(publication), body);
+    } finally {
+      JSON.stringify = originalStringify;
+    }
+    assert.equal(publicationStringifications, 1, 'Publication serialization should stringify the normalized request once.');
+    const legacyBody = serializePublicationRequest(payload);
+    assert.equal(legacyBody, JSON.stringify({ benchmark: payload, description_md: '' }));
+    assert.deepEqual(parsePublicationSnapshot(legacyBody), { benchmark: payload, description_md: '' });
     assert.equal(parsePublicationSnapshot(body).benchmark.submission_id, payload.submission_id);
     assert.throws(() => parsePublicationSnapshot('{invalid'));
+    const unicodeDescription = '😀'.repeat(DESCRIPTION_MAX_CODEPOINTS);
+    assert.equal(countCodePoints(unicodeDescription), DESCRIPTION_MAX_CODEPOINTS);
+    assert.equal(validateDescriptionMd(unicodeDescription), unicodeDescription);
+    assert.throws(() => validateDescriptionMd(unicodeDescription + '😀'), /Publication description exceeds 4000 characters\\./);
+
+    const maximumRows = Array.from({ length: PUBLICATION_MAX_ROWS }, (_, index) => ({ ...row, repetition: index + 1 }));
+    const maximumRowsRequest = { benchmark: { ...payload, measurements: { ...payload.measurements, rows: maximumRows } }, description_md: '' };
+    assert.equal(validatePublicationRequest(maximumRowsRequest).benchmark.measurements.rows.length, PUBLICATION_MAX_ROWS);
+    assert.throws(() => validatePublicationRequest({
+      benchmark: { ...maximumRowsRequest.benchmark, measurements: { ...maximumRowsRequest.benchmark.measurements, rows: maximumRows.concat(row) } },
+      description_md: ''
+    }), /Invalid public benchmark field: benchmark\\.measurements\\.rows/);
+
+    const largeRow = Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'number' ? Number.MAX_SAFE_INTEGER : value]));
+    const requestForLargeRowCount = largeRowCount => ({
+      benchmark: { ...payload, measurements: { ...payload.measurements,
+        rows: Array.from({ length: PUBLICATION_MAX_ROWS }, (_, index) => index < largeRowCount ? largeRow : row) } },
+      description_md: ''
+    });
+    let lowerLargeRowCount = 0;
+    let upperLargeRowCount = PUBLICATION_MAX_ROWS;
+    while (lowerLargeRowCount < upperLargeRowCount) {
+      const candidate = Math.ceil((lowerLargeRowCount + upperLargeRowCount) / 2);
+      const candidateBody = JSON.stringify(requestForLargeRowCount(candidate));
+      if (utf8ByteLength(candidateBody) <= PUBLICATION_MAX_UTF8_BYTES) lowerLargeRowCount = candidate;
+      else upperLargeRowCount = candidate - 1;
+    }
+    const boundaryRequest = requestForLargeRowCount(lowerLargeRowCount);
+    const boundaryBytes = utf8ByteLength(JSON.stringify(boundaryRequest));
+    const boundaryDescriptionLength = PUBLICATION_MAX_UTF8_BYTES - boundaryBytes;
+    assert(boundaryDescriptionLength >= 0 && boundaryDescriptionLength <= DESCRIPTION_MAX_CODEPOINTS, 'Synthetic boundary request did not leave a valid description range.');
+    boundaryRequest.description_md = 'x'.repeat(boundaryDescriptionLength);
+    const exactLimitBody = serializePublicationRequest(boundaryRequest);
+    assert.equal(utf8ByteLength(exactLimitBody), PUBLICATION_MAX_UTF8_BYTES);
+    assert.equal(parsePublicationSnapshot(exactLimitBody).description_md.length, boundaryDescriptionLength);
+    const overlimitRequest = { ...boundaryRequest, description_md: boundaryRequest.description_md + 'x' };
+    assert.equal(utf8ByteLength(JSON.stringify(overlimitRequest)), PUBLICATION_MAX_UTF8_BYTES + 1);
+    assert.throws(() => serializePublicationRequest(overlimitRequest), /Publication request exceeds 4MiB\\./);
     const code = encodeRecoveryCode(RECOVERY_FIXTURE);
     assert.ok(code.startsWith('aiolm-recovery-v1.'));
     assert.equal(code, 'aiolm-recovery-v1.eyJ2ZXJzaW9uIjoxLCJvcmlnaW4iOiJodHRwczovL2JlbmNobWFya3MuZXhhbXBsZS50ZXN0Iiwic3VibWlzc2lvbl9pZCI6IjAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInNlY3JldCI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEifQ');
@@ -184,6 +240,11 @@ try {
   assert.equal(openapi.paths['/v1/upload-sessions'].post.operationId, 'createUploadSession');
   assert.equal(openapi.paths['/v1/benchmark-runs/{id}'].delete.operationId, 'deleteBenchmarkRun');
   assert.equal(browser.namespace.validatePublicationRequest({ benchmark: payload, description_md: '' }).description_md, '');
+  const browserPublication = { benchmark: payload, description_md: '😀'.repeat(4000) };
+  assert.equal(browser.namespace.countCodePoints(browserPublication.description_md), 4000);
+  assert.equal(browser.namespace.serializePublicationRequest(browserPublication), JSON.stringify(browserPublication));
+  assert.throws(() => browser.namespace.validateDescriptionMd(browserPublication.description_md + '😀'), /Publication description exceeds 4000 characters\./);
+  assert.throws(() => browser.namespace.validatePublicBenchmark({}), /Invalid public benchmark field/);
   assert.equal(browser.namespace.formatRuntimeVersionLabel({ name: 'llama.cpp', version: '0.3.0-dev', build: 'b10638' }), '0.3.0-dev(10638)');
   assert.equal(browser.namespace.decodeRecoveryCode(browser.namespace.encodeRecoveryCode(browser.namespace.RECOVERY_FIXTURE)).version, 1);
 
