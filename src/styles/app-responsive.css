@@ -15,7 +15,6 @@
  :root { --ui-page-padding: 16px; --ui-canvas-padding: 16px; }
  .profile-snapshot { padding: 16px; }
  .settings-row { padding: var(--ui-row-space) 12px; }
- .tuning-redesign__header { padding: 16px; flex-wrap: wrap; }
  /* Phone width: location and server state on the first line, the model pill
     gets the full second line so its name stays readable. */
  .aiolm-header { display: grid; grid-template-columns: minmax(0,1fr) max-content; grid-template-rows: 48px auto; height: auto; padding-bottom: 8px; }
@@ -58,19 +57,10 @@
 @container fields (max-width: 719px) {
  .tuning-field-list > .tuning-default-field { grid-template-columns: minmax(0,1fr); gap: 12px; }
 }
-@container tuning (max-width: 599px) {
- .tuning-apply-footer { grid-template-columns: minmax(0,1fr); align-items: stretch; padding: 8px 16px; gap: 8px; }
-}
 /* Short windows scroll the editor as one region; reserve its gutter only once. */
 @media (max-height: 640px) {
  .chat-message-log { min-height: 48px; }
  .chat-composer-actions textarea { height: 52px; min-height: 52px; padding-block: 4px; }
- .tuning-redesign { overflow-y: auto; scrollbar-gutter: stable; }
- .tuning-redesign__body { flex: 0 0 auto; }
- .tuning-redesign__content { min-height: 240px; overflow: visible; }
- .tuning-redesign__content > .tuning-panel-scroll { height: auto; overflow: visible; }
- .tuning-navigation, .tuning-apply-footer { scrollbar-gutter: auto; }
- .tuning-apply-footer { position: sticky; bottom: 0; z-index: 10; }
 }
 
 /* Narrow model rows reserve the name column; action groups wrap below it. */

@@ -38,7 +38,7 @@
 }
 
 /* Shared editors and menus keep their lines separate when text is enlarged. */
-:root :is(.app-input, .app-textarea, .app-custom-select-trigger, .app-custom-dropdown-item, .app-button, .app-tab, .app-nav-item, .app-action-menu__item) { line-height: 1.5; }
+:root :is(.app-input, .app-textarea, .app-custom-select-trigger, .app-custom-dropdown-item, .app-button, .app-tab, .app-nav-item) { line-height: 1.5; }
 
 /* Windows contrast themes supply system fills and strokes; normal themes keep
    the borderless filled controls above. */
@@ -86,8 +86,7 @@
  :root .settings-profile-chip--active { background-color: var(--ui-action-secondary-fill-hover); }
  :root .app-empty-icon, :root .app-soft-accent, :root .models-list-count,
  :root .project-config-snapshot, :root .ui-background-accent-soft { background-color: var(--ui-accent-soft); }
- :root .app-custom-dropdown-item.is-highlighted, :root .app-action-menu-trigger[aria-expanded="true"],
- :root .app-action-menu__item:is(:focus, :focus-visible),
+ :root .app-custom-dropdown-item.is-highlighted,
  :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-color: var(--ui-accent-soft); }
  :root .performance-chip > span { background-color: var(--ui-field-fill); }
  :root .performance-chip > input:checked + span, :root .performance-baseline-chip { background-color: var(--ui-accent-soft); }
@@ -122,7 +121,7 @@
  :root .app-button--selected:not(:disabled), :root .app-button[aria-pressed="true"]:not(:disabled), :root .settings-profile-chip--active { background-image: var(--ui-action-secondary-gradient-hover); }
  :root .app-empty-icon, :root .app-soft-accent, :root .models-list-count, :root .project-config-snapshot, :root .ui-background-accent-soft, :root .app-badge--neutral { background-image: var(--ui-soft-gradient); }
  :root .model-publishers .app-badge--neutral { background-image: var(--ui-secondary-gradient); }
- :root .app-custom-dropdown-item.is-highlighted, :root .app-action-menu-trigger[aria-expanded="true"], :root .app-action-menu__item:is(:focus, :focus-visible), :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-image: var(--ui-soft-gradient); }
+ :root .app-custom-dropdown-item.is-highlighted, :root .app-tab:hover:not(:disabled), :root .app-nav-item:hover:not(:disabled, [aria-current="page"]) { background-image: var(--ui-soft-gradient); }
  :root .app-custom-select-trigger:not(:disabled), :root .app-input:not(:disabled), :root .app-textarea:not(:disabled), :root .performance-chip > span { background-image: var(--ui-field-rest-gradient); }
  :root .app-custom-select-trigger:hover:not(:disabled, [aria-expanded="true"]) { background-image: var(--ui-field-hover-gradient); }
  :root :is(.app-input:not([type="number"], [type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [role="combobox"]), .app-textarea):not(:disabled, [readonly]) { background-image: var(--app-edit-glyph), var(--ui-field-rest-gradient); }

@@ -204,21 +204,6 @@
 @media (forced-colors: active) { .app-custom-dropdown-item.is-highlighted::before { background: Highlight; } }
 .app-custom-dropdown-item.is-selected { color: var(--ui-accent); font-weight: 550; }
 .app-custom-dropdown-check { width: 16px; height: 16px; color: var(--ui-accent); }
-/* Row actions: an always visible ellipsis trigger and a small floating menu. */
-.app-action-menu-trigger { width: var(--ui-control); min-height: var(--ui-control); height: var(--ui-control); color: var(--ui-muted); }
-.app-action-menu-trigger[aria-expanded="true"] { background: var(--ui-surface-muted); color: var(--ui-ink); }
-/* Floating menus keep their own surface so a portal opened from the rail
-   never inherits rail foreground. */
-.app-action-menu { position: fixed; z-index: 50; min-width: 168px; max-width: min(320px, calc(100vw - 16px)); padding: 4px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius-menu); background: var(--ui-menu-bg); color: var(--ui-ink); box-shadow: var(--ui-elev-menu); }
-.app-action-menu__item { display: flex; align-items: flex-start; gap: 8px; min-height: var(--ui-menu-row); padding: 6px 10px; border-radius: var(--ui-radius-control); font-size: var(--ui-text); line-height: 1.5; cursor: pointer; outline: none; }
-.app-action-menu__item + .app-action-menu__item { margin-top: 2px; }
-.app-action-menu__item:focus-visible, .app-action-menu__item:focus { background: var(--ui-surface-muted); }
-.app-action-menu__item:focus-visible { box-shadow: inset 0 0 0 2px var(--ui-focus); }
-.app-action-menu__item.is-danger { color: var(--tone-error-ink); }
-.app-action-menu__item[aria-disabled="true"] { color: var(--ui-faint); cursor: not-allowed; }
-.app-action-menu__icon { display: inline-flex; flex-shrink: 0; margin-top: 2px; }
-.app-action-menu__copy { display: grid; min-width: 0; gap: 2px; }
-.app-action-menu__reason { color: var(--ui-muted); font-size: var(--ui-text-support); line-height: var(--ui-text-support-leading); }
 /* Inline text action inside running copy. */
 .app-link-button { display: inline; padding: 0; border: 0; background: transparent; color: var(--ui-accent); font: inherit; font-weight: 500; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .app-link-button:hover { text-decoration-thickness: 2px; }
