@@ -8,7 +8,7 @@ import Badge from './Badge';
 import { modelDisplayName } from '../lib/displayPaths';
 import { providerCopy } from '../i18n/providerCopy';
 
-export interface ModelBadge {
+interface ModelBadge {
   kind: 'family' | 'architecture' | 'parameters' | 'quantization' | 'context' | 'projector' | 'tag' | 'format';
   value: string;
   source: 'filename' | 'metadata' | 'hub';

@@ -107,5 +107,3 @@ export default function ConfirmDialog({
     document.body,
   );
 }
-
-export type { ConfirmDialogProps };

@@ -6,9 +6,9 @@ import StableLabel from "./StableLabel";
 import "./DiagnosticDetails.css";
 
 /** Single-line diagnostics longer than this collapse behind the toggle. */
-export const LONG_DIAGNOSTIC_LENGTH = 300;
+const LONG_DIAGNOSTIC_LENGTH = 300;
 /** Multiline diagnostics longer than this collapse; short two-liners stay inline. */
-export const LONG_DIAGNOSTIC_MULTILINE_LENGTH = 120;
+const LONG_DIAGNOSTIC_MULTILINE_LENGTH = 120;
 /** Visible summary truncation; the stored full text is never shortened. */
 export const DIAGNOSTIC_SUMMARY_MAX_LENGTH = 240;
 

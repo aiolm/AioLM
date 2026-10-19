@@ -94,5 +94,3 @@ export default function Tooltip({ content, label, id }: TooltipProps) {
     </span>
   );
 }
-
-export type { TooltipProps };
