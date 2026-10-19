@@ -125,7 +125,6 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const [providerOptionsPending, setProviderOptionsPending] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [editorRevision, setEditorRevision] = useState(0);
-  const [tuningRevision, setTuningRevision] = useState(0);
   const [resources, setResources] = useState<{ runtimes: api.InstalledRuntime[]; device: api.DeviceReport | null }>({ runtimes: [], device: null });
   // Whether the current installed-runtime query has answered. An empty
   // list is a real answer — no runtime installed — and must report the selected
@@ -400,9 +399,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   });
   const editorKey = `${cfg.active_model}:${editorRevision}`;
   const sidecar = (key: 'mmproj' | 'spec_draft_model', label: string, vision: boolean) => <label>{label}
-    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
-      ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]), icon: <ModelIcon model={cfg[key]} /> }] : [])]} onChange={value => change({ [key]: value })} />
-    <input className="app-input" aria-label={`${label} — ${copy.path}`} aria-describedby={`${id}-${key}-help`} value={normalizeDisplayPath(cfg[key])} disabled={disabled} onChange={event => change({ [key]: restoreDisplayPath(cfg[key], event.target.value) })} />
+    <CustomSelect ariaLabel={label} ariaDescribedBy={`${id}-${key}-help`} value={cfg[key]} disabled={disabled} onInputChange={value => change({ [key]: restoreDisplayPath(cfg[key], value) })} options={[{ value: '', label: copy.none }, ...catalog.models.filter(model => model.is_vision === vision && (model.artifact ? model.artifact.format === 'gguf' : /\.(gguf|mmproj)$/i.test(model.path))).map(model => ({ value: model.path, label: normalizeDisplayText(model.name), icon: <ModelIcon model={model.name} />, disabled: !!model.shards?.missing.length })),
+      ...(cfg[key] && !catalog.models.some(model => model.path === cfg[key]) ? [{ value: cfg[key], label: modelDisplayName(cfg[key]), icon: <ModelIcon model={cfg[key]} /> }] : [])]} onChange={value => change({ [key]: value })} placeholder={copy.path} />
     <span id={`${id}-${key}-help`} className="app-section-hint">{vision ? help.projector : help.draftModel}</span>
   </label>;
   return <ProfileRuntimeSchemaContext.Provider value={llama ? null : runtimeSchema}><dialog ref={dialog} className="app-dialog model-settings-dialog" aria-labelledby={`${id}-title`} aria-busy={disabled || undefined}
@@ -473,7 +471,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             {!external && <div hidden={section !== 'runtime'} className="model-settings-fields">
               <div className="model-settings-section-heading"><h3>{copy.runtime}</h3>{(renderRuntimeManager || onManageRuntimes) && <button type="button" className="app-button app-button--ghost app-button--sm" data-icon="settings" onClick={manageRuntimes}>{copy.manageRuntime}</button>}</div>
               {(resourceError || llama && runtime.error) && <FeedbackBanner tone="warning" action={{ label: copy.refresh, onClick: () => { setResourceRevision(value => value + 1); if (llama) runtime.refresh(); } }}>{normalizeDisplayText(resourceError || runtime.error || '')}</FeedbackBanner>}
-              {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} onInvalid={setFieldInvalid} />}
+              {llama && <DraftGpuEditor key={editorKey} placement={cfg.gpu} device={device} disabled={disabled || runtime.loading} onChange={gpu => change({ gpu })} draftDevice={cfg.spec_draft_device} onDraftDeviceChange={spec_draft_device => change({ spec_draft_device })} onInvalid={setFieldInvalid} />}
             </div>}
             {!benchmark && (external ? section === 'prompt' : section === 'sampling') && <div className="model-settings-prompt"><label htmlFor={`${id}-system-prompt`}>{profileCopy.prompt}</label><textarea id={`${id}-system-prompt`} className="app-textarea app-textarea--editable" value={profiles.systemPrompt} disabled={disabled} rows={3} onChange={event => profiles.setSystemPrompt(event.target.value)} /><small className="app-section-hint">{external ? copy.promptScope : profileCopy.promptHint}</small></div>}
             <div hidden={!llama || !['tuning', 'sampling', 'reasoning', 'adapters'].includes(section)}>
@@ -486,15 +484,14 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
                 {cfg.lora_adapters.length > 0 && <div className="app-section-hint"><p id={`${id}-lora-enabled-help`}>{help.loraEnabled}</p><p id={`${id}-lora-scale-help`}>{help.loraScale}</p></div>}
                 <button type="button" className="app-button app-button--secondary" aria-describedby={`${id}-lora-help`} data-icon="add" onClick={() => void api.pickLoraAdapter().then(path => { if (path) change({ lora_adapters: [...latest.current.lora_adapters.filter(item => item.path !== path), { path, enabled: true, scale: 1 }] }); }).catch(cause => setError(String(cause)))}>{copy.addLora}</button>
               </div>
-              <DraftTuningEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} section={section} disabled={disabled} benchmark={benchmark} runtime={runtime} contextLimit={contextLimit} onChange={change} onInvalid={setFieldInvalid}
-                onResetDrafts={() => { setTuningRevision(value => value + 1); setInvalid(previous => new Set([...previous].filter(key => key.startsWith('gpu_')))); }} />
+              <DraftTuningEditor key={editorKey} cfg={cfg} section={section} disabled={disabled} benchmark={benchmark} runtime={runtime} contextLimit={contextLimit} onChange={change} onInvalid={setFieldInvalid} />
             </div>
-            <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={`${editorKey}:${tuningRevision}`} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
+            <div hidden={section !== 'advanced' || !llama}>{llama && <><SettingsPasteBox cfg={cfg} options={runtime.options} disabled={disabled} onChange={change} /><DraftAdvancedEditor key={editorKey} cfg={cfg} options={runtime.options} verified={runtime.verified} disabled={disabled} benchmark={benchmark} onChange={change} onInvalid={setFieldInvalid} /></>}</div>
             {/* Profile selection can save before an option tab is visited. Keep
                 provider validation active and retain field drafts across tabs. */}
             {external && <div hidden={section !== 'options'}><p className="app-section-hint">{copy.externalOptions}</p><ProviderOptions collapseTools hideDefaultsReset key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
             {!llama && !external && <div hidden={section === 'model'}><ProviderOptions key={`${provider}:${editorRevision}`} section={section} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} /></div>}
-            {llama && section === 'advanced' && <ProviderOptions key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
+            {llama && section === 'advanced' && <ProviderOptions editor="custom" key={`${provider}:${editorRevision}`} cfg={cfg} disabled={disabled} onChange={change} onInvalid={setFieldInvalid} onChecking={setProviderOptionsPending} />}
             </div>
             </SettingsProfileControl>
             </div>

@@ -8,19 +8,25 @@ import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { formatMebibytes } from '../../shared/lib/units';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { modelSettingsHelp } from './modelSettingsHelp';
+import { controlChoiceCopy } from '../../shared/i18n/controlChoiceCopy';
 
-export default function DraftGpuEditor({ placement, device, disabled, onChange, onInvalid }: {
+export default function DraftGpuEditor({ placement, device, disabled, onChange, onInvalid, draftDevice = '', onDraftDeviceChange }: {
   placement?: GpuPlacement; device: DeviceReport | null; disabled: boolean;
+  draftDevice?: string; onDraftDeviceChange?: (value: string) => void;
   onChange: (gpu: GpuPlacement) => void; onInvalid: (key: string, invalid: boolean) => void;
 }) {
   const { t, locale } = useI18n();
   const copy = modelSettingsCopy[locale];
   const help = modelSettingsHelp[locale];
+  const choice = controlChoiceCopy[locale];
   const id = useId();
   const savedGpu = cloneGpuPlacement(placement);
   const gpu = resolvedGpuPlacement(savedGpu);
   const devices = (device?.profile.gpus ?? []).filter((item): item is typeof item & { stable_id: string } => !!item.stable_id);
   const [weights, setWeights] = useState<string | null>(null);
+  // Keep an empty manual draft editable; merely opening the editor never rewrites saved placement.
+  const [manualDraft, setManualDraft] = useState(!!draftDevice.trim());
+  const manual = !!onDraftDeviceChange && (manualDraft || !!draftDevice.trim());
   const deviceOptions = devices.map((item, index) => ({ value: item.stable_id, label: gpuDeviceLabel(item, index) }));
   // Only the draft device keeps an empty choice: a draft model is optional, so
   // "none pinned" is a real state there, unlike the main GPU and the split mode.
@@ -46,7 +52,14 @@ export default function DraftGpuEditor({ placement, device, disabled, onChange, 
     </label>)}</div>
     <div className="model-settings-grid">
       <div><label>{t('ui.gpuMain')}<CustomSelect ariaLabel={t('ui.gpuMain')} ariaDescribedBy={`${id}-main-hint`} value={gpu.main_gpu ?? ''} options={deviceOptions.filter(option => gpu.gpu_ids.includes(option.value))} onChange={value => patch({ main_gpu: value })} disabled={disabled || gpu.gpu_ids.length === 0} /></label><p id={`${id}-main-hint`} className="app-section-hint">{help.gpuMain}</p></div>
-      <div><label>{t('ui.gpuDraft')}<CustomSelect ariaLabel={t('ui.gpuDraft')} ariaDescribedBy={`${id}-draft-hint`} value={gpu.draft_gpu_id ?? ''} options={options} onChange={value => patch({ draft_gpu_id: value || null })} disabled={disabled || devices.length === 0} /></label><p id={`${id}-draft-hint`} className="app-section-hint">{help.gpuDraft}</p></div>
+      <div>{onDraftDeviceChange && <label>{choice.draftMode}<CustomSelect ariaLabel={choice.draftMode} value={manual ? 'manual' : 'list'} disabled={disabled}
+        options={[{ value: 'list', label: choice.deviceList }, { value: 'manual', label: choice.deviceManual }]}
+        onChange={value => { setManualDraft(value === 'manual'); if (value === 'list') onDraftDeviceChange(''); }} /></label>}
+        {manual ? <><label htmlFor={`${id}-draft-device`}>{choice.draftDevice}</label><input id={`${id}-draft-device`} className="app-input" value={draftDevice} disabled={disabled}
+          aria-describedby={`${id}-draft-hint`} onChange={event => onDraftDeviceChange?.(event.target.value)} /></>
+          : <label>{t('ui.gpuDraft')}<CustomSelect ariaLabel={t('ui.gpuDraft')} ariaDescribedBy={`${id}-draft-hint`} value={gpu.draft_gpu_id ?? ''} options={options} onChange={value => patch({ draft_gpu_id: value || null })} disabled={disabled || devices.length === 0} /></label>}
+        <p id={`${id}-draft-hint`} className="app-section-hint">{manual ? choice.draftDeviceHint : help.gpuDraft}</p>
+        {manual && !draftDevice.trim() && <p className="app-section-hint">{t('ui.gpuDraft')}: {options.find(option => option.value === gpu.draft_gpu_id)?.label ?? gpu.draft_gpu_id ?? copy.automatic}</p>}</div>
       <div><label>{t('ui.gpuSplitMode')}<CustomSelect ariaLabel={t('ui.gpuSplitMode')} ariaDescribedBy={`${id}-split-hint`} value={gpu.split_mode} options={['single', 'layer', 'row', 'tensor'].map(value => ({ value, label: value }))} onChange={value => patch({ split_mode: value as SplitMode })} disabled={disabled} /></label><p id={`${id}-split-hint`} className="app-section-hint">{help.gpuSplitMode}</p></div>
       <div><label>{copy.tensorSplit}<input className="app-input" aria-describedby={`${id}-weights-hint`} value={weights ?? gpu.tensor_split.join(', ')} disabled={disabled || gpu.gpu_ids.length < 2} onChange={event => {
         const raw = event.target.value; setWeights(raw);

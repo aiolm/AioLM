@@ -17,6 +17,7 @@ type SpecSelectKey = Extract<ServerTextKey, "spec_type" | "spec_draft_ngl">;
 type SpecTextKey = Extract<ServerTextKey, "spec_type" | "spec_draft_ngl" | "spec_draft_device" | "spec_draft_model">;
 
 interface Props {
+  showDraftBindings?: boolean;
   cfg: AppConfig;
   t: (key: UnifiedKey, vars?: TranslationVars) => string;
   disabled: boolean;
@@ -32,7 +33,7 @@ interface Props {
 
 /** Presentational: the "Speculative decoding" sub-section of the server tuning form. */
 export default function TuningSpeculativeSection({
-  cfg, t, disabled, numericDrafts, onNumericChange, onNumericCommit,
+  cfg, t, disabled, numericDrafts, onNumericChange, onNumericCommit, showDraftBindings = true,
   serverTextValue, serverSelectValue, selectServerText, onServerTextChange, commitServerText,
 }: Props) {
   const id = useTuningId();
@@ -125,7 +126,7 @@ export default function TuningSpeculativeSection({
           </div>
           <span id={`${id}-spec-draft-ngl-hint`} className="text-xs text-muted">{help.specDraftGpuLayers}</span></>}</TuningDefaultField>
         </div>
-        <div className="flex min-w-0 flex-col gap-1.5">
+        {showDraftBindings && <><div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
               <label htmlFor={`${id}-spec-draft-device`} className="text-sm text-ink">{t("ui.specDraftDeviceLabel")}</label>
@@ -166,7 +167,7 @@ export default function TuningSpeculativeSection({
           />
           <span id={`${id}-spec-draft-model-hint`} className="text-xs text-muted">{help.specDraftModel}</span>
           <TuningOptionMetadata fieldKey="spec_draft_model" />
-        </div>
+        </div></>}
       </div>
       <div className="mt-4 grid gap-4 app-form-grid">
         <NumericFieldGrid fields={MTP_FIELDS} cfg={cfg} drafts={numericDrafts} disabled={disabled} onChange={onNumericChange} onCommit={onNumericCommit} />

@@ -36,6 +36,8 @@ interface Props {
   showProjector?: boolean;
   showSpeculative?: boolean;
   showCacheTypes?: boolean;
+  /** The model settings dialog owns model and device selection separately. */
+  showDraftBindings?: boolean;
 }
 
 export default function TuningServerSection({
@@ -43,7 +45,7 @@ export default function TuningServerSection({
   serverTextValue, onServerTextChange, commitServerText, projectorEditable,
   serverSelectValue, selectServerText, showAdvanced = true,
   fields = SERVER_FIELDS, showFlashAttention = true, showProjector = true,
-  showSpeculative = true, showCacheTypes = true,
+  showSpeculative = true, showCacheTypes = true, showDraftBindings = true,
 }: Props) {
   const id = useTuningId();
   const { locale } = useI18n();
@@ -135,7 +137,7 @@ export default function TuningServerSection({
             <TuningOptionMetadata fieldKey="mmproj" />
           </div>}
 
-          {showSpeculative && <TuningSpeculativeSection
+          {showSpeculative && <TuningSpeculativeSection showDraftBindings={showDraftBindings}
             cfg={cfg}
             t={t}
             disabled={disabled}

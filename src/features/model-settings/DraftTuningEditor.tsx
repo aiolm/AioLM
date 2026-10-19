@@ -10,10 +10,9 @@ import TuningSamplingSection from '../tuning/TuningSamplingSection';
 import TuningReasoningSection from '../tuning/TuningReasoningSection';
 import { ADVANCED_SAMPLING_FIELDS, MTP_FIELDS, REASONING_FIELDS, SAMPLING_FIELDS, SERVER_FIELDS, type NumericKey, type ServerTextKey } from '../tuning/tuningFields';
 import { tuningDisplayConfig } from '../tuning/tuningResetState';
-import { resetAllTuning, resetTuningField } from '../../shared/config/tuningDefaults';
+import { resetTuningField } from '../../shared/config/tuningDefaults';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import type { useServerOptions } from '../tuning/useServerOptions';
-import { modelSettingsCopy } from './modelSettingsCopy';
 import { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /**
@@ -29,17 +28,15 @@ export type DraftPatch = (patch: Partial<AppConfig>) => void;
 export { BENCHMARK_CONTROLLED_KEYS } from './profileResetState';
 
 /** All handlers edit an in-memory draft. Persistence belongs to the dialog's caller. */
-export default function DraftTuningEditor({ cfg, section, disabled, benchmark, runtime, contextLimit, onChange, onInvalid, onResetDrafts }: {
+export default function DraftTuningEditor({ cfg, section, disabled, benchmark, runtime, contextLimit, onChange, onInvalid }: {
   cfg: AppConfig; section: string; disabled: boolean; benchmark: boolean;
   /** Context the selected model was trained for, when its header states one. */
   contextLimit?: number;
   runtime: ReturnType<typeof useServerOptions>; onChange: DraftPatch;
   onInvalid: (key: string, invalid: boolean) => void;
-  onResetDrafts: () => void;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const id = useId();
-  const copy = modelSettingsCopy[locale];
   const display = tuningDisplayConfig(cfg, runtime.options);
   const [numbers, setNumbers] = useState<Partial<Record<NumericKey, string>>>({});
   const [chatNumbers, setChatNumbers] = useState<Record<string, string>>({});
@@ -96,10 +93,9 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
   };
   const filterPatch = (patch: Partial<AppConfig>) => benchmark
     ? Object.fromEntries(Object.entries(patch).filter(([key]) => !BENCHMARK_CONTROLLED_KEYS.has(key))) as Partial<AppConfig> : patch;
-  const reset = (key?: string) => {
+  const reset = (key: string) => {
     clearDrafts(key);
-    onChange(filterPatch(key ? resetTuningField(cfg, key, tuningResetValues(runtime.options)) : resetAllTuning(tuningResetValues(runtime.options))));
-    if (!key) onResetDrafts();
+    onChange(filterPatch(resetTuningField(cfg, key, tuningResetValues(runtime.options))));
   };
   const textValue = (key: ServerTextKey) => String(display[key] ?? '');
   const text = (key: ServerTextKey, value: string) => onChange({ [key]: value });
@@ -114,9 +110,6 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
     return base.map(field => field.key === 'ctx_size' && ceiling !== field.max ? { ...field, max: ceiling } : field);
   }, [benchmark, contextLimit, cfg.ctx_size]);
   return <TuningIdScope.Provider value={id}><TuningOptionsContext.Provider value={runtime}><TuningDefaultsContext.Provider value={{ cfg, disabled, reset }}>
-    <div className="model-settings-presets">
-      <button type="button" className="app-button app-button--ghost app-button--sm" disabled={disabled} onClick={() => reset()}>{copy.reset}</button>
-    </div>
     {section === 'sampling' ? <TuningSamplingSection t={t} cfg={display} disabled={disabled} {...numericProps}
       chatOptionDrafts={chatNumbers} setChatOptionDrafts={setChatDrafts} chatOptionSelectModes={selectModes} setChatOptionSelectModes={setSelectModes}
       onChatOptionCommit={(field, value) => { const parsed = chatNumeric(field.key, value); if (parsed !== undefined) onChange({ chat_options: { ...cfg.chat_options, [field.key]: parsed } }); }}
@@ -127,7 +120,7 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
         reasoningBudgetMessageValue={textValue('reasoning_budget_message')} onReasoningBudgetMessageChange={value => text('reasoning_budget_message', value)}
         onReasoningBudgetMessageCommit={value => commitText('reasoning_budget_message', value)} />
         : <TuningServerSection t={t} cfg={display} disabled={disabled} {...numericProps} fields={section === 'adapters' ? [] : fields}
-          showFlashAttention={section !== 'adapters'} showCacheTypes={section !== 'adapters'} showProjector={false} showSpeculative={section === 'adapters'}
+          showFlashAttention={section !== 'adapters'} showCacheTypes={section !== 'adapters'} showProjector={false} showSpeculative={section === 'adapters'} showDraftBindings={false}
           updateFlash={flash_attn => onChange({ flash_attn })} serverTextValue={textValue} onServerTextChange={text} commitServerText={commitText} projectorEditable
           serverSelectValue={key => customText[key] || !optionsFor(key).includes(textValue(key)) ? 'custom' : textValue(key)}
           selectServerText={(key, value) => { setCustomText(previous => ({ ...previous, [key]: value === 'custom' })); if (value !== 'custom') text(key, value); }} />}

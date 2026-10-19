@@ -4,6 +4,7 @@ import { I18nProvider } from '../../shared/i18n/i18n';
 import type { DeviceReport, GpuPlacement } from '../../shared/api/types';
 import DraftGpuEditor from './DraftGpuEditor';
 import { emptyGpuPlacement } from '../../shared/runtime/sessionUtils';
+import { useState } from 'react';
 
 const device = { profile: { gpus: [
   { stable_id: 'gpu-a', name: 'Radeon 9700', vendor: 'amd', integrated: false, vram_mb: 16384 },
@@ -22,6 +23,32 @@ function mount(placement: GpuPlacement = twoGpus, devices = device) {
 }
 
 describe('DraftGpuEditor linkage', () => {
+  it('shows the saved manual placement without changing either field and switches explicitly to GPU selection', () => {
+    const onChange = vi.fn();
+    const manualChanges = vi.fn();
+    function Harness() {
+      const [manual, setManual] = useState('CUDA0,CUDA1');
+      return <DraftGpuEditor placement={{ ...twoGpus, draft_gpu_id: 'gpu-b' }} device={device} disabled={false} onChange={onChange}
+        draftDevice={manual} onDraftDeviceChange={value => { manualChanges(value); setManual(value); }} onInvalid={vi.fn()} />;
+    }
+    render(<I18nProvider initialLocale="en"><Harness /></I18nProvider>);
+    expect(screen.getByLabelText('Draft device names')).toHaveValue('CUDA0,CUDA1');
+    expect(screen.queryByRole('combobox', { name: 'Draft device' })).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled(); expect(manualChanges).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Draft device names'), { target: { value: 'none' } });
+    expect(manualChanges).toHaveBeenLastCalledWith('none');
+    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model device' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Choose a detected GPU' }));
+    expect(manualChanges).toHaveBeenLastCalledWith('');
+    expect(screen.queryByLabelText('Draft device names')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Draft device' })).toHaveTextContent('gpu-b');
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model device' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Enter device names' }));
+    expect(screen.getByLabelText('Draft device names')).toHaveValue('');
+    expect(screen.queryByRole('combobox', { name: 'Draft device' })).not.toBeInTheDocument();
+  });
+
   it('keeps weights editable in non-tensor modes while two GPUs are selected', () => {
     mount();
     expect(screen.getByLabelText('Tensor split (comma-separated weights)')).toBeEnabled();

@@ -79,12 +79,14 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   </div>;
 }
 
-export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section, collapseTools = false, hideDefaultsReset = false }: {
+export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking, section, collapseTools = false, hideDefaultsReset = false, editor = 'schema' }: {
   cfg: api.AppConfig; disabled: boolean; onChange: (patch: Partial<api.AppConfig>) => void; onInvalid: (key: string, invalid: boolean) => void;
   onChecking?: (checking: boolean) => void;
   section?: string;
   collapseTools?: boolean;
   hideDefaultsReset?: boolean;
+  /** A custom host owns primary controls and command import; discovered options remain available. */
+  editor?: 'schema' | 'custom';
 }) {
   const { locale } = useI18n(); const copy = providerCopy[locale];
   const provider = api.providerOf(cfg);
@@ -271,7 +273,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const advanced = !section || section === 'advanced';
   const managedOptions = collapseTools ? effective?.schema.options.filter(option => option.managed && option.managed !== 'discovery') ?? [] : [];
   return <div className="model-settings-fields">
-    {!collapseTools && <h3>{copy.options}</h3>}
+    {!collapseTools && editor === 'schema' && <h3>{copy.options}</h3>}
     {external && !hideDefaultsReset && <div>
       <button type="button" className="app-button app-button--secondary" disabled={disabled || checking || !effective || ['stale', 'unchecked'].includes(effective.help_state)} onClick={() => {
         if (!effective) return;
@@ -288,7 +290,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
-    {effective && <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
+    {effective && (editor === 'schema' || effective.schema.options.length > 0) && <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
       onChange={next => { setDefaultsRestored(false); onChange({ provider_options: { ...cfg.provider_options, [provider]: next } }); }}
       filter={option => (!collapseTools || !option.managed || option.managed === 'discovery') && inGroupSection(option.group) && (option.target === 'request' || !runtimeFlags || !effective.compat_keys.includes(option.key)
         || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined)}
@@ -307,12 +309,12 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       {managedOptions.map(option => <SchemaOptionField key={option.key} option={option} stored={values[option.key]} disabled onStore={value => update(option.key, value)} />)}
     </section>}
     {provider !== 'llama.cpp' && !api.isExternalProvider(provider) && <OptionField option={{ key: 'extra_args', target: 'launch', group: 'advanced', kind: { type: 'json' } }} value={values.extra_args} disabled={disabled} onChange={value => update('extra_args', value)} onInvalid={onInvalid} />}
-    <label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
+    {editor === 'schema' && <><label>{copy.import}<textarea className="app-textarea" disabled={disabled} value={paste} onChange={event => { importRequest.current += 1; setPaste(event.target.value); }} /></label>
     <label>{commandImportCopy[locale].syntax}<CustomSelect<api.CommandSyntax | ''> ariaLabel={commandImportCopy[locale].syntax}
       value={importSyntax} disabled={disabled}
       options={[{ value: '', label: commandImportCopy[locale].choose }, { value: 'windows', label: commandImportCopy[locale].windows }, { value: 'posix', label: commandImportCopy[locale].posix }]}
       onChange={value => { importRequest.current += 1; setImportSyntax(value); }} /></label>
-    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button>
+    <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim() || !importSyntax} onClick={importCommand}>{copy.import}</button></>}
     <button type="button" className="app-button app-button--secondary" disabled={disabled || runtimeNeeded} onClick={() => {
       const source = cfg;
       const request = ++previewRequest.current;

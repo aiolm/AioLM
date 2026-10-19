@@ -56,6 +56,11 @@ function mount(props: Partial<ModelSettingsDialogProps> = {}, locale: Locale = '
   render(<I18nProvider initialLocale={locale}><Harness /></I18nProvider>);
   return { onApply, onClose, onProfileCommit, onReloadProfile, getSaved: () => persisted };
 }
+function rawChat() {
+  const direct = screen.getByRole('button', { name: 'Enter arguments directly', hidden: true });
+  if (direct.getAttribute('aria-pressed') !== 'true') fireEvent.click(direct);
+  return screen.getByLabelText('Extra request JSON');
+}
 function numeric(key: string) { return document.querySelector<HTMLInputElement>(`input[id$="-${key}"]`)!; }
 function openOptions() {
   const runtimeNext = screen.queryByRole('button', { name: 'Continue to profile' });
@@ -369,6 +374,62 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('option', { name: 'language.gguf' })).toBeVisible();
     expect(screen.queryByRole('option', { name: 'Snapshot model' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'mmproj.gguf' })).not.toBeInTheDocument();
+  });
+
+  it('edits each companion model once, retaining arbitrary Unicode paths in the saved profile', async () => {
+    const { onProfileCommit } = mount({ initialSection: 'adapters' });
+    const projector = screen.getByRole('combobox', { name: 'Vision projector' });
+    const draft = screen.getByRole('combobox', { name: 'Draft model' });
+    expect(screen.queryByRole('textbox', { name: /Draft model|projector/i })).not.toBeInTheDocument();
+    expect(document.querySelector('input[id$="-spec-draft-model"]')).not.toBeInTheDocument();
+    expect(document.querySelector('input[id$="-spec-draft-device"]')).not.toBeInTheDocument();
+    fireEvent.change(projector, { target: { value: 'models/별도 폴더/projector.gguf' } });
+    fireEvent.change(draft, { target: { value: 'models/별도 폴더/draft.gguf' } });
+    expect(draft).toHaveValue('models/별도 폴더/draft.gguf');
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({
+      mmproj: 'models/별도 폴더/projector.gguf', spec_draft_model: 'models/별도 폴더/draft.gguf',
+    }), expect.anything(), true));
+  });
+
+  it('keeps one broad reset and one llama command importer while preserving field reset', async () => {
+    mount({ initialSection: 'tuning' });
+    expect(screen.getAllByRole('button', { name: 'Reset options to defaults' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Reset to runtime defaults' })).not.toBeInTheDocument();
+    const fieldReset = document.querySelector<HTMLButtonElement>('[data-default-field="ctx_size"] button')!;
+    expect(fieldReset).toBeEnabled();
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.click(fieldReset);
+    expect(numeric('ctx_size')).toHaveValue(4096);
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+    expect(screen.queryByRole('button', { name: 'Import command' })).not.toBeInTheDocument();
+    const paste = document.querySelector<HTMLTextAreaElement>('#model-settings-paste')!;
+    expect(paste).toBeVisible();
+    fireEvent.change(paste, { target: { value: 'llama-server --ctx-size 8192 --temp 0.4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply pasted settings' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
+    expect(numeric('temperature')).toHaveValue(0.4);
+  });
+
+  it('keeps native Windows path prefixes when choosing a catalog companion while displaying a readable path', async () => {
+    const path = String.raw`\\?\C:\Synthetic Models\한글 draft.gguf`;
+    vi.mocked(api.listModels).mockResolvedValueOnce({ models: [{ name: 'Catalog draft', path, size_mb: 1, is_vision: false }], truncated: false });
+    const { onProfileCommit } = mount({ initialSection: 'adapters' });
+    await waitFor(() => expect(api.listModels).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Draft model' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Catalog draft' }));
+    const input = screen.getByRole('combobox', { name: 'Draft model' });
+    expect(input).toHaveValue(String.raw`C:\Synthetic Models\한글 draft.gguf`);
+    // A no-op edit must not replace the native access path with its display form.
+    fireEvent.change(input, { target: { value: String.raw`C:\Synthetic Models\한글 draft.gguf` } });
+    const save = screen.getByRole('button', { name: 'Save profile' });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save); fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ spec_draft_model: path }), expect.anything(), true));
   });
 
   it.each(['unsupported', 'readiness'] as const)('keeps a saved model visible and blocks launch for a newly selected runtime %s failure', async failure => {
@@ -908,14 +969,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
 
   it('keeps invalid inputs while browsing profile previews and allows reverting the working draft', async () => {
     const { onProfileCommit } = mount({ initialSection: 'advanced' });
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    fireEvent.change(rawChat(), { target: { value: '{' } });
     fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     expect(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' })).toBeDisabled();
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
+    expect(rawChat()).toHaveValue('{');
     expect(onProfileCommit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
-    await waitFor(() => expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}'));
+    await waitFor(() => expect(rawChat()).toHaveValue('{}'));
   });
 
   it('preserves benchmark workload values and inherits the other tuning fields when applying the Default profile', async () => {
@@ -995,7 +1056,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.blur(numeric('temperature'));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
     fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    fireEvent.change(rawChat(), { target: { value: '{' } });
     fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Set as default' }));
@@ -1007,7 +1068,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(numeric('temperature')).toHaveValue(1.3);
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Working prompt');
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
+    expect(rawChat()).toHaveValue('{');
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByText('Discard unsaved changes?')).toBeVisible();
@@ -1050,7 +1111,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(custom, 'Saved prompt', source);
     const saved = { ...custom, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(custom.active_model)]: application } } };
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    fireEvent.change(rawChat(), { target: { value: '{' } });
     fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Original settings ·/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
@@ -1058,7 +1119,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Original settings · Editing' })).toBeVisible();
     expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options reset to defaults.');
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
+    expect(rawChat()).toHaveValue('{}');
     expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('');
     expect(numeric('ctx_size')).toHaveValue(4096);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' }), document.querySelector('.model-settings-footer')?.textContent ?? '').toBeEnabled());
@@ -1067,7 +1128,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Original settings · Editing' })).not.toBeInTheDocument());
     expect(numeric('ctx_size')).toHaveValue(16384);
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
+    expect(rawChat()).toHaveValue(JSON.stringify(custom.chat_options, null, 2));
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
   });
@@ -1101,13 +1162,13 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saved = { ...defaults, settings_profiles: { ...emptyProfileLibrary(), entries: [source],
       applied: { [profileTargetKey(cfg.active_model)]: application } } };
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
-    fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
+    fireEvent.change(rawChat(), { target: { value: '{' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Reset options to defaults' }));
     expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Options reset to defaults.');
-    expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
+    expect(rawChat()).toHaveValue('{}');
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(getSaved()).toEqual(saved);
     expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
