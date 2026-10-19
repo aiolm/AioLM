@@ -1374,11 +1374,22 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
     let mut streamed = api
         .post(
             "/v1/responses",
-            &json!({"model":"m.gguf","input":"three","stream":true}),
+            &json!({"model":"m.gguf","input":"three","stream":true,"previous_response_id":second["id"]}),
         )
         .send()
         .await
         .unwrap();
+    let streamed_request = upstream.requests()[2].json();
+    assert_eq!(
+        streamed_request["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"}
+        ])
+    );
     let events = sse_events(&drain(&mut streamed).await);
     let names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
@@ -1392,6 +1403,29 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
     );
     assert_eq!(events[3].1["response"]["output_text"], "Hello");
     let streamed_id = events[3].1["response"]["id"].as_str().unwrap();
+    let fourth: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"four","previous_response_id":streamed_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        upstream.requests()[3].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"},
+            {"role":"assistant","content":"Hello","reasoning_content":""},
+            {"role":"user","content":"four"}
+        ])
+    );
     assert_eq!(
         api.get(&format!("/v1/responses/{streamed_id}"))
             .send()
@@ -1417,6 +1451,14 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
             .status(),
         404
     );
+    assert_eq!(
+        api.get(&format!("/v1/responses/{}", fourth["id"].as_str().unwrap()))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     let unknown_history = api
         .post(
             "/v1/responses",
@@ -1426,6 +1468,267 @@ async fn responses_keep_their_history_and_stream_on_the_same_listener() {
         .await
         .unwrap();
     assert_eq!(unknown_history.status(), 404);
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn a_responses_descendant_keeps_history_after_its_ancestor_is_deleted() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, completion("done")).await;
+    api.load_default(&upstream, "worker", "m.gguf");
+
+    let first: Value = api
+        .post("/v1/responses", &json!({"model":"m.gguf","input":"one"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let first_id = first["id"].as_str().unwrap().to_string();
+    let second: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"two","previous_response_id":first_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second_id = second["id"].as_str().unwrap().to_string();
+
+    let removed = api
+        .http
+        .delete(api.url(&format!("/v1/responses/{first_id}")))
+        .bearer_auth(EXTERNAL_KEY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), 200);
+    assert_eq!(
+        api.get(&format!("/v1/responses/{first_id}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let direct_ancestor = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"bad","previous_response_id":first_id}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(direct_ancestor.status(), 404);
+    assert_eq!(
+        upstream.count(),
+        2,
+        "removed history must not reach upstream"
+    );
+
+    let third: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"three","previous_response_id":second_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(third["output_text"], "done");
+    assert_eq!(
+        upstream.requests()[2].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"}
+        ])
+    );
+    let cancelled = api
+        .http
+        .post(api.url(&format!("/v1/responses/{second_id}/cancel")))
+        .bearer_auth(EXTERNAL_KEY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), 200);
+    assert_eq!(
+        api.get(&format!("/v1/responses/{second_id}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let fourth_id = third["id"].as_str().unwrap();
+    let fourth: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"m.gguf","input":"four","previous_response_id":fourth_id}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fourth["output_text"], "done");
+    assert_eq!(
+        upstream.requests()[3].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"two"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"three"},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"four"}
+        ])
+    );
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn responses_can_continue_across_loaded_sessions_without_moving_history_into_the_session() {
+    let api = TestApi::start().await;
+    let default = Upstream::json(200, completion("default")).await;
+    let named = Upstream::json(200, completion("named")).await;
+    api.load_default(&default, "worker-default", "default.gguf");
+    api.load_named("s-named", &named, "worker-named", "named.gguf");
+
+    let first: Value = api
+        .post(
+            "/v1/responses",
+            &json!({"model":"default.gguf","input":"one"}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let second: Value = api
+        .post(
+            "/v1/responses",
+            &json!({
+                "model":"named.gguf",
+                "input":"two",
+                "previous_response_id":first["id"]
+            }),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        default.requests()[0].headers["authorization"],
+        "Bearer worker-default"
+    );
+    assert_eq!(
+        named.requests()[0].headers["authorization"],
+        "Bearer worker-named"
+    );
+    assert_eq!(
+        named.requests()[0].json()["messages"],
+        json!([
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"default"},
+            {"role":"user","content":"two"}
+        ])
+    );
+    assert_eq!(second["model"], "named.gguf");
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn responses_eviction_keeps_the_entry_cap_and_complete_retained_histories() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::json(200, completion("answer")).await;
+    api.load_default(&upstream, "worker", "m.gguf");
+    let mut ids = Vec::with_capacity(MAX_RESPONSES + 1);
+    let mut previous_id = None;
+    for index in 0..MAX_RESPONSES {
+        let mut body = json!({"model":"m.gguf","input":format!("turn-{index}")});
+        if let Some(previous_id) = previous_id.as_deref() {
+            body["previous_response_id"] = json!(previous_id);
+        }
+        let response: Value = api
+            .post("/v1/responses", &body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = response["id"].as_str().unwrap().to_string();
+        previous_id = Some(id.clone());
+        ids.push(id);
+    }
+    let filler: Value = api
+        .post("/v1/responses", &json!({"model":"m.gguf","input":"filler"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    ids.push(filler["id"].as_str().unwrap().to_string());
+
+    let mut available = Vec::new();
+    for (index, id) in ids.iter().enumerate() {
+        let response = api
+            .get(&format!("/v1/responses/{id}"))
+            .send()
+            .await
+            .unwrap();
+        match response.status().as_u16() {
+            200 => available.push(index),
+            404 => {}
+            status => panic!("unexpected status {status} for response {index}"),
+        }
+    }
+    assert_eq!(available.len(), MAX_RESPONSES);
+    assert_eq!(ids.len() - available.len(), 1);
+
+    let retained_index = *available
+        .iter()
+        .filter(|index| **index < MAX_RESPONSES)
+        .max()
+        .unwrap();
+    let continuation: Value = api
+        .post(
+            "/v1/responses",
+            &json!({
+                "model":"m.gguf",
+                "input":"continuation",
+                "previous_response_id":ids[retained_index]
+            }),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(continuation["output_text"], "answer");
+    let messages = upstream.requests().last().unwrap().json()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(messages.len(), (retained_index + 1) * 2 + 1);
+    assert_eq!(messages.first().unwrap()["content"], "turn-0");
+    assert_eq!(messages.last().unwrap()["content"], "continuation");
     eventually(|| api.active() == 0).await;
 }
 

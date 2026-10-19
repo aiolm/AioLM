@@ -129,10 +129,57 @@ fn take_sse_line<'a>(pending: &'a str, cursor: &mut usize) -> Option<&'a str> {
     Some(line)
 }
 
+struct HistoryNode {
+    parent: Option<Arc<HistoryNode>>,
+    turn: Vec<Value>,
+}
+
+impl HistoryNode {
+    fn append(
+        parent: Option<Arc<HistoryNode>>,
+        mut turn: Vec<Value>,
+        assistant: Value,
+    ) -> Arc<Self> {
+        turn.push(assistant);
+        Arc::new(Self { parent, turn })
+    }
+
+    fn flatten(&self) -> Vec<Value> {
+        let mut nodes = Vec::new();
+        let mut current = Some(self);
+        let mut capacity = 0;
+        while let Some(node) = current {
+            capacity += node.turn.len();
+            nodes.push(node);
+            current = node.parent.as_deref();
+        }
+        let mut messages = Vec::with_capacity(capacity);
+        for node in nodes.into_iter().rev() {
+            messages.extend(node.turn.iter().cloned());
+        }
+        messages
+    }
+}
+
+impl Drop for HistoryNode {
+    fn drop(&mut self) {
+        let mut parent = self.parent.take();
+        // Detach unique ancestors before each node drops so a deep chain does
+        // not recurse through Arc's field destructor. `into_inner` consumes a
+        // non-unique Arc without a separate failed-unwrapping drop race.
+        while let Some(node) = parent {
+            match Arc::into_inner(node) {
+                Some(mut owned) => parent = owned.parent.take(),
+                None => break,
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct StoredResponse {
     response: Value,
-    messages: Vec<Value>,
+    history: Arc<HistoryNode>,
 }
 
 struct Ctx {
@@ -710,26 +757,28 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
     })?;
     let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
     let previous_id = body.get("previous_response_id").and_then(Value::as_str);
-    let history = if let Some(previous_id) = previous_id {
+    let parent_history = if let Some(previous_id) = previous_id {
         let history = responses
             .lock()
             .await
             .get(previous_id)
-            .map(|stored| stored.messages.clone());
+            .map(|stored| Arc::clone(&stored.history));
         let Some(history) = history else {
             write_json_response(stream, 404, json!({"error":{"type":"not_found","message":format!("previous_response_id {previous_id} was not found")}})).await?;
             return Ok(());
         };
-        history
+        Some(history)
     } else {
-        Vec::new()
+        None
     };
-    let mut messages = history;
-    messages.extend(
-        responses_input_to_openai(&body)
-            .map_err(|message| ApiError::new(400, "invalid_request", message))?,
-    );
-    let openai_request = responses_to_openai(&body, messages.clone())
+    let turn_messages = responses_input_to_openai(&body)
+        .map_err(|message| ApiError::new(400, "invalid_request", message))?;
+    let mut request_messages = parent_history
+        .as_deref()
+        .map(HistoryNode::flatten)
+        .unwrap_or_default();
+    request_messages.extend(turn_messages.iter().cloned());
+    let openai_request = responses_to_openai(&body, request_messages)
         .map_err(|message| ApiError::new(400, "invalid_request", message))?;
     let stream_requested = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     // The lease counts this request as active on its model until the handler
@@ -760,7 +809,8 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
             response,
             &body,
             response_id,
-            messages,
+            parent_history,
+            turn_messages,
             Arc::clone(responses),
         )
         .await?;
@@ -769,9 +819,9 @@ async fn handle_responses(stream: &mut TcpStream, ctx: &Ctx, request: Request) -
             .await?
             .map_err(|message| ApiError::new(502, "bad_upstream_response", message))?;
         let assistant = openai_assistant_message(&value);
-        messages.push(assistant);
         let response_value = openai_to_responses(&value, &body, &response_id);
-        remember_response(responses, response_id, response_value.clone(), messages).await;
+        let history = HistoryNode::append(parent_history, turn_messages, assistant);
+        remember_response(responses, response_id, response_value.clone(), history).await;
         write_json_response(stream, 200, response_value).await?;
     }
     Ok(())
@@ -955,10 +1005,10 @@ async fn remember_response(
     responses: &Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
     id: String,
     response: Value,
-    messages: Vec<Value>,
+    history: Arc<HistoryNode>,
 ) {
     let mut guard = responses.lock().await;
-    guard.insert(id, StoredResponse { response, messages });
+    guard.insert(id, StoredResponse { response, history });
     while guard.len() > MAX_RESPONSES {
         if let Some(key) = guard.keys().next().cloned() {
             guard.remove(&key);
@@ -973,7 +1023,8 @@ async fn stream_responses(
     response: reqwest::Response,
     request: &Value,
     response_id: String,
-    mut messages: Vec<Value>,
+    parent_history: Option<Arc<HistoryNode>>,
+    turn_messages: Vec<Value>,
     responses: Arc<tokio::sync::Mutex<HashMap<String, StoredResponse>>>,
 ) -> Result<(), String> {
     write_stream_head(stream, 200, "text/event-stream", None).await?;
@@ -1021,8 +1072,6 @@ async fn stream_responses(
             }
         }
     }
-    messages
-        .push(json!({"role":"assistant","content":state.text,"reasoning_content":state.reasoning}));
     let completed = response_value(
         &response_id,
         model,
@@ -1031,7 +1080,12 @@ async fn stream_responses(
         state.usage.unwrap_or_else(|| json!({})),
         "completed",
     );
-    remember_response(&responses, response_id, completed.clone(), messages).await;
+    let history = HistoryNode::append(
+        parent_history,
+        turn_messages,
+        json!({"role":"assistant","content":state.text,"reasoning_content":state.reasoning}),
+    );
+    remember_response(&responses, response_id, completed.clone(), history).await;
     write_event(
         stream,
         "response.completed",
@@ -1388,6 +1442,129 @@ fn openai_to_anthropic(value: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_nodes_flatten_in_order_and_share_branch_ancestors() {
+        let root = HistoryNode::append(
+            None,
+            vec![json!({"role":"user","content":"one"})],
+            json!({"role":"assistant","content":"one answer"}),
+        );
+        let left = HistoryNode::append(
+            Some(Arc::clone(&root)),
+            vec![json!({"role":"user","content":"left"})],
+            json!({"role":"assistant","content":"left answer"}),
+        );
+        let right = HistoryNode::append(
+            Some(Arc::clone(&root)),
+            vec![json!({"role":"user","content":"right"})],
+            json!({"role":"assistant","content":"right answer"}),
+        );
+
+        assert_eq!(Arc::strong_count(&root), 3);
+        assert_eq!(
+            left.flatten(),
+            vec![
+                json!({"role":"user","content":"one"}),
+                json!({"role":"assistant","content":"one answer"}),
+                json!({"role":"user","content":"left"}),
+                json!({"role":"assistant","content":"left answer"}),
+            ]
+        );
+        assert_eq!(
+            right.flatten(),
+            vec![
+                json!({"role":"user","content":"one"}),
+                json!({"role":"assistant","content":"one answer"}),
+                json!({"role":"user","content":"right"}),
+                json!({"role":"assistant","content":"right answer"}),
+            ]
+        );
+        drop(right);
+        assert_eq!(Arc::strong_count(&root), 2);
+        drop(left);
+        assert_eq!(Arc::strong_count(&root), 1);
+    }
+
+    #[test]
+    fn dropping_a_deep_history_chain_does_not_recurse_through_parents() {
+        let mut history = None;
+        for index in 0..(MAX_RESPONSES * 64) {
+            history = Some(HistoryNode::append(
+                history,
+                vec![json!({"role":"user","content":index})],
+                json!({"role":"assistant","content":index}),
+            ));
+        }
+        let history = history.unwrap();
+        assert_eq!(history.flatten().len(), MAX_RESPONSES * 64 * 2);
+        drop(history);
+    }
+
+    #[test]
+    fn a_descendant_keeps_history_after_its_parent_entry_is_removed() {
+        let parent = HistoryNode::append(
+            None,
+            vec![json!({"role":"user","content":"parent"})],
+            json!({"role":"assistant","content":"answer"}),
+        );
+        let descendant = HistoryNode::append(
+            Some(Arc::clone(&parent)),
+            vec![json!({"role":"user","content":"next"})],
+            json!({"role":"assistant","content":"next answer"}),
+        );
+        drop(parent);
+        assert_eq!(
+            descendant.flatten(),
+            vec![
+                json!({"role":"user","content":"parent"}),
+                json!({"role":"assistant","content":"answer"}),
+                json!({"role":"user","content":"next"}),
+                json!({"role":"assistant","content":"next answer"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn concurrent_deep_branch_owner_drops_are_bounded() {
+        const DEPTH: usize = MAX_RESPONSES * 4;
+        let mut shared = None;
+        for index in 0..DEPTH {
+            shared = Some(HistoryNode::append(
+                shared,
+                vec![json!({"role":"user","content":index})],
+                json!({"role":"assistant","content":index}),
+            ));
+        }
+        let shared = shared.unwrap();
+        let branches = (0..3)
+            .map(|index| {
+                HistoryNode::append(
+                    Some(Arc::clone(&shared)),
+                    vec![json!({"role":"user","content":format!("branch-{index}")})],
+                    json!({"role":"assistant","content":format!("answer-{index}")}),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(Arc::strong_count(&shared), 4);
+
+        let barrier = Arc::new(std::sync::Barrier::new(branches.len() + 1));
+        let owners = branches
+            .into_iter()
+            .map(|branch| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    drop(branch);
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        drop(shared);
+        for owner in owners {
+            owner.join().unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn active_stream_can_outlive_the_idle_read_timeout() {
