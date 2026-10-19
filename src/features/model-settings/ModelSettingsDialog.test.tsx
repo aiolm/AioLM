@@ -16,6 +16,7 @@ import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
   providerRuntimeOptions: vi.fn(async () => []),
+  providerOptionIssues: vi.fn(async () => []),
   providerOptionSchema: vi.fn(async () => effectiveSchema([])),
   runtimeHelpTarget: vi.fn(() => new Promise(() => undefined)),
   providerCatalog: async () => [{ id: 'llama.cpp', engine: 'llama.cpp', server: 'llama-server', availability: { supported: true, detail: '' }, options: [] }],
@@ -45,17 +46,131 @@ function mount(props: Partial<ModelSettingsDialogProps> = {}, locale: Locale = '
   const onReloadProfile = props.onReloadProfile ?? vi.fn(async () => ({ config: persisted, application: appliedProfile(persisted)! }));
   function Harness() {
     const [open, setOpen] = useState(true);
-    return <ModelSettingsDialog open={open} initialConfig={structuredClone(cfg)} mode="default" targetLabel="Default execution"
+    return <ModelSettingsDialog open={open} initialConfig={structuredClone(cfg)} mode="default" targetLabel="Default execution" initialSection="model"
       {...props} onProfileCommit={onProfileCommit} onReloadProfile={onReloadProfile} onApply={onApply} onClose={() => { onClose(); setOpen(false); }} />;
   }
   render(<I18nProvider initialLocale={locale}><Harness /></I18nProvider>);
   return { onApply, onClose, onProfileCommit, onReloadProfile, getSaved: () => persisted };
 }
 function numeric(key: string) { return document.querySelector<HTMLInputElement>(`input[id$="-${key}"]`)!; }
+function openOptions() {
+  const runtimeNext = screen.queryByRole('button', { name: 'Continue to profile' });
+  if (runtimeNext) fireEvent.click(runtimeNext);
+  const profileNext = screen.queryByRole('button', { name: 'Use this profile and adjust options' });
+  if (profileNext) fireEvent.click(profileNext);
+}
 
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('guides ordinary entry through runtime and profile before exposing option editors', async () => {
+    const { onApply, onProfileCommit } = mount({ initialSection: undefined });
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Settings profiles' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Model' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Profiles' })).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+  it('requires a runtime selection before profile or option navigation', () => {
+    const onManageRuntimes = vi.fn();
+    mount({ initialConfig: { ...cfg, active_backend: '', active_build: '' }, initialSection: 'advanced', onManageRuntimes });
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+    expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_backend: '', active_build: '' }));
+  });
+  it('keeps the option draft on backward navigation and confirms before replacing it with another profile', async () => {
+    const alternate = captureProfile({ ...cfg, ctx_size: 12288 }, 'Alternate settings', 'global', '');
+    const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg,
+      settings_profiles: { ...emptyProfileLibrary(), entries: [defaultSettingsProfile(), alternate] } } });
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    fireEvent.blur(numeric('ctx_size'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to profile' }));
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Alternate settings' }));
+    expect(screen.getByRole('button', { name: 'Use this profile and adjust options' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    expect(screen.getByText('Discard unsaved changes?')).toBeVisible();
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    expect(numeric('ctx_size')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Alternate settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument());
+    openOptions();
+    expect(numeric('ctx_size')).toHaveValue(12288);
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+  });
+  it('focuses the new stage heading and exposes the current stage to assistive technology', async () => {
+    mount({ initialSection: undefined });
+    expect(screen.getByRole('button', { name: /^Choose runtime/ })).toHaveAttribute('aria-current', 'step');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose profile' })).toHaveFocus());
+    expect(screen.getByRole('button', { name: /^Choose profile/ })).toHaveAttribute('aria-current', 'step');
+    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Adjust options' })).toHaveFocus());
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose runtime' })).toHaveFocus());
+  });
+  it('shows only the chosen external engine profiles and reconfirms after changing runtime builds', async () => {
+    const provider = 'custom.new-engine';
+    const selected: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: 'build-one' };
+    const own = captureProfile(selected, 'New engine profile', 'global', '');
+    const other = captureProfile(cfg, 'Other engine profile', 'global', '');
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'New engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue(['build-one', 'build-two'].map(id => ({
+      id, provider, engine: 'New engine', server: 'openai-v1', accelerator: 'synthetic', installation: 'external', location: 'synthetic', available: true, problems: [],
+    })));
+    const { onApply, onProfileCommit } = mount({ initialSection: undefined, initialConfig: { ...selected,
+      settings_profiles: { ...emptyProfileLibrary(), entries: [own, other] } } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    expect(screen.getByRole('button', { name: /^New engine profile/ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Other engine profile/ })).not.toBeInTheDocument();
+    openOptions();
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose runtime' })).toHaveFocus());
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
+    await screen.findByRole('option', { name: 'build-two · synthetic · external' });
+    expect(screen.getByRole('combobox', { name: 'Runtime' })).toBeEnabled();
+    // Async inventory and schema updates can replace the portalled list.
+    fireEvent.click(screen.getByRole('option', { name: 'build-two · synthetic · external' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Runtime' })).toHaveTextContent('build-two'));
+    expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
+    fireEvent.click(screen.getByRole('option', { name: 'build-one · synthetic · external' }));
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    openOptions();
+    expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+  });
+  it('does not steal focus from a control used before the stage focus frame', async () => {
+    mount({ initialSection: undefined });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
+    const picker = screen.getByRole('combobox', { name: 'Settings profiles' });
+    picker.focus();
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(picker).toHaveFocus();
+  });
   it('shows external schema options together without assuming performance or reasoning categories', async () => {
     const provider = 'custom.unfamiliar';
     const options = [
@@ -66,7 +181,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.mocked(api.providerOptionSchema).mockResolvedValueOnce(effectiveSchema([], options));
     vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
     mount({ initialConfig: { ...cfg, active_provider: provider, active_runtime: 'specific-build' }, initialSection: 'reasoning' });
-    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Model', 'Runtime options', 'Conversation instructions', 'Profiles']);
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Model', 'Runtime options', 'Conversation instructions']);
     const tab = screen.getByRole('tab', { name: 'Runtime options' });
     expect(tab).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', tab.id);
@@ -76,11 +191,12 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByLabelText('Default system prompt')).toBeVisible();
     expect(screen.getByText(/AioLM conversation instructions/)).toBeVisible();
   });
-  it('opens external runtime setup directly at options and keeps runtime management beside the selectors', async () => {
+  it('opens external runtime setup at selection and keeps runtime management beside the selectors', async () => {
     const onManageRuntimes = vi.fn();
     mount({ initialConfig: { ...cfg, active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }, initialSection: 'setup', onManageRuntimes });
     expect(screen.queryByRole('tab', { name: 'Runtime connection' })).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Runtime options' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     const context = document.querySelector<HTMLElement>('.model-settings-runtime-selection')!;
     fireEvent.click(within(context).getByRole('button', { name: 'Manage runtimes' }));
     expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_provider: 'custom.unfamiliar', active_runtime: 'specific-build' }));
@@ -161,7 +277,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const first = { ...captureProfile(initialConfig, 'Initial setup', 'global', ''), id: 'initial-setup' };
     const selected = { ...captureProfile({ ...initialConfig, temperature: 0.3 }, 'Selected setup', 'global', ''), id: 'selected-setup' };
     const library = { ...emptyProfileLibrary(), entries: [first, selected], default_profile_id: first.id, legacy_imported: true };
-    const { onProfileCommit } = mount({ initialConfig: { ...initialConfig, settings_profiles: library } });
+    const { onProfileCommit } = mount({ initialConfig: { ...initialConfig, settings_profiles: library }, initialSection: 'profiles' });
     fireEvent.click(screen.getByRole('combobox', { name: 'Settings profiles' }));
     fireEvent.click(screen.getByRole('option', { name: 'Global · Selected setup' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalled());
@@ -200,8 +316,11 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.mocked(api.listModels).mockImplementationOnce(scan).mockImplementationOnce(scan);
     const { onApply } = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
     fireEvent.click(screen.getByRole('option', { name: 'narrow · synthetic · external' }));
+    expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
+    openOptions();
     await waitFor(() => expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible());
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
     expect(screen.getByRole('textbox', { name: 'Model path' })).toHaveValue('models/snapshot');
@@ -213,17 +332,31 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.spyOn(api, 'providerCatalog').mockResolvedValue(['llama.cpp', 'vllm', 'mlx-vlm'].map(id => ({ id: id as api.ProviderId,
       engine: id, server: 'synthetic-server', availability: { supported: true, detail: '' }, options: [] })));
     vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([
+      { id: 'b123-cpu', provider: 'llama.cpp', backend: 'cpu', build: 'b123', engine: 'llama.cpp', server: 'llama-server', accelerator: 'cpu', installation: 'managed', location: 'synthetic', available: true, problems: [] },
+      { id: 'synthetic', provider: 'vllm', engine: 'vllm', server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'synthetic', available: true, problems: [] },
+    ]);
     mount({ initialSection: 'sampling' });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved llama prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
     fireEvent.click(screen.getByRole('option', { name: 'vLLM' }));
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('combobox', { name: 'Runtime' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'synthetic · synthetic · external' }));
+    openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue(''));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved vLLM prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
     fireEvent.click(screen.getByRole('option', { name: 'llama.cpp' }));
+    openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved llama prompt'));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     fireEvent.click(screen.getByRole('combobox', { name: 'Inference engine' }));
     fireEvent.click(screen.getByRole('option', { name: 'vLLM' }));
+    openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue('Unsaved vLLM prompt'));
   });
 
@@ -354,8 +487,11 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('dialog', { name: 'Model & settings' })).not.toBeInTheDocument();
   });
 
-  it('places reset before profile save in the full profile banner', () => {
+  it('offers reset and save only after selecting the profile', () => {
     mount({ initialSection: 'profiles' });
+    expect(screen.queryByRole('button', { name: 'Save profile' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reset all to defaults' })).not.toBeInTheDocument();
+    openOptions();
     const banner = screen.getByRole('button', { name: 'Save profile' }).closest('.settings-profile-banner')!;
     expect(within(banner as HTMLElement).getAllByRole('button').map(button => button.textContent)).toEqual([
       'Reset all to defaults', 'Save profile', 'Save as new',
@@ -369,7 +505,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const preview = within(screen.getByRole('region', { name: 'Preview' }));
     expect(preview.getByRole('button', { name: 'Delete profile' })).toBeDisabled();
     expect(preview.queryByRole('button', { name: 'Select this profile' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Save profile' })).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Preset profiles' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
@@ -497,12 +633,10 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const options = screen.getAllByRole('option').map(option => option.textContent ?? '');
     expect(options).toContain('b123 (b123-cpu) · cpu · managed');
     expect(options.some(option => /system/i.test(option))).toBe(false);
-    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
-    // The disabled start says why, and offers the section that fixes it.
+    expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(screen.getByText('No runtime is selected.')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Choose a runtime' }));
     expect(screen.getByRole('combobox', { name: 'Runtime' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
   });
 
   it('reports a selected runtime as missing when the installed list loads empty', async () => {
@@ -528,7 +662,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
         finish = () => resolve([{ id: 'synthetic', provider, engine: provider, server: 'synthetic', accelerator: 'synthetic', installation: 'external', location: 'runtime', available: true, problems: [] }]);
       }));
     }
-    const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: {
+    const { onApply, onProfileCommit } = mount({ initialSection: 'gpu', initialConfig: {
       ...cfg, active_provider: provider, active_runtime: provider === 'llama.cpp' ? '' : 'synthetic',
     } });
     await waitFor(() => expect(api.deviceProfile).toHaveBeenCalled());
@@ -552,8 +686,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalled());
     expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
     expect(screen.queryByText('This runtime is not installed. Install it or select another runtime.')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
+    expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
     expect(onProfileCommit).not.toHaveBeenCalled();
   });
@@ -565,6 +699,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
     const { onApply } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
     expect(await screen.findByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).toBeVisible();
+    openOptions();
     expect(screen.getByText('This runtime is not installed. Install it or select another runtime.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
@@ -610,6 +745,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const writes = vi.spyOn(Storage.prototype, 'setItem');
     const { onProfileCommit } = mount();
     fireEvent.click(await screen.findByRole('button', { name: /b.gguf/ }));
+    openOptions();
     fireEvent.click(screen.getByRole('tab', { name: 'Performance & memory' }));
     expect(numeric('ctx_size').value).toBe('16384');
     fireEvent.change(numeric('ctx_size'), { target: { value: '12288' } });
@@ -703,7 +839,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('keeps invalid inputs while browsing profile previews and allows reverting the working draft', async () => {
     const { onProfileCommit } = mount({ initialSection: 'advanced' });
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Default · Default profile' }));
     expect(within(screen.getByRole('region', { name: 'Preview' })).getByRole('button', { name: 'Select this profile' })).toBeDisabled();
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{');
@@ -745,12 +881,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, '', copy);
     const { onProfileCommit } = mount({ initialSection: 'tuning', initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source, copy, orphan], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(numeric('ngl'), { target: { value: '25' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
-    expect(screen.getAllByRole('button', { name: /Shared settings/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    expect(document.querySelectorAll('.settings-profile-chip')).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Shared settings · Selected · Editing' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Shared settings · Default profile' }));
-    expect(screen.getByRole('button', { name: 'Save profile' })).toHaveAccessibleDescription('Save to: Shared settings');
+    expect(screen.getByRole('button', { name: 'Use this profile and adjust options' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Recovered settings' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
+    expect(screen.getByRole('button', { name: 'Save profile' })).toHaveAccessibleDescription('Save to: Shared settings');
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalledOnce());
@@ -765,12 +903,13 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, 'Saved prompt', profile);
     const { getSaved } = mount({ initialSection: 'sampling', initialConfig: { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [profile, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } } });
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
     fireEvent.change(screen.getByLabelText('Profile name'), { target: { value: 'Renamed profile' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Saved profile · Editing' })).not.toBeInTheDocument());
+    openOptions();
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
     expect(getSaved().settings_profiles?.entries.filter(profile => (profile.provider ?? 'llama.cpp') === 'llama.cpp')[0]).toMatchObject({ name: 'Renamed profile', system_prompt: 'Saved prompt' });
@@ -787,13 +926,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Working prompt' } });
     fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Saved profile · Selected · Editing' }));
     fireEvent.click(screen.getByRole('button', { name: 'Set as default' }));
     await waitFor(() => expect(getSaved().settings_profiles?.default_profile_id).toBe(profile.id));
     expect(onProfileCommit).toHaveBeenCalledOnce();
     expect(getSaved().temperature).toBe(cfg.temperature);
     expect(appliedProfile(getSaved())).toMatchObject({ system_prompt: 'Saved prompt', settings: { temperature: cfg.temperature } });
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
     fireEvent.click(screen.getByRole('tab', { name: 'Generation' }));
     expect(numeric('temperature')).toHaveValue(1.3);
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Working prompt');
@@ -817,7 +957,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Settings were saved');
     expect(screen.getByRole('heading', { name: 'Saved once' })).toBeVisible();
     expect(screen.getByLabelText('Default system prompt')).toHaveValue('Saved prompt');
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     expect(screen.getByRole('button', { name: 'Saved once · Selected' })).toBeVisible();
     expect(onProfileCommit).toHaveBeenCalledOnce();
   });
@@ -841,8 +981,9 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saved = { ...custom, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(custom.active_model)]: application } } };
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Original settings ·/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Original settings · Editing' })).toBeVisible();
@@ -850,7 +991,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
     expect(screen.getByLabelText('Extra server arguments (one per line)')).toHaveValue('');
     expect(numeric('ctx_size')).toHaveValue(4096);
-    expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile' }), document.querySelector('.model-settings-footer')?.textContent ?? '').toBeEnabled());
     expect(getSaved()).toEqual(saved);
     expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
@@ -868,6 +1009,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const saved = { ...defaults, settings_profiles: { ...emptyProfileLibrary(), entries: [source],
       applied: { [profileTargetKey(cfg.active_model)]: application } } };
     const { onApply, onProfileCommit, onClose, getSaved } = mount({ initialConfig: saved, initialSection: 'profiles' });
+    openOptions();
     expect(screen.getByRole('heading', { name: 'Default values' })).toBeVisible();
     expect(screen.queryByText(/Reset all options in the selected profile/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
@@ -891,7 +1033,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onApply, onProfileCommit, getSaved } = mount({ initialConfig: saved, initialSection: 'advanced' });
     fireEvent.change(screen.getByLabelText('Extra request JSON'), { target: { value: '{' } });
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('tab', { name: 'Profiles' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Choose profile/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Adjust options/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     expect(within(document.querySelector<HTMLElement>('.settings-profile-banner')!).getByRole('status')).toHaveTextContent('Reset to defaults.');
     expect(screen.getByLabelText('Extra request JSON')).toHaveValue('{}');
@@ -907,6 +1050,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const application = materializeProfileApplication(cfg, 'Saved prompt', source);
     const saved = { ...cfg, settings_profiles: { ...emptyProfileLibrary(), entries: [source, defaultSettingsProfile()], applied: { [profileTargetKey(cfg.active_model)]: application } } };
     const { onProfileCommit } = mount({ initialConfig: saved, initialSection: 'profiles' });
+    openOptions();
     fireEvent.click(screen.getByRole('button', { name: 'Reset all to defaults' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));

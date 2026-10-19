@@ -57,6 +57,10 @@ export interface SettingsProfileControlProps {
   disabled: boolean;
   blocked?: boolean;
   full: boolean;
+  showBanner?: boolean;
+  lockSelection?: boolean;
+  selectionOnly?: boolean;
+  onPreviewChange?: (id: string | null) => void;
   onApply: (id: string) => Promise<void>;
   onSaveAs: (name: string, scope: 'model' | 'global') => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
@@ -132,7 +136,7 @@ function SettingsValues({ settings, provider, schema, prompt, runtime, gpuDevice
   </div>;
 }
 
-export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, runtimeConfig, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
+export default function SettingsProfileControl({ items, state, activeId, basedOnId, defaultProfileId, modelPath, currentSettings, runtimeConfig, currentPrompt, defaults, runtimeOptions = SERVER_OPTIONS, runtimeVerified = false, gpuDevices = [], disabled, blocked = false, full, showBanner = true, lockSelection = false, selectionOnly = false, onPreviewChange, onApply, onSaveAs, onRename, onDelete, onSetDefault, onRevert, onReset, onEditingChange, saveAction, children, bannerTarget }: SettingsProfileControlProps) {
   const { locale } = useI18n();
   const copy = profileControlCopy[locale];
   const provider = providerOf(currentSettings);
@@ -158,6 +162,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
   editingChangeRef.current = onEditingChange;
   const active = items.find(item => item.id === (activeId ?? basedOnId));
   const preview = items.find(item => item.id === previewId);
+  useEffect(() => { onPreviewChange?.(preview?.id ?? null); }, [preview?.id, onPreviewChange]);
   const detailItem = preview ?? active;
   const defaultProfile = items.find(item => item.id === defaultProfileId);
   const isDefault = (item: ProfileViewItem) => item.id === defaultProfileId;
@@ -225,18 +230,18 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
       <span className="settings-profile-state-dot" aria-hidden="true" />
       <div className="settings-profile-banner-text"><div className="settings-profile-title-line" aria-live="polite"><h3 ref={bannerRef} id={labelId} tabIndex={-1}>{title}</h3>{isDefault(active) && <Badge tone="info" className="settings-profile-default-badge">{copy.defaultProfile}</Badge>}</div><p role="status" aria-atomic="true" className={resetFeedback ? 'settings-profile-feedback' : undefined}><span key={resetFeedback?.sequence ?? 0}>{resetFeedback ? resetFeedback.changed ? copy.resetDone : copy.resetUnchanged : subtitle}</span></p></div>
       <div className="settings-profile-buttons">
-        <CustomSelect className="settings-profile-picker" ariaLabel={copy.profiles} size="sm" value={active.id}
+        {lockSelection ? <span className="settings-profile-selected-name">{active.name}{state === 'working' ? ` · ${copy.editing}` : ''}</span> : <CustomSelect className="settings-profile-picker" ariaLabel={copy.profiles} size="sm" value={active.id}
           disabled={mutationLocked || blocked} options={items.map(item => ({ value: item.id, label: `${copy[item.scope]} · ${item.name}${bannerTarget && state === 'working' && item.id === active.id ? ` · ${copy.editing}` : ''}` }))}
-          onChange={id => { if (id !== active.id) void run(() => onApply(id), () => setPreviewId(null)); }} />
-        {full && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
+          onChange={id => { if (id !== active.id) void run(() => onApply(id), () => setPreviewId(null)); }} />}
+        {(full || lockSelection) && !selectionOnly && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => { const changed = onReset(); setResetFeedback({ changed, sequence: ++resetSequence.current }); setPreviewId(null); setError(''); }}>{copy.resetAll}</button>}
         {saveAction}
-        <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>
+        {!selectionOnly && <button type="button" className="app-button app-button--secondary app-button--sm" data-icon="save" disabled={mutationLocked || blocked} onClick={event => openAction({ kind: 'create', name: '', scope: 'global', model: modelPath }, event.currentTarget)}>{copy.saveAs}</button>}
         {state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
       </div>
     </div>;
 
   return <section className={`settings-profile-control${full ? ' settings-profile-control--full' : ''}`} aria-label={copy.profiles} onKeyDown={handleEscape} aria-busy={pending}>
-    {bannerTarget ? createPortal(banner, bannerTarget) : banner}
+    {showBanner && (bannerTarget ? createPortal(banner, bannerTarget) : banner)}
 
     {action && action.kind !== 'delete' && <div className="settings-profile-action app-card app-card--tight" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
       <>

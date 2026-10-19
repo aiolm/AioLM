@@ -5,6 +5,20 @@
 .model-settings-header h2 { margin: 4px 0; font-size: var(--ui-text-section); font-weight: 650; outline-offset: 4px; }
 .model-settings-header p { margin: 0; color: var(--ui-muted); overflow-wrap: break-word; font-size: var(--ui-text-support); }
 .model-settings-layout { display: grid; grid-template-columns: max(190px, 12em) minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
+.model-settings-layout--setup { grid-template-columns: minmax(0, 1fr); }
+.model-settings-flow { padding: 10px 24px; border-bottom: 1px solid var(--ui-border); }
+.model-settings-flow ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; list-style: none; margin: 0; padding: 0; }
+.model-settings-flow li { min-width: 0; }
+.model-settings-flow button { display: flex; gap: 8px; align-items: center; width: 100%; height: 100%; padding: 8px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-panel); color: inherit; text-align: start; cursor: pointer; }
+.model-settings-flow button[aria-current="step"] { border-color: currentColor; background: var(--ui-surface-muted); }
+.model-settings-flow button:disabled { opacity: 0.5; cursor: default; }
+.model-settings-flow button > span:last-child { min-width: 0; }
+.model-settings-flow strong, .model-settings-flow small { display: block; overflow-wrap: anywhere; }
+.model-settings-flow strong { font-size: var(--ui-text-support); }
+.model-settings-flow small { color: var(--ui-muted); font-size: var(--ui-text-caption); max-height: 2.8em; overflow: auto; }
+.model-settings-step-number { flex: 0 0 auto; font-weight: 650; }
+.model-settings-shell [hidden] { display: none !important; }
+.settings-profile-selected-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
 .model-settings-nav { display: flex; flex-direction: column; gap: 4px; padding: 16px 12px; border-right: 1px solid var(--ui-border); overflow-y: auto; }
 .model-settings-nav .app-tab { flex-shrink: 0; text-align: start; white-space: normal; }
 .model-settings-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
@@ -62,6 +76,9 @@
 .model-settings-actions:empty { display: none; }
 .model-settings-overlays { position: static; }
 @media (max-width: 720px) {
+  .model-settings-flow { padding: 8px; }
+  .model-settings-flow ol { gap: 4px; }
+  .model-settings-flow button { align-items: flex-start; gap: 4px; padding: 6px; }
   .model-settings-dialog { width: calc(100vw - 16px); height: calc(100dvh - 16px); }
   .model-settings-header { padding: 15px 16px 12px; }
   .model-settings-layout { display: flex; flex-direction: column; }
