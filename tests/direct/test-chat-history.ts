@@ -188,6 +188,8 @@ assert.equal(merged.threads.find((thread) => thread.id === "thread-local")?.mess
 assert.equal(merged.threads.some((thread) => thread.id === "thread-other"), true);
 assert.equal(merged.threads.some((thread) => thread.id === "thread-deleted"), false);
 assert.equal(mergeHydratedWorkspace(persistedWorkspace, initialWorkspace, initialWorkspace).activeThreadId, "thread-persisted");
+assert.deepEqual(mergeHydratedWorkspace(persistedWorkspace, structuredClone(initialWorkspace), initialWorkspace), persistedWorkspace,
+  "An equal replacement still accepts hydrated history instead of treating reference changes as local edits.");
 
 store.setItem("aiolm.chat-workspace.v1", "not-json");
 assert.equal(loadChatWorkspace(store).threads.length, 1);

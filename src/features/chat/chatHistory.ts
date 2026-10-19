@@ -127,7 +127,7 @@ function trackHistoryOperation<T>(operation: Promise<T>): Promise<T> {
 }
 
 function sameWorkspace(left: ChatWorkspace, right: ChatWorkspace): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
 function browserStorage(): ChatStorage | null {
@@ -474,7 +474,7 @@ export function mergeHydratedWorkspace(
     const local = currentById.get(thread.id);
     const baseline = initialById.get(thread.id);
     if (!local && baseline) return [];
-    const localChanged = local && (!baseline || JSON.stringify(local) !== JSON.stringify(baseline));
+    const localChanged = local && (!baseline || (local !== baseline && JSON.stringify(local) !== JSON.stringify(baseline)));
     return [localChanged ? local : thread];
   });
   for (const local of current.threads) {

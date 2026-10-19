@@ -23,6 +23,21 @@ vi.mock("./chatHistory", async (importOriginal) => ({
 describe("useChatThreads", () => {
   beforeEach(() => vi.mocked(loadChatWorkspaceAsync).mockResolvedValue(workspace));
 
+  it('hydrates an unchanged workspace without serializing the existing conversations', async () => {
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      const { result } = renderHook(useChatThreads, { initialProps: {
+        phase: 'idle' as const, requireIdle: () => true, onSwitchThread: () => undefined,
+      } });
+      await act(async () => { await Promise.resolve(); });
+      const historyReads = stringify.mock.calls.filter(([value]) => value === workspace || value === workspace.threads[0].messages);
+      expect(historyReads).toHaveLength(0);
+      expect(result.current.msgs).toEqual(workspace.threads[0].messages);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it.each(['streaming', 'approval'] as const)('preserves the live turn owner when delayed history hydration finishes during %s', async stage => {
     let resolveHydration!: (stored: ChatWorkspace) => void;
     vi.mocked(loadChatWorkspaceAsync).mockReturnValue(new Promise(resolve => { resolveHydration = resolve; }));

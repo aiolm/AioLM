@@ -76,7 +76,8 @@ export function useChatThreads({ phase, hasPendingTurn, requireIdle, onSwitchThr
         if (cancelled || revision !== hydrationRevision || isChatWorkspaceClearing()) return;
         const current = workspaceRef.current;
         let merged = mergeHydratedWorkspace(persisted, current, initialWorkspaceRef.current);
-        const localMessagesChanged = JSON.stringify(msgsRef.current) !== JSON.stringify(initialMsgsRef.current);
+        const localMessagesChanged = msgsRef.current !== initialMsgsRef.current
+          && JSON.stringify(msgsRef.current) !== JSON.stringify(initialMsgsRef.current);
         const preserveBuffer = localMessagesChanged || bufferRef.current.phase !== 'idle' || pendingTurnRef.current?.() === true;
         const owner = preserveBuffer ? current.threads.find(thread => thread.id === bufferRef.current.threadId) : undefined;
         if (owner) {
