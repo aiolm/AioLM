@@ -38,7 +38,7 @@ describe("MCP native tool payloads", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     fireEvent.click(await screen.findByRole("button", { name: "Prepare call: echo" }));
     expect(screen.getByLabelText("JSON arguments")).toBeInTheDocument();
-    expect(JSON.parse(screen.getByLabelText("Input schema").textContent!)).toEqual(schema);
+    expect(JSON.parse(screen.getByLabelText("Required input format (JSON Schema)").textContent!)).toEqual(schema);
     fireEvent.change(screen.getByLabelText("JSON arguments"), { target: { value: '{"message":"hello"}' } });
     fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));
     expect(screen.getByRole("button", { name: "Approve and run once" })).toBeInTheDocument();

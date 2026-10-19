@@ -53,7 +53,7 @@ describe('model metadata badges', () => {
   });
   it('localizes badge descriptions and identifies the source', () => {
     render(<I18nProvider initialLocale="ko"><ModelBadges model="Qwen3-8B-Q4_K_M.gguf" metadata={{ architecture: 'qwen3' }} /></I18nProvider>);
-    expect(screen.getByTitle('아키텍처: qwen3 · 모델 메타데이터')).toBeVisible();
+    expect(screen.getByTitle('아키텍처: qwen3 · 모델 파일 정보')).toBeVisible();
     expect(screen.getByTitle('양자화: Q4_K_M · 모델명에서 읽은 정보')).toBeVisible();
   });
   it('prioritizes capabilities and omits administrative and duplicate tags only from the summary', () => {
@@ -67,6 +67,14 @@ describe('model metadata badges', () => {
   it('keeps unfamiliar metadata architectures and short tags eligible for a summary', () => {
     expect(summaryModelBadges(modelBadges('unknown.gguf', { architecture: 'future-architecture', tags: ['future-task'] }))
       .map(badge => badge.value)).toEqual(['future-architecture', 'future-task']);
+  });
+  it('explains an unidentified artifact format while retaining literal tags from the model author', () => {
+    render(<I18nProvider initialLocale="ko"><ModelBadges mode="detail" model="synthetic-deployment.json" tags={['unknown']}
+      artifact={{ path: 'synthetic-deployment.json', name: 'Synthetic model', format: 'unknown', role: 'model', size_bytes: 1, file_count: 1,
+        architectures: [], modalities: { text: true, image: false, audio: false, video: false }, missing: [], incomplete: false, ownership: 'external', notes: [] }} /></I18nProvider>);
+    expect(screen.getByTitle('모델 형식: 형식 미확인 · 모델 파일 정보')).toBeVisible();
+    expect(screen.getByTitle('태그: unknown · Hugging Face 모델 정보')).toBeVisible();
+    expect(screen.queryByTitle('태그: unknown · 모델 파일 정보')).toBeNull();
   });
   it('reserves the omitted count within two rows as the column narrows and grows', () => {
     const widths = [70, 70, 70, 70, 70];

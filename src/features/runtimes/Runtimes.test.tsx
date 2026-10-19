@@ -295,10 +295,10 @@ describe("RuntimesPanel pull-request builds", () => {
     renderPanel();
     const retry = await screen.findByRole("button", { name: "Retry" });
     expect(screen.getByRole("alert")).toHaveTextContent("catalog unavailable");
-    expect(screen.queryByRole("button", { name: "Refresh remote metadata" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh available versions" })).not.toBeInTheDocument();
     fireEvent.click(retry);
     await waitFor(() => expect(mocked.rtList).toHaveBeenCalledTimes(2));
-    expect(await screen.findByRole("button", { name: "Refresh remote metadata" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Refresh available versions" })).toBeEnabled();
     expect(mocked.rtLatest).toHaveBeenCalledWith("cuda", true);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -709,7 +709,7 @@ describe('neutral inference engine inventory', () => {
     mocked.providerCatalog.mockResolvedValue([...BUILTINS, SYNTHETIC]);
     mocked.providerRuntimes.mockResolvedValue([SYNTHETIC_RUNTIME]);
     render(panel());
-    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search adapters' }), { target: { value: 'synth' } });
+    fireEvent.change(await screen.findByRole('searchbox', { name: "Search engines" }), { target: { value: 'synth' } });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'llama.cpp' })).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Synthetic' }));
     expect(screen.getByRole('heading', { name: 'Synthetic' })).toHaveFocus();
@@ -723,7 +723,7 @@ describe('neutral inference engine inventory', () => {
     expect(mocked.rtList).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
     expect(screen.getByRole('button', { name: 'Synthetic' })).toHaveFocus();
-    expect(screen.getByRole('searchbox', { name: 'Search adapters' })).toHaveValue('synth');
+    expect(screen.getByRole('searchbox', { name: "Search engines" })).toHaveValue('synth');
     fireEvent.click(screen.getByRole('button', { name: 'Synthetic' }));
     mocked.providerCatalog.mockResolvedValue(BUILTINS);
     mocked.providerRuntimes.mockResolvedValue([]);
@@ -731,7 +731,7 @@ describe('neutral inference engine inventory', () => {
     expect(await screen.findByText(/This engine is no longer listed/)).toBeVisible();
     expect(screen.queryByText(/^(?:Built-in adapter|Registered engine · openai-v1)$/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
-    expect(screen.getByRole('searchbox', { name: 'Search adapters' })).toHaveValue('synth');
+    expect(screen.getByRole('searchbox', { name: "Search engines" })).toHaveValue('synth');
   });
 
   it('keeps llama.cpp installs, PR builds, portable bundles, hardware and deep verification inside its adapter, and Python adapters inside theirs', async () => {
@@ -757,7 +757,7 @@ describe('neutral inference engine inventory', () => {
     render(panel());
     fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
     expect(screen.getByRole('heading', { name: 'Register an executable or entry point' })).toHaveFocus();
-    expect(screen.getByText('Advanced: register a manifest manually').closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText("Advanced: import registration file (manifest)").closest('details')).not.toHaveAttribute('open');
     fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
     fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
     fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
@@ -800,14 +800,14 @@ describe('neutral inference engine inventory', () => {
     const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
     fireEvent.change(modelFlag, { target: { value: '--model' } });
     fireEvent.change(portFlag, { target: { value: '--port' } });
-    fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+    fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
     fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+    fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
     fireEvent.click(await screen.findByRole('button', { name: 'Register' }));
 
     expect(await screen.findByText('Synthetic · build-1 is registered')).toBeVisible();
-    expect(screen.getByText(/Registration alone does not make a model Ready/)).toBeVisible();
+    expect(screen.getByText(/Select this engine and a model in an execution profile/)).toBeVisible();
     expect(mocked.providerCatalog).toHaveBeenCalledWith(true);
     fireEvent.click(screen.getByRole('button', { name: 'Set up an execution profile' }));
     expect(onOpenProfiles).toHaveBeenCalledOnce();
@@ -829,7 +829,7 @@ describe('neutral inference engine inventory', () => {
     const expectNewBuildAnnounced = async (updateConfig: ReturnType<typeof vi.fn>) => {
       expect(await screen.findByText('Synthetic G12 1000 options · build-2 is registered')).toBeVisible();
       expect(screen.queryByText('Synthetic G11 is registered')).not.toBeInTheDocument();
-      expect(screen.getByText(/Registration alone does not make a model Ready/)).toBeVisible();
+      expect(screen.getByText(/Select this engine and a model in an execution profile/)).toBeVisible();
       fireEvent.click(screen.getByRole('button', { name: 'Open Synthetic G12 1000 options' }));
       expect(screen.getByRole('heading', { name: 'Synthetic G11' })).toHaveFocus();
       expect(updateConfig).not.toHaveBeenCalled();
@@ -850,10 +850,10 @@ describe('neutral inference engine inventory', () => {
       const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
       fireEvent.change(modelFlag, { target: { value: '--model' } });
       fireEvent.change(portFlag, { target: { value: '--port' } });
-      fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+      fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
       fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
       fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+      fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
       fireEvent.click(await screen.findByRole('button', { name: 'Register' }));
       await expectNewBuildAnnounced(updateConfig);
     });
@@ -863,8 +863,8 @@ describe('neutral inference engine inventory', () => {
       mocked.runtimeAdapterRegister.mockImplementation(async () => { refreshes[refresh](); return NEW_BUILD; });
       render(panel({ store: { ...store, updateConfig } as unknown as AppStore }));
       fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
-      fireEvent.click(screen.getByText('Advanced: register a manifest manually'));
-      fireEvent.change(screen.getByRole('textbox', { name: 'Runtime manifest path' }), { target: { value: '/synthetic/runtime.json' } });
+      fireEvent.click(screen.getByText("Advanced: import registration file (manifest)"));
+      fireEvent.change(screen.getByRole('textbox', { name: "Registration file path (manifest)" }), { target: { value: '/synthetic/runtime.json' } });
       fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
       await expectNewBuildAnnounced(updateConfig);
       expect(mocked.runtimeAdapterRegister).toHaveBeenCalledWith('/synthetic/runtime.json');
@@ -885,10 +885,10 @@ describe('neutral inference engine inventory', () => {
       const [modelFlag, portFlag] = screen.getAllByLabelText('Option name');
       fireEvent.change(modelFlag, { target: { value: '--model' } });
       fireEvent.change(portFlag, { target: { value: '--port' } });
-      fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+      fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
       fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
       fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+      fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
       const register = await screen.findByRole('button', { name: 'Register' });
       register.focus();
       fireEvent.click(register);

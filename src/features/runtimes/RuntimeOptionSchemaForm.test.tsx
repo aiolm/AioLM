@@ -99,11 +99,11 @@ describe('generic runtime option renderer', () => {
     const onChange = vi.fn();
     render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm schema={current} values={{}} scope={[]} onChange={onChange} /></I18nProvider>);
     fireEvent.change(screen.getByLabelText(/Pasted command/), { target: { value: '--alpha 1 --beta 2 --alpha 3' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Split into ordered plan' }));
-    expect(await screen.findByText(/Plan order: alpha, beta, alpha/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: "Read options from command" }));
+    expect(await screen.findByText(/Imported option order: alpha, beta, alpha/)).toBeInTheDocument();
     expect(screen.getByText(/Managed by the app/)).toBeInTheDocument();
     expect(screen.getByText(/Unrecognized/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply plan to values' }));
+    fireEvent.click(screen.getByRole('button', { name: "Apply these options" }));
     // Grouped values alone would launch A1 A3 B2; the saved order keeps A1 B2 A3.
     expect(onChange).toHaveBeenCalledWith({
       alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
@@ -198,7 +198,7 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     const lazy = textOption('lazy', { managed: 'reserved' });
     render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([engine, lazy])} values={{ engine: 'mock', lazy: true }} scope={[]} onChange={() => undefined} /></I18nProvider>);
     expect(screen.getByText(/Fixed by the registered entry point/)).toBeVisible();
-    expect(screen.getByText(/Reserved for the app by the engine's adapter/)).toBeVisible();
+    expect(screen.getByText(/This option is controlled by AioLM through the engine adapter/)).toBeVisible();
     expect(screen.queryByRole('textbox')).toBeNull();
   });
 
@@ -237,7 +237,7 @@ describe('editing keeps every saved occurrence, alias and explicit value', () =>
     expect(document.body).not.toHaveTextContent('synthetic-secret-value');
     // Unknown facts are marked as such, not attributed to any source.
     const plainHeader = screen.getByText('--fresh_plain').parentElement!;
-    expect(plainHeader).toHaveTextContent('value count unconfirmed');
+    expect(plainHeader).toHaveTextContent('The number of values is unknown');
     expect(plainHeader).not.toHaveTextContent('Documented by');
   });
 });
@@ -312,7 +312,7 @@ describe('saved command-line order and confirmed syntax in the form', () => {
     const text = `--amber ${secret} --unknown=${secret}`;
     const input = screen.getByRole('textbox', { name: /Pasted command/ });
     fireEvent.change(input, { target: { value: text } });
-    fireEvent.click(screen.getByRole('button', { name: 'Split into ordered plan' }));
+    fireEvent.click(screen.getByRole('button', { name: "Read options from command" }));
     const review = await screen.findByText(/--amber/, { selector: '.app-feedback-message' });
     expect(review).not.toHaveTextContent(secret);
     expect(review).toHaveTextContent('•••');

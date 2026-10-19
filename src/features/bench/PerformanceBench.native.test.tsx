@@ -208,8 +208,8 @@ describe('native benchmark history UI', () => {
     renderPanel();
     fireEvent.click(await screen.findByRole('combobox', { name: 'Result history' }));
     fireEvent.click(screen.getByRole('option', { name: /recovered.gguf/ }));
-    expect(screen.getByText('Saved on the website · local copy')).toBeInTheDocument();
-    expect(screen.getByText(/Existing and unuploaded records are retained/)).toBeInTheDocument();
+    expect(screen.getByText("Saved on website · copy on this device")).toBeInTheDocument();
+    expect(screen.getByText(/along with existing and unuploaded records/)).toBeInTheDocument();
     expect(screen.queryByText('Stored on this device')).not.toBeInTheDocument();
   });
 

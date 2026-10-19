@@ -60,8 +60,8 @@ describe("MCP path presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discover tools" }));
     fireEvent.click(await screen.findByRole("button", { name: "Prepare call: read" }));
     expect(screen.getByText(`Reads ${displayDocument}`)).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Input schema", { selector: "summary" }));
-    expect(screen.getByLabelText("Input schema").textContent).toContain(JSON.stringify(displayDocument));
+    fireEvent.click(screen.getByText("Required input format (JSON Schema)", { selector: "summary" }));
+    expect(screen.getByLabelText("Required input format (JSON Schema)").textContent).toContain(JSON.stringify(displayDocument));
     fireEvent.change(screen.getByLabelText("JSON arguments"), { target: { value: JSON.stringify({ path: rawDocument }) } });
     expect(JSON.parse((screen.getByLabelText("JSON arguments") as HTMLTextAreaElement).value)).toEqual({ path: displayDocument });
     fireEvent.click(screen.getByRole("button", { name: "Review tool call" }));

@@ -18,7 +18,7 @@ describe('runtime verification coverage', () => {
     const start = vi.fn();
     render(<I18nProvider initialLocale="en"><DeepVerificationControls t={key => key} provider="custom.example" serverRunning={false} state={{ busy: false, error: null, record: null, start, cancel: vi.fn() }} /></I18nProvider>);
     expect(screen.getByRole('button', { name: 'ui.deepVerify' })).toBeDisabled();
-    expect(screen.getByText('External adapter v1 does not provide CPU reference verification.')).toBeInTheDocument();
+    expect(screen.getByText("This runtime adapter does not support comparison with CPU reference results.")).toBeInTheDocument();
     expect(start).not.toHaveBeenCalled();
   });
 });

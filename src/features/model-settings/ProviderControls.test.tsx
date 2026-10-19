@@ -149,18 +149,18 @@ describe('runtime-specific option controls', () => {
     render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'installed-one' }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
     expect(await screen.findByLabelText(/^--fresh-69/)).toBeInTheDocument();
     expect(screen.getByLabelText(/^--fresh-0\s/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Show more options/ })).not.toBeInTheDocument();
-    const previewButton = screen.getByRole('button', { name: 'Command preview' });
+    expect(screen.queryByRole('button', { name: /^Show more options/, hidden: true })).not.toBeInTheDocument();
+    const tools = screen.getByText('Command and help tools').closest('details')!;
+    const previewButton = within(tools).getByRole('button', { name: 'Command preview', hidden: true });
     expect(previewButton).not.toBeVisible();
-    expect(screen.getByRole('region', { name: 'App-managed arguments' })).not.toBeVisible();
-    const tools = previewButton.closest('details')!;
+    expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).not.toBeVisible();
     expect(tools).not.toHaveAttribute('open');
     expect(preview).not.toHaveBeenCalled();
     await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
     fireEvent.click(screen.getByText('Command and help tools'));
     expect(tools).toHaveAttribute('open');
     expect(previewButton).toBeVisible();
-    expect(screen.getByRole('region', { name: 'App-managed arguments' })).toBeVisible();
+    expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).toBeVisible();
     fireEvent.click(previewButton);
     await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
   });
@@ -595,7 +595,7 @@ describe('registered engine options from accepted help (G04)', () => {
     expect(row('--fresh-switch')).toHaveTextContent('custom.synthetic manifest-v1: {"min":1,"max":1}');
     expect(row('--fresh-switch')).toHaveTextContent('a saved value the reviewed help does not accept blocks launch');
     expect(row('--fresh-label')).toHaveTextContent('saved key');
-    expect(row('--fresh-label')).toHaveTextContent('declaration applies');
+    expect(row('--fresh-label')).toHaveTextContent("Using registration information");
     expect(row('--fresh-mode')).toHaveTextContent('reviewed help applies');
     expect(row('--fresh-mode')).not.toHaveTextContent('blocks launch');
   });
@@ -638,7 +638,7 @@ describe('registered engine options from accepted help (G04)', () => {
     expect(await screen.findByLabelText(/^--workers/)).toHaveValue('2');
     fireEvent.click(screen.getByRole('button', { name: 'Add occurrence' }));
     expect(onChange).toHaveBeenLastCalledWith({ provider_options: { 'custom.synthetic': { workers: 2, fresh_pair: { spelling: null, occurrences: [['', '']] } } } });
-    expect(screen.getByText('The accepted help matches this runtime.')).toBeVisible();
+    expect(screen.getByText("The reviewed help matches this runtime.")).toBeVisible();
   });
 
   it('saves a confirmed repetition pinned to the accepted help and revalidates', async () => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as api from '../api';
-import { providerOf, providerDisplayName, runtimeLabel } from '../api/providers';
+import { providerOf, providerDisplayName } from '../api/providers';
+import { runtimeInstanceLabel } from '../i18n/runtimeInstanceText';
 import { useI18n } from '../i18n/i18n';
 import { providerCopy } from '../i18n/providerCopy';
 import { runtimeVersionLabel, useInstalledRuntimes } from '../runtime/installedRuntimes';
@@ -26,7 +27,7 @@ export default function RuntimeSelectionLabel({ config, separator = ' / ' }: { c
     return () => { active = false; };
   }, [provider, id, identity]);
   if (provider !== 'llama.cpp') {
-    return `${providerDisplayName(provider)} · ${runtime?.provider === provider && runtime.id === id ? runtimeLabel(runtime) : id || providerCopy[locale].choose}`;
+    return `${providerDisplayName(provider)} · ${runtime?.provider === provider && runtime.id === id ? runtimeInstanceLabel(runtime, locale) : id || providerCopy[locale].choose}`;
   }
   const backend = config?.active_backend || 'PATH';
   const build = config?.active_build;

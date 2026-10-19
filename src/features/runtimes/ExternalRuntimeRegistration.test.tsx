@@ -19,7 +19,7 @@ const mount = (locked = false) => {
 describe('external engine registration', () => {
   it('registers a selected manifest and changes browsing without applying model settings', async () => {
     const { selected, busy } = mount();
-    fireEvent.change(screen.getByRole('textbox', { name: 'Runtime manifest path' }), { target: { value: '/synthetic/runtime.json' } });
+    fireEvent.change(screen.getByRole('textbox', { name: "Registration file path (manifest)" }), { target: { value: '/synthetic/runtime.json' } });
     fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
     await waitFor(() => expect(selected).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic engine' })));
     expect(api.runtimeAdapterRegister).toHaveBeenCalledWith('/synthetic/runtime.json');
@@ -31,7 +31,7 @@ describe('external engine registration', () => {
     const { selected } = mount();
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '/synthetic/runtime.json' } });
     fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Registered successfully, but inventory refresh failed.');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Registered, but the list could not be refreshed. Refresh the list before registering again.");
     expect(screen.getByRole('status')).toHaveTextContent('build-1');
     expect(selected).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic engine' }));
   });

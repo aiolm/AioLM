@@ -33,12 +33,12 @@ it('lists built-in and registered adapters in one name-ordered inventory with in
   expect(screen.getByRole('button', { name: 'vLLM' })).toHaveAccessibleDescription(/No runtime installed/);
   // Registration says nothing about whether a model is Ready.
   expect(screen.queryByText(/^Ready$/)).not.toBeInTheDocument();
-  expect(screen.getByText(/does not make a model Ready/)).toBeVisible();
+  expect(screen.getByText(/choose a model in an execution profile/)).toBeVisible();
 });
 
 it('filters an engine unknown to the app, expands its details with the keyboard and opens it explicitly', () => {
   const onOpen = renderList();
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Search adapters' }), { target: { value: 'synth' } });
+  fireEvent.change(screen.getByRole('searchbox', { name: "Search engines" }), { target: { value: 'synth' } });
   expect(screen.queryByRole('button', { name: 'llama.cpp' })).not.toBeInTheDocument();
   expect(screen.getByRole('status')).toHaveTextContent('1 of 4 engines');
   const details = screen.getByRole('button', { name: 'Details Synthetic' });
@@ -49,6 +49,6 @@ it('filters an engine unknown to the app, expands its details with the keyboard 
   expect(document.getElementById(details.getAttribute('aria-controls')!)).toHaveTextContent('build-1 · external · registered · Runtime needs attention · probe program missing');
   fireEvent.click(screen.getByRole('button', { name: 'Synthetic' }));
   expect(onOpen).toHaveBeenCalledWith('custom.synthetic');
-  fireEvent.change(screen.getByRole('searchbox', { name: 'Search adapters' }), { target: { value: 'no such engine' } });
-  expect(screen.getByText('No adapters match this search.')).toBeVisible();
+  fireEvent.change(screen.getByRole('searchbox', { name: "Search engines" }), { target: { value: 'no such engine' } });
+  expect(screen.getByText("No engines match this search.")).toBeVisible();
 });

@@ -1159,8 +1159,8 @@ describe('saved names for running chat targets', () => {
       engine: { provider: 'custom.speech', runtime_id: 'synthetic-build', upstream_model: 'native-speech-model',
         modalities: { text: false, image: false, audio: false, video: false }, tasks: ['transcription'], request_fields: {} } }]);
     renderPanel(createTestStore({ ...cfg, sessions: [saved] }));
-    fireEvent.click(screen.getByText('Media preprocessing'));
-    const picker = await screen.findByLabelText('Audio transcription session');
+    fireEvent.click(screen.getByText("How to send audio and video"));
+    const picker = await screen.findByLabelText("Session for converting audio to text");
     fireEvent.click(picker);
     fireEvent.click(await screen.findByRole('option', { name: 'My local speech engine · native-speech-model' }));
     expect(picker).toHaveTextContent('My local speech engine · native-speech-model');

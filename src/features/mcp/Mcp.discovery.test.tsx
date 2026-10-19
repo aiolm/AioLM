@@ -34,7 +34,7 @@ describe('MCP discovery selection ownership', () => {
     expect(screen.getByRole('button', { name: 'Discover tools' })).toBeEnabled();
     await act(async () => first.resolve(metadata('alpha_echo')));
     expect(screen.queryByRole('button', { name: 'Prepare call: alpha_echo' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Tool metadata loaded. No tool has been called.')).not.toBeInTheDocument();
+    expect(screen.queryByText("Tool descriptions loaded. No tools were run.")).not.toBeInTheDocument();
   });
 
   it('keeps the newer search pending when an older request finishes', async () => {
@@ -58,7 +58,7 @@ describe('MCP discovery selection ownership', () => {
     await act(async () => first.reject(new Error('Retired alpha discovery failure')));
     expect(screen.queryByText('Retired alpha discovery failure')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Prepare call: beta_echo' })).toBeEnabled();
-    expect(screen.getByText('Tool metadata loaded. No tool has been called.')).toBeInTheDocument();
+    expect(screen.getByText("Tool descriptions loaded. No tools were run.")).toBeInTheDocument();
   });
 
   it.each(['success', 'failure'])('leaves a new server draft clear after a retired discovery %s', async outcome => {
@@ -66,7 +66,7 @@ describe('MCP discovery selection ownership', () => {
     await openPanel(); select('alpha'); discover(); fireEvent.click(screen.getByRole('button', { name: 'New' }));
     await act(async () => outcome === 'success' ? first.resolve(metadata('alpha_echo')) : first.reject(new Error('Retired draft discovery failure')));
     expect(screen.getByLabelText('Name')).toHaveValue('');
-    expect(screen.queryByText('Tool metadata loaded. No tool has been called.')).not.toBeInTheDocument();
+    expect(screen.queryByText("Tool descriptions loaded. No tools were run.")).not.toBeInTheDocument();
     expect(screen.queryByText('Retired draft discovery failure')).not.toBeInTheDocument();
   });
 

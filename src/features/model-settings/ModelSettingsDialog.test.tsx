@@ -193,14 +193,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
     openOptions();
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose runtime' })).toHaveFocus());
-    await screen.findByRole('radio', { name: /^build-two · synthetic · external/ });
+    await screen.findByRole('radio', { name: /^build-two · synthetic · Registered installation/ });
     expect(screen.getByRole('radio', { name: /^build-two/ })).toBeEnabled();
     // Use the latest inventory after the asynchronous refresh.
-    fireEvent.click(screen.getByRole('radio', { name: /^build-two · synthetic · external/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^build-two · synthetic · Registered installation/ }));
     await waitFor(() => expect(screen.getByRole('radio', { name: /^build-two/ })).toBeChecked());
     expect(screen.getByRole('button', { name: /^Choose profile/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('radio', { name: /^build-one · synthetic · external/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^build-one · synthetic · Registered installation/ }));
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
     openOptions();
     expect(screen.getByRole('heading', { name: 'Adjust options' })).toBeVisible();
@@ -362,7 +362,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onApply } = mount({ initialConfig: { ...cfg, active_provider: 'vllm', active_runtime: 'wide', active_model: 'models/snapshot' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    fireEvent.click(screen.getByRole('radio', { name: /^narrow · synthetic · external/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /^narrow · synthetic · Registered installation/ }));
     expect(screen.getByRole('button', { name: /^Adjust options/ })).toBeDisabled();
     openOptions();
     await waitFor(() => expect(screen.getByText(/Selected runtime cannot load this snapshot/)).toBeVisible());
@@ -386,7 +386,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     fireEvent.click(screen.getByRole('radio', { name: /^vLLM/ }));
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('radio', { name: /^synthetic · synthetic · external/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: /^synthetic · synthetic · Registered installation/ }));
     openOptions();
     await waitFor(() => expect(screen.getByLabelText('Default system prompt')).toHaveValue(''));
     fireEvent.change(screen.getByLabelText('Default system prompt'), { target: { value: 'Unsaved vLLM prompt' } });
@@ -674,7 +674,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     await waitFor(() => expect(api.rtList).toHaveBeenCalled());
     expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
     const options = within(screen.getByRole('group', { name: 'Runtime' })).getAllByRole('radio').map(option => option.closest('label')?.textContent ?? '');
-    expect(options.some(option => option.startsWith('b123 (b123-cpu) · cpu · managed'))).toBe(true);
+    expect(options.some(option => option.startsWith('b123 (b123-cpu) · cpu · Installed by AioLM'))).toBe(true);
     expect(options.some(option => /system/i.test(option))).toBe(false);
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(screen.getByText('No runtime is selected.')).toBeVisible();

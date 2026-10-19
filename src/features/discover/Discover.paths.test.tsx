@@ -136,7 +136,7 @@ describe('Discover runtime journeys', () => {
     expect(store.cfg?.active_provider).toBe('llama.cpp');
     expect(store.updateConfig).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: 'mlx-vlm', active_runtime: '' }) }));
@@ -158,7 +158,7 @@ describe('Discover runtime journeys', () => {
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     await waitFor(() => expect(api.hfSearchModels).toHaveBeenCalledWith('', 30, 'downloads', provider === 'vllm' ? 'safetensors' : 'mlx'));
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     expect(settings.open).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ active_provider: provider, active_runtime: store.cfg?.active_runtime, active_model: snapshot.path }) }));
@@ -174,7 +174,7 @@ describe('Discover runtime journeys', () => {
     const renderPanel = () => <I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>;
     const view = render(renderPanel());
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     store.cfg!.active_provider = 'mlx-vlm'; store.cfg!.active_runtime = 'another-runtime'; view.rerender(renderPanel());
     await waitFor(() => expect(api.hfSearchModels).toHaveBeenLastCalledWith('', 30, 'downloads', 'mlx'));
@@ -199,7 +199,7 @@ describe('Discover runtime journeys', () => {
     const store = createTestStore({ active_provider: 'vllm' }); store.status = { state: 'running' };
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     expect(api.hfDownloadSnapshot).not.toHaveBeenCalled();
   });
@@ -209,7 +209,7 @@ describe('Discover runtime journeys', () => {
     vi.mocked(api.hfDownloadSnapshot).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectDownload = reject; }));
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={createTestStore({ active_provider: 'vllm' })} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     expect(download).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -228,7 +228,7 @@ describe('Discover runtime journeys', () => {
     const store = createTestStore({ active_provider: 'vllm' });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     expect(await screen.findByText('Download complete')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Configure and run' })).toBeVisible();
@@ -328,7 +328,7 @@ describe('Discover runtime journeys', () => {
     rememberExecution({ ...store.cfg!, active_model: snapshot.path, active_runtime: 'older-runtime', ctx_size: 8192, provider_options: { vllm: { max_model_len: 8192 } } });
     render(<I18nProvider initialLocale="en"><DiscoverPanel store={store} /></I18nProvider>);
     fireEvent.click(await screen.findByRole('button', { name: /owner\/model/ }));
-    const download = await screen.findByRole('button', { name: 'Download complete model snapshot' });
+    const download = await screen.findByRole('button', { name: "Download complete model folder" });
     await waitFor(() => expect(download).toBeEnabled()); fireEvent.click(download);
     fireEvent.click(await screen.findByRole('button', { name: 'Configure and run' }));
     // vLLM restores its own context option; the inactive llama.cpp context

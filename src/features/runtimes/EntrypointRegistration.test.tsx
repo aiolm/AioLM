@@ -107,7 +107,7 @@ it('takes adapter setup through fresh help and preserves probe environment, mode
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   await screen.findByRole('button', { name: 'Register' });
   expect(vi.mocked(api.entrypointManifestPreview).mock.calls.at(-1)?.[0]).toMatchObject({
     probe: prepared.probe, models: prepared.models, launch_resources: prepared.launch_resources, options_separator: '--',
@@ -131,19 +131,19 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
     prefix: ['/synthetic path/한글 engine.py'], artifacts: ['/synthetic path/한글 engine.py'],
   }), { program: null, args: ['/synthetic path/한글 engine.py', '--help'], scope: [], encoding: 'cp949', locale: 'ko_KR.UTF-8' });
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   expect(await screen.findByText('Fill in the required fields.')).toBeVisible();
   expect(api.entrypointManifestPreview).not.toHaveBeenCalled();
   for (const [label, flag] of [['Model binding', '--model'], ['Port binding', '--port']]) {
     fireEvent.click(screen.getByRole('combobox', { name: `${label} Option from help` }));
     fireEvent.click(screen.getByRole('option', { name: flag }));
   }
-  fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+  fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
   fireEvent.click(screen.getByRole('button', { name: 'Insert {model}' }));
   fireEvent.click(screen.getByRole('button', { name: 'Insert {options_json}' }));
   fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
   fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   await screen.findByRole('button', { name: 'Register' });
   const draft = vi.mocked(api.entrypointManifestPreview).mock.calls[0][0];
   expect(draft).toMatchObject({ model: { kind: 'flag', flag: '--model', equals: false }, port: { kind: 'flag', flag: '--port', equals: false },
@@ -180,7 +180,7 @@ it('shows changed options and retained values while reviewing a rebuilt entry po
   await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
   expect(screen.getByText(/new_option/)).toBeVisible();
   expect(screen.getByText(/changed_option/)).toBeVisible();
-  expect(screen.getByText(/^Saved values absent from the schema/)).toHaveTextContent('removed_option');
+  expect(screen.getByText(/^Saved options missing from the current option list/)).toHaveTextContent('removed_option');
   expect(api.entrypointHelpDiscover).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), testConfig);
 });
 
@@ -202,9 +202,9 @@ it('carries explicit option metadata in the entry so its help review and registr
       { key: '', flag: '--absent-flag', field: 'option', observed: null, declared: { sensitive: true }, declared_by: 'synthetic.adapter r1', applies: 'observed', blocking: false },
     ] } }]);
   render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
-  const field = screen.getByLabelText('Option metadata (JSON, optional)');
+  const field = screen.getByLabelText("Additional option information (JSON, optional)");
   fireEvent.change(field, { target: { value: '{"version":' } });
-  expect(screen.getByRole('alert')).toHaveTextContent('not valid JSON');
+  expect(screen.getByRole('alert')).toHaveTextContent('Enter option information as a JSON object');
   fireEvent.change(field, { target: { value: JSON.stringify(metadata) } });
   expect(screen.queryByRole('alert')).toBeNull();
   await enter();
@@ -238,19 +238,19 @@ it('does not register an optional binding the user chose but left without its op
   // Host is switched to "Option from help" but no option is picked.
   fireEvent.click(screen.getByRole('combobox', { name: 'Host binding (optional)' }));
   fireEvent.click(screen.getByRole('option', { name: 'Option from help' }));
-  fireEvent.change(screen.getByLabelText('Probe program'), { target: { value: '/synthetic/probe' } });
+  fireEvent.change(screen.getByLabelText("Compatibility check program"), { target: { value: '/synthetic/probe' } });
   fireEvent.click(screen.getByRole('button', { name: 'Insert {model}' }));
   fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
   fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   expect(await screen.findByText(/Host binding \(optional\).*choose its option or select Not used/)).toBeVisible();
   expect(api.entrypointManifestPreview).not.toHaveBeenCalled();
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
   // The other choices stay as typed; choosing "Not used" registers no host.
-  expect(screen.getByLabelText('Probe program')).toHaveValue('/synthetic/probe');
+  expect(screen.getByLabelText("Compatibility check program")).toHaveValue('/synthetic/probe');
   fireEvent.click(screen.getByRole('combobox', { name: 'Host binding (optional)' }));
   fireEvent.click(screen.getByRole('option', { name: 'Not used' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Review manifest' }));
+  fireEvent.click(screen.getByRole('button', { name: "Review registration details" }));
   await screen.findByRole('button', { name: 'Register' });
   expect(vi.mocked(api.entrypointManifestPreview).mock.calls[0][0]).toMatchObject({ host: null });
 });

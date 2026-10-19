@@ -54,7 +54,7 @@ beforeEach(() => {
 
 function chooseMarker() {
   fireEvent.click(screen.getByRole('combobox', { name: 'marker Positional layout' }));
-  fireEvent.click(screen.getByRole('option', { name: `Entry token 4: ${SECRET}` }));
+  fireEvent.click(screen.getByRole('option', { name: `Fixed launch argument 4: ${SECRET}` }));
 }
 
 describe('unsaved known-sensitive static roles', () => {

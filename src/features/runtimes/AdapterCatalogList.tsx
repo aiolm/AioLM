@@ -1,5 +1,6 @@
 import { memo, useDeferredValue, useId, useMemo, useState } from 'react';
-import { runtimeLabel, type ProviderDescription, type ProviderId, type RuntimeInstance } from '../../shared/api/providers';
+import { type ProviderDescription, type ProviderId, type RuntimeInstance } from '../../shared/api/providers';
+import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 import { useI18n } from '../../shared/i18n/i18n';
 import { adapterCatalogCopy, fillAdapterCopy } from '../../shared/i18n/adapterCatalogCopy';
 import Badge from '../../shared/ui/Badge';
@@ -9,6 +10,7 @@ type Copy = (typeof adapterCatalogCopy)['en'];
 function AdapterRow({ item, runtimes, disabled, copy, onOpen }: {
   item: ProviderDescription; runtimes: RuntimeInstance[]; disabled: boolean; copy: Copy; onOpen: (id: ProviderId) => void;
 }) {
+  const { locale } = useI18n();
   const id = useId();
   const [expanded, setExpanded] = useState(false);
   const builtin = item.kind !== 'external-process';
@@ -43,7 +45,7 @@ function AdapterRow({ item, runtimes, disabled, copy, onOpen }: {
           <ul>
             {runtimes.map(runtime => (
               <li key={runtime.id}>
-                {runtimeLabel(runtime)} · {runtime.available ? copy.runtimeFound : copy.attention}
+                {runtimeInstanceLabel(runtime, locale)} · {runtime.available ? copy.runtimeFound : copy.attention}
                 {runtime.problems.length > 0 && <small> · {runtime.problems.join('; ')}</small>}
               </li>
             ))}

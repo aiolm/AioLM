@@ -21,6 +21,7 @@ import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { clearRuntimeOptionOverrides } from '../runtimes/runtimeOptionDefaults';
 import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
 import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
+import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0 }: {
   cfg: api.AppConfig; disabled: boolean; onProvider: (provider: api.ProviderId) => void;
@@ -66,7 +67,7 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
     <fieldset disabled={disabled || description?.availability.supported === false} className="runtime-choice-group"><legend>{copy.runtime}</legend>
       {entries.map(item => <label key={item.id} className={`runtime-choice${item.id === selected ? ' is-selected' : ''}`}>
         <input type="radio" name={`${groupId}-runtime`} checked={item.id === selected} disabled={!item.available} onChange={() => selectRuntime(item)} />
-        <span><strong>{api.runtimeLabel(item)}</strong><small>{item.server}</small>{item.problems.length > 0 && <small>{normalizeDisplayText(item.problems.join('; '))}</small>}</span>
+        <span><strong>{runtimeInstanceLabel(item, locale)}</strong><small>{item.server}</small>{item.problems.length > 0 && <small>{normalizeDisplayText(item.problems.join('; '))}</small>}</span>
       </label>)}
       {inventoryState === 'ready' && !entries.length && <p className="app-section-hint">{flowCopy.noRuntimes}</p>}
       {selected && !entries.some(item => item.id === selected) && <p className="app-section-hint">{selected}</p>}

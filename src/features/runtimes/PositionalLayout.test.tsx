@@ -30,11 +30,11 @@ describe('positional layout', () => {
     const onSave = vi.fn();
     render(<I18nProvider initialLocale="en"><PositionalLayout effective={effective} disabled={false} onSave={onSave} /></I18nProvider>);
     choose('input', 'You supply it');
-    choose('model', 'App binding: model');
+    choose('model', "Value supplied by AioLM: model");
     // Only literal tokens after the declared subcommand are offered.
     fireEvent.click(screen.getByRole('combobox', { name: 'marker Positional layout' }));
-    expect(screen.queryByRole('option', { name: /Entry token 2: engine.py/ })).toBeNull();
-    fireEvent.click(screen.getByRole('option', { name: 'Entry token 4: MARKER' }));
+    expect(screen.queryByRole('option', { name: /Fixed launch argument 2: engine.py/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: "Fixed launch argument 4: MARKER" }));
     choose('output', 'You supply it');
     fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
     expect(onSave).toHaveBeenCalledWith({
@@ -81,11 +81,11 @@ describe('positional layout', () => {
     const onSave = vi.fn();
     const view = render(<I18nProvider initialLocale="en"><PositionalLayout effective={saved} disabled={false} onSave={onSave} /></I18nProvider>);
     expect(document.body).not.toHaveTextContent(secret);
-    expect(screen.getByRole('combobox', { name: 'marker Positional layout' })).toHaveTextContent('Entry token 4: •••');
+    expect(screen.getByRole('combobox', { name: 'marker Positional layout' })).toHaveTextContent("Fixed launch argument 4: •••");
     // Unselected choices in another slot's list are masked too.
     fireEvent.click(screen.getByRole('combobox', { name: 'extra Positional layout' }));
-    expect(screen.getByRole('option', { name: 'Entry token 4: •••' })).toBeVisible();
-    expect(screen.getByRole('option', { name: 'Entry token 5: plain-token' })).toBeVisible();
+    expect(screen.getByRole('option', { name: "Fixed launch argument 4: •••" })).toBeVisible();
+    expect(screen.getByRole('option', { name: "Fixed launch argument 5: plain-token" })).toBeVisible();
     expect(document.body).not.toHaveTextContent(secret);
     fireEvent.click(screen.getByRole('option', { name: 'Not mapped' }));
     // The exact saved role is unchanged by masking.
@@ -95,7 +95,7 @@ describe('positional layout', () => {
     // A sensitive slot newly drafted onto a token masks it from then on.
     const fresh = effectiveSchema([], slots, { entry: sensitiveEntry });
     render(<I18nProvider initialLocale="en"><PositionalLayout effective={fresh} disabled={false} onSave={vi.fn()} /></I18nProvider>);
-    choose('marker', `Entry token 4: ${secret}`);
+    choose('marker', `Fixed launch argument 4: ${secret}`);
     expect(document.body).not.toHaveTextContent(secret);
   });
 
@@ -114,8 +114,8 @@ describe('positional layout', () => {
     // Display-only protection survives the new review; its roles do not.
     expect(screen.getByRole('combobox', { name: 'marker Positional layout' })).toHaveTextContent('Not mapped');
     fireEvent.click(screen.getByRole('combobox', { name: 'other Positional layout' }));
-    expect(screen.getByRole('option', { name: 'Entry token 4: •••' })).toBeVisible();
-    expect(screen.getByRole('option', { name: 'Entry token 5: plain-token' })).toBeVisible();
+    expect(screen.getByRole('option', { name: "Fixed launch argument 4: •••" })).toBeVisible();
+    expect(screen.getByRole('option', { name: "Fixed launch argument 5: plain-token" })).toBeVisible();
     expect(document.body).not.toHaveTextContent(secret);
     fireEvent.click(screen.getByRole('option', { name: 'Not mapped' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save positional layout' }));
@@ -135,7 +135,7 @@ describe('positional layout', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('positional binding model');
     view.unmount();
     render(<I18nProvider initialLocale="en"><PositionalLayout effective={effectiveSchema([], slots)} disabled={false} onSave={vi.fn()} /></I18nProvider>);
-    expect(screen.getByText(/does not declare positional placement/)).toBeVisible();
+    expect(screen.getByText(/has no positions configured for these arguments/)).toBeVisible();
     expect(screen.queryByRole('combobox')).toBeNull();
   });
 });

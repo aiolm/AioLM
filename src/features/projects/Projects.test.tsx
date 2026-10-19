@@ -275,7 +275,7 @@ describe("Project configuration snapshots", () => {
     const store = createTestStore({ active_provider: 'vllm', active_runtime: 'synthetic-metal', active_backend: 'vulkan', active_build: 'stale-build', ctx_size: 8192,
       provider_options: { vllm: { max_model_len: 512 } } });
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · managed')).toBeVisible();
+    expect(await screen.findByText('vLLM · vllm-metal 0.30.0 · vLLM 0.30.0+cpu (synthetic-metal) · metal · Installed by AioLM')).toBeVisible();
     expect(screen.getByTestId('project-prompt-preview')).toHaveTextContent('512');
     expect(screen.getByTestId('project-prompt-preview')).not.toHaveTextContent('stale-build');
   });
@@ -530,7 +530,7 @@ describe("Project configuration snapshots", () => {
     const project = projectFromConfig("Research", "Cite the source", store.cfg!, [{ name: "notes.md", path: document }]);
     writeProjects([project]); setActiveProjectId(project.id);
     const { container } = render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
-    expect(screen.getByLabelText("Document bindings · one path per line")).toHaveTextContent(displayDocument);
+    expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent(displayDocument);
     expect(screen.getByTitle(String.raw`C:\models\test.gguf`)).toHaveTextContent('test.gguf');
     expect(container.textContent).not.toContain('\\\\?\\');
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
@@ -545,7 +545,7 @@ describe("Project configuration snapshots", () => {
     render(<I18nProvider initialLocale="en"><ProjectsPanel store={store} /></I18nProvider>);
     expect(screen.getByText("No documents yet.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Add document" }));
-    await waitFor(() => expect(screen.getByLabelText("Document bindings · one path per line")).toHaveTextContent("picked.md"));
+    await waitFor(() => expect(screen.getByLabelText("Linked documents · one path per line")).toHaveTextContent("picked.md"));
     fireEvent.click(screen.getByRole("button", { name: "Update project" }));
     expect(readProjects()[0]).toMatchObject({ documentBindings: [{ name: "picked.md", path: "C:/docs/picked.md" }] });
   });

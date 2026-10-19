@@ -79,7 +79,7 @@ function deferred<T>() {
 describe('provider portable import/export', () => {
   it('explains the model-session lock before submitting runtime changes or transfers', async () => {
     renderPanel(true);
-    await screen.findByText('0.31.0');
+    await screen.findByText('0.31.0 (portable-0-31-0-synthetic) · cpu · Installed by AioLM');
     fireEvent.change(screen.getByRole('textbox', { name: 'Python executable path' }), { target: { value: '/synthetic/python' } });
     const actions = ['Install isolated environment 0.31.0', 'Register existing Python environment', 'Remove', 'Export Python runtime bundle', 'Import Python runtime bundle'];
     for (const name of actions) {
@@ -101,7 +101,7 @@ describe('provider portable import/export', () => {
     });
     renderPanel();
     const providerRuntimes = await screen.findByRole('group', { name: 'vLLM · Runtime' });
-    expect(within(providerRuntimes).getByText('0.31.0')).toBeVisible();
+    expect(within(providerRuntimes).getByText('0.31.0 (portable-0-31-0-synthetic) · cpu · Installed by AioLM')).toBeVisible();
     fireEvent.click(within(providerRuntimes).getByRole('button', { name: 'Export Python runtime bundle' }));
     await waitFor(() => expect(mocked.providerPortableExport).toHaveBeenCalledWith('vllm', 'portable-0-31-0-synthetic'));
     await screen.findByTestId('portable-result');
@@ -121,7 +121,7 @@ describe('provider portable import/export', () => {
     await screen.findByTestId('portable-result');
     expect(screen.getByTestId('portable-result').textContent).toContain('portable-0-31-0-new');
     await waitFor(() => expect(mocked.providerRuntimes.mock.calls.length).toBeGreaterThanOrEqual(2));
-    await screen.findByText('0.31.0-new');
+    await screen.findByText('0.31.0-new (portable-0-31-0-new) · cpu · Installed by AioLM');
     expect(notifyCompletion).not.toHaveBeenCalled();
   });
 
@@ -137,12 +137,12 @@ describe('provider portable import/export', () => {
   it('mounts import failures and keeps the existing list', async () => {
     mocked.providerPortableImport.mockRejectedValue(new Error('wheel synthetic.whl failed its SHA-256 check'));
     renderPanel();
-    await screen.findByText('0.31.0');
+    await screen.findByText('0.31.0 (portable-0-31-0-synthetic) · cpu · Installed by AioLM');
     fireEvent.click(await importButton());
     await waitFor(() => expect(mocked.providerPortableImport).toHaveBeenCalled());
     await screen.findByText(/SHA-256/);
     expect(screen.queryByTestId('portable-result')).toBeNull();
-    expect(screen.getByText('0.31.0')).toBeTruthy();
+    expect(screen.getByText('0.31.0 (portable-0-31-0-synthetic) · cpu · Installed by AioLM')).toBeTruthy();
   });
 
   it('locks concurrent operations while one is in flight', async () => {

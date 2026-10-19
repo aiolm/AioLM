@@ -51,20 +51,20 @@ it('reloads help text choices, invalidates a review on edit and can return to th
   const locale = screen.getByLabelText('Help locale (optional)');
   expect(locale).toHaveValue('ko_KR.UTF-8');
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   fireEvent.change(locale, { target: { value: 'C' } });
-  expect(screen.queryByRole('button', { name: 'Accept this help' })).toBeNull();
+  expect(screen.queryByRole('button', { name: "Use these options" })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, { args: ['--help'], scope: [], encoding: 'cp949', locale: 'C' });
-  fireEvent.click(screen.getByRole('button', { name: 'Accept this help' }));
+  fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
   await waitFor(() => expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint,
     { args: ['--help'], scope: [], encoding: 'cp949', locale: 'C' }));
   fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
   fireEvent.click(screen.getByRole('option', { name: 'Auto (BOM or UTF-8)' }));
   fireEvent.change(locale, { target: { value: '' } });
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, { args: ['--help'], scope: [] });
 });
 
@@ -75,17 +75,17 @@ it('reviews an explicit execution directory, clears stale review on edit and ret
   expect(directory).toHaveValue('');
   fireEvent.change(directory, { target: { value: '/synthetic/first directory' } });
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/first directory' }));
   fireEvent.change(directory, { target: { value: '/synthetic/second 눈길' } });
-  expect(screen.queryByRole('button', { name: 'Accept this help' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   const request = vi.mocked(api.runtimeHelpDiscoverSelected).mock.calls.at(-1)![1];
   expect(request.working_directory).toBe('/synthetic/second 눈길');
   vi.mocked(api.runtimeHelpAccept).mockResolvedValueOnce({ version: 1, fingerprint: report.identity.fingerprint,
     request, working_directory: '/synthetic/second 눈길' });
-  fireEvent.click(screen.getByRole('button', { name: 'Accept this help' }));
+  fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
   await waitFor(() => expect(onAccepted).toHaveBeenCalledOnce());
   expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint, request);
   expect(directory).toHaveValue('/synthetic/second 눈길');
@@ -107,7 +107,7 @@ it('recovers a missing pinned directory through the common folder control withou
   await waitFor(() => expect(screen.getByLabelText('Execution working directory (optional)')).toHaveValue('/synthetic/recovered'));
   expect(api.pickRuntimePath).toHaveBeenCalledWith('folder');
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/recovered' }));
   expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
 });
@@ -128,7 +128,7 @@ it('discovers only on explicit action, preserves token boundaries, reviews the d
   expect(screen.getByText(/Changed options: changed_arity/)).toBeVisible();
   fireEvent.click(screen.getByText('Raw help'));
   expect(screen.getByText('stdout options stderr options')).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Accept this help' }));
+  fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
   await waitFor(() => expect(accepted).toHaveBeenCalledOnce());
   expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint, expect.objectContaining({ args: ['-I', '/synthetic path/engine.py', '--help', 'a b 한글'] }));
 });
@@ -142,7 +142,7 @@ it('cancels the old runtime when selection changes and rejects its late help pub
   rendered.rerender(view({ ...cfg, active_runtime: 'build-2' }));
   expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
   await act(async () => { finish(result); });
-  expect(screen.queryByRole('button', { name: 'Accept this help' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
   expect(screen.queryByText(/new_flag/)).not.toBeInTheDocument();
   await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
 });
@@ -155,9 +155,9 @@ it('keeps a cancelled late success unavailable for acceptance and can discover a
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await act(async () => { finish(result); });
-  expect(screen.queryByRole('button', { name: 'Accept this help' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  expect(await screen.findByRole('button', { name: 'Accept this help' })).toBeEnabled();
+  expect(await screen.findByRole('button', { name: "Use these options" })).toBeEnabled();
 });
 
 it('cancels an owned discovery when unmounted and never accepts an incomplete report', async () => {
@@ -166,7 +166,7 @@ it('cancels an owned discovery when unmounted and never accepts an incomplete re
   await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   await screen.findByText(/The help is incomplete/);
-  expect(screen.queryByRole('button', { name: 'Accept this help' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: "Use these options" })).not.toBeInTheDocument();
   vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise(() => undefined));
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
   rendered.unmount();
@@ -183,6 +183,6 @@ it('keeps a later manual directory edit when an earlier folder picker resolves',
   await act(async () => { finish('/synthetic/earlier picker directory'); });
   expect(directory).toHaveValue('/synthetic/new manual directory');
   fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
-  await screen.findByRole('button', { name: 'Accept this help' });
+  await screen.findByRole('button', { name: "Use these options" });
   expect(api.runtimeHelpDiscoverSelected).toHaveBeenLastCalledWith(cfg, expect.objectContaining({ working_directory: '/synthetic/new manual directory' }));
 });

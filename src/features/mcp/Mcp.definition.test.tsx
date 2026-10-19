@@ -150,7 +150,7 @@ describe('MCP saved definition ownership', () => {
     await screen.findByText(savedNotice);
     await act(async () => old.resolve([tool()]));
     expect(screen.queryByRole('button', { name: 'Prepare call: old_echo' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Tool metadata loaded. No tool has been called.')).not.toBeInTheDocument();
+    expect(screen.queryByText("Tool descriptions loaded. No tools were run.")).not.toBeInTheDocument();
     expect(screen.getByText(savedNotice)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Discover tools' })).toBeEnabled();
   });
