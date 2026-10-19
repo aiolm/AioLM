@@ -10,14 +10,6 @@ import ProgressBar from "./ProgressBar";
 import DiagnosticDetails, { isLongDiagnostic, summarizeDiagnostic } from "./DiagnosticDetails";
 import FeedbackBanner from "./FeedbackBanner";
 
-function hasPanelCancellation(task: AppTask): boolean {
-  return (task.kind === "runtime" && (task.id === "runtime-operation" || task.id === "deep-verification"))
-    || (task.kind === "benchmark" && task.id === "performance-benchmark-active")
-    || (task.kind === "other" && /^session-load-.+/.test(task.id))
-    || (task.kind === "other" && /^mcp-tool-call-.+/.test(task.id))
-    || (task.kind === "model-download" && task.id === "model-download");
-}
-
 /** Transfer detail for a task that reports bytes: "1.20 GiB / 4.00 GiB · 88.0 MiB/s". */
 export function transferLabel(task: AppTask): string | null {
   if (task.received === undefined || !task.total || task.total <= 0) return null;
@@ -78,7 +70,7 @@ export default function TaskStrip() {
                 {activeTask && transfer && <span className="app-task-strip__transfer" data-testid={`task-transfer-${task.id}`}>{transfer}</span>}
               </div>
               {progress !== undefined && <ProgressBar className="app-task-strip__progress" label={normalizeDisplayText(task.label)} value={progress} />}
-              {activeTask && task.cancel && !(hasPanelCancellation(task) && localTaskIds.has(task.id)) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
+              {activeTask && task.cancel && !localTaskIds.has(task.id) && <button type="button" className="app-button app-button--secondary app-button--sm" disabled={task.state === "cancelling"} onClick={() => void cancel(task)}><StableLabel value={task.state === "cancelling" ? t("ui.taskCancelling") : t("common.cancel")} labels={[t("ui.taskCancelling"), t("common.cancel")]} /></button>}
               {!activeTask && <button type="button" className="app-button app-button--ghost app-button--sm" aria-label={`${t("ui.taskDismiss")}: ${normalizeDisplayText(task.label)}`} onClick={() => dismissTask(task.id)}>{t("ui.taskDismiss")}</button>}
             </div>
           );

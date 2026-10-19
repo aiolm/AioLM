@@ -13,6 +13,9 @@ import { resetProfileOptions, resetProfileSettings } from './profileResetState';
 import { tuningResetValues } from '../../shared/config/tuningResetValues';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
 import { ORDER_KEY } from '../runtimes/optionOrder';
+import { registerTask, removeTask } from '../../shared/state/taskRegistry';
+import { LocalTaskCancelButton, TaskCancellationProvider } from '../../shared/ui/TaskCancellation';
+import TaskStrip from '../../shared/ui/TaskStrip';
 
 vi.mock('../../shared/api', async importOriginal => ({
   ...await importOriginal<typeof import('../../shared/api')>(),
@@ -93,6 +96,29 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
     expect(onManageRuntimes).toHaveBeenCalledWith(expect.objectContaining({ active_backend: '', active_build: '' }));
+  });
+
+  it('shares cancellation with the inline runtime manager and restores it when that retained manager is hidden', async () => {
+    const cancel = vi.fn();
+    const commit = vi.fn(); const reload = vi.fn();
+    registerTask({ id: 'runtime-adapter-registration', kind: 'runtime', label: 'Synthetic registration', interruptible: true, cancel });
+    try {
+      render(<I18nProvider initialLocale="en"><TaskCancellationProvider><TaskStrip /><ModelSettingsDialog open initialConfig={cfg}
+        mode="default" targetLabel="Synthetic execution" onApply={vi.fn()} onClose={vi.fn()} onProfileCommit={commit} onReloadProfile={reload}
+        renderRuntimeManager={() => <LocalTaskCancelButton taskId="runtime-adapter-registration" onClick={cancel}>Cancel registration</LocalTaskCancelButton>} />
+      </TaskCancellationProvider></I18nProvider>);
+      const strip = () => within(screen.getByRole('complementary', { name: 'Background tasks' }));
+      expect(strip().getByRole('button', { name: 'Cancel' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Manage runtimes' }));
+      expect(await screen.findByRole('button', { name: 'Cancel registration' })).toBeVisible();
+      await waitFor(() => expect(strip().queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Back to runtime' }));
+      await waitFor(() => expect(strip().getByRole('button', { name: 'Cancel' })).toBeEnabled());
+      expect(screen.queryByRole('button', { name: 'Cancel registration' })).not.toBeInTheDocument();
+      fireEvent.click(strip().getByRole('button', { name: 'Cancel' }));
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(commit).not.toHaveBeenCalled(); expect(reload).not.toHaveBeenCalled();
+    } finally { act(() => removeTask('runtime-adapter-registration')); }
   });
   it('manages runtimes inside the same modal, retains both drafts and waits for active operations', async () => {
     const inventory = vi.spyOn(api, 'providerRuntimes');

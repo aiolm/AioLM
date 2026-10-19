@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { ActivePanelContext } from "./PanelFeedback";
 import { useI18n } from "../i18n/i18n";
 import { getTaskSnapshot, useTasks } from "../state/taskRegistry";
@@ -36,12 +36,21 @@ export function LocalTaskCancelButton({ taskId, pending = false, disabled, onCli
   const register = useContext(TaskCancellationContext)?.register;
   const active = useContext(ActivePanelContext);
   const controlId = useId();
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!active || !register || (disabled && !pending && !cancelling)) return;
-    register(controlId, taskId);
-    return () => register(controlId, null);
+    // Editors and registration wizards keep drafts mounted behind hidden steps
+    // and closed disclosures. Their hidden controls cannot own cancellation.
+    const ancestors: HTMLElement[] = [];
+    for (let node = button.current?.parentElement; node; node = node.parentElement) ancestors.push(node);
+    const refresh = () => register(controlId, ancestors.some(node => node.hidden || node.hasAttribute('inert')
+      || (node.tagName === 'DETAILS' || node.tagName === 'DIALOG') && !node.hasAttribute('open')) ? null : taskId);
+    refresh();
+    const observer = new MutationObserver(refresh);
+    for (const node of ancestors) observer.observe(node, { attributes: true, attributeFilter: ['hidden', 'inert', 'open'] });
+    return () => { observer.disconnect(); register(controlId, null); };
   }, [active, cancelling, controlId, disabled, pending, register, taskId]);
-  return <button type="button" disabled={disabled || cancelling} {...props} className={className} onClick={event => {
+  return <button ref={button} type="button" disabled={disabled || cancelling} {...props} className={className} onClick={event => {
     if (getTaskSnapshot().some(task => task.id === taskId && task.state === "cancelling")) return;
     onClick?.(event);
   }}>{cancelling && !pending ? t("ui.taskCancelling") : children}</button>;

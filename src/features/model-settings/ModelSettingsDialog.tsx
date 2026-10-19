@@ -14,6 +14,7 @@ import ConfirmDialog from '../../shared/ui/ConfirmDialog';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import Badge from '../../shared/ui/Badge';
 import Switch from '../../shared/ui/Switch';
+import { ActivePanelContext } from '../../shared/ui/PanelFeedback';
 import TabNav from '../../shared/ui/TabNav';
 import { previewExecution } from '../models/modelExecutionState';
 import { useServerOptions } from '../tuning/useServerOptions';
@@ -502,7 +503,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
         </div>
         {managerRequest && renderRuntimeManager && <section className="model-settings-runtime-manager" hidden={!managerOpen}>
           <div className="model-settings-manager-actions"><button type="button" className="app-button app-button--secondary" disabled={disabled || managerBusy} onClick={closeRuntimeManager}>{flowCopy.backRuntime}</button></div>
-          <Suspense fallback={<p role="status">{t('extra.loading')}</p>}>{renderRuntimeManager({ ...managerRequest, active: managerOpen && open, onBusyChange: setManagerBusy })}</Suspense>
+          <ActivePanelContext.Provider value={managerOpen && open}><Suspense fallback={<p role="status">{t('extra.loading')}</p>}>{renderRuntimeManager({ ...managerRequest, active: managerOpen && open, onBusyChange: setManagerBusy })}</Suspense></ActivePanelContext.Provider>
         </section>}
         <footer className="model-settings-footer" hidden={managerOpen}>
           <div className="model-settings-footer-summary" tabIndex={0}>

@@ -125,7 +125,7 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
 
 function ReadyApp({ preferences, setPreferences, baseStore }: InitializedAppProps) {
   const { store, selectModel } = useExecutionStore(baseStore);
-  return <ModelSettingsProvider store={store}><AppShell preferences={preferences} setPreferences={setPreferences} store={store} selectModel={selectModel} /></ModelSettingsProvider>;
+  return <TaskCancellationProvider><ModelSettingsProvider store={store}><AppShell preferences={preferences} setPreferences={setPreferences} store={store} selectModel={selectModel} /></ModelSettingsProvider></TaskCancellationProvider>;
 }
 
 function AppShell({ preferences, setPreferences, store, selectModel }: { preferences: AppPreferences; setPreferences: React.Dispatch<React.SetStateAction<AppPreferences>>; store: ReturnType<typeof useAppStore>; selectModel: (path: string) => Promise<void> }) {
@@ -298,7 +298,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
     <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
-  return <TaskCancellationProvider><PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
+  return <PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
     <aside id="aiolm-sidebar" className="aiolm-sidebar">
       <div className="aiolm-sidebar-heading">{brand}<button type="button" className="app-icon-button aiolm-sidebar-toggle" aria-label={sidebarToggleLabel} title={sidebarToggleLabel} aria-expanded={!sidebarCollapsed} aria-controls="aiolm-sidebar" onClick={() => setSidebarCollapsed(current => !current)}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={sidebarCollapsed ? "M4 4h16v16H4V4Z M9 4v16M13 9l3 3-3 3" : "M4 4h16v16H4V4Z M9 4v16M16 9l-3 3 3 3"} /></svg></button></div>
@@ -342,5 +342,5 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
         </main>
       </div>
     </div>
-  </div></PanelFeedbackProvider></TaskCancellationProvider>;
+  </div></PanelFeedbackProvider>;
 }
