@@ -241,7 +241,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
     </div>;
 
   return <section className={`settings-profile-control${full ? ' settings-profile-control--full' : ''}`} aria-label={copy.profiles} onKeyDown={handleEscape} aria-busy={pending}>
-    {showBanner && (bannerTarget ? createPortal(banner, bannerTarget) : banner)}
+    {showBanner && !selectionOnly && (bannerTarget ? createPortal(banner, bannerTarget) : banner)}
 
     {action && action.kind !== 'delete' && <div className="settings-profile-action app-card app-card--tight" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
       <>
@@ -289,6 +289,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
             </div>}
           </div>
           <div className="settings-profile-buttons">
+            {selectionOnly && state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
             {preview && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={closePreview}>{copy.closePreview}</button>}
             {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked} onClick={() => void run(() => onApply(preview.id), () => setPreviewId(null))}>{copy.apply}</button>}
             {detailItem && detailItem.scope !== 'preset' && <>

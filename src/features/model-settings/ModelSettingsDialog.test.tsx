@@ -70,7 +70,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
     expect(screen.getByRole('heading', { name: 'Choose profile' })).toBeVisible();
-    expect(screen.getByRole('combobox', { name: 'Settings profiles' })).toBeVisible();
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    expect(document.querySelector('.settings-profile-chips')).toBeVisible();
     expect(screen.queryByRole('combobox', { name: 'Runtime' })).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
@@ -166,7 +167,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
   it('does not steal focus from a control used before the stage focus frame', async () => {
     mount({ initialSection: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
-    const picker = screen.getByRole('combobox', { name: 'Settings profiles' });
+    const picker = document.querySelector<HTMLButtonElement>('.settings-profile-chip')!;
     picker.focus();
     await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
     expect(picker).toHaveFocus();
@@ -272,17 +273,19 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
     await act(async () => { finish([]); });
   });
-  it('applies a common profile from the fixed selector before selecting a primary model', async () => {
+  it('previews and applies a common profile from the single list before selecting a primary model', async () => {
     const initialConfig = { ...cfg, active_model: '', settings_profiles: undefined };
     const first = { ...captureProfile(initialConfig, 'Initial setup', 'global', ''), id: 'initial-setup' };
     const selected = { ...captureProfile({ ...initialConfig, temperature: 0.3 }, 'Selected setup', 'global', ''), id: 'selected-setup' };
     const library = { ...emptyProfileLibrary(), entries: [first, selected], default_profile_id: first.id, legacy_imported: true };
     const { onProfileCommit } = mount({ initialConfig: { ...initialConfig, settings_profiles: library }, initialSection: 'profiles' });
-    fireEvent.click(screen.getByRole('combobox', { name: 'Settings profiles' }));
-    fireEvent.click(screen.getByRole('option', { name: 'Global · Selected setup' }));
+    expect(screen.queryByRole('combobox', { name: 'Settings profiles' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Selected setup' }));
+    expect(onProfileCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
     await waitFor(() => expect(onProfileCommit).toHaveBeenCalled());
     expect(onProfileCommit).toHaveBeenCalledWith(expect.objectContaining({ active_model: '', temperature: 0.3 }), expect.anything(), true);
-    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Settings profiles' })).toHaveTextContent('Selected setup'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Selected setup · Selected' })).toBeVisible());
   });
 
   it('offers GGUF language models as llama draft companions and excludes snapshot directories', async () => {

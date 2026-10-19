@@ -392,7 +392,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
           {step === 'options' && <TabNav items={sections.map(value => ({ id: value, label: value === 'prompt' ? copy.promptSection : copy[value] }))} active={section} onSelect={showSection} label={copy.title}
             tabId={value => `${id}-tab-${value}`} panelId={() => `${id}-panel`} orientation="vertical" className="model-settings-nav" />}
           <div className="model-settings-content">
-            <div className="model-settings-context" hidden={step === 'runtime'}><div ref={setProfileBannerTarget} /></div>
+            <div className="model-settings-context" hidden={step !== 'options'}><div ref={setProfileBannerTarget} /></div>
             <div className="model-settings-body" ref={body} id={`${id}-panel`} role={step === 'options' ? 'tabpanel' : 'region'} aria-labelledby={step === 'options' ? `${id}-tab-${section}` : `${id}-step-title`}>
             <h3 id={`${id}-step-title`} ref={flowHeading} tabIndex={-1}>{flowCopy[step]}</h3>
             <p className="app-section-hint">{flowCopy[`${step}Hint`]}</p>
