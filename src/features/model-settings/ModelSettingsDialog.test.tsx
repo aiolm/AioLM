@@ -72,6 +72,22 @@ function openOptions() {
 // These flows render every settings section; shared CI runners need time for DOM queries and saves.
 describe('model settings editor', { timeout: 45000 }, () => {
   beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+  it('keeps profile-library preparation bounded while editing a model option with many saved profiles', () => {
+    const base = captureProfile(cfg, 'Saved settings', 'global', 'Keep these instructions');
+    const entries = [defaultSettingsProfile(), ...Array.from({ length: 64 }, (_, index) => ({
+      ...base, id: `saved-${index}`, name: `Saved settings ${index}`,
+    }))];
+    const library = { ...emptyProfileLibrary(), entries };
+    const before = structuredClone(library);
+    mount({ initialSection: 'tuning', initialConfig: { ...cfg, settings_profiles: library } });
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+    const libraryCopies = clone.mock.calls.filter(([value]) =>
+      value && typeof value === 'object' && 'entries' in value && Array.isArray(value.entries) && value.entries.length >= entries.length);
+    expect(libraryCopies).toHaveLength(0);
+    expect(numeric('ctx_size')).toHaveValue(8192);
+    expect(library).toEqual(before);
+  });
   it('guides ordinary entry through runtime and profile before exposing option editors', async () => {
     const { onApply, onProfileCommit } = mount({ initialSection: undefined });
     expect(screen.getByRole('heading', { name: 'Choose runtime' })).toBeVisible();

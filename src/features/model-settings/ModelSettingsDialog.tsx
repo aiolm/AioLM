@@ -27,7 +27,7 @@ import SettingsProfileControl from './SettingsProfileControl';
 import SettingsChangeList, { changeCount } from './SettingsChangeList';
 import { useProfileEditor } from './useProfileEditor';
 import { appliedProfile, SettingsDeliveryError, type ProfileEditorResult, type ProfileCommitResult } from './profileEditor';
-import { defaultSettingsProfileEntry, profileDeletionReason, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
+import { ensureProfileLibrary, settingsEqual, type ProfileApplication } from '../../shared/config/settingsProfiles';
 import { profileDisplayName } from '../../shared/i18n/profileNames';
 import { resetProfileOptions, resetProfileSettings } from './profileResetState';
 import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
@@ -83,7 +83,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const help = modelSettingsHelp[locale];
   const profileCopy = profileStatusCopy[locale];
   const id = useId();
-  const saved = useRef(structuredClone(initialConfig));
+  const saved = useRef<api.AppConfig | null>(null);
+  if (saved.current === null) saved.current = structuredClone(initialConfig);
   const initial = useRef({ ...saved.current, ...(requireModelSelection ? { active_model: '' } : {}) });
   const [baseline, setBaseline] = useState(() => executionSettings(initial.current));
   const [settings, setSettings] = useState<ExecutionSettings>(() => executionSettings(initial.current));
@@ -145,7 +146,8 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const contextLimit = selectedMetadata?.context_length;
   const disabled = busy || applying;
   const benchmark = mode === 'benchmark';
-  const profiles = useProfileEditor(initialConfig, cfg, initialApplication ?? appliedProfile(initialConfig, sessionId), benchmark, entry => profileDisplayName(entry, locale));
+  const savedApplication = useMemo(() => initialApplication ?? appliedProfile(initialConfig, sessionId), [initialApplication, initialConfig, sessionId]);
+  const profiles = useProfileEditor(initialConfig, cfg, savedApplication, benchmark, entry => profileDisplayName(entry, locale));
   const runtimeSelection = llama ? cfg.active_backend && cfg.active_build ? `${cfg.active_backend}:${cfg.active_build}` : '' : cfg.active_runtime ?? '';
   const runtimeKey = JSON.stringify([provider, runtimeSelection]);
   // An explicit section is an existing-context deep link. Ordinary entry and
@@ -203,10 +205,21 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const enteredPath = restoreDisplayPath(cfg.active_model, pathDraft.trim());
   const dirty = valuesDirty || invalid.size > 0 || profileDirty || profiles.working || enteredPath !== cfg.active_model;
   const liveMatches = running && !!liveConfig && cfg.active_model === liveConfig.active_model && settingsEqual(settings, executionSettings(liveConfig)) && profiles.systemPrompt === (liveApplication?.system_prompt ?? '');
-  const profileItems = profiles.available.map(entry => {
-      const deletionReason = profileDeletionReason(profiles.library, entry.id);
-      return { ...entry, name: profileDisplayName(entry, locale), deletable: !deletionReason, deletionReason };
-    });
+  // Default protection is a property of the library, not of an individual row.
+  // Normalize once when it changes; typing an option must not clone every
+  // saved profile once for each visible profile.
+  const { profileItems, defaultProfileId } = useMemo(() => {
+    const library = ensureProfileLibrary(profiles.library, provider);
+    const protectedIds = new Set(Object.values(library.provider_defaults ?? {}));
+    const defaultId = library.provider_defaults?.[provider] ?? library.default_profile_id;
+    return {
+      defaultProfileId: library.entries.find(entry => entry.id === defaultId)!.id,
+      profileItems: profiles.library.entries.filter(entry => (entry.provider ?? 'llama.cpp') === provider).map(entry => {
+        const deletionReason = protectedIds.has(entry.id) ? 'default' as const : undefined;
+        return { ...entry, name: profileDisplayName(entry, locale), deletable: !deletionReason, deletionReason };
+      }),
+    };
+  }, [profiles.library, provider, locale]);
   const displayId = profiles.selected.id;
   // The live process was launched from this profile's settings. Overwriting it
   // would leave the profile describing something the running server is not, so
@@ -437,7 +450,7 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
             <div hidden={step === 'runtime'}>
             <SettingsProfileControl bannerTarget={profileBannerTarget} items={profileItems} state={working ? 'working' : 'named'} activeId={displayId} basedOnId={working ? displayId : null}
               showBanner={step !== 'runtime'} lockSelection={step === 'options'} selectionOnly={step === 'profile'} onPreviewChange={setProfilePreview}
-              defaultProfileId={defaultSettingsProfileEntry(profiles.library, provider).id} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
+              defaultProfileId={defaultProfileId} onSetDefault={id => commitProfile(() => profiles.prepareSetDefault(id), true)}
               modelPath={cfg.active_model} currentSettings={settings} runtimeConfig={cfg} currentPrompt={profiles.systemPrompt} defaults={executionSettings(resetProfileSettings(cfg, false))} runtimeOptions={runtime.options} runtimeVerified={runtime.verified} gpuDevices={device?.profile.gpus} full={step === 'profile'}
               disabled={disabled} resetDisabled={!llama && (runtimeSchema.pending || !runtimeSchema.view || ['stale', 'unchecked'].includes(runtimeSchema.view.help_state))} blocked={providerOptionsPending || invalid.size > 0 || pathPending} onEditingChange={setProfileDirty}
               onApply={selectProfile}
