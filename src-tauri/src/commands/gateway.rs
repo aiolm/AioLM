@@ -126,7 +126,7 @@ async fn stop_api(state: &AppState) -> Result<(), String> {
     let handle = state
         .gateway
         .lock()
-        .map_err(|_| "gateway state lock was poisoned".to_string())?
+        .unwrap_or_else(|error| error.into_inner())
         .take();
     if let Some(handle) = handle {
         gateway::stop(handle).await;
@@ -181,10 +181,13 @@ pub(crate) fn anthropic_gateway_status(
 /// Tear the listener down without waiting, for the process-exit path. Model
 /// processes are stopped separately.
 pub(crate) fn abort_gateway_now(state: &AppState) {
-    if let Ok(mut gateway) = state.gateway.lock() {
-        if let Some(handle) = gateway.take() {
-            handle.abort();
-        }
+    let handle = state
+        .gateway
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    if let Some(handle) = handle {
+        handle.abort();
     }
 }
 
@@ -193,6 +196,8 @@ mod tests {
     use super::*;
     use crate::server::Lifecycle;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
     fn client() -> reqwest::Client {
         reqwest::Client::builder().no_proxy().build().unwrap()
@@ -215,6 +220,16 @@ mod tests {
         server.url = url.into();
         server.api_key = key.into();
         server.model = model.into();
+    }
+
+    fn poison_gateway_slot(state: &AppState) {
+        let gateway = state.gateway.clone();
+        let result = std::thread::spawn(move || {
+            let _slot = gateway.lock().unwrap();
+            panic!("synthetic gateway slot poison");
+        })
+        .join();
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -388,6 +403,60 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "listener lingered");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn stopping_recovers_a_poisoned_gateway_slot_and_closes_owned_connections() {
+        let state = AppState::default();
+        let started = start_api(&state, 0).await.unwrap();
+        let port = started.port;
+        let mut connection = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        connection
+            .write_all(b"GET /v1/models HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        poison_gateway_slot(&state);
+
+        stop_api(&state).await.unwrap();
+
+        let mut byte = [0_u8; 1];
+        let closed = tokio::time::timeout(Duration::from_secs(5), connection.read(&mut byte))
+            .await
+            .unwrap();
+        assert!(matches!(closed, Ok(0) | Err(_)), "connection remained open");
+        assert!(TcpStream::connect(("127.0.0.1", port)).await.is_err());
+        assert!(state
+            .gateway
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn aborting_recovers_a_poisoned_gateway_slot_and_releases_its_port() {
+        let state = AppState::default();
+        let started = start_api(&state, 0).await.unwrap();
+        let port = started.port;
+        poison_gateway_slot(&state);
+
+        abort_gateway_now(&state);
+
+        assert!(state
+            .gateway
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none());
+        let listener = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)).await {
+                    break listener;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(listener);
     }
 
     #[test]
