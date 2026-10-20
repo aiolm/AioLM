@@ -1444,6 +1444,15 @@ pub fn check_imported_probe(
     Ok(())
 }
 
+fn bounded_output_line(bytes: &[u8]) -> String {
+    let mut line = String::from_utf8_lossy(bytes).into_owned();
+    if line.len() > MAX_OUTPUT_LINE {
+        line.truncate(line.floor_char_boundary(MAX_OUTPUT_LINE));
+        line.push_str(" [truncated]");
+    }
+    line
+}
+
 async fn run_logged(
     program: &Path,
     args: &[&str],
@@ -1488,11 +1497,7 @@ async fn run_logged(
                 for &byte in &buffer[..count] {
                     if byte == b'\n' || byte == b'\r' {
                         if !pending.is_empty() {
-                            let mut line = String::from_utf8_lossy(&pending).into_owned();
-                            if line.len() > MAX_OUTPUT_LINE {
-                                line.truncate(MAX_OUTPUT_LINE);
-                                line.push_str(" [truncated]");
-                            }
+                            let line = bounded_output_line(&pending);
                             pending.clear();
                             if sender.send(line).await.is_err() {
                                 return;
@@ -1504,9 +1509,7 @@ async fn run_logged(
                 }
             }
             if !pending.is_empty() {
-                let _ = sender
-                    .send(String::from_utf8_lossy(&pending).into_owned())
-                    .await;
+                let _ = sender.send(bounded_output_line(&pending)).await;
             }
         });
     }
@@ -3245,5 +3248,246 @@ mod tests {
             );
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    const LOGGED_OUTPUT_TEST: &str =
+        "providers::portable::tests::run_logged_preserves_lossy_output_and_owned_cancellation";
+    const RAW_OUTPUT_TEST: &str = "providers::portable::tests::portable_logged_raw_output_fixture";
+    const RAW_OUTPUT_MODE: &str = "__aiolm_portable_raw_output=";
+    const LOGGED_OUTPUT_ISOLATED: &str = "AIOLM_PORTABLE_LOGGED_OUTPUT_ISOLATED";
+    const LOGGED_CONTROL: &str = "PORTABLE_VALID_CONTROL";
+    const LOGGED_COMPLETE: &str = "PORTABLE_INVALID_COMPLETE";
+    const LOGGED_EOF: &str = "PORTABLE_EOF_INVALID=";
+
+    #[test]
+    fn run_logged_preserves_lossy_output_and_owned_cancellation() {
+        if std::env::var_os(LOGGED_OUTPUT_ISOLATED).is_none() {
+            // Isolate the panic observer from every other test's reader tasks.
+            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    LOGGED_OUTPUT_TEST,
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(LOGGED_OUTPUT_ISOLATED, "1");
+            let output = crate::procutil::capture_output_cancellable(
+                &mut command,
+                Duration::from_secs(60),
+                1024 * 1024,
+                None,
+            )
+            .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            print!("{stdout}");
+            eprint!("{stderr}");
+            assert!(
+                output.status.success(),
+                "isolated output fixture failed: {stderr}"
+            );
+            assert!(stdout.contains("test result: ok. 1 passed"));
+            return;
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(observe_logged_output());
+    }
+
+    async fn observe_logged_output() {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::Mutex;
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let panics = Arc::new(AtomicUsize::new(0));
+        let observed_panics = panics.clone();
+        let panic_cancel = cancel.clone();
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            observed_panics.fetch_add(1, Ordering::AcqRel);
+            // A real detached-reader panic otherwise loses the completion line
+            // and leaves this fixture waiting for the install timeout.
+            panic_cancel.store(true, Ordering::Release);
+            previous_hook(info);
+        }));
+
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let mode = format!(
+            "{RAW_OUTPUT_MODE}line:{}",
+            listener.local_addr().unwrap().port()
+        );
+        let progress = Arc::new(Mutex::new(Vec::<String>::new()));
+        let delivered = progress.clone();
+        let completed = Arc::new(AtomicBool::new(false));
+        let delivered_complete = completed.clone();
+        let progress_cancel = cancel.clone();
+        let operation_cancel = cancel.clone();
+        let program = std::env::current_exe().unwrap();
+        let operation = crate::procutil::OwnedTask::from(tokio::spawn(async move {
+            run_logged(
+                &program,
+                &[
+                    "--exact",
+                    RAW_OUTPUT_TEST,
+                    "--nocapture",
+                    "--test-threads=1",
+                    "--skip",
+                    &mode,
+                ],
+                &operation_cancel,
+                move |line| {
+                    if line == LOGGED_COMPLETE {
+                        delivered_complete.store(true, Ordering::Release);
+                        progress_cancel.store(true, Ordering::Release);
+                    }
+                    delivered.lock().unwrap().push(line);
+                },
+            )
+            .await
+        }));
+        // Deadlines only reclaim a broken fixture; success comes from output,
+        // the actual cancellation result and the owned child's socket closing.
+        let accepted = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await;
+        let outcome = tokio::time::timeout(Duration::from_secs(10), operation).await;
+        let socket_closed = if let Ok(Ok((mut peer, _))) = accepted {
+            let mut byte = [0u8; 1];
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::io::AsyncReadExt::read(&mut peer, &mut byte),
+            )
+            .await
+            {
+                Ok(Ok(0)) => true,
+                Ok(Err(error)) => matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+                ),
+                _ => false,
+            }
+        } else {
+            false
+        };
+        let reader_panics = panics.load(Ordering::Acquire);
+        let lines = progress.lock().unwrap().clone();
+        let control = lines.iter().any(|line| line == LOGGED_CONTROL);
+        let complete = completed.load(Ordering::Acquire);
+        let lossy_line = lines.iter().find(|line| line.starts_with('\u{fffd}'));
+        let bounded_line = lossy_line.is_some_and(|line| {
+            line.len() <= MAX_OUTPUT_LINE + " [truncated]".len()
+                && line.strip_suffix(" [truncated]").is_some_and(|prefix| {
+                    !prefix.is_empty() && prefix.chars().all(|ch| ch == '\u{fffd}')
+                })
+        });
+        let cancelled =
+            matches!(&outcome, Ok(Ok(Err(error))) if error.contains("operation cancelled"));
+
+        // The no-newline stderr record must survive the real post-exit drain
+        // into the failure tail. That stage deliberately has no progress call.
+        let program = std::env::current_exe().unwrap();
+        let mode = format!("{RAW_OUTPUT_MODE}eof");
+        let eof_cancel = Arc::new(AtomicBool::new(false));
+        let eof_outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_logged(
+                &program,
+                &[
+                    "--exact",
+                    RAW_OUTPUT_TEST,
+                    "--nocapture",
+                    "--test-threads=1",
+                    "--skip",
+                    &mode,
+                ],
+                &eof_cancel,
+                |_| {},
+            ),
+        )
+        .await;
+        let eof_error = match &eof_outcome {
+            Ok(Err(error)) => Some(error.as_str()),
+            _ => None,
+        };
+        let eof_line = eof_error.and_then(|error| {
+            error
+                .split_once("failed (7): ")
+                .and_then(|(_, tail)| tail.lines().find(|line| line.starts_with(LOGGED_EOF)))
+        });
+        let bounded_tail = eof_line.is_some_and(|line| {
+            line.len() <= MAX_OUTPUT_LINE + " [truncated]".len()
+                && line
+                    .strip_prefix(LOGGED_EOF)
+                    .and_then(|line| line.strip_suffix(" [truncated]"))
+                    .is_some_and(|payload| {
+                        !payload.is_empty() && payload.chars().all(|ch| ch == '\u{fffd}')
+                    })
+        });
+        println!(
+            "PORTABLE_LOGGED_OUTPUT reader_panics={reader_panics} control={control} complete={complete} lossy_line_bytes={:?} bounded_line={bounded_line} cancelled={cancelled} child_socket_closed={socket_closed} outcome={outcome:?} eof_line_bytes={:?} bounded_tail={bounded_tail} eof_failed_seven={}",
+            lossy_line.map(String::len), eof_line.map(str::len), eof_error.is_some_and(|error| error.contains("failed (7):"))
+        );
+        let mut failures = Vec::new();
+        for (passed, problem) in [
+            (reader_panics == 0, "a real detached output reader panicked"),
+            (control, "ordinary stdout progress was lost"),
+            (complete, "stdout progress after invalid UTF-8 was lost"),
+            (
+                bounded_line,
+                "lossy newline output lost its valid bounded record",
+            ),
+            (cancelled, "the real operation did not report cancellation"),
+            (socket_closed, "the owned writer child was not reclaimed"),
+            (
+                eof_error.is_some_and(|error| error.contains("failed (7):")),
+                "the actual child failure was lost",
+            ),
+            (
+                bounded_tail,
+                "the no-newline failure tail exceeded the output bound",
+            ),
+        ] {
+            if !passed {
+                failures.push(problem);
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn portable_logged_raw_output_fixture() {
+        // --skip is an inert libtest argument that carries this child-only
+        // mode through run_logged's deliberately cleared environment.
+        let Some(mode) =
+            std::env::args().find_map(|arg| arg.strip_prefix(RAW_OUTPUT_MODE).map(str::to_owned))
+        else {
+            return;
+        };
+        if let Some(port) = mode.strip_prefix("line:") {
+            let mut lifetime = std::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                port.parse::<u16>().unwrap(),
+            ))
+            .unwrap();
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "\n{LOGGED_CONTROL}").unwrap();
+            stdout.write_all(&[0xff; MAX_OUTPUT_LINE]).unwrap();
+            writeln!(stdout, "\n{LOGGED_COMPLETE}").unwrap();
+            stdout.flush().unwrap();
+            // This child cannot finish normally while its parent holds the
+            // socket; EOF on the parent's peer therefore observes termination.
+            let mut byte = [0u8; 1];
+            let _ = std::io::Read::read(&mut lifetime, &mut byte);
+        } else {
+            assert_eq!(mode, "eof");
+            let mut stderr = std::io::stderr().lock();
+            stderr.write_all(LOGGED_EOF.as_bytes()).unwrap();
+            stderr.write_all(&[0xff; MAX_OUTPUT_LINE]).unwrap();
+            stderr.flush().unwrap();
+            std::process::exit(7);
+        }
     }
 }
