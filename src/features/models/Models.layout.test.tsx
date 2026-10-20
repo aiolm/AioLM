@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import type { AppConfig } from "../../shared/api/types";
 import type { AppStore } from "../../shared/state/store";
 import { I18nProvider } from "../../shared/i18n/i18n";
 import "../../styles/app.css";
+import * as api from "../../shared/api/index";
+import { createTestStore } from "../../testing/appStore";
 import ModelsPanel from "./Models";
+
+vi.mock("../../shared/api/index", async importOriginal => ({
+  ...await importOriginal<typeof import("../../shared/api/index")>(),
+  isNativeRuntimeAvailable: vi.fn(() => false),
+  listModels: vi.fn(async () => ({ models: [], truncated: false })),
+  cancelModelScan: vi.fn(async () => undefined),
+  sessionList: vi.fn(async () => []),
+  deleteModel: vi.fn(async () => undefined),
+}));
 
 const cfg = {
   config_version: 1,
@@ -103,5 +114,92 @@ describe("ModelsPanel layout", () => {
     expect(screen.getByRole("button", { name: "Unload model" })).toBeEnabled();
     expect(container.textContent).not.toContain("127.0.0.1");
     expect(container.textContent).not.toContain("private-key");
+  });
+});
+
+describe("model library loaded path identity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.isNativeRuntimeAvailable).mockReturnValue(true);
+  });
+
+  it("marks equivalent Windows paths as loaded and prevents deleting the named session model", async () => {
+    const path = "c:/models/Example.gguf";
+    vi.mocked(api.listModels).mockResolvedValue({ models: [{ name: "Example.gguf", path, size_mb: 1, is_vision: false }], truncated: false });
+    vi.mocked(api.sessionList).mockResolvedValue([{ id: "named", name: "Named", state: "running", model: "served-alias", execution: { active_model: "C:\\Models\\example.gguf" } }]);
+    const base = createTestStore({ active_model: "", models_dir: "C:/models" });
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact onSelectModel={vi.fn()} /></I18nProvider>);
+
+    const button = await screen.findByRole("button", { name: "Configure & run: Example.gguf" });
+    await waitFor(() => expect(api.sessionList).toHaveBeenCalled());
+    await act(async () => { await vi.mocked(api.sessionList).mock.results[0].value; });
+    const row = within(button.closest<HTMLElement>('[role="listitem"]')!);
+    expect.soft(row.queryByText("Running")).toBeVisible();
+    const remove = row.getByRole("button", { name: "Delete: Example.gguf" });
+    expect(remove).toBeDisabled();
+    fireEvent.click(remove);
+    expect(api.deleteModel).not.toHaveBeenCalled();
+    expect(base.cfg?.active_model).toBe("");
+  });
+
+  it("keeps POSIX model paths that differ only by case distinct", async () => {
+    vi.mocked(api.listModels).mockResolvedValue({ models: [
+      { name: "Example.gguf", path: "/models/Example.gguf", size_mb: 1, is_vision: false },
+      { name: "example.gguf", path: "/models/example.gguf", size_mb: 1, is_vision: false },
+    ], truncated: false });
+    vi.mocked(api.sessionList).mockResolvedValue([{ id: "named", name: "Named", state: "running", model: "served-alias", execution: { active_model: "/models/example.gguf" } }]);
+    const base = createTestStore({ active_model: "", models_dir: "/models" });
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact onSelectModel={vi.fn()} /></I18nProvider>);
+
+    const upper = await screen.findByRole("button", { name: "Configure & run: Example.gguf" });
+    const lower = await screen.findByRole("button", { name: "Configure & run: example.gguf" });
+    const upperRow = within(upper.closest<HTMLElement>('[role="listitem"]')!);
+    const lowerRow = within(lower.closest<HTMLElement>('[role="listitem"]')!);
+    await waitFor(() => expect(lowerRow.getByText("Running")).toBeVisible());
+    expect(upperRow.queryByText("Running")).not.toBeInTheDocument();
+    expect(upperRow.getByRole("button", { name: "Delete: Example.gguf" })).toBeEnabled();
+    expect(lowerRow.getByRole("button", { name: "Delete: example.gguf" })).toBeDisabled();
+    expect(api.deleteModel).not.toHaveBeenCalled();
+  });
+
+  it("marks the default server model through an equivalent Windows execution path", async () => {
+    const path = "C:/Models/Example.gguf";
+    vi.mocked(api.listModels).mockResolvedValue({ models: [{ name: "Example.gguf", path, size_mb: 1, is_vision: false }], truncated: false });
+    vi.mocked(api.sessionList).mockResolvedValue([]);
+    const base = createTestStore({ active_model: "C:/Models/Other.gguf", models_dir: "C:/Models" });
+    base.status = { state: "running", model: "served-alias", execution: { active_model: "c:\\models\\example.gguf" } };
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact onSelectModel={vi.fn()} /></I18nProvider>);
+
+    const button = await screen.findByRole("button", { name: "Configure & run: Example.gguf" });
+    const row = within(button.closest<HTMLElement>('[role="listitem"]')!);
+    expect(row.getByText("Running")).toBeVisible();
+    expect(button).toHaveAttribute("title", path);
+    expect(base.cfg?.active_model).toBe("C:/Models/Other.gguf");
+    expect(base.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("protects a grouped model loaded through an equivalent later-shard path and keeps its original selection paths", async () => {
+    const first = "C:/Models/Shard-00001-of-00002.gguf";
+    const files = [first, "C:/Models/Shard-00002-of-00002.gguf"];
+    const model = { name: "Shard.gguf", path: first, size_mb: 2, is_vision: false, shards: { files, total: 2, missing: [] } };
+    vi.mocked(api.listModels).mockResolvedValue({ models: [model], truncated: false });
+    vi.mocked(api.sessionList).mockResolvedValue([{ id: "named", name: "Named", state: "running", model: "served-alias", execution: { active_model: "c:\\models\\shard-00002-of-00002.gguf" } }]);
+    const base = createTestStore({ active_model: "", models_dir: "C:/Models" });
+    const select = vi.fn();
+    render(<I18nProvider initialLocale="en"><ModelsPanel store={base} compact onSelectModel={select} /></I18nProvider>);
+
+    const button = await screen.findByRole("button", { name: "Configure & run: Shard.gguf" });
+    await waitFor(() => expect(api.sessionList).toHaveBeenCalled());
+    await act(async () => { await vi.mocked(api.sessionList).mock.results[0].value; });
+    const row = within(button.closest<HTMLElement>('[role="listitem"]')!);
+    expect(row.getByText("Running")).toBeVisible();
+    const remove = row.getByRole("button", { name: "Delete: Shard.gguf" });
+    expect(remove).toBeDisabled();
+    fireEvent.click(remove);
+    expect(api.deleteModel).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ path: first, shards: { files, total: 2, missing: [] } }));
+    expect(button).toHaveAttribute("title", first);
+    expect(model.shards.files).toEqual([first, "C:/Models/Shard-00002-of-00002.gguf"]);
   });
 });

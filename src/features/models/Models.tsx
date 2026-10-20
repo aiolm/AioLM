@@ -18,7 +18,7 @@ import Badge from "../../shared/ui/Badge";
 import StatusBadge from "../../shared/ui/StatusBadge";
 import { useI18n } from "../../shared/i18n/i18n";
 import { isLifecycleCancellation, isServerBusy, isServerRunning } from "../../shared/lib/serverLifecycle";
-import { normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
+import { modelPathIdentity, normalizeDisplayPath, normalizeDisplayText } from "../../shared/lib/displayPaths";
 import { shouldConfirmDestructive } from "../../shared/config/preferences";
 import { useFlashMessage } from "../../shared/hooks/useFlashMessage";
 import TuningOptionMetadata from '../tuning/TuningOptionMetadata';
@@ -169,8 +169,9 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   // missing is the runtime — and without one the launch fails in the backend.
   // Say so here and disable the rows rather than letting each click fail.
   const runtimeGap = !!cfg && runSetupGaps({ activeModel: cfg.active_model, activeProvider: cfg.active_provider, activeRuntime: cfg.active_runtime, activeBackend: cfg.active_backend, activeBuild: cfg.active_build }).includes('runtime');
-  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => loadedModelPath(session)));
-  if (isServerRunning(store.status.state) && liveModel) loadedModels.add(liveModel);
+  const loadedModels = new Set(sessions.filter(session => session.id !== 'default' && isServerRunning(session.state)).map(session => modelPathIdentity(loadedModelPath(session))));
+  if (isServerRunning(store.status.state) && liveModel) loadedModels.add(modelPathIdentity(liveModel));
+  const isModelLoaded = (model: api.GgufModel) => loadedModels.has(modelPathIdentity(model.path)) || !!model.shards?.files.some(path => loadedModels.has(modelPathIdentity(path)));
 
   const refreshServerAdapters = useCallback(async () => {
     if (!isServerRunning(store.status.state) || !store.status.url || !store.status.api_key) {
@@ -308,7 +309,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   };
 
   const removeModel = async (model: api.GgufModel) => {
-    if (serverRunning || loadedModels.has(model.path) || model.shards?.files.some(path => loadedModels.has(path))) {
+    if (serverRunning || isModelLoaded(model)) {
       notify(t("ui.stopBeforeDelete"));
       return;
     }
@@ -456,7 +457,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         {visible.map((model) => {
           const displayName = normalizeDisplayText(model.name);
           const incomplete = !!model.shards?.missing.length;
-          const running = loadedModels.has(model.path) || !!model.shards?.files.some(path => loadedModels.has(path));
+          const running = isModelLoaded(model);
           const actionLabel = onSelectModel ? copy.setupAction : running ? t("ui.rowRunning") : serverRunning ? t("ui.rowRestartSwitch") : t("ui.rowStart");
           return (
             <div
