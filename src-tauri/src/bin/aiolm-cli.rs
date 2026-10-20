@@ -329,7 +329,7 @@ fn validate_loopback_url(url: &str) -> Result<(), String> {
         reqwest::Url::parse(url).map_err(|_| "headless state URL is invalid".to_string())?;
     if parsed.scheme() != "http"
         || parsed.host_str() != Some("127.0.0.1")
-        || parsed.port().is_none()
+        || (parsed.port().is_none() && url != configured_server_url(80))
         || parsed.path() != "/v1"
     {
         return Err("headless state URL must be an http loopback /v1 endpoint".into());
@@ -350,7 +350,11 @@ fn validate_state_url(url: &str, port: u16) -> Result<(), String> {
 fn recorded_server_port(url: &str) -> Result<u16, String> {
     let port = reqwest::Url::parse(url)
         .ok()
-        .and_then(|parsed| parsed.port())
+        .and_then(|parsed| {
+            parsed
+                .port()
+                .or_else(|| (url == configured_server_url(80)).then_some(80))
+        })
         .ok_or("headless state URL has no explicit port")?;
     validate_state_url(url, port)?;
     Ok(port)
@@ -785,11 +789,40 @@ async fn wait_for_log_collector(state: &HeadlessState) -> Result<(), String> {
     Ok(())
 }
 
-fn health_url(url: &str) -> String {
-    format!(
-        "{}/health",
-        url.trim_end_matches("/v1").trim_end_matches('/')
-    )
+// Launch metadata describes the running engine; saved settings describe its successor.
+// Legacy/unusable metadata retains the established saved-selection resolver.
+fn status_health_path(
+    engine: Option<&Value>,
+    cfg: &config::AppConfig,
+    manifest_health_path: impl Fn(aiolm_lib::providers::ProviderId, &str) -> Result<String, String>,
+) -> Result<String, String> {
+    use aiolm_lib::providers::{provider_of, ProviderId};
+    let recorded = engine.and_then(|engine| {
+        let name = engine.get("provider")?.as_str()?;
+        let provider = ProviderId::parse(name).filter(|provider| provider.as_str() == name)?;
+        let runtime = engine.get("runtime_id")?.as_str()?;
+        if runtime.is_empty()
+            || !runtime
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        {
+            return None;
+        }
+        if provider.is_custom() {
+            manifest_health_path(provider, runtime).ok()
+        } else {
+            Some("/health".into())
+        }
+    });
+    if let Some(path) = recorded {
+        return Ok(path);
+    }
+    let provider = provider_of(cfg);
+    if provider.is_custom() {
+        manifest_health_path(provider, &cfg.active_runtime)
+    } else {
+        Ok("/health".into())
+    }
 }
 
 async fn server_status() -> Result<Value, String> {
@@ -810,15 +843,13 @@ async fn server_status() -> Result<Value, String> {
     let alive = state_process_is_managed(&state);
     let health = if alive {
         reqwest::Client::new()
-            .get(if aiolm_lib::providers::provider_of(&cfg).is_custom() {
-                let manifest = aiolm_lib::providers::registry::manifest(
-                    aiolm_lib::providers::provider_of(&cfg),
-                    &cfg.active_runtime,
-                )?;
-                format!("http://127.0.0.1:{}{}", port, manifest.health_path)
-            } else {
-                health_url(&state.url)
-            })
+            .get(format!(
+                "http://127.0.0.1:{port}{}",
+                status_health_path(state.engine.as_ref(), &cfg, |provider, runtime| {
+                    aiolm_lib::providers::registry::manifest(provider, runtime)
+                        .map(|manifest| manifest.health_path)
+                })?
+            ))
             .timeout(std::time::Duration::from_secs(2))
             .send()
             .await
@@ -2185,6 +2216,137 @@ mod tests {
         };
         assert_eq!(run_interruptible(slow, unavailable, &cancel).await, Ok(1));
         assert!(!cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn status_health_route_prefers_canonical_recorded_engine() {
+        use aiolm_lib::providers::ProviderId;
+        let cfg = config::AppConfig {
+            active_provider: "custom.example".into(),
+            active_runtime: "next-1".into(),
+            ..Default::default()
+        };
+        let original =
+            json!({"provider":"custom.example","runtime_id":"origin-1","extra":{"unchanged":true}});
+        let before = original.clone();
+        assert_eq!(
+            status_health_path(Some(&original), &cfg, |provider, runtime| {
+                assert_eq!(provider.as_str(), "custom.example");
+                assert_eq!(runtime, "origin-1");
+                Ok("/origin-ready".into())
+            }),
+            Ok("/origin-ready".into())
+        );
+        assert_eq!(original, before);
+        for provider in ProviderId::ALL {
+            let engine = json!({"provider":provider,"runtime_id":"build-1"});
+            assert_eq!(
+                status_health_path(Some(&engine), &cfg, |_, _| panic!(
+                    "native route does not read saved custom registration"
+                )),
+                Ok("/health".into())
+            );
+        }
+    }
+
+    #[test]
+    fn status_health_route_preserves_legacy_fallback_and_errors() {
+        let cfg = config::AppConfig {
+            active_provider: "custom.example".into(),
+            active_runtime: "next-1".into(),
+            ..Default::default()
+        };
+        let malformed = [
+            Value::Null,
+            json!({}),
+            json!([]),
+            json!("engine"),
+            json!({"provider":5,"runtime_id":"build-1"}),
+            json!({"provider":"","runtime_id":"build-1"}),
+            json!({"provider":" llama.cpp ","runtime_id":"build-1"}),
+            json!({"provider":"unknown","runtime_id":"build-1"}),
+            json!({"provider":"llama.cpp","runtime_id":null}),
+            json!({"provider":"llama.cpp","runtime_id":""}),
+            json!({"provider":"llama.cpp","runtime_id":"../build-1"}),
+            json!({"provider":"custom.example","runtime_id":" origin-1 "}),
+        ];
+        for engine in std::iter::once(None).chain(malformed.iter().map(Some)) {
+            assert_eq!(
+                status_health_path(engine, &cfg, |provider, runtime| {
+                    assert_eq!(provider.as_str(), "custom.example");
+                    assert_eq!(runtime, "next-1");
+                    Ok("/next-ready".into())
+                }),
+                Ok("/next-ready".into())
+            );
+            assert_eq!(
+                status_health_path(engine, &cfg, |_, _| Err("saved registration error".into())),
+                Err("saved registration error".into())
+            );
+        }
+        let original = json!({"provider":"custom.example","runtime_id":"origin-1"});
+        let calls = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            status_health_path(Some(&original), &cfg, |_, runtime| {
+                calls.borrow_mut().push(runtime.to_owned());
+                if runtime == "origin-1" {
+                    Err("original unavailable or invalid".into())
+                } else {
+                    Ok("/next-ready".into())
+                }
+            }),
+            Ok("/next-ready".into())
+        );
+        assert_eq!(*calls.borrow(), ["origin-1", "next-1"]);
+        assert_eq!(
+            status_health_path(Some(&original), &cfg, |_, runtime| Err(format!(
+                "unavailable {runtime}"
+            ))),
+            Err("unavailable next-1".into())
+        );
+        let native = config::AppConfig::default();
+        assert_eq!(
+            status_health_path(Some(&original), &native, |_, _| Err(
+                "original unavailable".into()
+            )),
+            Ok("/health".into())
+        );
+    }
+
+    #[test]
+    fn explicit_http80_roundtrips_without_opening_a_socket() {
+        let mut cfg = config::AppConfig {
+            port: 80,
+            ..Default::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.port, 80);
+        let url = configured_server_url(cfg.port);
+        assert_eq!(url, "http://127.0.0.1:80/v1");
+        let parsed = reqwest::Url::parse(&url).unwrap();
+        assert_eq!(
+            parsed.port(),
+            None,
+            "locked Rust parser prerequisite: HTTP80 is normalized"
+        );
+        assert_eq!(parsed.port_or_known_default(), Some(80));
+        assert!(validate_state_url(&url, 80).is_ok());
+        assert_eq!(recorded_server_port(&url), Ok(80));
+        assert_eq!(recorded_server_port("http://127.0.0.1:8080/v1"), Ok(8080));
+        assert!(validate_state_url(&url, 8080).is_err());
+        for invalid in [
+            "http://127.0.0.1/v1",
+            "https://127.0.0.1:80/v1",
+            "http://localhost:80/v1",
+            "http://127.0.0.1:080/v1",
+            "http://127.0.0.1:80/v1?next=1",
+            "http://127.0.0.1:80/v1#next",
+            "http://user@127.0.0.1:80/v1",
+            "http://127.0.0.1:80/v1/extra",
+            "http://192.0.2.1:80/v1",
+        ] {
+            assert!(recorded_server_port(invalid).is_err(), "{invalid}");
+        }
     }
 
     #[test]

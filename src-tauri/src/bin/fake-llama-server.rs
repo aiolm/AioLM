@@ -61,7 +61,16 @@ fn handle(mut stream: TcpStream) {
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("");
 
-    if path == "/health"
+    // Only the finite synthetic status cases supply this private-home path.
+    if let Some(record) = std::env::var_os("FAKE_STATUS_REQUEST_RECORD") {
+        let mut record = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(record)
+            .expect("synthetic HTTP request log");
+        writeln!(record, "{method} {path}").expect("record synthetic request");
+    }
+    if matches!(path, "/health" | "/round72-origin-health")
         && authorization
         && std::env::args().any(|arg| arg == "--adapter-no-health-auth")
     {
@@ -92,7 +101,7 @@ fn handle(mut stream: TcpStream) {
             }
         }
         ("OPTIONS", _) => respond(&mut stream, "200 OK", "text/plain", ""),
-        ("GET", "/health") => respond(
+        ("GET", "/health" | "/round72-origin-health") => respond(
             &mut stream,
             "200 OK",
             "application/json",

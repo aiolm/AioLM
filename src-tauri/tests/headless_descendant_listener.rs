@@ -820,6 +820,9 @@ impl PublicCase {
         self.success(&["config", "set", key, value]).map(|_| ())
     }
     fn setup(&mut self) -> PublicResult<u16> {
+        self.setup_with_status_route(false)
+    }
+    fn setup_with_status_route(&mut self, status_route: bool) -> PublicResult<u16> {
         public_io(fs::create_dir(&self.home))?;
         self.owns_home = true;
         for dir in [
@@ -874,7 +877,7 @@ impl PublicCase {
                 self.file("launch-argv.json").to_string_lossy().into_owned(),
             ),
         ]);
-        let registration = draft(
+        let mut registration = draft(
             &engine,
             &engine,
             "launcher-1",
@@ -887,6 +890,15 @@ impl PublicCase {
             environment,
             true,
         );
+        if status_route {
+            registration.health_path = "/round72-origin-health".into();
+            registration.environment.insert(
+                "FAKE_STATUS_REQUEST_RECORD".into(),
+                self.file("status-requests.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
         let manifest =
             providers::registry::manifest_from_draft(&registration).map_err(|e| e.to_string())?;
         public_io(fs::write(
@@ -1082,7 +1094,126 @@ impl PublicCase {
         );
         Ok(())
     }
+    fn status_health_route(&mut self, name: &str, port: u16) -> PublicResult<()> {
+        let drift = matches!(name, "status-route-next" | "status-route-legacy-next");
+        if drift {
+            let mut next: Value =
+                serde_json::from_slice(&public_io(fs::read(self.file("registration.json")))?)
+                    .map_err(|e| e.to_string())?;
+            public_require(
+                next["probe"]["args"]
+                    == serde_json::json!(["--adapter-probe", ENGINE, "launcher-1", "{model}"]),
+                "original A probe argv contract",
+            )?;
+            next["runtime_id"] = "health-next".into();
+            next["probe"]["args"][2] = "health-next".into();
+            next["health_path"] = "/round72-next-health".into();
+            let path = self.file("health-next.json");
+            public_io(fs::write(
+                &path,
+                serde_json::to_vec(&next).map_err(|e| e.to_string())?,
+            ))?;
+            let registered =
+                self.success(&["runtime", "register-manifest", &path.to_string_lossy()])?;
+            public_require(
+                registered["engine_id"] == ENGINE && registered["runtime_id"] == "health-next",
+                "B registered before A launch with matching probe identity",
+            )?;
+        }
+        self.launch("start", port)?;
+        let baseline = self.success(&["server", "status"])?;
+        public_require(
+            baseline["state"] == "running" && baseline["health"] == true,
+            "healthy original custom runtime before changing saved settings",
+        )?;
+        let mut state_path = self.state();
+        if matches!(
+            name,
+            "status-route-legacy-next" | "status-route-no-engine-unchanged"
+        ) {
+            let mut legacy: Value = serde_json::from_slice(&public_io(fs::read(&state_path))?)
+                .map_err(|e| e.to_string())?;
+            let legacy = legacy.as_object_mut().ok_or("state object")?;
+            // Optional proposed snapshot name; old records contain no such metadata.
+            legacy.remove("health_path");
+            if name == "status-route-no-engine-unchanged" {
+                legacy.remove("engine");
+            }
+            public_io(fs::write(
+                &state_path,
+                serde_json::to_vec(&legacy).map_err(|e| e.to_string())?,
+            ))?;
+        }
+        if name == "status-route-legacy-next" {
+            let old = self.file("profile/local/aiolm/headless-state.json");
+            public_io(fs::create_dir_all(old.parent().ok_or("old parent")?))?;
+            public_io(fs::rename(&state_path, &old))?;
+            state_path = old;
+        }
+        let state_before = self.record_file("status-original-state", &state_path)?;
+        let original: Value = serde_json::from_slice(&state_before).map_err(|e| e.to_string())?;
+        if drift {
+            self.success(&["runtime", "select", ENGINE, "health-next"])?;
+            self.set("port", &self.foreign_port()?.to_string())?;
+            self.set(
+                "active_model",
+                &self.file("models/replacement.gguf").to_string_lossy(),
+            )?;
+        }
+        let config_before = self.record_file("status-saved-config", &self.file("config.json"))?;
+        let log_before = public_io(fs::read(self.file("status-requests.txt")))?;
+        let contacts = self.contacts();
+        let (ok, status) = self.command(&["server", "status"])?;
+        let log_after = self.record_file("status-requests", &self.file("status-requests.txt"))?;
+        self.expect(
+            "status probes original custom route",
+            log_after.strip_prefix(log_before.as_slice())
+                == Some(&b"GET /round72-origin-health\n"[..]),
+        );
+        let mut expected = baseline;
+        expected["engine"] = original["engine"].clone();
+        self.expect(
+            "status preserves every original public field",
+            ok && status == expected,
+        );
+        let state_after = self.record_file("status-after-state", &state_path)?;
+        self.expect(
+            "status leaves raw state bytes unchanged",
+            state_after == state_before,
+        );
+        self.expect(
+            "status preserves full saved config bytes",
+            public_io(fs::read(self.file("config.json")))? == config_before,
+        );
+        self.expect(
+            "status never contacts saved-next foreign listener",
+            self.contacts() == contacts,
+        );
+        self.expect(
+            "foreign process remains live",
+            self.foreign_process
+                .as_ref()
+                .is_some_and(PublicProcess::running),
+        );
+        self.stop_and_observe(0)?;
+        self.expect(
+            "stop preserves full saved config bytes",
+            public_io(fs::read(self.file("config.json")))? == config_before,
+        );
+        self.expect(
+            "stop preserves foreign isolation",
+            self.contacts() == contacts
+                && self
+                    .foreign_process
+                    .as_ref()
+                    .is_some_and(PublicProcess::running),
+        );
+        Ok(())
+    }
     fn behavior(&mut self, name: &str, port: u16) -> PublicResult<()> {
+        if name.starts_with("status-route-") {
+            return self.status_health_route(name, port);
+        }
         if name == "saved-controls" {
             return self.saved_controls();
         }
@@ -1618,6 +1749,10 @@ async fn prepared_public_cli_regressions() {
     fs::create_dir_all(&evidence_root).expect("create synthetic evidence directory");
     let mut failures = vec![];
     for name in [
+        "status-route-unchanged",
+        "status-route-next",
+        "status-route-legacy-next",
+        "status-route-no-engine-unchanged",
         "harness-early-error",
         "harness-unwind",
         "unchanged",
@@ -1646,7 +1781,7 @@ async fn prepared_public_cli_regressions() {
         let mut case = PublicCase::new();
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PublicResult<()> {
-                let port = case.setup()?;
+                let port = case.setup_with_status_route(name.starts_with("status-route-"))?;
                 case.behavior(name, port)
             }));
         let cleanup = case.finish_checked();

@@ -1215,7 +1215,10 @@ fn listener_owned_by_child(
 }
 
 pub(crate) fn port_from_url(url: &str) -> Option<u16> {
-    reqwest::Url::parse(url).ok()?.port()
+    reqwest::Url::parse(url)
+        .ok()?
+        .port()
+        .or_else(|| (url == "http://127.0.0.1:80/v1").then_some(80))
 }
 
 /// Poll both /health and /v1/models until the child is usable or timeout expires.
@@ -1711,6 +1714,14 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair == ["--spec-draft-device", "CUDA1"]));
+    }
+
+    #[test]
+    fn explicit_http80_readiness_port_is_recovered_without_a_listener() {
+        assert_eq!(port_from_url("http://127.0.0.1:80/v1"), Some(80));
+        assert_eq!(port_from_url("http://127.0.0.1:8080/v1"), Some(8080));
+        assert_eq!(port_from_url("http://127.0.0.1/v1"), None);
+        assert_eq!(port_from_url("not a URL"), None);
     }
 
     #[test]
