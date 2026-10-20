@@ -141,6 +141,25 @@ fn searchable(value: &str) -> String {
         .collect()
 }
 
+/// Free memory in --list-devices changes between probes. Retain the model and
+/// total capacity; only discard the documented numeric free-memory suffix.
+fn runtime_identity(description: &str) -> String {
+    let description = description.trim_end();
+    if let Some((identity, free)) = description.rsplit_once(", ") {
+        let total = identity
+            .rsplit_once('(')
+            .and_then(|(_, memory)| memory.strip_suffix(" MiB"));
+        if let (Some(total), Some(free)) = (total, free.strip_suffix(" MiB free)")) {
+            if [total, free].into_iter().all(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            }) {
+                return searchable(identity);
+            }
+        }
+    }
+    searchable(description)
+}
+
 fn parse_runtime_devices(lines: &[String], prefix: &str) -> Vec<RuntimeDevice> {
     lines
         .iter()
@@ -157,7 +176,7 @@ fn parse_runtime_devices(lines: &[String], prefix: &str) -> Vec<RuntimeDevice> {
                 name: name.trim().to_string(),
                 index,
                 searchable: searchable(&format!("{name} {description}")),
-                identity: searchable(description),
+                identity: runtime_identity(description),
             })
         })
         .collect()
@@ -724,6 +743,125 @@ mod tests {
         // Selecting the same backend again changes nothing.
         let same = remap_runtime_devices(&placement, "rocm", &rocm, "rocm", &rocm);
         assert_eq!(same.placement, placement);
+    }
+
+    #[test]
+    fn switching_backends_preserves_placement_when_only_free_memory_changes() {
+        let before = vec![
+            "ROCm0: Test Radeon (32768 MiB, 1000 MiB free)".into(),
+            "ROCm1: Test Radeon (32768 MiB, 32000 MiB free)".into(),
+        ];
+        let after = vec![
+            "Vulkan0: Test Radeon (32768 MiB, 30000 MiB free)".into(),
+            "Vulkan1: Test Radeon (32768 MiB, 8000 MiB free)".into(),
+        ];
+        let placement = GpuPlacement {
+            gpu_ids: vec!["runtime:rocm:ROCm1".into(), "runtime:rocm:ROCm0".into()],
+            main_gpu: Some("runtime:rocm:ROCm1".into()),
+            draft_gpu_id: Some("runtime:rocm:ROCm0".into()),
+            tensor_split: vec![3.0, 1.0],
+            split_mode: SplitMode::Layer,
+        };
+        let mapped = remap_runtime_devices(&placement, "rocm", &before, "vulkan", &after);
+        assert_eq!(
+            mapped.placement.gpu_ids,
+            ["runtime:vulkan:Vulkan1", "runtime:vulkan:Vulkan0"]
+        );
+        assert_eq!(
+            mapped.placement.main_gpu.as_deref(),
+            Some("runtime:vulkan:Vulkan1")
+        );
+        assert_eq!(
+            mapped.placement.draft_gpu_id.as_deref(),
+            Some("runtime:vulkan:Vulkan0")
+        );
+        assert_eq!(mapped.placement.tensor_split, placement.tensor_split);
+        assert_eq!(mapped.placement.split_mode, placement.split_mode);
+        assert!(mapped.dropped.is_empty());
+    }
+
+    #[test]
+    fn runtime_identity_retains_total_memory_when_free_memory_changes() {
+        let before = vec![
+            "ROCm0: Test Card (16384 MiB, 1000 MiB free)".into(),
+            "ROCm1: Test Card (32768 MiB, 32000 MiB free)".into(),
+        ];
+        let after = vec![
+            "Vulkan0: Test Card (32768 MiB, 30000 MiB free)".into(),
+            "Vulkan1: Test Card (16384 MiB)".into(),
+        ];
+        let placement = GpuPlacement {
+            gpu_ids: vec!["runtime:rocm:ROCm0".into()],
+            main_gpu: Some("runtime:rocm:ROCm0".into()),
+            draft_gpu_id: Some("runtime:rocm:ROCm1".into()),
+            ..GpuPlacement::default()
+        };
+        let mapped = remap_runtime_devices(&placement, "rocm", &before, "vulkan", &after);
+        assert_eq!(mapped.placement.gpu_ids, ["runtime:vulkan:Vulkan1"]);
+        assert_eq!(
+            mapped.placement.main_gpu.as_deref(),
+            Some("runtime:vulkan:Vulkan1")
+        );
+        assert_eq!(
+            mapped.placement.draft_gpu_id.as_deref(),
+            Some("runtime:vulkan:Vulkan0")
+        );
+        assert!(mapped.dropped.is_empty());
+    }
+
+    #[test]
+    fn vulkan_auto_placement_does_not_identify_cards_by_free_memory() {
+        let devices = vec![
+            "Vulkan0: Test Card (32768 MiB, 1000 MiB free)".into(),
+            "Vulkan1: Test Card (32768 MiB, 32000 MiB free)".into(),
+        ];
+        assert!(
+            validate_safe_auto_placement(&GpuPlacement::default(), "vulkan", &devices).is_err()
+        );
+        let explicit = GpuPlacement {
+            gpu_ids: vec!["runtime:vulkan:Vulkan0".into()],
+            ..GpuPlacement::default()
+        };
+        assert!(validate_safe_auto_placement(&explicit, "vulkan", &devices).is_ok());
+        let distinct = vec![
+            devices[0].clone(),
+            "Vulkan1: Test Card (16384 MiB, 1000 MiB free)".into(),
+        ];
+        assert!(
+            validate_safe_auto_placement(&GpuPlacement::default(), "vulkan", &distinct).is_ok()
+        );
+    }
+
+    #[test]
+    fn runtime_identity_keeps_model_details_and_unrecognized_memory_suffixes() {
+        let placement = GpuPlacement {
+            gpu_ids: vec!["runtime:rocm:ROCm0".into()],
+            ..GpuPlacement::default()
+        };
+        for (before, after) in [
+            (
+                "Test Card (Rev A) (16384 MiB, 1000 MiB free)",
+                "Test Card (Rev B) (16384 MiB, 1000 MiB free)",
+            ),
+            (
+                "Test Card (16384 MiB, 1000 MiB free)",
+                "Test Card (16384 MiB, unavailable MiB free)",
+            ),
+            (
+                "Test Card (16384 MiB, 1000 MiB free)",
+                "Test Card (16384 MiB, 1000 MiB free) custom suffix",
+            ),
+        ] {
+            let mapped = remap_runtime_devices(
+                &placement,
+                "rocm",
+                &[format!("ROCm0: {before}")],
+                "vulkan",
+                &[format!("Vulkan0: {after}")],
+            );
+            assert!(mapped.placement.gpu_ids.is_empty());
+            assert_eq!(mapped.dropped, placement.gpu_ids);
+        }
     }
 
     #[test]
