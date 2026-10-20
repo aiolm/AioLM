@@ -155,7 +155,7 @@ describe('settings profile workspace', () => {
     const path = 'models/My Models/adapter file.gguf';
     const tensor = 'blk\\.\\d+\\.ffn.*=CPU,per_layer_token_embd.weight=CPU';
     const args = ['--control-vector-layer-range', '-1', '8', '--override-tensor', tensor, '--control-vector', path,
-      '--override-tensor=output.weight=CPU', '--future-option', 'value with spaces, commas=kept', '-0.5', '--jinja', '--cache-ram', '--no-warmup'];
+      '--override-tensor=output.weight=CPU', '--future-option', 'value with spaces, commas=kept', '--', '--未知', '-', '-0.5', '--jinja', '--cache-ram', '--no-warmup'];
     mount({ currentSettings: { server_args: args }, runtimeOptions: parseRuntimeHelp([
       '--control-vector-layer-range START END  range', '--override-tensor PATTERN  placement', '--control-vector FNAME  path',
       '--jinja  use templates', '--cache-ram N  cache', '--no-warmup  skip warmup',
@@ -163,7 +163,7 @@ describe('settings profile workspace', () => {
     const rows = within(screen.getByRole('region', { name: 'Current values' })).getAllByRole('listitem');
     expect(rows.map(row => [...row.querySelectorAll('code')].map(code => code.textContent))).toEqual([
       ['--control-vector-layer-range', '-1', '8'], ['--override-tensor', tensor], ['--control-vector', path],
-      ['--override-tensor', 'output.weight=CPU'], ['--future-option', 'value with spaces, commas=kept', '-0.5'],
+      ['--override-tensor', 'output.weight=CPU'], ['--future-option', 'value with spaces, commas=kept'], ['--'], ['--未知'], ['-', '-0.5'],
       ['--jinja'], ['--cache-ram'], ['--no-warmup'],
     ]);
   });
