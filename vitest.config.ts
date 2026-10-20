@@ -13,7 +13,7 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       // Only covers src/** exercised by Vitest (component/hook/utility
-      // tests). The 24 direct Node assertion scripts under tests/direct/**
+      // tests). The 21 direct Node assertion scripts under tests/direct/**
       // (run via tests/direct/run.ts) are not instrumented here —
       // see README's validation section for that scope split.
       provider: "v8",
