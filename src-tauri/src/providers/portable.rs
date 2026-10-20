@@ -149,6 +149,16 @@ fn fail(message: impl Into<String>) -> String {
     message.into()
 }
 
+fn check_version_pair(name: &str, promised: &str, actual: Option<&str>) -> Result<(), String> {
+    if actual != Some(promised) {
+        return Err(fail(format!(
+            "{name} version in the dependency closure ({}) does not match the declared version {promised}",
+            actual.unwrap_or("<missing>"),
+        )));
+    }
+    Ok(())
+}
+
 /// Distribution names compare case-insensitively with `-`, `_`, `.` equal.
 pub fn normalize_dist(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
@@ -526,6 +536,16 @@ pub fn export_freeze(
                 sources.insert(name.clone(), "pinned-git");
             }
         }
+    }
+    if !probe.mlx_version.is_empty()
+        && (provider == ProviderId::MlxVlm
+            || (provider == ProviderId::Vllm && variant == metal_env::VARIANT))
+    {
+        check_version_pair(
+            "mlx",
+            &probe.mlx_version,
+            freeze.get("mlx").map(|frozen| frozen.version.as_str()),
+        )?;
     }
     Ok(sources)
 }
@@ -948,6 +968,28 @@ pub fn validate_manifest(manifest: &PortableManifest) -> Result<(), String> {
         return Err(fail(
             "portable bundle manifest must keep provider identities separate from native build metadata",
         ));
+    }
+    let engine = python_env::package_name(manifest.provider);
+    check_version_pair(
+        engine,
+        &manifest.version,
+        manifest.packages.get(engine).map(String::as_str),
+    )?;
+    if manifest.variant == metal_env::VARIANT {
+        check_version_pair(
+            "vllm-metal",
+            &manifest.plugin_version,
+            manifest.packages.get("vllm-metal").map(String::as_str),
+        )?;
+    }
+    if !manifest.mlx_version.is_empty()
+        && (manifest.provider == ProviderId::MlxVlm || manifest.variant == metal_env::VARIANT)
+    {
+        check_version_pair(
+            "mlx",
+            &manifest.mlx_version,
+            manifest.packages.get("mlx").map(String::as_str),
+        )?;
     }
     Ok(())
 }
@@ -2796,6 +2838,318 @@ mod tests {
         manifest.platform.python_abi = "cpython-399-test".into();
         manifest.platform.python_version = "3.9.0".into();
         assert!(check_compatible(&manifest, current_os(), current_arch()).is_err());
+    }
+
+    #[test]
+    fn portable_archive_headers_match_their_vendored_identities() {
+        let rebuild = |manifest: &mut PortableManifest| {
+            manifest.wheels = manifest
+                .packages
+                .iter()
+                .map(|(name, version)| {
+                    let bytes = synthetic_wheel_bytes(name, version);
+                    PortableWheel {
+                        name: name.clone(),
+                        version: version.clone(),
+                        filename: synthetic_wheel_filename(name, version),
+                        sha256: sha256_bytes(&bytes),
+                        size: bytes.len() as u64,
+                    }
+                })
+                .collect();
+        };
+        let standard = synthetic_manifest(ProviderId::Vllm);
+        let legacy_mlx_vlm = synthetic_manifest(ProviderId::MlxVlm);
+        assert!(standard.plugin_version.is_empty() && standard.mlx_version.is_empty());
+        assert!(legacy_mlx_vlm.plugin_version.is_empty() && legacy_mlx_vlm.mlx_version.is_empty());
+        let mut reported_mlx_vlm = legacy_mlx_vlm.clone();
+        reported_mlx_vlm.mlx_version = reported_mlx_vlm.packages["mlx"].clone();
+        let mut unrelated_mlx = standard.clone();
+        unrelated_mlx.mlx_version = "0.99.0".into();
+        unrelated_mlx.packages.insert("mlx".into(), "0.20.0".into());
+        unrelated_mlx
+            .sources
+            .insert("mlx".into(), SOURCE_PYPI.into());
+        rebuild(&mut unrelated_mlx);
+
+        // A standard vLLM fixture has no MLX/plugin member. Explicitly supply all
+        // current Metal minima and sources before changing its variant and headers.
+        let mut metal = standard.clone();
+        metal.variant = metal_env::VARIANT.into();
+        metal.version = metal_env::CORE_VERSION.into();
+        metal.plugin_version = metal_env::VERSION.into();
+        metal.mlx_version = metal_env::MLX_VERSION.into();
+        metal.mlx_lm_commit = metal_env::MLX_LM_COMMIT.into();
+        metal.platform = platform_of_probe(&ready_metal_probe());
+        for (name, version, source) in [
+            ("vllm", metal_env::CORE_VERSION, SOURCE_RELEASE_URL),
+            ("vllm-metal", metal_env::VERSION, SOURCE_RELEASE_URL),
+            ("mlx", metal_env::MLX_VERSION, SOURCE_PYPI),
+        ] {
+            metal.packages.insert(name.into(), version.into());
+            metal.sources.insert(name.into(), source.into());
+        }
+        rebuild(&mut metal);
+        // The existing Metal validator also permits this public distribution
+        // spelling; preserve it with matching package/wheel metadata.
+        let mut public_metal = metal.clone();
+        public_metal.version = metal_env::VERSION.into();
+        public_metal
+            .packages
+            .insert("vllm".into(), metal_env::VERSION.into());
+        public_metal
+            .sources
+            .insert("vllm".into(), SOURCE_PYPI.into());
+        rebuild(&mut public_metal);
+
+        let controls = [
+            ("vllm-empty-optionals", &standard),
+            ("mlx-vlm-empty-optionals", &legacy_mlx_vlm),
+            ("mlx-vlm-populated-mlx", &reported_mlx_vlm),
+            ("vllm-unrelated-mlx", &unrelated_mlx),
+            ("metal-cpu-distribution", &metal),
+            ("metal-public-distribution", &public_metal),
+        ];
+        let fixture = PortableBoundaryFixture::new();
+        let cancel = AtomicBool::new(false);
+        let mut control_failures = Vec::new();
+        for (label, manifest) in controls {
+            for required in required_packages(manifest.provider, &manifest.variant) {
+                assert!(
+                    manifest.packages.contains_key(*required),
+                    "{label}: {required}"
+                );
+                assert!(
+                    manifest.sources.contains_key(*required),
+                    "{label}: {required}"
+                );
+                assert!(
+                    manifest.wheels.iter().any(|wheel| wheel.name == *required),
+                    "{label}: {required}"
+                );
+            }
+            let wheels = fixture.root.join(format!("control-{label}-wheels"));
+            write_wheels_dir(manifest, &wheels);
+            let output = fixture.root.join(format!("control-{label}.zip"));
+            let validation_error = validate_manifest(manifest).err();
+            let writer = write_archive(manifest, &wheels, &output, &cancel);
+            println!(
+                "PORTABLE_HEADER_CONTROL label={label} validation_error={validation_error:?} writer_error={:?} published={}",
+                writer.as_ref().err(), output.is_file(),
+            );
+            if validation_error.is_some() || writer.is_err() || !output.is_file() {
+                control_failures.push(label);
+            }
+        }
+        // Coherent bundles must publish before contradictory cases are meaningful.
+        assert!(
+            control_failures.is_empty(),
+            "clean controls failed: {control_failures:?}"
+        );
+        // Preserve the distinct imported-module/public-version exception. The
+        // frozen distribution/header stay +cpu; this is not a package-version alias.
+        let mut imported_public = ready_metal_probe();
+        imported_public.imported_version = metal_env::VERSION.into();
+        check_imported_probe(&metal, &imported_public).unwrap();
+        let mut public_record = ready_metal_probe();
+        public_record.version = metal_env::VERSION.into();
+        public_record.imported_version = metal_env::VERSION.into();
+        check_imported_probe(&public_metal, &public_record).unwrap();
+        // The unchanged late gate independently refuses a different installed
+        // MLX identity. This pure synthetic record is not an executed probe.
+        let mut wrong_mlx = ready_metal_probe();
+        wrong_mlx.mlx_version = "0.0.0".into();
+        let late_mlx_error = check_imported_probe(&metal, &wrong_mlx).unwrap_err();
+        println!("PORTABLE_HEADER_LATE_MLX error={late_mlx_error:?}");
+        assert_eq!(
+            late_mlx_error,
+            "imported MLX version differs from the bundle"
+        );
+
+        let rows = [
+            ("vllm-engine", &standard, "vllm"),
+            ("mlx-vlm-engine", &legacy_mlx_vlm, "mlx-vlm"),
+            ("metal-engine", &metal, "vllm"),
+            ("metal-plugin", &metal, "vllm-metal"),
+            ("metal-mlx", &metal, "mlx"),
+            ("mlx-vlm-populated-mlx", &reported_mlx_vlm, "mlx"),
+        ];
+        let mut failures = Vec::new();
+        for (label, clean, member) in rows {
+            let mut skew = clean.clone();
+            assert_ne!(skew.packages[member], "0.0.0");
+            *skew.packages.get_mut(member).unwrap() = "0.0.0".into();
+            // Real filenames, METADATA, RECORD, bytes, sizes and digests all follow
+            // the changed package. Only the semantic header promise now disagrees.
+            rebuild(&mut skew);
+            let wheels = fixture.root.join(format!("skew-{label}-wheels"));
+            write_wheels_dir(&skew, &wheels);
+            let output = fixture.root.join(format!("skew-{label}.zip"));
+            let validation_error = validate_manifest(&skew).err();
+            let writer = write_archive(&skew, &wheels, &output, &cancel);
+            println!(
+                "PORTABLE_HEADER_SKEW label={label} member={member} package={} engine_header={} plugin_header={} mlx_header={} validation_error={validation_error:?} writer_error={:?} published={}",
+                skew.packages[member], skew.version, skew.plugin_version, skew.mlx_version,
+                writer.as_ref().err(), output.exists(),
+            );
+            if validation_error.is_none() || writer.is_ok() || output.exists() {
+                failures.push(label);
+            }
+        }
+        // Check every identity and clean all owned archives before reporting failure.
+        drop(fixture);
+        assert!(
+            failures.is_empty(),
+            "contradictory portable identities accepted: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn export_freeze_rejects_populated_mlx_identity_drift() {
+        let metal_probe = ready_metal_probe();
+        let mut metal_freeze = synthetic_freeze(ProviderId::Vllm);
+        for (name, version) in [
+            ("vllm", metal_env::CORE_VERSION),
+            ("vllm-metal", metal_env::VERSION),
+            ("mlx", metal_env::MLX_VERSION),
+        ] {
+            metal_freeze.insert(
+                name.into(),
+                FrozenDist {
+                    version: version.into(),
+                    direct_url: None,
+                    portable_commit: String::new(),
+                },
+            );
+        }
+        let mlx_freeze = synthetic_freeze(ProviderId::MlxVlm);
+        let mut mlx_probe = synthetic_probe(ProviderId::MlxVlm);
+        mlx_probe.mlx_version = mlx_freeze["mlx"].version.clone();
+        let mut legacy_probe = mlx_probe.clone();
+        legacy_probe.mlx_version.clear();
+        let mut legacy_freeze = mlx_freeze.clone();
+        legacy_freeze.get_mut("mlx").unwrap().version = "0.0.0".into();
+        let mut unrelated_probe = synthetic_probe(ProviderId::Vllm);
+        unrelated_probe.mlx_version = "0.99.0".into();
+        let mut unrelated_freeze = synthetic_freeze(ProviderId::Vllm);
+        unrelated_freeze.insert("mlx".into(), legacy_freeze["mlx"].clone());
+
+        let controls = [
+            (
+                "metal-coherent",
+                ProviderId::Vllm,
+                &metal_probe,
+                &metal_freeze,
+            ),
+            (
+                "mlx-vlm-coherent",
+                ProviderId::MlxVlm,
+                &mlx_probe,
+                &mlx_freeze,
+            ),
+            (
+                "mlx-vlm-empty-optional",
+                ProviderId::MlxVlm,
+                &legacy_probe,
+                &legacy_freeze,
+            ),
+            (
+                "vllm-unrelated-mlx",
+                ProviderId::Vllm,
+                &unrelated_probe,
+                &unrelated_freeze,
+            ),
+        ];
+        let mut control_failures = Vec::new();
+        for (label, provider, probe, freeze) in controls {
+            for required in required_packages(provider, &probe.variant) {
+                assert!(freeze.contains_key(*required), "{label}: {required}");
+            }
+            let result = export_freeze(provider, probe, freeze);
+            let complete = result.as_ref().is_ok_and(|sources| {
+                sources.len() == freeze.len()
+                    && sources.keys().all(|name| freeze.contains_key(name))
+            });
+            println!(
+                "PORTABLE_FREEZE_CONTROL label={label} error={:?} complete={complete}",
+                result.as_ref().err()
+            );
+            if !complete {
+                control_failures.push(label);
+            }
+        }
+        assert!(
+            control_failures.is_empty(),
+            "coherent freeze controls failed: {control_failures:?}"
+        );
+
+        let mut failures = Vec::new();
+        for (label, provider, probe, freeze) in [
+            ("metal-mlx", ProviderId::Vllm, &metal_probe, &metal_freeze),
+            (
+                "mlx-vlm-populated-mlx",
+                ProviderId::MlxVlm,
+                &mlx_probe,
+                &mlx_freeze,
+            ),
+        ] {
+            let mut drift = freeze.clone();
+            drift.get_mut("mlx").unwrap().version = "0.0.0".into();
+            let error = export_freeze(provider, probe, &drift).err();
+            println!(
+                "PORTABLE_FREEZE_DRIFT label={label} reported_mlx={} frozen_mlx={} error={error:?}",
+                probe.mlx_version, drift["mlx"].version
+            );
+            if error.is_none() {
+                failures.push(label);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "changed MLX inventory accepted before download: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn recipe_construction_rejects_populated_mlx_identity_drift() {
+        let fixture = PortableBoundaryFixture::new();
+        let python = fixture.root.join("synthetic-interpreter-file");
+        let bytes = b"synthetic existing interpreter file; never executed";
+        fs::write(&python, bytes).unwrap();
+        let freeze = synthetic_freeze(ProviderId::MlxVlm);
+        let mut probe = synthetic_probe(ProviderId::MlxVlm);
+        probe.mlx_version = freeze["mlx"].version.clone();
+        let manifest = python_env::PythonRuntimeManifest {
+            format: RUNTIME_MANIFEST_FORMAT,
+            provider: ProviderId::MlxVlm,
+            id: "external-freshness".into(),
+            kind: python_env::InstallationKind::External,
+            python: python.to_string_lossy().into_owned(),
+            requested_version: None,
+            probe: Some(probe),
+        };
+        assert!(manifest.problems().is_empty(), "{:?}", manifest.problems());
+        let recipe = build_export_manifest(&manifest, &freeze).unwrap();
+        assert_eq!(recipe.packages["mlx"], recipe.mlx_version);
+        assert!(recipe.wheels.is_empty());
+        let mut drift = freeze.clone();
+        drift.get_mut("mlx").unwrap().version = "0.0.0".into();
+        let mut legacy = manifest.clone();
+        legacy.probe.as_mut().unwrap().mlx_version.clear();
+        assert!(legacy.problems().is_empty());
+        let legacy_recipe = build_export_manifest(&legacy, &drift).unwrap();
+        let legacy_accepted =
+            legacy_recipe.mlx_version.is_empty() && legacy_recipe.packages["mlx"] == "0.0.0";
+        assert!(legacy_accepted);
+        let result = build_export_manifest(&manifest, &drift);
+        let bytes_unchanged = fs::read(&python).unwrap() == bytes;
+        println!("PORTABLE_RECIPE_DRIFT coherent_mlx={} empty_optional_accepted={legacy_accepted} reported_mlx={} frozen_mlx={} result_error={:?} interpreter_bytes_unchanged={bytes_unchanged}", recipe.mlx_version, manifest.probe.as_ref().unwrap().mlx_version, drift["mlx"].version, result.as_ref().err());
+        assert!(bytes_unchanged);
+        drop(fixture);
+        assert!(
+            result.is_err(),
+            "recipe accepted changed MLX before wheel download"
+        );
     }
 
     #[test]
