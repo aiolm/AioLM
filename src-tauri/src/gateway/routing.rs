@@ -76,11 +76,9 @@ impl ModelSource {
         // Two sessions serving the same file must stay individually
         // addressable, so each is advertised with its session id appended.
         for index in 0..ready.len() {
-            let shared = ready
-                .iter()
-                .filter(|other| other.model_id == ready[index].model_id)
-                .count();
-            if shared > 1 {
+            let shared = (index > 0 && ready[index - 1].model_id == ready[index].model_id)
+                || (index + 1 < ready.len() && ready[index + 1].model_id == ready[index].model_id);
+            if shared {
                 ready[index].advertised =
                     format!("{}@{}", ready[index].model_id, ready[index].session_id);
             }
@@ -500,6 +498,65 @@ mod tests {
         // Once the duplicate goes away the plain name works again.
         sessions.get("s1").unwrap().state.lock().unwrap().lifecycle = Lifecycle::Stopped;
         assert_eq!(resolved(&source, Some("same.gguf")), Ok("default".into()));
+    }
+
+    #[test]
+    fn sorted_catalogs_preserve_unique_and_duplicate_advertisements() {
+        let (source, default, sessions) = source();
+        ready(
+            &default,
+            "http://127.0.0.1:1/v1",
+            "key-d",
+            r"C:\models\shared.gguf",
+        );
+        add_named(&sessions, "s3", "/models/unique-b.gguf");
+        add_named(&sessions, "s1", r"C:\models\unique-a.gguf");
+        add_named(&sessions, "s2", "/models/shared.gguf");
+        add_named(&sessions, "s4", r"D:\models\unique-a.gguf");
+
+        let catalog = source.snapshot();
+        let actual: Vec<(&str, &str, &str)> = catalog
+            .ready
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.model_id.as_str(),
+                    candidate.session_id.as_str(),
+                    candidate.advertised.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                ("shared.gguf", "default", "shared.gguf@default"),
+                ("shared.gguf", "s2", "shared.gguf@s2"),
+                ("unique-a.gguf", "s1", "unique-a.gguf@s1"),
+                ("unique-a.gguf", "s4", "unique-a.gguf@s4"),
+                ("unique-b.gguf", "s3", "unique-b.gguf"),
+            ]
+        );
+        assert_eq!(catalog.select(None).ok().unwrap().session_id, "default");
+        assert!(matches!(
+            catalog.select(Some("shared.gguf")),
+            Err(RouteError::Ambiguous { .. })
+        ));
+        assert_eq!(
+            catalog
+                .select(Some("unique-a.gguf@s4"))
+                .ok()
+                .unwrap()
+                .session_id,
+            "s4"
+        );
+        assert_eq!(
+            catalog
+                .select(Some("unique-b.gguf"))
+                .ok()
+                .unwrap()
+                .session_id,
+            "s3"
+        );
     }
 
     #[test]
