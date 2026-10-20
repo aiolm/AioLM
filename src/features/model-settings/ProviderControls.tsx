@@ -7,7 +7,7 @@ import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
 import { automaticProviderTelemetry, providerTelemetryCopy } from './providerTelemetry';
-import type { ConfirmedSyntax, EffectiveSchema } from '../../shared/api/runtimeHelp';
+import type { ConfirmedSyntax, EffectiveSchema, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
 import RuntimeOptionSchemaForm, { applyPlan, maskPreview, maskImportReview, OccurrenceOrder, SchemaOptionField } from '../runtimes/RuntimeOptionSchemaForm';
 import { sensitiveEntryTokenStrings } from '../runtimes/sensitiveEntryTokens';
 import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
@@ -225,7 +225,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     ? !Object.values(groups).flat().includes(group) : groups[section]?.includes(group));
   const inSection = (option: api.ProviderOption) => inGroupSection(option.group);
   const visible = usesEffective ? [] : schema.filter(option => inSection(option) && (option.target === 'request' || !option.flag || !runtimeFlags || runtimeFlags.includes(option.flag) || values[option.key] !== undefined));
-  const schemaVisible = effective ? effective.schema.options.filter(option => inGroupSection(option.group)).length : visible.length;
+  const schemaFilter = (option: OptionSchemaDefinition) => (!collapseTools || !option.managed || option.managed === 'discovery') && inGroupSection(option.group)
+    && (option.target === 'request' || !runtimeFlags || !effective?.compat_keys.includes(option.key)
+      || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined);
+  const hasSchemaOptions = effective ? effective.schema.options.some(schemaFilter) : visible.length > 0;
   const importCommand = () => {
     if (!importSyntax) return;
     const source = cfg;
@@ -290,10 +293,9 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
-    {effective && (editor === 'schema' || effective.schema.options.length > 0) && <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
+    {effective && (editor === 'schema' || effective.schema.options.length > 0) && <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} showNoMatch={hasSchemaOptions} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
       onChange={next => { setDefaultsRestored(false); onChange({ provider_options: { ...cfg.provider_options, [provider]: next } }); }}
-      filter={option => (!collapseTools || !option.managed || option.managed === 'discovery') && inGroupSection(option.group) && (option.target === 'request' || !runtimeFlags || !effective.compat_keys.includes(option.key)
-        || option.spellings.some(spelling => runtimeFlags.includes(spelling.flag)) || values[option.key] !== undefined)}
+      filter={schemaFilter}
       inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
       hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
       onInvalid={onInvalid}
@@ -338,7 +340,7 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {effective && <RuntimeFactDifferences conflicts={effective.conflicts} metadata={effective.metadata} schema={effective.schema} />}
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} draftPrefixSecrets={draftSecretIndices} onAccepted={() => { setEffectiveRevision(current => current + 1); checkedSchema.retry(); }} />}
     </OptionTools>}
-    {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !schemaVisible && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
+    {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !hasSchemaOptions && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
     {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
     {importReview && <FeedbackBanner tone="warning">{importReview}</FeedbackBanner>}

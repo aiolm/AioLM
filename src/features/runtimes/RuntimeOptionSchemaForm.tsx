@@ -548,6 +548,8 @@ export interface RuntimeOptionSchemaFormProps {
   compact?: boolean;
   /** Show the complete option list without a separate expansion step. */
   showAll?: boolean;
+  /** Embedded hosts can provide their own message when a category has no options. */
+  showNoMatch?: boolean;
   filter?: (option: OptionSchemaDefinition) => boolean;
   inheritLabel?: (option: OptionSchemaDefinition) => string | undefined;
   hint?: (option: OptionSchemaDefinition) => string | undefined;
@@ -559,7 +561,7 @@ export interface RuntimeOptionSchemaFormProps {
 }
 
 /** Generic runtime-scoped option renderer, validator and argv preview. */
-export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
+export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, showNoMatch = true, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
   const { locale } = useI18n();
   const copy = runtimeOptionsCopy[locale];
   const formId = useId();
@@ -644,7 +646,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   );
   const more = !showAll && visible.length > limit && <button type="button" className="app-button app-button--secondary" disabled={disabled}
     onClick={() => setLimit(current => current + 64)}>{copy.more} ({visible.length - limit})</button>;
-  if (compact) return <div className="model-settings-fields">{navigation}{fields}{more}{visible.length === 0 && <p>{copy.noMatch}</p>}</div>;
+  if (compact) return <div className="model-settings-fields">{navigation}{fields}{more}{showNoMatch && visible.length === 0 && <p>{copy.noMatch}</p>}</div>;
 
   return (
     <div className="model-settings-fields">
@@ -660,7 +662,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
       {fields}
       <OccurrenceOrder schema={schema} values={values} disabled={disabled} onChange={onChange} />
       {more}
-      {visible.length === 0 && <p className="app-section-hint">{copy.noMatch}</p>}
+      {showNoMatch && visible.length === 0 && <p className="app-section-hint">{copy.noMatch}</p>}
       <details>
         <summary>{copy.importTitle}</summary>
         <label htmlFor={`${formId}-import`}>{copy.importLabel}</label>
