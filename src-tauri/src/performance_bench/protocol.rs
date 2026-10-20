@@ -304,7 +304,7 @@ pub(super) struct Endpoint {
 }
 
 pub(super) async fn measure(
-    endpoint: Endpoint,
+    endpoint: &Endpoint,
     tokens: Arc<Vec<u32>>,
     generation: u32,
     slot: u32,
@@ -320,7 +320,7 @@ pub(super) async fn measure(
     let started = Instant::now();
     let mut stream = CompletionStream::default();
     let work = async {
-        let (path, body) = match &engine {
+        let (path, body) = match engine {
             Some(engine) => engine.body(&tokens, generation)?,
             None => (
                 "/completion".into(),
@@ -329,7 +329,7 @@ pub(super) async fn measure(
         };
         let response = client
             .post(format!("{base}{path}"))
-            .bearer_auth(&key)
+            .bearer_auth(key)
             .json(&body)
             .send()
             .await
@@ -515,7 +515,7 @@ mod tests {
         let measured = tokio::time::timeout(
             Duration::from_secs(25),
             measure(
-                Endpoint {
+                &Endpoint {
                     client,
                     base: format!("http://{address}"),
                     key: "synthetic-benchmark-key".into(),
@@ -1096,7 +1096,7 @@ mod tests {
         let measured = tokio::time::timeout(
             Duration::from_secs(2),
             measure(
-                Endpoint {
+                &Endpoint {
                     engine: None,
                     client,
                     base: format!("http://{address}"),
@@ -1133,7 +1133,7 @@ mod tests {
         let measured = tokio::time::timeout(
             Duration::from_secs(2),
             measure(
-                Endpoint {
+                &Endpoint {
                     engine: None,
                     client,
                     base: format!("http://{address}"),

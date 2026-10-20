@@ -450,7 +450,7 @@ async fn batch(
     let mut requests = FuturesUnordered::new();
     for slot in 0..concurrency {
         let measured = protocol::measure(
-            endpoint.clone(),
+            endpoint,
             tokens.clone(),
             generation,
             slot,
