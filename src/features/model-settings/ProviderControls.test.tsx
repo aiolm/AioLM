@@ -146,27 +146,51 @@ describe('runtime-specific option controls', () => {
     vi.mocked(api.providerRuntimeOptions).mockResolvedValue([]);
     const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue([]);
     const onChecking = vi.fn();
-    render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'installed-one' }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
-    const externalOptions = await screen.findAllByLabelText(/^--fresh-/);
-    expect(externalOptions).toHaveLength(70);
-    expect(externalOptions[69]).toBeInTheDocument();
-    expect(externalOptions[69]).toHaveAccessibleName(/^--fresh-69/);
-    expect(externalOptions[0]).toBeInTheDocument();
-    expect(externalOptions[0]).toHaveAccessibleName(/^--fresh-0\s/);
-    expect(screen.queryByRole('button', { name: /^Show more options/, hidden: true })).not.toBeInTheDocument();
-    const tools = screen.getByText('Command and help tools').closest('details')!;
-    const previewButton = within(tools).getByRole('button', { name: 'Command preview', hidden: true });
-    expect(previewButton).not.toBeVisible();
-    expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).not.toBeVisible();
-    expect(tools).not.toHaveAttribute('open');
-    expect(preview).not.toHaveBeenCalled();
-    await waitFor(() => expect(onChecking).toHaveBeenLastCalledWith(false));
-    fireEvent.click(screen.getByText('Command and help tools'));
-    expect(tools).toHaveAttribute('open');
-    expect(previewButton).toBeVisible();
-    expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).toBeVisible();
-    fireEvent.click(previewButton);
-    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let rendered: ReturnType<typeof render> | undefined;
+    try {
+      // Flush the schema responses together, then drive the real validation
+      // debounce explicitly. The unrelated inventory remains unresolved.
+      await act(async () => {
+        rendered = render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'installed-one' }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
+      });
+      const container = rendered!.container;
+      const expectedNames = Array.from({ length: 70 }, (_, index) => `--fresh-${index}`);
+      expect(container.querySelector('input[name="--fresh-69"]')).toBeInTheDocument();
+      const externalLabels = Array.from(container.querySelectorAll<HTMLLabelElement>('label[for]'))
+        .filter(label => label.textContent?.trim().startsWith('--fresh-'));
+      const externalControls = externalLabels.map(label => label.control);
+      expect(externalLabels).toHaveLength(70);
+      expect(externalControls.every(control => control instanceof HTMLInputElement)).toBe(true);
+      expect(externalControls.map(control => control instanceof HTMLInputElement ? control.name : '')).toEqual(expectedNames);
+      expect(externalLabels.map(label => label.textContent?.trim().split(/\s+/, 1)[0])).toEqual(expectedNames);
+      const externalOptions = externalControls as HTMLInputElement[];
+      expect(externalOptions).toHaveLength(70);
+      expect(externalOptions[69]).toBeInTheDocument();
+      expect(externalOptions[69]).toHaveAccessibleName(/^--fresh-69/);
+      expect(externalOptions[0]).toBeInTheDocument();
+      expect(externalOptions[0]).toHaveAccessibleName(/^--fresh-0\s/);
+      expect(container).not.toHaveTextContent('Show more options');
+      expect(container.querySelector('button[aria-label^="Show more options"], button[title^="Show more options"]')).toBeNull();
+      const tools = screen.getByText('Command and help tools').closest('details')!;
+      const previewButton = within(tools).getByRole('button', { name: 'Command preview', hidden: true });
+      expect(previewButton).not.toBeVisible();
+      expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).not.toBeVisible();
+      expect(tools).not.toHaveAttribute('open');
+      expect(preview).not.toHaveBeenCalled();
+      expect(onChecking).toHaveBeenLastCalledWith(true);
+      await act(async () => { vi.advanceTimersByTime(150); });
+      expect(onChecking).toHaveBeenLastCalledWith(false);
+      fireEvent.click(screen.getByText('Command and help tools'));
+      expect(tools).toHaveAttribute('open');
+      expect(previewButton).toBeVisible();
+      expect(within(tools).getByRole('region', { name: 'App-managed arguments', hidden: true })).toBeVisible();
+      await act(async () => { fireEvent.click(previewButton); });
+      expect(preview).toHaveBeenCalledTimes(1);
+    } finally {
+      rendered?.unmount();
+      vi.useRealTimers();
+    }
   });
   it('renders an installed native build option through the same schema and retains other engine values', async () => {
     const extra = schemaOption({ key: 'fresh-native', flag: '--fresh-native', target: 'launch', group: 'runtime', kind: { type: 'integer' } });
