@@ -72,9 +72,6 @@ pub(crate) async fn runtime_help_discover(
     // Discovery never starts a model server, so live sessions do not block it;
     // sessions only gate registration, which owns probes.
     let root = adapters_root();
-    let owner = owner.clone();
-    let engine = engine.clone();
-    let runtime = runtime.clone();
     tokio::task::spawn_blocking(move || {
         runtime_help_store::discover_persist_describe(
             service(),
