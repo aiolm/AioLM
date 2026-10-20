@@ -322,7 +322,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           options: [{ value: 'auto', label: embeddingCopy.auto }, { value: 'lexical', label: embeddingCopy.lexical },
             ...availableEmbeddingSessions.map(session => ({ value: session.id, label: embeddingSessionLabel(session) })),
             ...(!['auto', 'lexical'].includes(embeddingSelection) && !availableEmbeddingSessions.some(session => session.id === embeddingSelection)
-              ? [{ value: embeddingSelection, label: embeddingCopy.lexical }] : [])],
+              ? [{ value: embeddingSelection, label: `${embeddingCopy.unavailable} · ${embeddingSelection}` }] : [])],
           onChange: value => { if (requireIdle()) setEmbeddingSelection(value); },
         } : undefined}
         model={model || configuredModel}

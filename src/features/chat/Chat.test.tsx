@@ -1167,6 +1167,30 @@ describe('saved names for running chat targets', () => {
     expect(mocked.embedText.mock.calls.at(-1)?.slice(0, 3)).toEqual(['http://127.0.0.1:8092', 'synthetic-embedding-key', 'native-embedding-model']);
   });
 
+  it('distinguishes an unavailable selected embedding session from keyword search after a session refresh', async () => {
+    const saved = [definition('documents-α', 'My document index'), definition('documents-β', 'Other index')];
+    const candidates: api.SessionStatus[] = saved.map(item => ({ id: item.id, name: item.name, state: 'running',
+      model: item.models.primary_model, url: 'http://127.0.0.1:8092',
+      engine: { provider: 'custom.documents', runtime_id: 'synthetic-build', upstream_model: 'encoder',
+        modalities: { text: true, image: false, audio: false, video: false }, tasks: ['embed'], request_fields: {}, embedding_model: 'encoder' } }));
+    mocked.sessionList.mockResolvedValue(candidates);
+    renderPanel({ ...createTestStore({ ...cfg, sessions: saved }), status: { ...store.status } });
+    fireEvent.click(screen.getByText('Conversation settings'));
+    const picker = await screen.findByLabelText('Document search embedding model');
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole('option', { name: 'My document index · encoder · documents-α' }));
+
+    mocked.sessionList.mockResolvedValue([candidates[1]]);
+    await act(async () => { window.dispatchEvent(new Event(SESSION_STATUS_CHANGED_EVENT)); });
+    await waitFor(() => expect(picker).toHaveTextContent('Unavailable session · documents-α'));
+    fireEvent.click(picker);
+    expect(screen.getByRole('option', { name: 'Unavailable session · documents-α' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('option', { name: 'Keyword search' })).toHaveLength(1);
+    expect(mocked.embedText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('option', { name: 'Keyword search' }));
+    expect(picker).toHaveTextContent('Keyword search');
+  });
+
   it('identifies a transcription target by the saved name while retaining its native model label', async () => {
     const saved = definition('speech', 'My local speech engine');
     mocked.sessionList.mockResolvedValue([{ id: saved.id, name: 'runtime-speech-file', state: 'running', port: 8093,
