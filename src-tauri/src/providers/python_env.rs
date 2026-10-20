@@ -859,6 +859,10 @@ async fn run_logged(
         tail.push_back(line);
     };
     let deadline = tokio::time::Instant::now() + INSTALL_TIMEOUT;
+    let poll_interval = Duration::from_millis(200);
+    // Output must not restart the cancellation/deadline polling clock.
+    let cancellation_poll = tokio::time::sleep(poll_interval);
+    tokio::pin!(cancellation_poll);
     let mut output_open = true;
     let status = loop {
         tokio::select! {
@@ -872,7 +876,7 @@ async fn run_logged(
                 None => output_open = false,
             },
             status = child.wait() => break status.map_err(|error| error.to_string())?,
-            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+            _ = &mut cancellation_poll => {
                 if cancel.load(Ordering::Acquire) {
                     child.terminate();
                     return Err("runtime installation cancelled".into());
@@ -881,6 +885,7 @@ async fn run_logged(
                     child.terminate();
                     return Err("runtime installation timed out".into());
                 }
+                cancellation_poll.as_mut().reset(tokio::time::Instant::now() + poll_interval);
             }
         }
     };
@@ -1465,5 +1470,239 @@ mod tests {
             "synthetic interpreter"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn synthetic_installer_continues_output_to_natural_exit() -> std::io::Result<()> {
+        use std::io::Write;
+
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        writeln!(output)?;
+        writeln!(output, "AIOLM_OUTPUT_START={}", std::process::id())?;
+        writeln!(output, "AIOLM_OUTPUT_CANCEL_POINT")?;
+        output.flush()?;
+        for sequence in 0..200 {
+            for part in 0..8 {
+                writeln!(output, "AIOLM_OUTPUT_TICK={sequence}:{part}")?;
+            }
+            output.flush()?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        writeln!(output, "AIOLM_OUTPUT_NATURAL_COMPLETION")?;
+        output.flush()
+    }
+
+    #[cfg(windows)]
+    #[derive(Debug, Default)]
+    struct ContinuingOutputObservation {
+        result: Option<Result<(), String>>,
+        outer_elapsed: bool,
+        starts: usize,
+        cancel_points: usize,
+        cancelled_by_progress: bool,
+        ticks: usize,
+        ticks_after_cancel: usize,
+        natural_completion_lines: usize,
+        maximum_progress_gap: Duration,
+        progress_to_return: Option<Duration>,
+        exit_code: Option<u32>,
+        forced_cleanup: bool,
+        errors: Vec<String>,
+    }
+
+    #[cfg(windows)]
+    fn observe_continuing_installer(
+        cancel_at_progress: bool,
+    ) -> Result<ContinuingOutputObservation, String> {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::{
+            Foundation::WAIT_OBJECT_0,
+            System::Threading::{
+                GetExitCodeProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+            },
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "aiolm-python-continuing-output-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&root).map_err(|error| error.to_string())?;
+        let cleanup = StagingCleanup(root.clone());
+        let execution = (|| -> Result<ContinuingOutputObservation, String> {
+            fs::create_dir(root.join("venv")).map_err(|error| error.to_string())?;
+            fs::write(root.join("venv/synthetic-package"), "partial")
+                .map_err(|error| error.to_string())?;
+            let runner = std::env::current_exe().map_err(|error| error.to_string())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())?;
+            let cancel = Arc::new(AtomicBool::new(false));
+            let mut observed = ContinuingOutputObservation::default();
+            let mut process: Option<OwnedHandle> = None;
+            let mut first_progress = None;
+            let mut last_progress = None;
+            let result = runtime.block_on(async {
+                let work = run_logged(
+                    &runner,
+                    &[
+                        "--exact",
+                        "providers::python_env::tests::synthetic_installer_continues_output_to_natural_exit",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ],
+                    &cancel,
+                    |line| {
+                        if !line.starts_with("AIOLM_OUTPUT_") {
+                            return;
+                        }
+                        let now = std::time::Instant::now();
+                        first_progress.get_or_insert(now);
+                        if let Some(previous) = last_progress.replace(now) {
+                            observed.maximum_progress_gap =
+                                observed.maximum_progress_gap.max(now.duration_since(previous));
+                        }
+                        if let Some(pid) = line.strip_prefix("AIOLM_OUTPUT_START=") {
+                            observed.starts += 1;
+                            match pid.parse::<u32>() {
+                                Ok(pid) if process.is_none() => {
+                                    let handle = unsafe {
+                                        OpenProcess(
+                                            PROCESS_SYNCHRONIZE
+                                                | PROCESS_QUERY_LIMITED_INFORMATION
+                                                | PROCESS_TERMINATE,
+                                            0,
+                                            pid,
+                                        )
+                                    };
+                                    if handle.is_null() {
+                                        observed.errors.push(std::io::Error::last_os_error().to_string());
+                                    } else {
+                                        process = Some(unsafe { OwnedHandle::from_raw_handle(handle) });
+                                    }
+                                }
+                                _ => observed.errors.push("invalid or repeated helper PID".into()),
+                            }
+                        } else if line == "AIOLM_OUTPUT_CANCEL_POINT" {
+                            observed.cancel_points += 1;
+                            if cancel_at_progress {
+                                cancel.store(true, Ordering::Release);
+                                observed.cancelled_by_progress = true;
+                            }
+                        } else if line.starts_with("AIOLM_OUTPUT_TICK=") {
+                            observed.ticks += 1;
+                            observed.ticks_after_cancel += usize::from(observed.cancelled_by_progress);
+                        } else if line == "AIOLM_OUTPUT_NATURAL_COMPLETION" {
+                            observed.natural_completion_lines += 1;
+                        }
+                    },
+                );
+                // A failing baseline still runs a finite producer; this bound
+                // drops work and its process-tree owner on a fixture failure.
+                tokio::time::timeout(Duration::from_secs(8), work).await
+            });
+            observed.progress_to_return = first_progress.map(|instant| instant.elapsed());
+            match result {
+                Ok(result) => observed.result = Some(result),
+                Err(_) => observed.outer_elapsed = true,
+            }
+            // Own the runtime explicitly: all detached stream futures are
+            // cancelled before process synchronization and filesystem cleanup.
+            drop(runtime);
+            if let Some(process) = process {
+                let handle = process.as_raw_handle();
+                let mut wait = unsafe { WaitForSingleObject(handle, 5000) };
+                if wait != WAIT_OBJECT_0 {
+                    observed.forced_cleanup = true;
+                    if unsafe { TerminateProcess(handle, 1) } == 0 {
+                        observed
+                            .errors
+                            .push(std::io::Error::last_os_error().to_string());
+                    }
+                    wait = unsafe { WaitForSingleObject(handle, 5000) };
+                }
+                if wait != WAIT_OBJECT_0 {
+                    observed
+                        .errors
+                        .push(format!("helper exit was not observed: {wait}"));
+                } else {
+                    let mut code = 0;
+                    if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
+                        observed
+                            .errors
+                            .push(std::io::Error::last_os_error().to_string());
+                    } else {
+                        observed.exit_code = Some(code);
+                    }
+                }
+            } else {
+                observed
+                    .errors
+                    .push("no retained helper process handle".into());
+            }
+            Ok(observed)
+        })();
+        // Neither expected RED nor a setup/control error asserts before this
+        // owned path's removal has been attempted and its result recorded.
+        let manifest_absent = !root.join(MANIFEST).exists();
+        let removal = match fs::remove_dir_all(&root) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+        drop(cleanup);
+        let remaining = root.exists();
+        let mut observed = execution.map_err(|error| {
+            format!("setup failed: {error}; cleanup={removal:?}; path_remaining={remaining}")
+        })?;
+        if !manifest_absent || removal.is_err() || remaining {
+            observed.errors.push(format!(
+                "manifest_absent={manifest_absent}; cleanup={removal:?}; path_remaining={remaining}"
+            ));
+        }
+        Ok(observed)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_cancels_continuing_output_before_natural_completion() -> Result<(), String> {
+        let normal = observe_continuing_installer(false)?;
+        let cancelled = observe_continuing_installer(true)?;
+        // Both cases have disposed their runtime, synchronized their retained
+        // process handle and attempted checked staging cleanup before assertions.
+        eprintln!("normal: {normal:#?}\ncancelled: {cancelled:#?}");
+        assert!(normal.errors.is_empty(), "{normal:#?}");
+        assert!(
+            !normal.outer_elapsed && !normal.forced_cleanup,
+            "{normal:#?}"
+        );
+        assert_eq!(normal.result, Some(Ok(())), "{normal:#?}");
+        assert_eq!(normal.starts, 1, "{normal:#?}");
+        assert_eq!(normal.cancel_points, 1, "{normal:#?}");
+        assert!(normal.ticks > 0, "{normal:#?}");
+        assert_eq!(normal.exit_code, Some(0), "{normal:#?}");
+        assert!(cancelled.errors.is_empty(), "{cancelled:#?}");
+        assert!(
+            !cancelled.outer_elapsed && !cancelled.forced_cleanup,
+            "{cancelled:#?}"
+        );
+        assert_eq!(cancelled.starts, 1, "{cancelled:#?}");
+        assert_eq!(cancelled.cancel_points, 1, "{cancelled:#?}");
+        assert!(cancelled.cancelled_by_progress, "{cancelled:#?}");
+        assert_eq!(
+            cancelled.result,
+            Some(Err("runtime installation cancelled".into())),
+            "{cancelled:#?}"
+        );
+        assert_ne!(
+            cancelled.exit_code,
+            Some(0),
+            "cancellation waited for natural helper completion: {cancelled:#?}"
+        );
+        assert_eq!(cancelled.natural_completion_lines, 0, "{cancelled:#?}");
+        Ok(())
     }
 }
