@@ -271,7 +271,6 @@ pub(crate) async fn poll_upload_session(
     };
     // Retry-After on a successful poll is informational only and
     // intentionally not surfaced; errors already returned above.
-    let _ = retry_after;
     Ok(outcome)
 }
 
