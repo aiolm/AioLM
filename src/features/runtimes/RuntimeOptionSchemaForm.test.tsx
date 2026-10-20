@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
 import RuntimeOptionSchemaForm, { maskImportReview } from './RuntimeOptionSchemaForm';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
@@ -273,6 +274,41 @@ describe('saved command-line order and confirmed syntax in the form', () => {
     fireEvent.click(screen.getByRole('option', { name: '--alpha' }));
     expect(onChange).toHaveBeenLastCalledWith({ alpha: { spelling: null, occurrences: [['1'], ['3']] }, beta: '2',
       '@option_order': { version: 1, occurrences: [{ key: 'alpha' }, { key: 'beta' }, { key: 'alpha' }] } });
+  });
+
+  it('keeps distinct occurrence aliases when editing only one saved value', () => {
+    const pair = textOption('pair', {
+      spellings: [{ flag: '--pair' }, { flag: '-P' }],
+      arity: known({ min: 2, max: 2 }),
+      repeatable: known(true),
+    });
+    const initial = {
+      pair: { spelling: '-P', occurrences: [['first', '한글'], ['second', 'value']] },
+      token: 'middle',
+      '@option_order': { version: 1, occurrences: [{ key: 'pair', spelling: '-P' }, { key: 'token' }, { key: 'pair', spelling: '--pair' }] },
+    };
+    const onChange = vi.fn();
+    function ControlledForm() {
+      const [values, setValues] = useState<Record<string, unknown>>(initial);
+      return <RuntimeOptionSchemaForm schema={schema([pair, textOption('token')])} values={values} scope={[]}
+        onChange={next => { onChange(next); setValues(next); }} />;
+    }
+
+    render(<I18nProvider initialLocale="en"><ControlledForm /></I18nProvider>);
+    expect(screen.getByRole('combobox', { name: '--pair Occurrence 1 Spelling' })).toHaveTextContent('-P');
+    expect(screen.getByRole('combobox', { name: '--pair Occurrence 2 Spelling' })).toHaveTextContent('--pair');
+
+    fireEvent.change(screen.getByLabelText('--pair Occurrence 2 Value 1'), { target: { value: 'edited' } });
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      pair: { spelling: '-P', occurrences: [['first', '한글'], ['edited', 'value']] },
+      token: 'middle',
+      '@option_order': { version: 1, occurrences: [{ key: 'pair', spelling: '-P' }, { key: 'token' }, { key: 'pair' }] },
+    });
+    expect(screen.getByRole('combobox', { name: '--pair Occurrence 1 Spelling' })).toHaveTextContent('-P');
+    expect(screen.getByRole('combobox', { name: '--pair Occurrence 2 Spelling' })).toHaveTextContent('--pair');
+    expect(screen.getByLabelText('--pair Occurrence 1 Value 1')).toHaveValue('first');
+    expect(screen.getByLabelText('--pair Occurrence 2 Value 1')).toHaveValue('edited');
   });
 
   it('removes an occurrence together with its saved position', () => {

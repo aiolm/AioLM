@@ -342,7 +342,8 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
           {onRowSpelling && spellings.length > 1 && (
             <CustomSelect
               ariaLabel={`${name} ${copy.occurrence} ${rowIndex + 1} ${copy.spelling}`}
-              value={rowSpellings?.[rowIndex] ?? current?.spelling ?? spellings[0].flag}
+              // A null order spelling means this option's default, not the shared alias.
+              value={(rowSpellings?.[rowIndex] === null ? spellings[0].flag : rowSpellings?.[rowIndex]) ?? current?.spelling ?? spellings[0].flag}
               disabled={locked}
               options={spellings.map(spelling => ({ value: spelling.flag, label: spelling.flag }))}
               onChange={flag => onRowSpelling(rowIndex, flag)}
@@ -574,6 +575,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   const [error, setError] = useState('');
 
   const groups = useMemo(() => [...new Set(schema.options.map(option => option.group || 'runtime'))].sort(), [schema]);
+  const schemaKeys = useMemo(() => new Set(schema.options.map(option => option.key)), [schema]);
   const visible = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
     return schema.options.filter(option => {
@@ -608,12 +610,16 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   const rowSpellings = useMemo(() => {
     const byKey = new Map<string, Array<string | null>>();
     if (!order.ok || !order.order) return byKey;
-    for (const item of expandPlan(schema, values, order.order)) byKey.set(item.key, [...(byKey.get(item.key) ?? []), item.spelling ?? null]);
+    for (const item of expandPlan(schema, values, order.order)) {
+      const spellings = byKey.get(item.key);
+      if (spellings) spellings.push(item.spelling ?? null);
+      else byKey.set(item.key, [item.spelling ?? null]);
+    }
     return byKey;
   }, [order, schema, values]);
   const masked = useMemo(() => (preview ? maskPreview(preview, schema, values) : null), [preview, schema, values]);
   const reviewedImport = useMemo(() => imported ? maskImportReview(imported, schema, values) : null, [imported, schema, values]);
-  const unknownKeys = useMemo(() => Object.keys(values).filter(key => key !== ORDER_KEY && !schema.options.some(option => option.key === key)), [schema, values]);
+  const unknownKeys = useMemo(() => Object.keys(values).filter(key => key !== ORDER_KEY && !schemaKeys.has(key)), [schemaKeys, values]);
 
   const fields = (showAll ? visible : visible.slice(0, limit)).map((option, index) => (
     <div key={option.key} style={index >= DEFERRED_FROM ? deferredStyle : undefined}>
