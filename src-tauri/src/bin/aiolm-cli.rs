@@ -30,6 +30,9 @@ struct HeadlessState {
     pid: u32,
     url: String,
     model: String,
+    // Configured retention only; this is not an inventory of files the engine opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file_bindings: Option<HeadlessFileBindings>,
     started_at: u64,
     #[serde(default)]
     executable: String,
@@ -39,6 +42,60 @@ struct HeadlessState {
     log_collector: Option<LogCollectorIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct HeadlessFileBindings {
+    // Freeze the process plan's directory so relative model selections never rebase.
+    working_directory: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model_target: Option<PathBuf>,
+    auxiliary: Vec<String>,
+}
+
+impl HeadlessFileBindings {
+    fn capture(cfg: &config::AppConfig, directory: Option<&Path>) -> Result<Self, String> {
+        let directory = directory
+            .map(Path::to_path_buf)
+            .map(Ok)
+            .unwrap_or_else(env::current_dir)
+            .and_then(fs::canonicalize)
+            .map_err(|error| format!("cannot retain the launch directory: {error}"))?;
+        let mut auxiliary = Vec::new();
+        for path in [&cfg.mmproj, &cfg.spec_draft_model]
+            .into_iter()
+            .chain(
+                cfg.lora_adapters
+                    .iter()
+                    .filter(|adapter| adapter.enabled)
+                    .map(|adapter| &adapter.path),
+            )
+            .filter(|path| !path.trim().is_empty())
+        {
+            let path = directory.join(path);
+            // Preserve the original name for split siblings and an existing canonical
+            // target for aliases. An ignored, nonexistent selection must not block start.
+            for retained in std::iter::once(path.clone()).chain(fs::canonicalize(&path).ok()) {
+                let retained = retained
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| "cannot retain a non-UTF-8 configured file path")?;
+                if !auxiliary.contains(&retained) {
+                    auxiliary.push(retained);
+                }
+            }
+        }
+        let model_target = fs::canonicalize(directory.join(&cfg.active_model)).ok();
+        Ok(Self {
+            working_directory: directory,
+            model_target,
+            auxiliary,
+        })
+    }
+
+    fn model(&self, model: &str) -> PathBuf {
+        self.working_directory.join(model)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -141,7 +198,19 @@ fn read_state_at(path: &Path) -> Result<Option<HeadlessState>, String> {
         .map_err(|error| format!("invalid headless state {}: {error}", path.display()))
 }
 
+fn serialized_state(state: &HeadlessState) -> Result<Vec<u8>, String> {
+    let bytes = serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_HEADLESS_STATE_BYTES {
+        return Err(format!(
+            "headless state exceeds {MAX_HEADLESS_STATE_BYTES} bytes"
+        ));
+    }
+    Ok(bytes)
+}
+
 fn write_state(state: &HeadlessState) -> Result<(), String> {
+    // Check the exact bytes before creating the state directory or staging file.
+    let bytes = serialized_state(state)?;
     let path = state_path();
     let parent = path
         .parent()
@@ -156,26 +225,42 @@ fn write_state(state: &HeadlessState) -> Result<(), String> {
             .map(|duration| duration.as_nanos())
             .unwrap_or_default()
     ));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .map_err(|error| format!("cannot create {}: {error}", tmp.display()))?;
-    let bytes = serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| format!("cannot write {}: {error}", tmp.display()))?;
-    drop(file);
-    if let Ok(metadata) = fs::symlink_metadata(&path) {
-        if metadata.file_type().is_symlink() {
-            let _ = fs::remove_file(&tmp);
+    let mut created = false;
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|error| format!("cannot create {}: {error}", tmp.display()))?;
+        created = true;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| format!("cannot write {}: {error}", tmp.display()))?;
+        drop(file);
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(format!(
                 "refusing to replace symlinked state {}",
                 path.display()
             ));
         }
+        fs::rename(&tmp, &path)
+            .map_err(|error| format!("cannot activate {}: {error}", path.display()))
+    })();
+    if let Err(error) = result {
+        if !created {
+            return Err(error);
+        }
+        // The closure closes its file before cleanup, including write/sync errors.
+        return match fs::remove_file(&tmp) {
+            Ok(()) => Err(error),
+            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => Err(error),
+            Err(cleanup) => Err(format!(
+                "{error}; cannot remove {}: {cleanup}",
+                tmp.display()
+            )),
+        };
     }
-    fs::rename(&tmp, &path).map_err(|error| format!("cannot activate {}: {error}", path.display()))
+    Ok(())
 }
 
 fn remove_state() {
@@ -799,6 +884,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
     )?;
     let resource_id = resources.as_ref().map(|value| value.id().to_owned());
     let working_directory = plan.working_directory;
+    let file_bindings = HeadlessFileBindings::capture(&cfg, working_directory.as_deref())?;
     let engine_info = aiolm_lib::providers::execution::probed_info(&cfg).await?;
     let log_file_path = log_path();
     if let Some(parent) = log_file_path.parent() {
@@ -898,6 +984,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
         pid,
         url: url.clone(),
         model: cfg.active_model.clone(),
+        file_bindings: Some(file_bindings),
         started_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
@@ -908,7 +995,11 @@ async fn server_start_unlocked() -> Result<Value, String> {
         engine: Some(serde_json::to_value(engine_info).map_err(|error| error.to_string())?),
     };
     if let Err(error) = write_state(&state) {
-        let _ = terminate_pid(pid);
+        // Ownership has not transferred: terminate this exact child/job and its resources.
+        let mut owned = shared.lock().unwrap_or_else(|error| error.into_inner());
+        server::kill(&mut owned.child, Some(Arc::clone(&err)));
+        drop(owned);
+        // PendingLogCollector still owns and kills/waits its exact child on return.
         return Err(error);
     }
     // Headless mode deliberately transfers ownership to its persisted state;
@@ -1180,7 +1271,40 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
         &cfg.spec_draft_model,
     )?;
     if let Some(state) = read_state()?.filter(state_process_is_managed) {
-        deletable_model_path(root, &safe, &state.model, "", "")?;
+        let Some(bindings) = state.file_bindings.as_ref() else {
+            // Preserve the primary/shard guard for legacy records before refusing unknown files.
+            deletable_model_path(root, &safe, &state.model, "", "")?;
+            return Err("stop and start the headless server once before deleting files: this older launch did not record its configured file references".into());
+        };
+        if !bindings.working_directory.is_absolute()
+            || bindings
+                .model_target
+                .as_ref()
+                .is_some_and(|path| !path.is_absolute())
+            || bindings
+                .auxiliary
+                .iter()
+                .any(|path| !Path::new(path).is_absolute())
+        {
+            return Err("stop the headless server before deleting files: select absolute paths and restart to replace invalid launch references".into());
+        }
+        let model = bindings.model(&state.model);
+        if !model.is_absolute() {
+            return Err("stop the headless server before deleting files: select absolute paths and restart to replace unresolved launch references".into());
+        }
+        let model = model
+            .to_str()
+            .ok_or("cannot resolve the recorded model path")?;
+        deletable_model_path(root, &safe, model, "", "")?;
+        if let Some(target) = &bindings.model_target {
+            let target = target
+                .to_str()
+                .ok_or("cannot resolve the recorded model target")?;
+            deletable_model_path(root, &safe, target, "", "")?;
+        }
+        for binding in &bindings.auxiliary {
+            deletable_model_path(root, &safe, binding, "", "")?;
+        }
     }
     if cfg.lora_adapters.iter().any(|adapter| {
         adapter.enabled
@@ -2179,6 +2303,26 @@ mod tests {
     }
 
     #[test]
+    fn headless_state_serialization_obeys_reader_size_limit() {
+        for (bytes, accepted) in [(65535, true), (65536, true), (65537, false)] {
+            let mut state: HeadlessState = serde_json::from_value(json!({
+                "pid": 0, "url": "http://127.0.0.1:1/v1", "model": "",
+                "started_at": 1, "executable": "synthetic", "log_path": ""
+            }))
+            .unwrap();
+            let overhead = serde_json::to_vec_pretty(&state).unwrap().len();
+            state.model = "x".repeat(bytes - overhead);
+            assert_eq!(serde_json::to_vec_pretty(&state).unwrap().len(), bytes);
+            let result = serialized_state(&state);
+            if accepted {
+                assert_eq!(result.unwrap().len(), bytes);
+            } else {
+                assert_eq!(result.unwrap_err(), "headless state exceeds 65536 bytes");
+            }
+        }
+    }
+
+    #[test]
     fn a_server_started_before_the_data_folder_moved_is_still_found() {
         let root = env::temp_dir().join(format!("aiolm-cli-state-{}", uuid::Uuid::new_v4()));
         let current = root.join("home").join("cli").join("headless-state.json");
@@ -2188,6 +2332,7 @@ mod tests {
             pid,
             url: "http://127.0.0.1:8080/v1".into(),
             model: "model.gguf".into(),
+            file_bindings: None,
             started_at: 1,
             executable: String::new(),
             log_path: String::new(),

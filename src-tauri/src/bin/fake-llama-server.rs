@@ -129,7 +129,7 @@ fn handle(mut stream: TcpStream) {
             }
         }
         ("POST", "/v1/embeddings") => {
-            if !authorization {
+            if !authorization && !std::env::args().any(|arg| arg == "--native-auxiliary-fixture") {
                 respond(
                     &mut stream,
                     "401 Unauthorized",
@@ -255,6 +255,90 @@ fn portable_inventory_fixture(arguments: &[String]) -> bool {
     }
     std::io::stdout().flush().unwrap();
     true
+}
+
+// Explicit fixture mode: record the exact native command and the finite bytes it consumed.
+// Read handles close before serving, so deletion cannot pass through a sharing error.
+fn auxiliary_fixture_runtime() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join(".auxiliary-native-fixture")))
+        .is_some_and(|p| p.is_file())
+}
+
+fn native_auxiliary_receipt(arguments: &[String]) {
+    let Some(index) = arguments
+        .iter()
+        .position(|arg| arg == "--native-auxiliary-fixture")
+    else {
+        return;
+    };
+    let record = arguments.get(index + 1).expect("owned native receipt path");
+    let mut files = Vec::new();
+    for flag in ["--model", "--mmproj", "--spec-draft-model", "--lora"] {
+        let matches = arguments
+            .iter()
+            .enumerate()
+            .filter(|(_, arg)| arg.as_str() == flag)
+            .collect::<Vec<_>>();
+        assert!(matches.len() <= 1, "duplicate native binding flag");
+        if let Some((index, _)) = matches.first() {
+            let value = arguments.get(index + 1).expect("native binding value");
+            for path in value.split(',') {
+                let bytes = std::fs::read(path).expect("read native synthetic binding");
+                assert!(
+                    bytes.len() <= 4096 && bytes.starts_with(b"GGUF"),
+                    "finite GGUF fixture only"
+                );
+                files.push(serde_json::json!({"flag":flag,"path":path,"bytes":bytes}));
+            }
+        }
+    }
+    assert!(
+        files.iter().any(|file| file["flag"] == "--model"),
+        "native primary binding required"
+    );
+    // Explicit fault injection after launch but before CLI state publication.
+    // The harness owns this new sentinel directory and must report it separately.
+    if let Some(index) = arguments
+        .iter()
+        .position(|arg| arg == "--native-state-directory-fixture")
+    {
+        std::fs::create_dir(arguments.get(index + 1).expect("owned state sentinel path"))
+            .expect("create new state publication sentinel");
+    }
+    let receipt = serde_json::to_vec(&serde_json::json!({
+        "pid": std::process::id(), "cwd": std::env::current_dir().unwrap(), "argv": &arguments[1..], "files": files
+    })).unwrap();
+    let record = std::path::Path::new(record);
+    assert!(
+        !record.exists(),
+        "native receipt destination must be absent"
+    );
+    let staged = record.with_extension(format!("{}.receipt", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged)
+        .expect("exclusive native receipt staging");
+    file.write_all(&receipt)
+        .expect("write finite native receipt");
+    drop(file);
+    std::fs::rename(staged, record).expect("publish complete native receipt");
+    if let Some(index) = arguments
+        .iter()
+        .position(|arg| arg == "--native-ack-fixture")
+    {
+        let ack = std::path::Path::new(arguments.get(index + 1).expect("owned ack path"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ack.is_file() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native receipt not acknowledged"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 }
 
 fn main() {
@@ -651,7 +735,15 @@ fn main() {
         }
     }
     if std::env::args().any(|arg| arg == "--version" || arg == "--help") {
-        println!("llama-server test fixture b1\n--model MODEL   model path\n--port PORT   server port\n--api-key KEY   credential\n--api-key-file FILE   credential file\n--ctx-size N   context size\n--threads N   worker count\n--temp N   sampling temperature\n--top-p N   sampling probability\n--top-k N   sampling count\n--fixture-native-value TEXT   synthetic native option");
+        if auxiliary_fixture_runtime() {
+            println!("llama-server test fixture b1\n--model MODEL   model path\n--port PORT   server port\n--api-key KEY   credential\n--api-key-file FILE   credential file\n--ctx-size N   context size\n--threads N   worker count\n--temp N   sampling temperature\n--top-p N   sampling probability\n--top-k N   sampling count\n--fixture-native-value TEXT   synthetic native option\n--mmproj FILE   synthetic projector\n--lora FILES   synthetic adapters\n--spec-type TYPE   synthetic speculation\n--spec-draft-model FILE   synthetic draft");
+        } else {
+            println!("llama-server test fixture b1\n--model MODEL   model path\n--port PORT   server port\n--api-key KEY   credential\n--api-key-file FILE   credential file\n--ctx-size N   context size\n--threads N   worker count\n--temp N   sampling temperature\n--top-p N   sampling probability\n--top-k N   sampling count\n--fixture-native-value TEXT   synthetic native option");
+        }
+        return;
+    }
+    // CPU fixture has no accelerator devices; this probe must exit rather than bind port zero.
+    if auxiliary_fixture_runtime() && arguments.iter().any(|arg| arg == "--list-devices") {
         return;
     }
     if std::env::args().any(|arg| arg == "--fake-startup-failure") {
@@ -690,6 +782,7 @@ fn main() {
     }
     let port = port_arg();
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind fake llama-server port");
+    native_auxiliary_receipt(&arguments);
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => handle(stream),
