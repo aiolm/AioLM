@@ -20,10 +20,18 @@ export function suitabilityOf(device: api.DeviceReport | null, backend: string):
  * architecture), keep the catalog visible rather than rendering an empty
  * runtime list. */
 export function computeVisibleRows(rows: BackendRow[], device: api.DeviceReport | null, showAll: boolean) {
-  const matchingRows = rows.filter((row) => showAll || !device || row.busy || row.installed.length > 0 || fitOf(device, row.backend) === "recommended");
+  // `fitOf` intentionally preserves the first matching backend verdict. Keep
+  // that precedence while avoiding a backend-list scan for every row and sort
+  // comparison in the render path.
+  const fitByBackend = new Map<string, api.BackendFit>();
+  for (const verdict of device?.backends ?? []) {
+    if (!fitByBackend.has(verdict.backend)) fitByBackend.set(verdict.backend, verdict.fit);
+  }
+  const fitFor = (backend: string): api.BackendFit => fitByBackend.get(backend) ?? "compatible";
+  const matchingRows = rows.filter((row) => showAll || !device || row.busy || row.installed.length > 0 || fitFor(row.backend) === "recommended");
   const visibleRows = (matchingRows.length > 0 ? matchingRows : rows)
     .slice()
-    .sort((left, right) => FIT_ORDER[fitOf(device, left.backend)] - FIT_ORDER[fitOf(device, right.backend)]);
+    .sort((left, right) => FIT_ORDER[fitFor(left.backend)] - FIT_ORDER[fitFor(right.backend)]);
   const hiddenCount = matchingRows.length > 0 ? rows.length - visibleRows.length : 0;
   return { visibleRows, hiddenCount };
 }

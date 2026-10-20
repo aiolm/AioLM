@@ -81,7 +81,9 @@ export default memo(function AdapterCatalogList({
     const query = deferred.trim().toLowerCase();
     const runtimeByProvider = new Map<string, RuntimeInstance[]>();
     for (const runtime of runtimes) {
-      runtimeByProvider.set(runtime.provider, [...(runtimeByProvider.get(runtime.provider) ?? []), runtime]);
+      const owned = runtimeByProvider.get(runtime.provider);
+      if (owned) owned.push(runtime);
+      else runtimeByProvider.set(runtime.provider, [runtime]);
     }
     return catalog
       .filter(item => !query || `${item.id} ${item.engine} ${item.server} ${item.managed_variant ?? ''}`.toLowerCase().includes(query))

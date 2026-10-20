@@ -49,5 +49,15 @@ export function runtimeReferences(cfg: api.AppConfig | null | undefined, backend
   }
   // One line per target: a session that carries the runtime in both its own
   // override and its applied profile is still one thing the user loses.
-  return found.filter((item, index) => found.findIndex(other => other.kind === item.kind && other.name === item.name) === index);
+  const seen = new Map<RuntimeReferenceKind, Set<string>>();
+  return found.filter(item => {
+    let namesForKind = seen.get(item.kind);
+    if (!namesForKind) {
+      namesForKind = new Set<string>();
+      seen.set(item.kind, namesForKind);
+    }
+    if (namesForKind.has(item.name)) return false;
+    namesForKind.add(item.name);
+    return true;
+  });
 }
