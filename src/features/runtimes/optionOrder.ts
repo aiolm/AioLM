@@ -1,4 +1,5 @@
 import type { OptionSchema, OptionSchemaDefinition, PlannedOccurrence } from '../../shared/api/runtimeHelp';
+import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 
 /** Saved key of the command-line order record (see `runtime_ordered.rs`).
  * Grouped values stay the authority for values; the record decides the
@@ -249,6 +250,11 @@ export function moveOccurrence(schema: OptionSchema, values: Record<string, unkn
   return writePlan(schema, values, plan);
 }
 
+/** The native integer can exceed the exact range of the editor's numbers. */
+export class ImportedIntegerPrecisionError extends Error {
+  constructor() { super(runtimeOptionsCopy.en.importIntegerPrecision); }
+}
+
 /** Merge an imported ordered plan: imported options replace their saved
  * occurrences and follow the existing ones in pasted order. Refuses to
  * rewrite a saved record this app cannot read. */
@@ -257,6 +263,14 @@ export function applyPlan(schema: OptionSchema, values: Record<string, unknown>,
   if (!state.ok) throw new Error('saved option order needs review before importing');
   const keys = new Set(imported.plan.map(item => item.key));
   const options = new Map(schema.options.map(option => [option.key, option]));
+  // Check before merging any occurrence: IPC numbers may already have lost
+  // integer digits, while the original pasted command is still reviewable.
+  for (const item of imported.plan) {
+    if (supportedValue(options.get(item.key)?.kind) === 'integer'
+      && item.values.some(value => typeof value === 'number' && !Number.isSafeInteger(value))) {
+      throw new ImportedIntegerPrecisionError();
+    }
+  }
   const kept = expandPlan(schema, values, state.order).filter(item => !keys.has(item.key));
   const incoming = imported.plan.filter(item => orderable(options.get(item.key)));
   const next = writePlan(schema, values, [...kept, ...incoming]);

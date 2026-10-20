@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { effectiveSchema, schemaOption } from '../../testing/effectiveSchema';
-import type { CommandEntry, OptionSchemaDefinition } from '../../shared/api/runtimeHelp';
+import type { CommandEntry, OptionSchemaDefinition, PositionalRole } from '../../shared/api/runtimeHelp';
 import { sensitiveEntryTokenStrings, sensitiveStaticIndices } from './sensitiveEntryTokens';
 import { maskImportReview, maskPreview } from './RuntimeOptionSchemaForm';
 
@@ -82,9 +82,40 @@ describe('sensitive entry tokens', () => {
     });
     const secrets = sensitiveEntryTokenStrings(effective);
     const imported = { plan: [], managed: ['serve', SECRET], unrecognized: [`--x=${SECRET}`] };
-    const review = maskImportReview(imported, effective.schema, {}, secrets);
+    // The actual request entry, unlike the string list alone, proves which
+    // sensitive slot is static. Unsaved/stale mappings cannot grant this.
+    const actualEntry: CommandEntry = { ...entry, positional_roles: { marker: { role: 'static', index: 3 } } };
+    const review = maskImportReview(imported, effective.schema, {}, secrets, actualEntry);
     expect(review.managed).toEqual(['serve', '•••']);
     expect(review.unrecognized).toEqual(['--x=•••']);
+    expect(maskImportReview(imported, effective.schema, {}, [], actualEntry)).toEqual(review);
     expect(imported.managed).toEqual(['serve', SECRET]);
+  });
+
+  it.each([
+    ['user', { role: 'user' }],
+    ['unmapped', undefined],
+    ['binding', { role: 'binding', name: 'model' }],
+    ['invalid static', { role: 'static', index: 99 }],
+  ] as Array<[string, PositionalRole | undefined]>)('keeps both review buckets hidden when a static secret coexists with a %s sensitive slot', (_label, role) => {
+    const effective = effectiveSchema([], [slot('marker', 0, known), { ...slot('dynamic', 1, known), managed: role?.role === 'user' ? null : 'discovery' }]);
+    const actualEntry: CommandEntry = { ...entry, positional_roles: {
+      marker: { role: 'static', index: 3 }, ...(role ? { dynamic: role } : {}),
+    } };
+    const imported = { plan: [], managed: ['serve', SECRET, 'fresh-managed-secret'], unrecognized: ['fresh-user-secret'] };
+    const before = structuredClone({ effective, actualEntry, imported });
+    expect(maskImportReview(imported, effective.schema, {}, [SECRET], actualEntry)).toEqual({ managed: ['•••', '•••', '•••'], unrecognized: ['•••'] });
+    expect({ effective, actualEntry, imported }).toEqual(before);
+  });
+
+  it('requires actual valid static ownership even when known entry-secret strings are available', () => {
+    const effective = effectiveSchema([], [slot('marker', 0, known)]);
+    const imported = { plan: [], managed: ['serve', SECRET], unrecognized: ['fresh-secret'] };
+    const hidden = { managed: ['•••', '•••'], unrecognized: ['•••'] };
+    expect(maskImportReview(imported, effective.schema, {}, [SECRET])).toEqual(hidden);
+    for (const index of [0, 99]) {
+      const invalid: CommandEntry = { ...entry, positional_roles: { marker: { role: 'static', index } } };
+      expect(maskImportReview(imported, effective.schema, {}, [SECRET], invalid)).toEqual(hidden);
+    }
   });
 });

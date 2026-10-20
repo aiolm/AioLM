@@ -93,8 +93,13 @@ describe('unsaved known-sensitive static roles', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Command syntax' }));
     fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
-    const review = await screen.findByText(/serve •••/);
+    // The draft identifies a literal secret, but import still used the
+    // unmapped actual entry, so neither flattened review word has ownership.
+    const review = await screen.findByText('••• •••', { selector: '.app-feedback-message' });
     expect(review).not.toHaveTextContent(SECRET);
+    expect(review).not.toHaveTextContent('serve');
+    expect(imported).toHaveBeenCalledWith(expect.any(Object), [], paste, 'posix', entry);
+    expect(entry.positional_roles).toBeUndefined();
     expect(screen.getByRole('textbox', { name: 'Import command' })).toHaveValue(paste);
 
     // Switching runtimes drops the draft: the new review shows its own bytes.
@@ -137,8 +142,11 @@ describe('unsaved known-sensitive static roles', () => {
       expect(rendered).toHaveTextContent('•••');
       expect(rendered).not.toHaveTextContent(SECRET);
     });
-    const maskedReview = await screen.findByText(/serve •••/);
+    const maskedReview = await screen.findByText('••• •••', { selector: '.app-feedback-message' });
     expect(maskedReview).not.toHaveTextContent(SECRET);
+    expect(maskedReview).not.toHaveTextContent('serve');
+    expect(imported).toHaveBeenCalledWith(expect.any(Object), [], paste, 'posix', entry);
+    expect(entry.positional_roles).toBeUndefined();
     expect(screen.getByText(/Help command/)).not.toHaveTextContent(SECRET);
     expect(confirm).not.toHaveBeenCalled();
     expect(screen.getByRole('textbox', { name: 'Import command' })).toHaveValue(paste);

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
-import RuntimeOptionSchemaForm, { maskImportReview } from './RuntimeOptionSchemaForm';
+import RuntimeOptionSchemaForm, { maskImportReview, maskPreview } from './RuntimeOptionSchemaForm';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import * as runtimeHelp from '../../shared/api/runtimeHelp';
 import type { OptionSchema } from '../../shared/api/runtimeHelp';
@@ -367,6 +367,62 @@ describe('saved command-line order and confirmed syntax in the form', () => {
 
 
 describe('command review projections', () => {
+  it('masks documented sensitive Number values across equivalent decimal and exponent formatting', () => {
+    const current = schema([textOption('quota', { kind: known('number'), sensitive: known(true) })]);
+    const values = { quota: 1e30 };
+    const argv = ['--quota', '1e30', '--copy=1e+30', '2'];
+    const before = structuredClone({ values, argv });
+    // Alternate exponent spelling is a semantic comparison control; the
+    // current native serializer emits 1e+30. Its actual 1.0 differs from JS 1.
+    expect(maskPreview(argv, current, values)).toEqual(['--quota', '•••', '--copy=•••', '2']);
+    // Root's public native resolver also pins browser-like JSON 0.000001
+    // becoming argv 1e-6, while the stored JS display is 0.000001.
+    expect(maskPreview(['1e-6'], current, { quota: 1e-6 })).toEqual(['•••']);
+    expect(maskPreview(['1.0', '--copy=1e0'], current, { quota: 1 })).toEqual(['•••', '--copy=•••']);
+    expect({ values, argv }).toEqual(before);
+  });
+
+  it('masks documented Json primitives and equivalent object formatting without changing argv', () => {
+    const current = schema([textOption('payload', { kind: known('json'), sensitive: known(true) })]);
+    expect(maskPreview(['--payload', '"synthetic-preview-secret"'], current, { payload: 'synthetic-preview-secret' }))
+      .toEqual(['--payload', '•••']);
+    const value = { z: 1, a: [1, 'synthetic-preview-secret'] };
+    const argv = ['--payload', '{"a":[1.0,"synthetic-preview-secret"],"z":1}', '--copy={"z":1,"a":[1e0,"synthetic-preview-secret"]}', 'null'];
+    const before = structuredClone({ value, argv });
+    expect(maskPreview(argv, current, { payload: value })).toEqual(['--payload', '•••', '--copy=•••', 'null']);
+    expect(maskPreview(['1.0', '1e0'], current, { payload: 1 })).toEqual(['•••', '•••']);
+    expect({ value, argv }).toEqual(before);
+  });
+
+  it('keeps Text matching exact and leaves unconfirmed sensitivity unchanged', () => {
+    const text = schema([textOption('secret', { kind: known('text'), sensitive: known(true) })]);
+    expect(maskPreview(['1e30', '1e+30', '"1e30"'], text, { secret: '1e30' })).toEqual(['•••', '1e+30', '"1e30"']);
+    const unconfirmed = schema([textOption('secret', { kind: known('json'), sensitive: { value: true, certainty: 'unknown' } })]);
+    expect(maskPreview(['"synthetic-preview-secret"'], unconfirmed, { secret: 'synthetic-preview-secret' }))
+      .toEqual(['"synthetic-preview-secret"']);
+  });
+
+  it('hides both ambiguous review buckets for a documented sensitive positional without changing raw data', () => {
+    const positional = textOption('payload', { position: 0, spellings: [], kind: known('json'), sensitive: known(true) });
+    const publicOption = textOption('public');
+    const current = schema([positional, publicOption]);
+    const values = { public: 'previous' };
+    const imported = {
+      plan: [{ key: 'public', values: ['kept'] }], managed: ['synthetic-managed-positional', '--public', 'managed-control'],
+      unrecognized: ['{"token":"synthetic-private","n":9007199254740993}', '--public', 'ambiguous-control'],
+    };
+    const before = structuredClone({ values, imported, current });
+    // The flattened bucket has no positional ownership. Even a word matching
+    // a known flag cannot be proven to be metadata rather than a secret value.
+    expect(maskImportReview(imported, current, values)).toEqual({
+      managed: ['•••', '•••', '•••'], unrecognized: ['•••', '•••', '•••'],
+    });
+    expect({ values, imported, current }).toEqual(before);
+    const unconfirmed = schema([{ ...positional, sensitive: { value: true, certainty: 'unknown' } }, publicOption]);
+    expect(maskImportReview(imported, unconfirmed, values)).toEqual({ managed: imported.managed, unrecognized: imported.unrecognized });
+    expect(maskImportReview(imported, schema([publicOption]), values)).toEqual({ managed: imported.managed, unrecognized: imported.unrecognized });
+  });
+
   it('masks tuple values and inline aliases without mutating plans or stored values', () => {
     const current = schema([textOption('amber', { spellings: [{flag:'--amber'},{flag:'-a'}], sensitive: {value:true,certainty:'verified'}, arity: {value:{min:2,max:2},certainty:'verified'} })]);
     const values = { amber: 'previous-synthetic-value' };

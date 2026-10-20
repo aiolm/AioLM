@@ -1,5 +1,5 @@
 import { memo, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { runtimeHelpImport, runtimeHelpResolve, type ConfirmedSyntax, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition, type OptionSchemaFact } from '../../shared/api/runtimeHelp';
+import { runtimeHelpImport, runtimeHelpResolve, staticCandidates, type CommandEntry, type ConfirmedSyntax, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition, type OptionSchemaFact } from '../../shared/api/runtimeHelp';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { useI18n } from '../../shared/i18n/i18n';
@@ -7,7 +7,7 @@ import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 
 type Copy = (typeof runtimeOptionsCopy)['en'];
 
-import { applyPlan, editOption, expandPlan, moveOccurrence, ORDER_KEY, readOrder, readStored, setOccurrenceSpelling, writeStored } from './optionOrder';
+import { applyPlan, editOption, expandPlan, ImportedIntegerPrecisionError, moveOccurrence, ORDER_KEY, readOrder, readStored, setOccurrenceSpelling, writeStored } from './optionOrder';
 export { readStored, writeStored, applyPlan, type StoredOption } from './optionOrder';
 
 function supported<T>(fact: OptionSchemaFact<T> | undefined): T | undefined {
@@ -478,14 +478,31 @@ export function OccurrenceOrder({ schema, values, disabled = false, onChange }: 
   );
 }
 
+/** Compare JSON display values independently of native key/number formatting. */
+function canonicalJson(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
+    const record = item as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
+  });
+}
+
 export function maskPreview(argv: string[], schema: OptionSchema, values: Record<string, unknown>, entrySecrets: Iterable<string> = []): string[] {
   const secrets = new Set<string>();
+  const numbers = new Set<number>();
+  const json = new Set<string>();
   for (const option of schema.options) {
     if (supported(option.sensitive) !== true) continue;
+    const kind = kindOf(option);
     for (const row of readStored(values[option.key])?.rows ?? []) {
       for (const cell of row) {
         const text = display(cell);
         if (text) secrets.add(text);
+        if (kind === 'number' && typeof cell === 'number' && Number.isFinite(cell)) numbers.add(cell);
+        if (kind === 'json') {
+          const canonical = canonicalJson(cell);
+          if (canonical !== undefined) json.add(canonical);
+        }
       }
     }
   }
@@ -495,21 +512,43 @@ export function maskPreview(argv: string[], schema: OptionSchema, values: Record
   for (const secret of entrySecrets) {
     if (secret) secrets.add(secret);
   }
+  const isSecret = (text: string) => {
+    if (secrets.has(text)) return true;
+    if (!numbers.size && !json.size) return false;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (typeof parsed === 'number' && numbers.has(parsed)) return true;
+      const canonical = json.size ? canonicalJson(parsed) : undefined;
+      return canonical !== undefined && json.has(canonical);
+    } catch { return false; }
+  };
   return argv.map(token => {
-    if (secrets.has(token)) return '•••';
+    if (isSecret(token)) return '•••';
     const equals = token.indexOf('=');
-    return equals > 0 && secrets.has(token.slice(equals + 1)) ? `${token.slice(0, equals + 1)}•••` : token;
+    return equals > 0 && isSecret(token.slice(equals + 1)) ? `${token.slice(0, equals + 1)}•••` : token;
   });
 }
 
 /** Mask review projections only. The pasted command, plan and stored values
  * keep their exact bytes. A sensitive flag with uncertain arity hides every
  * following review word instead of guessing where its value ends. Known
- * sensitive entry tokens pass through the same projection masking. */
-export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, values: Record<string, unknown>, entrySecrets: Iterable<string> = []): Pick<ImportedPlan, 'managed' | 'unrecognized'> {
+ * sensitive entry tokens pass through the same projection masking. With a
+ * sensitive positional, neither review bucket has reliable ownership unless
+ * the actual request entry proves it is a fixed literal. Unsaved draft roles
+ * identify display secrets but never establish import ownership. */
+export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, values: Record<string, unknown>, entrySecrets: Iterable<string> = [], entry?: CommandEntry | null): Pick<ImportedPlan, 'managed' | 'unrecognized'> {
   const reviewValues: Record<string, unknown> = { ...values };
+  const reviewSecrets = [...entrySecrets];
+  const staticIndices = new Set(entry ? staticCandidates(entry) : []);
+  let sensitivePositional = false;
   for (const option of schema.options) {
     if (supported(option.sensitive) !== true) continue;
+    if (option.position !== null && option.position !== undefined) {
+      const role = entry?.positional_roles?.[option.key];
+      const literal = role?.role === 'static' && staticIndices.has(role.index) ? entry?.prefix[role.index] : undefined;
+      if (option.target === 'launch' && typeof literal === 'string') reviewSecrets.push(literal);
+      else sensitivePositional = true;
+    }
     const rows = [...(readStored(values[option.key])?.rows ?? []), ...imported.plan.filter(item => item.key === option.key).map(item => [...item.values])];
     for (const words of [imported.managed, imported.unrecognized]) {
       for (let index = 0; index < words.length; index += 1) {
@@ -527,7 +566,10 @@ export function maskImportReview(imported: ImportedPlan, schema: OptionSchema, v
     }
     reviewValues[option.key] = { occurrences: rows };
   }
-  return { managed: maskPreview(imported.managed, schema, reviewValues, entrySecrets), unrecognized: maskPreview(imported.unrecognized, schema, reviewValues, entrySecrets) };
+  return {
+    managed: sensitivePositional ? imported.managed.map(() => '•••') : maskPreview(imported.managed, schema, reviewValues, reviewSecrets),
+    unrecognized: sensitivePositional ? imported.unrecognized.map(() => '•••') : maskPreview(imported.unrecognized, schema, reviewValues, reviewSecrets),
+  };
 }
 
 function isApplicable(option: OptionSchemaDefinition, scope: string[]): boolean {
@@ -680,7 +722,7 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
           {imported && (
             <button type="button" className="app-button app-button--secondary" disabled={disabled}
               onClick={() => {
-                try { onChange(applyPlan(schema, values, imported)); } catch (cause) { setImportError(cause instanceof Error ? cause.message : String(cause)); }
+                try { onChange(applyPlan(schema, values, imported)); } catch (cause) { setImportError(cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof Error ? cause.message : String(cause)); }
               }}>{copy.apply}</button>
           )}
         </div>

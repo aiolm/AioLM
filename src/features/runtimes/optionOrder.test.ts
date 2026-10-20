@@ -170,3 +170,43 @@ describe('saved command-line order', () => {
     expect(editOption(schema, values, 'gone', undefined)).toEqual({ beta: '2', [ORDER_KEY]: { version: 1, occurrences: [{ key: 'beta' }] } });
   });
 });
+
+describe('imported integer values at the JavaScript boundary', () => {
+  const typedSchema: OptionSchema = { ...schema, options: [
+    option('count', { kind: known('integer') }),
+    option('ratio', { kind: known('number') }),
+    option('label', { kind: known('text') }),
+  ] };
+  const transported = (decimal: string) => JSON.parse(
+    `{"plan":[{"key":"count","spelling":"--count","values":[${decimal}]}]}`,
+  ) as { plan: Array<{ key: string; spelling?: string; values: unknown[] }> };
+
+  it.each(['9007199254740992', '9007199254740993', '-9007199254740993', '9223372036854775807', '-9223372036854775808'])(
+    'refuses unsafe native integer %s atomically without replacing saved values or order', decimal => {
+      const saved = {
+        count: { spelling: null, occurrences: [[7], [8]] }, label: 'kept',
+        retained_unknown: { nested: ['original'] },
+        [ORDER_KEY]: { version: 1, occurrences: [{ key: 'count' }, { key: 'label' }, { key: 'count' }] },
+      };
+      const imported = transported(decimal);
+      imported.plan.unshift({ key: 'label', spelling: '--label', values: ['new'] });
+      const before = structuredClone({ saved, imported });
+      expect(() => applyPlan(typedSchema, saved, imported)).toThrow('Review the original pasted command before applying.');
+      expect({ saved, imported }).toEqual(before);
+    },
+  );
+
+  it('keeps safe Integer endpoints exact and preserves Number and literal Text policy', () => {
+    for (const [decimal, expected] of [['9007199254740991', 9007199254740991], ['-9007199254740991', -9007199254740991], ['0', 0]] as const) {
+      expect(applyPlan(typedSchema, { retained_unknown: 'kept' }, transported(decimal)))
+        .toEqual({ retained_unknown: 'kept', count: expected });
+    }
+    expect(applyPlan(typedSchema, {}, { plan: [
+      { key: 'ratio', values: [1e20] }, { key: 'label', values: ['9007199254740993'] },
+    ] })).toEqual({ ratio: 1e20, label: '9007199254740993' });
+    // An import with unknown arity can retain tentative literal values for
+    // native review; the GUI must not guess a different representation.
+    expect(applyPlan(typedSchema, {}, { plan: [{ key: 'count', values: ['9007199254740993'] }] }))
+      .toEqual({ count: '9007199254740993' });
+  });
+});

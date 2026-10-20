@@ -3,6 +3,7 @@ import * as api from '../../shared/api';
 import { useI18n } from '../../shared/i18n/i18n';
 import { providerCopy } from '../../shared/i18n/providerCopy';
 import { commandImportCopy } from '../../shared/i18n/commandImportCopy';
+import { runtimeOptionsCopy } from '../../shared/i18n/runtimeOptionsCopy';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { useRuntimeInventoryRevision } from '../../shared/runtime/runtimeInventoryEvents';
@@ -14,7 +15,7 @@ import RuntimeHelpReview from '../runtimes/RuntimeHelpReview';
 import RuntimeFactDifferences from '../runtimes/RuntimeFactDifferences';
 import ConfirmedSyntaxReview from '../runtimes/ConfirmedSyntaxReview';
 import PositionalLayout from '../runtimes/PositionalLayout';
-import { ORDER_KEY } from '../runtimes/optionOrder';
+import { ImportedIntegerPrecisionError, ORDER_KEY } from '../runtimes/optionOrder';
 import { modelSettingsCopy } from './modelSettingsCopy';
 import { settingsFlowCopy } from './settingsFlowCopy';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
@@ -241,8 +242,8 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
       void api.runtimeHelpImport(effective.schema, effective.scope, paste, importSyntax, effective.entry).then(result => {
         if (!current()) return;
         let next: Record<string, unknown>;
-        try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(String(cause)); return; }
-        const review = maskImportReview(result, effective.schema, values, liveEntrySecrets());
+        try { next = applyPlan(effective.schema, values, result); } catch (cause) { setError(cause instanceof ImportedIntegerPrecisionError ? runtimeOptionsCopy[locale].importIntegerPrecision : String(cause)); return; }
+        const review = maskImportReview(result, effective.schema, values, liveEntrySecrets(), effective.entry);
         setError(''); setImportReview([...review.managed, ...review.unrecognized].join(' '));
         onChange({ provider_options: { ...cfg.provider_options, [provider]: next } });
       }).catch(cause => { if (current()) setError(String(cause)); });
