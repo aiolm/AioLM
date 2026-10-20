@@ -58,6 +58,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [serverAdapterScales, setServerAdapterScales] = useState<Record<number, string>>({});
   const [adapterBusy, setAdapterBusy] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ title: string; description: string; confirmLabel: string; confirmIcon?: string; onConfirm: () => void } | null>(null);
+  const pendingDeletions = useRef(new Set<string>());
   const scanTimer = useRef<number | null>(null);
   const scanGeneration = useRef(0);
   const pendingScan = useRef<ReturnType<typeof startModelScan> | null>(null);
@@ -315,6 +316,8 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     }
     const remove = async () => {
       setPendingConfirm(null);
+      if (pendingDeletions.current.has(model.path)) return;
+      pendingDeletions.current.add(model.path);
       try {
         await api.deleteModel(model.path, model.shards?.files);
         forgetExecution(model.path);
@@ -325,6 +328,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
+        pendingDeletions.current.delete(model.path);
         invalidateModelCatalog();
       }
     };
