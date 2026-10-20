@@ -299,9 +299,16 @@ pub fn deep_key(
     hardware_fingerprint: &str,
     runtime_devices: &[String],
 ) -> String {
+    deep_key_from_canary_key(
+        cfg,
+        &cache_key(cfg, resolved, hardware_fingerprint, runtime_devices),
+    )
+}
+
+fn deep_key_from_canary_key(cfg: &AppConfig, canary_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"deep\0");
-    hasher.update(cache_key(cfg, resolved, hardware_fingerprint, runtime_devices).as_bytes());
+    hasher.update(canary_key.as_bytes());
     hasher.update([0u8]);
     hasher.update(model_identity(&cfg.active_model).as_bytes());
     hasher.update([0u8]);
@@ -317,6 +324,8 @@ pub fn cache_key(
     hardware_fingerprint: &str,
     runtime_devices: &[String],
 ) -> String {
+    #[cfg(test)]
+    canary_cancel_public_flow_tests::runtime_identity_requested();
     cache_key_with_runtime_identity(
         cfg,
         resolved,
@@ -531,7 +540,9 @@ pub async fn ensure_verified(
     // this exact placement. It outranks the canary in both directions: its
     // failure is specific evidence the canary cannot produce, and it is the only
     // thing that can have covered an architecture the canary does not reach.
-    let deep = deep_key(cfg, resolved, hardware_fingerprint, runtime_devices);
+    // Both lookups describe this request's current runtime inventory. Deep
+    // composition still reads the selected model's metadata here.
+    let deep = deep_key_from_canary_key(cfg, &key);
     if let Some(record) = cache.deep.get(&deep) {
         if record.verdict == Verdict::Fail {
             return Err(refusal(&deep, record));
@@ -1328,6 +1339,15 @@ mod canary_cancel_public_flow_tests {
         static OBSERVING: Cell<bool> = const { Cell::new(false) };
         static CANCEL_NEXT_MEASUREMENT: Cell<bool> = const { Cell::new(false) };
         static MEASUREMENT_STARTS: Cell<usize> = const { Cell::new(0) };
+        static RUNTIME_IDENTITY_REQUESTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    // Each observation is followed unconditionally by the real runtime file
+    // inventory. No identity, metadata or cache result is substituted.
+    pub(super) fn runtime_identity_requested() {
+        if OBSERVING.get() {
+            RUNTIME_IDENTITY_REQUESTS.set(RUNTIME_IDENTITY_REQUESTS.get() + 1);
+        }
     }
 
     // This only observes actual measurement entry and raises the same flag the
@@ -1351,6 +1371,7 @@ mod canary_cancel_public_flow_tests {
         fn begin() -> Self {
             assert!(!OBSERVING.get(), "canary observation is already installed");
             MEASUREMENT_STARTS.set(0);
+            RUNTIME_IDENTITY_REQUESTS.set(0);
             CANCEL_NEXT_MEASUREMENT.set(true);
             OBSERVING.set(true);
             Self
@@ -1359,6 +1380,10 @@ mod canary_cancel_public_flow_tests {
         fn count(&self) -> usize {
             MEASUREMENT_STARTS.get()
         }
+
+        fn take_identity_requests(&self) -> usize {
+            RUNTIME_IDENTITY_REQUESTS.replace(0)
+        }
     }
 
     impl Drop for Observation {
@@ -1366,6 +1391,7 @@ mod canary_cancel_public_flow_tests {
             OBSERVING.set(false);
             CANCEL_NEXT_MEASUREMENT.set(false);
             MEASUREMENT_STARTS.set(0);
+            RUNTIME_IDENTITY_REQUESTS.set(0);
         }
     }
 
@@ -1400,13 +1426,17 @@ mod canary_cancel_public_flow_tests {
 
     #[test]
     fn cancelled_canary_is_not_cached_and_the_same_key_can_be_retried() {
+        run_child(CHILD_TEST, "cancel-then-retry");
+    }
+
+    fn run_child(test: &str, mode: &str) {
         let parent_home = std::env::var_os("AIOLM_HOME");
         let home = OwnedHome::new();
         let output =
             crate::procutil::std_command(std::env::current_exe().expect("current test executable"))
-                .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
+                .args(["--exact", test, "--nocapture", "--test-threads=1"])
                 .env("AIOLM_HOME", &home.path)
-                .env(CHILD_MODE, "cancel-then-retry")
+                .env(CHILD_MODE, mode)
                 .output()
                 .expect("spawn isolated public canary fixture");
         assert_eq!(
@@ -1425,6 +1455,148 @@ mod canary_cancel_public_flow_tests {
         assert!(
             stdout.contains("test result: ok. 1 passed"),
             "the exact child filter must actually run one fixture:\n{stdout}"
+        );
+    }
+
+    #[test]
+    fn verification_reuses_one_runtime_inventory_and_refreshes_the_next_request() {
+        run_child(
+            "verify::canary_cancel_public_flow_tests::isolated_public_runtime_identity_fixture",
+            "identity-refresh",
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn isolated_public_runtime_identity_fixture() {
+        let Ok(mode) = std::env::var(CHILD_MODE) else {
+            return;
+        };
+        assert_eq!(mode, "identity-refresh");
+        let home = PathBuf::from(std::env::var_os("AIOLM_HOME").expect("isolated home"));
+        assert_eq!(crate::home::aiolm_home(), home);
+        let cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            active_build: "b424242".into(),
+            active_model: home
+                .join("synthetic-model.gguf")
+                .to_string_lossy()
+                .into_owned(),
+            ngl: 99,
+            ..Default::default()
+        };
+        let placement = ResolvedGpu {
+            device_flag: Some("Vulkan0".into()),
+            ..Default::default()
+        };
+        let devices = vec!["Vulkan0: Synthetic identity fixture (1024 MiB)".into()];
+        let hardware = "synthetic-identity-hardware";
+        let root = runtime::runtime_dir(&cfg.active_backend, &cfg.active_build).unwrap();
+        let vendor = root.join(".kpack").join("synthetic-kernel.dat");
+        fs::create_dir_all(vendor.parent().unwrap()).unwrap();
+        fs::write(&vendor, b"first synthetic kernel").unwrap();
+        fs::write(
+            &cfg.active_model,
+            b"synthetic metadata only, not model weights",
+        )
+        .unwrap();
+        assert!(
+            !runtime::perplexity_bin_for(&cfg.active_backend, &cfg.active_build)
+                .unwrap()
+                .exists()
+        );
+        let old_key = cache_key(&cfg, &placement, hardware, &devices);
+        let old_deep = deep_key(&cfg, &placement, hardware, &devices);
+        // Preserve the original public key's exact byte composition, separately
+        // from the implementation's deep-key composition helper.
+        let mut original = Sha256::new();
+        original.update(b"deep\0");
+        original.update(old_key.as_bytes());
+        original.update([0]);
+        original.update(model_identity(&cfg.active_model).as_bytes());
+        original.update([0]);
+        original.update(cfg.ngl.to_string().as_bytes());
+        assert_eq!(old_deep, format!("{:x}", original.finalize()));
+
+        let observation = Observation::begin();
+        CANCEL_NEXT_MEASUREMENT.set(false);
+        let first = ensure_verified(&cfg, &placement, hardware, &devices, None)
+            .await
+            .unwrap_err();
+        let first_reads = observation.take_identity_requests();
+        let cached = ensure_verified(&cfg, &placement, hardware, &devices, None)
+            .await
+            .unwrap_err();
+        let cached_reads = observation.take_identity_requests();
+        assert_eq!(first, cached);
+        assert_eq!(observation.count(), 1);
+
+        // A deterministic size change avoids mtime granularity and sleeping.
+        fs::write(&vendor, b"second, longer synthetic kernel payload").unwrap();
+        let new_key = cache_key(&cfg, &placement, hardware, &devices);
+        let new_deep = deep_key(&cfg, &placement, hardware, &devices);
+        let direct_reads = observation.take_identity_requests();
+        assert_ne!(old_key, new_key);
+        assert_ne!(old_deep, new_deep);
+        let refreshed = ensure_verified(&cfg, &placement, hardware, &devices, None)
+            .await
+            .unwrap_err();
+        let refreshed_reads = observation.take_identity_requests();
+        assert_eq!(observation.count(), 2);
+        let cache = load_cache();
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.entries[&old_key].verdict, Verdict::Unsupported);
+        assert_eq!(cache.entries[&new_key].verdict, Verdict::Unsupported);
+        assert_eq!(first, refusal(&old_key, &cache.entries[&old_key]));
+        assert_eq!(refreshed, refusal(&new_key, &cache.entries[&new_key]));
+
+        fs::write(&cfg.active_model, b"changed synthetic model metadata").unwrap();
+        let changed_weights = deep_key(&cfg, &placement, hardware, &devices);
+        assert_ne!(new_deep, changed_weights);
+        assert_eq!(new_key, cache_key(&cfg, &placement, hardware, &devices));
+        let mut shallower = cfg.clone();
+        shallower.ngl = 50;
+        assert_eq!(
+            new_key,
+            cache_key(&shallower, &placement, hardware, &devices)
+        );
+        assert_ne!(
+            changed_weights,
+            deep_key(&shallower, &placement, hardware, &devices)
+        );
+        let deep_failure = record(Verdict::Fail, None, "synthetic cached deep failure");
+        store_deep(&changed_weights, deep_failure.clone());
+        observation.take_identity_requests();
+        let deep_refusal = ensure_verified(&cfg, &placement, hardware, &devices, None)
+            .await
+            .unwrap_err();
+        let deep_reads = observation.take_identity_requests();
+        assert_eq!(deep_refusal, refusal(&changed_weights, &deep_failure));
+        allow_override(&new_key).unwrap();
+        assert!(ensure_verified(&cfg, &placement, hardware, &devices, None)
+            .await
+            .is_ok());
+        let override_reads = observation.take_identity_requests();
+        let mut host = cfg.clone();
+        host.ngl = 0;
+        assert!(ensure_verified(&host, &placement, hardware, &devices, None)
+            .await
+            .is_ok());
+        let host_reads = observation.take_identity_requests();
+        assert_eq!(observation.count(), 2);
+        assert!(!home.join("verification").exists());
+        println!("RUNTIME_IDENTITY_PUBLIC_FLOW reads=[{first_reads},{cached_reads},{refreshed_reads},{deep_reads},{override_reads},{host_reads}] direct_reads={direct_reads} measurement_starts={} old_key={old_key} new_key={new_key} old_deep={old_deep} new_deep={new_deep} first={first:?} cached={cached:?} refreshed={refreshed:?} deep_refusal={deep_refusal:?}", observation.count());
+        assert_eq!(direct_reads, 2, "standalone public keys remain fresh");
+        assert_eq!(
+            [
+                first_reads,
+                cached_reads,
+                refreshed_reads,
+                deep_reads,
+                override_reads,
+                host_reads
+            ],
+            [1, 1, 1, 1, 1, 0],
+            "one current runtime inventory per public verification request"
         );
     }
 
