@@ -79,6 +79,13 @@ function buildTargets(): Map<string, Target> {
 }
 
 const TARGETS = buildTargets();
+const NEGATIVE_NUMERIC_TOKEN = /^-(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:e[+-]?\d+)?$/i;
+
+function isFlagToken(token: string): boolean {
+  // Preserve the original dash boundary for every nonnumeric token; only
+  // decimal negative values can be consumed as arguments.
+  return token.startsWith('-') && !NEGATIVE_NUMERIC_TOKEN.test(token);
+}
 
 /**
  * Split a pasted command into tokens.
@@ -136,7 +143,7 @@ export function parseSettingsText(text: string, options: readonly ServerOption[]
     // positional argument this app has nowhere to put.
     if (!flag.startsWith('-')) continue;
     const next = tokens[at + 1];
-    const value = next !== undefined && !next.startsWith('-') ? next : undefined;
+    const value = next !== undefined && !isFlagToken(next) ? next : undefined;
 
     const target = TARGETS.get(flag);
     if (target) {
@@ -163,7 +170,7 @@ export function parseSettingsText(text: string, options: readonly ServerOption[]
     const values: string[] = [];
     for (let taken = 0; taken < option.arity; taken += 1) {
       const argument = tokens[at + 1];
-      if (argument === undefined || argument.startsWith('-')) break;
+      if (argument === undefined || isFlagToken(argument)) break;
       values.push(argument);
       at += 1;
     }
