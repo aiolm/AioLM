@@ -249,7 +249,35 @@ pub(crate) fn explicit_operand<'de, D: serde::Deserializer<'de>>(
 /// same number while `"true"` never equals `true`.
 fn same_operand(left: &Value, right: &Value) -> bool {
     match (left, right) {
-        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (Value::Number(a), Value::Number(b)) => {
+            let integer = |number: &serde_json::Number| {
+                number
+                    .as_i64()
+                    .map(i128::from)
+                    .or_else(|| number.as_u64().map(i128::from))
+            };
+            let integer_float = |integer: i128, number: &serde_json::Number| {
+                const U64_UPPER_EXCLUSIVE: f64 = (1_u128 << 64) as f64;
+                number.as_f64().is_some_and(|float| {
+                    // i128 holds every signed/unsigned JSON integer. Check the
+                    // float's integral domain before casting, including the
+                    // exclusive u64 upper bound, so no saturating cast can match.
+                    float.is_finite()
+                        && float.fract() == 0.0
+                        && (i64::MIN as f64..U64_UPPER_EXCLUSIVE).contains(&float)
+                        && float as i128 == integer
+                })
+            };
+            match (integer(a), integer(b)) {
+                (Some(a), Some(b)) => a == b,
+                (Some(a), None) => integer_float(a, b),
+                (None, Some(b)) => integer_float(b, a),
+                (None, None) => a
+                    .as_f64()
+                    .zip(b.as_f64())
+                    .is_some_and(|(a, b)| a.is_finite() && b.is_finite() && a == b),
+            }
+        }
         _ => left == right,
     }
 }
@@ -1698,5 +1726,321 @@ mod tests {
                 )])
             )
             .is_err());
+    }
+
+    #[test]
+    fn public_integer_json_contract_preserves_signed_boundaries() {
+        let original = schema(vec![option("count", ValueKind::Integer, 1, Some(1))]);
+        let parsed = OptionSchema::parse(&serde_json::to_vec(&original).unwrap()).unwrap();
+        for integer in [
+            i64::MIN,
+            i64::MIN + 1,
+            9_007_199_254_740_992_i64,
+            9_007_199_254_740_993_i64,
+            i64::MAX - 1,
+            i64::MAX,
+        ] {
+            let literal = integer.to_string();
+            let value: Value = serde_json::from_str(&literal).unwrap();
+            assert_eq!(value.as_i64(), Some(integer));
+            let resolved = parsed
+                .resolve(&[], &selected(&[("count", vec![vec![value]])]))
+                .unwrap();
+            assert_eq!(resolved.argv, vec!["--count".to_owned(), literal]);
+            assert!(resolved.request.is_empty());
+        }
+        let outside_signed_contract = json!(u64::MAX);
+        assert_eq!(outside_signed_contract.as_i64(), None);
+        let issues = parsed
+            .resolve(
+                &[],
+                &selected(&[("count", vec![vec![outside_signed_contract.clone()]])]),
+            )
+            .unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].key, "count");
+        assert_eq!(
+            issues[0].message,
+            "value does not match the documented type; unknown types accept text tokens only"
+        );
+        let mut invalid_operand = original;
+        invalid_operand
+            .options
+            .push(option("enabled", ValueKind::Boolean, 0, Some(0)));
+        invalid_operand.constraints.push(known(Relation::Requires {
+            when: Predicate {
+                key: "count".into(),
+                equals: Some(outside_signed_contract),
+            },
+            other: Predicate {
+                key: "enabled".into(),
+                equals: None,
+            },
+        }));
+        assert!(
+            OptionSchema::parse(&serde_json::to_vec(&invalid_operand).unwrap())
+                .unwrap_err()
+                .contains("constraint operand does not match")
+        );
+    }
+
+    #[test]
+    fn public_constraints_keep_distinct_large_i64_operands() {
+        let mut failures = Vec::new();
+        for (expected, actual) in [
+            (9_007_199_254_740_992_i64, 9_007_199_254_740_993_i64),
+            (i64::MAX, i64::MAX - 1),
+            (i64::MIN, i64::MIN + 1),
+        ] {
+            let mut requires = schema(vec![
+                option("enabled", ValueKind::Boolean, 0, Some(0)),
+                option("count", ValueKind::Integer, 1, Some(1)),
+            ]);
+            requires.constraints.push(known(Relation::Requires {
+                when: Predicate {
+                    key: "enabled".into(),
+                    equals: Some(json!(true)),
+                },
+                other: Predicate {
+                    key: "count".into(),
+                    equals: Some(json!(expected)),
+                },
+            }));
+            let requires = OptionSchema::parse(&serde_json::to_vec(&requires).unwrap()).unwrap();
+            let values = |count| {
+                selected(&[
+                    ("enabled", vec![vec![json!(true)]]),
+                    ("count", vec![vec![json!(count)]]),
+                ])
+            };
+            let matching = requires.resolve(&[], &values(expected)).unwrap();
+            assert_eq!(
+                matching.argv,
+                vec![
+                    "--enabled".to_owned(),
+                    "--count".into(),
+                    expected.to_string()
+                ]
+            );
+            assert!(matching.request.is_empty());
+            match requires.resolve(&[], &values(actual)) {
+                Err(issues) => {
+                    assert_eq!(issues.len(), 1);
+                    assert_eq!(issues[0].key, "enabled");
+                    assert_eq!(issues[0].message, "requires the documented value of count");
+                }
+                Ok(resolved) => failures.push(format!(
+                    "requires count=={expected} accepted distinct {actual}; argv={:?}",
+                    resolved.argv
+                )),
+            }
+
+            let mut excludes = requires;
+            excludes.constraints = vec![known(Relation::Excludes {
+                when: Predicate {
+                    key: "count".into(),
+                    equals: Some(json!(expected)),
+                },
+                other: Predicate {
+                    key: "enabled".into(),
+                    equals: Some(json!(true)),
+                },
+            })];
+            let excludes = OptionSchema::parse(&serde_json::to_vec(&excludes).unwrap()).unwrap();
+            let matching = excludes.resolve(&[], &values(expected)).unwrap_err();
+            assert_eq!(matching.len(), 1);
+            assert_eq!(matching[0].key, "count");
+            assert_eq!(matching[0].message, "cannot be combined with enabled");
+            match excludes.resolve(&[], &values(actual)) {
+                Ok(resolved) => {
+                    assert_eq!(
+                        resolved.argv,
+                        vec!["--enabled".to_owned(), "--count".into(), actual.to_string()]
+                    );
+                    assert!(resolved.request.is_empty());
+                }
+                Err(issues) => failures.push(format!(
+                    "excludes count=={expected} rejected distinct {actual}; issues={issues:?}"
+                )),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn public_number_constraints_compare_integer_float_boundaries_exactly() {
+        let cases = [
+            (json!(1), json!(1.0), true),
+            (json!(1), json!(1.5), false),
+            (json!(-1), json!(-1.0), true),
+            (json!(0), json!(-0.0), true),
+            (
+                json!(9_007_199_254_740_992_i64),
+                json!((1_u64 << 53) as f64),
+                true,
+            ),
+            (
+                json!(9_007_199_254_740_993_i64),
+                json!((1_u64 << 53) as f64),
+                false,
+            ),
+            (json!(i64::MAX), json!(i64::MAX as f64), false),
+            (json!(i64::MIN), json!(i64::MIN as f64), true),
+            (json!(i64::MIN + 1), json!(i64::MIN as f64), false),
+            (json!(i64::MIN), json!(i64::MIN as f64 - 2048.0), false),
+            (json!(1_u64 << 63), json!(i64::MAX as f64), true),
+            (json!(u64::MAX), json!(u64::MAX - 1), false),
+            (json!(u64::MAX), json!(u64::MAX as f64), false),
+            (
+                json!(u64::MAX - 2047),
+                json!((u64::MAX - 2047) as f64),
+                true,
+            ),
+            (
+                json!(u64::MAX - 2046),
+                json!((u64::MAX - 2047) as f64),
+                false,
+            ),
+            (json!(-1), json!(u64::MAX), false),
+            (json!(0.5), json!(0.5), true),
+            (json!(0.5), json!(0.75), false),
+        ];
+        for (left, right, equal) in cases {
+            for (expected, actual) in [(&left, &right), (&right, &left)] {
+                let mut described = schema(vec![
+                    option("enabled", ValueKind::Boolean, 0, Some(0)),
+                    option("count", ValueKind::Number, 1, Some(1)),
+                ]);
+                described.constraints.push(known(Relation::Requires {
+                    when: Predicate {
+                        key: "enabled".into(),
+                        equals: Some(json!(true)),
+                    },
+                    other: Predicate {
+                        key: "count".into(),
+                        equals: Some(expected.clone()),
+                    },
+                }));
+                let described =
+                    OptionSchema::parse(&serde_json::to_vec(&described).unwrap()).unwrap();
+                let values = selected(&[
+                    ("enabled", vec![vec![json!(true)]]),
+                    ("count", vec![vec![actual.clone()]]),
+                ]);
+                let result = described.resolve(&[], &values);
+                if equal {
+                    let resolved = result
+                        .unwrap_or_else(|issues| panic!("{expected} != {actual}: {issues:?}"));
+                    assert_eq!(
+                        resolved.argv,
+                        vec!["--enabled".to_owned(), "--count".into(), actual.to_string()]
+                    );
+                    assert!(resolved.request.is_empty());
+                } else {
+                    let issues = result.unwrap_err();
+                    assert_eq!(issues.len(), 1, "{expected} and {actual}");
+                    assert_eq!(issues[0].message, "requires the documented value of count");
+                }
+            }
+        }
+        for (expected, actual) in [(json!(true), json!("true")), (json!(1), json!("1"))] {
+            let mut described = schema(vec![
+                option("enabled", ValueKind::Boolean, 0, Some(0)),
+                option("value", ValueKind::Json, 1, Some(1)),
+            ]);
+            described.constraints.push(known(Relation::Requires {
+                when: Predicate {
+                    key: "enabled".into(),
+                    equals: Some(json!(true)),
+                },
+                other: Predicate {
+                    key: "value".into(),
+                    equals: Some(expected),
+                },
+            }));
+            let issues = described
+                .resolve(
+                    &[],
+                    &selected(&[
+                        ("enabled", vec![vec![json!(true)]]),
+                        ("value", vec![vec![actual]]),
+                    ]),
+                )
+                .unwrap_err();
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].message, "requires the documented value of value");
+        }
+    }
+
+    #[test]
+    fn public_sensitive_native_serialization_retains_number_and_json_argv() {
+        let mut options = vec![
+            option("exponent", ValueKind::Number, 1, Some(1)),
+            option("integral", ValueKind::Number, 1, Some(1)),
+            option("jsontext", ValueKind::Json, 1, Some(1)),
+            option("jsonobject", ValueKind::Json, 1, Some(1)),
+            option("jsonarray", ValueKind::Json, 1, Some(1)),
+            option("inline", ValueKind::Number, 1, Some(1)),
+            option("small", ValueKind::Number, 1, Some(1)),
+        ];
+        for option in &mut options {
+            option.sensitive = known(true);
+        }
+        options[5].spellings[0].style = ValueStyle::Equals;
+        let described = schema(options);
+        let original_schema = described.clone();
+        let values = selected(&[
+            ("exponent", vec![vec![json!(1e30)]]),
+            ("integral", vec![vec![json!(1.0)]]),
+            ("jsontext", vec![vec![json!("synthetic-secret")]]),
+            (
+                "jsonobject",
+                vec![vec![json!({"z":1,"a":[1.0,"synthetic-secret"]})]],
+            ),
+            (
+                "jsonarray",
+                vec![vec![json!([1.0, 1e30, "synthetic-secret"])]],
+            ),
+            ("inline", vec![vec![json!(1e30)]]),
+            // The browser serializes 1e-6 as this decimal JSON literal.
+            (
+                "small",
+                vec![vec![serde_json::from_str("0.000001").unwrap()]],
+            ),
+        ]);
+        let original_values = serde_json::to_value(&values).unwrap();
+        let resolved = described.resolve(&[], &values).unwrap();
+        eprintln!(
+            "NATIVE_SENSITIVE_SERIALIZATION {}",
+            json!({
+                "argv":resolved.argv,
+                "request":resolved.request,
+                "overrides":values,
+                "sensitive_keys":described.options.iter().filter(|option|
+                    option.sensitive.supported() == Some(&true))
+                    .map(|option| option.key.as_str()).collect::<Vec<_>>()
+            })
+        );
+        assert_eq!(
+            resolved.argv,
+            vec![
+                "--exponent",
+                "1e+30",
+                "--integral",
+                "1.0",
+                "--jsontext",
+                "\"synthetic-secret\"",
+                "--jsonobject",
+                "{\"a\":[1.0,\"synthetic-secret\"],\"z\":1}",
+                "--jsonarray",
+                "[1.0,1e+30,\"synthetic-secret\"]",
+                "--inline=1e+30",
+                "--small",
+                "1e-6",
+            ]
+        );
+        assert!(resolved.request.is_empty());
+        assert_eq!(serde_json::to_value(&values).unwrap(), original_values);
+        assert_eq!(described, original_schema);
     }
 }
