@@ -19,6 +19,55 @@ describe('model execution memory', () => {
     expect(restoreExecution(lower, upper.active_model)).toMatchObject({ temperature: 0.2, mmproj: upper.mmproj });
     expect(restoreExecution(upper, lower.active_model)).toMatchObject({ temperature: 0.8, mmproj: lower.mmproj });
   });
+  it('restores a legacy path from the same cache version used for the preferred lookup', () => {
+    const remembered = { ...testConfig, active_model: '/models/Example.gguf', temperature: 0.25, mmproj: '/models/Projector.gguf' };
+    rememberExecution(remembered);
+    const raw = localStorage.getItem(MODEL_EXECUTION_KEY)!;
+    const replacement = JSON.stringify({ version: 1, models: {} });
+    const get = Storage.prototype.getItem;
+    let reads = 0;
+    const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key) {
+      return key === MODEL_EXECUTION_KEY ? (reads++ === 0 ? raw : replacement) : get.call(this, key);
+    });
+    try {
+      expect(restoreExecution({ ...testConfig, active_model: '/models/Other.gguf' }, remembered.active_model))
+        .toMatchObject({ active_model: remembered.active_model, temperature: 0.25, mmproj: remembered.mmproj });
+      expect(reads).toBe(1);
+    } finally { read.mockRestore(); }
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(raw);
+  });
+  it('prefers a raw profile key over the legacy identity without changing either entry', () => {
+    const path = '/models/Example.gguf';
+    const raw = JSON.stringify({ version: 1, models: {
+      [profileTargetKey(path)]: { temperature: 0.3, mmproj: '/models/Preferred.gguf' },
+      [path]: { temperature: 0.8, mmproj: '/models/Legacy.gguf' },
+    } });
+    localStorage.setItem(MODEL_EXECUTION_KEY, raw);
+    expect(restoreExecution({ ...testConfig, active_model: '/models/Other.gguf' }, path))
+      .toMatchObject({ temperature: 0.3, mmproj: '/models/Preferred.gguf' });
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(raw);
+  });
+  it('keeps external provider cache lookup separate from legacy llama identities', () => {
+    const path = '/models/Example.gguf';
+    const raw = JSON.stringify({ version: 1, models: {
+      [profileTargetKey(path, 'default', 'vllm')]: { provider_options: { vllm: { max_model_len: 8192 } } },
+      [path]: { temperature: 0.8, provider_options: { vllm: { max_model_len: 1024 } } },
+    } });
+    localStorage.setItem(MODEL_EXECUTION_KEY, raw);
+    const cfg = { ...testConfig, active_provider: 'vllm' as const, active_model: '/models/Other.gguf', provider_options: { vllm: { max_model_len: 4096 } } };
+    expect(restoreExecution(cfg, path).provider_options).toEqual({ vllm: { max_model_len: 8192 } });
+    expect(restoreExecution(cfg, '/models/Unseen.gguf').provider_options).toEqual(cfg.provider_options);
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(raw);
+  });
+  it('surfaces malformed or unavailable cache data when no applied snapshot exists', () => {
+    localStorage.setItem(MODEL_EXECUTION_KEY, '{invalid');
+    expect(() => restoreExecution({ ...testConfig, active_model: 'current.gguf' }, 'other.gguf')).toThrow();
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe('{invalid');
+    const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Cache unavailable'); });
+    try {
+      expect(() => restoreExecution({ ...testConfig, active_model: 'current.gguf' }, 'other.gguf')).toThrow('Cache unavailable');
+    } finally { read.mockRestore(); }
+  });
   it('restores an applied snapshot independently of changed profile originals and stale local memory', () => {
     const a = { ...testConfig, active_model: 'a.gguf', temperature: 0.2 };
     const original = captureProfile(a, 'Brief', 'global', 'Saved prompt');

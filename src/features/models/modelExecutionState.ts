@@ -32,7 +32,11 @@ export function restoreExecution(cfg: AppConfig, path: string): Partial<AppConfi
   if (identity(cfg.active_model) === identity(path)) return { ...executionSnapshot(cfg), active_model: path };
   const application = cfg.settings_profiles?.applied[profileTargetKey(path, 'default', providerOf(cfg))];
   const persisted = application && identity(application.model) === identity(path) ? application.settings : undefined;
-  const saved = persisted ?? read().models[profileTargetKey(path, 'default', providerOf(cfg))] ?? (providerOf(cfg) === 'llama.cpp' ? read().models[identity(path)] : undefined);
+  let saved = persisted;
+  if (saved === undefined || saved === null) {
+    const models = read().models;
+    saved = models[profileTargetKey(path, 'default', providerOf(cfg))] ?? (providerOf(cfg) === 'llama.cpp' ? models[identity(path)] : undefined);
+  }
   // Re-capture through the allowlist even when local storage was manually edited.
   return { ...executionSnapshot({ ...cfg, mmproj: '', spec_draft_model: '', spec_type: 'none', lora_adapters: [], ...saved }), active_model: path };
 }
