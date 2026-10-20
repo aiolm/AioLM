@@ -523,7 +523,11 @@ pub fn apply(
         conflicts: Vec::new(),
         error: None,
     };
-    let before = (schema.options.clone(), schema.constraints.clone());
+    // Applying facts changes only claimed, unowned options and appends
+    // constraints. Retain those originals rather than cloning the whole
+    // schema, including unrelated options and existing constraints.
+    let mut before = Vec::new();
+    let original_constraints = schema.constraints.len();
     let conflict =
         |key: &str, flag: &str, field: &str, observed: Value, declared: Value| FactConflict {
             key: key.into(),
@@ -579,6 +583,7 @@ pub fn apply(
             ));
             continue;
         }
+        before.push((index, option.clone()));
         // A reservation only ever locks an option; it never unlocks one.
         if let Some(reason) = &entry.reserved {
             option.managed = Some(ManagedBinding::Reserved);
@@ -711,7 +716,10 @@ pub fn apply(
         }
     }
     if let Err(error) = schema.validate() {
-        (schema.options, schema.constraints) = before;
+        for (index, original) in before {
+            schema.options[index] = original;
+        }
+        schema.constraints.truncate(original_constraints);
         view.applied.clear();
         view.error = Some(format!("option metadata was not applied: {error}"));
         // Nothing partial applies, but declared secrecy is never lost (it
@@ -1456,6 +1464,69 @@ mod tests {
         "9ed3724b1747c95b8ef7fa80f75a92012020529bb56a8bdfbd6f61910c600c7a";
     const LLAMA_BUILTIN_DIGEST: &str =
         "a9c26ab5bf24a9346323773cccd30e2b2029d8cc0cee3c00e9f71a4d39d50d3c";
+
+    #[test]
+    fn failed_metadata_restores_existing_constraints_and_all_nonsecret_option_facts() {
+        let mut original = schema();
+        original.constraints.push(observed(Relation::Requires {
+            when: Predicate {
+                key: "cache".into(),
+                equals: Some(json!("synthetic-cache-value")),
+            },
+            other: Predicate {
+                key: "switch".into(),
+                equals: None,
+            },
+        }));
+        original.validate().unwrap();
+        let declared = metadata(
+            json!([
+                {"flag":"--cache","kind":"integer","sensitive":true,"runtime_default":{"literal":7}},
+                {"flag":"-c","unit":"bytes"},
+                {"flag":"--loose","reserved":"The application supplies this value."},
+                {"flag":"--mode","unit":"items"},
+                {"flag":"--port","sensitive":true}
+            ]),
+            json!([{"kind":"requires","when":{"flag":"--mode"},"other":{"flag":"--switch"}}]),
+        );
+        declared.validate(engine()).unwrap();
+        let mut current = original.clone();
+        let view = apply(&mut current, &declared, false, true);
+        assert!(
+            view.error
+                .as_ref()
+                .is_some_and(|error| error.contains("constraint operand")),
+            "{:?}",
+            view.error
+        );
+        assert!(view.applied.is_empty());
+        assert!(view
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.flag == "-c" && conflict.field == "duplicate"));
+        assert!(view
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.flag == "--port" && conflict.field == "binding"));
+        assert!(view.conflicts.iter().any(|conflict| conflict.key == "loose"
+            && conflict.field == "metadata"
+            && conflict.blocking));
+        // Secrecy is the sole intentional effect after a failed transaction.
+        let mut expected = original;
+        expected.options[0].sensitive = Fact {
+            value: Some(true),
+            certainty: Certainty::Documented,
+            source: Some(Source::Adapter {
+                id: "synthetic.adapter".into(),
+                revision: "r1".into(),
+            }),
+        };
+        assert_eq!(current, expected);
+        current.validate().unwrap();
+        assert!(!serde_json::to_string(&view)
+            .unwrap()
+            .contains("synthetic-cache-value"));
+    }
 
     #[test]
     fn an_equals_spelling_keeps_its_single_value() {
