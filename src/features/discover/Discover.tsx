@@ -6,7 +6,7 @@ import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { firstShard, formatBytes, formatSpeedBps, groupHfFiles, isMmprojPath, markInstalled, quantLabel, shardTotal, validateHfRepoId, type HfFileGroup } from "./discoverUtils";
 import { MODEL_DOWNLOAD_TASK_ID, useModelDownload } from "../../shared/state/modelDownloadTask";
-import { finishTask, getTaskSnapshot, registerTask, updateTask } from "../../shared/state/taskRegistry";
+import { finishTask, getTaskSnapshot, registerTask, subscribeTasks, updateTask } from "../../shared/state/taskRegistry";
 import FeedbackBanner from "../../shared/ui/FeedbackBanner";
 import Badge from "../../shared/ui/Badge";
 import ProgressBar from "../../shared/ui/ProgressBar";
@@ -46,6 +46,31 @@ interface InstalledLookup {
   state: "pending" | "ready" | "unavailable";
 }
 
+type TransferCancel = () => Promise<void> | void;
+
+interface TransferOrigin {
+  repo: string;
+  file: string;
+  destination: string;
+  provider: api.ProviderId;
+  runtime: string;
+  activeModel: string;
+  mmproj: string;
+  taskCancel: TransferCancel | null;
+  superseded: boolean;
+  cancelled: boolean;
+  disposed: boolean;
+}
+
+interface TransferContext {
+  repo: string;
+  destination: string;
+  provider: api.ProviderId;
+  runtime: string;
+  activeModel: string;
+  mmproj: string;
+}
+
 function matches(lookup: InstalledLookup | null, repoId: string, modelsDir: string): boolean {
   return !!lookup && lookup.repoId === repoId && lookup.modelsDir === modelsDir;
 }
@@ -76,7 +101,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const [searching, setSearching] = useState(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
-  const transferOrigin = useRef<{ repo: string; file: string } | null>(null);
+  const transferOrigin = useRef<TransferOrigin | null>(null);
   // Which of the selected repository's files this machine already holds.
   // Activation refuses to overwrite, so offering a download for one of these
   // could only ever produce an error; the row says "Installed" instead.
@@ -101,6 +126,15 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   const inspectGeneration = useRef(0);
   const installedGeneration = useRef(0);
   const modelsDir = store.cfg?.models_dir ?? "";
+  const latestTransferContext = useRef<TransferContext | null>(null);
+  latestTransferContext.current = selected && store.cfg ? {
+    repo: selected.id,
+    destination: modelsDir,
+    provider,
+    runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '',
+    activeModel: store.cfg.active_model,
+    mmproj: store.cfg.mmproj,
+  } : null;
   const downloadBusy = !!downloading || downloadTask?.state === 'running' || downloadTask?.state === 'cancelling';
   const [snapshots, setSnapshots] = useState<{ repo: string; destination: string; artifacts: api.ModelArtifact[] } | null>(null);
   const [checkingSnapshots, setCheckingSnapshots] = useState(false);
@@ -153,10 +187,19 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
 
   useEffect(() => () => {
     searchGeneration.current += 1; inspectGeneration.current += 1; installedGeneration.current += 1;
+    if (transferOrigin.current) transferOrigin.current.disposed = true;
     // StrictMode replays mount effects while preserving refs. Retire the
     // listing marker with its request so the next setup can load the catalog.
     opened.current = '';
   }, []);
+
+  // Observe task replacement synchronously; a replacement can be registered
+  // and cleared before React renders another snapshot of the task registry.
+  useEffect(() => subscribeTasks(() => {
+    const origin = transferOrigin.current;
+    const task = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
+    if (origin?.taskCancel && task && task.cancel !== origin.taskCancel) origin.superseded = true;
+  }), []);
 
   // Sort is part of the request, so changing it re-runs what is on screen.
   const changeSort = (order: api.HfSortKey) => {
@@ -231,6 +274,29 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
   }, [selected, format, modelsDir, installedRevision]);
 
   const transferActive = () => getTaskSnapshot().some(task => task.id === MODEL_DOWNLOAD_TASK_ID && ['running', 'cancelling'].includes(task.state));
+  const currentTransferTask = () => getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
+  const ownsTransferTask = (cancelToken: TransferCancel | null) => cancelToken !== null
+    && currentTransferTask()?.cancel === cancelToken;
+  const finishTransferTask = (cancelToken: TransferCancel | null, state: 'completed' | 'cancelled' | 'failed', detail?: string) => {
+    if (ownsTransferTask(cancelToken)) finishTask(MODEL_DOWNLOAD_TASK_ID, state, detail);
+  };
+
+  const canUpdateTransferPanel = (origin: TransferOrigin) => transferOrigin.current === origin && !origin.disposed;
+  const ownsTransferOrigin = (origin: TransferOrigin) => {
+    const task = currentTransferTask();
+    return canUpdateTransferPanel(origin) && origin.taskCancel !== null && !origin.cancelled && !origin.superseded
+      && (!task || task.cancel === origin.taskCancel);
+  };
+  const ownsCurrentDownload = (origin: TransferOrigin) => {
+    const current = latestTransferContext.current;
+    return ownsTransferOrigin(origin) && !!current
+      && current.repo === origin.repo
+      && current.destination === origin.destination
+      && current.provider === origin.provider
+      && current.runtime === origin.runtime
+      && current.activeModel === origin.activeModel
+      && current.mmproj === origin.mmproj;
+  };
 
   const download = async ({ file, files: parts, displayPath, sizeBytes }: HfFileGroup) => {
     if (!selected || !store.cfg || transferActive()) return;
@@ -240,6 +306,18 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const repoId = selected.id;
     const destination = store.cfg.models_dir;
     const execution = { provider, runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '' };
+    const origin: TransferOrigin = {
+      repo: repoId,
+      file: file.path,
+      destination,
+      ...execution,
+      activeModel: store.cfg.active_model,
+      mmproj: store.cfg.mmproj,
+      taskCancel: null,
+      superseded: false,
+      cancelled: false,
+      disposed: false,
+    };
     if (!validateHfRepoId(selected.id)) {
       setError(t("ui.invalidRepoId"));
       return;
@@ -249,10 +327,12 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       return;
     }
     setDownloading(file.path);
-    transferOrigin.current = { repo: repoId, file: file.path };
+    transferOrigin.current = origin;
     setDownloadedChoice(null);
     // Show the row immediately, before the first native progress event, so the
     // strip and this card both have something the moment the click lands.
+    const cancelDownload = () => api.hfCancelDownload();
+    origin.taskCancel = cancelDownload;
     registerTask({
       id: MODEL_DOWNLOAD_TASK_ID,
       kind: "model-download",
@@ -261,7 +341,7 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
       received: 0,
       total: sizeBytes,
       interruptible: true,
-      cancel: () => api.hfCancelDownload(),
+      cancel: cancelDownload,
     });
     setError(null);
     setNotice(null);
@@ -271,74 +351,95 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
         ? await api.hfDownloadModel(repoId, file.path, destination, true)
         : await api.hfDownloadModel(repoId, file.path, destination);
       transferred = true;
-      finishTask(MODEL_DOWNLOAD_TASK_ID, 'completed');
+      finishTransferTask(origin.taskCancel, 'completed');
       invalidateModelCatalog();
       // Mark it installed now and re-read after: the row must stop offering a
       // download the instant the transfer lands, and the lookup then confirms
       // it against the destination directory. Applied only while the panel is
       // still showing what was downloaded.
-      setInstalledLookup((current) => {
-        if (!matches(current, repoId, destination)) return current;
-        let entries = current!.entries;
-        const parent = downloaded.path.slice(0, Math.max(downloaded.path.lastIndexOf('/'), downloaded.path.lastIndexOf('\\')) + 1);
-        for (const part of parts) entries = markInstalled(entries, part.path, parent + part.path.split('/').pop()!, part.size_bytes);
-        return { ...current!, entries };
-      });
-      setInstalledRevision((revision) => revision + 1);
+      if (canUpdateTransferPanel(origin)) {
+        setInstalledLookup((current) => {
+          if (!matches(current, repoId, destination)) return current;
+          let entries = current!.entries;
+          const parent = downloaded.path.slice(0, Math.max(downloaded.path.lastIndexOf('/'), downloaded.path.lastIndexOf('\\')) + 1);
+          for (const part of parts) entries = markInstalled(entries, part.path, parent + part.path.split('/').pop()!, part.size_bytes);
+          return { ...current!, entries };
+        });
+        setInstalledRevision((revision) => revision + 1);
+      }
       let modelPath = downloaded.path;
       if (shardTotal(file.path)) {
         const entries = await api.hfInstalledFiles(repoId, [firstShard(file.path)], destination);
         const first = entries.find(entry => entry.path === firstShard(file.path));
         if (!first || first.missing_shards.length > 0) {
-          setNotice(t('ui.downloadedModel', { file: file.path })); return;
+          if (ownsCurrentDownload(origin)) setNotice(t('ui.downloadedModel', { file: file.path }));
+          return;
         }
         modelPath = first.local_path;
       }
       if (modelSettings) {
         const projector = file.is_mmproj || isMmprojPath(file.path);
-        setDownloadedChoice({ path: modelPath, projector, ...execution });
-        setNotice(t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }));
+        if (ownsCurrentDownload(origin)) {
+          setDownloadedChoice({ path: modelPath, projector, ...execution });
+          setNotice(t(projector ? 'ui.downloadedProjector' : 'ui.downloadedModel', { file: file.path }));
+        }
         return;
       }
       if (file.is_mmproj || isMmprojPath(file.path)) {
-        await guard.run(async () => {
+        if (!ownsCurrentDownload(origin)) return;
+        const applied = await guard.run(async () => {
+          if (!ownsCurrentDownload(origin)) return;
           if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
           await latestStore.current.updateConfig({ mmproj: downloaded.path });
         });
-        setNotice(t("ui.downloadedProjector", { file: file.path }));
+        if (applied && ownsCurrentDownload(origin)) setNotice(t("ui.downloadedProjector", { file: file.path }));
       } else {
-        if (onSelectModel) await guard.run(async () => {
-          if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
-          await onSelectModel(modelPath); onOpenModels?.();
-        });
-        else await guard.run(async () => {
-          if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
-          await latestStore.current.updateConfig({ active_model: modelPath });
-        });
-        setNotice(t("ui.downloadedModel", { file: file.path }));
+        if (!ownsCurrentDownload(origin)) return;
+        const applied = onSelectModel
+          ? await guard.run(async () => {
+            if (!ownsCurrentDownload(origin)) return;
+            if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
+            await onSelectModel(modelPath); onOpenModels?.();
+          })
+          : await guard.run(async () => {
+            if (!ownsCurrentDownload(origin)) return;
+            if (!['stopped', 'failed', 'crashed'].includes(latestStore.current.status.state)) throw new Error(t('ui.stopBeforeDownload'));
+            await latestStore.current.updateConfig({ active_model: modelPath });
+          });
+        if (applied && ownsCurrentDownload(origin)) setNotice(t("ui.downloadedModel", { file: file.path }));
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       // A download that never reached the native stream ends here, so the row
       // has to be closed from this side or it would sit there running forever.
-      if (!transferred) finishTask(MODEL_DOWNLOAD_TASK_ID, message === 'model download cancelled' ? 'cancelled' : 'failed', message);
-      if (message !== 'model download cancelled') setError(message);
+      if (!transferred) finishTransferTask(origin.taskCancel, message === 'model download cancelled' ? 'cancelled' : 'failed', message);
+      if (message !== 'model download cancelled' && ownsTransferTask(origin.taskCancel) && canUpdateTransferPanel(origin)) setError(message);
     } finally {
       if (!transferred) {
         invalidateModelCatalog();
-        setInstalledRevision(revision => revision + 1);
+        if (canUpdateTransferPanel(origin)) setInstalledRevision(revision => revision + 1);
       }
-      setDownloading(null);
+      if (canUpdateTransferPanel(origin)) setDownloading(null);
     }
   };
 
   const cancel = async () => {
+    const task = getTaskSnapshot().find(task => task.id === MODEL_DOWNLOAD_TASK_ID);
+    if (!task || !['running', 'cancelling'].includes(task.state)) return;
+    const cancelToken = task.cancel;
+    if (!cancelToken) return;
+    const origin = downloading && transferOrigin.current?.file === downloading && transferOrigin.current.taskCancel === cancelToken
+      ? transferOrigin.current : null;
+    if (origin) origin.cancelled = true;
     updateTask(MODEL_DOWNLOAD_TASK_ID, { state: 'cancelling' });
     try {
       await api.hfCancelDownload();
     } catch (caught) {
-      updateTask(MODEL_DOWNLOAD_TASK_ID, { state: 'running' });
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (ownsTransferTask(cancelToken)) {
+        if (origin && transferOrigin.current === origin) origin.cancelled = false;
+        updateTask(MODEL_DOWNLOAD_TASK_ID, { state: 'running' });
+        if (!origin || canUpdateTransferPanel(origin)) setError(caught instanceof Error ? caught.message : String(caught));
+      }
     }
   };
 
@@ -350,22 +451,46 @@ export default function DiscoverPanel({ store, active = true, onSelectModel, onO
     const repo = selected.id;
     const destination = store.cfg.models_dir;
     const execution = { provider, runtime: provider === api.providerOf(store.cfg) ? store.cfg.active_runtime ?? '' : '' };
+    const origin: TransferOrigin = {
+      repo,
+      file: repo,
+      destination,
+      ...execution,
+      activeModel: store.cfg.active_model,
+      mmproj: store.cfg.mmproj,
+      taskCancel: null,
+      superseded: false,
+      cancelled: false,
+      disposed: false,
+    };
     setDownloadedChoice(null);
     setDownloading(repo); setError(null); setNotice(null);
+    transferOrigin.current = origin;
+    const cancelDownload = () => api.hfCancelDownload();
+    origin.taskCancel = cancelDownload;
     registerTask({ id: MODEL_DOWNLOAD_TASK_ID, kind: 'model-download', label: repo, phase: 'starting',
-      received: 0, total: 0, interruptible: true, cancel: () => api.hfCancelDownload() });
+      received: 0, total: 0, interruptible: true, cancel: cancelDownload });
     try {
       const artifact = await api.hfDownloadSnapshot(repo, destination);
-      invalidateModelCatalog(); finishTask(MODEL_DOWNLOAD_TASK_ID, 'completed');
-      setInstalledRevision(revision => revision + 1);
-      setDownloadedChoice({ path: artifact.path, projector: false, ...execution });
-      setNotice(t('ui.downloadedModel', { file: repo }));
+      invalidateModelCatalog(); finishTransferTask(cancelDownload, 'completed');
+      if (!ownsTransferOrigin(origin)) return;
+      if (canUpdateTransferPanel(origin)) {
+        setInstalledRevision(revision => revision + 1);
+        setDownloadedChoice({ path: artifact.path, projector: false, ...execution });
+        setNotice(t('ui.downloadedModel', { file: repo }));
+      }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      finishTask(MODEL_DOWNLOAD_TASK_ID, message === 'model download cancelled' ? 'cancelled' : 'failed', message);
-      if (message !== 'model download cancelled') setError(message);
-      setInstalledRevision(revision => revision + 1);
-    } finally { setDownloading(null); }
+      if (ownsTransferTask(cancelDownload)) {
+        finishTransferTask(cancelDownload, message === 'model download cancelled' ? 'cancelled' : 'failed', message);
+        if (ownsCurrentDownload(origin)) {
+          if (message !== 'model download cancelled') setError(message);
+          setInstalledRevision(revision => revision + 1);
+        }
+      }
+    } finally {
+      if (canUpdateTransferPanel(origin)) setDownloading(null);
+    }
   };
 
   // Only an answer read for what is on screen right now may mark a row.
