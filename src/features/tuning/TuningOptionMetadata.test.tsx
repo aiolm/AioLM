@@ -13,6 +13,16 @@ describe('visible setting defaults', () => {
     expect(screen.getByText("'auto'")).toBeVisible();
     expect(screen.getByText('자동 선택 · 실제 값은 실행 환경에 따라 결정됩니다.')).toBeVisible();
   });
+  it('labels a qualified automatic fallback from a deprecated server option', () => {
+    const options = parseRuntimeHelp([
+      '--load-mode MODE          loading mode (default: auto)',
+      '--mmap                    memory-map model weights; use --load-mode mmap or none.',
+    ].join('\n'));
+    render(<I18nProvider initialLocale="en"><TuningOptionsContext.Provider value={{ options, verified: true }}>
+      <TuningOptionMetadata fieldKey="raw-server:--mmap" />
+    </TuningOptionsContext.Provider></I18nProvider>);
+    expect(screen.getByText('Automatic selection; the effective value depends on the runtime environment.')).toBeVisible();
+  });
   it('keeps inherited controls editable with a single request identifier and their default', () => {
     const runtime = { options: parseRuntimeHelp('--min-p N           minimum (default: 0.12)'), verified: true };
     render(<I18nProvider initialLocale="ko"><TuningOptionsContext.Provider value={runtime}>
