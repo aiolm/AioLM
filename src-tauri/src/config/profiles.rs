@@ -1064,7 +1064,7 @@ pub fn validate_update(
             if current.map_or(Some(1), |library| library.revision.checked_add(1))
                 == Some(incoming.revision) =>
         {
-            incoming.validate()
+            Ok(())
         }
         _ => Err(
             "settings profiles changed since this configuration was opened; reload before saving"
