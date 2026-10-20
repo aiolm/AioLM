@@ -311,6 +311,8 @@ fn digest_cancellable(path: &Path, cancel: Option<&AtomicBool>) -> Result<String
 }
 fn read_registration_record(engine: ProviderId, runtime: &str) -> Result<Registration, String> {
     let registered: Registration = bounded_json(&path(engine, runtime)?)?;
+    #[cfg(test)]
+    observe_registry_inventory(true);
     if registered.manifest.engine_id != engine || registered.manifest.runtime_id != runtime {
         return Err("runtime registration identity mismatch".into());
     }
@@ -1069,7 +1071,27 @@ pub fn remove(engine: ProviderId, runtime: &str) -> Result<(), String> {
         Err(error) => Err(error.to_string()),
     }
 }
+#[cfg(test)]
+std::thread_local! {
+    static REGISTRY_INVENTORY_COUNTS: std::cell::Cell<Option<(usize, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn observe_registry_inventory(record_read: bool) {
+    REGISTRY_INVENTORY_COUNTS.with(|counts| {
+        if let Some((scans, records)) = counts.get() {
+            counts.set(Some((
+                scans + usize::from(!record_read),
+                records + usize::from(record_read),
+            )));
+        }
+    });
+}
+
 fn registrations() -> Vec<Registration> {
+    #[cfg(test)]
+    observe_registry_inventory(false);
     let mut result = Vec::new();
     for engine in fs::read_dir(root())
         .into_iter()
@@ -1114,7 +1136,16 @@ fn registrations() -> Vec<Registration> {
 }
 
 pub fn availability(engine: ProviderId, os: &str, arch: &str) -> super::Availability {
-    let supported = registrations().iter().any(|r| {
+    availability_in_inventory(&registrations(), engine, os, arch)
+}
+
+fn availability_in_inventory(
+    inventory: &[Registration],
+    engine: ProviderId,
+    os: &str,
+    arch: &str,
+) -> super::Availability {
+    let supported = inventory.iter().any(|r| {
         r.manifest.engine_id == engine
             && r.manifest
                 .platforms
@@ -1175,8 +1206,9 @@ pub fn runtime_instances() -> Vec<super::RuntimeInstance> {
         .collect()
 }
 pub fn catalog() -> Vec<Value> {
+    let inventory = registrations();
     let mut seen = std::collections::BTreeSet::new();
-    registrations().into_iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":r.manifest.engine_id.availability(),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":"unsupported","deep_verification":"unsupported","portable":"unsupported"}})).collect()
+    inventory.iter().filter(|r| seen.insert(r.manifest.engine_id)).map(|r| serde_json::json!({"id":r.manifest.engine_id,"engine":r.manifest.display_name,"server":"openai-v1","availability":availability_in_inventory(&inventory, r.manifest.engine_id, std::env::consts::OS, std::env::consts::ARCH),"options":r.manifest.options,"managed_version":null,"kind":"external-process","capabilities":{"benchmark":"unsupported","deep_verification":"unsupported","portable":"unsupported"}})).collect()
 }
 pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     let r = read_registration(super::provider_of(cfg), &cfg.active_runtime)?;
@@ -2493,5 +2525,262 @@ mod tests {
         assert_eq!(launch_prefix(&manifest), ["-m", "synthetic.server"]);
         manifest.launch.args = vec!["--model={model}".into()];
         assert!(launch_prefix(&manifest).is_empty());
+    }
+
+    #[test]
+    fn catalog_reuses_one_inventory_without_changing_host_recovery_order_or_freshness() {
+        const CHILD: &str = "AIOLM_REGISTRY_CATALOG_FIXTURE";
+        const FILTER: &str = "providers::registry::tests::catalog_reuses_one_inventory_without_changing_host_recovery_order_or_freshness";
+        const OWNER: &str = ".catalog-fixture-owner";
+        if std::env::var_os(CHILD).is_none() {
+            let original_home = std::env::var_os("AIOLM_HOME");
+            let base = fs::canonicalize(std::env::temp_dir()).unwrap();
+            let area = base.join(format!("aiolm-registry-catalog-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&area).unwrap();
+            let area = fs::canonicalize(area).unwrap();
+            assert_eq!(area.parent(), Some(base.as_path()));
+            struct Cleanup {
+                area: PathBuf,
+                base: PathBuf,
+            }
+            impl Drop for Cleanup {
+                fn drop(&mut self) {
+                    let Ok(area) = fs::canonicalize(&self.area) else {
+                        return;
+                    };
+                    let Ok(base) = fs::canonicalize(&self.base) else {
+                        return;
+                    };
+                    if area == self.area
+                        && base == self.base
+                        && area.parent() == Some(base.as_path())
+                        && fs::read(area.join(OWNER))
+                            .is_ok_and(|bytes| bytes == b"synthetic catalog fixture")
+                    {
+                        let _ = fs::remove_dir_all(area);
+                    }
+                }
+            }
+            fs::write(area.join(OWNER), b"synthetic catalog fixture").unwrap();
+            let _cleanup = Cleanup {
+                area: area.clone(),
+                base,
+            };
+            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", FILTER, "--nocapture", "--test-threads=1"])
+                .env(CHILD, &area)
+                .env("AIOLM_HOME", &area);
+            let output = crate::procutil::capture_output_cancellable(
+                &mut command,
+                Duration::from_secs(30),
+                256 * 1024,
+                None,
+            )
+            .unwrap();
+            assert_eq!(std::env::var_os("AIOLM_HOME"), original_home);
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            assert!(output.status.success(), "isolated catalog fixture failed");
+            assert!(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.starts_with("test result: ok. 1 passed; 0 failed;")));
+            return;
+        }
+
+        let area = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap());
+        assert!(area.is_absolute());
+        assert!(area
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("aiolm-registry-catalog-"));
+        assert_eq!(PathBuf::from(std::env::var_os(CHILD).unwrap()), area);
+        assert_eq!(
+            fs::read(area.join(OWNER)).unwrap(),
+            b"synthetic catalog fixture"
+        );
+
+        fn record(
+            area: &Path,
+            engine: &str,
+            runtime: usize,
+            os: &str,
+            recovered: bool,
+        ) -> Registration {
+            let mut manifest = example();
+            manifest.engine_id = ProviderId::parse(engine).unwrap();
+            manifest.runtime_id = format!("build-{runtime}");
+            manifest.display_name = format!("Synthetic {engine} {runtime}");
+            manifest.probe.program = area.join("unused-probe").to_string_lossy().into_owned();
+            manifest.launch.program = area.join("unused-server").to_string_lossy().into_owned();
+            manifest.platforms = vec![Platform {
+                os: os.into(),
+                arch: std::env::consts::ARCH.into(),
+            }];
+            if recovered {
+                manifest.options[0].flag = Some("--port".into());
+                assert!(validate_manifest(&manifest)
+                    .unwrap_err()
+                    .contains("app-owned"));
+            } else {
+                validate_manifest(&manifest).unwrap();
+            }
+            Registration {
+                manifest,
+                executable_sha256: "a".repeat(64),
+                probe_sha256: "b".repeat(64),
+                artifacts_sha256: BTreeMap::new(),
+                probe: None,
+                model_fingerprint: String::new(),
+                launch_fingerprint: String::new(),
+                error: None,
+            }
+        }
+
+        fn expected_row(record: &Registration, supported: bool, recovered: bool) -> Value {
+            let availability = if supported {
+                serde_json::json!({"supported":true,"detail":""})
+            } else {
+                serde_json::json!({"supported":false,"reason":"external-runtime-unavailable",
+                    "detail":"Register this external engine for the current OS/architecture before running it. Saved selections remain preserved."})
+            };
+            let options = if recovered {
+                vec![]
+            } else {
+                record.manifest.options.clone()
+            };
+            serde_json::json!({"id":record.manifest.engine_id,
+                "engine":record.manifest.display_name,"server":"openai-v1",
+                "availability":availability,"options":options,"managed_version":null,
+                "kind":"external-process","capabilities":{"benchmark":"unsupported",
+                    "deep_verification":"unsupported","portable":"unsupported"}})
+        }
+
+        fn stored_bytes(records: &[Registration]) -> Vec<(PathBuf, Vec<u8>)> {
+            records
+                .iter()
+                .map(|record| {
+                    let path =
+                        path(record.manifest.engine_id, &record.manifest.runtime_id).unwrap();
+                    let bytes = fs::read(&path).unwrap();
+                    (path, bytes)
+                })
+                .collect()
+        }
+
+        fn measure(expected: &[Value], label: &str) -> (usize, usize) {
+            REGISTRY_INVENTORY_COUNTS.with(|counts| {
+                assert!(counts.replace(Some((0, 0))).is_none());
+            });
+            let started = std::time::Instant::now();
+            let actual = catalog();
+            let elapsed = started.elapsed();
+            let counts = REGISTRY_INVENTORY_COUNTS.with(|counts| counts.replace(None).unwrap());
+            let output = serde_json::to_string(&actual).unwrap();
+            eprintln!(
+                "CATALOG_FIXTURE {label} scans={} records={} elapsed_us={} rows={} sha256={:x} output={output}",
+                counts.0,
+                counts.1,
+                elapsed.as_micros(),
+                actual.len(),
+                Sha256::digest(output.as_bytes())
+            );
+            assert_eq!(actual.as_slice(), expected);
+            counts
+        }
+
+        let foreign_os = if std::env::consts::OS == "linux" {
+            "windows"
+        } else {
+            "linux"
+        };
+        let cases = [
+            ("custom.a-mixed", true, false),
+            ("custom.b-unavailable", false, false),
+            ("custom.c-recovery", true, true),
+            ("custom.d", true, false),
+            ("custom.e", true, false),
+            ("custom.f", true, false),
+            ("custom.g", true, false),
+            ("custom.h-last", true, false),
+        ];
+        let mut records = Vec::new();
+        // Opposite creation order makes the public sorted first-runtime choice observable.
+        for &(engine, supported, recovered) in cases.iter().rev() {
+            for runtime in (0..4).rev() {
+                let os = if !supported || (engine == "custom.a-mixed" && runtime == 0) {
+                    foreign_os
+                } else {
+                    std::env::consts::OS
+                };
+                let record = record(&area, engine, runtime, os, recovered && runtime == 0);
+                save(&record).unwrap();
+                records.push(record);
+            }
+        }
+        let before = stored_bytes(&records);
+        let mut expected = cases
+            .iter()
+            .map(|&(engine, supported, recovered)| {
+                let record = records
+                    .iter()
+                    .find(|record| {
+                        record.manifest.engine_id.as_str() == engine
+                            && record.manifest.runtime_id == "build-0"
+                    })
+                    .unwrap();
+                expected_row(record, supported, recovered)
+            })
+            .collect::<Vec<_>>();
+        let mut samples = Vec::new();
+        for label in ["initial-1", "initial-2", "initial-3"] {
+            samples.push(measure(&expected, label));
+        }
+        for (path, bytes) in before {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+
+        for record in records
+            .iter()
+            .filter(|record| record.manifest.engine_id.as_str() == "custom.h-last")
+        {
+            remove(record.manifest.engine_id, &record.manifest.runtime_id).unwrap();
+        }
+        records.retain(|record| record.manifest.engine_id.as_str() != "custom.h-last");
+        expected.retain(|row| row["id"] != "custom.h-last");
+        let changed = records
+            .iter_mut()
+            .find(|record| {
+                record.manifest.engine_id.as_str() == "custom.b-unavailable"
+                    && record.manifest.runtime_id == "build-3"
+            })
+            .unwrap();
+        changed.manifest.platforms[0].os = std::env::consts::OS.into();
+        save(changed).unwrap();
+        expected[1]["availability"] = serde_json::json!({"supported":true,"detail":""});
+        for runtime in (0..4).rev() {
+            let added = record(
+                &area,
+                "custom.z-fresh",
+                runtime,
+                std::env::consts::OS,
+                false,
+            );
+            if runtime == 0 {
+                expected.push(expected_row(&added, true, false));
+            }
+            save(&added).unwrap();
+            records.push(added);
+        }
+        let before_fresh = stored_bytes(&records);
+        samples.push(measure(&expected, "after-add-remove-platform-change"));
+        for (path, bytes) in before_fresh {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
+        for (scans, records) in samples {
+            assert_eq!(scans, 1, "one catalog request must reuse its inventory");
+            assert_eq!(records, 32, "each captured registration is read once");
+        }
     }
 }
