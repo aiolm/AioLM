@@ -40,6 +40,13 @@ interface Props {
   showDraftBindings?: boolean;
 }
 
+function optionsWithCurrentValue(current: string, options: readonly string[]) {
+  return [
+    ...(options.includes(current) ? [] : [{ value: current, label: current }]),
+    ...options.map((option) => ({ value: option, label: option })),
+  ];
+}
+
 export default function TuningServerSection({
   t, cfg, disabled, numericDrafts, onNumericChange, onNumericCommit, updateFlash,
   serverTextValue, onServerTextChange, commitServerText, projectorEditable,
@@ -70,12 +77,8 @@ export default function TuningServerSection({
         <CustomSelect
           id={`${id}-flash-attn`}
           ariaDescribedBy={`${id}-flash-attn-hint`}
-          value={cfg.flash_attn === "on" || cfg.flash_attn === "off" ? cfg.flash_attn : "auto"}
-          options={[
-            { value: "auto", label: "auto" },
-            { value: "on", label: "on" },
-            { value: "off", label: "off" },
-          ]}
+          value={cfg.flash_attn}
+          options={optionsWithCurrentValue(cfg.flash_attn, ["auto", "on", "off"])}
           onChange={updateFlash}
           disabled={disabled}
           className="w-full"
@@ -98,8 +101,8 @@ export default function TuningServerSection({
                 <CustomSelect
                   id={inputId}
                   ariaDescribedBy={`${inputId}-hint`}
-                  value={field.options?.includes(value) ? value : (field.options?.[0] ?? value)}
-                  options={(field.options ?? []).map((option) => ({ value: option, label: option }))}
+                  value={value}
+                  options={optionsWithCurrentValue(value, field.options ?? [])}
                   onChange={(next) => {
                     onServerTextChange(field.key, next);
                     commitServerText(field.key, next);

@@ -26,6 +26,12 @@ interface Props {
   onReasoningBudgetMessageCommit: (value: string) => void;
 }
 
+function optionsWithCurrentValue(current: string, options: { value: string; label: string }[]) {
+  return options.some((option) => option.value === current)
+    ? options
+    : [{ value: current, label: current }, ...options];
+}
+
 export default function TuningReasoningSection({
   t, cfg, disabled, numericDrafts, onNumericChange, onNumericCommit,
   updateServerText, updateReasoningEffort, reasoningBudgetMessageValue,
@@ -51,11 +57,11 @@ export default function TuningReasoningSection({
             id={`${id}-reasoning`}
             ariaDescribedBy={`${id}-reasoning-hint`}
             value={cfg.reasoning}
-            options={[
+            options={optionsWithCurrentValue(cfg.reasoning, [
               { value: "auto", label: "auto" },
               { value: "on", label: "on" },
               { value: "off", label: "off" },
-            ]}
+            ])}
             onChange={(val) => updateServerText("reasoning", val)}
             disabled={disabled}
             className="w-full"
@@ -70,12 +76,12 @@ export default function TuningReasoningSection({
             id={`${id}-reasoning-format`}
             ariaDescribedBy={`${id}-reasoning-format-hint`}
             value={cfg.reasoning_format}
-            options={[
+            options={optionsWithCurrentValue(cfg.reasoning_format, [
               { value: "auto", label: "auto" },
               { value: "none", label: "none" },
               { value: "deepseek", label: "deepseek" },
               { value: "deepseek-legacy", label: "deepseek-legacy" },
-            ]}
+            ])}
             onChange={(val) => updateServerText("reasoning_format", val)}
             disabled={disabled}
             className="w-full"
@@ -90,11 +96,11 @@ export default function TuningReasoningSection({
             id={`${id}-reasoning-preserve`}
             ariaDescribedBy={`${id}-reasoning-preserve-hint`}
             value={cfg.reasoning_preserve}
-            options={[
+            options={optionsWithCurrentValue(cfg.reasoning_preserve, [
               { value: "auto", label: cfg.reasoning_preserve === 'auto' ? preserveDefault : `${t("ui.templateDefault")} · ${preserveDefault}` },
               { value: "on", label: "on" },
               { value: "off", label: "off" },
-            ]}
+            ])}
             onChange={(val) => updateServerText("reasoning_preserve", val)}
             disabled={disabled}
             className="w-full"
@@ -114,7 +120,7 @@ export default function TuningReasoningSection({
             id={`${id}-reasoning-effort`}
             ariaDescribedBy={`${id}-reasoning-effort-hint`}
             value={cfg.reasoning_effort}
-            options={[
+            options={optionsWithCurrentValue(cfg.reasoning_effort, [
               { value: "default", label: cfg.reasoning_effort === 'default' ? effortDefault : `default · ${effortDefault}` },
               { value: "none", label: "none" },
               { value: "minimal", label: "minimal" },
@@ -123,7 +129,7 @@ export default function TuningReasoningSection({
               { value: "high", label: "high" },
               { value: "xhigh", label: "xhigh" },
               { value: "max", label: "max" },
-            ]}
+            ])}
             onChange={(val) => updateReasoningEffort(val)}
             disabled={disabled}
             className="w-full"
