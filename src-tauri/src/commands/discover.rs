@@ -60,7 +60,10 @@ pub(crate) async fn hf_download_snapshot(
 #[tauri::command]
 pub(crate) async fn hf_open_model_card(repo_id: String) -> Result<(), String> {
     discover::validate_repo_id(&repo_id)?;
-    open::that(format!("https://huggingface.co/{}", repo_id.trim()))
+    let url = format!("https://huggingface.co/{}", repo_id.trim());
+    tokio::task::spawn_blocking(move || open::that(url))
+        .await
+        .map_err(|_| "The model card could not be opened.".to_string())?
         .map_err(|error| format!("The model card could not be opened: {error}"))
 }
 
