@@ -221,7 +221,7 @@ async function readIndexedRecords(): Promise<DocumentIndexRecord[]> {
     const request = db.transaction(INDEX_STORE, "readonly").objectStore(INDEX_STORE).getAll();
     request.onsuccess = () => {
       db.close();
-      resolve(request.result.filter(validRecord).slice(-MAX_RECORDS));
+      resolve(boundedIndexRecords(request.result.filter(validRecord)).records);
     };
     request.onerror = () => {
       db.close();
@@ -236,13 +236,14 @@ async function writeIndexedRecords(records: DocumentIndexRecord[]): Promise<void
     const transaction = db.transaction(INDEX_STORE, "readwrite");
     const store = transaction.objectStore(INDEX_STORE);
     const bounded = boundedIndexRecords(records);
-    for (const key of bounded.removedKeys) store.delete(key);
+    // Replace the complete retained set atomically, including omitted paths.
+    store.clear();
     for (const record of bounded.records) store.put(record);
     transaction.oncomplete = () => {
       db.close();
       resolve();
     };
-    transaction.onerror = () => {
+    transaction.onabort = transaction.onerror = () => {
       db.close();
       reject(transaction.error ?? new Error("Document index write failed."));
     };
