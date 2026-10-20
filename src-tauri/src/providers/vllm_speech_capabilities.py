@@ -8,9 +8,114 @@ import ast
 import pathlib
 
 
+def _source_flags(text):
+    tree = ast.parse(text)
+    nodes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    root = ("builtin", "object")
+    protocol = ("protocol", "SupportsTranscription")
+    terminals = {root: (root,), protocol: (protocol, root)}
+    declarations = {}
+    attributes = {protocol: {"supports_transcription": True,
+                             "supports_transcription_only": False}}
+    flag_names = ("supports_transcription", "supports_transcription_only")
+    for name, node in nodes.items():
+        bases = []
+        for base in node.bases:
+            if isinstance(base, ast.Name) and base.id in nodes:
+                key = ("local", base.id)
+            elif isinstance(base, ast.Name) and base.id == "SupportsTranscription":
+                key = protocol
+            elif isinstance(base, ast.Name) and base.id == "object":
+                key = root
+            else:
+                # Imported bases carry no flag evidence. Keep their identity in
+                # C3 order without assuming an unknown nn.Module disables STT.
+                key = ("external", ast.dump(base, include_attributes=False))
+                terminals[key] = (key, root)
+            bases.append(key)
+        key = ("local", name)
+        declarations[key] = tuple(bases) or (root,)
+        own = {}
+        for item in node.body:
+            targets = item.targets if isinstance(item, ast.Assign) else [item.target] if isinstance(item, ast.AnnAssign) else []
+            value = getattr(item, "value", None)
+            if value is None:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in flag_names:
+                    # A nonliteral assignment shadows inherited evidence too;
+                    # an annotation with no value does not set an attribute.
+                    own[target.id] = value.value if isinstance(value, ast.Constant) and type(value.value) is bool else None
+        attributes[key] = own
+    del nodes, tree
+
+    def linearize(start):
+        # Temporary C3 state covers only the requested ancestry. The retained
+        # source summary contains declarations and final booleans, not every
+        # local class's full MRO (including unregistered classes).
+        mros = dict(terminals)
+        pending, visiting = [(start, False)], set()
+        while pending:
+            key, expanded = pending.pop()
+            if expanded:
+                visiting.discard(key)
+            if key in mros:
+                continue
+            if not expanded:
+                if key in visiting:
+                    mros[key] = None
+                    continue
+                visiting.add(key)
+                pending.append((key, True))
+                pending.extend((base, False) for base in reversed(declarations[key]))
+                continue
+            bases = declarations[key]
+            if any(mros[base] is None for base in bases):
+                mros[key] = None
+                continue
+            if len(bases) == 1:
+                mros[key] = (key,) + mros[bases[0]]
+                continue
+            sequences = [list(mros[base]) for base in bases] + [list(bases)]
+            order = [key]
+            while sequences:
+                head = next((sequence[0] for sequence in sequences
+                             if all(sequence[0] not in other[1:] for other in sequences)), None)
+                if head is None:
+                    # Cyclic or inconsistent local inheritance cannot grant a
+                    # capability, including through an explicit direct flag.
+                    order = None
+                    break
+                order.append(head)
+                sequences = [sequence[1:] if sequence[0] == head else sequence
+                             for sequence in sequences]
+                sequences = [sequence for sequence in sequences if sequence]
+            mros[key] = tuple(order) if order is not None else None
+        return mros[start]
+
+    results = {}
+
+    def flags(name):
+        key = ("local", name)
+        if key not in declarations:
+            return False, False
+        if name not in results:
+            order = linearize(key)
+            values = []
+            for flag in flag_names:
+                value = next((attributes[base][flag] for base in order or ()
+                              if flag in attributes.get(base, {})), None)
+                values.append(value is True)
+            results[name] = tuple(values)
+        return results[name]
+
+    return flags
+
+
 def scan_speech_registry(record, package_root, entries):
     transcription, only, translation = set(), set(), set()
     root = pathlib.Path(package_root)
+    latest_source, latest_text, latest_flags = None, None, None
     for architecture, entry in entries.items():
         if not isinstance(entry, (tuple, list)) or len(entry) != 2:
             continue
@@ -24,38 +129,16 @@ def scan_speech_registry(record, package_root, entries):
         try:
             if source.stat().st_size > 2 * 1024 * 1024:
                 continue
-            tree = ast.parse(source.read_text(encoding="utf-8"))
+            text = source.read_text(encoding="utf-8")
+            # Every registration still reads fresh evidence. Retain only the
+            # latest source's compact summary for this invocation, never ASTs
+            # for all modules or a filename-only snapshot across reads.
+            if source != latest_source or text != latest_text:
+                latest_flags = _source_flags(text)
+                latest_source, latest_text = source, text
         except (OSError, SyntaxError, UnicodeError):
             continue
-        classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
-
-        def flags(name, visited):
-            if name in visited or name not in classes:
-                return False, False
-            node = classes[name]
-            visited = visited | {name}
-            supports, exclusive = False, False
-            for base in node.bases:
-                base_name = base.id if isinstance(base, ast.Name) else ""
-                if base_name == "SupportsTranscription":
-                    supports = True
-                else:
-                    parent_supports, parent_only = flags(base_name, visited)
-                    supports |= parent_supports
-                    exclusive |= parent_only
-            for item in node.body:
-                targets = item.targets if isinstance(item, ast.Assign) else [item.target] if isinstance(item, ast.AnnAssign) else []
-                value = getattr(item, "value", None)
-                if not isinstance(value, ast.Constant) or type(value.value) is not bool:
-                    continue
-                for target in targets:
-                    if isinstance(target, ast.Name) and target.id == "supports_transcription":
-                        supports = value.value
-                    if isinstance(target, ast.Name) and target.id == "supports_transcription_only":
-                        exclusive = value.value
-            return supports, exclusive
-
-        supported, exclusive = flags(class_name, set())
+        supported, exclusive = latest_flags(class_name)
         if supported:
             transcription.add(architecture)
             if exclusive:

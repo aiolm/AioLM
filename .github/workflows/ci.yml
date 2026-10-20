@@ -43,6 +43,9 @@ jobs:
           python3 -B -m unittest discover -s scripts/model-repair -p 'test_*.py'
           python3 -B -m unittest discover -s scripts/provider-compatibility -p 'test_*.py'
           python3 -B src-tauri/src/providers/vllm_probe_tests.py
+          python3 -B src-tauri/src/providers/vllm_speech_capabilities_tests.py
+          python3 -B src-tauri/src/providers/metal_capabilities_tests.py
+          python3 -B -m unittest discover -s src-tauri/src/providers/tests -p 'test_*.py'
       - name: Typecheck
         run: npm run typecheck
       - name: Build
