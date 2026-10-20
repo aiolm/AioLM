@@ -50,6 +50,7 @@ const BenchPanel = lazy(() => import("../features/bench/Bench"));
 const RuntimesPanel = lazy(() => import("../features/runtimes/Runtimes"));
 const ProjectsPanel = lazy(() => import("../features/projects/Projects"));
 const SettingsPanel = lazy(() => import("../features/settings/Settings"));
+const navigationEntries = navigationGroups.flatMap(group => group.items);
 
 function PanelLoading() {
   const { t } = useI18n();
@@ -148,7 +149,6 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   // navigates away from the page that started it.
   useModelDownloadTask();
   const copy = navigationText[locale];
-  const entries = navigationGroups.flatMap(group => group.items);
   useEffect(() => {
     const dialog = menuRef.current;
     if (menuOpen && dialog && !dialog.open) dialog.showModal();
@@ -274,7 +274,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
     }
   };
 
-  const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(entries.find(item => item.id === id)!.label);
+  const labelFor = (id: ViewId) => id === 'models' ? executionCopy.title : id === 'runtimes' ? executionCopy.manageRuntime : t(navigationEntries.find(item => item.id === id)!.label);
   const title = labelFor(view);
   const showDeveloper = view === "api" || view === "diagnostics";
   const liveModel = ['running', 'starting', 'stopping'].includes(serverState) ? loadedModelPath(store.status) || undefined : undefined;
@@ -296,7 +296,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
   </nav>;
   const sidebarToggleLabel = sidebarCollapsed ? copy.expandSidebar : copy.collapseSidebar;
   const panel = (id: ViewId, children: React.ReactNode) => <section key={id} hidden={view !== id} aria-label={labelFor(id)} className="app-panel-host" data-view={id}>
-    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(entries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
+    <ActivePanelContext.Provider value={view === id}>{visited.has(id) && <PanelBoundary label={t(navigationEntries.find(item => item.id === id)!.label)}><LazyPanel>{children}</LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
   </section>;
   return <PanelFeedbackProvider><div className={sidebarCollapsed ? "app-shell app-shell--rail" : "app-shell"} onKeyDown={event => { if (event.key !== "Escape" || event.defaultPrevented || !(event.target instanceof Element)) return; const details = event.target.closest<HTMLDetailsElement>("details[open]"); if (details) { event.preventDefault(); details.open = false; details.querySelector("summary")?.focus(); } }}>
     <a href="#main-content" className="app-skip-link">{t("app.skip")}</a>
@@ -334,7 +334,7 @@ function AppShell({ preferences, setPreferences, store, selectModel }: { prefere
           {panel("sessions", <SessionsPanel store={store} active={view === "sessions"} />)}
           {panel("runtimes", <>{modelSettings.suspended && <div className="runtime-return"><button type="button" className="app-button app-button--secondary app-button--sm" onClick={modelSettings.resume}>{modelCopy.resume}</button></div>}<RuntimesPanel store={store} active={view === "runtimes"} engineRequest={runtimeEngineRequest} onOpenProfiles={openProfiles} /></>)}
           {panel("benchmark", <BenchPanel store={store} active={view === "benchmark"} />)}
-          <section hidden={!showDeveloper} aria-label={t(entries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
+          <section hidden={!showDeveloper} aria-label={t(navigationEntries.find(item => item.id === developerSection)!.label)} className="app-panel-host" data-view={developerSection}>
             <ActivePanelContext.Provider value={showDeveloper}>{(visited.has("api") || visited.has("diagnostics")) && <PanelBoundary label={t("section.developer")}><LazyPanel><DeveloperPanel store={store} section={developerSection} onNavigate={navigate} /></LazyPanel></PanelBoundary>}</ActivePanelContext.Provider>
           </section>
           {panel("mcp", <McpPanel store={store} />)}
