@@ -158,7 +158,7 @@
 .tuning-default-note { flex: 0 0 auto; white-space: nowrap; }
 .tuning-option-flag--none { background: none; color: var(--ui-faint); font-style: italic; }
 .tuning-option-note { margin-top: 2px; color: var(--ui-muted); font-size: var(--ui-text-support); line-height: 1.6; }
-.tuning-option-flag { flex: 0 0 auto; }
+.tuning-option-flag { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .tuning-option-summary .option-default-value { margin-inline-end: auto; }
 .tuning-option-summary .option-default-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
 .tuning-default-note { margin-inline-start: 4px; color: var(--ui-muted); }
