@@ -1,6 +1,6 @@
 import { CustomSelect } from "../../shared/ui/CustomSelect";
 import Badge from "../../shared/ui/Badge";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../../shared/i18n/i18n";
 import { useTuningId } from './TuningIdScope';
 import { tuningHelp } from '../../shared/i18n/tuningHelp';
@@ -72,10 +72,15 @@ export default function TuningSamplerChain({
   const [draft, setDraft] = useState<string[]>(() => normalizeSamplerChain(source));
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [selectedToAdd, setSelectedToAdd] = useState("");
+  const previousControlledValue = useRef<readonly string[] | null>(null);
 
   useEffect(() => {
     const next = normalizeSamplerChain(value ?? samplers ?? EMPTY_SAMPLER_CHAIN);
+    const controlledValueChanged = previousControlledValue.current === null || !sameValues(previousControlledValue.current, next);
+    previousControlledValue.current = next;
     setDraft((current) => sameValues(current, next) ? current : next);
+    // A controlled replacement can reorder or remove the item held by the pointer.
+    if (controlledValueChanged) setDraggedIndex(null);
   }, [samplers, value]);
 
   const publish = (next: readonly string[]) => {
@@ -96,8 +101,16 @@ export default function TuningSamplerChain({
 
   const drop = (targetIndex: number) => {
     if (disabled || draggedIndex === null || draggedIndex === targetIndex) return;
+    if (draggedIndex < 0 || draggedIndex >= draft.length || targetIndex < 0 || targetIndex >= draft.length) {
+      setDraggedIndex(null);
+      return;
+    }
     const next = [...draft];
     const [item] = next.splice(draggedIndex, 1);
+    if (item === undefined) {
+      setDraggedIndex(null);
+      return;
+    }
     next.splice(targetIndex, 0, item);
     publish(next);
     setDraggedIndex(null);
