@@ -76,10 +76,12 @@ pub(crate) fn validate_model_shards(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn group_shards(files: Vec<GgufModel>) -> Vec<GgufModel> {
+fn group_shards(files: Vec<GgufModel>, cancel: &AtomicBool) -> Result<Vec<GgufModel>, String> {
+    check_cancelled(cancel)?;
     let mut models = Vec::new();
     let mut groups = BTreeMap::<(PathBuf, String, usize), Vec<(usize, GgufModel)>>::new();
     for file in files {
+        check_cancelled(cancel)?;
         if let Some((base, index, total)) = shard_name(&file.name) {
             let parent = Path::new(&file.path)
                 .parent()
@@ -94,11 +96,21 @@ fn group_shards(files: Vec<GgufModel>) -> Vec<GgufModel> {
         }
     }
     for ((_, base, total), mut parts) in groups {
+        check_cancelled(cancel)?;
         parts.sort_by_key(|(index, _)| *index);
+        check_cancelled(cancel)?;
         let present: HashSet<usize> = parts.iter().map(|(index, _)| *index).collect();
-        let missing = (1..=total)
-            .filter(|index| !present.contains(index))
-            .collect();
+        let mut missing = Vec::new();
+        for index in 1..=total {
+            #[cfg(test)]
+            grouping_cancellation_tests::observe(grouping_cancellation_tests::Event::ShardIndex(
+                index,
+            ));
+            check_cancelled(cancel)?;
+            if !present.contains(&index) {
+                missing.push(index);
+            }
+        }
         let mut model = parts[0].1.clone();
         model.name = format!("{base}.gguf");
         model.size_mb = parts.iter().map(|(_, part)| part.size_mb).sum();
@@ -109,7 +121,7 @@ fn group_shards(files: Vec<GgufModel>) -> Vec<GgufModel> {
         });
         models.push(model);
     }
-    models
+    Ok(models)
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -136,11 +148,15 @@ struct ScanProgress<'a> {
 
 impl ScanProgress<'_> {
     fn check_cancelled(&self) -> Result<(), String> {
-        if self.cancel.load(Ordering::Relaxed) {
-            Err("model scan cancelled".into())
-        } else {
-            Ok(())
-        }
+        check_cancelled(self.cancel)
+    }
+}
+
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        Err("model scan cancelled".into())
+    } else {
+        Ok(())
     }
 }
 
@@ -174,7 +190,9 @@ fn scan_with_limits(
     let mut models = Vec::new();
     walk(&root, &mut models, 0, &mut progress)?;
     progress.check_cancelled()?;
-    let mut models = group_shards(models);
+    #[cfg(test)]
+    grouping_cancellation_tests::observe(grouping_cancellation_tests::Event::AfterWalkCheck);
+    let mut models = group_shards(models, cancel)?;
     models.sort_by(|left, right| {
         right
             .size_mb
@@ -294,7 +312,7 @@ mod tests {
                 )
             })
             .collect();
-        let result = group_shards(files);
+        let result = group_shards(files, &AtomicBool::new(false)).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "Qwen-Q4.gguf");
         assert!(result[0].path.ends_with("Qwen-Q4-00001-of-00033.gguf"));
@@ -307,10 +325,14 @@ mod tests {
 
     #[test]
     fn missing_shards_stay_one_visible_incomplete_model() {
-        let result = group_shards(vec![
-            fixture("a-00004-of-00004.gguf", "models", 4.0),
-            fixture("a-00002-of-00004.gguf", "models", 2.0),
-        ]);
+        let result = group_shards(
+            vec![
+                fixture("a-00004-of-00004.gguf", "models", 4.0),
+                fixture("a-00002-of-00004.gguf", "models", 2.0),
+            ],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].shards.as_ref().unwrap().missing, vec![1, 3]);
         assert_eq!(result[0].size_mb, 6.0);
@@ -335,7 +357,7 @@ mod tests {
         }
         files.push(fixture("mmproj.gguf", "a", 1.0));
         files.push(fixture("single.gguf", "a", 1.0));
-        let result = group_shards(files);
+        let result = group_shards(files, &AtomicBool::new(false)).unwrap();
         assert_eq!(result.len(), 6);
         assert!(result
             .iter()
@@ -421,5 +443,153 @@ mod tests {
         assert!(result.models.is_empty());
         assert!(result.truncated);
         let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod grouping_cancellation_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(super) enum Event {
+        AfterWalkCheck,
+        ShardIndex(usize),
+    }
+
+    type Observer = Box<dyn FnMut(Event)>;
+    thread_local! {
+        static OBSERVER: RefCell<Option<Observer>> = const { RefCell::new(None) };
+    }
+
+    // Observe only real phase/index work. The callback may cancel the real
+    // registry job; this hook never substitutes a check or a scan result.
+    pub(super) fn observe(event: Event) {
+        OBSERVER.with(|slot| {
+            if let Some(observer) = slot.borrow_mut().as_mut() {
+                observer(event);
+            }
+        });
+    }
+
+    struct Observation;
+
+    impl Observation {
+        fn install(observer: impl FnMut(Event) + 'static) -> Self {
+            OBSERVER.with(|slot| {
+                assert!(
+                    slot.borrow().is_none(),
+                    "scan observation already installed"
+                );
+                *slot.borrow_mut() = Some(Box::new(observer));
+            });
+            Self
+        }
+    }
+
+    impl Drop for Observation {
+        fn drop(&mut self) {
+            OBSERVER.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    struct Fixture {
+        base: PathBuf,
+        root: PathBuf,
+        file: PathBuf,
+    }
+
+    const CONTENT: &[u8] = b"synthetic shard metadata";
+
+    impl Fixture {
+        fn new() -> Self {
+            let base = std::env::temp_dir().canonicalize().unwrap();
+            let root = base.join(format!("aiolm-scan-group-cancel-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            let root = root.canonicalize().unwrap();
+            assert_eq!(root.parent(), Some(base.as_path()));
+            let file = root.join("model-00001-of-00032.gguf");
+            fs::write(&file, CONTENT).unwrap();
+            Self { base, root, file }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let root = self.root.canonicalize().unwrap();
+            assert_eq!(root, self.root);
+            assert_eq!(root.parent(), Some(self.base.as_path()));
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    fn cancelled_at(boundary: Event, expected: &[Event]) {
+        let fixture = Fixture::new();
+        let registry = Arc::new(ScanRegistry::default());
+        let job = registry.begin("group-cancel-boundary".into()).unwrap();
+        let other = registry.begin("unrelated-scan".into()).unwrap();
+        assert!(!job.cancel.load(Ordering::Relaxed));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let delivered = events.clone();
+        let cancelling_registry = registry.clone();
+        let _observation = Observation::install(move |event| {
+            delivered.borrow_mut().push(event);
+            if event == boundary {
+                cancelling_registry.cancel("group-cancel-boundary").unwrap();
+            }
+        });
+        let result = scan_cancellable(&fixture.root.to_string_lossy(), &job.cancel);
+        let actual = events.borrow().clone();
+        println!("MODEL_GROUP_CANCEL boundary={boundary:?} events={actual:?} result={result:?}");
+        assert_eq!(result.unwrap_err(), "model scan cancelled");
+        assert!(job.cancel.load(Ordering::Relaxed));
+        assert!(!other.cancel.load(Ordering::Relaxed));
+        assert_eq!(fs::read(&fixture.file).unwrap(), CONTENT);
+        assert_eq!(
+            actual, expected,
+            "no additional missing-index work after the next cancellation poll"
+        );
+    }
+
+    #[test]
+    fn public_scan_stops_grouping_when_cancelled_after_walk() {
+        cancelled_at(Event::AfterWalkCheck, &[Event::AfterWalkCheck]);
+    }
+
+    #[test]
+    fn public_scan_stops_missing_indices_at_the_cancelled_index() {
+        let expected = std::iter::once(Event::AfterWalkCheck)
+            .chain((1..=8).map(Event::ShardIndex))
+            .collect::<Vec<_>>();
+        cancelled_at(Event::ShardIndex(8), &expected);
+    }
+
+    #[test]
+    fn public_scan_keeps_complete_output_and_observer_isolation() {
+        let fixture = Fixture::new();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let delivered = events.clone();
+        let observation = Observation::install(move |event| delivered.borrow_mut().push(event));
+        let result =
+            scan_cancellable(&fixture.root.to_string_lossy(), &AtomicBool::new(false)).unwrap();
+        let expected = serde_json::json!({
+            "models": [{"name":"model.gguf", "path":fixture.file.to_string_lossy(),
+                "size_mb":CONTENT.len() as f64 / 1_048_576.0, "is_vision":false,
+                "shards":{"files":[fixture.file.to_string_lossy()],"total":32,"missing":(2..=32).collect::<Vec<_>>()}}],
+            "truncated":false,
+        });
+        assert_eq!(serde_json::to_value(&result).unwrap(), expected);
+        assert_eq!(events.borrow().len(), 33);
+        drop(observation);
+        let next = scan(&fixture.root.to_string_lossy()).unwrap();
+        assert_eq!(serde_json::to_value(next).unwrap(), expected);
+        assert_eq!(
+            events.borrow().len(),
+            33,
+            "dropped observer receives no later work"
+        );
+        assert_eq!(fs::read(&fixture.file).unwrap(), CONTENT);
     }
 }
