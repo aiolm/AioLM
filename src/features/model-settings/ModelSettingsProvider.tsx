@@ -24,6 +24,8 @@ export type { ExecutionTarget, ModelSettingsRequest, ModelSettingsContext } from
 const ModelSettingsDialog = lazy(() => import('./ModelSettingsDialog'));
 const RuntimesPanel = lazy(() => import('../runtimes/Runtimes'));
 
+interface LaunchCancellation { editorKey: number; cancel: () => void }
+
 function assignedTarget(config: api.AppConfig, application?: ProfileApplication, sessionId = 'default'): ProfileCommitResult {
   const library = application?.profile_id && config.settings_profiles ? ensureProfileLibrary(config.settings_profiles) : profileLibrary(config);
   const resolved = resolveProfileForExecution(config, library, application, profileTargetKey(config.active_model, sessionId, providerOf(config)));
@@ -44,7 +46,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const [editor, setEditor] = useState<{ request: ModelSettingsRequest; base: api.AppConfig; baseDefinition?: api.SessionDefinition; initial: api.AppConfig; key: number; existingSession: boolean } | null>(null);
   const [suspended, setSuspended] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [launching, setLaunching] = useState(false);
+  const [launching, setLaunching] = useState<LaunchCancellation | null>(null);
   const [preflightState, setPreflightState] = useState<'checking' | 'cancelling' | null>(null);
   const preflightOwner = useRef<{ id: string; cancelled: boolean } | null>(null);
   const [error, setError] = useState('');
@@ -190,9 +192,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     lock.current = true; setBusy(true);
     let persisted: api.AppConfig | undefined;
     let application = profile.application;
-    // Set once the launch has been issued and left to finish on its own, so the
-    // shared cleanup below does not cancel the state that tracks it.
-    let handedOff = false;
+    let launchOwner: LaunchCancellation | undefined;
     try {
       const current = latest.current.getConfig();
       if (!current) throw new Error(copy.loading);
@@ -313,8 +313,10 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       const result = { config: saved, application };
       rebase(result);
       if (intent === 'start') {
-        setLaunching(true);
-        handedOff = true;
+        const owner: LaunchCancellation = { editorKey: editor.key, cancel: () => {
+          void (target.kind === 'session' ? api.sessionStop(id) : latest.current.stop()).catch(cause => setError(String(cause)));
+        } };
+        launchOwner = owner; setLaunching(owner);
         liveProfiles.current.set(id, { model: saved.active_model, application: structuredClone(application) });
         // Reading a model into VRAM takes minutes. Awaiting it here held a modal
         // dialog over the whole app and kept the lock that gates reopening it, so
@@ -325,7 +327,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         void (target.kind === 'session'
           ? api.sessionStart(id, saved, saved.stop_existing_sessions_on_load).catch(cause => setError(String(cause)))
           : latest.current.start(saved, status?.state === 'running').catch(() => undefined))
-          .finally(() => { setLaunching(false); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
+          .finally(() => { setLaunching(current => current === owner ? null : current); void latest.current.refreshStatus().catch(() => undefined); notifySessionStatusChanged(); });
       } else if (requestOnly) {
         await api.applyRequestSettings(saved, id);
         liveProfiles.current.set(id, { model: saved.active_model, pid: status?.pid, application: structuredClone(application) });
@@ -337,7 +339,12 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
     } catch (cause) {
       if (persisted) throw new SettingsDeliveryError(String(cause), persisted, application);
       throw cause;
-    } finally { lock.current = false; setBusy(false); if (!handedOff) setLaunching(false); }
+    } finally {
+      lock.current = false; setBusy(false);
+      // Only this active launch can supply the editor's cancellation action.
+      // Its handed-off load continues after closing or editing another target.
+      if (launchOwner) setLaunching(current => current === launchOwner ? null : current);
+    }
   };
   const apply = async (draft: api.AppConfig, intent: 'save' | 'start', profile: ProfileEditorResult) => {
     await persist(draft, intent, { ...profile, saveMode: editor?.request.target.kind === 'benchmark' ? 'benchmark' : 'all' }, true);
@@ -371,7 +378,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       liveApplication={liveApplication}
       executionNotice={stopsOtherSessions ? <p>{copy.stopOthers}</p> : undefined}
       preflightState={preflightState ?? undefined}
-      onCancelStart={preflightState ? cancelPreflight : launching ? stopTarget : undefined} onStop={stopTarget}
+      onCancelStart={preflightState ? cancelPreflight : launching?.editorKey === editor.key ? launching.cancel : undefined} onStop={stopTarget}
       renderRuntimeManager={({ config, revision, active, onBusyChange }) => <RuntimesPanel store={store} active={active} engineRequest={{ provider: providerOf(config), revision }} onBusyChange={onBusyChange} />} /></Suspense>}
   </Context.Provider>;
 }
