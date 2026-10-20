@@ -1,4 +1,5 @@
 import type { AppConfig } from "../api/types.ts";
+import { CACHE_TYPE_OPTIONS } from "../config/tuningValidation.ts";
 import type { ConfigPatch } from "./configSaveQueue.ts";
 
 function normalizeStoredPath(value: string): string {
@@ -8,7 +9,7 @@ function normalizeStoredPath(value: string): string {
 const DEFAULT_BATCH_SIZE = 2048;
 const DEFAULT_UBATCH_SIZE = 512;
 const DEFAULT_CACHE_TYPE = "f16";
-const CACHE_TYPES = new Set(["f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1"]);
+const CACHE_TYPES: ReadonlySet<string> = new Set(CACHE_TYPE_OPTIONS);
 
 function finiteInteger(value: unknown, fallback: number, min: number, max: number): number {
   const parsed = typeof value === "number" ? value : Number(value);

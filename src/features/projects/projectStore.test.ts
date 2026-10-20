@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EXECUTION_KEYS, executionSettings } from '../../shared/config/executionSettings';
+import { CACHE_TYPE_OPTIONS } from '../../shared/config/tuningValidation.ts';
 import { testConfig } from '../../testing/appStore';
 import { ACTIVE_PROJECT_KEY, MAX_PROJECTS, PROJECTS_CHANGED_EVENT, PROJECTS_KEY, activeProjectId, exportProject, importProject, projectConfigPatch, projectFromConfig, readProjects, setActiveProjectId, upsertProject, writeProjects } from './projectStore';
 import { materializeProfileApplication, captureProfile } from '../../shared/config/settingsProfiles';
@@ -111,6 +112,21 @@ describe('project settings snapshots', () => {
     expect(restored.config).not.toHaveProperty('models_dir');
     expect(restored.config).not.toHaveProperty('settings_profiles');
     expect(restored.config).not.toHaveProperty('sessions');
+  });
+  it('preserves every valid cache type through project normalization and falls back independently', () => {
+    for (const cacheType of CACHE_TYPE_OPTIONS) {
+      const project = projectFromConfig('Cache project', '', { ...testConfig, cache_type_k: cacheType, cache_type_v: 'q4_1' });
+      const restored = importProject(exportProject(project));
+      const patch = projectConfigPatch(restored);
+      expect(restored.config.cache_type_k).toBe(cacheType);
+      expect(restored.config.cache_type_v).toBe('q4_1');
+      expect(patch.cache_type_k).toBe(cacheType);
+      expect(patch.cache_type_v).toBe('q4_1');
+    }
+
+    const invalid = projectFromConfig('Invalid cache project', '', { ...testConfig, cache_type_k: 'not-a-cache-type', cache_type_v: 'iq4_nl' });
+    expect(invalid.config.cache_type_k).toBe('f16');
+    expect(invalid.config.cache_type_v).toBe('iq4_nl');
   });
   it('keeps captured settings separate from source and applied copies', () => {
     const cfg = { ...structuredClone(testConfig), chat_options: { stop: ['done'] } };

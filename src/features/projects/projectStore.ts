@@ -1,6 +1,6 @@
 import { isProviderId } from '../../shared/api/providerIdentity.ts';
 import type { AppConfig, LoraAdapterConfig } from "../../shared/api/types";
-import type { JsonObject } from "../../shared/config/tuningValidation";
+import { CACHE_TYPE_OPTIONS, type JsonObject } from "../../shared/config/tuningValidation.ts";
 import type { ProfileApplication } from "../../shared/config/settingsProfiles";
 import type { ExecutionKey, ExecutionSettings } from "../../shared/config/executionSettings";
 
@@ -72,7 +72,7 @@ function safeClone<T>(value: T): T {
   }
 }
 
-const PROJECT_CACHE_TYPES = new Set(["f16", "f32", "bf16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1"]);
+const PROJECT_CACHE_TYPES: ReadonlySet<string> = new Set(CACHE_TYPE_OPTIONS);
 
 function stringList(value: unknown, limit: number): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, limit) : [];
