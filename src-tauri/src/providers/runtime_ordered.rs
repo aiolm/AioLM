@@ -591,13 +591,20 @@ pub fn import_plan_for_entry(
                 continue;
             }
             let negated = name.strip_prefix("--no-").map(|rest| format!("--{rest}"));
-            let found = schema.options.iter().find(|o| {
-                o.spellings.iter().any(|s| s.flag == name)
+            // Preserve the out-of-scope review path when no eligible option
+            // matches, while allowing the selected scope's spelling to win.
+            let mut first_match = None;
+            let eligible = schema.options.iter().find(|o| {
+                let matches = o.spellings.iter().any(|s| s.flag == name)
                     || (negated
                         .as_deref()
-                        .is_some_and(|n| o.spellings.iter().any(|s| s.flag == n)))
+                        .is_some_and(|n| o.spellings.iter().any(|s| s.flag == n)));
+                if matches && first_match.is_none() {
+                    first_match = Some(*o);
+                }
+                matches && selected_scope.starts_with(&o.scope)
             });
-            let Some(option) = found else {
+            let Some(option) = eligible.or(first_match) else {
                 unrecognized.push(word.clone());
                 if inline.is_none() {
                     if let Some(next) = words.get(index).filter(|n| !n.starts_with("--")) {
@@ -611,15 +618,14 @@ pub fn import_plan_for_entry(
                 unrecognized.push(word.clone());
                 continue;
             }
-            // Negative `--no-foo` maps to explicit false on the base key.
+            // Explicit negative spellings use their documented polarity.
             let is_negative = negated.is_some_and(|n| {
                 option.spellings.iter().any(|s| s.flag == n)
                     && !option.spellings.iter().any(|s| s.flag == name)
-            }) || (name.starts_with("--no-")
-                && option
-                    .spellings
-                    .iter()
-                    .any(|s| s.flag == name && s.polarity == Some(false)));
+            }) || option
+                .spellings
+                .iter()
+                .any(|s| s.flag == name && s.polarity == Some(false));
             if option.kind.supported() == Some(&super::runtime_options::ValueKind::Boolean)
                 && option.arity.supported().is_some_and(|a| a.max == Some(0))
             {
@@ -1714,5 +1720,204 @@ mod tests {
             );
             assert!(imported.managed.is_empty() && imported.unrecognized.is_empty());
         }
+    }
+
+    #[test]
+    fn selected_scope_import_is_not_shadowed_by_an_unrelated_scope() {
+        let scope = vec!["serve".to_string()];
+        let entry = CommandEntry {
+            version: 1,
+            program: "synthetic-engine".into(),
+            prefix: scope.clone(),
+            layout: Some(super::super::runtime_command::CommandLayout {
+                version: 1,
+                subcommands: vec![0],
+                options: vec![],
+            }),
+            separator: None,
+            positional_bindings: Some(vec![]),
+            positional_roles: BTreeMap::new(),
+        };
+        let entry_before = entry.clone();
+        for unrelated_first in [true, false] {
+            let mut unrelated = option("other.value", "--value", 1, Some(1));
+            unrelated.scope = vec!["other".into()];
+            let mut selected = option("serve.value", "--value", 1, Some(1));
+            selected.scope = scope.clone();
+            let definitions = if unrelated_first {
+                vec![unrelated, selected]
+            } else {
+                vec![selected, unrelated]
+            };
+            let schema = schema(definitions);
+            schema.validate().unwrap();
+            let schema_before = schema.clone();
+            for registered in [false, true] {
+                let imported = if registered {
+                    import_plan_for_entry(
+                        &schema,
+                        &scope,
+                        Some(&entry),
+                        "synthetic-engine serve --value payload",
+                        super::super::options::CommandSyntax::Posix,
+                    )
+                } else {
+                    import_plan_text(&schema, &scope, "serve --value payload")
+                }
+                .unwrap();
+                assert!(imported.managed.is_empty());
+                assert!(imported.unrecognized.is_empty(), "{imported:?}");
+                let expected_plan = json!([{
+                    "key": "serve.value",
+                    "spelling": "--value",
+                    "values": ["payload"]
+                }]);
+                assert_eq!(serde_json::to_value(&imported.plan).unwrap(), expected_plan);
+                let resolved = resolve_plan(&schema, &scope, &imported.plan).unwrap();
+                assert_eq!(resolved.argv, ["serve", "--value", "payload"]);
+                assert!(resolved.request.is_empty());
+                assert_eq!(serde_json::to_value(&imported.plan).unwrap(), expected_plan);
+
+                let grouped = overrides_from_plan(&imported.plan);
+                assert_eq!(
+                    serde_json::to_value(&grouped).unwrap(),
+                    json!({"serve.value": {
+                        "spelling": "--value", "occurrences": [["payload"]]
+                    }})
+                );
+                let stored = super::super::runtime_help_store::map_from_overrides(&grouped);
+                let stored_before = stored.clone();
+                let restored = resolve_saved(&schema, &scope, &stored).unwrap();
+                assert_eq!(restored.argv, ["serve", "--value", "payload"]);
+                assert!(restored.request.is_empty());
+                assert_eq!(stored, stored_before);
+                assert_eq!(schema, schema_before);
+                assert_eq!(entry, entry_before);
+            }
+        }
+    }
+
+    #[test]
+    fn arbitrary_false_aliases_round_trip_through_import_and_saved_order() {
+        let mut cache = option("cache", "--cache", 0, Some(0));
+        cache.kind = known(ValueKind::Boolean);
+        cache.repeatable = known(true);
+        cache.spellings = vec![
+            super::super::runtime_options::Spelling {
+                flag: "--cache".into(),
+                style: super::super::runtime_options::ValueStyle::Separate,
+                polarity: Some(true),
+            },
+            super::super::runtime_options::Spelling {
+                flag: "-E".into(),
+                style: super::super::runtime_options::ValueStyle::Separate,
+                polarity: Some(false),
+            },
+            super::super::runtime_options::Spelling {
+                flag: "--disable-cache".into(),
+                style: super::super::runtime_options::ValueStyle::Separate,
+                polarity: Some(false),
+            },
+            super::super::runtime_options::Spelling {
+                flag: "--enable-cache".into(),
+                style: super::super::runtime_options::ValueStyle::Separate,
+                polarity: None,
+            },
+        ];
+        let schema = schema(vec![cache]);
+        schema.validate().unwrap();
+        let schema_before = schema.clone();
+        let imported =
+            import_plan_text(&schema, &[], "-E --cache --disable-cache --enable-cache -E").unwrap();
+        assert!(imported.managed.is_empty() && imported.unrecognized.is_empty());
+        let expected_plan = json!([
+            {"key":"cache","spelling":"-E","values":[false]},
+            {"key":"cache","spelling":"--cache","values":[true]},
+            {"key":"cache","spelling":"--disable-cache","values":[false]},
+            {"key":"cache","spelling":"--enable-cache","values":[true]},
+            {"key":"cache","spelling":"-E","values":[false]}
+        ]);
+        assert_eq!(serde_json::to_value(&imported.plan).unwrap(), expected_plan);
+        let expected_argv = ["-E", "--cache", "--disable-cache", "--enable-cache", "-E"];
+        let resolved = resolve_plan(&schema, &[], &imported.plan).unwrap();
+        assert_eq!(resolved.argv, expected_argv);
+        assert!(resolved.request.is_empty());
+
+        let grouped = overrides_from_plan(&imported.plan);
+        assert_eq!(
+            serde_json::to_value(&grouped).unwrap(),
+            json!({"cache": {
+                "spelling": "-E", "occurrences": [[false],[true],[false],[true],[false]]
+            }})
+        );
+        let mut stored = super::super::runtime_help_store::map_from_overrides(&grouped);
+        let order = SavedOrder {
+            version: ORDER_VERSION,
+            occurrences: imported
+                .plan
+                .iter()
+                .map(|item| OrderEntry {
+                    key: item.key.clone(),
+                    spelling: item.spelling.clone(),
+                })
+                .collect(),
+        };
+        stored.insert(ORDER_KEY.into(), serde_json::to_value(order).unwrap());
+        let stored_before = stored.clone();
+        let restored = resolve_saved(&schema, &[], &stored).unwrap();
+        assert_eq!(restored.argv, expected_argv);
+        assert!(restored.request.is_empty());
+        assert_eq!(stored, stored_before);
+        assert_eq!(schema, schema_before);
+        assert_eq!(serde_json::to_value(&imported.plan).unwrap(), expected_plan);
+    }
+
+    #[test]
+    fn import_honors_positive_and_default_polarity_even_for_negative_looking_aliases() {
+        for alias in ["-E", "--disable-cache", "--no-cache"] {
+            for polarity in [Some(true), None] {
+                let mut cache = option("cache", alias, 0, Some(0));
+                cache.kind = known(ValueKind::Boolean);
+                cache.spellings[0].polarity = polarity;
+                let schema = schema(vec![cache]);
+                schema.validate().unwrap();
+                let schema_before = schema.clone();
+                let imported = import_plan_text(&schema, &[], alias).unwrap();
+                assert!(imported.managed.is_empty() && imported.unrecognized.is_empty());
+                let expected_plan = json!([{
+                    "key": "cache", "spelling": alias, "values": [true]
+                }]);
+                assert_eq!(serde_json::to_value(&imported.plan).unwrap(), expected_plan);
+                let resolved = resolve_plan(&schema, &[], &imported.plan).unwrap();
+                assert_eq!(resolved.argv, [alias]);
+                assert!(resolved.request.is_empty());
+                let grouped = overrides_from_plan(&imported.plan);
+                assert_eq!(
+                    serde_json::to_value(&grouped).unwrap(),
+                    json!({"cache": {"spelling": alias, "occurrences": [[true]]}})
+                );
+                assert_eq!(schema.resolve(&[], &grouped).unwrap().argv, [alias]);
+                assert_eq!(schema, schema_before);
+            }
+        }
+    }
+
+    #[test]
+    fn import_does_not_invent_an_undocumented_negative_alias() {
+        let mut cache = option("cache", "--cache", 0, Some(0));
+        cache.kind = known(ValueKind::Boolean);
+        cache.spellings[0].polarity = Some(true);
+        let schema = schema(vec![cache]);
+        schema.validate().unwrap();
+        let schema_before = schema.clone();
+        let imported = import_plan_text(&schema, &[], "--no-cache").unwrap();
+        assert!(imported.plan.is_empty());
+        assert!(imported.managed.is_empty());
+        assert_eq!(imported.unrecognized, ["--no-cache"]);
+        assert!(resolve_plan(&schema, &[], &imported.plan)
+            .unwrap()
+            .argv
+            .is_empty());
+        assert_eq!(schema, schema_before);
     }
 }
