@@ -14,16 +14,14 @@ function urlTransform(url: string): string {
   return '#blocked';
 }
 
-function components() {
-  return {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    a: ({ href, children }: any) => {
-      const safe = typeof href === 'string' ? urlTransform(href) : '#blocked';
-      if (safe === '#blocked') return <span>{children}</span>;
-      return <a href={safe} rel="noreferrer noopener" target="_blank">{children}</a>;
-    },
-  };
-}
+const MARKDOWN_COMPONENTS = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  a: ({ href, children }: any) => {
+    const safe = typeof href === 'string' ? urlTransform(href) : '#blocked';
+    if (safe === '#blocked') return <span>{children}</span>;
+    return <a href={safe} rel="noreferrer noopener" target="_blank">{children}</a>;
+  },
+};
 
 export function DescriptionPreview({ text }: { text: string }) {
   const allowed = useMemo(() => [...allowedSet] as AllowedElement[], []);
@@ -35,7 +33,7 @@ export function DescriptionPreview({ text }: { text: string }) {
           allowedElements={allowed}
           unwrapDisallowed
           urlTransform={urlTransform}
-          components={components()}
+          components={MARKDOWN_COMPONENTS}
         >
           {text || 'No description.'}
         </Markdown>
