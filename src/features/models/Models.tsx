@@ -318,7 +318,9 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
       try {
         await api.deleteModel(model.path, model.shards?.files);
         forgetExecution(model.path);
-        if (cfg?.active_model === model.path) await store.updateConfig({ active_model: '' });
+        if (store.getConfig()?.active_model === model.path) {
+          await store.updateConfig(current => current.active_model === model.path ? { active_model: '' } : {});
+        }
         notify(t("ui.deletedModelNamed", { name: model.name }));
       } catch (error) {
         notify(`${t("ui.deleteFailed")}: ${error instanceof Error ? error.message : String(error)}`);

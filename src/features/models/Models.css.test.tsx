@@ -76,6 +76,7 @@ const baseCfg = {
 function storeFor(cfg: AppConfig): AppStore {
   return {
     cfg,
+    getConfig: () => cfg,
     status: { state: "stopped" },
     busy: false,
     updateConfig: async () => cfg,
@@ -158,7 +159,7 @@ describe("ModelsPanel CSS cascade", () => {
     const model = { name: "large.gguf", path: files[0], size_mb: 300, is_vision: false, shards: { files, total: 2, missing: [] } };
     mocked.listModels.mockReset().mockResolvedValue({ models: [model], truncated: false });
     mocked.deleteModel.mockReset().mockResolvedValue(undefined);
-    const cfg = { ...baseCfg, models_dir: "C:/models" };
+    const cfg = { ...baseCfg, models_dir: "C:/models", active_model: "C:/models/other.gguf" };
     const store = storeFor(cfg);
     store.updateConfig = vi.fn().mockResolvedValue(cfg);
     render(createElement(I18nProvider, { initialLocale: "en", children: createElement(ModelsPanel, { store }) }));
@@ -174,6 +175,9 @@ describe("ModelsPanel CSS cascade", () => {
     expect(mocked.deleteModel).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Delete model" }));
     await waitFor(() => expect(mocked.deleteModel).toHaveBeenCalledWith(files[0], files));
+    expect(await screen.findByText("Deleted: large.gguf")).toBeVisible();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    expect(store.cfg?.active_model).toBe("C:/models/other.gguf");
   });
 
   it("shows incomplete shards without allowing selection or launch", async () => {
