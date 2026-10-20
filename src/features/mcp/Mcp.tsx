@@ -1,6 +1,6 @@
 import PanelFeedback from "../../shared/ui/PanelFeedback";
 import StableLabel from "../../shared/ui/StableLabel";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
 import type { AppStore } from "../../shared/state/store";
 import { formatMcpCommand, validateMcpServerDraft } from "./mcpUtils";
@@ -21,6 +21,7 @@ import { LocalTaskCancelButton } from "../../shared/ui/TaskCancellation";
 
 type Approval = { tool: api.McpTool; args: Record<string, unknown> };
 type ToolCall = { id: string; taskId: string; label: string; cancelRequested: boolean; settled: boolean; cancelPending?: Promise<void> };
+type DeleteConfirmation = { server: api.McpServer };
 
 function toolExecutionFailed(response: unknown): boolean {
   return response !== null && typeof response === "object" && "isError" in response && response.isError === true;
@@ -84,11 +85,24 @@ export default function McpPanel(_props: { store: AppStore }) {
   const selectionGeneration = useRef(0);
   const discoveryGeneration = useRef(0);
   const [result, setResult] = useState<unknown>(null);
-  const [pendingDelete, setPendingDelete] = useState<api.McpServer | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<DeleteConfirmation | null>(null);
+  const pendingDeleteRef = useRef<DeleteConfirmation | null>(null);
+  const deleteDialogRevision = useRef(0);
+  const removingIdsRef = useRef(new Set<string>());
+  const [removingIds, setRemovingIds] = useState<Set<string>>(() => new Set());
+  const removalView = useRef<{ selectedId: string | null } | null>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
   const cancelDeleteRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const approvalSectionRef = useRef<HTMLElement>(null);
+
+  // Deletion feedback belongs to the committed view that issued it. A later
+  // edit or action can own feedback without changing the selected server.
+  useLayoutEffect(() => {
+    const view = { selectedId };
+    removalView.current = view;
+    return () => { if (removalView.current === view) removalView.current = null; };
+  }, [selectedId, name, command, argsText, enabled, approvalPolicy, selectedTool, argsJson, approval, approvalBusy, tools, toolLoading, result, saving, notice, error]);
 
   const cancelCall = async (call: ToolCall) => {
     try { await requestCallCancellation(call); }
@@ -104,6 +118,8 @@ export default function McpPanel(_props: { store: AppStore }) {
     discoveryGeneration.current += 1;
     const call = activeCallRef.current;
     activeCallRef.current = null;
+    pendingDeleteRef.current = null;
+    deleteDialogRevision.current += 1;
     if (call) void requestCallCancellation(call).catch(() => undefined);
   }, []);
 
@@ -122,17 +138,30 @@ export default function McpPanel(_props: { store: AppStore }) {
     if (!dialog) return;
     if (pendingDelete && !dialog.open) {
       dialog.showModal();
-      window.requestAnimationFrame(() => cancelDeleteRef.current?.focus());
+      window.requestAnimationFrame(() => { if (pendingDeleteRef.current === pendingDelete) cancelDeleteRef.current?.focus(); });
     } else if (!pendingDelete && dialog.open) {
       dialog.close();
     }
   }, [pendingDelete]);
 
-  const closeDeleteDialog = () => {
-    const serverId = pendingDelete?.id;
-    setPendingDelete(null);
-    if (serverId) window.requestAnimationFrame(() => deleteButtonRefs.current[serverId]?.focus());
+  const openDeleteDialog = (server: api.McpServer) => {
+    const confirmation = { server };
+    deleteDialogRevision.current += 1;
+    pendingDeleteRef.current = confirmation;
+    setPendingDelete(confirmation);
   };
+
+  const closeDeleteConfirmation = (confirmation: DeleteConfirmation | null, restoreFocus = true) => {
+    if (!confirmation || pendingDeleteRef.current !== confirmation) return;
+    pendingDeleteRef.current = null;
+    const revision = ++deleteDialogRevision.current;
+    const focusOwner = document.activeElement;
+    setPendingDelete(null);
+    if (restoreFocus) window.requestAnimationFrame(() => {
+      if (deleteDialogRevision.current === revision && pendingDeleteRef.current === null && document.activeElement === focusOwner) deleteButtonRefs.current[confirmation.server.id]?.focus();
+    });
+  };
+  const closeDeleteDialog = () => closeDeleteConfirmation(pendingDeleteRef.current);
 
   const loadServers = async () => {
     try {
@@ -226,17 +255,32 @@ export default function McpPanel(_props: { store: AppStore }) {
     }
   };
 
-  const doRemove = async (server: api.McpServer) => {
+  const doRemove = async (server: api.McpServer, confirmation: DeleteConfirmation | null = null) => {
+    if (removingIdsRef.current.has(server.id)) return;
+    removingIdsRef.current.add(server.id);
+    setRemovingIds(new Set(removingIdsRef.current));
+    const view = removalView.current;
     try {
-      setServers(await api.mcpRemoveServer(server.id));
-      if (selectedId === server.id) resetDraft();
-      setNotice(t("ui.mcpRemoved"));
-      setError(null);
+      const next = await api.mcpRemoveServer(server.id);
+      const current = removalView.current;
+      if (!current) return;
+      const removedCurrentTarget = current.selectedId === server.id;
+      setServers(next);
+      if (removedCurrentTarget) resetDraft();
+      if (removedCurrentTarget || current === view) {
+        setNotice(t("ui.mcpRemoved"));
+        setError(null);
+      }
+      const confirmationNow = pendingDeleteRef.current;
+      if (confirmationNow?.server.id === server.id && !next.some(candidate => candidate.id === server.id)) {
+        closeDeleteConfirmation(confirmationNow, current === view);
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (view && removalView.current === view) setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setPendingDelete(null);
-      window.requestAnimationFrame(() => deleteButtonRefs.current[server.id]?.focus());
+      removingIdsRef.current.delete(server.id);
+      if (removalView.current) setRemovingIds(new Set(removingIdsRef.current));
+      closeDeleteConfirmation(confirmation, view !== null && removalView.current === view);
     }
   };
 
@@ -358,7 +402,7 @@ export default function McpPanel(_props: { store: AppStore }) {
       </PanelFeedback>
 
       <div className="grid min-h-0 gap-4 app-master-detail">
-        <aside className="app-card app-card--tight"><div className="flex items-center justify-between gap-2"><h3 className="app-section-title">{t("panel.configuredServers")}</h3><button type="button" data-icon="add" onClick={resetDraft} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button></div><div className="mt-3 space-y-1.5">{servers.length === 0 && <EmptyState title={t("panel.noMcpServers")} description={t("ui.mcpEmptyHint")} />}{servers.map((server) => <div key={server.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${server.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => selectServer(server)} aria-current={server.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium text-ink">{normalizeDisplayText(server.name)}</span><span className="mt-0.5 block"><StatusBadge label={server.enabled ? t("ui.enabled") : t("ui.disabled")} tone={server.enabled ? "success" : "neutral"} /></span></button><button type="button" ref={(element) => { deleteButtonRefs.current[server.id] = element; }} onClick={() => { if (shouldConfirmDestructive()) setPendingDelete(server); else void doRemove(server); }} aria-label={t("ui.removeNamed", { name: normalizeDisplayText(server.name) })} className="app-icon-button app-icon-button--danger mr-1"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div></aside>
+        <aside className="app-card app-card--tight"><div className="flex items-center justify-between gap-2"><h3 className="app-section-title">{t("panel.configuredServers")}</h3><button type="button" data-icon="add" onClick={resetDraft} className="app-button app-button--secondary app-button--sm">{t("panel.newItem")}</button></div><div className="mt-3 space-y-1.5">{servers.length === 0 && <EmptyState title={t("panel.noMcpServers")} description={t("ui.mcpEmptyHint")} />}{servers.map((server) => <div key={server.id} className={`app-list-row flex items-center justify-between gap-1 px-1 py-1 ${server.id === selectedId ? "is-selected" : ""}`}><button type="button" onClick={() => selectServer(server)} aria-current={server.id === selectedId ? "true" : undefined} className="app-list-row__action flex-col items-start"><span className="block app-text-wrap text-xs font-medium text-ink">{normalizeDisplayText(server.name)}</span><span className="mt-0.5 block"><StatusBadge label={server.enabled ? t("ui.enabled") : t("ui.disabled")} tone={server.enabled ? "success" : "neutral"} /></span></button><button type="button" ref={(element) => { deleteButtonRefs.current[server.id] = element; }} onClick={() => { if (shouldConfirmDestructive()) openDeleteDialog(server); else void doRemove(server); }} aria-label={t("ui.removeNamed", { name: normalizeDisplayText(server.name) })} className="app-icon-button app-icon-button--danger mr-1"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M3 3 9 9M9 3 3 9" /></svg></button></div>)}</div></aside>
 
         <div className="min-w-0 space-y-4"><section className="app-card"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="app-section-title">{t("ui.serverDefinition")}</h3><p className="app-section-hint">{t("ui.serverDefinitionHint")}</p></div><div className="flex items-center gap-2"><Switch id="mcp-server-enabled" checked={enabled} onChange={setEnabled} /><label htmlFor="mcp-server-enabled" className="text-xs text-muted">{t("ui.enabled")}</label></div></div><div className="mt-3.5 grid gap-3 app-form-grid"><label className="text-xs text-muted">{t("ui.fieldName")}<input value={normalizeDisplayText(name)} onChange={(event) => setName(event.target.value)} placeholder={t("ui.fieldNamePlaceholder")} className="app-input mt-1" /></label><label className="text-xs text-muted">{t("ui.fieldCommand")}<input spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPath(command)} onChange={(event) => setCommand(event.target.value)} placeholder="npx or C:\\Tools\\server.exe" className="app-input mt-1 font-mono" /></label></div><label className="mt-3.5 block text-xs text-muted">{t("ui.fieldArgs")}<textarea spellCheck={false} autoCorrect="off" autoCapitalize="off" value={normalizeDisplayPathLines(argsText)} onChange={(event) => setArgsText(event.target.value)} rows={4} placeholder={"-y\n@modelcontextprotocol/server-filesystem\nC:\\Documents"} className="app-textarea mt-1 app-mono" /></label><div className="mt-4 flex flex-wrap items-center gap-2.5"><div className="flex items-center gap-2 text-xs text-muted"><span>{t("ui.approvalPolicy")}</span><CustomSelect ariaLabel={t("ui.approvalPolicy")} value={approvalPolicy} options={[{ value: "always-ask", label: t("ui.policyAlwaysAsk") }, { value: "once", label: t("ui.policyOnce") }, { value: "session", label: t("ui.policySession") }, { value: "server-tool", label: t("ui.policyServerTool") }, { value: "deny", label: t("ui.policyDeny") }]} onChange={(val) => { const nextPolicy = val as McpApprovalPolicy; setApprovalPolicy(nextPolicy); saveMcpApprovalPolicy(nextPolicy); setApprovedCalls(new Set()); setNotice(`${t("ui.approvalPolicy")}: ${policyLabel(nextPolicy)}`); }} size="sm" triggerClassName="w-[140px]" /></div><button type="button" onClick={() => void save()} disabled={saving} aria-busy={saving} className="app-button app-button--primary app-button--sm">{t("ui.saveServer")}</button>{selectedServer && <><code className="max-w-full app-text-wrap rounded bg-canvas px-2.5 py-1.5 font-mono text-xs text-muted" title={displayMcpCommand}>{displayMcpCommand}</code><button type="button" onClick={() => void discoverTools()} disabled={saving || toolLoading || !selectedServer.enabled} className="app-button app-button--secondary app-button--sm"><StableLabel value={toolLoading ? t("ui.discovering") : t("ui.discoverTools")} labels={[t("ui.discovering"), t("ui.discoverTools")]} /></button></>}</div></section>
 
@@ -385,11 +429,11 @@ export default function McpPanel(_props: { store: AppStore }) {
           <div className="app-confirm-dialog__eyebrow">{t("ui.destructiveAction")}</div>
           <h2 id="mcp-delete-title">{t("ui.deleteServerTitle")}</h2>
           <p id="mcp-delete-description">
-            {t("ui.deleteServerBody", { name: normalizeDisplayText(pendingDelete?.name ?? "") })}
+            {t("ui.deleteServerBody", { name: normalizeDisplayText(pendingDelete?.server.name ?? "") })}
           </p>
           <div className="app-confirm-dialog__actions">
             <button type="button" ref={cancelDeleteRef} className="app-button app-button--secondary" onClick={closeDeleteDialog}>{t("panel.cancel")}</button>
-            <button type="button" className="app-button app-button--danger" onClick={() => pendingDelete && void doRemove(pendingDelete)}>{t("ui.deleteServer")}</button>
+            <button type="button" className="app-button app-button--danger" disabled={pendingDelete !== null && removingIds.has(pendingDelete.server.id)} aria-busy={pendingDelete !== null && removingIds.has(pendingDelete.server.id)} onClick={() => pendingDelete && void doRemove(pendingDelete.server, pendingDelete)}>{t("ui.deleteServer")}</button>
           </div>
         </div>
       </dialog>
