@@ -147,8 +147,12 @@ describe('runtime-specific option controls', () => {
     const preview = vi.spyOn(api, 'providerCommandPreview').mockResolvedValue([]);
     const onChecking = vi.fn();
     render(<I18nProvider initialLocale="en"><ProviderOptions collapseTools cfg={{ ...testConfig, active_provider: provider, active_runtime: 'installed-one' }} disabled={false} onChange={vi.fn()} onInvalid={vi.fn()} onChecking={onChecking} /></I18nProvider>);
-    expect(await screen.findByLabelText(/^--fresh-69/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^--fresh-0\s/)).toBeInTheDocument();
+    const externalOptions = await screen.findAllByLabelText(/^--fresh-/);
+    expect(externalOptions).toHaveLength(70);
+    expect(externalOptions[69]).toBeInTheDocument();
+    expect(externalOptions[69]).toHaveAccessibleName(/^--fresh-69/);
+    expect(externalOptions[0]).toBeInTheDocument();
+    expect(externalOptions[0]).toHaveAccessibleName(/^--fresh-0\s/);
     expect(screen.queryByRole('button', { name: /^Show more options/, hidden: true })).not.toBeInTheDocument();
     const tools = screen.getByText('Command and help tools').closest('details')!;
     const previewButton = within(tools).getByRole('button', { name: 'Command preview', hidden: true });
