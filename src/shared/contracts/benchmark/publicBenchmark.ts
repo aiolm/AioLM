@@ -54,9 +54,9 @@ const gpu = (value: BenchmarkGpuSnapshot): PublicGpu => ({
 });
 
 /**
- * llama-server options whose value names this machine rather than the tuning
+ * Runtime options whose values name this machine rather than the tuning
  * setup: its files, its listening address, its credentials or its prompt text.
- * Each is dropped together with its value, so a published launch carries only
+ * Each is dropped together with all its values, so a published launch carries only
  * settings another reader can apply. `safeArgument` independently rejects any
  * token that still reads as a path, URL or address, which also covers options
  * a newer runtime adds after this list was written.
@@ -92,7 +92,7 @@ const safeArgument = (token: string) => token.length > 0 && token.length <= 128
 
 /**
  * The measured launch as ordered tokens, so a reader can reproduce the setup
- * instead of inferring it from the curated settings. An option and its value
+ * instead of inferring it from the curated settings. An option and all its values
  * are published together or not at all; a half-reported option would read as a
  * switch the run never used.
  */
@@ -101,13 +101,17 @@ export function effectiveArguments(args: readonly string[]): string[] | null {
   const published: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const [name] = args[index].split('=', 1);
-    // A following token that does not begin another option is this option's value.
-    const pair = isOption(args[index]) && !args[index].includes('=') && index + 1 < args.length && !isOption(args[index + 1])
-      ? [args[index], args[index + 1]] : [args[index]];
-    index += pair.length - 1;
-    if (PRIVATE_OPTIONS.has(name) || SECRET_OPTION.test(name.replace(/^--?/, '')) || !pair.every(safeArgument)) continue;
-    if (published.length + pair.length > MAX_PUBLISHED_ARGUMENTS) break;
-    published.push(...pair);
+    // Keep contiguous values together, including private multi-value options.
+    // A value that looks like an option keeps the existing flag boundary.
+    const start = index;
+    if (isOption(args[start])) {
+      while (index + 1 < args.length && !isOption(args[index + 1])) index += 1;
+    }
+    if (PRIVATE_OPTIONS.has(name) || SECRET_OPTION.test(name.replace(/^--?/, ''))) continue;
+    const group = args.slice(start, index + 1);
+    if (!group.every(safeArgument)) continue;
+    if (published.length + group.length > MAX_PUBLISHED_ARGUMENTS) break;
+    published.push(...group);
   }
   return published;
 }
