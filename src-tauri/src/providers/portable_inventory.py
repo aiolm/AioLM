@@ -30,9 +30,10 @@ while queue:
     seen[name] = extras
     for raw in installed[name].requires or []:
         requirement = Requirement(raw)
-        environments = [{**default_environment(), "extra": extra} for extra in extras | {""}]
-        if requirement.marker and not any(requirement.marker.evaluate(env) for env in environments):
-            continue
+        if requirement.marker:
+            environments = [{**default_environment(), "extra": extra} for extra in extras | {""}]
+            if not any(requirement.marker.evaluate(env) for env in environments):
+                continue
         dependency = normalize(requirement.name)
         if dependency not in installed:
             raise RuntimeError("installed engine dependency is missing: " + dependency)
