@@ -362,9 +362,9 @@ fn mean(values: impl Iterator<Item = f64>) -> Option<f64> {
     (count > 0).then(|| sum / f64::from(count))
 }
 
-fn rate(tokens: u32, seconds: f64) -> Option<f64> {
+fn rate(tokens: u64, seconds: f64) -> Option<f64> {
     (tokens > 0 && seconds > 0.0)
-        .then(|| f64::from(tokens) / seconds)
+        .then(|| tokens as f64 / seconds)
         .filter(|value| value.is_finite())
 }
 
@@ -383,10 +383,13 @@ fn aggregate(
     let last_first = measurements.iter().filter_map(|m| m.first_token).max();
     let last = measurements.iter().filter_map(|m| m.last_token).max();
     let completion_tokens = measurements.iter().map(|m| m.completion_tokens).sum();
-    let prompt_tokens = measurements.iter().map(|m| m.prompt_tokens).sum();
+    let prompt_tokens = measurements
+        .iter()
+        .map(|m| u64::from(m.prompt_tokens))
+        .sum();
     let decoded = measurements
         .iter()
-        .map(|m| m.completion_tokens.saturating_sub(1))
+        .map(|m| u64::from(m.completion_tokens.saturating_sub(1)))
         .sum();
     let errors = measurements
         .iter()
@@ -429,7 +432,7 @@ fn aggregate(
             })
             .flatten(),
         e2e_ms: e2e * 1000.0,
-        total_tps: rate(completion_tokens, e2e),
+        total_tps: rate(u64::from(completion_tokens), e2e),
         peak_memory_bytes,
         timing_source: "client",
         error: (!errors.is_empty()).then(|| errors.join("; ")),
@@ -524,6 +527,25 @@ async fn trial(
     let Some(measured) = measured else {
         return Err("benchmark cancelled".into());
     };
+    // Raw runtime usage can be invalid yet individually representable. Keep
+    // every representable mismatch row; reject only totals the public u32 row
+    // cannot hold, before mutating rows, checkpointing or emitting a row.
+    for (name, total) in [
+        (
+            "completion",
+            measured
+                .iter()
+                .try_fold(0u32, |sum, m| sum.checked_add(m.completion_tokens)),
+        ),
+        (
+            "cached",
+            measured
+                .iter()
+                .try_fold(0u32, |sum, m| sum.checked_add(m.cached_tokens)),
+        ),
+    ] {
+        total.ok_or_else(|| format!("benchmark {name} token total exceeds u32 range"))?;
+    }
     let row = aggregate(
         request,
         prompt,
@@ -811,6 +833,782 @@ mod tests {
             context_profile: "novel_ko".into(),
             warmup: true,
         }
+    }
+
+    // Exercise reported usage through owned loopback HTTP and the trial recorder.
+    // Representable mismatches retain rows; public-total overflow preserves prior work.
+    use serde_json::{json as usage_json, Value as UsageValue};
+
+    #[derive(Default)]
+    struct UsageSocketGroup {
+        sockets: Vec<std::net::TcpStream>,
+        workers: Vec<std::thread::JoinHandle<Result<(), String>>>,
+        errors: Vec<String>,
+    }
+
+    impl UsageSocketGroup {
+        fn retire(&mut self) {
+            for socket in self.sockets.drain(..) {
+                let _ = socket.shutdown(std::net::Shutdown::Both);
+            }
+            for worker in self.workers.drain(..) {
+                match worker.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => self.errors.push(error),
+                    Err(_) => self.errors.push("fixture socket worker panicked".into()),
+                }
+            }
+        }
+    }
+
+    impl Drop for UsageSocketGroup {
+        fn drop(&mut self) {
+            self.retire();
+        }
+    }
+
+    // A synchronous owning thread allows Drop to join even during async unwind or
+    // future timeout. No abort-only Tokio task or detached socket survives a step.
+    struct UsageHttpOwner {
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<Result<(), String>>>,
+        receipts: Arc<Mutex<Vec<UsageValue>>>,
+    }
+
+    impl UsageHttpOwner {
+        fn retire(&mut self) -> Result<(), String> {
+            self.stop.store(true, Ordering::Release);
+            match self.worker.take() {
+                Some(worker) => worker
+                    .join()
+                    .map_err(|_| "fixture listener worker panicked".to_string())?,
+                None => Ok(()),
+            }
+        }
+
+        fn finish(mut self) -> (Vec<UsageValue>, Result<(), String>) {
+            let joined = self.retire();
+            let receipts = self
+                .receipts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            (receipts, joined)
+        }
+    }
+
+    impl Drop for UsageHttpOwner {
+        fn drop(&mut self) {
+            let _ = self.retire();
+        }
+    }
+
+    fn usage_read_request(socket: &mut std::net::TcpStream) -> Result<UsageValue, String> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        let (header_end, length) = loop {
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                return Err("request closed before its whole body".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            if bytes.len() > 1024 * 1024 {
+                return Err("fixture request exceeds 1 MiB".into());
+            }
+            if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                if end > 64 * 1024 {
+                    return Err("fixture headers exceed 64 KiB".into());
+                }
+                let head = std::str::from_utf8(&bytes[..end]).map_err(|e| e.to_string())?;
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .ok_or("missing Content-Length")?;
+                if length > 1024 * 1024 - end - 4 {
+                    return Err("fixture body too large".into());
+                }
+                break (end + 4, length);
+            }
+        };
+        while bytes.len() < header_end + length {
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                return Err("request body truncated".into());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        let head = std::str::from_utf8(&bytes[..header_end]).map_err(|e| e.to_string())?;
+        let headers: Vec<_> = head
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                line.split_once(':')
+                    .map(|(k, v)| (k.to_ascii_lowercase(), v.trim().to_owned()))
+            })
+            .collect();
+        let body: UsageValue = serde_json::from_slice(&bytes[header_end..header_end + length])
+            .map_err(|e| e.to_string())?;
+        Ok(usage_json!({"line": head.lines().next(), "headers":headers,
+            "body":body,"wire":bytes,"body_bytes":length}))
+    }
+
+    fn usage_http(
+        reports: Vec<[u32; 3]>,
+        stall: Option<usize>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<(protocol::Endpoint, UsageHttpOwner), String> {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|e| e.to_string())?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let base = format!(
+            "http://{}",
+            listener.local_addr().map_err(|e| e.to_string())?
+        );
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let receipts = Arc::new(Mutex::new(Vec::new()));
+        let stopped = stop.clone();
+        let captured = receipts.clone();
+        let worker = std::thread::Builder::new().name("benchmark-usage-fixture".into()).spawn(move || {
+            let mut owned = UsageSocketGroup::default();
+            let posted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let accept_result = (|| -> Result<(), String> {
+                while !stopped.load(Ordering::Acquire) {
+                    let (mut socket, _) = match listener.accept() {
+                        Ok(socket) => socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    };
+                    // Accepted sockets must use blocking reads even though the listener polls.
+                    socket.set_nonblocking(false).map_err(|e| e.to_string())?;
+                    socket.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
+                    socket.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
+                    owned.sockets.push(socket.try_clone().map_err(|e| e.to_string())?);
+                    let captured = captured.clone();
+                    let reports = reports.clone();
+                    let cancel = cancel.clone();
+                    let stopped = stopped.clone();
+                    let posted = posted.clone();
+                    owned.workers.push(std::thread::spawn(move || {
+                        let mut receipt = usage_read_request(&mut socket)?;
+                        let slot = receipt["body"]["id_slot"].as_u64().ok_or("missing slot")? as usize;
+                        let [prompt, completion, cached] = *reports.get(slot).ok_or("unexpected slot")?;
+                        let usage = usage_json!({"prompt_tokens":prompt,"completion_tokens":completion,
+                            "prompt_tokens_details":{"cached_tokens":cached}});
+                        let response = if stall == Some(slot) {
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"tokens\":[8],\"stop\":false}\n\n".to_owned()
+                        } else {
+                            let final_value = usage_json!({"tokens":[8,9],"stop":true,"usage":usage});
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {final_value}\n\n")
+                        };
+                        receipt["response"] = usage_json!(response);
+                        receipt["reported_usage"] = usage;
+                        captured.lock().map_err(|_| "fixture receipts poisoned")?.push(receipt);
+                        socket.write_all(response.as_bytes()).map_err(|e| e.to_string())?;
+                        posted.fetch_add(1, Ordering::AcqRel);
+                        if stall == Some(slot) {
+                            while posted.load(Ordering::Acquire) < reports.len() && !stopped.load(Ordering::Acquire) {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            cancel.store(true, Ordering::Release);
+                            while !stopped.load(Ordering::Acquire) {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        }
+                        let _ = socket.shutdown(std::net::Shutdown::Both);
+                        Ok(())
+                    }));
+                }
+                Ok(())
+            })();
+            // This explicit path and Drop both stop/close/join every accepted socket.
+            owned.retire();
+            accept_result?;
+            if owned.errors.is_empty() { Ok(()) } else { Err(owned.errors.join("; ")) }
+        }).map_err(|e| e.to_string())?;
+        Ok((
+            protocol::Endpoint {
+                client,
+                base,
+                key: "r64-synthetic-key".into(),
+                engine: None,
+            },
+            UsageHttpOwner {
+                stop,
+                worker: Some(worker),
+                receipts,
+            },
+        ))
+    }
+
+    fn usage_expected_body(slot: usize) -> UsageValue {
+        // Independent frozen expected body: do not call completion_body to derive it.
+        usage_json!({"prompt":[1,2,3],"n_predict":2,"stream":true,"cache_prompt":false,
+            "ignore_eos":true,"return_tokens":true,"temperature":0,"seed":42,"top_k":1,
+            "top_p":1.0,"min_p":0.0,"repeat_penalty":1.0,"presence_penalty":0.0,
+            "frequency_penalty":0.0,"stop":[],"id_slot":slot})
+    }
+
+    fn usage_assert_requests(mut receipts: Vec<UsageValue>, reports: &[[u32; 3]]) {
+        receipts.sort_by_key(|r| r["body"]["id_slot"].as_u64());
+        assert_eq!(
+            receipts.len(),
+            reports.len(),
+            "SETUP: every request was captured"
+        );
+        for (slot, receipt) in receipts.iter().enumerate() {
+            assert_eq!(receipt["line"], "POST /completion HTTP/1.1");
+            assert_eq!(receipt["body"], usage_expected_body(slot));
+            let headers: Vec<(String, String)> =
+                serde_json::from_value(receipt["headers"].clone()).unwrap();
+            assert!(headers
+                .iter()
+                .any(|(k, v)| k == "authorization" && v == "Bearer r64-synthetic-key"));
+            assert!(headers
+                .iter()
+                .any(|(k, v)| k == "content-type" && v == "application/json"));
+            assert!(headers.iter().any(|(k, v)| k == "content-length"
+                && v.parse::<u64>().ok() == receipt["body_bytes"].as_u64()));
+            let [p, c, k] = reports[slot];
+            assert_eq!(
+                receipt["reported_usage"],
+                usage_json!({"prompt_tokens":p,
+                "completion_tokens":c,"prompt_tokens_details":{"cached_tokens":k}})
+            );
+            assert!(receipt["wire"]
+                .as_array()
+                .is_some_and(|bytes| !bytes.is_empty()));
+        }
+        println!("Usage_HTTP_RECEIPTS {}", usage_json!(receipts));
+    }
+
+    enum UsageExpected {
+        Row {
+            completion: u32,
+            cached: u32,
+            error: Option<&'static str>,
+        },
+        Error(&'static str),
+        Cancel,
+    }
+
+    async fn usage_step(
+        request: &PerformanceBenchRequest,
+        result: &mut PerformanceBenchResult,
+        checkpoint: &Checkpoint,
+        progress: &Progress,
+        reports: Vec<[u32; 3]>,
+        repetition: u32,
+        expected: UsageExpected,
+    ) {
+        use futures_util::FutureExt;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stall = matches!(expected, UsageExpected::Cancel).then_some(1);
+        let (endpoint, owner) = usage_http(reports.clone(), stall, cancel.clone()).unwrap();
+        let before = serde_json::to_value(&result.rows).unwrap();
+        let row_count = result.rows.len();
+        let outcome = std::panic::AssertUnwindSafe(trial(
+            request,
+            &endpoint,
+            Arc::new(vec![1, 2, 3]),
+            (3, reports.len() as u32, repetition),
+            0,
+            &cancel,
+            Duration::from_secs(5),
+            result,
+            Some(checkpoint),
+            progress,
+        ))
+        .catch_unwind()
+        .await;
+        // ALL setup, transport and semantic checks follow synchronous cleanup/join.
+        let (receipts, cleanup) = owner.finish();
+        println!(
+            "USAGE_TRIAL_RECEIPT {}",
+            usage_json!({"cleanup":cleanup,"outcome":format!("{outcome:?}"),"result":result})
+        );
+        assert!(cleanup.is_ok(), "SETUP/TRANSPORT cleanup: {cleanup:?}");
+        usage_assert_requests(receipts, &reports);
+        assert!(
+            outcome.is_ok(),
+            "aggregation panicked; cleanup completed, this is a FAILED regression"
+        );
+        let outcome = outcome.unwrap();
+        assert_eq!(
+            serde_json::to_value(&result.rows[..row_count]).unwrap(),
+            before,
+            "every prior row, including its complete numeric/timing/error payload, is immutable"
+        );
+        match expected {
+            UsageExpected::Error(message) => {
+                assert_eq!(outcome.unwrap_err(), message);
+                assert_eq!(result.rows.len(), row_count, "no lossy failed numeric row");
+            }
+            UsageExpected::Cancel => {
+                assert_eq!(outcome.unwrap_err(), "benchmark cancelled");
+                assert_eq!(result.rows.len(), row_count);
+            }
+            UsageExpected::Row {
+                completion,
+                cached,
+                error,
+            } => {
+                let measured = outcome.unwrap();
+                let mut facts: Vec<_> = measured
+                    .iter()
+                    .map(|m| [m.prompt_tokens, m.completion_tokens, m.cached_tokens])
+                    .collect();
+                facts.sort_unstable();
+                let mut expected_facts = reports.clone();
+                expected_facts.sort_unstable();
+                assert_eq!(
+                    facts, expected_facts,
+                    "all three raw fields passed through actual measure"
+                );
+                assert_eq!(result.rows.len(), row_count + 1);
+                let row = result.rows.last().unwrap();
+                assert_eq!(
+                    row.id,
+                    format!("test-p3-g2-c{}-r{repetition}", reports.len())
+                );
+                assert_eq!(
+                    (
+                        row.prompt_tokens,
+                        row.generation_length,
+                        row.concurrency,
+                        row.repetition
+                    ),
+                    (3, 2, reports.len() as u32, repetition)
+                );
+                assert_eq!(
+                    (row.completion_tokens, row.cached_tokens),
+                    (completion, cached)
+                );
+                match error {
+                    Some(message) => {
+                        assert!(row.error.as_deref().is_some_and(|e| e.contains(message)))
+                    }
+                    None => assert!(row.error.is_none(), "{:?}", row.error),
+                }
+                assert_eq!(row.timing_source, "client");
+                assert!(row.e2e_ms.is_finite() && row.e2e_ms > 0.0);
+                assert!(row.ttft_ms.is_some_and(|v| v.is_finite() && v >= 0.0));
+                assert!(row.pp_tps.is_some_and(|v| v.is_finite() && v > 0.0));
+                assert!(
+                    row.tpot_ms.is_none() && row.tg_tps.is_none(),
+                    "final-only stream has no decode interval"
+                );
+                let expected_rate = f64::from(completion) * 1000.0 / row.e2e_ms;
+                assert!((row.total_tps.unwrap() / expected_rate - 1.0).abs() < 1.0e-12);
+            }
+        }
+    }
+
+    async fn usage_usage_case(reports: Vec<[u32; 3]>, expected: UsageExpected, prior: bool) {
+        let request = PerformanceBenchRequest {
+            prompt_lengths: vec![3],
+            generation_length: 2,
+            batch_sizes: vec![2],
+            repetitions: 3,
+            ..request()
+        };
+        let mut result = failed(&request, &AppConfig::default(), "pending".into());
+        let checkpoints = Arc::new(Mutex::new(Vec::<UsageValue>::new()));
+        let captured = checkpoints.clone();
+        let checkpoint: Checkpoint = Arc::new(move |r| {
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(r).unwrap());
+            Ok(())
+        });
+        let events = Arc::new(Mutex::new(Vec::<UsageValue>::new()));
+        let captured = events.clone();
+        let progress: Progress = Arc::new(move |p| {
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::to_value(p).unwrap())
+        });
+        if prior {
+            usage_step(
+                &request,
+                &mut result,
+                &checkpoint,
+                &progress,
+                vec![[3, 2, 0]; 2],
+                1,
+                UsageExpected::Row {
+                    completion: 4,
+                    cached: 0,
+                    error: None,
+                },
+            )
+            .await;
+            usage_step(
+                &request,
+                &mut result,
+                &checkpoint,
+                &progress,
+                vec![[3, 1, 0], [3, 2, 0]],
+                2,
+                UsageExpected::Row {
+                    completion: 3,
+                    cached: 0,
+                    error: Some("output token count mismatch"),
+                },
+            )
+            .await;
+        }
+        let before_checkpoints = checkpoints.lock().unwrap().clone();
+        let before_events = events.lock().unwrap().clone();
+        let before_rows = result.rows.len();
+        let keeps_row = matches!(expected, UsageExpected::Row { .. });
+        let concurrency = reports.len();
+        let repetition = if prior { 3 } else { 1 };
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            reports,
+            repetition,
+            expected,
+        )
+        .await;
+        let after_checkpoints = checkpoints.lock().unwrap().clone();
+        assert_eq!(
+            &after_checkpoints[..before_checkpoints.len()],
+            &before_checkpoints
+        );
+        assert_eq!(
+            after_checkpoints.len(),
+            before_checkpoints.len() + usize::from(keeps_row)
+        );
+        if keeps_row {
+            assert_eq!(
+                after_checkpoints.last().unwrap(),
+                &serde_json::to_value(&result).unwrap()
+            );
+        }
+        let phase = if concurrency == 1 { "single" } else { "batch" };
+        let mut expected_events = before_events;
+        expected_events.push(usage_json!({"run_id":"test","phase":phase,"completed":before_rows,
+            "total":6,"row":null,"message":format!("3 input / 2 output, {concurrency} request(s), repetition {repetition}")}));
+        if keeps_row {
+            expected_events.push(
+                usage_json!({"run_id":"test","phase":phase,"completed":result.rows.len(),
+                "total":6,"row":result.rows.last(),"message":null}),
+            );
+        }
+        assert_eq!(
+            *events.lock().unwrap(),
+            expected_events,
+            "full progress payload and prefix must be exact"
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_usage_good_and_representable_mismatch_controls() {
+        usage_usage_case(
+            vec![[3, 2, 0]; 2],
+            UsageExpected::Row {
+                completion: 4,
+                cached: 0,
+                error: None,
+            },
+            false,
+        )
+        .await;
+        usage_usage_case(
+            vec![[3, 1, 0], [3, 2, 0]],
+            UsageExpected::Row {
+                completion: 3,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_single_max_prompt_is_a_representable_mismatch_row() {
+        usage_usage_case(
+            vec![[u32::MAX, 2, 0]],
+            UsageExpected::Row {
+                completion: 2,
+                cached: 0,
+                error: Some("prompt token count mismatch"),
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_single_max_completion_is_a_representable_mismatch_row() {
+        usage_usage_case(
+            vec![[3, u32::MAX, 0]],
+            UsageExpected::Row {
+                completion: u32::MAX,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_single_max_cache_is_a_representable_mismatch_row() {
+        usage_usage_case(
+            vec![[3, 2, u32::MAX]],
+            UsageExpected::Row {
+                completion: 2,
+                cached: u32::MAX,
+                error: Some("cold benchmark unexpectedly reused"),
+            },
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_prompt_sum_max_and_one_over_still_keep_rows() {
+        for p in [u32::MAX - 3, u32::MAX - 2] {
+            usage_usage_case(
+                vec![[p, 2, 0], [3, 2, 0]],
+                UsageExpected::Row {
+                    completion: 4,
+                    cached: 0,
+                    error: Some("prompt token count mismatch"),
+                },
+                true,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn usage_usage_two_max_prompts_keep_original_mismatch_and_prior_rows() {
+        usage_usage_case(
+            vec![[u32::MAX, 2, 0]; 2],
+            UsageExpected::Row {
+                completion: 4,
+                cached: 0,
+                error: Some("prompt token count mismatch"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_completion_sum_highest_public_value_keeps_a_row() {
+        usage_usage_case(
+            vec![[3, u32::MAX - 2, 0], [3, 2, 0]],
+            UsageExpected::Row {
+                completion: u32::MAX,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_completion_one_over_returns_error_without_discarding_prior_rows() {
+        usage_usage_case(
+            vec![[3, u32::MAX - 1, 0], [3, 2, 0]],
+            UsageExpected::Error("benchmark completion token total exceeds u32 range"),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_completion_overflow_without_prior_rows_returns_error() {
+        usage_usage_case(
+            vec![[3, u32::MAX, 0]; 2],
+            UsageExpected::Error("benchmark completion token total exceeds u32 range"),
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_cache_sum_highest_public_value_keeps_a_row() {
+        usage_usage_case(
+            vec![[3, 2, u32::MAX], [3, 2, 0]],
+            UsageExpected::Row {
+                completion: 4,
+                cached: u32::MAX,
+                error: Some("cold benchmark unexpectedly reused"),
+            },
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_cache_one_over_returns_error_without_discarding_prior_rows() {
+        usage_usage_case(
+            vec![[3, 2, u32::MAX], [3, 2, 1]],
+            UsageExpected::Error("benchmark cached token total exceeds u32 range"),
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn usage_usage_cancelled_batch_keeps_only_prior_finished_rows() {
+        usage_usage_case(vec![[3, 2, 0]; 2], UsageExpected::Cancel, true).await;
+    }
+
+    // Journal checkpoint, finish and replay retain exactly the completed trials.
+    // Final status metadata is supplied here; native run status selection is separate.
+    struct UsageJournalRoot(std::path::PathBuf);
+    impl UsageJournalRoot {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("aiolm-r64-journal-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn finish(self) -> Result<(), String> {
+            std::fs::remove_dir_all(&self.0).map_err(|e| e.to_string())
+        }
+    }
+    impl Drop for UsageJournalRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn usage_journal_bytes(root: &std::path::Path) -> Result<Vec<Vec<u8>>, String> {
+        let mut paths = std::fs::read_dir(root.join("runs"))
+            .map_err(|e| e.to_string())?
+            .map(|entry| entry.map(|e| e.path()).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.retain(|p| p.extension().is_some_and(|e| e == "jsonl"));
+        paths.sort();
+        paths
+            .iter()
+            .map(|p| std::fs::read(p).map_err(|e| e.to_string()))
+            .collect()
+    }
+    #[tokio::test]
+    async fn usage_usage_journal_retains_exact_prior_rows_on_trial_error() {
+        let root = UsageJournalRoot::new();
+        let request = PerformanceBenchRequest {
+            prompt_lengths: vec![3],
+            generation_length: 2,
+            batch_sizes: vec![2],
+            repetitions: 3,
+            ..request()
+        };
+        let mut result = failed(&request, &AppConfig::default(), "pending".into());
+        let journal = Arc::new(
+            crate::benchmark::store::RunJournal::begin(
+                &root.0,
+                usage_json!({"schemaVersion":1,"id":"test","createdAt":0,"model":"synthetic",
+                "backend":"synthetic","build":"synthetic","request":request,"result":result}),
+            )
+            .unwrap(),
+        );
+        let captured = journal.clone();
+        let checkpoint: Checkpoint = Arc::new(move |r| captured.checkpoint(r));
+        let progress: Progress = Arc::new(|_| {});
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            vec![[3, 2, 0]; 2],
+            1,
+            UsageExpected::Row {
+                completion: 4,
+                cached: 0,
+                error: None,
+            },
+        )
+        .await;
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            vec![[3, 1, 0], [3, 2, 0]],
+            2,
+            UsageExpected::Row {
+                completion: 3,
+                cached: 0,
+                error: Some("output token count mismatch"),
+            },
+        )
+        .await;
+        let before = usage_journal_bytes(&root.0);
+        // Journal replay crosses the existing JSON serialization boundary.
+        // Compare every field in that persisted domain, including all counters.
+        let prior_rows: UsageValue =
+            serde_json::from_slice(&serde_json::to_vec(&result.rows).unwrap()).unwrap();
+        usage_step(
+            &request,
+            &mut result,
+            &checkpoint,
+            &progress,
+            vec![[3, u32::MAX - 1, 0], [3, 2, 0]],
+            3,
+            UsageExpected::Error("benchmark completion token total exceeds u32 range"),
+        )
+        .await;
+        let after = usage_journal_bytes(&root.0);
+        // Explicitly supplied metadata tests journal semantics only. The actual
+        // run finalizer's partial/failed selection is covered separately by the native run caller.
+        result.status = "partial";
+        result.message = Some("benchmark completion token total exceeds u32 range".into());
+        let finish = journal.finish(&result);
+        drop(checkpoint);
+        drop(journal);
+        let page = crate::benchmark::store::list(&root.0, 0, 10);
+        let cleanup = root.finish();
+        println!(
+            "USAGE_JOURNAL_RECEIPT {}",
+            usage_json!({"before":before,"after":after,"finish":finish,"page":page.as_ref().map(|p|&p.records),"cleanup":cleanup,"result":result})
+        );
+        // Native journal file/lock owners and the synthetic directory are gone.
+        assert!(cleanup.is_ok(), "journal cleanup {cleanup:?}");
+        assert_eq!(
+            before.unwrap(),
+            after.unwrap(),
+            "Err added no bytes/checkpoint/trial"
+        );
+        finish.unwrap();
+        let page = page.unwrap();
+        assert!(page.warnings.is_empty(), "{:?}", page.warnings);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0]["result"]["rows"], prior_rows);
+        assert_eq!(
+            page.records[0]["result"],
+            serde_json::from_slice::<UsageValue>(&serde_json::to_vec(&result).unwrap()).unwrap()
+        );
     }
 
     #[test]
