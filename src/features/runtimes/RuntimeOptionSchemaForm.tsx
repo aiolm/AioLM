@@ -1,4 +1,4 @@
-import { memo, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { memo, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { runtimeHelpImport, runtimeHelpResolve, staticCandidates, type CommandEntry, type ConfirmedSyntax, type ImportedPlan, type OptionSchema, type OptionSchemaDefinition, type OptionSchemaFact } from '../../shared/api/runtimeHelp';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
@@ -602,6 +602,8 @@ export interface RuntimeOptionSchemaFormProps {
   confirmSyntaxFor?: (option: OptionSchemaDefinition) => boolean;
 }
 
+interface ImportRequestOwner { schema: OptionSchema; scopeKey: string; text: string }
+
 /** Generic runtime-scoped option renderer, validator and argv preview. */
 export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, disabled = false, onChange, compact = false, showAll = false, showNoMatch = true, filter, inheritLabel, hint, onInvalid, onConfirmSyntax, confirmSyntaxFor }: RuntimeOptionSchemaFormProps) {
   const { locale } = useI18n();
@@ -614,9 +616,29 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
   const [issues, setIssues] = useState<Array<{ key: string; message: string }>>([]);
   const [preview, setPreview] = useState<string[] | null>(null);
   const [paste, setPaste] = useState('');
-  const [imported, setImported] = useState<ImportedPlan | null>(null);
-  const [importError, setImportError] = useState('');
+  const [acceptedImport, setAcceptedImport] = useState<{ request: ImportRequestOwner; result: ImportedPlan } | null>(null);
+  const [failedImport, setFailedImport] = useState<{ request: ImportRequestOwner; message: string } | null>(null);
+  const activeImport = useRef<ImportRequestOwner | null>(null);
+  const scopeKey = JSON.stringify(scope);
+  const importOwner = useRef({ schema, scopeKey, text: paste });
+  const matchesRenderedOwner = (request: ImportRequestOwner) => request.schema === schema && request.scopeKey === scopeKey && request.text === paste;
+  const ownsImport = (request: ImportRequestOwner) => activeImport.current === request
+    && request.schema === importOwner.current.schema && request.scopeKey === importOwner.current.scopeKey && request.text === importOwner.current.text;
+  const imported = acceptedImport && matchesRenderedOwner(acceptedImport.request) ? acceptedImport.result : null;
+  const importError = failedImport && matchesRenderedOwner(failedImport.request) ? failedImport.message : '';
   const [error, setError] = useState('');
+
+  useLayoutEffect(() => { importOwner.current = { schema, scopeKey, text: paste }; }, [schema, scopeKey, paste]);
+  useLayoutEffect(() => {
+    // A changed owner hides stale data during render and then releases it.
+    // Equal scope contents and unrelated saved-value edits retain the import.
+    setAcceptedImport(current => current && (current.request.schema !== schema || current.request.scopeKey !== scopeKey) ? null : current);
+    setFailedImport(current => current && (current.request.schema !== schema || current.request.scopeKey !== scopeKey) ? null : current);
+    return () => {
+      // An older owner's cleanup must not invalidate a newer request.
+      if (activeImport.current?.schema === schema && activeImport.current.scopeKey === scopeKey) activeImport.current = null;
+    };
+  }, [schema, scopeKey]);
 
   const groups = useMemo(() => [...new Set(schema.options.map(option => option.group || 'runtime'))].sort(), [schema]);
   const schemaKeys = useMemo(() => new Set(schema.options.map(option => option.key)), [schema]);
@@ -710,19 +732,25 @@ export default memo(function RuntimeOptionSchemaForm({ schema, values, scope, di
         <label htmlFor={`${formId}-import`}>{copy.importLabel}</label>
         <textarea id={`${formId}-import`} name="schema-import" className="app-textarea" value={paste} disabled={disabled}
           autoCorrect="off" autoCapitalize="off" spellCheck={false}
-          onChange={event => { setPaste(event.target.value); setImportError(''); }} />
+          onChange={event => { activeImport.current = null; setAcceptedImport(null); setFailedImport(null); setPaste(event.target.value); }} />
         <div className="app-page-actions mt-3">
           <button type="button" className="app-button app-button--secondary" disabled={disabled || !paste.trim()}
             onClick={() => {
-              setImportError('');
+              const request = { schema, scopeKey, text: paste };
+              activeImport.current = request;
+              setAcceptedImport(null); setFailedImport(null);
               void runtimeHelpImport(schema, scope, paste)
-                .then(result => setImported(result))
-                .catch(cause => { setImported(null); setImportError(cause instanceof Error ? cause.message : String(cause)); });
+                .then(result => { if (ownsImport(request)) setAcceptedImport({ request, result }); })
+                .catch(cause => {
+                  if (!ownsImport(request)) return;
+                  setAcceptedImport(null); setFailedImport({ request, message: cause instanceof Error ? cause.message : String(cause) });
+                });
             }}>{copy.split}</button>
           {imported && (
             <button type="button" className="app-button app-button--secondary" disabled={disabled}
               onClick={() => {
-                try { onChange(applyPlan(schema, values, imported)); } catch (cause) { setImportError(cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof Error ? cause.message : String(cause)); }
+                if (!acceptedImport || !ownsImport(acceptedImport.request)) return;
+                try { onChange(applyPlan(schema, values, acceptedImport.result)); } catch (cause) { setFailedImport({ request: acceptedImport.request, message: cause instanceof ImportedIntegerPrecisionError ? copy.importIntegerPrecision : cause instanceof Error ? cause.message : String(cause) }); }
               }}>{copy.apply}</button>
           )}
         </div>
