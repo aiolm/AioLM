@@ -231,49 +231,56 @@ fn media_bytes(provider: ProviderId, modality: &str, part: &Value) -> Result<u64
     ))
 }
 
+fn check_content_parts<'a>(
+    info: &EngineInfo,
+    parts: impl IntoIterator<Item = &'a Value>,
+) -> Result<(), AdaptError> {
+    let mut media_count = 0;
+    let mut decoded_bytes = 0u64;
+    for part in parts {
+        let kind = part
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let Some(modality) =
+            part_modality(part).filter(|_| !matches!(kind, "image" | "audio" | "video"))
+        else {
+            return Err(adapt_error(
+                "unsupported_content",
+                format!(
+                    "content part type `{kind}` is not supported by {}; use text, image_url, input_audio, audio_url or video_url parts",
+                    info.provider.server()
+                ),
+            ));
+        };
+        if !supports(info.modalities, modality) {
+            return Err(adapt_error(
+                "unsupported_input",
+                format!(
+                    "the loaded model on {} does not accept {modality} input; remove the {modality} part or load a model that supports it",
+                    info.provider.server()
+                ),
+            ));
+        }
+        if modality != "text" {
+            media_count += 1;
+            decoded_bytes =
+                decoded_bytes.saturating_add(media_bytes(info.provider, modality, part)?);
+            if media_count > 4 || decoded_bytes > 128 * 1024 * 1024 {
+                return Err(adapt_error(
+                    "media_limit",
+                    "Each message accepts up to four media files and 128 MiB of decoded media.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn check_parts(info: &EngineInfo, messages: &[Value]) -> Result<(), AdaptError> {
     for message in messages {
-        let Some(parts) = message.get("content").and_then(Value::as_array) else {
-            continue;
-        };
-        let mut media_count = 0;
-        let mut decoded_bytes = 0u64;
-        for part in parts {
-            let kind = part
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let Some(modality) =
-                part_modality(part).filter(|_| !matches!(kind, "image" | "audio" | "video"))
-            else {
-                return Err(adapt_error(
-                    "unsupported_content",
-                    format!(
-                        "content part type `{kind}` is not supported by {}; use text, image_url, input_audio, audio_url or video_url parts",
-                        info.provider.server()
-                    ),
-                ));
-            };
-            if !supports(info.modalities, modality) {
-                return Err(adapt_error(
-                    "unsupported_input",
-                    format!(
-                        "the loaded model on {} does not accept {modality} input; remove the {modality} part or load a model that supports it",
-                        info.provider.server()
-                    ),
-                ));
-            }
-            if modality != "text" {
-                media_count += 1;
-                decoded_bytes =
-                    decoded_bytes.saturating_add(media_bytes(info.provider, modality, part)?);
-                if media_count > 4 || decoded_bytes > 128 * 1024 * 1024 {
-                    return Err(adapt_error(
-                        "media_limit",
-                        "Each message accepts up to four media files and 128 MiB of decoded media.",
-                    ));
-                }
-            }
+        if let Some(parts) = message.get("content").and_then(Value::as_array) {
+            check_content_parts(info, parts)?;
         }
     }
     Ok(())
@@ -770,17 +777,12 @@ pub fn adapt_request(
     }
     if endpoint == "embeddings" {
         if let Some(input) = body.get("input") {
-            let parts: Vec<Value> = match input {
-                Value::Object(_) => vec![input.clone()],
-                Value::Array(items) => items
-                    .iter()
-                    .filter(|item| item.is_object())
-                    .cloned()
-                    .collect(),
-                _ => Vec::new(),
-            };
-            if !parts.is_empty() {
-                check_parts(info, &[serde_json::json!({"content": parts})])?;
+            match input {
+                Value::Object(_) => check_content_parts(info, std::iter::once(input))?,
+                Value::Array(items) => {
+                    check_content_parts(info, items.iter().filter(|item| item.is_object()))?
+                }
+                _ => {}
             }
         }
     }
@@ -1283,6 +1285,64 @@ mod tests {
                 .code,
             "unsupported_input"
         );
+    }
+
+    #[test]
+    fn embedding_media_share_one_budget_while_chat_messages_have_separate_budgets() {
+        let engine = info(ProviderId::Vllm, all_inputs());
+        let image = json!({"type":"image_url","image_url":{"url":"https://example.com/a.png"}});
+        let mut single = json!({"input":image.clone()});
+        adapt_request(&engine, "embeddings", &mut single).unwrap();
+        assert_eq!(single["input"], image);
+
+        let input = json!([
+            null,
+            "plain text",
+            17,
+            [],
+            false,
+            image.clone(),
+            image.clone(),
+            image.clone(),
+            image.clone()
+        ]);
+        let mut embedding = json!({"input":input.clone()});
+        adapt_request(&engine, "embeddings", &mut embedding).unwrap();
+        assert_eq!(embedding["input"], input);
+        assert_eq!(embedding["model"], "/models/embedding");
+
+        let mut five = input.clone();
+        five.as_array_mut().unwrap().push(image.clone());
+        let mut embedding = json!({"input":five});
+        let before = embedding.clone();
+        assert_eq!(
+            adapt_request(&engine, "embeddings", &mut embedding).unwrap_err(),
+            adapt_error(
+                "media_limit",
+                "Each message accepts up to four media files and 128 MiB of decoded media."
+            )
+        );
+        assert_eq!(embedding, before);
+
+        let parts = vec![image; 4];
+        let mut chat = json!({"messages":[
+            {"role":"user","content":parts.clone()},
+            {"role":"user","content":parts.clone()}
+        ]});
+        adapt_request(&engine, "chat/completions", &mut chat).unwrap();
+        assert_eq!(chat["messages"][0]["content"].as_array().unwrap(), &parts);
+        assert_eq!(chat["messages"][1]["content"].as_array().unwrap(), &parts);
+
+        let mut invalid = json!({"input":[
+            {"type":"image_url","image_url":{}},
+            {"type":"unknown"}
+        ]});
+        let before = invalid.clone();
+        assert_eq!(
+            adapt_request(&engine, "embeddings", &mut invalid).unwrap_err(),
+            adapt_error("invalid_media", "The image part has no media reference.")
+        );
+        assert_eq!(invalid, before);
     }
 
     #[test]
