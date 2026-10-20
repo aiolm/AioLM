@@ -99,7 +99,8 @@
   .model-settings-content { flex: 1; }
   .model-settings-context { padding: 8px 16px; }
   .model-settings-runtime-selection > .model-settings-fields { grid-template-columns: minmax(0, 1fr); gap: 18px; }
-  .model-settings-context .settings-profile-picker { flex-basis: 100%; }
+  .model-settings-context .settings-profile-picker,
+  .model-settings-context .settings-profile-selected-name { flex-basis: 100%; }
   .model-settings-grid, .model-settings-gpus { grid-template-columns: minmax(0, 1fr); }
   .model-settings-lora { grid-template-columns: minmax(0, 1fr) 80px; }
   .model-settings-footer { padding: 12px 16px; }
