@@ -674,8 +674,18 @@ fn shard_group(name: &str) -> Option<Vec<String>> {
     )
 }
 
-/// Which parts of `target`'s multi-part set are not on disk beside it.
-fn missing_shards(target: &Path) -> Vec<String> {
+fn installed_file_metadata(target: &Path, root: &Path) -> Option<fs::Metadata> {
+    let resolved = target.canonicalize().ok()?;
+    if !resolved.starts_with(root) {
+        return None;
+    }
+    fs::metadata(resolved)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+}
+
+/// Which parts of `target`'s multi-part set are not in the selected library.
+fn missing_shards(target: &Path, root: &Path) -> Vec<String> {
     let Some(name) = target.file_name().and_then(|value| value.to_str()) else {
         return Vec::new();
     };
@@ -685,7 +695,7 @@ fn missing_shards(target: &Path) -> Vec<String> {
     let parent = target.parent().unwrap_or(Path::new(""));
     group
         .into_iter()
-        .filter(|part| !parent.join(part).is_file())
+        .filter(|part| installed_file_metadata(&parent.join(part), root).is_none())
         .collect()
 }
 
@@ -709,6 +719,12 @@ pub fn installed_files(
     if files.len() > MAX_TREE_ENTRIES {
         return Err("too many repository files to inspect safely".into());
     }
+    // Resolve the selected library without creating it. Root aliases remain
+    // valid, but a repository link must not claim files outside that library
+    // which the download path would refuse to write.
+    let Ok(canonical_root) = Path::new(root).canonicalize() else {
+        return Ok(Vec::new());
+    };
     let base = Path::new(root).join("hf").join(repo_directory(repo_id));
     let mut installed = Vec::new();
     for file in files {
@@ -716,17 +732,14 @@ pub fn installed_files(
             continue;
         }
         let target = base.join(relative_path(file));
-        let Ok(metadata) = fs::metadata(&target) else {
+        let Some(metadata) = installed_file_metadata(&target, &canonical_root) else {
             continue;
         };
-        if !metadata.is_file() {
-            continue;
-        }
         installed.push(InstalledHfFile {
             path: file.clone(),
             local_path: target.to_string_lossy().into_owned(),
             size_bytes: metadata.len(),
-            missing_shards: missing_shards(&target),
+            missing_shards: missing_shards(&target, &canonical_root),
         });
     }
     Ok(installed)
@@ -1621,6 +1634,127 @@ mod tests {
             bytes,
         )
         .expect("write installed fixture file");
+    }
+
+    #[cfg(any(unix, windows))]
+    fn link_installed_directory(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("create fixture directory link");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // A junction exercises native directory redirection without
+            // requiring Developer Mode, elevation or system setting changes.
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .creation_flags(0x08000000)
+                .output()
+                .expect("create fixture junction");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn installed_lookup_excludes_a_repository_link_outside_the_selected_library() {
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm installed links-{}", Uuid::new_v4()));
+        let models = fixture.join("models");
+        let outside = fixture.join("outside models");
+        fs::create_dir_all(models.join("hf/owner/model")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        write_repo_file(&models, "plain.gguf", b"plain");
+        fs::write(outside.join("other.gguf"), b"outside").unwrap();
+        let link = models.join("hf/owner/model/linked folder");
+        link_installed_directory(&outside, &link);
+        assert!(target_path(
+            models.to_str().unwrap(),
+            "owner/model",
+            "linked folder/other.gguf"
+        )
+        .is_err());
+        let result = installed_files(
+            models.to_str().unwrap(),
+            "owner/model",
+            &["plain.gguf".into(), "linked folder/other.gguf".into()],
+        );
+        fs::remove_dir(&link).unwrap();
+        assert_eq!(fs::read(outside.join("other.gguf")).unwrap(), b"outside");
+        fs::remove_dir_all(&fixture).unwrap();
+        let installed = result.unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].path, "plain.gguf");
+        assert_eq!(installed[0].size_bytes, 5);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn installed_lookup_preserves_selected_root_links_and_contained_repository_links() {
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm installed aliases-{}", Uuid::new_v4()));
+        let models = fixture.join("models");
+        let cache = models.join("cached model");
+        fs::create_dir_all(models.join("hf/owner/model")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("big-00001-of-00002.gguf"), b"one").unwrap();
+        let root_link = fixture.join("selected library link");
+        let cache_link = models.join("hf/owner/model/cache link");
+        link_installed_directory(&models, &root_link);
+        link_installed_directory(&cache, &cache_link);
+        let relative = "cache link/big-00001-of-00002.gguf";
+        let result = installed_files(
+            root_link.to_str().unwrap(),
+            "owner/model",
+            &[relative.into()],
+        );
+        fs::remove_dir(&root_link).unwrap();
+        fs::remove_dir(&cache_link).unwrap();
+        assert_eq!(
+            fs::read(cache.join("big-00001-of-00002.gguf")).unwrap(),
+            b"one"
+        );
+        fs::remove_dir_all(&fixture).unwrap();
+        let installed = result.unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(
+            installed[0].local_path,
+            root_link
+                .join("hf")
+                .join("owner")
+                .join("model")
+                .join("cache link")
+                .join("big-00001-of-00002.gguf")
+                .to_string_lossy()
+        );
+        assert_eq!(installed[0].missing_shards, ["big-00002-of-00002.gguf"]);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn installed_lookup_never_recreates_the_missing_target_of_a_selected_root_link() {
+        let fixture =
+            std::env::temp_dir().join(format!("aiolm installed missing-{}", Uuid::new_v4()));
+        let models = fixture.join("models");
+        let link = fixture.join("selected library link");
+        fs::create_dir_all(&models).unwrap();
+        link_installed_directory(&models, &link);
+        fs::remove_dir(&models).unwrap();
+        let result = installed_files(
+            link.to_str().unwrap(),
+            "owner/model",
+            &["model.gguf".into()],
+        );
+        let recreated = models.exists();
+        fs::remove_dir(&link).unwrap();
+        fs::remove_dir(&fixture).unwrap();
+        assert!(result.unwrap().is_empty());
+        assert!(!recreated);
     }
 
     #[test]

@@ -87,7 +87,7 @@ pub(crate) async fn hf_search_models(
 
 /// Which repository files this machine already holds, so Discover can mark
 /// them installed instead of offering a download that would refuse to
-/// overwrite. Runs off the UI thread: it stats one path per listed file.
+/// overwrite. Resolving and checking local paths runs off the UI thread.
 #[tauri::command]
 pub(crate) async fn hf_installed_files(
     repo_id: String,
