@@ -30,13 +30,12 @@ describe('native transport cancellation', () => {
     const removed = vi.spyOn(aborter.signal, 'removeEventListener');
     const started = Date.now();
     const sending = transport.submitSnapshot(entry({ requestBody: '{"exact":true}' }), aborter.signal);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(added.mock.calls.length).toBeGreaterThan(0);
     aborter.abort();
     await expect(sending).rejects.toMatchObject({ code: 'aborted' });
     expect(Date.now() - started).toBeLessThan(5000);
     expect(benchmarkSharingCancel).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001');
     expect(removed.mock.calls.length).toBe(added.mock.calls.length);
-    expect(added.mock.calls.length).toBeGreaterThan(0);
   });
 
   it('submits exact persisted bytes and preserves receipts without a signal', async () => {
