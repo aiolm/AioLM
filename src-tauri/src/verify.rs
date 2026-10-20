@@ -544,6 +544,9 @@ pub async fn ensure_verified(
         };
     }
     let record = measure(cfg, resolved, cancel).await;
+    if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err("server start cancelled".into());
+    }
     store(&key, record.clone());
     match record.verdict {
         Verdict::Pass => Ok(()),
@@ -595,6 +598,8 @@ async fn measure(
     resolved: &ResolvedGpu,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Record {
+    #[cfg(test)]
+    canary_cancel_public_flow_tests::measurement_started(cancel);
     let binary = match runtime::perplexity_bin_for(&cfg.active_backend, &cfg.active_build) {
         Ok(path) if path.is_file() => path,
         Ok(path) => {
@@ -1307,5 +1312,229 @@ mod tests {
             .position(|arg| *arg == "--fit")
             .expect("fit flag");
         assert_eq!(args.get(fit + 1), Some(&"off"));
+    }
+}
+
+#[cfg(test)]
+mod canary_cancel_public_flow_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    const CHILD_MODE: &str = "AIOLM_CANARY_CANCEL_PUBLIC_FIXTURE";
+    const CHILD_TEST: &str =
+        "verify::canary_cancel_public_flow_tests::isolated_public_canary_cancellation_fixture";
+
+    thread_local! {
+        static OBSERVING: Cell<bool> = const { Cell::new(false) };
+        static CANCEL_NEXT_MEASUREMENT: Cell<bool> = const { Cell::new(false) };
+        static MEASUREMENT_STARTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    // This only observes actual measurement entry and raises the same flag the
+    // public caller passed. It does not return a fake Record or bypass a cache,
+    // model digest, runner, error, persistence step or cancellation check.
+    pub(super) fn measurement_started(cancel: Option<&Arc<AtomicBool>>) {
+        if !OBSERVING.get() {
+            return;
+        }
+        MEASUREMENT_STARTS.set(MEASUREMENT_STARTS.get() + 1);
+        if CANCEL_NEXT_MEASUREMENT.replace(false) {
+            cancel
+                .expect("public canary fixture must pass its cancellation flag")
+                .store(true, Ordering::Release);
+        }
+    }
+
+    struct Observation;
+
+    impl Observation {
+        fn begin() -> Self {
+            assert!(!OBSERVING.get(), "canary observation is already installed");
+            MEASUREMENT_STARTS.set(0);
+            CANCEL_NEXT_MEASUREMENT.set(true);
+            OBSERVING.set(true);
+            Self
+        }
+
+        fn count(&self) -> usize {
+            MEASUREMENT_STARTS.get()
+        }
+    }
+
+    impl Drop for Observation {
+        fn drop(&mut self) {
+            OBSERVING.set(false);
+            CANCEL_NEXT_MEASUREMENT.set(false);
+            MEASUREMENT_STARTS.set(0);
+        }
+    }
+
+    // Follows the existing runtime_schema isolated-child fixture convention:
+    // the parent process never changes AIOLM_HOME or reads the user's cache.
+    struct OwnedHome {
+        base: PathBuf,
+        path: PathBuf,
+    }
+
+    impl OwnedHome {
+        fn new() -> Self {
+            let base = std::env::temp_dir()
+                .canonicalize()
+                .expect("resolve temp root");
+            let path = base.join(format!("aiolm-canary-cancel-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&path).expect("create owned canary fixture home");
+            let path = path.canonicalize().expect("resolve created fixture home");
+            assert_eq!(path.parent(), Some(base.as_path()));
+            Self { base, path }
+        }
+    }
+
+    impl Drop for OwnedHome {
+        fn drop(&mut self) {
+            let owned = self.path.canonicalize().expect("owned fixture home exists");
+            assert_eq!(owned, self.path, "fixture root changed before cleanup");
+            assert_eq!(owned.parent(), Some(self.base.as_path()));
+            fs::remove_dir_all(owned).expect("remove only the owned canary fixture home");
+        }
+    }
+
+    #[test]
+    fn cancelled_canary_is_not_cached_and_the_same_key_can_be_retried() {
+        let parent_home = std::env::var_os("AIOLM_HOME");
+        let home = OwnedHome::new();
+        let output =
+            crate::procutil::std_command(std::env::current_exe().expect("current test executable"))
+                .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
+                .env("AIOLM_HOME", &home.path)
+                .env(CHILD_MODE, "cancel-then-retry")
+                .output()
+                .expect("spawn isolated public canary fixture");
+        assert_eq!(
+            std::env::var_os("AIOLM_HOME"),
+            parent_home,
+            "the parent environment must remain unchanged"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "public canary fixture failed ({:?}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            output.status
+        );
+        print!("{stdout}");
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "the exact child filter must actually run one fixture:\n{stdout}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn isolated_public_canary_cancellation_fixture() {
+        let Ok(mode) = std::env::var(CHILD_MODE) else {
+            return;
+        };
+        assert_eq!(mode, "cancel-then-retry");
+        let home = PathBuf::from(std::env::var_os("AIOLM_HOME").expect("isolated home"));
+        assert!(home.is_absolute() && home.is_dir());
+        assert_eq!(crate::home::aiolm_home(), home);
+        assert!(!home.join("verification.json").exists());
+        assert!(!home.join("verification").exists());
+        assert!(!home.join("runtimes").exists());
+
+        let cfg = AppConfig {
+            active_backend: "vulkan".into(),
+            active_build: "b424242".into(),
+            active_model: home
+                .join("synthetic-model.gguf")
+                .to_string_lossy()
+                .into_owned(),
+            ngl: 99,
+            ..Default::default()
+        };
+        let placement = ResolvedGpu {
+            device_flag: Some("Vulkan0".into()),
+            ..Default::default()
+        };
+        let devices = vec!["Vulkan0: Synthetic canary fixture (1024 MiB)".into()];
+        let hardware = "synthetic-canary-hardware";
+        let key = cache_key(&cfg, &placement, hardware, &devices);
+        assert_eq!(key.len(), 64);
+        assert!(!cfg.active_model.is_empty());
+        assert!(!Path::new(&cfg.active_model).exists());
+        assert!(
+            !runtime::perplexity_bin_for(&cfg.active_backend, &cfg.active_build)
+                .unwrap()
+                .exists()
+        );
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let observation = Observation::begin();
+        let cancelled_error = ensure_verified(&cfg, &placement, hardware, &devices, Some(&cancel))
+            .await
+            .expect_err("a cancelled/unverified launch must not be accepted");
+        assert!(cancel.load(Ordering::Acquire));
+        let starts_after_cancel = observation.count();
+        let after_cancel = load_cache();
+        let cancelled_entry = after_cancel.entries.get(&key).cloned();
+        let cache_after_cancel = fs::read_to_string(home.join("verification.json")).ok();
+
+        // Complete both retries before checking persistence so a failure retains
+        // evidence about the same-key cache path.
+        cancel.store(false, Ordering::Release);
+        assert_eq!(key, cache_key(&cfg, &placement, hardware, &devices));
+        let retry_error = ensure_verified(&cfg, &placement, hardware, &devices, Some(&cancel))
+            .await
+            .expect_err("missing synthetic tool remains a completed Unsupported result");
+        let starts_after_retry = observation.count();
+        let after_retry = load_cache();
+        let retry_entry = after_retry.entries.get(&key).cloned();
+
+        // A completed Unsupported result retains its existing caching policy.
+        // A third identical call must use it, and must not measure again.
+        let cached_error = ensure_verified(&cfg, &placement, hardware, &devices, Some(&cancel))
+            .await
+            .expect_err("cached Unsupported must still refuse the launch");
+        let starts_after_cached_call = observation.count();
+        println!(
+            "CANARY_CANCEL_PUBLIC_FLOW cancelled_persisted={} starts=[{starts_after_cancel},{starts_after_retry},{starts_after_cached_call}] cancelled_error={cancelled_error:?} retry_error={retry_error:?} cached_error={cached_error:?} cache_after_cancel={cache_after_cancel:?}",
+            cancelled_entry.is_some()
+        );
+
+        assert_eq!(
+            starts_after_cancel, 1,
+            "public path must enter real measure"
+        );
+        assert!(
+            cancelled_entry.is_none(),
+            "cancellation must not persist a numerical verdict: {cancelled_entry:?}"
+        );
+        assert!(
+            cache_after_cancel.is_none(),
+            "an empty isolated cache must stay unwritten after cancellation"
+        );
+        assert!(
+            cancelled_error.contains("cancelled"),
+            "cancellation must remain a cancellation error: {cancelled_error}"
+        );
+        assert_eq!(
+            starts_after_retry, 2,
+            "same-key retry must reach measure again"
+        );
+        let retry_entry = retry_entry.expect("completed Unsupported remains cached");
+        assert_eq!(retry_entry.verdict, Verdict::Unsupported);
+        assert!(retry_entry.detail.contains("does not ship"));
+        assert_eq!(starts_after_cached_call, 2);
+        assert_eq!(retry_error, cached_error);
+        assert_eq!(key, cache_key(&cfg, &placement, hardware, &devices));
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(
+            !home.join("verification").exists(),
+            "no canary download/probe text"
+        );
+        assert!(
+            !home.join("runtimes").exists(),
+            "runtime lookup stays read-only"
+        );
+        assert!(!Path::new(&cfg.active_model).exists());
     }
 }
