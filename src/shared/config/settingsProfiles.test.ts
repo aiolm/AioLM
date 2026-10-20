@@ -379,3 +379,25 @@ describe('settings a save would rewrite', () => {
     expect(source).toEqual(before);
   });
 });
+
+describe('settings object key ordering', () => {
+  const composed = '\u00e9';
+  const decomposed = 'e\u0301';
+  const left = { chat_options: { [composed]: 'composed-key value', [decomposed]: 'decomposed-key value' } };
+  const right = { chat_options: { [decomposed]: 'decomposed-key value', [composed]: 'composed-key value' } };
+
+  it('ignores insertion order for distinct literal keys with equal collation rank', () => {
+    expect(composed).not.toBe(decomposed);
+    expect(changedSettings(left, right)).toEqual([]);
+    expect(settingsEqual(left, right)).toBe(true);
+  });
+
+  it('preserves changed literal keys and values while retaining meaningful array order', () => {
+    const changed = { chat_options: { [decomposed]: 'changed literal value', [composed]: 'composed-key value' } };
+    expect(settingsEqual(left, changed)).toBe(false);
+    expect(changedSettings(left, changed)).toEqual([{ key: `chat_options.${decomposed}`, path: ['chat_options', decomposed],
+      before: 'decomposed-key value', after: 'changed literal value' }]);
+    expect(settingsEqual({ chat_options: { [composed]: 1 } }, { chat_options: { [decomposed]: 1 } })).toBe(false);
+    expect(settingsEqual({ chat_options: { stop: ['a', 'b'] } }, { chat_options: { stop: ['b', 'a'] } })).toBe(false);
+  });
+});

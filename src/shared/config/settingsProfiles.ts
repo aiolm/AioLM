@@ -368,7 +368,7 @@ export function applySettingsProfile(cfg: AppConfig, profile: SettingsProfile): 
 
 function sortedValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortedValue);
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, sortedValue(item)]));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b) || (a < b ? -1 : a > b ? 1 : 0)).map(([key, item]) => [key, sortedValue(item)]));
   return value;
 }
 
