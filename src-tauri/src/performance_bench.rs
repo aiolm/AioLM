@@ -767,7 +767,7 @@ pub async fn run(
             target_bytes *= 2;
             if target_bytes > 4 * 1024 * 1024 { return Err("could not construct enough corpus tokens within the text size limit".into()); }
         };
-        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone(), engine: provider_protocol };
+        let endpoint = protocol::Endpoint { client: client.clone(), base: base.to_owned(), key: key.clone(), engine: provider_protocol.map(Arc::new) };
         if let Some(checkpoint) = &runtime.checkpoint { checkpoint(&result)?; }
         warm_slots(&request, &endpoint, &all_tokens[..warmup_tokens], isolated.parallel, &cancel, &progress).await?;
         // Concurrency is the outer sweep so every input length finishes at one level before the next: 1x runs for all lengths, then 2x, and so on.

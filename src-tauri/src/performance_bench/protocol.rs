@@ -300,7 +300,7 @@ pub(super) struct Endpoint {
     pub client: reqwest::Client,
     pub base: String,
     pub key: String,
-    pub engine: Option<super::providers::ProviderProtocol>,
+    pub engine: Option<Arc<super::providers::ProviderProtocol>>,
 }
 
 pub(super) async fn measure(
