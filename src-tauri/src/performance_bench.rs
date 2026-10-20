@@ -532,7 +532,7 @@ async fn trial(
     // cannot hold, before mutating rows, checkpointing or emitting a row.
     for (name, total) in [
         (
-            "completion",
+            "output",
             measured
                 .iter()
                 .try_fold(0u32, |sum, m| sum.checked_add(m.completion_tokens)),
@@ -544,7 +544,9 @@ async fn trial(
                 .try_fold(0u32, |sum, m| sum.checked_add(m.cached_tokens)),
         ),
     ] {
-        total.ok_or_else(|| format!("benchmark {name} token total exceeds u32 range"))?;
+        total.ok_or_else(|| {
+            format!("The runtime reported too many {name} tokens to record this measurement.")
+        })?;
     }
     let row = aggregate(
         request,
@@ -1438,7 +1440,9 @@ mod tests {
     async fn usage_usage_completion_one_over_returns_error_without_discarding_prior_rows() {
         usage_usage_case(
             vec![[3, u32::MAX - 1, 0], [3, 2, 0]],
-            UsageExpected::Error("benchmark completion token total exceeds u32 range"),
+            UsageExpected::Error(
+                "The runtime reported too many output tokens to record this measurement.",
+            ),
             true,
         )
         .await;
@@ -1448,7 +1452,9 @@ mod tests {
     async fn usage_usage_completion_overflow_without_prior_rows_returns_error() {
         usage_usage_case(
             vec![[3, u32::MAX, 0]; 2],
-            UsageExpected::Error("benchmark completion token total exceeds u32 range"),
+            UsageExpected::Error(
+                "The runtime reported too many output tokens to record this measurement.",
+            ),
             false,
         )
         .await;
@@ -1472,7 +1478,9 @@ mod tests {
     async fn usage_usage_cache_one_over_returns_error_without_discarding_prior_rows() {
         usage_usage_case(
             vec![[3, 2, u32::MAX], [3, 2, 1]],
-            UsageExpected::Error("benchmark cached token total exceeds u32 range"),
+            UsageExpected::Error(
+                "The runtime reported too many cached tokens to record this measurement.",
+            ),
             true,
         )
         .await;
@@ -1576,14 +1584,17 @@ mod tests {
             &progress,
             vec![[3, u32::MAX - 1, 0], [3, 2, 0]],
             3,
-            UsageExpected::Error("benchmark completion token total exceeds u32 range"),
+            UsageExpected::Error(
+                "The runtime reported too many output tokens to record this measurement.",
+            ),
         )
         .await;
         let after = usage_journal_bytes(&root.0);
         // Explicitly supplied metadata tests journal semantics only. The actual
         // run finalizer's partial/failed selection is covered separately by the native run caller.
         result.status = "partial";
-        result.message = Some("benchmark completion token total exceeds u32 range".into());
+        result.message =
+            Some("The runtime reported too many output tokens to record this measurement.".into());
         let finish = journal.finish(&result);
         drop(checkpoint);
         drop(journal);
