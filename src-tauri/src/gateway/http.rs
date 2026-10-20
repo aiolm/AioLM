@@ -187,7 +187,15 @@ async fn read_head_inner(stream: &mut TcpStream) -> Result<Head, ApiError> {
     let mut buffer = [0_u8; 8192];
     let header_end = loop {
         if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break index + 4;
+            let header_end = index + 4;
+            if header_end > MAX_HEADER_BYTES {
+                return Err(ApiError::new(
+                    431,
+                    "headers_too_large",
+                    "request headers exceed the 64 KiB limit",
+                ));
+            }
+            break header_end;
         }
         if bytes.len() > MAX_HEADER_BYTES {
             return Err(ApiError::new(
@@ -421,6 +429,20 @@ mod tests {
         read_request(&mut server).await
     }
 
+    fn complete_head_of_length(length: usize) -> Vec<u8> {
+        let prefix = b"GET /v1/models HTTP/1.1\r\nX-Filler: ";
+        let suffix = b"\r\n\r\n";
+        assert!(length >= prefix.len() + suffix.len());
+        let mut raw = Vec::with_capacity(length);
+        raw.extend_from_slice(prefix);
+        raw.extend(std::iter::repeat_n(
+            b'a',
+            length - prefix.len() - suffix.len(),
+        ));
+        raw.extend_from_slice(suffix);
+        raw
+    }
+
     #[tokio::test]
     async fn a_get_request_needs_no_content_length_and_loses_its_query_string() {
         let request = parse(b"GET /v1/models?limit=2 HTTP/1.1\r\nHost: x\r\nX-Api-Key: k\r\n\r\n")
@@ -493,6 +515,53 @@ mod tests {
         raw.extend(std::iter::repeat_n(b'a', MAX_HEADER_BYTES + 1));
         let error = parse(&raw).await.err().unwrap();
         assert_eq!(error.status, 431);
+    }
+
+    #[tokio::test]
+    async fn the_complete_header_limit_is_inclusive_and_rejects_one_byte_over() {
+        let request = parse(&complete_head_of_length(MAX_HEADER_BYTES))
+            .await
+            .unwrap();
+        assert_eq!(request.path, "/v1/models");
+
+        let error = parse(&complete_head_of_length(MAX_HEADER_BYTES + 1))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!((error.status, error.code), (431, "headers_too_large"));
+    }
+
+    #[tokio::test]
+    async fn a_header_that_crosses_the_limit_in_a_later_chunk_is_refused() {
+        let raw = complete_head_of_length(MAX_HEADER_BYTES + 1);
+        let (mut client, mut server) = connected_pair().await;
+        client
+            .write_all(&raw[..MAX_HEADER_BYTES - 1])
+            .await
+            .unwrap();
+        let reader = tokio::spawn(async move { read_head(&mut server).await });
+        tokio::task::yield_now().await;
+        client
+            .write_all(&raw[MAX_HEADER_BYTES - 1..])
+            .await
+            .unwrap();
+
+        let error = reader.await.unwrap().err().unwrap();
+        assert_eq!((error.status, error.code), (431, "headers_too_large"));
+    }
+
+    #[tokio::test]
+    async fn a_small_head_can_share_a_read_with_a_large_body() {
+        let body = vec![b'b'; MAX_HEADER_BYTES + 1];
+        let mut raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw.extend_from_slice(&body);
+
+        let request = parse(&raw).await.unwrap();
+        assert_eq!(request.body, body);
     }
 
     #[tokio::test]
