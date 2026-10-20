@@ -645,9 +645,9 @@ fn listed_gguf_files(
         .collect()
 }
 
-/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Returns every
-/// file name in the group, in order, when `name` is one part of such a set.
-fn shard_group(name: &str) -> Option<Vec<String>> {
+/// GGUF's standard multi-part suffix is `-00001-of-00033.gguf`. Generates the
+/// group in order, without allocating names just to recognize a split model.
+fn shard_group(name: &str) -> Option<impl Iterator<Item = String> + '_> {
     let (stem, extension) = name.rsplit_once('.')?;
     if !extension.eq_ignore_ascii_case("gguf") {
         return None;
@@ -667,11 +667,7 @@ fn shard_group(name: &str) -> Option<Vec<String>> {
     if total <= 1 || index == 0 || index > total {
         return None;
     }
-    Some(
-        (1..=total)
-            .map(|part| format!("{base}-{part:05}-of-{total:05}.{extension}"))
-            .collect(),
-    )
+    Some((1..=total).map(move |part| format!("{base}-{part:05}-of-{total:05}.{extension}")))
 }
 
 fn installed_file_metadata(target: &Path, root: &Path) -> Option<fs::Metadata> {
@@ -685,7 +681,11 @@ fn installed_file_metadata(target: &Path, root: &Path) -> Option<fs::Metadata> {
 }
 
 /// Which parts of `target`'s multi-part set are not in the selected library.
-fn missing_shards(target: &Path, root: &Path) -> Vec<String> {
+fn missing_shards(
+    target: &Path,
+    root: &Path,
+    groups: &mut std::collections::HashMap<PathBuf, Vec<String>>,
+) -> Vec<String> {
     let Some(name) = target.file_name().and_then(|value| value.to_str()) else {
         return Vec::new();
     };
@@ -693,10 +693,20 @@ fn missing_shards(target: &Path, root: &Path) -> Vec<String> {
         return Vec::new();
     };
     let parent = target.parent().unwrap_or(Path::new(""));
-    group
-        .into_iter()
-        .filter(|part| installed_file_metadata(&parent.join(part), root).is_none())
-        .collect()
+    let mut group = group.peekable();
+    let Some(first) = group.peek() else {
+        return Vec::new();
+    };
+    // Every row in a split set needs the same result. Reuse it only within
+    // this query; the next query must observe newly downloaded/deleted parts.
+    groups
+        .entry(parent.join(first))
+        .or_insert_with(|| {
+            group
+                .filter(|part| installed_file_metadata(&parent.join(part), root).is_none())
+                .collect()
+        })
+        .clone()
 }
 
 /// Which of `files` this machine already holds for `repo_id`.
@@ -727,6 +737,7 @@ pub fn installed_files(
     };
     let base = Path::new(root).join("hf").join(repo_directory(repo_id));
     let mut installed = Vec::new();
+    let mut shard_groups = std::collections::HashMap::new();
     for file in files {
         if validate_repo_path(file).is_err() {
             continue;
@@ -739,7 +750,7 @@ pub fn installed_files(
             path: file.clone(),
             local_path: target.to_string_lossy().into_owned(),
             size_bytes: metadata.len(),
-            missing_shards: missing_shards(&target, &canonical_root),
+            missing_shards: missing_shards(&target, &canonical_root, &mut shard_groups),
         });
     }
     Ok(installed)
@@ -934,7 +945,9 @@ where
 /// A request for any part selects the same complete model and first entrypoint.
 fn model_download_plan(files: &[HfFile], file_path: &str) -> Result<Vec<HfFile>, String> {
     let (directory, name) = file_path.rsplit_once('/').unwrap_or(("", file_path));
-    let paths = shard_group(name).unwrap_or_else(|| vec![name.to_owned()]);
+    let paths: Vec<_> = shard_group(name)
+        .map(Iterator::collect)
+        .unwrap_or_else(|| vec![name.to_owned()]);
     let indexed: std::collections::HashMap<_, _> = files
         .iter()
         .map(|file| (file.path.as_str(), file))
@@ -1758,6 +1771,66 @@ mod tests {
     }
 
     #[test]
+    fn installed_split_groups_preserve_row_order_and_refresh_between_queries() {
+        let root = installed_fixture();
+        let base = root.join("hf").join("owner").join("model");
+        fs::create_dir(base.join("Q4")).unwrap();
+        fs::create_dir(base.join("Q8")).unwrap();
+        let requested = [
+            "Q8/big-00002-of-00003.gguf",
+            "Q4/big-00003-of-00003.gguf",
+            "Q4/big-00001-of-00003.gguf",
+            "Q8/big-00001-of-00003.gguf",
+            "Q4/big-00003-of-00003.gguf",
+            "Q4/big-00001-of-00002.GGUF",
+        ];
+        for name in requested {
+            write_repo_file(&root, name, b"ok");
+        }
+        let files = requested.map(str::to_owned);
+        let first = installed_files(root.to_str().unwrap(), "owner/model", &files).unwrap();
+        assert_eq!(
+            first
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            requested
+        );
+        for row in &first {
+            assert_eq!(row.size_bytes, 2);
+            assert_eq!(
+                Path::new(&row.local_path),
+                base.join(relative_path(&row.path))
+            );
+        }
+        assert_eq!(first[0].missing_shards, ["big-00003-of-00003.gguf"]);
+        assert_eq!(first[1].missing_shards, ["big-00002-of-00003.gguf"]);
+        assert_eq!(first[2].missing_shards, first[1].missing_shards);
+        assert_eq!(first[3].missing_shards, first[0].missing_shards);
+        assert_eq!(first[4].missing_shards, first[1].missing_shards);
+        assert_eq!(first[5].missing_shards, ["big-00002-of-00002.GGUF"]);
+        fs::remove_file(base.join("Q8").join("big-00002-of-00003.gguf")).unwrap();
+        write_repo_file(&root, "Q4/big-00002-of-00003.gguf", b"new");
+        let second = installed_files(root.to_str().unwrap(), "owner/model", &files).unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            requested[1..]
+        );
+        assert!(second[0].missing_shards.is_empty());
+        assert!(second[1].missing_shards.is_empty());
+        assert_eq!(
+            second[2].missing_shards,
+            ["big-00002-of-00003.gguf", "big-00003-of-00003.gguf"]
+        );
+        assert!(second[3].missing_shards.is_empty());
+        assert_eq!(second[4].missing_shards, ["big-00002-of-00002.GGUF"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn search_rejects_a_sort_order_the_api_does_not_accept() {
         let rejected = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -1899,7 +1972,7 @@ mod tests {
     #[test]
     fn only_standard_shard_suffixes_form_a_group() {
         assert_eq!(
-            shard_group("big-00002-of-00003.gguf"),
+            shard_group("big-00002-of-00003.gguf").map(Iterator::collect::<Vec<_>>),
             Some(vec![
                 "big-00001-of-00003.gguf".to_string(),
                 "big-00002-of-00003.gguf".to_string(),
