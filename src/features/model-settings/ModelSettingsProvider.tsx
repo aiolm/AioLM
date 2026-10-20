@@ -86,11 +86,27 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       : base);
     const id = target.kind === 'session' ? target.sessionId : 'default';
     const external = target.kind === 'project' || target.kind === 'benchmark';
-    const reference = request.application ?? (external && request.config
-      ? { model: initial.active_model, settings: profileSettingsSnapshot(initial), system_prompt: request.systemPrompt ?? '' }
-      : appliedProfile({ ...cfg, active_model: initial.active_model }, id));
+    let reference = request.application;
+    if (!reference) {
+      if (external && request.config) reference = { model: initial.active_model, settings: profileSettingsSnapshot(initial), system_prompt: request.systemPrompt ?? '' };
+      else if (target.kind === 'default' && providerOf(initial) !== providerOf(cfg)) {
+        // Look up the saved target before repairing assignments from the draft:
+        // a new provider without an assignment starts from its designated default.
+        const library = cfg.settings_profiles ? ensureProfileLibrary(cfg.settings_profiles, providerOf(initial)) : profileLibrary(cfg);
+        const application = library.applied[profileTargetKey(initial.active_model, id, providerOf(initial))];
+        reference = application && profileTargetKey(application.model) === profileTargetKey(initial.active_model)
+          ? application : applyDefaultProfile(initial, library).application;
+      } else reference = appliedProfile({ ...cfg, active_model: initial.active_model }, id);
+    }
     const assigned = assignedTarget(initial, reference, id);
     initial = assigned.config;
+    if (target.kind === 'default') {
+      const library = initial.settings_profiles!;
+      const key = profileTargetKey(initial.active_model, id, providerOf(initial));
+      // Keep the resolved identity and prompt when the editor repairs this new
+      // target, rather than creating an anonymous recovery profile alongside it.
+      if (!library.applied[key]) initial = { ...initial, settings_profiles: { ...library, applied: { ...library.applied, [key]: assigned.application } } };
+    }
     if (external) base = assigned.config;
     request = { ...request, application: assigned.application, systemPrompt: assigned.application.system_prompt };
     setEditor({ request, base: structuredClone(base), baseDefinition: definition ? structuredClone(definition) : undefined, initial: structuredClone(initial), key: ++counter.current,
