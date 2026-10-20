@@ -34,7 +34,10 @@ export function parseRuntimeHelp(help: string): ServerOption[] {
   const rows: { signature: string; description: string; group: string }[] = [];
   let group = 'Runtime';
   const lines = help.replace(/\u001b\[[0-9;]*m/g, '').split(/\r?\n/);
-  const indent = Math.min(...lines.filter(line => /^\s*--?[a-zA-Z]/.test(line)).map(line => line.length - line.trimStart().length));
+  let indent = Infinity;
+  for (const line of lines) {
+    if (/^\s*--?[a-zA-Z]/.test(line)) indent = Math.min(indent, line.length - line.trimStart().length);
+  }
   for (const raw of lines) {
     const line = raw.trim();
     if (/^-{3,}.*-{3,}$/.test(line)) { group = line.replace(/^-+|-+$/g, '').trim(); continue; }
