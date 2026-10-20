@@ -683,12 +683,21 @@ impl AppConfig {
         self.active_runtime = self.active_runtime.trim().to_owned();
         self.provider_options
             .retain(|_, options| !options.is_empty());
-        let mut execution_base = self.clone();
-        execution_base.sessions.clear();
-        execution_base.settings_profiles = None;
+        let execution_base = self
+            .sessions
+            .iter()
+            .any(|session| session.execution.is_some())
+            .then(|| {
+                let mut base = self.clone();
+                base.sessions.clear();
+                base.settings_profiles = None;
+                base
+            });
         for session in &mut self.sessions {
             session.normalize();
-            execution::normalize_session(&execution_base, session);
+            if let Some(base) = &execution_base {
+                execution::normalize_session(base, session);
+            }
         }
         {
             let mut seen = std::collections::HashSet::new();
@@ -812,13 +821,20 @@ impl AppConfig {
         }
         {
             let mut seen = std::collections::HashSet::new();
-            let mut execution_base = self.clone();
-            execution_base.sessions.clear();
-            execution_base.settings_profiles = None;
+            let execution_base = self
+                .sessions
+                .iter()
+                .any(|session| session.execution.is_some())
+                .then(|| {
+                    let mut base = self.clone();
+                    base.sessions.clear();
+                    base.settings_profiles = None;
+                    base
+                });
             for session in &self.sessions {
                 session.validate()?;
-                if session.execution.is_some() {
-                    execution::session_config(&execution_base, session)?
+                if let (Some(base), Some(_)) = (&execution_base, &session.execution) {
+                    execution::session_config(base, session)?
                         .validate()
                         .map_err(|error| format!("session '{}': {error}", session.id))?;
                 }
@@ -877,6 +893,7 @@ fn migrate(cfg: AppConfig) -> Result<AppConfig, String> {
     migrate_with_presence(cfg, None)
 }
 
+#[cfg(test)]
 fn migrate_value(value: serde_json::Value) -> Result<AppConfig, String> {
     let cfg: AppConfig = serde_json::from_value(value.clone())
         .map_err(|error| format!("invalid config value: {error}"))?;
@@ -1159,12 +1176,13 @@ fn load_from_path(path: &Path) -> Result<AppConfig, String> {
         .map_err(|error| format!("invalid config at {}: {error}", path.display()))?;
     let cfg: AppConfig = serde_json::from_value(raw_value.clone())
         .map_err(|error| format!("invalid config at {}: {error}", path.display()))?;
-    let was_old = cfg.config_version < CURRENT_CONFIG_VERSION;
-    let migrated = migrate_value(raw_value.clone())?;
+    let original_version = cfg.config_version;
+    let was_old = original_version < CURRENT_CONFIG_VERSION;
+    let migrated = migrate_with_presence(cfg, Some(&raw_value))?;
     if was_old {
         let backup = path.with_extension(format!(
             "v{}-before-v{}.json",
-            cfg.config_version, CURRENT_CONFIG_VERSION
+            original_version, CURRENT_CONFIG_VERSION
         ));
         if !backup.exists() {
             // Preserve the exact pre-migration document, including unknown fields.
@@ -2168,5 +2186,527 @@ mod tests {
         // Every pushed session shares the id "dup", so dedup collapses them
         // to one entry well before the MAX_SESSIONS truncation would matter.
         assert_eq!(cfg.sessions.len(), 1);
+    }
+
+    mod configuration_contract_tests {
+        use super::*;
+        use serde_json::{json, Value};
+        use sha2::{Digest, Sha256};
+        use std::process::Command;
+
+        const CHILD_MODE: &str = "AIOLM_CONFIG_CONTRACT_CHILD";
+        const OWNED_MARKER: &str = "synthetic-config-contract-v1";
+
+        struct OwnedHome(PathBuf);
+
+        impl OwnedHome {
+            fn new() -> Self {
+                let path =
+                    std::env::temp_dir().join(format!("aiolm-config-contract-{}", Uuid::new_v4()));
+                fs::create_dir(&path).unwrap();
+                fs::write(path.join("owned-fixture.marker"), OWNED_MARKER).unwrap();
+                Self(path)
+            }
+        }
+
+        impl Drop for OwnedHome {
+            fn drop(&mut self) {
+                // Only this object's newly-created UUID directory is removed.
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn synthetic_config() -> AppConfig {
+            AppConfig {
+                models_dir: "models".into(),
+                ..AppConfig::default()
+            }
+        }
+
+        fn saved_value(cfg: &AppConfig) -> Value {
+            // Preserve the same f32 number spelling as the actual saved format.
+            serde_json::from_slice(&serde_json::to_vec(cfg).unwrap()).unwrap()
+        }
+
+        fn digest(bytes: &[u8]) -> String {
+            format!("{:x}", Sha256::digest(bytes))
+        }
+
+        fn inherited_session(id: &str) -> SessionDefinition {
+            SessionDefinition {
+                id: id.into(),
+                name: " owned session ".into(),
+                models: SessionModels {
+                    primary_model: " primary.gguf ".into(),
+                    mmproj: " vision.gguf ".into(),
+                    draft_model: " draft.gguf ".into(),
+                },
+                model_profile_id: Some(" profile-owned ".into()),
+                ..SessionDefinition::default()
+            }
+        }
+
+        #[test]
+        fn normalization_preserves_complete_configuration_and_session_bindings() {
+            for mode in ["empty", "inherited", "override", "deduplicate-and-bound"] {
+                let mut cfg = synthetic_config();
+                cfg.port = 0;
+                cfg.ctx_size = 256;
+                cfg.ngl = 1_000;
+                cfg.temperature = 99.0;
+                cfg.active_provider = " llama.cpp ".into();
+                cfg.active_runtime = " ".into();
+                cfg.gpu.gpu_ids = vec![" gpu-a ".into(), " ".into()];
+                cfg.gpu.main_gpu = Some(" gpu-a ".into());
+                cfg.gpu.tensor_split = vec![-1.0, 2.0];
+                cfg.gpu.draft_gpu_id = Some(" ".into());
+                match mode {
+                    "empty" => {}
+                    "inherited" => cfg.sessions.push(inherited_session(" inherited ")),
+                    "override" => {
+                        let mut session = inherited_session(" isolated ");
+                        session.execution = Some(
+                            json!({"temperature":99,"ctx_size":256,"spec_draft_p_min":0.3})
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        );
+                        cfg.sessions.push(session);
+                    }
+                    "deduplicate-and-bound" => {
+                        cfg.sessions.push(inherited_session(" session-0 "));
+                        let mut duplicate = inherited_session("session-0");
+                        duplicate.name = "later duplicate must disappear".into();
+                        cfg.sessions.push(duplicate);
+                        for index in 1..70 {
+                            cfg.sessions
+                                .push(inherited_session(&format!(" session-{index} ")));
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                let mut expected = cfg.clone();
+                expected.port = 8080;
+                expected.ctx_size = 512;
+                expected.ngl = 999;
+                expected.temperature = 2.0;
+                expected.active_provider = "llama.cpp".into();
+                expected.active_runtime.clear();
+                expected.gpu.gpu_ids = vec!["gpu-a".into()];
+                expected.gpu.main_gpu = Some("gpu-a".into());
+                expected.gpu.tensor_split = vec![0.0, 2.0];
+                expected.gpu.draft_gpu_id = None;
+                if mode == "deduplicate-and-bound" {
+                    expected.sessions.remove(1);
+                    expected.sessions.truncate(64);
+                }
+                for session in &mut expected.sessions {
+                    session.id = session.id.trim().into();
+                    session.name = "owned session".into();
+                    session.models.primary_model = "primary.gguf".into();
+                    session.models.mmproj = "vision.gguf".into();
+                    session.models.draft_model = "draft.gguf".into();
+                    session.model_profile_id = Some("profile-owned".into());
+                    if let Some(execution) = &mut session.execution {
+                        execution.insert("temperature".into(), json!(2.0));
+                        execution.insert("ctx_size".into(), json!(512));
+                    }
+                }
+                cfg.normalize();
+                assert_eq!(saved_value(&cfg), saved_value(&expected), "{mode}");
+                cfg.validate().unwrap();
+                let once = saved_value(&cfg);
+                cfg.normalize();
+                assert_eq!(saved_value(&cfg), once, "second normalization: {mode}");
+                println!(
+                    "CONFIG_CONTRACT {}",
+                    json!({"case":mode,"configuration":once})
+                );
+            }
+        }
+
+        #[test]
+        fn session_validation_preserves_definition_execution_and_duplicate_error_order() {
+            let invalid_patch = json!({"port":9000}).as_object().unwrap().clone();
+            let mut cases = Vec::new();
+            let mut invalid_id = synthetic_config();
+            invalid_id.sessions.push(SessionDefinition {
+                execution: Some(invalid_patch.clone()),
+                ..SessionDefinition::default()
+            });
+            cases.push((
+                "id-before-execution",
+                invalid_id,
+                "session id must be a non-empty string up to 128 characters",
+            ));
+            let mut execution_before_duplicate = synthetic_config();
+            execution_before_duplicate.sessions = vec![
+                SessionDefinition {
+                    id: "same".into(),
+                    ..SessionDefinition::default()
+                },
+                SessionDefinition {
+                    id: "same".into(),
+                    execution: Some(invalid_patch),
+                    ..SessionDefinition::default()
+                },
+            ];
+            cases.push((
+                "execution-before-duplicate",
+                execution_before_duplicate,
+                "unsupported execution setting: port",
+            ));
+            let mut duplicate_before_gpu = synthetic_config();
+            duplicate_before_gpu.sessions = vec![
+                SessionDefinition {
+                    id: "same".into(),
+                    ..SessionDefinition::default()
+                },
+                SessionDefinition {
+                    id: "same".into(),
+                    ..SessionDefinition::default()
+                },
+            ];
+            duplicate_before_gpu.gpu.gpu_ids = vec!["gpu-a".into()];
+            duplicate_before_gpu.gpu.main_gpu = Some("missing".into());
+            cases.push((
+                "duplicate-before-gpu",
+                duplicate_before_gpu,
+                "duplicate session id: same",
+            ));
+            let mut gpu_before_library = synthetic_config();
+            gpu_before_library.gpu.gpu_ids = vec!["gpu-a".into()];
+            gpu_before_library.gpu.main_gpu = Some("missing".into());
+            gpu_before_library
+                .settings_profiles
+                .as_mut()
+                .unwrap()
+                .version = 99;
+            cases.push((
+                "gpu-before-library",
+                gpu_before_library,
+                "main_gpu 'missing' must be one of the selected gpu_ids",
+            ));
+            let mut count_before_id = synthetic_config();
+            count_before_id.sessions = vec![SessionDefinition::default(); 65];
+            cases.push((
+                "count-before-id",
+                count_before_id,
+                "too many saved sessions (max 64)",
+            ));
+            for (name, cfg, expected) in cases {
+                let before = saved_value(&cfg);
+                let error = cfg.validate().unwrap_err();
+                assert_eq!(error, expected, "{name}");
+                assert_eq!(
+                    saved_value(&cfg),
+                    before,
+                    "validate must not mutate: {name}"
+                );
+                println!(
+                    "CONFIG_CONTRACT {}",
+                    json!({"case":name,"error":error,
+                "configuration":before})
+                );
+            }
+        }
+
+        fn run_isolated_child(mode: &str) {
+            let home = OwnedHome::new();
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "config::tests::configuration_contract_tests::isolated_public_config_child",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_MODE, mode)
+                .env("AIOLM_HOME", &home.0)
+                .output()
+                .unwrap();
+            // The child is reaped before any parent assertion and its own directory
+            // is removed by RAII even if status/assertion fails.
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "child mode {mode}: {}",
+                output.status
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("CONFIG_CHILD_DONE"));
+        }
+
+        #[test]
+        fn public_load_preserves_presence_schema_backup_and_error_contracts() {
+            for mode in [
+                "missing",
+                "current",
+                "freshness",
+                "onboarding-absent",
+                "legacy",
+                "existing-backup",
+                "versionless",
+                "legacy-absent",
+                "typed-present",
+                "typed-absent",
+                "malformed-json",
+                "malformed-type",
+                "future",
+            ] {
+                run_isolated_child(mode);
+            }
+        }
+
+        #[test]
+        fn isolated_public_config_child() {
+            let Ok(mode) = std::env::var(CHILD_MODE) else {
+                return;
+            };
+            let root = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap());
+            assert!(root.is_absolute());
+            assert!(root.starts_with(std::env::temp_dir()));
+            assert_eq!(
+                fs::read_to_string(root.join("owned-fixture.marker")).unwrap(),
+                OWNED_MARKER
+            );
+            assert_eq!(config_path(), root.join("config.json"));
+            let path = config_path();
+            let original_version = match mode.as_str() {
+                "versionless" => 0,
+                "legacy-absent" => 1,
+                _ => 13,
+            };
+            let old_case = matches!(
+                mode.as_str(),
+                "legacy" | "existing-backup" | "versionless" | "legacy-absent"
+            );
+            let backup = path.with_extension(format!(
+                "v{original_version}-before-v{CURRENT_CONFIG_VERSION}.json"
+            ));
+            let source_cfg = synthetic_config();
+            let mut source = saved_value(&source_cfg);
+            let mut original = None;
+            if mode != "missing" {
+                match mode.as_str() {
+                    "current" | "freshness" => {
+                        source["owned_unknown"] = json!({"retained":true});
+                    }
+                    "onboarding-absent" => {
+                        source
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("onboarding_completed");
+                    }
+                    "legacy" | "existing-backup" | "versionless" | "legacy-absent" => {
+                        source["config_version"] = json!(original_version);
+                        source["owned_unknown"] = json!({"exact_original":true});
+                        source["ctx_size"] = json!(0);
+                        source["stop_existing_sessions_on_load"] = json!(false);
+                        if mode == "versionless" {
+                            source.as_object_mut().unwrap().remove("config_version");
+                            source["spec_draft_n_max"] = json!(0);
+                            source["spec_draft_p_split"] = json!(0.0);
+                            source["reasoning_budget"] = json!(0);
+                        }
+                        if mode == "legacy-absent" {
+                            for field in [
+                                "spec_draft_n_max",
+                                "spec_draft_p_split",
+                                "reasoning_budget",
+                                "flash_attn",
+                                "iters",
+                            ] {
+                                source.as_object_mut().unwrap().remove(field);
+                            }
+                        }
+                    }
+                    "typed-present" | "typed-absent" => {
+                        source["server_args"] = json!([
+                            "--ctx-size",
+                            "2048",
+                            "--verbose",
+                            "--sleep-idle-seconds",
+                            "-1"
+                        ]);
+                        if mode == "typed-absent" {
+                            source.as_object_mut().unwrap().remove("ctx_size");
+                        } else {
+                            source["ctx_size"] = json!(8192);
+                        }
+                    }
+                    "malformed-json" => {}
+                    "malformed-type" => {
+                        source["port"] = json!("not-a-port");
+                    }
+                    "future" => {
+                        source["config_version"] = json!(CURRENT_CONFIG_VERSION + 1);
+                    }
+                    _ => panic!("unknown child mode: {mode}"),
+                }
+                let bytes = if mode == "malformed-json" {
+                    b"{\n  invalid owned fixture\n".to_vec()
+                } else {
+                    let mut bytes = serde_json::to_vec_pretty(&source).unwrap();
+                    bytes.push(b'\n');
+                    bytes
+                };
+                fs::write(&path, &bytes).unwrap();
+                original = Some(bytes);
+            }
+            if mode == "existing-backup" {
+                fs::write(&backup, b"first owned recovery point\n").unwrap();
+            }
+            let mut result = load_result();
+            let mut fact = json!({"case":mode});
+            if mode == "freshness" {
+                let first = result.as_ref().unwrap();
+                assert_eq!(saved_value(first), saved_value(&source_cfg));
+                assert_eq!(fs::read(&path).unwrap(), *original.as_ref().unwrap());
+                fact["first_configuration"] = saved_value(first);
+                source["ctx_size"] = json!(16_384);
+                let mut changed = serde_json::to_vec_pretty(&source).unwrap();
+                changed.push(b'\n');
+                fs::write(&path, &changed).unwrap();
+                original = Some(changed);
+                // Same process, same public path and same home: a second call must
+                // actually observe the changed disk document, without rewriting it.
+                result = load_result();
+            }
+            match mode.as_str() {
+                "malformed-json" | "malformed-type" | "future" => {
+                    let error = result.unwrap_err();
+                    if mode == "future" {
+                        assert_eq!(
+                            error,
+                            format!(
+                                "config schema {} is newer than this app supports (current {})",
+                                CURRENT_CONFIG_VERSION + 1,
+                                CURRENT_CONFIG_VERSION
+                            )
+                        );
+                    } else {
+                        assert!(
+                            error.starts_with(&format!("invalid config at {}:", path.display()))
+                        );
+                    }
+                    assert_eq!(fs::read(&path).unwrap(), *original.as_ref().unwrap());
+                    assert!(!backup.exists());
+                    fact["error"] =
+                        json!(error
+                            .replace(&path.to_string_lossy().to_string(), "<owned-config-path>"));
+                }
+                _ => {
+                    let cfg = result.unwrap();
+                    cfg.validate().unwrap();
+                    assert_eq!(cfg.config_version, CURRENT_CONFIG_VERSION);
+                    match mode.as_str() {
+                        "missing" => {
+                            let expected = AppConfig::default();
+                            assert_eq!(saved_value(&cfg), saved_value(&expected));
+                            assert_eq!(
+                                cfg.models_dir,
+                                root.join("models").to_string_lossy().into_owned()
+                            );
+                            assert!(!cfg.onboarding_completed);
+                            assert!(!path.exists());
+                        }
+                        "current" => {
+                            assert_eq!(saved_value(&cfg), saved_value(&source_cfg));
+                        }
+                        "freshness" => {
+                            let mut expected = source_cfg.clone();
+                            expected.ctx_size = 16_384;
+                            assert_eq!(saved_value(&cfg), saved_value(&expected));
+                            assert_eq!(cfg.ctx_size, 16_384);
+                        }
+                        "onboarding-absent" => {
+                            assert!(cfg.onboarding_completed);
+                        }
+                        "legacy" | "existing-backup" | "versionless" | "legacy-absent" => {
+                            assert_eq!(cfg.ctx_size, 0);
+                            assert!(!cfg.stop_existing_sessions_on_load);
+                            if mode == "versionless" {
+                                assert_eq!(cfg.spec_draft_n_max, 0);
+                                assert_eq!(cfg.spec_draft_p_split, 0.0);
+                                assert_eq!(cfg.reasoning_budget, 0);
+                            }
+                            if mode == "legacy-absent" {
+                                assert_eq!(cfg.spec_draft_n_max, 3);
+                                assert_eq!(cfg.spec_draft_p_split, 0.1);
+                                assert_eq!(cfg.reasoning_budget, -1);
+                                assert_eq!(cfg.flash_attn, "auto");
+                                assert_eq!(cfg.iters, 5);
+                            }
+                            assert_eq!(
+                                serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+                                saved_value(&cfg)
+                            );
+                            let expected_backup = if mode == "existing-backup" {
+                                b"first owned recovery point\n".as_slice()
+                            } else {
+                                original.as_ref().unwrap().as_slice()
+                            };
+                            assert_eq!(fs::read(&backup).unwrap(), expected_backup);
+                        }
+                        "typed-present" | "typed-absent" => {
+                            assert_eq!(
+                                cfg.ctx_size,
+                                if mode == "typed-present" { 8192 } else { 2048 }
+                            );
+                            assert_eq!(cfg.sleep_idle_seconds, -1);
+                            assert_eq!(cfg.server_args, vec!["--verbose"]);
+                        }
+                        _ => unreachable!(),
+                    }
+                    if mode != "missing" && !old_case {
+                        assert_eq!(
+                            fs::read(&path).unwrap(),
+                            *original.as_ref().unwrap(),
+                            "current schema must not rewrite"
+                        );
+                        assert!(!backup.exists());
+                    }
+                    let mut configuration = saved_value(&cfg);
+                    if mode == "missing" {
+                        // Above assertion verifies the exact runtime-resolved path;
+                        // normalize only that known owned path for cross-run facts.
+                        configuration["models_dir"] = json!("<owned-home>/models");
+                    }
+                    fact["configuration"] = configuration;
+                }
+            }
+            let mut files = fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    let bytes = fs::read(entry.path()).unwrap();
+                    json!({"name":entry.file_name().to_string_lossy(),"bytes":bytes.len(),
+                "sha256":digest(&bytes),"utf8":String::from_utf8(bytes).unwrap()})
+                })
+                .collect::<Vec<_>>();
+            files.sort_by_key(|file| file["name"].as_str().unwrap().to_owned());
+            let actual_names = files
+                .iter()
+                .map(|file| file["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            let mut expected_names = vec!["owned-fixture.marker".to_owned()];
+            if mode != "missing" {
+                expected_names.push("config.json".to_owned());
+            }
+            if old_case {
+                expected_names.push(backup.file_name().unwrap().to_string_lossy().into_owned());
+            }
+            expected_names.sort();
+            assert_eq!(
+                actual_names,
+                expected_names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            );
+            fact["files"] = json!(files);
+            println!("CONFIG_LOAD_FACT {}", fact);
+            println!("CONFIG_CHILD_DONE");
+        }
     }
 }
