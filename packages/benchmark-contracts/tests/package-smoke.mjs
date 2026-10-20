@@ -68,7 +68,7 @@ try {
 
   writeFileSync(join(consumer, 'node-smoke.mjs'), `
     import assert from 'node:assert/strict';
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, assertIsoTimestamp, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizeBenchmarkTrials, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, assertIsoTimestamp, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
     const row = payload.measurements.rows[0];
     assert.equal(validatePublicBenchmark(payload), payload);
@@ -96,6 +96,73 @@ try {
       '2024-02-29T00:00:00',
       '', undefined, null, 42,
     ]) assert.throws(() => timestamp(value));
+    const lowerBound = summarizeBenchmarkTrials([{
+      ...row, id: 'lower-bound', error: null, prompt_tokens: 1, generation_length: 1, concurrency: 1, repetition: 1,
+      completion_tokens: 0, cached_tokens: 0, ttft_ms: 0, tpot_ms: 0, pp_tps: 0, tg_tps: 0,
+      e2e_ms: 0, total_tps: 0, peak_memory_bytes: 0,
+    }])[0];
+    assert.equal(lowerBound.ttft_ms, 0);
+    assert.equal(lowerBound.tg_stddev, null);
+    assert.equal(lowerBound.speedup, null);
+    const maxTrial = { ...row, id: 'max-a', error: null, ttft_ms: Number.MAX_VALUE, tg_tps: Number.MAX_VALUE, peak_memory_bytes: Number.MAX_VALUE };
+    const maxSummary = summarizeBenchmarkTrials([maxTrial, { ...maxTrial, id: 'max-b', repetition: 2 }])[0];
+    assert.equal(maxSummary.ttft_ms, Number.MAX_VALUE);
+    assert.equal(maxSummary.tg_tps, Number.MAX_VALUE);
+    assert.equal(maxSummary.tg_stddev, 0);
+    const largeTrial = { ...row, id: 'large-a', error: null, ttft_ms: Number.MAX_VALUE, tg_tps: Number.MAX_VALUE };
+    const halfTrial = { ...row, id: 'large-b', error: null, repetition: 2, ttft_ms: Number.MAX_VALUE / 2, tg_tps: Number.MAX_VALUE / 2 };
+    const largeSummary = summarizeBenchmarkTrials([largeTrial, halfTrial])[0];
+    assert.equal(largeSummary.ttft_ms, Number.MAX_VALUE * 0.75);
+    assert(Math.abs(largeSummary.tg_stddev / (Number.MAX_VALUE / (2 * Math.sqrt(2))) - 1) <= Number.EPSILON * 2);
+    const nullSummary = summarizeBenchmarkTrials([{ ...row, id: 'null-metric', error: null, tg_tps: null }])[0];
+    assert.equal(nullSummary.tg_tps, null);
+    assert.equal(nullSummary.tg_stddev, null);
+    const failedSummary = summarizeBenchmarkTrials([{ ...row, id: 'failed-trial', error: 'failed', tg_tps: 100 }])[0];
+    assert.equal(failedSummary.samples, 0);
+    assert.equal(failedSummary.tg_tps, null);
+    const duplicateSummary = summarizeBenchmarkTrials([
+      { ...row, id: 'duplicate', error: null, tg_tps: 10 },
+      { ...row, id: 'duplicate', error: null, repetition: 2, tg_tps: 30 },
+    ])[0];
+    assert.equal(duplicateSummary.samples, 1);
+    assert.equal(duplicateSummary.tg_tps, 10);
+    const workloadSummaries = summarizeBenchmarkTrials([
+      { ...row, id: 'work-a', error: null, prompt_tokens: 1, tg_tps: 10 },
+      { ...row, id: 'work-b', error: null, prompt_tokens: 2, tg_tps: 20 },
+    ]);
+    assert.deepEqual(workloadSummaries.map(summary => summary.prompt_tokens), [1, 2]);
+    const concurrencySummaries = summarizeBenchmarkTrials([
+      { ...row, id: 'concurrency-base', error: null, concurrency: 1, tg_tps: 10, cached_tokens: 0 },
+      { ...row, id: 'concurrency-two', error: null, concurrency: 2, tg_tps: 20, cached_tokens: 0 },
+    ]);
+    assert.equal(concurrencySummaries.find(summary => summary.concurrency === 2).speedup, 2);
+    const cachedSummaries = summarizeBenchmarkTrials([
+      { ...row, id: 'cached-base', error: null, concurrency: 1, tg_tps: 10, cached_tokens: 1 },
+      { ...row, id: 'cached-two', error: null, concurrency: 2, tg_tps: 20, cached_tokens: 1 },
+    ]);
+    assert.equal(cachedSummaries.find(summary => summary.concurrency === 2).speedup, null);
+    const unrepresentableSpeedup = summarizeBenchmarkTrials([
+      { ...row, id: 'ratio-base', error: null, concurrency: 1, tg_tps: Number.MIN_VALUE, cached_tokens: 0 },
+      { ...row, id: 'ratio-high', error: null, concurrency: 2, tg_tps: Number.MAX_VALUE, cached_tokens: 0 },
+    ]).find(summary => summary.concurrency === 2);
+    assert.equal(unrepresentableSpeedup.speedup, null);
+    assert.equal(summarizeBenchmarkTrials([
+      { ...row, id: 'memory-a', error: null, peak_memory_bytes: 0 },
+      { ...row, id: 'memory-b', error: null, repetition: 2, peak_memory_bytes: Number.MAX_VALUE },
+    ])[0].peak_memory_bytes, Number.MAX_VALUE);
+    const summarizeMemory = values => summarizeBenchmarkTrials(values.map((peak_memory_bytes, index) => ({
+      ...row, id: 'memory-sign-' + index, error: null, peak_memory_bytes,
+    })))[0].peak_memory_bytes;
+    assert(Object.is(summarizeMemory([-0, +0]), +0));
+    assert(Object.is(summarizeMemory([+0, -0]), +0));
+    assert(Object.is(summarizeMemory([-0, -0]), -0));
+    assert(Object.is(summarizeMemory([0]), +0));
+    assert.equal(summarizeMemory([null]), null);
+    assert.equal(summarizeBenchmarkTrials([{ ...row, id: 'memory-error', error: 'failed', peak_memory_bytes: Number.MAX_VALUE }])[0].peak_memory_bytes, null);
+    const largeMemorySummary = summarizeBenchmarkTrials(Array.from({ length: 130000 }, (_, index) => ({
+      ...row, id: 'memory-large-' + index, error: null, peak_memory_bytes: index,
+    })))[0];
+    assert.equal(largeMemorySummary.peak_memory_bytes, 129999);
     for (const format of ['hf-safetensors', 'mlx', 'gguf']) {
       const metal = { ...payload, schema_version: 2,
         runtime: { name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' },
