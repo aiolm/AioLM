@@ -908,11 +908,12 @@ pub fn validate_manifest(manifest: &PortableManifest) -> Result<(), String> {
     }
     // Personal paths and credentials must never cross machines in a bundle.
     let text = String::from_utf8_lossy(&encoded);
+    let folded_text = text.to_lowercase();
     for marker in [
         "/home/",
-        "/Users/",
-        "C:\\Users",
-        "C:/Users",
+        "/users/",
+        "c:\\users",
+        "c:/users",
         "\\\\",
         "api_key",
         "apikey",
@@ -921,7 +922,7 @@ pub fn validate_manifest(manifest: &PortableManifest) -> Result<(), String> {
         "password",
         "secret",
     ] {
-        if text.to_lowercase().contains(marker) {
+        if folded_text.contains(marker) {
             return Err(fail(
                 "portable bundle manifest must not contain personal paths or credentials",
             ));
@@ -1076,11 +1077,8 @@ pub fn portable_id(version: &str) -> String {
         .collect();
     let slug = slug.trim_matches('-');
     let rand = &uuid::Uuid::new_v4().simple().to_string()[..12];
-    let mut id = format!("portable-{slug}-{rand}");
-    if id.len() > 64 {
-        id.truncate(64);
-    }
-    id
+    let slug = &slug[..slug.len().min(64 - "portable-".len() - 1 - rand.len())];
+    format!("portable-{slug}-{rand}")
 }
 
 fn provider_root(provider: ProviderId) -> PathBuf {
@@ -3094,5 +3092,158 @@ mod tests {
         // The dependency edge resolved from local wheels only.
         assert_eq!(versions["synthetic-lib"], "2.0.0");
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn portable_ids_preserve_random_suffix_for_long_accepted_versions() {
+        let mut failures = Vec::new();
+        for version in [
+            "0.31.0".to_owned(),
+            "1".repeat(54),
+            "1".repeat(64),
+            "V1.0+RC1".to_owned(),
+            "!!!".to_owned(),
+        ] {
+            assert!(valid_version(&version));
+            let first = portable_id(&version);
+            let second = portable_id(&version);
+            for id in [&first, &second] {
+                python_env::validate_id(id).unwrap();
+                assert!(id.starts_with("portable-") && id.len() <= 64, "{id}");
+                let suffix = id.rsplit_once('-').unwrap().1;
+                if suffix.len() != 12 || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    failures.push(format!(
+                        "version length {} lost its twelve-digit nonce: {id}",
+                        version.len()
+                    ));
+                }
+            }
+            if first == second {
+                failures.push(format!(
+                    "version length {} reused the same runtime identity: {first}",
+                    version.len()
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    struct PortableBoundaryFixture {
+        base: PathBuf,
+        root: PathBuf,
+    }
+
+    impl PortableBoundaryFixture {
+        fn new() -> Self {
+            let base = std::env::temp_dir().canonicalize().unwrap();
+            let root = base.join(format!("aiolm-portable-boundary-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            let root = root.canonicalize().unwrap();
+            assert_eq!(root.parent(), Some(base.as_path()));
+            Self { base, root }
+        }
+    }
+
+    impl Drop for PortableBoundaryFixture {
+        fn drop(&mut self) {
+            let owned = self.root.canonicalize().unwrap();
+            assert_eq!(owned, self.root);
+            assert_eq!(owned.parent(), Some(self.base.as_path()));
+            fs::remove_dir_all(owned).unwrap();
+        }
+    }
+
+    // Build malformed archive inputs without going through the writer's gate;
+    // every vendored wheel still has the fixture's real bytes and digest.
+    fn write_raw_manifest_fixture(manifest: &PortableManifest, path: &Path) {
+        let mut archive = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        archive.start_file(PORTABLE_MANIFEST_NAME, options).unwrap();
+        archive
+            .write_all(&serde_json::to_vec(manifest).unwrap())
+            .unwrap();
+        for wheel in &manifest.wheels {
+            archive
+                .start_file(format!("{PORTABLE_WHEELS_DIR}/{}", wheel.filename), options)
+                .unwrap();
+            archive
+                .write_all(&synthetic_wheel_bytes(&wheel.name, &wheel.version))
+                .unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn personal_path_case_variants_are_rejected_at_public_archive_boundaries() {
+        let fixture = PortableBoundaryFixture::new();
+        let mut clean = synthetic_manifest(ProviderId::Vllm);
+        // A reader that accepts the manifest stops at the existing platform
+        // gate, before provider roots or any interpreter are considered.
+        clean.platform.os = "synthetic-foreign".into();
+        validate_manifest(&clean).unwrap();
+        let wheels_dir = fixture.root.join("wheels");
+        write_wheels_dir(&clean, &wheels_dir);
+        let clean_path = fixture.root.join("clean.zip");
+        let cancel = AtomicBool::new(false);
+        write_archive(&clean, &wheels_dir, &clean_path, &cancel).unwrap();
+        let (round_trip, wheels) = read_archive(&clean_path, &cancel).unwrap();
+        assert_eq!(round_trip, clean);
+        assert_eq!(wheels.len(), clean.wheels.len());
+        let clean_import_error =
+            import_bundle(&clean_path, Arc::new(AtomicBool::new(false)), |_| {
+                panic!("a foreign-platform fixture must never start installation")
+            })
+            .await
+            .unwrap_err();
+        assert!(clean_import_error.contains("built for synthetic-foreign"));
+
+        let mut failures = Vec::new();
+        for (index, marker) in [
+            "/home/synthetic/private",
+            "/Users/synthetic/private",
+            "/uSeRs/synthetic/private",
+            "C:/Users/synthetic/private",
+            "c:/uSeRs/synthetic/private",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut manifest = clean.clone();
+            manifest.constraints = marker.into();
+            let validation_error = validate_manifest(&manifest).err();
+            let output = fixture.root.join(format!("writer-{index}.zip"));
+            let writer_error = write_archive(&manifest, &wheels_dir, &output, &cancel).err();
+            if writer_error.is_some() {
+                assert!(!output.exists());
+            }
+            let input = fixture.root.join(format!("reader-{index}.zip"));
+            write_raw_manifest_fixture(&manifest, &input);
+            let reader_error = import_bundle(&input, Arc::new(AtomicBool::new(false)), |_| {
+                panic!("a manifest rejection must never start installation")
+            })
+            .await
+            .unwrap_err();
+            println!(
+                "PORTABLE_PATH_BOUNDARIES marker={marker:?} validation={validation_error:?} writer={writer_error:?} reader={reader_error:?} published={}",
+                output.exists()
+            );
+            for (boundary, error) in [
+                ("validation", validation_error.as_deref()),
+                ("public writer", writer_error.as_deref()),
+                ("public import reader", Some(reader_error.as_str())),
+            ] {
+                if !error.is_some_and(|error| error.contains("personal paths or credentials")) {
+                    failures.push(format!("{boundary} accepted {marker:?}: {error:?}"));
+                }
+            }
+        }
+        for wheel in &clean.wheels {
+            assert_eq!(
+                fs::read(wheels_dir.join(&wheel.filename)).unwrap(),
+                synthetic_wheel_bytes(&wheel.name, &wheel.version)
+            );
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
