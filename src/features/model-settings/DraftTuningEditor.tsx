@@ -84,11 +84,16 @@ export default function DraftTuningEditor({ cfg, section, disabled, benchmark, r
     onChange({ chat_options: options });
   };
   const clearDrafts = (key?: string) => {
-    for (const name of [...Object.keys(numbers), ...Object.keys(chatNumbers)]) if (!key || key === name) onInvalid(name, false);
-    if (!key) { setNumbers({}); setChatNumbers({}); setCustomText({}); setSelectModes({}); }
+    if (!key) {
+      for (const name of new Set([...Object.keys(numbers), ...Object.keys(chatNumbers), ...Object.keys(customText), ...Object.keys(selectModes)])) onInvalid(name, false);
+      setNumbers({}); setChatNumbers({}); setCustomText({}); setSelectModes({});
+    }
     else {
+      onInvalid(key, false);
       setNumbers(previous => { const next = { ...previous }; delete next[key as NumericKey]; return next; });
       setChatNumbers(previous => { const next = { ...previous }; delete next[key]; return next; });
+      setCustomText(previous => { const next = { ...previous }; delete next[key as ServerTextKey]; return next; });
+      setSelectModes(previous => { const next = { ...previous }; delete next[key]; return next; });
     }
   };
   const filterPatch = (patch: Partial<AppConfig>) => benchmark
