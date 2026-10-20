@@ -467,6 +467,58 @@ fn entry_start(entry: &CommandEntry, words: &[String]) -> Result<usize, String> 
     Ok(0)
 }
 
+/// Imported plans cross JSON IPC into the editor's JavaScript value store.
+/// Keep exact integer literals outside its safe domain in raw review, including
+/// nested literals. Some outside values are representable, but not all are.
+fn json_import_has_safe_integers(value: &Value) -> bool {
+    const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+    match value {
+        Value::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                integer.unsigned_abs() <= MAX_SAFE_INTEGER
+            } else if let Some(integer) = number.as_u64() {
+                integer <= MAX_SAFE_INTEGER
+            } else {
+                true
+            }
+        }
+        Value::Array(values) => values.iter().all(json_import_has_safe_integers),
+        Value::Object(values) => values.values().all(json_import_has_safe_integers),
+        _ => true,
+    }
+}
+
+/// Interpret completed occurrences only after their raw token boundaries and
+/// arity are known. Unknown facts retain literal values for later review.
+fn imported_values(option: &OptionDefinition, values: Vec<Value>) -> Option<Vec<Value>> {
+    use super::runtime_options::ValueKind;
+    let kind = option.kind.supported();
+    if option.arity.supported().is_none()
+        || matches!(kind, None | Some(ValueKind::Text | ValueKind::Tokens))
+    {
+        return Some(values);
+    }
+    values
+        .into_iter()
+        .map(|value| {
+            let text = value.as_str()?;
+            match kind? {
+                ValueKind::Integer => text.parse::<i64>().ok().map(Value::from),
+                ValueKind::Number => text
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                    .map(Value::Number),
+                ValueKind::Boolean => text.parse::<bool>().ok().map(Value::from),
+                ValueKind::Json => serde_json::from_str(text)
+                    .ok()
+                    .filter(json_import_has_safe_integers),
+                ValueKind::Text | ValueKind::Tokens => unreachable!("literal kinds returned above"),
+            }
+        })
+        .collect()
+}
+
 /// Import a pasted command. With the selected runtime's registered entry,
 /// its program and literal prefix tokens are skipped exactly (never guessed),
 /// declared subcommands delimit scopes, the entry's own option separator is
@@ -551,6 +603,7 @@ pub fn import_plan_for_entry(
             index += skip_segment(scope_cursor, index);
             continue;
         }
+        let word_start = index;
         let word = words[index].clone();
         index += 1;
         if word == "--" && separator.take().is_some() {
@@ -704,6 +757,10 @@ pub fn import_plan_for_entry(
                 }));
                 continue;
             }
+            let Some(values) = imported_values(option, values) else {
+                unrecognized.extend_from_slice(&words[word_start..index]);
+                continue;
+            };
             plan.push(PlannedOccurrence {
                 key: option.key.clone(),
                 spelling: Some(name.clone()),
@@ -770,6 +827,10 @@ pub fn import_plan_for_entry(
                 );
                 continue;
             }
+            let Some(values) = imported_values(slot, values) else {
+                unrecognized.extend_from_slice(&words[word_start..index]);
+                continue;
+            };
             plan.push(PlannedOccurrence {
                 key: slot.key.clone(),
                 spelling: None,
@@ -778,11 +839,15 @@ pub fn import_plan_for_entry(
         } else if positional_index < positional_slots.len() {
             let slot = positional_slots[positional_index];
             positional_index += 1;
-            plan.push(PlannedOccurrence {
-                key: slot.key.clone(),
-                spelling: None,
-                values: vec![Value::String(word)],
-            });
+            if let Some(values) = imported_values(slot, vec![Value::String(word)]) {
+                plan.push(PlannedOccurrence {
+                    key: slot.key.clone(),
+                    spelling: None,
+                    values,
+                });
+            } else {
+                unrecognized.extend_from_slice(&words[word_start..index]);
+            }
         } else {
             unrecognized.push(word);
         }
@@ -1919,5 +1984,591 @@ mod tests {
             .argv
             .is_empty());
         assert_eq!(schema, schema_before);
+    }
+
+    #[test]
+    fn public_integer_import_round_trips_types_order_and_saved_values() {
+        let mut count = option("count", "--count", 1, Some(1));
+        count.kind = known(ValueKind::Integer);
+        count.repeatable = known(true);
+        let label = option("label", "--label", 1, Some(1));
+        let mut unknown = option("unknown", "--unknown", 1, Some(1));
+        unknown.kind = Fact::default();
+        let mut switch = option("switch", "--switch", 0, Some(0));
+        switch.kind = known(ValueKind::Boolean);
+        let original = schema(vec![count, label, unknown, switch]);
+        let schema = OptionSchema::parse(&serde_json::to_vec(&original).unwrap()).unwrap();
+        let text = "--count 4 --label 0004 --count 7 --unknown 0004 --switch";
+        let imports = [
+            ("text", import_plan_text(&schema, &[], text).unwrap()),
+            (
+                "entry-api-options-only",
+                import_plan_for_entry(
+                    &schema,
+                    &[],
+                    None,
+                    text,
+                    super::super::options::CommandSyntax::Posix,
+                )
+                .unwrap(),
+            ),
+        ];
+        for (api, imported) in imports {
+            eprintln!(
+                "INTEGER_IMPORT {api} imported={}",
+                serde_json::to_string(&imported).unwrap()
+            );
+            assert!(imported.managed.is_empty());
+            assert!(imported.unrecognized.is_empty());
+            let resolved = resolve_plan(&schema, &[], &imported.plan).unwrap_or_else(|issues| {
+                panic!("{api}: valid Integer import cannot resolve: {issues:?}")
+            });
+            assert_eq!(
+                serde_json::to_value(&imported).unwrap(),
+                json!({
+                    "plan": [
+                        {"key":"count","spelling":"--count","values":[4]},
+                        {"key":"label","spelling":"--label","values":["0004"]},
+                        {"key":"count","spelling":"--count","values":[7]},
+                        {"key":"unknown","spelling":"--unknown","values":["0004"]},
+                        {"key":"switch","spelling":"--switch","values":[true]}
+                    ],
+                    "managed":[],"unrecognized":[]
+                })
+            );
+            let expected_argv = vec![
+                "--count",
+                "4",
+                "--label",
+                "0004",
+                "--count",
+                "7",
+                "--unknown",
+                "0004",
+                "--switch",
+            ];
+            assert_eq!(resolved.argv, expected_argv);
+            assert!(resolved.request.is_empty());
+
+            let grouped = overrides_from_plan(&imported.plan);
+            assert_eq!(
+                grouped["count"].occurrences,
+                vec![vec![json!(4)], vec![json!(7)]]
+            );
+            let mut stored = super::super::runtime_help_store::map_from_overrides(&grouped);
+            let order = SavedOrder {
+                version: ORDER_VERSION,
+                occurrences: imported
+                    .plan
+                    .iter()
+                    .map(|item| OrderEntry {
+                        key: item.key.clone(),
+                        spelling: item.spelling.clone(),
+                    })
+                    .collect(),
+            };
+            stored.insert(ORDER_KEY.into(), serde_json::to_value(&order).unwrap());
+            let stored_before = stored.clone();
+            assert_eq!(saved_order(&stored).unwrap(), Some(order));
+            let saved = resolve_saved(&schema, &[], &stored).unwrap();
+            assert_eq!(saved.argv, expected_argv);
+            assert!(saved.request.is_empty());
+            assert_eq!(stored, stored_before);
+        }
+    }
+
+    #[test]
+    fn public_text_and_unknown_import_control_preserves_literal_tokens() {
+        let mut count = option("count", "--count", 1, Some(1));
+        count.repeatable = known(true);
+        let label = option("label", "--label", 1, Some(1));
+        let mut unknown = option("unknown", "--unknown", 1, Some(1));
+        unknown.kind = Fact::default();
+        let mut switch = option("switch", "--switch", 0, Some(0));
+        switch.kind = known(ValueKind::Boolean);
+        let schema = schema(vec![count, label, unknown, switch]);
+        let imported = import_plan_text(
+            &schema,
+            &[],
+            "--count 4 --label 0004 --count 7 --unknown 0004 --switch",
+        )
+        .unwrap();
+        assert!(imported.managed.is_empty());
+        assert!(imported.unrecognized.is_empty());
+        assert_eq!(imported.plan[0].values, vec![json!("4")]);
+        assert_eq!(imported.plan[1].values, vec![json!("0004")]);
+        assert_eq!(imported.plan[3].values, vec![json!("0004")]);
+        assert_eq!(imported.plan[4].values, vec![json!(true)]);
+        let resolved = resolve_plan(&schema, &[], &imported.plan).unwrap();
+        assert_eq!(
+            resolved.argv,
+            vec![
+                "--count",
+                "4",
+                "--label",
+                "0004",
+                "--count",
+                "7",
+                "--unknown",
+                "0004",
+                "--switch"
+            ]
+        );
+        assert!(resolved.request.is_empty());
+    }
+
+    fn assert_public_import_round_trip(
+        schema: &OptionSchema,
+        imported: &ImportedPlan,
+        expected_argv: &[String],
+    ) {
+        assert!(imported.managed.is_empty());
+        assert!(imported.unrecognized.is_empty());
+        let resolved = resolve_plan(schema, &[], &imported.plan).unwrap();
+        assert_eq!(resolved.argv, expected_argv);
+        assert!(resolved.request.is_empty());
+        let mut stored = super::super::runtime_help_store::map_from_overrides(
+            &overrides_from_plan(&imported.plan),
+        );
+        let order = SavedOrder {
+            version: ORDER_VERSION,
+            occurrences: imported
+                .plan
+                .iter()
+                .map(|item| OrderEntry {
+                    key: item.key.clone(),
+                    spelling: item.spelling.clone(),
+                })
+                .collect(),
+        };
+        stored.insert(ORDER_KEY.into(), serde_json::to_value(order).unwrap());
+        let before = stored.clone();
+        let saved = resolve_saved(schema, &[], &stored).unwrap();
+        assert_eq!(saved.argv, expected_argv);
+        assert!(saved.request.is_empty());
+        assert_eq!(stored, before);
+    }
+
+    #[test]
+    fn public_scalar_import_preserves_types_aliases_and_user_positionals() {
+        let mut count = option("count", "--count", 1, Some(1));
+        count.kind = known(ValueKind::Integer);
+        count
+            .spellings
+            .push(super::super::runtime_options::Spelling {
+                flag: "-c".into(),
+                style: super::super::runtime_options::ValueStyle::Equals,
+                polarity: None,
+            });
+        let mut ratio = option("ratio", "--ratio", 1, Some(1));
+        ratio.kind = known(ValueKind::Number);
+        let mut truth = option("truth", "--truth", 1, Some(1));
+        truth.kind = known(ValueKind::Boolean);
+        let mut payload = option("payload", "--payload", 1, Some(1));
+        payload.kind = known(ValueKind::Json);
+        let mut tokens = option("tokens", "--tokens", 1, Some(1));
+        tokens.kind = known(ValueKind::Tokens);
+        let mut unknown = option("unknown", "--unknown", 1, Some(1));
+        unknown.kind = Fact::default();
+        let mut switch = option("switch", "--switch", 0, Some(0));
+        switch.kind = known(ValueKind::Boolean);
+        let mut tail = positional("tail", 0, 1, Some(1));
+        tail.scope.clear();
+        tail.kind = known(ValueKind::Integer);
+        let schema = schema(vec![
+            count,
+            ratio,
+            truth,
+            payload,
+            option("label", "--label", 1, Some(1)),
+            tokens,
+            unknown,
+            switch,
+            tail,
+        ]);
+        let options = r#"-c=-4 --ratio -0.5 --truth false --payload '{"x":1}' --label 0004 --tokens 0004 --unknown true --switch 6"#;
+        let entry = CommandEntry {
+            version: 1,
+            program: "/synthetic/engine".into(),
+            prefix: vec![],
+            layout: None,
+            separator: None,
+            positional_bindings: Some(vec![]),
+            positional_roles: BTreeMap::from([(
+                "tail".into(),
+                super::super::runtime_positional::PositionalRole::User,
+            )]),
+        };
+        let expected_values = vec![
+            json!(-4),
+            json!(-0.5),
+            json!(false),
+            json!({"x":1}),
+            json!("0004"),
+            json!("0004"),
+            json!("true"),
+            json!(true),
+            json!(6),
+        ];
+        let expected_argv: Vec<String> = [
+            "-c=-4",
+            "--ratio",
+            "-0.5",
+            "--truth",
+            "false",
+            "--payload",
+            "{\"x\":1}",
+            "--label",
+            "0004",
+            "--tokens",
+            "0004",
+            "--unknown",
+            "true",
+            "--switch",
+            "6",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        for imported in [
+            import_plan_text(&schema, &[], options).unwrap(),
+            import_plan_for_entry(
+                &schema,
+                &[],
+                Some(&entry),
+                &format!("{} {options}", entry.program),
+                super::super::options::CommandSyntax::Posix,
+            )
+            .unwrap(),
+        ] {
+            assert_eq!(
+                imported
+                    .plan
+                    .iter()
+                    .map(|row| row.values[0].clone())
+                    .collect::<Vec<_>>(),
+                expected_values
+            );
+            assert_public_import_round_trip(&schema, &imported, &expected_argv);
+        }
+    }
+
+    #[test]
+    fn public_json_import_preserves_native_literal_shapes() {
+        let mut payload = option("payload", "--payload", 1, Some(1));
+        payload.kind = known(ValueKind::Json);
+        let schema = schema(vec![payload]);
+        for (literal, expected) in [
+            (r#"{"x":1}"#, json!({"x":1})),
+            ("[1,true,null]", json!([1, true, null])),
+            (r#""literal""#, json!("literal")),
+            (r#""""#, json!("")),
+            ("null", Value::Null),
+            ("true", json!(true)),
+            ("false", json!(false)),
+            ("0", json!(0)),
+            ("0.5", json!(0.5)),
+            ("9007199254740991", json!(9_007_199_254_740_991_i64)),
+            ("-9007199254740991", json!(-9_007_199_254_740_991_i64)),
+            (
+                r#"{"count":[9007199254740991,-9007199254740991]}"#,
+                json!({"count":[9_007_199_254_740_991_i64,-9_007_199_254_740_991_i64]}),
+            ),
+            (r#""9223372036854775807""#, json!("9223372036854775807")),
+            ("9007199254740992.0", json!(9_007_199_254_740_992.0)),
+        ] {
+            for text in [
+                format!("--payload '{literal}'"),
+                format!("--payload='{literal}'"),
+            ] {
+                let imported = import_plan_text(&schema, &[], &text).unwrap();
+                assert_eq!(imported.plan[0].values, vec![expected.clone()]);
+                let native_json = serde_json::to_vec(&imported).unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<ImportedPlan>(&native_json).unwrap(),
+                    imported
+                );
+                assert_public_import_round_trip(
+                    &schema,
+                    &imported,
+                    &[
+                        "--payload".into(),
+                        serde_json::to_string(&expected).unwrap(),
+                    ],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn public_integer_import_preserves_native_i64_limits() {
+        let mut count = option("count", "--count", 1, Some(1));
+        count.kind = known(ValueKind::Integer);
+        count
+            .spellings
+            .push(super::super::runtime_options::Spelling {
+                flag: "-c".into(),
+                style: super::super::runtime_options::ValueStyle::Equals,
+                polarity: None,
+            });
+        let schema = schema(vec![count]);
+        for integer in [
+            i64::MIN,
+            i64::MIN + 1,
+            9_007_199_254_740_993,
+            i64::MAX - 1,
+            i64::MAX,
+        ] {
+            for syntax in [
+                super::super::options::CommandSyntax::Posix,
+                super::super::options::CommandSyntax::Windows,
+            ] {
+                for (text, argv) in [
+                    (
+                        format!("--count {integer}"),
+                        vec!["--count".into(), integer.to_string()],
+                    ),
+                    (format!("-c={integer}"), vec![format!("-c={integer}")]),
+                ] {
+                    let imported =
+                        import_plan_text_with_syntax(&schema, &[], &text, syntax).unwrap();
+                    assert_eq!(imported.plan[0].values[0].as_i64(), Some(integer));
+                    let native_json = serde_json::to_vec(&imported).unwrap();
+                    assert_eq!(
+                        serde_json::from_slice::<ImportedPlan>(&native_json).unwrap(),
+                        imported
+                    );
+                    assert_public_import_round_trip(&schema, &imported, &argv);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn public_malformed_scalar_import_keeps_raw_review_and_validation() {
+        for (kind, literal) in [
+            (ValueKind::Integer, "9223372036854775808"),
+            (ValueKind::Integer, "1.5"),
+            (ValueKind::Number, "NaN"),
+            (ValueKind::Number, "1e309"),
+            (ValueKind::Boolean, "False"),
+            (ValueKind::Boolean, "1"),
+            (ValueKind::Json, "not-json"),
+            (ValueKind::Json, "{\"x\":"),
+        ] {
+            let mut value = option("value", "--value", 1, Some(1));
+            value.kind = known(kind);
+            let mut port = option("port", "--port", 1, Some(1));
+            port.kind = known(ValueKind::Integer);
+            port.managed = Some(super::super::runtime_options::ManagedBinding::Port);
+            let schema = schema(vec![value, option("label", "--label", 1, Some(1)), port]);
+            for inline in [false, true] {
+                let value_tokens = if inline {
+                    format!("--value='{literal}'")
+                } else {
+                    format!("--value '{literal}'")
+                };
+                let imported = import_plan_text(
+                    &schema,
+                    &[],
+                    &format!("{value_tokens} --label retained --port 004"),
+                )
+                .unwrap();
+                assert_eq!(imported.managed, ["--port", "004"]);
+                let expected_review = if inline {
+                    vec![format!("--value={literal}")]
+                } else {
+                    vec!["--value".into(), literal.into()]
+                };
+                assert_eq!(imported.unrecognized, expected_review);
+                assert_eq!(imported.plan.len(), 1);
+                assert_eq!(imported.plan[0].key, "label");
+                let resolved = resolve_plan(&schema, &[], &imported.plan).unwrap();
+                assert_eq!(resolved.argv, ["--label", "retained"]);
+                assert!(resolved.request.is_empty());
+            }
+        }
+        let mut pair = option("pair", "--pair", 2, Some(2));
+        pair.kind = known(ValueKind::Integer);
+        let pair_schema = schema(vec![pair, option("label", "--label", 1, Some(1))]);
+        let missing = import_plan_text(&pair_schema, &[], "--pair 004 --label retained").unwrap();
+        assert_eq!(missing.unrecognized, ["--pair", "004"]);
+        assert_eq!(
+            resolve_plan(&pair_schema, &[], &missing.plan).unwrap().argv,
+            ["--label", "retained"]
+        );
+        let complete =
+            import_plan_text(&pair_schema, &[], "--pair 004 -2 --label retained").unwrap();
+        assert_eq!(complete.plan[0].values, vec![json!(4), json!(-2)]);
+        assert_public_import_round_trip(
+            &pair_schema,
+            &complete,
+            &[
+                "--pair".into(),
+                "4".into(),
+                "-2".into(),
+                "--label".into(),
+                "retained".into(),
+            ],
+        );
+        let mut unknown_arity = option("payload", "--payload", 1, Some(1));
+        unknown_arity.kind = known(ValueKind::Json);
+        unknown_arity.arity = Fact::default();
+        let unknown_schema = schema(vec![unknown_arity]);
+        let tentative = import_plan_text(&unknown_schema, &[], "--payload '{broken'").unwrap();
+        assert_eq!(tentative.plan[0].values, vec![json!("{broken")]);
+        assert!(
+            resolve_plan(&unknown_schema, &[], &tentative.plan).unwrap_err()[0]
+                .message
+                .contains("arity is unknown")
+        );
+        let mut ranged = option("count", "--count", 1, Some(1));
+        ranged.kind = known(ValueKind::Integer);
+        ranged.range = known(super::super::runtime_options::NumericRange {
+            min: Some(0.0),
+            max: Some(8.0),
+        });
+        let ranged_schema = schema(vec![ranged]);
+        let outside = import_plan_text(&ranged_schema, &[], "--count 9").unwrap();
+        assert_eq!(outside.plan[0].values, vec![json!(9)]);
+        assert_eq!(
+            resolve_plan(&ranged_schema, &[], &outside.plan).unwrap_err()[0].message,
+            "value is outside the documented numeric range"
+        );
+    }
+
+    #[test]
+    fn public_scalar_positionals_follow_documented_types() {
+        for (kind, literal, expected, argument) in [
+            (ValueKind::Integer, "6", json!(6), "6"),
+            (ValueKind::Number, "0.5", json!(0.5), "0.5"),
+            (ValueKind::Boolean, "true", json!(true), "true"),
+            (ValueKind::Boolean, "false", json!(false), "false"),
+            (ValueKind::Json, "{\"x\":1}", json!({"x":1}), "{\"x\":1}"),
+        ] {
+            let mut slot = positional("value", 0, 1, Some(1));
+            slot.scope.clear();
+            slot.kind = known(kind);
+            let mut marker = option("marker", "--marker", 0, Some(0));
+            marker.kind = known(ValueKind::Boolean);
+            let schema = schema(vec![marker, slot]);
+            let entry = CommandEntry {
+                version: 1,
+                program: "/synthetic/engine".into(),
+                prefix: vec![],
+                layout: None,
+                separator: None,
+                positional_bindings: Some(vec![]),
+                positional_roles: BTreeMap::from([(
+                    "value".into(),
+                    super::super::runtime_positional::PositionalRole::User,
+                )]),
+            };
+            for entry in [None, Some(&entry)] {
+                let text = format!(
+                    "{}--marker '{literal}'",
+                    entry.map_or(String::new(), |entry| format!("{} ", entry.program))
+                );
+                let imported = import_plan_for_entry(
+                    &schema,
+                    &[],
+                    entry,
+                    &text,
+                    super::super::options::CommandSyntax::Posix,
+                )
+                .unwrap();
+                assert_eq!(imported.plan[1].values, vec![expected.clone()]);
+                assert_public_import_round_trip(
+                    &schema,
+                    &imported,
+                    &["--marker".into(), argument.to_owned()],
+                );
+            }
+        }
+        let mut slot = positional("value", 0, 1, Some(1));
+        slot.scope.clear();
+        slot.kind = known(ValueKind::Json);
+        let schema = schema(vec![slot]);
+        let malformed = import_plan_text(&schema, &[], "not-json").unwrap();
+        assert!(malformed.plan.is_empty());
+        assert_eq!(malformed.unrecognized, ["not-json"]);
+    }
+
+    #[test]
+    fn public_json_import_keeps_unsafe_integer_literals_in_original_review() {
+        for literal in [
+            "9007199254740992",
+            "-9007199254740992",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "18446744073709551615",
+            r#"{ "x": [ 0, 9007199254740993 ] }"#,
+            r#"[0,{"x":-9007199254740993}]"#,
+            r#"{"x":[true,18446744073709551615]}"#,
+        ] {
+            let mut payload = option("payload", "--payload", 1, Some(1));
+            payload.kind = known(ValueKind::Json);
+            payload.sensitive = known(true);
+            let flag_schema = schema(vec![payload, option("label", "--label", 1, Some(1))]);
+            for inline in [false, true] {
+                let words = if inline {
+                    format!("--payload='{literal}'")
+                } else {
+                    format!("--payload '{literal}'")
+                };
+                let imported =
+                    import_plan_text(&flag_schema, &[], &format!("{words} --label kept")).unwrap();
+                let expected_review = if inline {
+                    vec![format!("--payload={literal}")]
+                } else {
+                    vec!["--payload".into(), literal.into()]
+                };
+                assert_eq!(imported.unrecognized, expected_review);
+                assert!(imported.managed.is_empty());
+                assert_eq!(imported.plan.len(), 1);
+                assert_eq!(imported.plan[0].key, "label");
+                let resolved = resolve_plan(&flag_schema, &[], &imported.plan).unwrap();
+                assert_eq!(resolved.argv, ["--label", "kept"]);
+                assert!(resolved.request.is_empty());
+            }
+            let mut slot = positional("payload", 0, 1, Some(1));
+            slot.scope.clear();
+            slot.kind = known(ValueKind::Json);
+            let mut marker = option("marker", "--marker", 0, Some(0));
+            marker.kind = known(ValueKind::Boolean);
+            let positional_schema =
+                schema(vec![marker, slot, option("label", "--label", 1, Some(1))]);
+            let entry = CommandEntry {
+                version: 1,
+                program: "/synthetic/engine".into(),
+                prefix: vec![],
+                layout: None,
+                separator: None,
+                positional_bindings: Some(vec![]),
+                positional_roles: BTreeMap::from([(
+                    "payload".into(),
+                    super::super::runtime_positional::PositionalRole::User,
+                )]),
+            };
+            for entry in [None, Some(&entry)] {
+                let text = format!(
+                    "{}--marker '{literal}' --label kept",
+                    entry.map_or(String::new(), |entry| format!("{} ", entry.program))
+                );
+                let imported = import_plan_for_entry(
+                    &positional_schema,
+                    &[],
+                    entry,
+                    &text,
+                    super::super::options::CommandSyntax::Posix,
+                )
+                .unwrap();
+                assert_eq!(imported.unrecognized, [literal]);
+                assert!(imported.plan.iter().all(|row| row.key != "payload"));
+                let resolved = resolve_plan(&positional_schema, &[], &imported.plan).unwrap();
+                assert_eq!(resolved.argv, ["--marker", "--label", "kept"]);
+                assert!(resolved.request.is_empty());
+            }
+        }
     }
 }
