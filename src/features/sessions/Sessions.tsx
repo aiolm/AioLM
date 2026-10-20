@@ -179,11 +179,6 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     setStopExisting(cfg.stop_existing_sessions_on_load ?? true);
   }, [cfg, cfg?.sessions, cfg?.stop_existing_sessions_on_load]);
 
-  const persist = async (next: api.SessionDefinition[]) => {
-    await store.updateConfig({ sessions: next });
-    setDefinitions(next);
-  };
-
   const performSelection = (definition: api.SessionDefinition) => {
     setSelectedId(definition.id);
     setDetailsOpen(true);
@@ -211,17 +206,19 @@ export default function SessionsPanel({ store, active = true }: { store: AppStor
     saving.current = true;
     setSavingId(editing.id);
     const trimmed = normalizedEditing.name.trim();
-    const latestDefinitions = (store.getConfig?.() ?? cfg)?.sessions ?? definitions;
-    const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
-    const nextDefinition = {
-      ...(latestDefinition ?? normalizedEditing),
-      name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
-    };
-    const next = [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition];
     try {
-      await persist(next);
+      const saved = await store.updateConfig(current => {
+        const latestDefinitions = current.sessions ?? [];
+        const latestDefinition = latestDefinitions.find((definition) => definition.id === normalizedEditing.id);
+        const nextDefinition = {
+          ...(latestDefinition ?? normalizedEditing),
+          name: trimmed || modelLabel(normalizedEditing.models.primary_model, normalizedEditing.id),
+        };
+        return { sessions: [...latestDefinitions.filter((definition) => definition.id !== nextDefinition.id), nextDefinition] };
+      });
+      setDefinitions(saved.sessions ?? []);
       if (currentEdit.current === snapshot) {
-        setEditing(nextDefinition);
+        setEditing(saved.sessions?.find((definition) => definition.id === normalizedEditing.id) ?? null);
         setNotice(t("ui.sessionSaved"));
       }
     } catch (error) {

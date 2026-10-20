@@ -363,12 +363,15 @@ describe("session model settings", () => {
     await waitFor(() => expect(mocked.sessionStart).toHaveBeenCalledWith("work", expect.objectContaining({ active_model: "models/changed.gguf", ctx_size: 16384 }), false));
   });
   it("preserves newer execution settings when saving only a session name", async () => {
+    const before = structuredClone(cfg);
     const store = renderPanel(); await selectWork();
     fireEvent.change(screen.getByLabelText("Session name"), { target: { value: "Renamed" } });
     const latest = { ...definition, enabled: false, execution: { ...definition.execution, ctx_size: 32768 } };
-    vi.mocked(store.getConfig).mockReturnValue({ ...cfg, sessions: [latest] });
+    store.cfg!.sessions = [latest];
     fireEvent.click(screen.getByRole("button", { name: "Save session" }));
-    await waitFor(() => expect(store.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ sessions: [expect.objectContaining({ name: "Renamed", enabled: false, execution: latest.execution })] })));
+    await waitFor(() => expect(screen.getByRole('article', { name: 'Renamed' })).toBeVisible());
+    expect(store.cfg).toEqual({ ...cfg, sessions: [{ ...latest, name: "Renamed" }] });
+    expect(cfg).toEqual(before);
   });
   it("blocks a load that would interrupt a current response", async () => {
     renderPanel({ ...cfg, stop_existing_sessions_on_load: true }); await selectWork();
