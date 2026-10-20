@@ -98,8 +98,24 @@ export interface UploadSessionPoll {
   expires_at: string;
 }
 
-/** Timestamps are ISO8601 over the wire. */
+/** Timestamps are RFC3339 date-times over the wire; return the original spelling. */
+const ISO_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$/;
+
 export function assertIsoTimestamp(value: string): string {
-  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) throw new Error('Invalid service timestamp.');
+  const match = typeof value === 'string' ? value.match(ISO_DATE_TIME) : null;
+  if (!match) throw new Error('Invalid service timestamp.');
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offset = match[8];
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
+  const offsetHour = offset === 'Z' || offset === 'z' ? 0 : Number(offset.slice(1, 3));
+  const offsetMinute = offset === 'Z' || offset === 'z' ? 0 : Number(offset.slice(4, 6));
+  if (month < 1 || day < 1 || day > daysInMonth || hour > 23 || minute > 59 || second > 59
+    || offsetHour > 23 || offsetMinute > 59) throw new Error('Invalid service timestamp.');
   return value;
 }

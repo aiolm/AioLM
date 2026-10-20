@@ -68,7 +68,7 @@ try {
 
   writeFileSync(join(consumer, 'node-smoke.mjs'), `
     import assert from 'node:assert/strict';
-    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
+    import { validatePublicBenchmark, validateBenchmarkReceipt, summarizePublicBenchmarkRows, publicBenchmarkSchema, validatePublicationRequest, normalizePublicationInput, parsePublicationSnapshot, serializePublicationRequest, validateDescriptionMd, DESCRIPTION_MAX_CODEPOINTS, PUBLICATION_MAX_UTF8_BYTES, PUBLICATION_MAX_ROWS, countCodePoints, utf8ByteLength, encodeRecoveryCode, decodeRecoveryCode, RECOVERY_FIXTURE, base64UrlEncode, base64UrlDecode, normalizeServiceOrigin, parseServiceError, normalizeBaseUrl, benchmarkRunsUrl, assertIsoTimestamp, publicationSchema, formatRuntimeVersionLabel } from '@aiolm/benchmark-contracts';
     const payload = ${JSON.stringify(payload)};
     const row = payload.measurements.rows[0];
     assert.equal(validatePublicBenchmark(payload), payload);
@@ -80,6 +80,22 @@ try {
       assert.throws(() => validatePublicBenchmark({ ...python, execution: { ...python.execution, settings: { gpu_layers: 0 } } }));
     }
     assert.equal(summarizePublicBenchmarkRows(payload.measurements.rows).find(row => row.concurrency === 2).speedup, 2);
+    const timestamp = value => assertIsoTimestamp(value);
+    for (const value of [
+      '2024-02-29T23:59:59Z',
+      '2024-02-29T23:59:59.123456789+05:30',
+      '2024-02-29t23:59:59.1z',
+      '2000-02-29T00:00:00-04:00',
+      '0000-02-29T00:00:00Z',
+    ]) assert.equal(timestamp(value), value);
+    for (const value of [
+      'Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)',
+      '2023-02-29T00:00:00Z',
+      '2024-13-01T00:00:00Z',
+      '2024-02-29T24:00:00Z',
+      '2024-02-29T00:00:00',
+      '', undefined, null, 42,
+    ]) assert.throws(() => timestamp(value));
     for (const format of ['hf-safetensors', 'mlx', 'gguf']) {
       const metal = { ...payload, schema_version: 2,
         runtime: { name: 'vllm', version: '0.30.0', backend: 'metal', build: '0.30.0', variant: 'vllm-metal', plugin_version: '0.30.0' },
