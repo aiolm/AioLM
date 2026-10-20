@@ -345,29 +345,27 @@ pub(crate) fn valid_scope(scope: &[String]) -> bool {
             .all(|s| identifier(s) && !s.starts_with(['-', '/']) && !s.contains('/'))
 }
 
-impl OptionSchema {
-    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() > MAX_SCHEMA_BYTES {
-            return Err("runtime option schema exceeds 3 MiB".into());
-        }
-        let schema: Self = serde_json::from_slice(bytes)
-            .map_err(|e| format!("invalid runtime option schema: {e}"))?;
-        schema.validate()?;
-        Ok(schema)
-    }
+// Help text is immutable during one validation. Count only referenced
+// documents, once per call, while retaining every fact and span check.
+struct SourceValidator<'a> {
+    documents: BTreeMap<&'a str, (&'a RawHelp, std::cell::OnceCell<usize>)>,
+}
 
+impl SourceValidator<'_> {
     fn source(&self, source: &Source) -> Result<(), String> {
         let valid = match source {
             Source::Help {
                 document,
                 start_line,
                 end_line,
-            } => self.raw_help.iter().any(|help| {
-                help.id == *document
-                    && *start_line > 0
-                    && end_line >= start_line
-                    && *end_line as usize <= help.text.lines().count()
-            }),
+            } => self
+                .documents
+                .get(document.as_str())
+                .is_some_and(|(help, lines)| {
+                    *start_line > 0
+                        && end_line >= start_line
+                        && *end_line as usize <= *lines.get_or_init(|| help.text.lines().count())
+                }),
             Source::Adapter { id, revision } => {
                 identifier(id) && !revision.is_empty() && bounded_text(revision, 256)
             }
@@ -386,6 +384,18 @@ impl OptionSchema {
             self.source(source)?;
         }
         Ok(())
+    }
+}
+
+impl OptionSchema {
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_SCHEMA_BYTES {
+            return Err("runtime option schema exceeds 3 MiB".into());
+        }
+        let schema: Self = serde_json::from_slice(bytes)
+            .map_err(|e| format!("invalid runtime option schema: {e}"))?;
+        schema.validate()?;
+        Ok(schema)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -412,13 +422,19 @@ impl OptionSchema {
         if self.raw_help.iter().map(|h| h.text.len()).sum::<usize>() > MAX_HELP_BYTES {
             return Err("runtime option schema raw help exceeds 2 MiB".into());
         }
-        let mut documents = BTreeSet::new();
+        let mut documents = BTreeMap::new();
         for help in &self.raw_help {
-            if !identifier(&help.id) || !valid_scope(&help.scope) || !documents.insert(&help.id) {
+            if !identifier(&help.id)
+                || !valid_scope(&help.scope)
+                || documents
+                    .insert(help.id.as_str(), (help, std::cell::OnceCell::new()))
+                    .is_some()
+            {
                 return Err("invalid or duplicate raw-help document".into());
             }
         }
-        self.fact(&self.end_of_options)?;
+        let sources = SourceValidator { documents };
+        sources.fact(&self.end_of_options)?;
         let mut keys = BTreeSet::new();
         let mut flags = BTreeSet::new();
         let mut positions = BTreeSet::new();
@@ -432,19 +448,19 @@ impl OptionSchema {
             {
                 return Err("invalid or duplicate runtime option identity".into());
             }
-            self.fact(&option.kind)?;
-            self.fact(&option.arity)?;
-            self.fact(&option.repeatable)?;
-            self.fact(&option.choices)?;
-            self.fact(&option.range)?;
-            self.fact(&option.unit)?;
-            self.fact(&option.runtime_default)?;
-            self.fact(&option.request_field)?;
-            self.fact(&option.restart_required)?;
-            self.fact(&option.sensitive)?;
-            self.fact(&option.local_path)?;
+            sources.fact(&option.kind)?;
+            sources.fact(&option.arity)?;
+            sources.fact(&option.repeatable)?;
+            sources.fact(&option.choices)?;
+            sources.fact(&option.range)?;
+            sources.fact(&option.unit)?;
+            sources.fact(&option.runtime_default)?;
+            sources.fact(&option.request_field)?;
+            sources.fact(&option.restart_required)?;
+            sources.fact(&option.sensitive)?;
+            sources.fact(&option.local_path)?;
             for span in &option.raw_spans {
-                self.source(span)?;
+                sources.source(span)?;
             }
             if let Some(arity) = option.arity.supported() {
                 if arity.min > 256 || arity.max.is_some_and(|n| n < arity.min || n > 256) {
@@ -523,7 +539,7 @@ impl OptionSchema {
             }
         }
         for constraint in &self.constraints {
-            self.fact(constraint)?;
+            sources.fact(constraint)?;
             if let Some(relation) = constraint.supported() {
                 let (Relation::Requires { when, other } | Relation::Excludes { when, other }) =
                     relation;
@@ -1564,6 +1580,82 @@ mod tests {
             end_line: 99,
         });
         assert!(schema.validate().is_err());
+    }
+
+    #[test]
+    fn help_sources_keep_line_boundaries_error_order_and_fresh_text_between_calls() {
+        let span = Source::Help {
+            document: "stdout".into(),
+            start_line: 2,
+            end_line: 2,
+        };
+        let mut first = option("first", ValueKind::Text, 1, Some(1));
+        first.kind.source = Some(span.clone());
+        first.arity.source = Some(span.clone());
+        first.raw_spans.push(span.clone());
+        let mut current = schema(vec![first, option("second", ValueKind::Text, 1, Some(1))]);
+        current.end_of_options = known(true);
+        current.end_of_options.source = Some(span.clone());
+        current.constraints.push(known(Relation::Requires {
+            when: Predicate {
+                key: "first".into(),
+                equals: None,
+            },
+            other: Predicate {
+                key: "second".into(),
+                equals: None,
+            },
+        }));
+        current.constraints[0].source = Some(span);
+        current.raw_help.push(RawHelp {
+            id: "stdout".into(),
+            scope: vec![],
+            stream: HelpStream::Stdout,
+            text: "첫 줄\r\n둘째 λ\r\n".into(),
+            truncated: false,
+        });
+        let original = serde_json::to_vec(&current).unwrap();
+        assert_eq!(OptionSchema::parse(&original).unwrap(), current);
+        assert!(current
+            .resolve(&[], &Overrides::new())
+            .unwrap()
+            .argv
+            .is_empty());
+        assert_eq!(serde_json::to_vec(&current).unwrap(), original);
+        let source_error = "option fact has an invalid source or raw-help span";
+        current.raw_help[0].text = "한 줄\n".into();
+        assert_eq!(current.validate().unwrap_err(), source_error);
+        current.raw_help[0].text = "첫 줄\n둘째 λ".into();
+        current.validate().unwrap();
+        for (document, start_line, end_line) in [
+            ("missing", 1, 1),
+            ("stdout", 0, 1),
+            ("stdout", 2, 1),
+            ("stdout", 1, 3),
+        ] {
+            let mut invalid = current.clone();
+            invalid.options[0].arity.source = Some(Source::Help {
+                document: document.into(),
+                start_line,
+                end_line,
+            });
+            assert_eq!(invalid.validate().unwrap_err(), source_error);
+        }
+        let mut duplicate = current.clone();
+        duplicate.raw_help.push(duplicate.raw_help[0].clone());
+        duplicate.end_of_options.source = None;
+        assert_eq!(
+            duplicate.validate().unwrap_err(),
+            "invalid or duplicate raw-help document"
+        );
+        let mut unsupported = current.clone();
+        unsupported.options[0].kind.source = None;
+        assert_eq!(
+            unsupported.validate().unwrap_err(),
+            "supported option facts need a value and source"
+        );
+        current.raw_help[0].text.clear();
+        assert_eq!(current.validate().unwrap_err(), source_error);
     }
 
     #[test]
