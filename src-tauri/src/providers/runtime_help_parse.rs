@@ -227,42 +227,45 @@ fn arity_for_metavar(metavar: &str) -> Option<Arity> {
     None
 }
 
-fn split_spec_help(line: &str) -> (String, String) {
+fn split_spec_help(
+    line: &str,
+    group: &str,
+    start_line: u32,
+) -> (String, String, Option<PendingOption>) {
     // Help separates the flag spec from prose with two or more spaces, but the
     // same gap also separates aliases (`-t,    --threads N`). The boundary is
     // the first gap whose left side is a complete explicit option spec: an
     // alias-list prefix (`-t,`) never qualifies, so the split cannot cut
     // inside the spec.
     let bytes = line.as_bytes();
-    let mut gaps: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b' ' || bytes[i] == b'\t' {
-            let mut j = i;
-            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
-                j += 1;
+            let start = i;
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
             }
-            if j - i >= 2 {
-                gaps.push((i, j));
+            if i - start >= 2 {
+                let left = line[..start].trim_end();
+                if !left.is_empty() && left.len() <= 1024 {
+                    let parsed = parse_option_spec(left, group, start_line);
+                    if parsed.is_some() {
+                        return (left.into(), line[i..].trim().into(), parsed);
+                    }
+                }
             }
-            i = j;
         } else {
             i += 1;
-        }
-    }
-    for (start, end) in gaps {
-        let left = line[..start].trim_end();
-        if left.is_empty() || left.len() > 1024 {
-            continue;
-        }
-        if parse_option_spec(left, "", 0).is_some() {
-            return (left.into(), line[end..].trim().into());
         }
     }
     // No gap completes a spec: either a spec-only line whose description
     // lives on the next line (long argparse flags), or prose that no spec
     // candidate accepts. Callers treat an unparsable spec as unconfirmed.
-    (line.trim().into(), String::new())
+    let spec = line.trim().to_owned();
+    let parsed = (spec.len() <= 1024)
+        .then(|| parse_option_spec(&spec, group, start_line))
+        .flatten();
+    (spec, String::new(), parsed)
 }
 
 fn split_aliases(spec: &str) -> Vec<String> {
@@ -514,15 +517,15 @@ pub fn parse_help_report(
     // stderr with an empty stdout. An empty stream never shadows a documented
     // one. Truncated/lossy/failed reports were rejected above, so the chosen
     // text is exact and every span below names its real source stream.
-    let (document, text) = if stdout_text.trim().is_empty() && !stderr_text.trim().is_empty() {
-        ("stderr", report.stderr.clean_text.clone())
-    } else {
-        ("stdout", report.stdout.clean_text.clone())
-    };
+    let (document, text): (&str, &str) =
+        if stdout_text.trim().is_empty() && !stderr_text.trim().is_empty() {
+            ("stderr", stderr_text)
+        } else {
+            ("stdout", stdout_text)
+        };
     if text.len() > 2 * 1024 * 1024 {
         return Err("help output exceeds its schema limit".into());
     }
-    let lines: Vec<&str> = text.lines().collect();
     let mut options: Vec<PendingOption> = Vec::new();
     let mut current_group = "runtime".to_string();
     let mut positional_section = false;
@@ -534,7 +537,7 @@ pub fn parse_help_report(
     let mut last_option: Option<usize> = None;
     let mut end_of_options = Fact::default();
 
-    for (index, line) in lines.iter().enumerate() {
+    for (index, line) in text.lines().enumerate() {
         let line_no = u32::try_from(index + 1).unwrap_or(u32::MAX);
         // A bare `--` line documents an explicitly supported delimiter.
         if line.trim() == "--" {
@@ -549,7 +552,10 @@ pub fn parse_help_report(
             continue;
         }
         // Usage lines name subcommands but never become options themselves.
-        if trimmed.to_lowercase().starts_with("usage:") {
+        if trimmed
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("usage:"))
+        {
             in_usage_wrap = true;
             last_option = None;
             continue;
@@ -587,7 +593,7 @@ pub fn parse_help_report(
                         .chars()
                         .next()
                         .is_some_and(|c| c.is_ascii_uppercase())
-                        && split_spec_help(trimmed).0.len() <= 64);
+                        && split_spec_help(trimmed, &current_group, line_no).0.len() <= 64);
                 if !looks_new {
                     let entry = &mut options[idx];
                     if !entry.help.is_empty() {
@@ -606,12 +612,12 @@ pub fn parse_help_report(
         // spells flags at COLUMN0, so an indent requirement yields zero
         // options. Anything unparsable stays raw, never an option.
         if trimmed.starts_with('-') || trimmed.starts_with('/') {
-            let (spec, help) = split_spec_help(trimmed);
+            let (spec, help, parsed) = split_spec_help(trimmed, &current_group, line_no);
             if spec.is_empty() || spec.len() > 1024 {
                 last_option = None;
                 continue;
             }
-            if let Some(mut pending) = parse_option_spec(&spec, &current_group, line_no) {
+            if let Some(mut pending) = parsed {
                 pending.help = help;
                 pending.end_line = line_no;
                 if options.len() < 4096 {
@@ -746,13 +752,23 @@ pub fn parse_help_report(
     // `--no-host` buffer switch and `--host HOST` address) it is an
     // independent switch whose own spelling means true, so neither option is
     // dropped as a duplicate and neither takes the other's meaning.
-    let taken: Vec<String> = merged
-        .iter()
-        .filter(|pending| !pending.negative_only)
-        .map(|pending| pending.key.clone())
-        .collect();
+    let taken: Option<BTreeSet<String>> = if merged.iter().any(|pending| pending.negative_only) {
+        Some(
+            merged
+                .iter()
+                .filter(|pending| !pending.negative_only)
+                .map(|pending| pending.key.clone())
+                .collect(),
+        )
+    } else {
+        None
+    };
     for pending in &mut merged {
-        if !pending.negative_only || !taken.contains(&pending.key) {
+        if !pending.negative_only
+            || !taken
+                .as_ref()
+                .is_some_and(|taken| taken.contains(&pending.key))
+        {
             continue;
         }
         let Some(own) = pending
@@ -784,7 +800,7 @@ pub fn parse_help_report(
                 duplicate = true;
             }
         }
-        let mut key = pending.key.clone();
+        let mut key = pending.key;
         if !seen_keys.insert(key.clone()) {
             // Same flag in another subcommand gets a different key; within one
             // discovery a duplicate key means the help repeats the flag.
@@ -800,11 +816,11 @@ pub fn parse_help_report(
         if key.len() > 128 {
             continue;
         }
+        let parsed_arity = arity_for_metavar(&pending.metavar);
         let (kind, arity) = if pending.positional.is_some() {
-            let arity = arity_for_metavar(&pending.metavar);
             (
                 Fact::default(),
-                arity
+                parsed_arity
                     .map(|a| verified(a, document, pending.start_line, pending.end_line))
                     .unwrap_or_default(),
             )
@@ -831,12 +847,9 @@ pub fn parse_help_report(
             // observed, so argv waits for explicit metadata.
             (Fact::default(), Fact::default())
         } else {
-            let arity = arity_for_metavar(&pending.metavar);
-            let choices = parse_choices(&pending.metavar);
-            let _ = choices;
             (
                 Fact::default(),
-                arity
+                parsed_arity
                     .map(|a| verified(a, document, pending.start_line, pending.end_line))
                     .unwrap_or_default(),
             )
@@ -870,8 +883,7 @@ pub fn parse_help_report(
         }
         // Equals style is only confirmed when help shows `=`.
         for spelling in &mut pending.spellings {
-            if spelling.style == ValueStyle::Equals
-                && arity_for_metavar(&pending.metavar).is_none_or(|a| a.max != Some(1))
+            if spelling.style == ValueStyle::Equals && parsed_arity.is_none_or(|a| a.max != Some(1))
             {
                 spelling.style = ValueStyle::Separate;
             }
@@ -990,6 +1002,7 @@ pub fn apply_overlay(
     for (index, option) in base.options.iter().enumerate() {
         by_key.insert(option.key.clone(), index);
     }
+    let mut known: Option<BTreeSet<&str>> = None;
     for incoming in overlay.options {
         let Some(&index) = by_key.get(&incoming.key) else {
             // New flags are not a fixed allowlist: unknown help flags stay
@@ -997,6 +1010,9 @@ pub fn apply_overlay(
             // because metadata is missing.
             continue;
         };
+        if !incoming.raw_spans.is_empty() && known.is_none() {
+            known = Some(base.raw_help.iter().map(|h| h.id.as_str()).collect());
+        }
         let current = &mut base.options[index];
         // Scope, spellings and positions are observed syntax; metadata does not
         // rewrite them. Flag conflicts are reported for review.
@@ -1118,10 +1134,11 @@ pub fn apply_overlay(
         if !incoming.raw_spans.is_empty() {
             // Observed spans must name a document this schema actually holds;
             // foreign documents are not silently stitched into validation.
-            let known: BTreeSet<&str> = base.raw_help.iter().map(|h| h.id.as_str()).collect();
             for span in &incoming.raw_spans {
                 let observed = match span {
-                    Source::Help { document, .. } => known.contains(document.as_str()),
+                    Source::Help { document, .. } => known
+                        .as_ref()
+                        .is_some_and(|known| known.contains(document.as_str())),
                     _ => true,
                 };
                 if observed && !current.raw_spans.contains(span) {

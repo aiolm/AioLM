@@ -18,7 +18,7 @@ use super::runtime_options::{OptionIssue, OptionSchema, Override, ResolvedOption
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::atomic::Ordering,
 };
@@ -288,10 +288,21 @@ pub fn describe(
         return Err("descriptor schema must match its help report".into());
     }
     let (diff, retained) = match previous {
-        None => (
-            None,
-            diff_with_saved(schema, schema, saved_keys).retained_unknown,
-        ),
+        None => {
+            let mut retained = if saved_keys.is_empty() {
+                Vec::new()
+            } else {
+                let known: BTreeSet<&str> = schema.options.iter().map(|o| o.key.as_str()).collect();
+                saved_keys
+                    .iter()
+                    .filter(|key| !known.contains(key.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            retained.sort();
+            retained.dedup();
+            (None, retained)
+        }
         Some(old) => {
             let diff = diff_with_saved(&old.schema, schema, saved_keys);
             let retained = diff.retained_unknown.clone();
