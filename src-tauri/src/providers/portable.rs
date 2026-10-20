@@ -214,6 +214,14 @@ pub type FreezeMap = BTreeMap<String, FrozenDist>;
 /// installed, upgraded, or imported beyond the metadata reader itself, so an
 /// external environment is never mutated.
 pub fn read_freeze(provider: ProviderId, python: &Path) -> Result<FreezeMap, String> {
+    read_freeze_cancellable(provider, python, None)
+}
+
+fn read_freeze_cancellable(
+    provider: ProviderId,
+    python: &Path,
+    cancel: Option<&AtomicBool>,
+) -> Result<FreezeMap, String> {
     let script = format!(
         "{}\n{}",
         include_str!("portable_source_probe.py"),
@@ -228,9 +236,17 @@ pub fn read_freeze(provider: ProviderId, python: &Path) -> Result<FreezeMap, Str
         &mut command,
         Duration::from_secs(60),
         4 * 1024 * 1024,
-        None,
+        cancel,
     )
-    .map_err(|error| format!("runtime inventory check failed: {error}"))?;
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::Interrupted
+            && cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            fail("portable runtime operation cancelled")
+        } else {
+            format!("runtime inventory check failed: {error}")
+        }
+    })?;
     if !output.status.success() {
         return Err(fail("runtime inventory check failed"));
     }
@@ -1644,9 +1660,12 @@ pub async fn export_bundle(
     // One inventory read feeds the recipe, the download pins and the wheel
     // inventory alike, so the environment cannot skew between them.
     let source_python = PathBuf::from(&manifest.python);
-    let freeze = tokio::task::spawn_blocking(move || read_freeze(provider, &source_python))
-        .await
-        .map_err(|error| format!("portable export task failed: {error}"))??;
+    let inventory_cancel = cancel.clone();
+    let freeze = tokio::task::spawn_blocking(move || {
+        read_freeze_cancellable(provider, &source_python, Some(inventory_cancel.as_ref()))
+    })
+    .await
+    .map_err(|error| format!("portable export task failed: {error}"))??;
     let recipe = build_export_manifest(&manifest, &freeze)?;
     let external_before = (manifest.kind == python_env::InstallationKind::External)
         .then(|| fingerprint_dir(Path::new(&manifest.python).parent()));

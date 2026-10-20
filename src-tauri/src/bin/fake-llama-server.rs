@@ -186,8 +186,82 @@ fn handle(mut stream: TcpStream) {
     }
 }
 
+// Synthetic interpreter transport for the portable inventory cancellation test.
+// It validates the real command text, but never executes Python or an engine.
+fn portable_inventory_fixture(arguments: &[String]) -> bool {
+    let probe_shape = arguments.len() == 4 && arguments[1] == "-B" && arguments[2] == "-c";
+    let inventory_shape = arguments.len() == 5
+        && arguments[1] == "-I"
+        && arguments[2] == "-c"
+        && arguments[4] == "vllm";
+    if !probe_shape && !inventory_shape {
+        return false;
+    }
+    let executable = std::env::current_exe().expect("synthetic interpreter executable");
+    if executable.file_stem() != Some(std::ffi::OsStr::new("aiolm-portable-inventory-fixture")) {
+        return false;
+    }
+    let expected_source = if probe_shape {
+        format!(
+            "{}\n{}\n{}\n{}\nprint('AIOLM_PROBE=' + json.dumps(out))\n",
+            include_str!("../providers/portable_source_probe.py"),
+            include_str!("../providers/vllm_probe.py"),
+            include_str!("../providers/vllm_speech_capabilities.py"),
+            include_str!("../providers/metal_capabilities.py"),
+        )
+    } else {
+        format!(
+            "{}\n{}",
+            include_str!("../providers/portable_source_probe.py"),
+            include_str!("../providers/portable_inventory.py"),
+        )
+    };
+    assert_eq!(
+        arguments[3], expected_source,
+        "exact production interpreter source"
+    );
+    let descriptor = executable.with_extension("aiolm-portable-inventory-fixture");
+    let metadata = std::fs::metadata(&descriptor).expect("owned fixture descriptor");
+    assert!(metadata.is_file() && metadata.len() <= 256);
+    let descriptor = std::fs::read_to_string(descriptor).expect("owned fixture descriptor");
+    let mut lines = descriptor.lines();
+    assert_eq!(lines.next(), Some("AIOLM_PORTABLE_INVENTORY_FIXTURE_V1"));
+    let address: std::net::SocketAddr = lines.next().expect("owned endpoint").parse().unwrap();
+    assert!(address.ip().is_loopback() && address.port() != 0);
+    assert!(lines.next().is_none());
+
+    let phase = if probe_shape { b'P' } else { b'I' };
+    let mut controller = TcpStream::connect(address).expect("owned loopback controller");
+    controller.write_all(&[phase, b'\n']).unwrap();
+    controller.flush().unwrap();
+    let mut action = [0u8; 1];
+    if controller.read_exact(&mut action).is_err() {
+        // Closing the owned controller also releases a fixture during unwinding.
+        // This process creates no descendants or other lifetime owners.
+        return true;
+    }
+    if phase == b'P' {
+        assert_eq!(action[0], b'P');
+        // An explicitly failed probe reaches inventory, then the real export
+        // readiness check refuses it. No healthy engine or help flags are faked.
+        println!(
+            "AIOLM_PROBE={{\"version\":\"\",\"variant\":\"standard\",\"errors\":[\"synthetic inventory fixture intentionally has no engine\"]}}"
+        );
+    } else {
+        assert_eq!(action[0], b'S');
+        println!(
+            "synthetic transport noise\nAIOLM_FREEZE=[{{\"name\":\"synthetic_pkg\",\"version\":\"1.0\",\"direct_url\":null}}]"
+        );
+    }
+    std::io::stdout().flush().unwrap();
+    true
+}
+
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
+    if portable_inventory_fixture(&arguments) {
+        return;
+    }
     if arguments
         .iter()
         .any(|arg| arg == "--adapter-launcher-fixture")

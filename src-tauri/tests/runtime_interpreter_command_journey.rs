@@ -6,6 +6,9 @@
 //! real parser accepts the exact launch argv. Opt-in: set AIOLM_TEST_PYTHON
 //! to a Python 3 executable and run with `--ignored`. This certifies argv and
 //! parser acceptance only, not inference or any engine.
+//! A default-suite synthetic interpreter case below separately exercises
+//! public portable export cancellation through real owned child processes;
+//! it executes no Python source and makes no engine-readiness claim.
 use aiolm_lib::{
     providers::{
         self,
@@ -31,7 +34,8 @@ impl Home {
             std::env::temp_dir().join(format!("aiolm interpreter 눈길 {}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         let previous = std::env::var_os("AIOLM_HOME");
-        // One test per integration binary; no concurrent reader of this.
+        // Only the ignored interpreter case reads this process home; the synthetic
+        // portable case uses a separate process and passes its home via Command::env.
         std::env::set_var("AIOLM_HOME", &path);
         Self { path, previous }
     }
@@ -502,4 +506,358 @@ async fn simple_entry(
     assert_eq!(observed["parsed"]["output"], "out.txt", "{runtime}");
     assert_eq!(observed["parsed"]["count"], 3, "{runtime}");
     assert_eq!(observed["parsed"]["model"], json!(cfg.active_model));
+}
+
+// The parent never changes AIOLM_HOME; every product call is child-isolated.
+mod portable_inventory_cancel {
+    use aiolm_lib::providers::{portable, python_env, ProviderId};
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::io::Read;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    const TEST: &str = "portable_inventory_cancel::export_inventory_cancellation_reclaims_the_child_and_allows_retry";
+    const ISOLATED: &str = "AIOLM_PORTABLE_INVENTORY_CANCEL_ISOLATED";
+    const FIXTURE_ERROR: &str = "synthetic inventory fixture intentionally has no engine";
+
+    struct OwnedHome {
+        base: PathBuf,
+        path: PathBuf,
+    }
+
+    impl OwnedHome {
+        fn new() -> Self {
+            let base = std::env::temp_dir().canonicalize().unwrap();
+            let path = base.join(format!(
+                "aiolm-portable-inventory-cancel-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir(&path).unwrap();
+            let path = path.canonicalize().unwrap();
+            assert_eq!(path.parent(), Some(base.as_path()));
+            Self { base, path }
+        }
+    }
+
+    impl Drop for OwnedHome {
+        fn drop(&mut self) {
+            let path = self.path.canonicalize().unwrap();
+            assert_eq!(path, self.path);
+            assert_eq!(path.parent(), Some(self.base.as_path()));
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    struct ChildOwner(std::process::Child);
+
+    impl Drop for ChildOwner {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn isolate() {
+        let home = OwnedHome::new();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(ISOLATED, "1")
+            .env("AIOLM_HOME", &home.path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        let mut child = ChildOwner(command.spawn().unwrap());
+        let stdout = child.0.stdout.take().unwrap();
+        let stderr = child.0.stderr.take().unwrap();
+        let out = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            std::io::Read::take(stdout, 1024 * 1024)
+                .read_to_end(&mut bytes)
+                .unwrap();
+            bytes
+        });
+        let err = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            std::io::Read::take(stderr, 1024 * 1024)
+                .read_to_end(&mut bytes)
+                .unwrap();
+            bytes
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                child.0.kill().unwrap();
+                child.0.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stdout = out.join().unwrap();
+        let stderr = err.join().unwrap();
+        let stdout = String::from_utf8_lossy(&stdout);
+        let stderr = String::from_utf8_lossy(&stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        assert!(
+            status.is_some_and(|status| status.success()),
+            "isolated fixture failed: {stderr}"
+        );
+        assert!(stdout.contains("test result: ok. 1 passed"));
+    }
+
+    async fn accept_phase(
+        listener: &tokio::net::TcpListener,
+        expected: u8,
+        stages: &mut Vec<u8>,
+    ) -> BufReader<tokio::net::TcpStream> {
+        let (peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+            .await
+            .expect("fixture must actually start")
+            .unwrap();
+        let mut peer = BufReader::new(peer);
+        let mut banner = String::new();
+        tokio::time::timeout(Duration::from_secs(10), peer.read_line(&mut banner))
+            .await
+            .expect("fixture must identify its live stage")
+            .unwrap();
+        assert_eq!(banner.as_bytes(), &[expected, b'\n']);
+        stages.push(banner.as_bytes()[0]);
+        peer
+    }
+
+    async fn closed(peer: &mut BufReader<tokio::net::TcpStream>) -> bool {
+        let mut byte = [0u8; 1];
+        match tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await {
+            Ok(Ok(0)) => true,
+            Ok(Err(error)) => matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ),
+            _ => false,
+        }
+    }
+
+    fn digest(path: &Path) -> String {
+        format!("{:x}", Sha256::digest(fs::read(path).unwrap()))
+    }
+
+    async fn exercise() {
+        let home = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap())
+            .canonicalize()
+            .unwrap();
+        // Even the internal child branch is confined to the exclusively created
+        // synthetic root. It cannot fall through to an ambient application home.
+        assert_eq!(
+            home.parent(),
+            Some(std::env::temp_dir().canonicalize().unwrap().as_path())
+        );
+        let suffix = home
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .strip_prefix("aiolm-portable-inventory-cancel-")
+            .unwrap();
+        uuid::Uuid::parse_str(suffix).unwrap();
+        assert_eq!(fs::read_dir(&home).unwrap().count(), 0);
+        assert_eq!(aiolm_lib::home::aiolm_home(), home);
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let python = home.join(if cfg!(windows) {
+            "aiolm-portable-inventory-fixture.exe"
+        } else {
+            "aiolm-portable-inventory-fixture"
+        });
+        fs::copy(env!("CARGO_BIN_EXE_fake-llama-server"), &python).unwrap();
+        fs::write(
+            python.with_extension("aiolm-portable-inventory-fixture"),
+            format!(
+                "AIOLM_PORTABLE_INVENTORY_FIXTURE_V1\n{}\n",
+                listener.local_addr().unwrap()
+            ),
+        )
+        .unwrap();
+        let runtime_id = "external-inventory-cancel";
+        let directory = python_env::providers_root().join("vllm").join(runtime_id);
+        assert!(directory.starts_with(&home));
+        fs::create_dir_all(&directory).unwrap();
+        let manifest = python_env::PythonRuntimeManifest {
+            format: 1,
+            provider: ProviderId::Vllm,
+            id: runtime_id.into(),
+            kind: python_env::InstallationKind::External,
+            python: python.to_string_lossy().into_owned(),
+            requested_version: None,
+            probe: None,
+        };
+        let registration = directory.join("aiolm-provider-runtime.json");
+        fs::write(&registration, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let registration_bytes = fs::read(&registration).unwrap();
+        let python_digest = digest(&python);
+        let canary = home.join("owned-external-canary.bin");
+        fs::write(&canary, b"synthetic existing external bytes").unwrap();
+        let canary_digest = digest(&canary);
+        let output = home.join("must-not-publish.zip");
+        let progress = Arc::new(AtomicUsize::new(0));
+        let mut stages = Vec::new();
+
+        // An uncancelled public read still executes a real owned command and the
+        // existing marked-record parser. This is synthetic transport, not proof
+        // that Python's actual installed-distribution script has executed.
+        let direct_python = python.clone();
+        let direct = tokio::task::spawn_blocking(move || {
+            portable::read_freeze(ProviderId::Vllm, &direct_python)
+        });
+        let mut peer = accept_phase(&listener, b'I', &mut stages).await;
+        peer.get_mut().write_all(b"S").await.unwrap();
+        let direct_result = tokio::time::timeout(Duration::from_secs(10), direct)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let direct_closed = closed(&mut peer).await;
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let operation_cancel = cancel.clone();
+        let operation_output = output.clone();
+        let operation_progress = progress.clone();
+        let mut operation = tokio::spawn(async move {
+            portable::export_bundle(
+                ProviderId::Vllm,
+                runtime_id,
+                &operation_output,
+                operation_cancel,
+                move |_| {
+                    operation_progress.fetch_add(1, Ordering::AcqRel);
+                },
+            )
+            .await
+        });
+        let mut probe = accept_phase(&listener, b'P', &mut stages).await;
+        probe.get_mut().write_all(b"P").await.unwrap();
+        let first_probe_closed = closed(&mut probe).await;
+        let mut inventory = accept_phase(&listener, b'I', &mut stages).await;
+        let false_while_live = !cancel.load(Ordering::Acquire);
+        cancel.store(true, Ordering::Release);
+        // No sleep decides when cancellation is raised: the real child has
+        // connected and identified the inventory stage. The deadline detects a
+        // failed liveness contract, then releases only that fixture for cleanup.
+        let early = tokio::time::timeout(Duration::from_secs(5), &mut operation).await;
+        let (returned_while_held, cancelled_result) = match early {
+            Ok(result) => (true, result.unwrap()),
+            Err(_) => {
+                inventory.get_mut().write_all(b"S").await.unwrap();
+                (
+                    false,
+                    tokio::time::timeout(Duration::from_secs(10), operation)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                )
+            }
+        };
+        let cancelled_error = cancelled_result.err();
+        let cancelled_child_closed = closed(&mut inventory).await;
+
+        // Retry the same public operation with the same Arc after clearing it.
+        // It must really probe and inventory again, then reject the deliberately
+        // unhealthy engine. No successful export or fake readiness is expected.
+        cancel.store(false, Ordering::Release);
+        let retry_cancel = cancel.clone();
+        let retry_output = output.clone();
+        let retry_progress = progress.clone();
+        let retry = tokio::spawn(async move {
+            portable::export_bundle(
+                ProviderId::Vllm,
+                runtime_id,
+                &retry_output,
+                retry_cancel,
+                move |_| {
+                    retry_progress.fetch_add(1, Ordering::AcqRel);
+                },
+            )
+            .await
+        });
+        let mut probe = accept_phase(&listener, b'P', &mut stages).await;
+        probe.get_mut().write_all(b"P").await.unwrap();
+        let retry_probe_closed = closed(&mut probe).await;
+        let mut inventory = accept_phase(&listener, b'I', &mut stages).await;
+        inventory.get_mut().write_all(b"S").await.unwrap();
+        let retry_error = tokio::time::timeout(Duration::from_secs(10), retry)
+            .await
+            .unwrap()
+            .unwrap()
+            .err();
+        let retry_child_closed = closed(&mut inventory).await;
+        let registration_unchanged = fs::read(&registration).unwrap() == registration_bytes
+            && python_env::read(ProviderId::Vllm, runtime_id).unwrap() == manifest;
+        let existing_bytes_unchanged =
+            digest(&python) == python_digest && digest(&canary) == canary_digest;
+        let no_new_installation = fs::read_dir(directory.parent().unwrap()).unwrap().count() == 1;
+        println!(
+            "PORTABLE_INVENTORY_CANCEL observed_stages={stages:?} live_before_cancel={false_while_live} returned_while_held={returned_while_held} cancelled_error={cancelled_error:?} retry_error={retry_error:?} child_closed=[{direct_closed},{first_probe_closed},{cancelled_child_closed},{retry_probe_closed},{retry_child_closed}] progress={} published={} registration_unchanged={registration_unchanged} existing_bytes_unchanged={existing_bytes_unchanged} no_new_installation={no_new_installation}",
+            progress.load(Ordering::Acquire), output.exists(),
+        );
+        // All children have finished or been released before RED is asserted.
+        assert!(
+            direct_closed
+                && first_probe_closed
+                && cancelled_child_closed
+                && retry_probe_closed
+                && retry_child_closed
+        );
+        assert_eq!(direct_result.len(), 1);
+        assert_eq!(direct_result["synthetic-pkg"].version, "1.0");
+        assert!(direct_result["synthetic-pkg"].direct_url.is_none());
+        assert!(false_while_live);
+        assert!(
+            retry_error.as_deref().is_some_and(
+                |error| error.contains("not importable") && error.contains(FIXTURE_ERROR)
+            )
+        );
+        assert!(!cancel.load(Ordering::Acquire));
+        assert_eq!(progress.load(Ordering::Acquire), 0);
+        assert!(!output.exists());
+        assert!(registration_unchanged && existing_bytes_unchanged && no_new_installation);
+        assert_eq!(stages, b"IPIPI");
+        if !returned_while_held {
+            assert!(cancelled_error.as_deref().is_some_and(|error| error
+                .contains("not importable")
+                && error.contains(FIXTURE_ERROR)));
+        }
+        assert!(
+            returned_while_held,
+            "live inventory did not observe public cancellation before fixture release"
+        );
+        assert!(cancelled_error
+            .as_deref()
+            .is_some_and(|error| error == "portable runtime operation cancelled"));
+    }
+
+    #[test]
+    fn export_inventory_cancellation_reclaims_the_child_and_allows_retry() {
+        if std::env::var_os(ISOLATED).is_none() {
+            isolate();
+            return;
+        }
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(exercise());
+    }
 }
