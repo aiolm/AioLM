@@ -101,6 +101,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
 
   const selectedStatus = selectedSession ?? store.status;
   const embeddingCandidates = [{ ...store.status, id: 'default', name: t('ui.defaultSession') }, ...namedSessions];
+  const availableEmbeddingSessions = embeddingSessions(embeddingCandidates);
   const embeddingChoice = selectEmbeddingSession(embeddingCandidates, selectedSessionId, embeddingSelection);
   const embeddingCopy = embeddingTargetCopy[locale];
   const serverOn = isServerRunning(selectedStatus.state);
@@ -316,11 +317,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
           ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
         ]}
         selectedSessionId={selectedSessionId}
-        embedding={selectedStatus.engine || embeddingSessions(embeddingCandidates).length ? {
+        embedding={selectedStatus.engine || availableEmbeddingSessions.length ? {
           label: embeddingCopy.label, hint: embeddingCopy.hint, value: embeddingSelection,
           options: [{ value: 'auto', label: embeddingCopy.auto }, { value: 'lexical', label: embeddingCopy.lexical },
-            ...embeddingSessions(embeddingCandidates).map(session => ({ value: session.id, label: embeddingSessionLabel(session) })),
-            ...(!['auto', 'lexical'].includes(embeddingSelection) && !embeddingSessions(embeddingCandidates).some(session => session.id === embeddingSelection)
+            ...availableEmbeddingSessions.map(session => ({ value: session.id, label: embeddingSessionLabel(session) })),
+            ...(!['auto', 'lexical'].includes(embeddingSelection) && !availableEmbeddingSessions.some(session => session.id === embeddingSelection)
               ? [{ value: embeddingSelection, label: embeddingCopy.lexical }] : [])],
           onChange: value => { if (requireIdle()) setEmbeddingSelection(value); },
         } : undefined}
