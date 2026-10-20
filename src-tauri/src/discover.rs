@@ -579,11 +579,19 @@ async fn files_at(
 ) -> Result<Vec<HfFile>, String> {
     validate_repo_id(repo_id)?;
     let entries = repository_tree(repo_id, revision, cancel).await?;
+    listed_gguf_files(repo_id, revision, &entries)
+}
+
+fn listed_gguf_files(
+    repo_id: &str,
+    revision: &str,
+    entries: &[ApiTreeEntry],
+) -> Result<Vec<HfFile>, String> {
     // Index companion names once. A repository may list thousands of GGUF
     // variants; searching its whole tree again per row would be quadratic.
     let mut loading: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
-    for entry in &entries {
+    for entry in entries {
         if entry.entry_type != "file" {
             continue;
         }
@@ -594,7 +602,7 @@ async fn files_at(
             .insert(name.into());
     }
     entries
-        .into_iter()
+        .iter()
         .filter(|entry| {
             entry.entry_type == "file" && entry.path.to_ascii_lowercase().ends_with(".gguf")
         })
@@ -624,7 +632,7 @@ async fn files_at(
                 .lfs
                 .as_ref()
                 .and_then(|lfs| lfs.oid.clone())
-                .or(entry.oid);
+                .or_else(|| entry.oid.clone());
             Ok(HfFile {
                 path: entry.path.clone(),
                 size_bytes: entry.size,
@@ -947,8 +955,10 @@ pub async fn download(
     validate_repo_id(repo_id)?;
     validate_repo_path(file_path)?;
     let revision = immutable_revision(repo_id, &cancel).await?;
-    let files = files_at(repo_id, &revision, &cancel).await?;
+    let entries = repository_tree(repo_id, &revision, &cancel).await?;
+    let files = listed_gguf_files(repo_id, &revision, &entries)?;
     let plan = model_download_plan(&files, file_path)?;
+    drop(files);
     if plan.iter().any(|file| file.size_bytes > MAX_MODEL_BYTES) {
         return Err("model file exceeds the 512 GiB safety limit".into());
     }
@@ -972,9 +982,18 @@ pub async fn download(
     } else {
         entrypoint.clone()
     };
-    if include_companions {
-        let entries = repository_tree(repo_id, &revision, &cancel).await?;
-        let plan = snapshots::gguf_companion_plan(&entries, file_path)?;
+    let companions = if include_companions {
+        if cancel.load(Ordering::Acquire) {
+            return Err(DOWNLOAD_CANCELLED.into());
+        }
+        Some(snapshots::gguf_companion_plan(&entries, file_path)?)
+    } else {
+        None
+    };
+    // Both plans use the same verified revision. Release its full tree before
+    // transferring loading assets or model bytes instead of fetching it again.
+    drop(entries);
+    if let Some(plan) = companions {
         let target = target_path(models_dir, repo_id, file_path)?;
         snapshots::download_gguf_companions(
             &app,
@@ -1528,15 +1547,65 @@ mod tests {
             "type": "file",
         }))
         .expect("parse LFS tree entry");
-        let oid = entry
-            .lfs
-            .as_ref()
-            .and_then(|lfs| lfs.oid.clone())
-            .or(entry.oid);
+        let file = listed_gguf_files("owner/model", &"a".repeat(40), &[entry])
+            .unwrap()
+            .pop()
+            .unwrap();
         assert_eq!(
-            expected_sha256(oid.as_deref()),
+            expected_sha256(file.oid.as_deref()),
             Some("849856e1e7eff8ea7425a2a4cee50f3d547165194f50ea3112c9fc07cb08daad".to_string())
         );
+    }
+
+    #[test]
+    fn one_repository_tree_preserves_file_metadata_and_companion_scope() {
+        let entries: Vec<ApiTreeEntry> = serde_json::from_value(serde_json::json!([
+            {"type":"file", "path":"config.json", "size":2},
+            {"type":"file", "path":"tokenizer.json", "size":3},
+            {"type":"file", "path":"Q4/model.GGUF", "size":42, "oid":"git-blob-model"},
+            {"type":"file", "path":"local/config.json", "size":4},
+            {"type":"file", "path":"local/model.gguf", "size":43},
+            {"type":"file", "path":"Q4/mmproj.gguf", "size":44},
+            {"type":"file", "path":"Q4/model-00001-of-00002.gguf", "size":45},
+            {"type":"directory", "path":"not-a-file.gguf"},
+            {"type":"file", "path":"model.safetensors", "size":46}
+        ]))
+        .unwrap();
+        let revision = "b".repeat(40);
+        let files = listed_gguf_files("owner/model", &revision, &entries).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| (
+                    file.path.as_str(),
+                    file.size_bytes,
+                    file.companions_available
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("Q4/model.GGUF", 42, true),
+                ("local/model.gguf", 43, false),
+                ("Q4/mmproj.gguf", 44, false),
+                ("Q4/model-00001-of-00002.gguf", 45, false),
+            ]
+        );
+        assert_eq!(files[0].oid.as_deref(), Some("git-blob-model"));
+        assert!(files[2].is_mmproj);
+        for file in &files {
+            assert!(file.download_url.contains(&format!("/resolve/{revision}/")));
+        }
+        let companions = snapshots::gguf_companion_plan(&entries, &files[0].path).unwrap();
+        assert_eq!(
+            companions
+                .iter()
+                .map(|file| (file.path.as_str(), file.size))
+                .collect::<Vec<_>>(),
+            [("config.json", 2), ("tokenizer.json", 3)]
+        );
+        let unsafe_entry =
+            serde_json::from_value(serde_json::json!({"type":"file", "path":"../escape.gguf"}))
+                .unwrap();
+        assert!(listed_gguf_files("owner/model", &revision, &[unsafe_entry]).is_err());
     }
 
     fn installed_fixture() -> PathBuf {
