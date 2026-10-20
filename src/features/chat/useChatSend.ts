@@ -394,16 +394,20 @@ export function useChatSend({
         role: "user",
         content: images.length ? buildMultimodalContent(requestContent, images, turn.mediaBeforeText) : requestContent,
       };
-      const systemMessage: api.ChatMessage = { role: "system", content: buildPersonalizedSystemPrompt(turn.systemPrompt, turn.personalization) };
-      const rawHistory = historyOverride ?? (retry && failed ? failed.history : [
-        ...(systemMessage.content ? [systemMessage] : []),
+      // Supplied history already carries this turn's frozen system prompt.
+      const suppliedHistory = historyOverride ?? (retry && failed ? failed.history : undefined);
+      const systemMessage: api.ChatMessage | undefined = suppliedHistory === undefined
+        ? { role: "system", content: buildPersonalizedSystemPrompt(turn.systemPrompt, turn.personalization) }
+        : undefined;
+      const rawHistory = suppliedHistory ?? [
+        ...(systemMessage?.content ? [systemMessage] : []),
         ...msgs.map(message => convertHistoryMessage(historyConversionCacheRef.current!, message, turn.mediaBeforeText)),
         userMessage,
-      ]);
+      ];
       const { contextSize, runtimeContext } = chatContextBudget(requestConfig);
       const maxContextTokens = Math.max(1, Math.floor(contextSize * 0.75));
       // Trimming would truncate the system message; local instructions are never cut silently.
-      if (!historyOverride && !(retry && failed) && !runtimeContext && hasPersonalization(turn.personalization)) {
+      if (systemMessage && !runtimeContext && hasPersonalization(turn.personalization)) {
         const systemTokens = estimateMessageTokens(systemMessage);
         if (systemTokens > maxContextTokens - 32) throw new Error(pt("contextTooLarge", { tokens: systemTokens, budget: maxContextTokens }));
       }
