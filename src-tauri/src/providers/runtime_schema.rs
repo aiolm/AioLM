@@ -2234,15 +2234,28 @@ pub fn sensitive_keys(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
 /// and out-of-range indices contribute nothing; the program is not a prefix
 /// index.
 fn sensitive_entry_tokens(effective: &EffectiveSchema) -> BTreeSet<String> {
-    let mut tokens = BTreeSet::new();
     let (Some(supplement), Some(entry)) = (&effective.supplement, &effective.entry) else {
-        return tokens;
+        return BTreeSet::new();
     };
-    for option in &effective.schema.options {
+    sensitive_static_tokens(
+        effective
+            .schema
+            .options
+            .iter()
+            .filter(|option| effective.help_keys.contains(&option.key)),
+        supplement,
+        entry,
+    )
+}
+
+fn sensitive_static_tokens<'a>(
+    options: impl Iterator<Item = &'a OptionDefinition>,
+    supplement: &SupplementView,
+    entry: &CommandEntry,
+) -> BTreeSet<String> {
+    let mut tokens = BTreeSet::new();
+    for option in options {
         if option.position.is_none() || option.target != Target::Launch {
-            continue;
-        }
-        if !effective.help_keys.contains(&option.key) {
             continue;
         }
         if option.sensitive.supported() != Some(&true) {
@@ -2261,6 +2274,41 @@ fn sensitive_entry_tokens(effective: &EffectiveSchema) -> BTreeSet<String> {
         }
     }
     tokens
+}
+
+/// Historical help can prove secrecy without becoming current launch help.
+/// Only roles pinned to that accepted schema can identify its prefix tokens.
+fn historical_sensitive_entry_tokens(
+    root: &Path,
+    selected: &Selected,
+    effective: &EffectiveSchema,
+) -> BTreeSet<String> {
+    let (Some(fingerprint), Some(supplement), Some(entry)) = (
+        &effective.accepted_fingerprint,
+        &effective.supplement,
+        &effective.entry,
+    ) else {
+        return BTreeSet::new();
+    };
+    if effective.help_state != HelpState::Stale
+        || !effective.help_keys.is_empty()
+        || supplement.fingerprint != *fingerprint
+    {
+        return BTreeSet::new();
+    }
+    let key = &selected.key;
+    let Some(mut schema) =
+        runtime_help_store::stored_schema(root, &key.engine, &key.runtime, fingerprint)
+    else {
+        return BTreeSet::new();
+    };
+    if schema.binding.fingerprint != *fingerprint || schema.validate().is_err() {
+        return BTreeSet::new();
+    }
+    if let Some((metadata, builtin)) = compat(selected).ok().and_then(|c| c.metadata) {
+        runtime_metadata::apply(&mut schema, &metadata, builtin, false);
+    }
+    sensitive_static_tokens(schema.options.iter(), supplement, entry)
 }
 
 /// The argv text of every saved value of the selected runtime's secret keys,
@@ -2285,6 +2333,9 @@ fn secret_texts(root: &Path, cfg: &AppConfig) -> BTreeSet<String> {
     if let Ok(selected) = Selected::from_config(cfg) {
         if let Ok(effective) = effective_for(root, cfg, &selected, false) {
             secrets.extend(sensitive_entry_tokens(&effective));
+            secrets.extend(historical_sensitive_entry_tokens(
+                root, &selected, &effective,
+            ));
         }
     }
     secrets
@@ -3617,6 +3668,9 @@ mod tests {
             "current" => current_mask_case(&adapters, &home),
             "stale" => stale_mask_case(&adapters, &home),
             "unknown" => unknown_mask_case(&adapters, &home),
+            "old-parser" => old_parser_static_prefix_mask_case(&adapters, &home),
+            "old-parser-negative" => historical_static_prefix_negative_case(&adapters, &home),
+            "old-parser-metadata" => historical_static_prefix_metadata_case(&adapters, &home),
             mode => panic!("unknown static prefix fixture mode: {mode}"),
         }
     }
@@ -3851,5 +3905,340 @@ mod tests {
             manifest.launch.args[3], secret,
             "validation must preserve the registered argv"
         );
+    }
+    // No real engine is spawned. The existing isolated-home wrapper starts only
+    // this crate's exact Rust test child and requires its one-test pass summary.
+
+    #[test]
+    fn static_entry_prefix_secrets_stay_masked_after_parser_upgrade() {
+        run_static_prefix_fixture("old-parser");
+    }
+
+    fn old_parser_static_prefix_mask_case(root: &Path, home: &Path) {
+        let snapshot_fp = "a".repeat(64);
+        let (cfg, engine, runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &snapshot_fp,
+            &snapshot_fp,
+            documented_sensitive(),
+        );
+        let provider = super::ProviderId::parse(&engine).unwrap();
+        let manifest = registry::manifest(provider, &runtime).unwrap();
+        let registration_path = root.join(&engine).join(&runtime).join("registration.json");
+        let registration_before = std::fs::read(&registration_path).unwrap();
+        let accepted_path = accepted_path(root, &engine, &runtime).unwrap();
+        let accepted_before = std::fs::read(&accepted_path).unwrap();
+        let supplement_path = supplement_path(root, &engine, &runtime).unwrap();
+        let supplement_before = std::fs::read(&supplement_path).unwrap();
+        let cfg_before = serde_json::to_value(&cfg).unwrap();
+        let argv = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "-I".into(),
+            "engine.py".into(),
+            "serve".into(),
+            secret.clone(),
+            "plain-token".into(),
+            format!("--token={secret}"),
+        ];
+        let argv_before = argv.clone();
+        let expected = vec![
+            "C:\\synthetic\\static-prefix-engine.exe".into(),
+            "-I".into(),
+            "engine.py".into(),
+            "serve".into(),
+            REDACTED.into(),
+            "plain-token".into(),
+            format!("--token={REDACTED}"),
+        ];
+        assert_eq!(manifest.launch.args[3], secret);
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), expected);
+
+        let snapshot_path = runtime_help_store::snapshot_root(root, &engine, &runtime)
+            .unwrap()
+            .join(format!("{snapshot_fp}.json"));
+        let snapshot_before = std::fs::read(&snapshot_path).unwrap();
+        let original: Value = serde_json::from_slice(&snapshot_before).unwrap();
+        let mut historical = original.clone();
+        let previous_parser = super::super::runtime_help::PARSER_VERSION
+            .checked_sub(1)
+            .unwrap();
+        historical["report"]["identity"]["parser_version"] = json!(previous_parser);
+        let historical_bytes = serde_json::to_vec(&historical).unwrap();
+        std::fs::write(&snapshot_path, &historical_bytes).unwrap();
+        let mut restored = historical.clone();
+        restored["report"]["identity"]["parser_version"] =
+            original["report"]["identity"]["parser_version"].clone();
+        assert_eq!(
+            restored, original,
+            "the fixture changes only the parser version"
+        );
+
+        assert!(
+            runtime_help_store::load_snapshot(root, &engine, &runtime, &snapshot_fp)
+                .unwrap()
+                .is_none()
+        );
+        let stale = effective(root, &cfg, false).unwrap();
+        assert_eq!(stale.help_state, HelpState::Stale);
+        assert!(stale.help_keys.is_empty());
+        assert!(stale.entry.as_ref().unwrap().positional_roles.is_empty());
+        assert!(sensitive_keys(root, &cfg).contains("marker"));
+        let retained: Map<String, Value> =
+            serde_json::from_value(json!({"marker":"synthetic-retained-user-value"})).unwrap();
+        let launch_error = launch_arguments(root, &cfg, &retained).unwrap_err();
+        assert!(
+            launch_error.contains("accepted help snapshot is missing"),
+            "{launch_error}"
+        );
+        assert!(
+            launch_error.contains("Saved options marker were retained"),
+            "{launch_error}"
+        );
+
+        let actual = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        assert_eq!(argv, argv_before, "the caller's launch argv stays exact");
+        assert_eq!(serde_json::to_value(&cfg).unwrap(), cfg_before);
+        assert_eq!(registry::manifest(provider, &runtime).unwrap(), manifest);
+        assert_eq!(
+            std::fs::read(&registration_path).unwrap(),
+            registration_before
+        );
+        assert_eq!(std::fs::read(&accepted_path).unwrap(), accepted_before);
+        assert_eq!(std::fs::read(&supplement_path).unwrap(), supplement_before);
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), historical_bytes);
+        // Public-output receipt precedes the intended privacy assertion, so RED
+        // retains complete actual/expected argv and byte-ownership identities.
+        println!(
+            "R61_OLD_PARSER_STATIC_MASK {}",
+            json!({
+                "actual": actual, "expected": expected, "argv_unchanged": argv == argv_before,
+                "registration_sha256": format!("{:x}", Sha256::digest(&registration_before)),
+                "snapshot_before_sha256": format!("{:x}", Sha256::digest(&snapshot_before)),
+                "snapshot_historical_sha256": format!("{:x}", Sha256::digest(&historical_bytes)),
+                "accepted_sha256": format!("{:x}", Sha256::digest(&accepted_before)),
+                "supplement_sha256": format!("{:x}", Sha256::digest(&supplement_before)),
+                "help_state": stale.help_state, "launch_error": launch_error,
+            })
+        );
+        assert_eq!(
+            actual, expected,
+            "an explicitly known-sensitive static prefix token stays hidden after a parser upgrade"
+        );
+    }
+
+    #[test]
+    fn historical_static_prefix_mask_requires_reviewed_evidence() {
+        run_static_prefix_fixture("old-parser-negative");
+    }
+
+    fn historical_static_prefix_negative_case(root: &Path, home: &Path) {
+        let fingerprint = "a".repeat(64);
+        let (cfg, engine, runtime, secret) = build_engine_fixture(
+            root,
+            home,
+            &fingerprint,
+            &fingerprint,
+            documented_sensitive(),
+        );
+        let snapshot_path = runtime_help_store::snapshot_root(root, &engine, &runtime)
+            .unwrap()
+            .join(format!("{fingerprint}.json"));
+        let supplement_path = supplement_path(root, &engine, &runtime).unwrap();
+        let supplement_bytes = std::fs::read(&supplement_path).unwrap();
+        let mut snapshot: HelpSnapshot =
+            serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+        snapshot.report.identity.parser_version = super::super::runtime_help::PARSER_VERSION
+            .checked_sub(1)
+            .unwrap();
+        let historical_bytes = serde_json::to_vec(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, &historical_bytes).unwrap();
+        let argv = vec!["serve".into(), secret.clone(), format!("--token={secret}")];
+        let expected = vec![
+            "serve".into(),
+            REDACTED.into(),
+            format!("--token={REDACTED}"),
+        ];
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), expected);
+
+        // These schemas are otherwise valid, so each secrecy/target/index
+        // guard is exercised independently of malformed-schema rejection.
+        let mut unknown = snapshot.clone();
+        unknown.schema.options[1].sensitive.certainty = Certainty::Unknown;
+        let mut public = snapshot.clone();
+        public.schema.options[1].sensitive.value = Some(false);
+        let mut request = snapshot.clone();
+        request.schema.options[1].target = Target::Request;
+        request.schema.options[1].position = None;
+        request.schema.options[1].request_field =
+            documented("marker".into(), &adapter_source("synthetic.role", "1"));
+        let mut flag = snapshot.clone();
+        flag.schema.options[1].position = None;
+        flag.schema.options[1].spellings = vec![Spelling {
+            flag: "--marker".into(),
+            style: ValueStyle::Separate,
+            polarity: None,
+        }];
+        for (name, candidate) in [
+            ("unknown sensitivity", unknown),
+            ("explicit public", public),
+            ("request target", request),
+            ("nonpositional option", flag),
+        ] {
+            candidate.schema.validate().expect(name);
+            std::fs::write(&snapshot_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+            assert_eq!(
+                mask_argv(root, &cfg, argv.clone(), REDACTED),
+                argv,
+                "{name}"
+            );
+        }
+
+        let mut foreign_engine = snapshot.clone();
+        foreign_engine.schema.binding.engine = "custom.foreign".into();
+        let mut foreign_runtime = snapshot.clone();
+        foreign_runtime.schema.binding.runtime = "foreign-runtime".into();
+        let mut foreign_fingerprint = snapshot.clone();
+        foreign_fingerprint.schema.binding.fingerprint = "b".repeat(64);
+        let mut invalid_schema = snapshot.clone();
+        invalid_schema.schema.schema_version = SCHEMA_VERSION + 1;
+        for (name, candidate) in [
+            ("foreign engine", foreign_engine),
+            ("foreign runtime", foreign_runtime),
+            ("foreign schema fingerprint", foreign_fingerprint),
+            ("unsupported schema", invalid_schema),
+        ] {
+            std::fs::write(&snapshot_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+            assert_eq!(
+                mask_argv(root, &cfg, argv.clone(), REDACTED),
+                argv,
+                "{name}"
+            );
+        }
+        std::fs::write(&snapshot_path, b"{").unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::remove_file(&snapshot_path).unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::write(&snapshot_path, &historical_bytes).unwrap();
+
+        let original_supplement: Supplement = serde_json::from_slice(&supplement_bytes).unwrap();
+        let mut foreign_supplement = original_supplement.clone();
+        foreign_supplement.fingerprint = "b".repeat(64);
+        let mut far_index = original_supplement.clone();
+        far_index.options.get_mut("marker").unwrap().positional =
+            Some(PositionalRole::Static { index: 99 });
+        let mut invalid_index = original_supplement.clone();
+        invalid_index.options.get_mut("marker").unwrap().positional =
+            Some(PositionalRole::Static { index: 128 });
+        let mut unknown_key = original_supplement.clone();
+        let role = unknown_key.options.remove("marker").unwrap();
+        unknown_key.options.insert("unknown_slot".into(), role);
+        let mut user_role = original_supplement.clone();
+        user_role.options.get_mut("marker").unwrap().positional = Some(PositionalRole::User);
+        for (name, candidate) in [
+            ("foreign supplement fingerprint", foreign_supplement),
+            ("outside prefix index", far_index),
+            ("invalid stored index", invalid_index),
+            ("unknown slot key", unknown_key),
+            ("user role", user_role),
+        ] {
+            std::fs::write(&supplement_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+            assert_eq!(
+                mask_argv(root, &cfg, argv.clone(), REDACTED),
+                argv,
+                "{name}"
+            );
+        }
+        std::fs::write(&supplement_path, b"{").unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::remove_file(&supplement_path).unwrap();
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        std::fs::write(&supplement_path, &supplement_bytes).unwrap();
+        // Restoring valid evidence restores masking on the next call.
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), expected);
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), historical_bytes);
+        assert_eq!(std::fs::read(&supplement_path).unwrap(), supplement_bytes);
+    }
+
+    #[test]
+    fn historical_static_prefix_secrecy_uses_explicit_runtime_metadata() {
+        run_static_prefix_fixture("old-parser-metadata");
+    }
+
+    fn historical_static_prefix_metadata_case(root: &Path, home: &Path) {
+        let fingerprint = "a".repeat(64);
+        let (cfg, engine, runtime, secret) =
+            build_engine_fixture(root, home, &fingerprint, &fingerprint, Fact::default());
+        let registration_path = root.join(&engine).join(&runtime).join("registration.json");
+        let mut registration: Value =
+            serde_json::from_slice(&std::fs::read(&registration_path).unwrap()).unwrap();
+        registration["manifest"]["option_metadata"] = json!({
+            "version": runtime_metadata::METADATA_VERSION,
+            "engine_id": engine,
+            "adapter": {"id": "synthetic.role", "revision": "1"},
+            "options": [{"positional": "marker", "sensitive": true}],
+        });
+        let registration_bytes = serde_json::to_vec(&registration).unwrap();
+        std::fs::write(&registration_path, &registration_bytes).unwrap();
+        let argv = vec!["serve".into(), secret.clone(), format!("--token={secret}")];
+        let expected = vec![
+            "serve".into(),
+            REDACTED.into(),
+            format!("--token={REDACTED}"),
+        ];
+        let current_mask = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        assert_eq!(current_mask, expected);
+        let snapshot_path = runtime_help_store::snapshot_root(root, &engine, &runtime)
+            .unwrap()
+            .join(format!("{fingerprint}.json"));
+        let mut snapshot: HelpSnapshot =
+            serde_json::from_slice(&std::fs::read(&snapshot_path).unwrap()).unwrap();
+        assert!(snapshot.schema.options[1].sensitive.supported().is_none());
+        snapshot.report.identity.parser_version = super::super::runtime_help::PARSER_VERSION
+            .checked_sub(1)
+            .unwrap();
+        let snapshot_bytes = serde_json::to_vec(&snapshot).unwrap();
+        std::fs::write(&snapshot_path, &snapshot_bytes).unwrap();
+        let stale = effective(root, &cfg, false).unwrap();
+        assert_eq!(stale.help_state, HelpState::Stale);
+        assert!(stale.help_keys.is_empty());
+        assert!(stale.entry.as_ref().unwrap().positional_roles.is_empty());
+        assert!(sensitive_keys(root, &cfg).contains("marker"));
+        let actual = mask_argv(root, &cfg, argv.clone(), REDACTED);
+        assert_eq!(
+            std::fs::read(&registration_path).unwrap(),
+            registration_bytes
+        );
+        assert_eq!(std::fs::read(&snapshot_path).unwrap(), snapshot_bytes);
+        println!(
+            "R61_HISTORICAL_METADATA_STATIC_MASK {}",
+            json!({"actual": actual, "expected": expected, "current_mask": current_mask})
+        );
+        assert_eq!(
+            actual, expected,
+            "explicit runtime metadata preserves historical static-slot secrecy"
+        );
+
+        // Metadata only fills observed unknowns. It cannot contradict an
+        // explicit public fact or infer a slot from an unrelated selector.
+        snapshot.schema.options[1].sensitive = Fact {
+            value: Some(false),
+            certainty: Certainty::Documented,
+            source: Some(adapter_source("synthetic.role", "1")),
+        };
+        std::fs::write(&snapshot_path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        assert!(!sensitive_keys(root, &cfg).contains("marker"));
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
+        snapshot.schema.options[1].sensitive = Fact::default();
+        std::fs::write(&snapshot_path, &snapshot_bytes).unwrap();
+        registration["manifest"]["option_metadata"]["options"][0]["positional"] =
+            json!("unrelated_slot");
+        std::fs::write(
+            &registration_path,
+            serde_json::to_vec(&registration).unwrap(),
+        )
+        .unwrap();
+        assert!(!sensitive_keys(root, &cfg).contains("marker"));
+        assert_eq!(mask_argv(root, &cfg, argv.clone(), REDACTED), argv);
     }
 }
