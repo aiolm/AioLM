@@ -418,6 +418,15 @@ pub fn estimate_memory(cfg: &AppConfig, model: &str, mmproj: &str) -> MemoryEsti
 /// A stopped server has no loaded model. Estimate the selected model then;
 /// while live, retain the identity of the model that is actually loaded.
 pub fn estimate_status_memory(cfg: &AppConfig, state: &ServerState) -> MemoryEstimate {
+    if state.lifecycle.blocks_resource_change() {
+        if let Some(execution) = state
+            .execution
+            .as_ref()
+            .filter(|execution| !execution.active_model.trim().is_empty())
+        {
+            return estimate_memory(execution, &execution.active_model, &execution.mmproj);
+        }
+    }
     if state.lifecycle.blocks_resource_change() && !state.model.is_empty() {
         estimate_memory(cfg, &state.model, &state.mmproj)
     } else {
@@ -586,7 +595,9 @@ impl ErrBuf {
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        strip_ansi(&redact_text(&text, &secret))
+        // Protect both the exact token and the text terminal controls render.
+        let text = strip_ansi(&redact_text(&text, &secret));
+        redact_text(&text, &strip_ansi(&secret))
     }
 
     pub fn clear(&self) {
@@ -1797,8 +1808,8 @@ mod tests {
     fn linux_listener_ownership_identifies_a_real_socket() {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(listener_owned_by_child(std::process::id(), port));
-        assert!(!listener_owned_by_child(0, port));
+        assert!(listener_owned_by_child(std::process::id(), port, None));
+        assert!(!listener_owned_by_child(0, port, None));
     }
 
     #[cfg(unix)]
@@ -2428,5 +2439,176 @@ mod tests {
         let _ = process.wait();
         assert!(still_running);
         assert!(elapsed < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn diagnostic_tokens_remain_redacted_when_terminal_sequences_split_them() {
+        let secret = "synthetic-token";
+        for token in [
+            "synthetic-token",
+            "synthetic-\x1b[31mtoken\x1b[0m",
+            "synthetic-\x1b]0;synthetic-title\x07token",
+            "synthetic-\x1b]0;synthetic-title\x1b\\token",
+        ] {
+            let message = format!("前🙂 \x1b[32mcontext\x1b[0m {token} 終\n");
+            for chunk_size in [1, 3, message.len()] {
+                let ring = ErrBuf::default();
+                ring.set_secret(secret);
+                for chunk in message.as_bytes().chunks(chunk_size) {
+                    ring.push(chunk);
+                }
+                let tail = ring.tail();
+                eprintln!("diagnostic token={token:?} chunk={chunk_size} tail={tail:?}");
+                assert_eq!(tail, "前🙂 context [REDACTED] 終\n");
+                assert!(!tail.contains(secret));
+                assert!(!tail.contains('\x1b'));
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostic_redaction_keeps_empty_clear_and_replacement_secret_contracts() {
+        let ring = ErrBuf::default();
+        ring.push("前🙂 \x1b[32mpublic\x1b[0m synthetic-token".as_bytes());
+        assert_eq!(ring.tail(), "前🙂 public synthetic-token");
+        ring.clear();
+        ring.set_secret("old-token");
+        ring.push(b"old-token");
+        assert_eq!(ring.tail(), "[REDACTED]");
+        ring.clear();
+        assert!(ring.tail().is_empty());
+        ring.push(b"old-\x1b[31mtoken\x1b[0m");
+        assert_eq!(ring.tail(), "[REDACTED]");
+        ring.clear();
+        ring.set_secret("new-token");
+        ring.push(b"old-token new-\x1b]0;title\x07token");
+        assert_eq!(ring.tail(), "old-token [REDACTED]");
+        ring.clear_secret();
+        assert_eq!(ring.tail(), "old-token new-token");
+        ring.clear();
+        assert!(ring.tail().is_empty());
+    }
+
+    #[test]
+    fn diagnostic_redaction_preserves_raw_and_visible_escape_containing_secrets() {
+        let ring = ErrBuf::default();
+        let secret = "synthetic-\x1b[31mtoken\x1b[0m";
+        ring.set_secret(secret);
+        for token in [secret, "synthetic-token", "synthetic-\x1b[32mtoken\x1b[0m"] {
+            ring.clear();
+            ring.push(format!("readable {token} 🙂").as_bytes());
+            assert_eq!(ring.tail(), "readable [REDACTED] 🙂");
+        }
+        ring.clear();
+        ring.set_secret("\x1b[31m\x1b[0m");
+        ring.push(b"visible \x1b[31m\x1b[0m text");
+        assert_eq!(ring.tail(), "visible [REDACTED] text");
+        ring.clear();
+        ring.push(b"visible text");
+        assert_eq!(ring.tail(), "visible text");
+    }
+
+    #[test]
+    fn diagnostic_stream_labels_and_retention_survive_normalized_redaction() {
+        // Supplement to the public push/tail cases: stdout is a private helper.
+        let ring = ErrBuf::default();
+        ring.set_secret("synthetic-token");
+        ring.push_stdout(&vec![b'x'; CAP * 16]);
+        ring.push_stdout("\ncore 🙂 synthetic-\x1b[31mtoken\x1b[0m".as_bytes());
+        ring.push(&vec![b'y'; CAP * 16]);
+        ring.push(b"\nwrapper synthetic-\x1b]0;title\x07token");
+        let tail = ring.tail();
+        eprintln!("diagnostic streams tail={tail:?}");
+        assert!(tail.starts_with("[stdout]\n"));
+        assert!(tail.contains("core 🙂 [REDACTED]"));
+        assert!(tail.contains("\n[stderr]\n"));
+        assert!(tail.contains("wrapper [REDACTED]"));
+        assert!(!tail.contains("synthetic-token"));
+        assert!(!tail.contains('\x1b'));
+        assert!(tail.len() < CAP * 3);
+        ring.clear();
+        assert!(ring.tail().is_empty());
+        ring.push_stdout(b"next synthetic-token");
+        assert_eq!(ring.tail(), "[stdout]\nnext [REDACTED]");
+    }
+
+    #[test]
+    fn status_memory_keeps_fallbacks_for_missing_execution_bindings_and_inactive_sessions() {
+        // Supplementary fallback coverage; actual readiness is exercised by smoke_fake.
+        struct Area(PathBuf);
+        impl Drop for Area {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("aiolm-memory-fallback-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let area = Area(root.clone());
+        let selected = root.join("selected.gguf");
+        let loaded = root.join("loaded.gguf");
+        let projector = root.join("projector.gguf");
+        for (path, mib) in [(&selected, 16), (&loaded, 8), (&projector, 2)] {
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(mib * 1024 * 1024)
+                .unwrap();
+        }
+        let cfg = AppConfig {
+            active_model: selected.to_string_lossy().into_owned(),
+            ctx_size: 1024,
+            parallel: 1,
+            ..Default::default()
+        };
+        let mut state = ServerState::new();
+        state.model = loaded.to_string_lossy().into_owned();
+        state.mmproj = projector.to_string_lossy().into_owned();
+        let expected_live =
+            serde_json::to_value(estimate_memory(&cfg, &state.model, &state.mmproj)).unwrap();
+        let expected_selected =
+            serde_json::to_value(estimate_memory(&cfg, &cfg.active_model, &cfg.mmproj)).unwrap();
+        let mut observations = Vec::new();
+        for lifecycle in [Lifecycle::Starting, Lifecycle::Ready, Lifecycle::Stopping] {
+            state.lifecycle = lifecycle;
+            for binding in [None, Some(""), Some(" \t ")] {
+                state.execution = binding.map(|active_model| AppConfig {
+                    active_model: active_model.into(),
+                    ctx_size: 4096,
+                    parallel: 4,
+                    ..Default::default()
+                });
+                observations.push((
+                    serde_json::to_value(estimate_status_memory(&cfg, &state)).unwrap(),
+                    expected_live.clone(),
+                ));
+            }
+            state.model.clear();
+            observations.push((
+                serde_json::to_value(estimate_status_memory(&cfg, &state)).unwrap(),
+                expected_selected.clone(),
+            ));
+            state.model = loaded.to_string_lossy().into_owned();
+        }
+        state.execution = Some(AppConfig {
+            active_model: state.model.clone(),
+            ctx_size: 4096,
+            parallel: 4,
+            ..Default::default()
+        });
+        for lifecycle in [Lifecycle::Stopped, Lifecycle::Crashed] {
+            state.lifecycle = lifecycle;
+            observations.push((
+                serde_json::to_value(estimate_status_memory(&cfg, &state)).unwrap(),
+                expected_selected.clone(),
+            ));
+        }
+        drop(area);
+        assert!(
+            !root.exists(),
+            "owned fallback fixture removed before assertions"
+        );
+        for (actual, expected) in observations {
+            assert_eq!(actual, expected);
+        }
     }
 }

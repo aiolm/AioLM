@@ -469,10 +469,14 @@ fn session_uses_model_file(server: &server::ServerState, candidate: &Path) -> bo
         && [&server.model, &server.mmproj, &server.draft_model]
             .into_iter()
             .chain(server.execution.iter().flat_map(|cfg| {
-                cfg.lora_adapters
-                    .iter()
-                    .filter(|adapter| adapter.enabled)
-                    .map(|adapter| &adapter.path)
+                [&cfg.active_model, &cfg.mmproj, &cfg.spec_draft_model]
+                    .into_iter()
+                    .chain(
+                        cfg.lora_adapters
+                            .iter()
+                            .filter(|adapter| adapter.enabled)
+                            .map(|adapter| &adapter.path),
+                    )
             }))
             .filter(|path| !path.trim().is_empty())
             .any(|path| model_binding_uses_file(Path::new(path), candidate))
@@ -1049,5 +1053,132 @@ mod tests {
         ] {
             assert_eq!(staged_name(name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn execution_file_bindings_protect_named_sessions_after_served_id_replacement() {
+        // Supplemental exact-guard coverage, not public deletion or readiness proof.
+        struct Area(PathBuf);
+        impl Drop for Area {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let owned_path =
+            std::env::temp_dir().join(format!("aiolm-live-binding-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&owned_path).unwrap();
+        let area = Area(owned_path);
+        let first = area.0.join("loaded-00001-of-00002.gguf");
+        let second = area.0.join("loaded-00002-of-00002.gguf");
+        let unrelated = area.0.join("other.gguf");
+        for path in [&first, &second, &unrelated] {
+            fs::write(path, b"synthetic fixture").unwrap();
+        }
+        let candidates = [
+            first.canonicalize().unwrap(),
+            second.canonicalize().unwrap(),
+        ];
+        let unrelated = unrelated.canonicalize().unwrap();
+        let mut observations = Vec::new();
+        for role in [
+            "primary",
+            "projector",
+            "draft",
+            "enabled-lora",
+            "disabled-lora",
+        ] {
+            let mut cfg = config::AppConfig::default();
+            let binding = first.to_string_lossy().into_owned();
+            match role {
+                "primary" => cfg.active_model = binding,
+                "projector" => cfg.mmproj = binding,
+                "draft" => cfg.spec_draft_model = binding,
+                _ => cfg.lora_adapters.push(config::LoraAdapterConfig {
+                    path: binding,
+                    scale: 1.0,
+                    enabled: role == "enabled-lora",
+                }),
+            }
+            let mut state = crate::server::ServerState::new();
+            state.model = "fake-model".into();
+            state.execution = Some(cfg);
+            for lifecycle in [
+                crate::server::Lifecycle::Starting,
+                crate::server::Lifecycle::Ready,
+                crate::server::Lifecycle::Stopping,
+                crate::server::Lifecycle::Stopped,
+            ] {
+                state.lifecycle = lifecycle;
+                observations.push((
+                    role,
+                    lifecycle,
+                    candidates
+                        .iter()
+                        .map(|path| session_uses_model_file(&state, path))
+                        .collect::<Vec<_>>(),
+                    session_uses_model_file(&state, &unrelated),
+                ));
+            }
+        }
+        let all_files_present = [&first, &second]
+            .iter()
+            .all(|path| fs::read(path).unwrap() == b"synthetic fixture");
+        // Every observation is collected and the owned directory removed before assertions.
+        let owned_path = area.0.clone();
+        drop(area);
+        assert!(
+            !owned_path.exists(),
+            "owned guard fixture directory removed"
+        );
+        assert!(all_files_present);
+        eprintln!("guard observations after checked owned-area cleanup: {observations:?}");
+        for (role, lifecycle, protected, unrelated) in observations {
+            let expected = lifecycle.blocks_resource_change() && role != "disabled-lora";
+            eprintln!("guard {role}/{lifecycle:?}: protected={protected:?}, unrelated={unrelated}, expected={expected}; owned area absent");
+            assert_eq!(protected, [expected, expected], "{role}/{lifecycle:?}");
+            assert!(!unrelated, "{role}/{lifecycle:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_shards_protect_their_link_targets_after_served_id_replacement() {
+        // Supplemental guard-only link case on the already supported Unix path.
+        use std::os::unix::fs::symlink;
+        struct Area(PathBuf);
+        impl Drop for Area {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let owned_path =
+            std::env::temp_dir().join(format!("aiolm-live-binding-link-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&owned_path).unwrap();
+        let area = Area(owned_path);
+        let first_target = area.0.join("first.gguf");
+        let second_target = area.0.join("second.gguf");
+        fs::write(&first_target, b"synthetic first").unwrap();
+        fs::write(&second_target, b"synthetic second").unwrap();
+        let first = area.0.join("loaded-00001-of-00002.gguf");
+        symlink(&first_target, &first).unwrap();
+        symlink(&second_target, area.0.join("loaded-00002-of-00002.gguf")).unwrap();
+        let mut state = crate::server::ServerState::new();
+        state.lifecycle = crate::server::Lifecycle::Ready;
+        state.model = "fake-model".into();
+        state.execution = Some(config::AppConfig {
+            active_model: first.to_string_lossy().into_owned(),
+            ..Default::default()
+        });
+        let protected = session_uses_model_file(&state, &second_target.canonicalize().unwrap());
+        state.lifecycle = crate::server::Lifecycle::Stopped;
+        let stopped = session_uses_model_file(&state, &second_target.canonicalize().unwrap());
+        let owned_path = area.0.clone();
+        drop(area);
+        assert!(
+            !owned_path.exists(),
+            "owned guard fixture directory removed"
+        );
+        assert!(protected);
+        assert!(!stopped);
     }
 }
