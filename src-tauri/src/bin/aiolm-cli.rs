@@ -261,6 +261,16 @@ fn validate_state_url(url: &str, port: u16) -> Result<(), String> {
     }
 }
 
+// Persisted state describes the launch, while saved settings describe the next launch.
+fn recorded_server_port(url: &str) -> Result<u16, String> {
+    let port = reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.port())
+        .ok_or("headless state URL has no explicit port")?;
+    validate_state_url(url, port)?;
+    Ok(port)
+}
+
 fn sensitive_name(name: &str) -> bool {
     let normalized = name.to_ascii_lowercase().replace(['-', ' '], "_");
     [
@@ -702,7 +712,8 @@ async fn server_status() -> Result<Value, String> {
         return Ok(json!({"state":"stopped","managed":false}));
     };
     let cfg = config::load_result()?;
-    if validate_state_url(&state.url, cfg.port).is_err() {
+    let port = recorded_server_port(&state.url);
+    if port.is_err() {
         if !log_collector_is_alive(&state) {
             remove_state();
         }
@@ -710,6 +721,7 @@ async fn server_status() -> Result<Value, String> {
             json!({"state":"crashed","managed":false,"error":"invalid headless state endpoint"}),
         );
     }
+    let port = port?;
     let alive = state_process_is_managed(&state);
     let health = if alive {
         reqwest::Client::new()
@@ -718,9 +730,9 @@ async fn server_status() -> Result<Value, String> {
                     aiolm_lib::providers::provider_of(&cfg),
                     &cfg.active_runtime,
                 )?;
-                format!("http://127.0.0.1:{}{}", cfg.port, manifest.health_path)
+                format!("http://127.0.0.1:{}{}", port, manifest.health_path)
             } else {
-                health_url(&configured_server_url(cfg.port))
+                health_url(&state.url)
             })
             .timeout(std::time::Duration::from_secs(2))
             .send()
@@ -737,7 +749,7 @@ async fn server_status() -> Result<Value, String> {
         "state": if health { "running" } else if alive { "starting_or_unhealthy" } else { "crashed" },
         "managed": true,
         "pid": state.pid,
-        "url": configured_server_url(cfg.port),
+        "url": state.url,
         "model": state.model,
         "engine": state.engine,
         "health": health,
@@ -936,8 +948,7 @@ async fn server_stop_unlocked() -> Result<Value, String> {
     let Some(state) = read_state()? else {
         return Ok(json!({"state":"stopped","managed":false}));
     };
-    let cfg = config::load_result()?;
-    validate_state_url(&state.url, cfg.port)?;
+    recorded_server_port(&state.url)?;
     if process_is_alive(state.pid) && !state_process_is_managed(&state) {
         return Err(
             "headless state does not identify the current process; refusing to stop it".into(),
@@ -1161,15 +1172,6 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
             json!({"ok":true,"deleted":deleted,"kind":"snapshot","unlisted_files_preserved":preserved,"models_dir":root}),
         );
     }
-    if read_state()?.is_some_and(|state| {
-        state_process_is_managed(&state)
-            && fs::canonicalize(&state.model)
-                .ok()
-                .zip(fs::canonicalize(&candidate).ok())
-                .is_some_and(|(model, candidate)| model == candidate)
-    }) {
-        return Err("stop the headless server before deleting the model it is using".into());
-    }
     let safe = deletable_model_path(
         root,
         &candidate,
@@ -1177,6 +1179,9 @@ fn delete_model_value(path: &str) -> Result<Value, String> {
         &cfg.mmproj,
         &cfg.spec_draft_model,
     )?;
+    if let Some(state) = read_state()?.filter(state_process_is_managed) {
+        deletable_model_path(root, &safe, &state.model, "", "")?;
+    }
     if cfg.lora_adapters.iter().any(|adapter| {
         adapter.enabled
             && fs::canonicalize(&adapter.path)
