@@ -33,12 +33,12 @@ export function validateToolArguments(schema: unknown, value: Record<string, unk
   const objectSchema = schema as { required?: unknown; properties?: unknown };
   if (Array.isArray(objectSchema.required)) {
     for (const key of objectSchema.required) {
-      if (typeof key === "string" && !(key in value)) return `missing required field: ${key}`;
+      if (typeof key === "string" && !Object.prototype.hasOwnProperty.call(value, key)) return `missing required field: ${key}`;
     }
   }
   if (objectSchema.properties && typeof objectSchema.properties === "object" && !Array.isArray(objectSchema.properties)) {
     for (const [key, rule] of Object.entries(objectSchema.properties as Record<string, unknown>)) {
-      if (!(key in value) || !rule || typeof rule !== "object") continue;
+      if (!Object.prototype.hasOwnProperty.call(value, key) || !rule || typeof rule !== "object") continue;
       const type = (rule as { type?: unknown }).type;
       const actual = value[key];
       if (type === "string" && typeof actual !== "string") return `${key} must be a string`;
