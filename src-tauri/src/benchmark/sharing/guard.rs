@@ -16,15 +16,25 @@
 use crate::state::AppState;
 use std::sync::atomic::Ordering;
 
+fn non_operation_measurement_active(state: &AppState) -> bool {
+    if state.exiting.load(Ordering::Acquire) {
+        return true;
+    }
+    if state.runtime_busy.load(Ordering::Acquire) {
+        return true;
+    }
+    match state.bench_process.try_lock() {
+        Ok(running) => running.is_some(),
+        Err(_) => true,
+    }
+}
+
 /// True while genuine benchmark measurement activity is running: the
 /// operation lock held across the whole run, a tracked bench process, a
 /// runtime mutation, or application shutdown. A normally serving Ready
 /// server or session explicitly does not count.
 pub(crate) fn measurement_active(state: &AppState) -> bool {
-    if state.exiting.load(Ordering::Acquire) {
-        return true;
-    }
-    if state.runtime_busy.load(Ordering::Acquire) {
+    if non_operation_measurement_active(state) {
         return true;
     }
     // The benchmark runner holds this for the whole measurement; any other
@@ -33,15 +43,33 @@ pub(crate) fn measurement_active(state: &AppState) -> bool {
     if state.operation.try_lock().is_err() {
         return true;
     }
-    match state.bench_process.try_lock() {
-        Ok(running) => {
-            if running.is_some() {
-                return true;
-            }
-        }
-        Err(_) => return true,
-    }
     false
+}
+
+/// Acquire the existing operation gate for one short privileged side effect.
+///
+/// This is deliberately non-blocking: a benchmark owns the same gate for its
+/// whole run and must fail fast rather than queue behind sharing. The returned
+/// owned guard is moved into the blocking closure by the caller, so cancelling
+/// the parent future cannot release the gate while vault or registry work is
+/// still running. Callers must not call [`measurement_active`] while holding
+/// this guard because the guard itself is the operation signal.
+pub(crate) fn try_privileged_operation(
+    state: &AppState,
+) -> Result<tokio::sync::OwnedMutexGuard<()>, super::errors::SharingError> {
+    if non_operation_measurement_active(state) {
+        return Err(super::errors::SharingError::measurement_active());
+    }
+    let gate = state
+        .operation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| super::errors::SharingError::measurement_active())?;
+    if non_operation_measurement_active(state) {
+        drop(gate);
+        return Err(super::errors::SharingError::measurement_active());
+    }
+    Ok(gate)
 }
 
 /// Fail-closed gate used by sharing commands before vault, registry or
@@ -90,6 +118,9 @@ mod tests {
         state.server.lock().unwrap().lifecycle = Lifecycle::Ready;
         assert!(!measurement_active(&state));
         assert!(ensure_idle(&state).is_ok());
+        let gate = try_privileged_operation(&state).unwrap();
+        assert!(state.operation.try_lock().is_err());
+        drop(gate);
         state.server.lock().unwrap().lifecycle = Lifecycle::Stopped;
     }
 }
