@@ -1,0 +1,2 @@
+# This byte-exact help fixture includes the engine's final blank line.
+src-tauri/tests/runtime_binding_arity_help.txt whitespace=-blank-at-eof

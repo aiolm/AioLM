@@ -548,6 +548,7 @@ fn main() {
             return;
         }
         let extra = match mode.as_str() {
+            "binding-arity" => "  --fresh-optional [VALUE]      synthetic optional value\n  --fresh-files FILE [FILE ...]  synthetic one-or-more values\n  --fresh-any [VALUE ...]       synthetic zero-or-more values\n  -i X, --fresh-items X Y       synthetic aliases with unknown count\n",
             "v2" => "  --fresh-extra VALUE   synthetic option added by build two\n",
             // An alias for per-occurrence spelling, and aliases that disagree
             // on the value count so help leaves that count unknown.

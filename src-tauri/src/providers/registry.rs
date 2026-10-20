@@ -2041,12 +2041,6 @@ pub fn check_draft_against_help(
     draft: &EntrypointDraft,
     schema: &super::runtime_options::OptionSchema,
 ) -> Result<(), String> {
-    let documented = |flag: &str| {
-        schema
-            .options
-            .iter()
-            .any(|option| option.spellings.iter().any(|s| s.flag == flag))
-    };
     for (name, binding) in [
         ("model", Some(&draft.model)),
         ("port", Some(&draft.port)),
@@ -2054,10 +2048,21 @@ pub fn check_draft_against_help(
         ("served model", draft.served_model.as_ref()),
     ] {
         match binding {
-            Some(ArgBinding::Flag { flag, .. }) if !documented(flag) => {
-                return Err(format!(
-                    "the {name} binding {flag} is not an option the discovered help documents"
-                ))
+            Some(ArgBinding::Flag { flag, .. }) => {
+                let option = schema
+                    .options
+                    .iter()
+                    .find(|option| option.spellings.iter().any(|s| s.flag == *flag))
+                    .ok_or_else(|| format!(
+                        "the {name} binding {flag} is not an option the discovered help documents"
+                    ))?;
+                if option.arity.supported().is_some_and(|arity| {
+                    arity.min > 1 || arity.max.is_some_and(|max| max < 1)
+                }) {
+                    return Err(format!(
+                        "the {name} binding {flag} supplies one value but the discovered help documents an incompatible value count"
+                    ));
+                }
             }
             Some(ArgBinding::Positional)
                 if !schema.options.iter().any(|option| option.position.is_some()) =>
