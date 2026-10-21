@@ -1152,7 +1152,7 @@ struct Shape {
     tensors: TensorBytes,
 }
 
-fn shape(model: &FoundModel) -> Result<Shape, EstimateNote> {
+fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
     let facts = &model.facts;
     let architecture = facts.architecture.as_deref().unwrap_or_default();
     let qwen_hybrid = matches!(
@@ -1186,7 +1186,7 @@ fn shape(model: &FoundModel) -> Result<Shape, EstimateNote> {
         .head_count
         .as_ref()
         .ok_or(EstimateNote::MissingMetadata)?;
-    let tensors = model.tensors.clone().ok_or(EstimateNote::MissingMetadata)?;
+    let tensors = model.tensors.ok_or(EstimateNote::MissingMetadata)?;
     // Header dimensions are untrusted sizes, not allocations to honour. Reject
     // incomplete layer arrays and implausible shapes instead of manufacturing
     // an MHA fallback or overflowing arithmetic later in the estimate.
@@ -1995,7 +1995,7 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
     if speculative && !cfg.spec_draft_model.trim().is_empty() {
         notes.insert(EstimateNote::Auxiliary);
         match load_model(&cfg.spec_draft_model, &mut disk, true) {
-            Loaded::Ready(model) => match shape(&model) {
+            Loaded::Ready(model) => match shape(model) {
                 Ok(shape) => draft = Some(shape),
                 Err(note) => {
                     notes.insert(note);
@@ -2029,7 +2029,7 @@ fn estimate_memory(cfg: &AppConfig, env: &Environment) -> MemoryEstimate {
     // build_args always supplies n_gpu_layers (including the app default).
     // Upstream fit.cpp does not redistribute experts once it is explicit.
 
-    let main_shape = main.as_ref().map(shape);
+    let main_shape = main.map(shape);
     if let Some(Err(note)) = &main_shape {
         notes.insert(*note);
     }
@@ -3227,7 +3227,7 @@ mod tests {
             Loaded::Ready(found) => found,
             _ => panic!("synthetic model unreadable"),
         };
-        let dimensions = shape(&found).unwrap();
+        let dimensions = shape(found).unwrap();
         assert_eq!(
             dimensions.recurrent_bytes,
             vec![71_680 + 24_576, 0, 71_680, 0]
