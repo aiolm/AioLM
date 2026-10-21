@@ -572,16 +572,16 @@ pub(crate) async fn benchmark_sharing_submit(
     let (base, origin) = service_origin()?;
     let benchmarks = benchmarks_root()?;
     let submission = submission_id.clone();
-    let request_body = body.clone();
-    let (secret, _) = spawn_privileged_blocking(&state, move || {
+    let (secret, body) = spawn_privileged_blocking(&state, move || {
         ensure_generation_live(&submission, &live)?;
-        load_bound_secret(
+        let (secret, _) = load_bound_secret(
             &vault::OsVault,
             &benchmarks,
             &origin,
             &submission,
-            Some(&request_body),
-        )
+            Some(&body),
+        )?;
+        Ok((secret, body))
     })
     .await?;
     ensure_live(&state, &submission_id, &live)?;
