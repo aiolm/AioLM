@@ -202,13 +202,15 @@ pub struct Environment {
 impl Environment {
     pub fn detect(cfg: &AppConfig, runtime_devices: &[String]) -> Self {
         let ram_capacity_bytes = crate::hardware_memory::system_memory_bytes();
-        let profile = (cfg.active_backend != "cpu").then(hardware::detect);
-        let mut env = Self::from_profile(cfg, ram_capacity_bytes, profile.as_ref());
+        let gpus = (cfg.active_backend != "cpu")
+            .then(hardware::detect_gpu_devices)
+            .unwrap_or_default();
+        let mut env = Self::from_gpus(cfg, ram_capacity_bytes, &gpus);
         // A possible integrated adapter in the machine is not proof that the
         // selected runtime device shares RAM. Only resolved selection may use
         // RAM as GPU capacity.
         env.shared_memory = false;
-        if let Some(capacity) = capacity::gpu_capacity(cfg, profile.as_ref(), runtime_devices) {
+        if let Some(capacity) = capacity::gpu_capacity(cfg, &gpus, runtime_devices) {
             env.vram_capacity_bytes = Some(capacity.dedicated_bytes);
             env.shared_memory = capacity.shared;
             env.accelerator = Accelerator::Gpu {
@@ -218,10 +220,10 @@ impl Environment {
         env
     }
 
-    fn from_profile(
+    fn from_gpus(
         cfg: &AppConfig,
         ram_capacity_bytes: Option<u64>,
-        profile: Option<&hardware::DeviceProfile>,
+        gpus: &[hardware::GpuDevice],
     ) -> Self {
         let device_count = |count: usize| {
             if cfg.gpu.split_mode == SplitMode::Single {
@@ -253,9 +255,8 @@ impl Environment {
                 }
             }
         };
-        let eligible: Vec<_> = profile
-            .into_iter()
-            .flat_map(|profile| &profile.gpus)
+        let eligible: Vec<_> = gpus
+            .iter()
             .filter(|gpu| gpu.vendor != GpuVendor::Unknown)
             .filter(|gpu| vendor.is_none_or(|vendor| gpu.vendor == vendor))
             .collect();
@@ -2988,14 +2989,14 @@ mod tests {
     fn runtime_gpu_selection_and_single_mode_preserve_declared_placement() {
         let mut cfg = config(Path::new("synthetic.gguf"));
         cfg.gpu.gpu_ids = vec!["runtime:cuda:CUDA0".into(), "runtime:cuda:CUDA1".into()];
-        let env = Environment::from_profile(&cfg, Some(32 << 30), None);
+        let env = Environment::from_gpus(&cfg, Some(32 << 30), &[]);
         assert_eq!(env.accelerator, Accelerator::Gpu { devices: 2 });
         assert!(env.shared_memory); // Physical mapping is unknown, so do not claim separate pools.
         cfg.gpu.split_mode = SplitMode::Single;
-        assert_eq!(Environment::from_profile(&cfg, None, None).accelerator, GPU);
+        assert_eq!(Environment::from_gpus(&cfg, None, &[]).accelerator, GPU);
         cfg.active_backend = "cpu".into();
         assert_eq!(
-            Environment::from_profile(&cfg, None, None).accelerator,
+            Environment::from_gpus(&cfg, None, &[]).accelerator,
             Accelerator::Cpu
         );
     }

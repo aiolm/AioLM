@@ -369,6 +369,11 @@ fn physical_cores() -> Option<u32> {
     None
 }
 
+/// Current GPU facts without collecting the CPU or full device-profile identity.
+pub(crate) fn detect_gpu_devices() -> Vec<GpuDevice> {
+    detect_gpus().0
+}
+
 pub fn detect() -> DeviceProfile {
     let (gpus, detection) = detect_gpus();
     let cpu = CpuInfo {
