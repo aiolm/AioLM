@@ -182,18 +182,16 @@ fn validate_record(record: &Value) -> Result<(), String> {
     {
         return Err("invalid benchmark record envelope".into());
     }
-    let mut request: PerformanceBenchRequest = serde_json::from_value(
+    let mut request = PerformanceBenchRequest::deserialize(
         record
             .get("request")
-            .cloned()
             .ok_or("benchmark request is missing")?,
     )
     .map_err(|error| error.to_string())?;
     crate::performance_bench::validate_request(&mut request)?;
     if let Some(value) = record.pointer("/result/provenance") {
-        let provenance: super::provenance::BenchmarkProvenance =
-            serde_json::from_value(value.clone())
-                .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
+        let provenance = super::provenance::BenchmarkProvenance::deserialize(value)
+            .map_err(|error| format!("invalid benchmark provenance: {error}"))?;
         provenance.validate(&request.context_profile)?;
     }
     for name in ["runtime_variant", "runtime_plugin_version"] {
@@ -663,6 +661,139 @@ mod tests {
             error: None,
         }
     }
+    #[test]
+    fn import_validates_a_later_duplicate_before_creating_the_store() {
+        let parent = root();
+        let destination = parent.join("absent-import");
+        let first = record("same-id", 1);
+        let mut invalid = record("same-id", 2);
+        invalid["request"]["generation_length"] = json!(0);
+        assert_eq!(
+            import(&destination, vec![first, invalid]).unwrap_err(),
+            "generation length must be 1 to 4096 and repetitions 1 to 10"
+        );
+        assert!(!destination.exists());
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[test]
+    fn import_keeps_original_request_and_provenance_representations() {
+        let root = root();
+        let mut input = record("original-values", 7);
+        input["request"]["prompt_lengths"] = json!([32, 16, 16]);
+        input["request"]["batch_sizes"] = json!([8, 2, 2]);
+        input["request"]["extension"] = serde_json::from_str::<Value>(
+            r#"{"integer":18446744073709551615,"float":1.0,"zero":-0.0,"nested":["한글",null]}"#,
+        )
+        .unwrap();
+        input["result"]["provenance"] = json!({
+            "schema_version": 1, "app_version": "synthetic",
+            "method": {"id": "cold-prompt-serving", "version": 1},
+            "corpus": {"profile": "novel_en", "version": 1, "sha256": "a".repeat(64)},
+            "model": {"status": "unidentified", "format": "gguf",
+                "metadata": {"format": "GGUF", "name": "Synthetic", "base_models": [], "source": "gguf"}},
+            "environment": {"os": "synthetic", "arch": "synthetic",
+                "cpu": {"name": "synthetic", "logical_cores": 1},
+                "installed_gpus": [], "execution": {"mode": "cpu", "selected_gpus": [],
+                    "devices": [], "selection_complete": true}, "detection": "synthetic"},
+            "execution_config": {"threads": -1, "tensor_split": [1.0, -0.0]},
+            "extension": input["request"]["extension"].clone()
+        });
+        let original_bytes = serde_json::to_vec(&input).unwrap();
+        let request_bytes = serde_json::to_vec(&input["request"]).unwrap();
+        let provenance_bytes = serde_json::to_vec(&input["result"]["provenance"]).unwrap();
+        // The journal keeps the supplied values, including unknown fields and Number kinds.
+        let mut result = input["result"].clone();
+        result.as_object_mut().unwrap().remove("rows");
+        let mut expected = encoded(&Entry::Start {
+            record: input.clone(),
+            origin: Some(JournalOrigin::Legacy),
+        })
+        .unwrap();
+        expected.extend(encoded(&Entry::Finish { result }).unwrap());
+        assert_eq!(import(&root, vec![input.clone(), input]).unwrap(), 1);
+        let path = files(&root).unwrap().remove(0);
+        assert_eq!(fs::read(&path).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_vec(&replay_run(&path).unwrap().record).unwrap(),
+            original_bytes
+        );
+        let page = list(&root, 0, 10).unwrap();
+        assert!(page.warnings.is_empty());
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(
+            serde_json::to_vec(&page.records[0]["request"]).unwrap(),
+            request_bytes
+        );
+        assert_eq!(
+            serde_json::to_vec(&page.records[0]["result"]["provenance"]).unwrap(),
+            provenance_bytes
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicates_and_tombstones_do_not_hide_deserialization_errors_or_native_validation() {
+        let root = root();
+        let valid = record("retained-id", 1);
+        assert_eq!(import(&root, vec![valid.clone()]).unwrap(), 1);
+        let path = files(&root).unwrap().remove(0);
+        let bytes = fs::read(&path).unwrap();
+        let mut malformed = valid.clone();
+        // A floating point JSON Number must not silently become a typed u32.
+        malformed["request"]["generation_length"] = json!(8.0);
+        let expected =
+            serde_json::from_value::<PerformanceBenchRequest>(malformed["request"].clone())
+                .unwrap_err()
+                .to_string();
+        let mut malformed_provenance = valid.clone();
+        malformed_provenance["result"]["provenance"] = json!({});
+        let expected_provenance = format!(
+            "invalid benchmark provenance: {}",
+            serde_json::from_value::<super::super::provenance::BenchmarkProvenance>(json!({}))
+                .unwrap_err()
+        );
+        assert_eq!(
+            import(&root, vec![malformed.clone()]).unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
+            expected_provenance
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        delete(&root, "retained-id").unwrap();
+        assert_eq!(import(&root, vec![valid]).unwrap(), 0);
+        assert_eq!(
+            import(&root, vec![malformed.clone()]).unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            import(&root, vec![malformed_provenance.clone()]).unwrap_err(),
+            expected_provenance
+        );
+        assert!(files(&root).unwrap().is_empty());
+        // Fresh ids make native validation independent of duplicate/tombstone rejection.
+        for (mut input, expected) in [
+            (malformed, expected),
+            (malformed_provenance, expected_provenance),
+        ] {
+            input["id"] = json!("standalone-native");
+            input["request"]["run_id"] = json!("standalone-native");
+            input["result"]["run_id"] = json!("standalone-native");
+            let native_error = match RunJournal::begin(&root, input) {
+                Ok(journal) => {
+                    drop(journal);
+                    panic!("invalid native input was accepted");
+                }
+                Err(error) => error,
+            };
+            assert_eq!(native_error, expected);
+            assert!(files(&root).unwrap().is_empty());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn metadata_updates_preserve_unknown_values_and_persisted_rows() {
         let mut stored = Some(record("metadata", 7));
