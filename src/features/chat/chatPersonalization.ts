@@ -149,12 +149,17 @@ export function findSkillReferences(text: string): string[] {
     return line.replace(/(`+)[^`]*?\1/g, " ");
   }).join("\n").normalize("NFC");
   const names: string[] = [];
+  let seenNames: Set<string> | undefined;
   // Skill names may use any script (native folder and front-matter names are Unicode), so letters are matched with \p{L}.
   const pattern = /(^|[^\p{L}\p{M}\p{N}_$\\])\$(\p{L}(?:[\p{L}\p{M}\p{N}_.:-]{0,62}[\p{L}\p{M}\p{N}_])?)(?=$|[\s.,;:!?)\]}"'。、，．！？：；）」』】〉》])/gmu;
   for (const match of prose.matchAll(pattern)) {
     const name = match[2];
     if (name === name.toUpperCase() && /\p{Lu}/u.test(name)) continue;
-    if (!names.some((item) => item.toLowerCase() === name.toLowerCase())) names.push(name);
+    const key = name.toLowerCase();
+    if (seenNames?.has(key)) continue;
+    if (!seenNames) seenNames = new Set();
+    seenNames.add(key);
+    names.push(name);
   }
   return names;
 }

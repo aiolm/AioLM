@@ -8,6 +8,7 @@ const creator: ChatSkill = { id: "agents:skill-creator", name: "skill-creator", 
 describe("skill references", () => {
   it("finds $name references in prose, in order and once each", () => {
     expect(findSkillReferences("Use $pdf, then $skill-creator. Again: $pdf!")).toEqual(["pdf", "skill-creator"]);
+    expect(findSkillReferences(`Use $${"Re\u0301sume\u0301"} then $résumé and $Résumé.`)).toEqual(["Résumé"]);
   });
 
   it("ignores amounts, escapes, inline math, env-style names and code", () => {
@@ -45,9 +46,9 @@ describe("skill references", () => {
   });
 
   it("matches picker ids and $names against the catalog and reports unknown names", () => {
-    const resolved = resolveSkillSelection("Use $Pdf, $Skill-Creator and $nope", ["aiolm:pdf", "aiolm:gone"], [pdf, creator]);
+    const resolved = resolveSkillSelection("Use $Pdf, $Skill-Creator and $nope, $Nope, $later", ["aiolm:pdf", "aiolm:gone"], [pdf, creator]);
     expect(resolved.skills.map((skill) => skill.id)).toEqual(["aiolm:pdf", "agents:skill-creator"]);
-    expect(resolved.unknownNames).toEqual(["nope"]);
+    expect(resolved.unknownNames).toEqual(["nope", "later"]);
     expect(resolved.missingIds).toEqual(["aiolm:gone"]);
   });
 });
