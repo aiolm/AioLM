@@ -599,15 +599,26 @@ pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, String> 
             continue;
         };
         let digest = record_digest(&record);
-        let mut result = record["result"].clone();
-        result
-            .as_object_mut()
-            .ok_or("benchmark result is missing")?
-            .remove("rows");
-        let mut bytes = encoded(&Entry::Start {
+        record["result"]
+            .as_object()
+            .ok_or("benchmark result is missing")?;
+        let start = Entry::Start {
             record,
             origin: Some(JournalOrigin::Legacy),
-        })?;
+        };
+        let mut bytes = encoded(&start)?;
+        let Entry::Start { mut record, .. } = start else {
+            unreachable!("import encoded a start event");
+        };
+        let mut result = record
+            .get_mut("result")
+            .expect("checked benchmark result")
+            .take();
+        drop(record);
+        result
+            .as_object_mut()
+            .expect("checked benchmark result")
+            .remove("rows");
         bytes.extend(encoded(&Entry::Finish { result })?);
         crate::config::atomic_write(&path, &bytes)?;
         sync_parent(&path)?;
@@ -705,6 +716,118 @@ mod tests {
             );
             assert_eq!(stored, before);
         }
+    }
+
+    #[test]
+    fn import_keeps_original_start_and_exact_finish_metadata_bytes() {
+        let root = root();
+        for row_count in [0, 1, 640] {
+            for position in 0..3 {
+                let id = format!("import-metadata-{row_count}-{position}");
+                let mut original = record(&id, (row_count * 3 + position) as u64);
+                original["unknown-root"] =
+                    json!({"text": "e\u{301}😀", "integer": 9007199254740993u64});
+                let mut persisted_row = json!(row());
+                persisted_row["unknown-row"] = json!({"rows": [true, null], "unsigned": u64::MAX});
+                let persisted_rows: Vec<_> = (0..row_count)
+                    .map(|index| {
+                        let mut value = persisted_row.clone();
+                        value["id"] = json!(format!("trial-{index}"));
+                        value
+                    })
+                    .collect();
+                let mut fields = vec![
+                    ("a", json!({"rows": [null, {"한글": "漢字"}]})),
+                    ("run_id", json!(&id)),
+                    ("status", json!("complete")),
+                    ("message", Value::Null),
+                    ("args", json!([])),
+                    ("runtime_version", json!("synthetic")),
+                    ("context_size", json!(256)),
+                    ("parallel", json!(1)),
+                    (
+                        "z",
+                        json!({"min": i64::MIN, "max": u64::MAX, "large": 9007199254740993u64,
+                        "float": 1.0f64, "negative_zero": -0.0f64, "empty": {}, "nullable": null}),
+                    ),
+                ];
+                let at = [0, fields.len() / 2, fields.len()][position];
+                fields.insert(at, ("rows", json!(persisted_rows)));
+                original["result"] = Value::Object(
+                    fields
+                        .into_iter()
+                        .map(|(key, value)| (key.into(), value))
+                        .collect(),
+                );
+
+                // Reference the journal protocol: untouched Start, then clone/remove Finish.
+                // Removal on the actual Map retains both supported backend orderings.
+                let mut expected_result = original["result"].clone();
+                expected_result.as_object_mut().unwrap().remove("rows");
+                let mut expected = encoded(&Entry::Start {
+                    record: original.clone(),
+                    origin: Some(JournalOrigin::Legacy),
+                })
+                .unwrap();
+                expected.extend(
+                    encoded(&Entry::Finish {
+                        result: expected_result,
+                    })
+                    .unwrap(),
+                );
+
+                assert_eq!(import(&root, vec![original.clone()]).unwrap(), 1);
+                let path = path_for(&root, &original, &HashSet::new())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(fs::read(&path).unwrap(), expected);
+                let page = list(&root, 0, 100).unwrap();
+                assert!(page.warnings.is_empty());
+                let stored = page.records.iter().find(|value| value["id"] == id).unwrap();
+                assert_eq!(
+                    serde_json::to_vec(&stored["result"]).unwrap(),
+                    serde_json::to_vec(&original["result"]).unwrap()
+                );
+                assert_eq!(stored["unknown-root"], original["unknown-root"]);
+                assert_eq!(import(&root, vec![original]).unwrap(), 0);
+                assert_eq!(fs::read(path).unwrap(), expected);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn import_keeps_prior_journal_after_failure_and_retries_remaining_records() {
+        let root = root();
+        let first = record("first", 7);
+        let second = record("second", 7);
+        let third = record("third", 7);
+        let path = |value: &Value| path_for(&root, value, &HashSet::new()).unwrap().unwrap();
+        let first_path = path(&first);
+        let second_path = path(&second);
+        let third_path = path(&third);
+        fs::create_dir_all(&second_path).unwrap();
+        let batch = vec![first, second, third];
+
+        assert!(import(&root, batch.clone()).is_err());
+        let first_bytes = fs::read(&first_path).unwrap();
+        assert!(second_path.is_dir());
+        assert!(!third_path.exists());
+        let page = list(&root, 0, 100).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records[0]["id"], "first");
+        assert!(page.warnings.is_empty());
+
+        fs::remove_dir(&second_path).unwrap();
+        assert_eq!(import(&root, batch.clone()).unwrap(), 2);
+        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+        assert!(second_path.is_file() && third_path.is_file());
+        assert_eq!(import(&root, batch).unwrap(), 0);
+        let page = list(&root, 0, 100).unwrap();
+        assert_eq!(page.total, 3);
+        assert_eq!(page.records.len(), 3);
+        assert!(page.warnings.is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
