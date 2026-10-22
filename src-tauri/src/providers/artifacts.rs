@@ -616,8 +616,7 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
                 .map(|map| {
                     map.values()
                         .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect::<BTreeSet<_>>()
+                        .collect::<BTreeSet<&str>>()
                 })
                 .unwrap_or_default();
             let valid = index
@@ -639,8 +638,11 @@ pub fn inspect_snapshot(dir: &Path) -> ModelArtifact {
                 missing.push("model.safetensors.index.json (invalid weight_map)".into());
             }
             for file in required {
-                if !present.contains(&file) {
-                    missing.push(file);
+                if present
+                    .binary_search_by(|name| name.as_str().cmp(file))
+                    .is_err()
+                {
+                    missing.push(file.to_owned());
                 }
             }
         }
@@ -1097,6 +1099,99 @@ mod tests {
             "processors stay optional for text snapshots"
         );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn indexed_snapshot_membership_preserves_exact_names_and_fresh_readiness() {
+        let dir = temp_dir("indexed-membership");
+        let config = br#"{"model_type":"llama"}"#;
+        write(&dir, "config.json", config);
+        write(&dir, "tokenizer.json", b"{}");
+        for name in ["z.safetensors", "B.safetensors", "a.safetensors"] {
+            write(&dir, name, b"x");
+        }
+        write(&dir, "zero.safetensors", b"");
+        let cases: [(Value, &[&str], bool); 3] = [
+            (
+                json!({"weight_map":{"z":"z.safetensors","b":"B.safetensors",
+                    "a":"a.safetensors","duplicate":"B.safetensors"}}),
+                &[],
+                false,
+            ),
+            (
+                json!({"weight_map":{"present":"B.safetensors","case":"b.safetensors",
+                    "zero":"zero.safetensors","duplicate":"b.safetensors",
+                    "composed":"\u{e9}.safetensors","decomposed":"e\u{301}.safetensors"}}),
+                &[
+                    "b.safetensors",
+                    "e\u{301}.safetensors",
+                    "zero.safetensors",
+                    "\u{e9}.safetensors",
+                ],
+                true,
+            ),
+            (
+                json!({"weight_map":{"present":"B.safetensors","invalid":42,
+                    "path":"../escape.safetensors","missing":"b.safetensors",
+                    "duplicate":"b.safetensors"}}),
+                &[
+                    "../escape.safetensors",
+                    "b.safetensors",
+                    "model.safetensors.index.json (invalid weight_map)",
+                ],
+                false,
+            ),
+        ];
+        for (index, expected_missing, partial) in cases {
+            let bytes = serde_json::to_vec(&index).unwrap();
+            write(&dir, "model.safetensors.index.json", &bytes);
+            if partial {
+                write(&dir, "pending.safetensors.aiolm-part", b"x");
+            }
+            let artifact = inspect_snapshot(&dir);
+            assert_eq!(artifact.missing, expected_missing.to_vec());
+            assert_eq!(artifact.incomplete, partial);
+            assert_eq!(
+                artifact.ready_files(),
+                expected_missing.is_empty() && !partial
+            );
+            assert_eq!(artifact.format, ArtifactFormat::HfSafetensors);
+            assert_eq!(artifact.model_type.as_deref(), Some("llama"));
+            assert!(artifact.has_tokenizer && artifact.notes.is_empty());
+            assert_eq!(artifact.ownership, "external");
+            assert_eq!(artifact.file_count, 7);
+            assert_eq!(
+                artifact.size_bytes,
+                (config.len() + 2 + 3 + bytes.len()) as u64
+            );
+            if partial {
+                fs::remove_file(dir.join("pending.safetensors.aiolm-part")).unwrap();
+            }
+        }
+        write(
+            &dir,
+            "model.safetensors.index.json",
+            br#"{"weight_map":{"one":"z.safetensors","two":"z.safetensors"}}"#,
+        );
+        assert!(inspect_snapshot(&dir).ready_files());
+        write(&dir, "z.safetensors", b"");
+        let truncated = inspect_snapshot(&dir);
+        assert_eq!(truncated.missing, vec!["z.safetensors"]);
+        assert!(!truncated.incomplete && !truncated.ready_files());
+        write(&dir, "z.safetensors", b"x");
+        assert!(inspect_snapshot(&dir).ready_files());
+        for name in [
+            "config.json",
+            "tokenizer.json",
+            "z.safetensors",
+            "B.safetensors",
+            "a.safetensors",
+            "zero.safetensors",
+            "model.safetensors.index.json",
+        ] {
+            fs::remove_file(dir.join(name)).unwrap();
+        }
+        fs::remove_dir(dir).unwrap();
     }
 
     #[test]
