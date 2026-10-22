@@ -518,12 +518,12 @@ fn update_result(record: &mut Option<Value>, result: Value) -> Result<(), String
         .and_then(|value| value.get_mut("result"))
         .and_then(Value::as_object_mut)
         .ok_or("benchmark metadata is missing its start event")?;
-    for (key, value) in result
-        .as_object()
-        .ok_or("benchmark metadata must be an object")?
-    {
+    let Value::Object(result) = result else {
+        return Err("benchmark metadata must be an object".into());
+    };
+    for (key, value) in result {
         if key != "rows" {
-            target.insert(key.clone(), value.clone());
+            target.insert(key, value);
         }
     }
     Ok(())
@@ -652,6 +652,61 @@ mod tests {
             error: None,
         }
     }
+    #[test]
+    fn metadata_updates_preserve_unknown_values_and_persisted_rows() {
+        let mut stored = Some(record("metadata", 7));
+        let persisted_rows = json!([row()]);
+        stored.as_mut().unwrap()["result"]["rows"] = persisted_rows.clone();
+        let extension = json!({"nested": [null, {"é": "漢字"}], "enabled": true});
+        for (index, incoming_rows) in [
+            json!([{"must_not_replace": true}]),
+            Value::Null,
+            json!({"not": "rows"}),
+            json!(7),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            update_result(
+                &mut stored,
+                json!({"rows": incoming_rows, "extension": extension.clone(), "nullable": null, "last": index}),
+            )
+            .unwrap();
+            let result = &stored.as_ref().unwrap()["result"];
+            assert_eq!(result["rows"], persisted_rows);
+            assert_eq!(result["extension"], extension);
+            assert_eq!(result.get("nullable"), Some(&Value::Null));
+            assert_eq!(result["last"], json!(index));
+        }
+    }
+
+    #[test]
+    fn metadata_requires_a_start_before_rejecting_non_object_updates() {
+        for incoming in [
+            Value::Null,
+            json!(false),
+            json!("invalid"),
+            json!([]),
+            json!({}),
+        ] {
+            let mut missing = None;
+            assert_eq!(
+                update_result(&mut missing, incoming).unwrap_err(),
+                "benchmark metadata is missing its start event"
+            );
+            assert!(missing.is_none());
+        }
+        for incoming in [Value::Null, json!(false), json!("invalid"), json!([])] {
+            let mut stored = Some(record("metadata", 7));
+            let before = stored.clone();
+            assert_eq!(
+                update_result(&mut stored, incoming).unwrap_err(),
+                "benchmark metadata must be an object"
+            );
+            assert_eq!(stored, before);
+        }
+    }
+
     #[test]
     fn history_keeps_more_than_twenty_runs_and_import_preserves_native_ids() {
         let root = root();
