@@ -348,8 +348,8 @@ fn prepare_inner(
 ) -> Result<Prepared, SharingError> {
     valid_submission_id(submission_id)?;
     let bytes = transport::submission_bytes(body)?;
-    probe_body_submission(&bytes, submission_id)?;
-    let body_sha256 = transport::body_sha256_hex(&bytes);
+    probe_body_submission(bytes, submission_id)?;
+    let body_sha256 = transport::body_sha256_hex(bytes);
     let destination = config::submit_endpoint_for_origin(origin);
     let _lock = registry::submission_lock(benchmarks, submission_id)?;
     ensure_record(
@@ -412,7 +412,7 @@ fn load_bound_secret(
                 "This submission was restored from a backup.",
             ));
         }
-        if transport::body_sha256_hex(&bytes) != binding.body_sha256 {
+        if transport::body_sha256_hex(bytes) != binding.body_sha256 {
             return Err(SharingError::binding_conflict_msg(
                 "This submission is already bound to different data.",
             ));
@@ -588,7 +588,7 @@ pub(crate) async fn benchmark_sharing_submit(
     // Accepted replays may submit without a live permit; the server returns
     // the existing receipt. A missing permit is never an error here.
     let permit = permits::live_permit(&submission_id).map(|(permit, _)| permit);
-    let bytes = transport::submission_bytes(&body)?;
+    transport::submission_bytes(&body)?;
     let client = transport::shared_client()?;
     let outcome = abortable_request(
         &submission_id,
@@ -599,7 +599,7 @@ pub(crate) async fn benchmark_sharing_submit(
             &secret,
             permit.as_deref(),
             &submission_id,
-            &bytes,
+            body.into_bytes(),
         ),
     )
     .await?;
@@ -1677,7 +1677,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         });
         let client = transport::http_client().unwrap();
-        let body_bytes = body.clone().into_bytes();
+        let body_bytes = body.into_bytes();
         let live = snapshot_live(&id);
         let canceller = id.clone();
         tokio::spawn(async move {
@@ -1695,7 +1695,7 @@ mod tests {
                     &secret,
                     None,
                     &id,
-                    &body_bytes,
+                    body_bytes.clone(),
                 ),
             ),
         )
@@ -1739,7 +1739,7 @@ mod tests {
         let outcome = abortable_request(
             &id,
             &snapshot_live(&id),
-            transport::submit_benchmark_run(&client, &live_url, &secret, None, &id, &body_bytes),
+            transport::submit_benchmark_run(&client, &live_url, &secret, None, &id, body_bytes),
         )
         .await
         .unwrap();
@@ -1774,7 +1774,7 @@ mod tests {
             permits::note_measurement_start();
         });
         let secret = [1u8; OWNER_SECRET_LEN];
-        let empty: &[u8] = b"{}";
+        let empty = b"{}".to_vec();
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             abortable_request(

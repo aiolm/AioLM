@@ -152,7 +152,7 @@ fn validate_token_field(value: &str, max: usize) -> Result<(), SharingError> {
 
 /// Publication body presented for binding or submission: non-empty UTF-8
 /// within the 4 MiB whole-request budget. Returns the exact bytes.
-pub(crate) fn submission_bytes(body: &str) -> Result<Vec<u8>, SharingError> {
+pub(crate) fn submission_bytes(body: &str) -> Result<&[u8], SharingError> {
     let bytes = body.as_bytes();
     if bytes.is_empty() {
         return Err(SharingError::binding_conflict_msg(
@@ -164,7 +164,7 @@ pub(crate) fn submission_bytes(body: &str) -> Result<Vec<u8>, SharingError> {
             "The publication body exceeds the size limit.",
         ));
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 pub(crate) fn body_sha256_hex(bytes: &[u8]) -> String {
@@ -289,14 +289,14 @@ pub(crate) async fn submit_benchmark_run(
     secret: &[u8; OWNER_SECRET_LEN],
     permit: Option<&str>,
     submission_id: &str,
-    body: &[u8],
+    body: Vec<u8>,
 ) -> Result<SubmitOutcome, SharingError> {
     let mut request = client
         .post(config::submit_endpoint(base))
         .header("Authorization", bearer_header(secret))
         .header("Idempotency-Key", submission_id)
         .header("Content-Type", "application/json")
-        .body(body.to_vec());
+        .body(body);
     if let Some(permit) = permit {
         request = request.header("X-Upload-Permit", permit);
     }
@@ -474,8 +474,15 @@ mod tests {
 
     #[tokio::test]
     async fn submit_binds_exact_body_and_headers() {
-        let expected_body = br#"{"benchmark":{"submission_id":"123e4567-e89b-42d3-a456-426614174000"},"description_md":"hi"}"#.to_vec();
+        let expected_body = concat!(
+            r#"{"benchmark":{"submission_id":"123e4567-e89b-42d3-a456-426614174000"},"description_md":""#,
+            "hi-\u{4e16}\u{754c}-\u{1f680}",
+            r#""}"#,
+        )
+        .as_bytes()
+        .to_vec();
         let expected_bearer = format!("Bearer {}", URL_SAFE_NO_PAD.encode(test_secret()));
+        let expected_for_server = expected_body.clone();
         let (base_url, server) = mock_server(1, move |head, body| {
             assert!(head.starts_with("POST /v1/benchmark-runs HTTP/1.1"));
             // Header names arrive lowercased on the wire; values are exact.
@@ -492,7 +499,7 @@ mod tests {
             assert_eq!(auth, expected_bearer);
             assert!(lower.contains("idempotency-key: 123e4567-e89b-42d3-a456-426614174000"));
             assert!(lower.contains("x-upload-permit: permit-abc"));
-            assert_eq!(body, expected_body);
+            assert_eq!(body, expected_for_server);
             (
                 201,
                 vec![],
@@ -509,7 +516,7 @@ mod tests {
             &test_secret(),
             Some("permit-abc"),
             "123e4567-e89b-42d3-a456-426614174000",
-            br#"{"benchmark":{"submission_id":"123e4567-e89b-42d3-a456-426614174000"},"description_md":"hi"}"#,
+            expected_body,
         )
         .await
         .unwrap();
@@ -542,7 +549,7 @@ mod tests {
             &test_secret(),
             None,
             "123e4567-e89b-42d3-a456-426614174000",
-            b"{}",
+            b"{}".to_vec(),
         )
         .await
         .unwrap();
@@ -556,7 +563,7 @@ mod tests {
             &test_secret(),
             None,
             "123e4567-e89b-42d3-a456-426614174000",
-            b"{}",
+            b"{}".to_vec(),
         )
         .await;
         drop(outcome);
@@ -572,7 +579,7 @@ mod tests {
             &test_secret(),
             None,
             "123e4567-e89b-42d3-a456-426614174000",
-            b"{}",
+            b"{}".to_vec(),
         )
         .await;
         assert!(oversized.is_err());
@@ -836,7 +843,7 @@ mod tests {
                 &secret,
                 None,
                 "123e4567-e89b-42d3-a456-426614174000",
-                b"{}",
+                b"{}".to_vec(),
             ),
             registration,
         );
@@ -849,8 +856,15 @@ mod tests {
     fn body_limits_are_enforced_before_network() {
         assert!(submission_bytes("").is_err());
         assert!(submission_bytes(&"x".repeat(MAX_BODY_BYTES + 1)).is_err());
+        let exact_utf8 = "\u{1f600}".repeat(MAX_BODY_BYTES / "\u{1f600}".len());
+        assert_eq!(exact_utf8.len(), MAX_BODY_BYTES);
+        let accepted = submission_bytes(&exact_utf8).unwrap();
+        assert_eq!(accepted.len(), MAX_BODY_BYTES);
+        let over_limit = format!("{exact_utf8}!");
+        assert_eq!(over_limit.len(), MAX_BODY_BYTES + 1);
+        assert!(submission_bytes(&over_limit).is_err());
         let bytes = submission_bytes(r#"{"a":1}"#).unwrap();
-        assert_eq!(body_sha256_hex(&bytes).len(), 64);
+        assert_eq!(body_sha256_hex(bytes).len(), 64);
     }
 
     const HANDOFF_ID: &str = "0b7c5f0e-3d1a-4c2b-9e8f-1a2b3c4d5e6f";
