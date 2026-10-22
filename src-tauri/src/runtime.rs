@@ -2886,41 +2886,74 @@ fn help_supports_dflash(help: &str) -> bool {
         .any(|token| token == "draft-dflash")
 }
 
+/// Metadata consumed by provider discovery, without a filesystem size total.
+pub(crate) struct InstalledRuntimeMetadata {
+    pub build: String,
+    pub backend: String,
+    pub dir: String,
+    pub version: Option<RuntimeVersion>,
+}
+
+// Project each directory before inspecting the next entry. In particular, full
+// listing must measure size before reading that entry's manifests.
+fn installed_directories_in(root: &Path) -> impl Iterator<Item = (String, String, PathBuf)> {
+    fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (build, backend) = name.split_once('-')?;
+            if validate_runtime_identifiers(backend, build).is_err() {
+                return None;
+            }
+            let dir = entry.path();
+            if !dir.join(server_executable_name()).is_file()
+                || !dir.join(bench_executable_name()).is_file()
+            {
+                return None;
+            }
+            Some((build.into(), backend.into(), dir))
+        })
+}
+
 pub fn list_installed() -> Vec<InstalledRuntime> {
-    let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(runtimes_root()) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let Some((build, backend)) = name.split_once('-') else {
-            continue;
-        };
-        if validate_runtime_identifiers(backend, build).is_err() {
-            continue;
-        }
-        let dir = entry.path();
-        if !dir.join(server_executable_name()).is_file()
-            || !dir.join(bench_executable_name()).is_file()
-        {
-            continue;
-        }
-        out.push(InstalledRuntime {
-            build: build.into(),
-            backend: backend.into(),
+    list_installed_in(&runtimes_root())
+}
+
+pub(crate) fn list_installed_in(root: &Path) -> Vec<InstalledRuntime> {
+    let mut out = installed_directories_in(root)
+        .map(|(build, backend, dir)| InstalledRuntime {
+            build,
+            backend,
             dir: dir.to_string_lossy().to_string(),
             size_mb: dir_size(&dir),
             version: read_version_manifest(&dir),
             source: read_source_manifest(&dir),
             replaced: None,
-        });
-    }
+        })
+        .collect::<Vec<_>>();
+    out.sort_by(|a, b| b.build.cmp(&a.build).then(a.backend.cmp(&b.backend)));
+    out
+}
+
+pub(crate) fn list_installed_metadata() -> Vec<InstalledRuntimeMetadata> {
+    list_installed_metadata_in(&runtimes_root())
+}
+
+pub(crate) fn list_installed_metadata_in(root: &Path) -> Vec<InstalledRuntimeMetadata> {
+    let mut out = installed_directories_in(root)
+        .map(|(build, backend, dir)| InstalledRuntimeMetadata {
+            build,
+            backend,
+            dir: dir.to_string_lossy().to_string(),
+            version: read_version_manifest(&dir),
+        })
+        .collect::<Vec<_>>();
     out.sort_by(|a, b| b.build.cmp(&a.build).then(a.backend.cmp(&b.backend)));
     out
 }
@@ -6960,8 +6993,186 @@ fn extract(path: &Path, dest: &Path, cancel: &Arc<AtomicBool>) -> Result<(), Str
 }
 
 #[cfg(test)]
+pub(crate) mod listing_fixture {
+    use super::*;
+
+    pub(crate) struct Fixture {
+        pub root: PathBuf,
+        files: Vec<PathBuf>,
+        directories: Vec<PathBuf>,
+    }
+
+    fn check_ancestors(path: &Path) {
+        for ancestor in path.ancestors() {
+            let metadata = fs::symlink_metadata(ancestor).unwrap();
+            assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                assert_eq!(metadata.file_attributes() & 0x400, 0, "reparse ancestor");
+            }
+        }
+    }
+
+    impl Fixture {
+        pub(crate) fn new() -> Self {
+            let parent = fs::canonicalize(std::env::temp_dir()).unwrap();
+            check_ancestors(&parent);
+            let root = parent.join(format!("rp-{}", Uuid::new_v4().simple()));
+            fs::create_dir(&root).unwrap();
+            check_ancestors(&root);
+            Self {
+                directories: vec![root.clone()],
+                root,
+                files: vec![],
+            }
+        }
+
+        pub(crate) fn directory(&mut self, relative: &str) -> PathBuf {
+            let mut directory = self.root.clone();
+            for component in Path::new(relative).components() {
+                assert!(matches!(component, Component::Normal(_)));
+                directory.push(component);
+                if !self.directories.contains(&directory) {
+                    check_ancestors(directory.parent().unwrap());
+                    fs::create_dir(&directory).unwrap();
+                    self.directories.push(directory.clone());
+                }
+                check_ancestors(&directory);
+            }
+            directory
+        }
+
+        pub(crate) fn write(&mut self, relative: &str, bytes: &[u8]) {
+            let relative_path = Path::new(relative);
+            assert!(relative_path
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))));
+            if let Some(parent) = relative_path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                self.directory(parent.to_str().unwrap());
+            }
+            let file = self.root.join(relative_path);
+            if !self.files.contains(&file) {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&file)
+                    .unwrap();
+                self.files.push(file.clone());
+            }
+            let metadata = fs::symlink_metadata(&file).unwrap();
+            assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+            fs::write(file, bytes).unwrap();
+        }
+
+        pub(crate) fn remove_file(&mut self, relative: &str) {
+            let file = self.root.join(relative);
+            assert!(self.files.contains(&file));
+            fs::remove_file(&file).unwrap();
+            self.files.retain(|entry| entry != &file);
+        }
+
+        pub(crate) fn finish(self) {
+            for file in self.files {
+                check_ancestors(file.parent().unwrap());
+                let metadata = fs::symlink_metadata(&file).unwrap();
+                assert!(metadata.is_file() && !metadata.file_type().is_symlink());
+                fs::remove_file(file).unwrap();
+            }
+            for directory in self.directories.into_iter().rev() {
+                check_ancestors(&directory);
+                fs::remove_dir(directory).unwrap();
+            }
+        }
+    }
+
+    pub(crate) fn assert_json(label: &str, actual: serde_json::Value, expected: serde_json::Value) {
+        println!(
+            "RUNTIME_LISTING_JSON {}",
+            serde_json::json!({"case":label,"actual":actual,"expected":expected})
+        );
+        assert_eq!(actual, expected, "{label}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_runtime_listing_keeps_json_order_and_fresh_nested_sizes() {
+        use super::listing_fixture::{assert_json, Fixture};
+        use serde_json::json;
+        let mut fixture = Fixture::new();
+        for name in ["b10-cpu", "b9-cuda", "b9-cpu"] {
+            fixture.write(&format!("{name}/{}", server_executable_name()), b"server");
+            fixture.write(&format!("{name}/{}", bench_executable_name()), b"bench");
+        }
+        let version = br#"{"semver":"synthetic","build":9,"commit":"abc"}"#;
+        let source = br#"{"pull_request":7,"repository":"synthetic/runtime","commit":"abc","archive_sha256":"fixture","url":"synthetic"}"#;
+        fixture.write("b9-cpu/aiolm-runtime.json", version);
+        fixture.write("b9-cpu/aiolm-runtime-source.json", source);
+        fixture.write("b9-cuda/llama-board-runtime.json", version);
+        fixture.write("b9-cpu/nested/payload", b"12345");
+        let mb = |bytes: usize| bytes as f64 / 1_048_576.0;
+        let mut expected = json!([
+            {"build":"b9","backend":"cpu","dir":fixture.root.join("b9-cpu").to_str().unwrap(),"size_mb":mb(11+version.len()+source.len()+5),
+             "version":{"semver":"synthetic","build":9,"commit":"abc"},
+             "source":{"pull_request":7,"repository":"synthetic/runtime","commit":"abc","archive_sha256":"fixture","url":"synthetic","head_ref":"","author":"","state":"","fork":false,"commit_check":""}},
+            {"build":"b9","backend":"cuda","dir":fixture.root.join("b9-cuda").to_str().unwrap(),"size_mb":mb(11+version.len()),"version":{"semver":"synthetic","build":9,"commit":"abc"}},
+            {"build":"b10","backend":"cpu","dir":fixture.root.join("b10-cpu").to_str().unwrap(),"size_mb":mb(11)}
+        ]);
+        assert_json(
+            "full initial",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected.clone(),
+        );
+        fixture.write("b9-cpu/nested/payload", b"12345678901234567");
+        expected[0]["size_mb"] = json!(mb(11 + version.len() + source.len() + 17));
+        assert_json(
+            "full grown child",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected.clone(),
+        );
+        fixture.remove_file("b9-cpu/nested/payload");
+        expected[0]["size_mb"] = json!(mb(11 + version.len() + source.len()));
+        assert_json(
+            "full removed child",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected,
+        );
+        fixture.finish();
+    }
+
+    #[test]
+    fn full_runtime_listing_keeps_the_depth_boundary() {
+        use super::listing_fixture::{assert_json, Fixture};
+        use serde_json::json;
+        let mut fixture = Fixture::new();
+        fixture.write(&format!("b1-cpu/{}", server_executable_name()), b"s");
+        fixture.write(&format!("b1-cpu/{}", bench_executable_name()), b"b");
+        let mut relative = String::from("b1-cpu");
+        for depth in 1..=33 {
+            relative.push_str("/d");
+            fixture.directory(&relative);
+            if depth == 32 {
+                fixture.write(&format!("{relative}/included"), b"12345");
+            }
+            if depth == 33 {
+                fixture.write(&format!("{relative}/excluded"), b"1234567890123");
+            }
+        }
+        let expected = json!([{"build":"b1","backend":"cpu","dir":fixture.root.join("b1-cpu").to_str().unwrap(),"size_mb":7.0/1_048_576.0}]);
+        assert_json(
+            "full depth boundary",
+            serde_json::to_value(list_installed_in(&fixture.root)).unwrap(),
+            expected,
+        );
+        fixture.finish();
+    }
 
     /// Architecture list used wherever a test only cares about the other
     /// configure options; the CUDA policy has its own tests.

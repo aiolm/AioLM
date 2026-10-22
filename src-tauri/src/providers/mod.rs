@@ -326,9 +326,10 @@ pub fn selection_of(cfg: &crate::config::AppConfig) -> ExecutionSelection {
     }
 }
 
-/// Every runtime the app can offer, llama.cpp first, in a stable order.
-pub fn list_runtime_instances() -> Vec<RuntimeInstance> {
-    let mut instances = crate::runtime::list_installed()
+fn llama_runtime_instances(
+    runtimes: Vec<crate::runtime::InstalledRuntimeMetadata>,
+) -> Vec<RuntimeInstance> {
+    runtimes
         .into_iter()
         .map(|runtime| RuntimeInstance {
             provider: ProviderId::Llama,
@@ -343,14 +344,19 @@ pub fn list_runtime_instances() -> Vec<RuntimeInstance> {
             variant: None,
             plugin_version: None,
             installation: "managed",
-            location: runtime.dir.clone(),
+            location: runtime.dir,
             available: true,
             problems: Vec::new(),
             backend: Some(runtime.backend),
             build: Some(runtime.build),
             server_flags: None,
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// Every runtime the app can offer, llama.cpp first, in a stable order.
+pub fn list_runtime_instances() -> Vec<RuntimeInstance> {
+    let mut instances = llama_runtime_instances(crate::runtime::list_installed_metadata());
     for provider in [ProviderId::Vllm, ProviderId::MlxVlm] {
         instances.extend(python_env::list(provider).into_iter().map(|manifest| {
             let availability = provider.availability();
@@ -458,6 +464,85 @@ pub async fn refresh_selected_python_runtime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_runtime_projection_preserves_filters_manifest_precedence_and_fresh_edits() {
+        use crate::runtime::{
+            bench_executable_name, list_installed_metadata_in,
+            listing_fixture::{assert_json, Fixture},
+            server_executable_name,
+        };
+        use serde_json::json;
+        let mut fixture = Fixture::new();
+        for name in [
+            "b10-cpu",
+            "b9-future-backend",
+            "b9-cuda",
+            "b9-cpu",
+            "b11-cpu",
+            "invalid-cpu",
+            "nohyphen",
+        ] {
+            fixture.write(&format!("{name}/{}", server_executable_name()), b"s");
+            fixture.write(&format!("{name}/{}", bench_executable_name()), b"b");
+        }
+        fixture.write(&format!("b3-cpu/{}", server_executable_name()), b"s");
+        fixture.write(&format!("b2-cpu/{}", bench_executable_name()), b"b");
+        fixture.write("b1-cpu", b"not a directory");
+        let current = br#"{"semver":"current","build":9,"commit":"current"}"#;
+        let legacy = br#"{"semver":"legacy","build":2,"commit":"legacy"}"#;
+        fixture.write("b9-cpu/aiolm-runtime.json", current);
+        fixture.write("b9-cpu/llama-board-runtime.json", legacy);
+        fixture.write("b9-cuda/llama-board-runtime.json", legacy);
+        fixture.write("b10-cpu/aiolm-runtime.json", b"{bad");
+        fixture.write("b10-cpu/llama-board-runtime.json", legacy);
+        fixture.directory("b11-cpu/aiolm-runtime.json");
+        fixture.write("b11-cpu/llama-board-runtime.json", legacy);
+        fixture.write("b9-cpu/aiolm-runtime-source.json", br#"{"pull_request":7,"repository":"synthetic/runtime","commit":"abc","archive_sha256":"fixture","url":"synthetic"}"#);
+        fixture.write("b9-cuda/llama-board-runtime-source.json", b"{bad");
+        let expected_entry = |id: &str, build: &str, backend: &str, version: Option<&str>| {
+            let mut entry = json!({"provider":"llama.cpp","id":id,"engine":"llama.cpp","server":"llama-server","accelerator":backend,"installation":"managed","location":fixture.root.join(id).to_str().unwrap(),"available":true,"problems":[],"backend":backend,"build":build});
+            if let Some(version) = version {
+                entry["version"] = json!(version);
+            }
+            entry
+        };
+        let mut expected = json!([
+            expected_entry("b9-cpu", "b9", "cpu", Some("b9 (current)")),
+            expected_entry("b9-cuda", "b9", "cuda", Some("b2 (legacy)")),
+            expected_entry("b9-future-backend", "b9", "future-backend", None),
+            expected_entry("b11-cpu", "b11", "cpu", None),
+            expected_entry("b10-cpu", "b10", "cpu", None)
+        ]);
+        let read = |root: &std::path::Path| {
+            serde_json::to_value(llama_runtime_instances(list_installed_metadata_in(root))).unwrap()
+        };
+        assert_json(
+            "managed initial filters and precedence",
+            read(&fixture.root),
+            expected.clone(),
+        );
+        assert_json(
+            "managed missing root",
+            read(&fixture.root.join("absent")),
+            json!([]),
+        );
+        fixture.write(
+            "b9-cpu/aiolm-runtime.json",
+            br#"{"semver":"edited","build":12,"commit":"fresh"}"#,
+        );
+        expected[0]["version"] = json!("b12 (fresh)");
+        fixture.remove_file("b10-cpu/aiolm-runtime.json");
+        expected[4]["version"] = json!("b2 (legacy)");
+        fixture.remove_file(&format!("b9-future-backend/{}", bench_executable_name()));
+        expected.as_array_mut().unwrap().remove(2);
+        assert_json(
+            "managed fresh manifest and executable edits",
+            read(&fixture.root),
+            expected,
+        );
+        fixture.finish();
+    }
 
     #[test]
     fn provider_spellings_round_trip_and_legacy_empty_means_llama() {
