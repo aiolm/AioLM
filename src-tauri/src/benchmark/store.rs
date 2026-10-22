@@ -267,12 +267,64 @@ fn existing_digests(root: &Path) -> Result<HashSet<String>, String> {
         .collect())
 }
 
+// Constructors stay inside this module so a path decision requires evidence
+// that the exact immutable record passed the complete validator.
+// Revisit this proof if validation gains external freshness checks or other
+// non-pure dependencies.
+mod validated {
+    use super::{validate_record, Value};
+
+    pub(super) struct Record(Value);
+    pub(super) struct RecordRef<'a>(&'a Value);
+
+    pub(super) fn batch(records: Vec<Value>) -> Result<impl Iterator<Item = Record>, String> {
+        if records.len() > 100 {
+            return Err("import at most 100 benchmark records at a time".into());
+        }
+        // This is eager: every supplied record is checked before returning
+        // the owning iterator, including duplicates and tombstoned ids.
+        for record in &records {
+            validate_record(record)?;
+        }
+        Ok(records.into_iter().map(Record))
+    }
+
+    impl Record {
+        pub(super) fn view(&self) -> RecordRef<'_> {
+            RecordRef(&self.0)
+        }
+
+        pub(super) fn into_value(self) -> Value {
+            self.0
+        }
+    }
+
+    impl<'a> RecordRef<'a> {
+        pub(super) fn check(record: &'a Value) -> Result<Self, String> {
+            validate_record(record)?;
+            Ok(Self(record))
+        }
+
+        pub(super) fn value(self) -> &'a Value {
+            self.0
+        }
+    }
+}
+
 fn path_for(
     root: &Path,
     record: &Value,
     existing: &HashSet<String>,
 ) -> Result<Option<PathBuf>, String> {
-    validate_record(record)?;
+    path_for_validated(root, validated::RecordRef::check(record)?, existing)
+}
+
+fn path_for_validated(
+    root: &Path,
+    record: validated::RecordRef<'_>,
+    existing: &HashSet<String>,
+) -> Result<Option<PathBuf>, String> {
+    let record = record.value();
     let digest = record_digest(record);
     let id = record["id"].as_str().expect("validated id");
     if existing.contains(&digest)
@@ -583,19 +635,15 @@ pub(crate) fn list(root: &Path, offset: usize, limit: usize) -> Result<HistoryPa
 }
 
 pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, String> {
-    if records.len() > 100 {
-        return Err("import at most 100 benchmark records at a time".into());
-    }
-    for record in &records {
-        validate_record(record)?;
-    }
+    let records = validated::batch(records)?;
     let _lock = StoreLock::acquire(root)?;
     let mut imported = 0;
     let mut existing = existing_digests(root)?;
     for record in records {
-        let Some(path) = path_for(root, &record, &existing)? else {
+        let Some(path) = path_for_validated(root, record.view(), &existing)? else {
             continue;
         };
+        let record = record.into_value();
         let digest = record_digest(&record);
         record["result"]
             .as_object()
@@ -630,6 +678,218 @@ pub(crate) fn import(root: &Path, records: Vec<Value>) -> Result<usize, String> 
 mod tests {
     use super::*;
     use crate::performance_bench::PerformanceBenchRow;
+    #[test]
+    fn import_batch_boundaries_keep_preflight_errors_and_empty_scan_effects() {
+        let parent = root();
+        let capped = parent.join("capped");
+        assert_eq!(
+            import(&capped, vec![Value::Null; 101]).unwrap_err(),
+            "import at most 100 benchmark records at a time"
+        );
+        assert!(!capped.exists());
+
+        let rejected = parent.join("first-error");
+        let mut invalid = record("first-error", 1);
+        invalid["request"]["generation_length"] = json!(0);
+        assert_eq!(
+            import(&rejected, vec![invalid, Value::Null]).unwrap_err(),
+            "generation length must be 1 to 4096 and repetitions 1 to 10"
+        );
+        assert!(!rejected.exists());
+
+        let maximum = parent.join("maximum");
+        let records = (0..100u64)
+            .map(|index| record(&format!("maximum-{index}"), index))
+            .collect();
+        assert_eq!(import(&maximum, records).unwrap(), 100);
+        let page = list(&maximum, 0, 100).unwrap();
+        assert_eq!(page.total, 100);
+        assert_eq!(page.records.len(), 100);
+        assert_eq!(page.next_offset, None);
+        assert!(page.warnings.is_empty());
+
+        let empty = parent.join("empty");
+        assert_eq!(import(&empty, vec![]).unwrap(), 0);
+        assert!(empty.join(".store.lock").is_file());
+        assert!(!empty.join("runs").exists());
+        let blocker = empty.join("runs");
+        fs::write(&blocker, b"preserved scan blocker").unwrap();
+        let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
+        assert_eq!(
+            import(&empty, vec![]).unwrap_err(),
+            format!("cannot read benchmark history: {io_error}")
+        );
+        assert_eq!(fs::read(&blocker).unwrap(), b"preserved scan blocker");
+        // Remove only files this test requested; unexpected residue must survive.
+        for index in 0..100u64 {
+            let digest = record_digest(&record(&format!("maximum-{index}"), index));
+            fs::remove_file(maximum.join("runs").join(format!("{index:016}-{digest}"))).unwrap();
+            fs::remove_file(
+                maximum
+                    .join("run-locks")
+                    .join(format!("{}.lock", digest.strip_suffix(".jsonl").unwrap())),
+            )
+            .unwrap();
+        }
+        fs::remove_dir(maximum.join("runs")).unwrap();
+        fs::remove_dir(maximum.join("run-locks")).unwrap();
+        fs::remove_file(maximum.join(".store.lock")).unwrap();
+        fs::remove_dir(maximum).unwrap();
+        fs::remove_file(blocker).unwrap();
+        fs::remove_file(empty.join(".store.lock")).unwrap();
+        fs::remove_dir(empty).unwrap();
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[test]
+    fn import_enforces_exact_record_size_and_preserves_unknown_padding() {
+        let parent = root();
+        let destination = parent.join("size-boundary");
+        let mut input = record("size-boundary", 7);
+        input["unknown-padding"] = json!("");
+        let overhead = serde_json::to_vec(&input).unwrap().len();
+        assert!(overhead < MAX_RECORD_BYTES);
+        input["unknown-padding"] = json!("x".repeat(MAX_RECORD_BYTES - overhead));
+        let original = serde_json::to_vec(&input).unwrap();
+        assert_eq!(original.len(), MAX_RECORD_BYTES);
+
+        let mut oversized = input.clone();
+        oversized["unknown-padding"] =
+            json!(format!("{}x", input["unknown-padding"].as_str().unwrap()));
+        assert_eq!(
+            serde_json::to_vec(&oversized).unwrap().len(),
+            MAX_RECORD_BYTES + 1
+        );
+        assert_eq!(
+            import(&destination, vec![oversized.clone()]).unwrap_err(),
+            "benchmark record exceeds the storage size limit"
+        );
+        assert!(!destination.exists());
+
+        assert_eq!(import(&destination, vec![input.clone()]).unwrap(), 1);
+        let journal = destination
+            .join("runs")
+            .join(format!("{:016}-{}", 7, record_digest(&input)));
+        let bytes = fs::read(&journal).unwrap();
+        let first_line = bytes.split(|byte| *byte == b'\n').next().unwrap();
+        let start: Value = serde_json::from_slice(first_line).unwrap();
+        assert_eq!(start["kind"], "start");
+        assert_eq!(start["origin"], "legacy");
+        assert_eq!(serde_json::to_vec(&start["record"]).unwrap(), original);
+        let page = list(&destination, 0, 100).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.next_offset, None);
+        assert!(page.warnings.is_empty());
+        // A new imported record has display state but no accepted receipt.
+        let mut displayed = input.clone();
+        displayed["localState"] = json!("recovery");
+        assert_eq!(page.records, vec![displayed]);
+
+        assert_eq!(
+            import(&destination, vec![oversized]).unwrap_err(),
+            "benchmark record exceeds the storage size limit"
+        );
+        assert_eq!(fs::read(&journal).unwrap(), bytes);
+        fs::remove_file(journal).unwrap();
+        fs::remove_dir(destination.join("runs")).unwrap();
+        fs::remove_file(
+            destination
+                .join("run-locks")
+                .join(format!("{:x}.lock", Sha256::digest(b"size-boundary"))),
+        )
+        .unwrap();
+        fs::remove_dir(destination.join("run-locks")).unwrap();
+        fs::remove_file(destination.join(".store.lock")).unwrap();
+        fs::remove_dir(destination).unwrap();
+        fs::remove_dir(parent).unwrap();
+    }
+
+    #[test]
+    fn native_scan_order_and_both_replay_validation_gates_remain_independent() {
+        let parent = root();
+        let native = parent.join("native");
+        fs::create_dir(&native).unwrap();
+        let blocker = native.join("runs");
+        fs::write(&blocker, b"native scan blocker").unwrap();
+        let io_error = fs::read_dir(&blocker).expect_err("runs is a file");
+        let mut invalid = record("native-invalid", 1);
+        invalid["request"]["generation_length"] = json!(0);
+        let native_error = match RunJournal::begin(&native, invalid) {
+            Err(error) => error,
+            Ok(journal) => {
+                drop(journal);
+                panic!("invalid native input was accepted");
+            }
+        };
+        assert_eq!(
+            native_error,
+            format!("cannot read benchmark history: {io_error}")
+        );
+        assert!(native.join(".store.lock").is_file());
+        assert_eq!(fs::read(&blocker).unwrap(), b"native scan blocker");
+
+        let replay_root = parent.join("replay");
+        let runs = replay_root.join("runs");
+        fs::create_dir_all(&runs).unwrap();
+        let good = record("invalid-start", 11);
+        let mut bad_start = good.clone();
+        bad_start["result"]["parallel"] = json!("invalid");
+        let mut first_bytes = encoded(&Entry::Start {
+            record: bad_start,
+            origin: Some(JournalOrigin::Legacy),
+        })
+        .unwrap();
+        // This valid Finish would repair parallel if Start validation were removed.
+        first_bytes.extend(
+            encoded(&Entry::Finish {
+                result: good["result"].clone(),
+            })
+            .unwrap(),
+        );
+        let first_path = runs.join(format!("{:016}-{}", 11, record_digest(&good)));
+        fs::write(&first_path, &first_bytes).unwrap();
+
+        let second = record("invalid-finish", 12);
+        let mut bad_finish = second["result"].clone();
+        bad_finish["parallel"] = json!("invalid");
+        let mut second_bytes = encoded(&Entry::Start {
+            record: second.clone(),
+            origin: Some(JournalOrigin::Legacy),
+        })
+        .unwrap();
+        second_bytes.extend(encoded(&Entry::Finish { result: bad_finish }).unwrap());
+        let second_path = runs.join(format!("{:016}-{}", 12, record_digest(&second)));
+        fs::write(&second_path, &second_bytes).unwrap();
+
+        let page = list(&replay_root, 0, 100).unwrap();
+        assert_eq!(page.total, 2);
+        assert!(page.records.is_empty());
+        assert_eq!(page.next_offset, None);
+        let warning = "a benchmark record could not be read and was preserved: benchmark record and request do not match";
+        assert_eq!(page.warnings, vec![warning.to_owned(), warning.to_owned()]);
+        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
+        assert_eq!(fs::read(&second_path).unwrap(), second_bytes);
+        fs::remove_file(blocker).unwrap();
+        fs::remove_file(native.join(".store.lock")).unwrap();
+        fs::remove_dir(native).unwrap();
+        fs::remove_file(first_path).unwrap();
+        fs::remove_file(second_path).unwrap();
+        fs::remove_dir(runs).unwrap();
+        for id in ["invalid-start", "invalid-finish"] {
+            fs::remove_file(
+                replay_root
+                    .join("run-locks")
+                    .join(format!("{:x}.lock", Sha256::digest(id.as_bytes()))),
+            )
+            .unwrap();
+        }
+        fs::remove_dir(replay_root.join("run-locks")).unwrap();
+        fs::remove_file(replay_root.join(".store.lock")).unwrap();
+        fs::remove_dir(replay_root).unwrap();
+        fs::remove_dir(parent).unwrap();
+    }
+
     pub(super) fn root() -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("aiolm-benchmark-store-{}", uuid::Uuid::new_v4()));
