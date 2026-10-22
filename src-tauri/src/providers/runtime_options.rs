@@ -427,6 +427,10 @@ impl OptionSchema {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_indexed().map(|_| ())
+    }
+
+    fn validate_indexed(&self) -> Result<BTreeMap<&str, &OptionDefinition>, String> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(format!(
                 "unsupported runtime option schema version {}; this app supports {SCHEMA_VERSION}",
@@ -463,14 +467,14 @@ impl OptionSchema {
         }
         let sources = SourceValidator { documents };
         sources.fact(&self.end_of_options)?;
-        let mut keys = BTreeSet::new();
+        let mut options_by_key = BTreeMap::new();
         let mut flags = BTreeSet::new();
         let mut positions = BTreeSet::new();
         let mut request_fields = BTreeSet::new();
         for option in &self.options {
             if !identifier(&option.key)
                 || !valid_scope(&option.scope)
-                || !keys.insert(&option.key)
+                || options_by_key.insert(option.key.as_str(), option).is_some()
                 || !bounded_text(&option.help, 32_768)
                 || !bounded_text(&option.group, 256)
             {
@@ -571,7 +575,9 @@ impl OptionSchema {
             if let Some(relation) = constraint.supported() {
                 let (Relation::Requires { when, other } | Relation::Excludes { when, other }) =
                     relation;
-                if !keys.contains(&when.key) || !keys.contains(&other.key) {
+                if !options_by_key.contains_key(when.key.as_str())
+                    || !options_by_key.contains_key(other.key.as_str())
+                {
                     return Err("constraint refers to an unknown option".into());
                 }
                 // Parsing already refuses `"equals": null`; a constructed
@@ -582,10 +588,8 @@ impl OptionSchema {
                     let Some(expected) = &predicate.equals else {
                         continue;
                     };
-                    let option = self
-                        .options
-                        .iter()
-                        .find(|o| o.key == predicate.key)
+                    let option = options_by_key
+                        .get(predicate.key.as_str())
                         .expect("constraint keys were checked");
                     if expected.is_null() || option.scalar(expected).is_err() {
                         return Err(format!(
@@ -599,7 +603,7 @@ impl OptionSchema {
         if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_SCHEMA_BYTES {
             return Err("runtime option schema exceeds 3 MiB".into());
         }
-        Ok(())
+        Ok(options_by_key)
     }
 
     pub fn resolve(
@@ -621,12 +625,15 @@ impl OptionSchema {
         selected_scope: &[String],
         overrides: &BTreeMap<String, Vec<Occurrence>>,
     ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
-        if let Err(message) = self.validate() {
-            return Err(vec![OptionIssue {
-                key: String::new(),
-                message,
-            }]);
-        }
+        let options_by_key = match self.validate_indexed() {
+            Ok(options_by_key) => options_by_key,
+            Err(message) => {
+                return Err(vec![OptionIssue {
+                    key: String::new(),
+                    message,
+                }]);
+            }
+        };
         if overrides.len() > MAX_OPTIONS {
             return Err(vec![OptionIssue {
                 key: String::new(),
@@ -647,7 +654,7 @@ impl OptionSchema {
                 key: key.clone(),
                 message,
             };
-            let Some(option) = self.options.iter().find(|o| o.key == *key) else {
+            let Some(option) = options_by_key.get(key.as_str()) else {
                 issues.push(issue(
                     "saved option is absent from this schema; review the runtime change".into(),
                 ));
@@ -1701,6 +1708,68 @@ mod tests {
             max: Some(1.0),
         });
         assert!(schema(vec![invalid]).validate().is_err());
+    }
+
+    #[test]
+    fn public_resolution_keeps_schema_first_and_saved_key_issue_order() {
+        let mut managed = option("z", ValueKind::Text, 1, Some(1));
+        managed.managed = Some(ManagedBinding::Port);
+        let mut described = schema(vec![
+            managed,
+            option("a", ValueKind::Integer, 1, Some(1)),
+            option("d", ValueKind::Text, 1, Some(1)),
+        ]);
+        described.constraints.push(known(Relation::Requires {
+            when: Predicate {
+                key: "a".into(),
+                equals: None,
+            },
+            other: Predicate {
+                key: "d".into(),
+                equals: None,
+            },
+        }));
+        let values = selected(&[
+            ("z", vec![vec![json!("retained-managed")]]),
+            ("m", vec![vec![json!("retained-missing")]]),
+            ("a", vec![vec![json!("wrong-integer-type")]]),
+        ]);
+        let original_schema = described.clone();
+        let original_values = values.clone();
+        let issue = |key: &str, message: &str| OptionIssue {
+            key: key.into(),
+            message: message.into(),
+        };
+        assert_eq!(
+            described.resolve(&[], &values).unwrap_err(),
+            vec![
+                issue(
+                    "a",
+                    "value does not match the documented type; unknown types accept text tokens only",
+                ),
+                issue(
+                    "m",
+                    "saved option is absent from this schema; review the runtime change",
+                ),
+                issue(
+                    "z",
+                    "this option is managed by the app; use its binding control",
+                ),
+                issue("a", "requires the documented value of d"),
+            ]
+        );
+        assert_eq!(described, original_schema);
+        assert_eq!(values, original_values);
+
+        // Schema validation precedes all saved-value errors.
+        described.options.push(described.options[0].clone());
+        let duplicate_schema = described.clone();
+        assert_eq!(
+            described.resolve(&[], &values).unwrap_err(),
+            vec![issue("", "invalid or duplicate runtime option identity")]
+        );
+        assert_eq!(described, duplicate_schema);
+        assert_eq!(values, original_values);
     }
 
     #[test]
