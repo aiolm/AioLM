@@ -336,7 +336,7 @@ pub fn overrides_from_map(map: &Map<String, Value>) -> BTreeMap<String, Override
         }
         if let Some(obj) = value.as_object() {
             if obj.contains_key("occurrences") {
-                if let Ok(parsed) = serde_json::from_value::<Override>(value.clone()) {
+                if let Ok(parsed) = Override::deserialize(value) {
                     out.insert(key.clone(), parsed);
                     continue;
                 }
@@ -757,12 +757,243 @@ mod tests {
         map.insert("threads".into(), Value::from(4));
         map.insert("label".into(), Value::from("explicit"));
         map.insert("empty".into(), Value::from(""));
+        map.insert("legacy_false".into(), Value::from(false));
+        map.insert("legacy_zero".into(), Value::from(0));
+        map.insert("legacy_null".into(), Value::Null);
+        map.insert(
+            "legacy_nested".into(),
+            serde_json::json!({"nested": ["한글🙂", -7, true]}),
+        );
+        map.insert("legacy_unicode".into(), Value::from("한글🙂"));
+        map.insert("signed_min".into(), Value::from(i64::MIN));
+        map.insert("unsigned_max".into(), Value::from(u64::MAX));
+        map.insert("float".into(), serde_json::json!(1.5));
+        map.insert("negative_zero".into(), serde_json::json!(-0.0));
+        map.insert(
+            "explicit_default".into(),
+            serde_json::json!({"occurrences": [["default"]]}),
+        );
+        map.insert(
+            "explicit_null_spelling".into(),
+            serde_json::json!({"spelling": null, "occurrences": [["null-spelling"]]}),
+        );
+        map.insert(
+            "explicit_alias".into(),
+            serde_json::json!({
+                "spelling": "--pair",
+                "occurrences": [["a", "b"], ["c", "d"]]
+            }),
+        );
+        let explicit_values = serde_json::json!({
+            "spelling": null,
+            "occurrences": [[
+                {"nested": ["한글🙂", false, 0]},
+                i64::MIN,
+                u64::MAX,
+                1.5,
+                -0.0,
+                false,
+                0,
+                ""
+            ]]
+        });
+        map.insert("explicit_values".into(), explicit_values.clone());
+        map.insert(
+            "empty_occurrences".into(),
+            serde_json::json!({"spelling": null, "occurrences": []}),
+        );
+        map.insert(
+            "empty_tuple".into(),
+            serde_json::json!({"spelling": null, "occurrences": [[]]}),
+        );
+        let invalid_occurrences = serde_json::json!({
+            "spelling": "--bad",
+            "occurrences": "not-a-sequence"
+        });
+        map.insert("invalid_occurrences".into(), invalid_occurrences.clone());
+        let invalid_spelling = serde_json::json!({
+            "spelling": 7,
+            "occurrences": [["kept"]]
+        });
+        map.insert("invalid_spelling".into(), invalid_spelling.clone());
+        let invalid_unknown = serde_json::json!({
+            "occurrences": [["kept"]],
+            "unknown": true
+        });
+        map.insert("invalid_unknown".into(), invalid_unknown.clone());
+        map.insert(
+            super::super::runtime_ordered::ORDER_KEY.into(),
+            serde_json::json!({"version": 1, "occurrences": [{"key": "threads"}]}),
+        );
+        let before = map.clone();
         let overrides = overrides_from_map(&map);
-        assert_eq!(overrides["threads"].occurrences, vec![vec![Value::from(4)]]);
+        let mut expected = BTreeMap::new();
+        expected.insert(
+            "threads".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![Value::from(4)]],
+            },
+        );
+        expected.insert(
+            "label".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![Value::from("explicit")]],
+            },
+        );
+        expected.insert(
+            "empty".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![Value::from("")]],
+            },
+        );
+        for (key, value) in [
+            ("legacy_false", Value::from(false)),
+            ("legacy_zero", Value::from(0)),
+            ("legacy_null", Value::Null),
+            (
+                "legacy_nested",
+                serde_json::json!({"nested": ["한글🙂", -7, true]}),
+            ),
+            ("legacy_unicode", Value::from("한글🙂")),
+            ("signed_min", Value::from(i64::MIN)),
+            ("unsigned_max", Value::from(u64::MAX)),
+            ("float", serde_json::json!(1.5)),
+            ("negative_zero", serde_json::json!(-0.0)),
+        ] {
+            expected.insert(
+                key.into(),
+                Override {
+                    spelling: None,
+                    occurrences: vec![vec![value]],
+                },
+            );
+        }
+        expected.insert(
+            "explicit_default".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![Value::from("default")]],
+            },
+        );
+        expected.insert(
+            "explicit_null_spelling".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![Value::from("null-spelling")]],
+            },
+        );
+        expected.insert(
+            "explicit_alias".into(),
+            Override {
+                spelling: Some("--pair".into()),
+                occurrences: vec![
+                    vec![Value::from("a"), Value::from("b")],
+                    vec![Value::from("c"), Value::from("d")],
+                ],
+            },
+        );
+        expected.insert(
+            "explicit_values".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![
+                    serde_json::json!({"nested": ["한글🙂", false, 0]}),
+                    Value::from(i64::MIN),
+                    Value::from(u64::MAX),
+                    serde_json::json!(1.5),
+                    serde_json::json!(-0.0),
+                    Value::from(false),
+                    Value::from(0),
+                    Value::from(""),
+                ]],
+            },
+        );
+        expected.insert(
+            "empty_occurrences".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![],
+            },
+        );
+        expected.insert(
+            "empty_tuple".into(),
+            Override {
+                spelling: None,
+                occurrences: vec![vec![]],
+            },
+        );
+        for (key, value) in [
+            ("invalid_occurrences", invalid_occurrences.clone()),
+            ("invalid_spelling", invalid_spelling.clone()),
+            ("invalid_unknown", invalid_unknown.clone()),
+        ] {
+            expected.insert(
+                key.into(),
+                Override {
+                    spelling: None,
+                    occurrences: vec![vec![value]],
+                },
+            );
+        }
+        assert_eq!(overrides, expected);
+        assert!(!overrides.contains_key(super::super::runtime_ordered::ORDER_KEY));
+        assert_eq!(map, before, "decoding never mutates the saved map");
         let back = map_from_overrides(&overrides);
-        assert_eq!(back["threads"], Value::from(4));
-        assert_eq!(back["empty"], Value::from(""));
-        // Repeated tuples use the explicit object shape.
+        let mut expected_back = Map::new();
+        for key in [
+            "threads",
+            "label",
+            "empty",
+            "legacy_false",
+            "legacy_zero",
+            "legacy_null",
+            "legacy_nested",
+            "legacy_unicode",
+            "signed_min",
+            "unsigned_max",
+            "float",
+            "negative_zero",
+        ] {
+            expected_back.insert(key.into(), map[key].clone());
+        }
+        expected_back.insert("explicit_default".into(), Value::from("default"));
+        expected_back.insert(
+            "explicit_null_spelling".into(),
+            Value::from("null-spelling"),
+        );
+        expected_back.insert(
+            "explicit_alias".into(),
+            serde_json::json!({
+                "spelling": "--pair",
+                "occurrences": [["a", "b"], ["c", "d"]]
+            }),
+        );
+        expected_back.insert("explicit_values".into(), explicit_values);
+        expected_back.insert(
+            "empty_occurrences".into(),
+            serde_json::json!({"spelling": null, "occurrences": []}),
+        );
+        expected_back.insert(
+            "empty_tuple".into(),
+            serde_json::json!({"spelling": null, "occurrences": [[]]}),
+        );
+        expected_back.insert("invalid_occurrences".into(), invalid_occurrences);
+        expected_back.insert("invalid_spelling".into(), invalid_spelling);
+        expected_back.insert("invalid_unknown".into(), invalid_unknown);
+        assert_eq!(back, expected_back);
+        assert_eq!(
+            serde_json::to_vec(&overrides).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_vec(&back).unwrap(),
+            serde_json::to_vec(&expected_back).unwrap()
+        );
+
+        // Repeated tuples use the explicit object shape and round-trip fully.
         let repeated = BTreeMap::from([(
             "pair".to_string(),
             Override {
@@ -774,8 +1005,14 @@ mod tests {
             },
         )]);
         let encoded = map_from_overrides(&repeated);
-        assert!(encoded["pair"].is_object());
-        assert_eq!(overrides_from_map(&encoded)["pair"], repeated["pair"]);
+        assert_eq!(
+            encoded,
+            Map::from_iter([(
+                "pair".into(),
+                serde_json::json!({"spelling": null, "occurrences": [[1, 2], [3, 4]]}),
+            )])
+        );
+        assert_eq!(overrides_from_map(&encoded), repeated);
     }
 
     #[test]

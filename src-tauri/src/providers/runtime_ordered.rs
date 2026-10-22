@@ -87,7 +87,7 @@ pub fn saved_order(values: &Map<String, Value>) -> Result<Option<SavedOrder>, St
         }
         None => return Err("the saved option order has no valid version".into()),
     }
-    let order: SavedOrder = serde_json::from_value(raw.clone())
+    let order: SavedOrder = SavedOrder::deserialize(raw)
         .map_err(|e| format!("the saved option order is malformed: {e}"))?;
     if order.occurrences.len() > MAX_PLAN {
         return Err("the saved option order has too many occurrences".into());
@@ -1147,41 +1147,71 @@ mod tests {
             values.insert(ORDER_KEY.into(), order);
             values
         };
-        let refused = |order: Value, needle: &str| {
+        let refused = |order: Value, expected: &str| {
             let values = with(order);
             let before = values.clone();
             let issues = resolve_saved(&schema, &[], &values).unwrap_err();
             assert_eq!(issues[0].key, ORDER_KEY);
-            assert!(issues[0].message.contains(needle), "{}", issues[0].message);
+            assert_eq!(issues[0].message, expected);
             // Refusal never edits the saved values.
             assert_eq!(values, before);
         };
         let entries = json!([{"key": "alpha"}, {"key": "beta"}, {"key": "alpha"}]);
-        refused(json!({"version": 2, "occurrences": entries}), "version 2");
-        refused(json!({"occurrences": entries}), "no valid version");
+        refused(
+            json!({"version": 2, "occurrences": entries}),
+            "the saved option order uses version 2, which this app does not support; the saved values were retained",
+        );
+        refused(
+            json!({"occurrences": entries}),
+            "the saved option order has no valid version",
+        );
+        refused(
+            json!({"version": 1}),
+            "the saved option order is malformed: missing field `occurrences`",
+        );
+        refused(
+            json!({"version": 1, "occurrences": null}),
+            "the saved option order is malformed: invalid type: null, expected a sequence",
+        );
+        refused(
+            json!({"version": 1, "occurrences": "not-a-sequence"}),
+            "the saved option order is malformed: invalid type: string \"not-a-sequence\", expected a sequence",
+        );
+        refused(
+            json!({"version": 1, "occurrences": ["alpha"]}),
+            "the saved option order is malformed: invalid type: string \"alpha\", expected struct OrderEntry",
+        );
+        refused(
+            json!({"version": 1, "occurrences": [{"key": 3}]}),
+            "the saved option order is malformed: invalid type: integer `3`, expected a string",
+        );
+        refused(
+            json!({"version": 1, "occurrences": [{"key": "alpha", "spelling": 3}]}),
+            "the saved option order is malformed: invalid type: integer `3`, expected a string",
+        );
         refused(
             json!({"version": 1, "occurrences": entries, "later": true}),
-            "malformed",
+            "the saved option order is malformed: unknown field `later`, expected `version` or `occurrences`",
         );
         refused(
             json!({"version": 1, "occurrences": [{"key": "alpha"}, {"key": "beta"}]}),
-            "1 occurrence(s) of alpha",
+            "the saved option order lists 1 occurrence(s) of alpha, but 2 are saved",
         );
         refused(
             json!({"version": 1, "occurrences": [{"key": "alpha"}, {"key": "alpha"}, {"key": "gamma"}]}),
-            "gamma",
+            "the saved option order names gamma, which has no saved value",
         );
         refused(
             json!({"version": 1, "occurrences": [{"key": "alpha", "spelling": "-a"}, {"key": "beta"}, {"key": "alpha"}]}),
-            "spells alpha differently",
+            "the saved option order spells alpha differently from its saved value",
         );
         refused(
             json!({"version": 1, "occurrences": [{"key": "alpha", "spelling": ""}]}),
-            "invalid entry",
+            "the saved option order has an invalid entry",
         );
         refused(
             json!({"version": 1, "occurrences": vec![json!({"key": "x".repeat(120)}); 600]}),
-            "64 KiB",
+            "the saved option order exceeds 64 KiB; the saved values were retained",
         );
         // An alias the schema does not have is refused at resolution.
         let mut values = with(
