@@ -12,7 +12,7 @@ use aiolm_lib::{
     },
     AppConfig,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 struct Home {
     path: PathBuf,
@@ -61,7 +61,7 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
       "launch":{"program":program,"args":args,"env":{},"working_directory":home.path},
       "probe":{"program":program,"args":["--adapter-probe","custom.commandfixture","r1","{model}","{options_json}"],"env":{}},
       "artifacts":[script],
-      "options":[{"key":"global_name","flag":"--global-name","kind":{"type":"text","max_len":128},"target":"launch","scope":[]},{"key":"worker_mode","flag":"--worker-mode","kind":{"type":"text","max_len":128},"target":"launch","scope":["serve"]}],
+      "options":[{"key":"global_name","flag":"--global-name","kind":{"type":"text","max_len":128},"target":"launch","scope":[]},{"key":"worker_mode","flag":"--worker-mode","kind":{"type":"text","max_len":128},"target":"launch","scope":["serve"]},{"key":"worker_count","flag":"--worker-count","kind":{"type":"integer","min":0,"max":9},"target":"launch","scope":[]},{"key":"payload","flag":"--payload","kind":{"type":"json"},"target":"launch","scope":[]},{"key":"temperature","kind":{"type":"number","min":0.0,"max":2.0},"target":"request","scope":[]},{"key":"request_payload","kind":{"type":"json"},"target":"request","scope":[]}],
       "option_metadata":{"version":1,"engine_id":"custom.commandfixture","adapter":{"id":"synthetic.command","revision":"r1"},"options":[{"flag":"--fresh-pair","repeatable":true}]}});
     let source = home.path.join("manifest.json");
     fs::write(&source, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -144,6 +144,171 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
         "r1",
     )
     .unwrap();
+    let sized_json = |target: usize| {
+        let overhead = serde_json::to_string(&json!({"value": ""})).unwrap().len();
+        let text = "x".repeat(target - overhead);
+        let value = json!({"value": text});
+        assert_eq!(serde_json::to_string(&value).unwrap().len(), target);
+        value
+    };
+    let cases: Vec<(&str, Map<String, Value>)> = vec![
+        (
+            "legacy-integer-valid",
+            serde_json::from_value(json!({"worker_count": 0})).unwrap(),
+        ),
+        (
+            "legacy-integer-invalid",
+            serde_json::from_value(json!({"worker_count": 10})).unwrap(),
+        ),
+        (
+            "legacy-request-number-invalid",
+            serde_json::from_value(json!({"temperature": 3.0})).unwrap(),
+        ),
+        (
+            "legacy-request-json-valid",
+            serde_json::from_value(json!({"request_payload": {"enabled": true}})).unwrap(),
+        ),
+        (
+            "structured-text-over-limit",
+            serde_json::from_value(json!({
+                "global_name": {"spelling":"--global-name","occurrences":[["x".repeat(129)]]}
+            }))
+            .unwrap(),
+        ),
+        (
+            "structured-integer-valid",
+            serde_json::from_value(json!({
+                "worker_count": {"spelling":"--worker-count","occurrences":[[0]]}
+            }))
+            .unwrap(),
+        ),
+        (
+            "structured-malformed",
+            serde_json::from_value(json!({"worker_count": {"occurrences":"bad"}})).unwrap(),
+        ),
+        (
+            "structured-unknown-envelope",
+            serde_json::from_value(json!({
+                "worker_count": {"occurrences":[[0]],"extra":true}
+            }))
+            .unwrap(),
+        ),
+        (
+            "legacy-null",
+            serde_json::from_value(json!({"worker_count": null})).unwrap(),
+        ),
+        (
+            "legacy-nul-text",
+            serde_json::from_value(json!({"global_name": "\u{0}"})).unwrap(),
+        ),
+        (
+            "structured-empty-text",
+            serde_json::from_value(json!({
+                "global_name": {"spelling":"--global-name","occurrences":[[""]]}
+            }))
+            .unwrap(),
+        ),
+        (
+            "launch-json-limit",
+            serde_json::from_value(json!({"payload": sized_json(65_536)})).unwrap(),
+        ),
+        (
+            "launch-json-too-large",
+            serde_json::from_value(json!({"payload": sized_json(65_537)})).unwrap(),
+        ),
+        (
+            "request-json-limit",
+            serde_json::from_value(json!({"request_payload": sized_json(65_536)})).unwrap(),
+        ),
+        (
+            "request-json-too-large",
+            serde_json::from_value(json!({"request_payload": sized_json(65_537)})).unwrap(),
+        ),
+        (
+            "launch-json-envelope-looking",
+            serde_json::from_value(json!({
+                "payload": {"occurrences":[[{"enabled":true}]],"spelling":"--payload"}
+            }))
+            .unwrap(),
+        ),
+        (
+            "request-json-envelope-looking",
+            serde_json::from_value(json!({
+                "request_payload": {"occurrences":[[{"enabled":true}]],"spelling":"--request-payload"}
+            }))
+            .unwrap(),
+        ),
+        (
+            "unknown-key",
+            serde_json::from_value(json!({"unknown_saved_key": true})).unwrap(),
+        ),
+        (
+            "unmapped-target",
+            serde_json::from_value(json!({
+                "target": {"occurrences":[["entry-one"]]}
+            }))
+            .unwrap(),
+        ),
+        (
+            "unicode-structured-text",
+            serde_json::from_value(json!({
+                "worker_mode": {"spelling":"--worker-mode","occurrences":[["한글🙂"]]}
+            }))
+            .unwrap(),
+        ),
+        (
+            "mixed-errors",
+            serde_json::from_value(json!({
+                "global_name": {"spelling":"--global-name","occurrences":[["x".repeat(129)]]},
+                "payload": sized_json(65_537),
+                "temperature": 3.0,
+                "unknown_saved_key": true,
+                "worker_count": 10
+            }))
+            .unwrap(),
+        ),
+    ];
+    let mut observed_cases = Vec::new();
+    for (name, values) in &cases {
+        let values_before = serde_json::to_vec(values).unwrap();
+        let cfg_before = serde_json::to_vec(&cfg).unwrap();
+        let manifest_before = serde_json::to_vec(&registered).unwrap();
+        let issues = providers::registry::saved_option_issues(&cfg, &registered, values);
+        observed_cases.push(json!({
+            "name": name,
+            "issues": serde_json::to_value(&issues).unwrap(),
+        }));
+        assert_eq!(serde_json::to_vec(values).unwrap(), values_before);
+        assert_eq!(serde_json::to_vec(&cfg).unwrap(), cfg_before);
+        assert_eq!(serde_json::to_vec(&registered).unwrap(), manifest_before);
+    }
+    let expected_cases = vec![
+        json!({"name":"legacy-integer-valid","issues":[]}),
+        json!({"name":"legacy-integer-invalid","issues":[{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"}]}),
+        json!({"name":"legacy-request-number-invalid","issues":[{"code":"type","key":"temperature","message":"unsupported or invalid adapter option: temperature"}]}),
+        json!({"name":"legacy-request-json-valid","issues":[]}),
+        json!({"name":"structured-text-over-limit","issues":[{"code":"type","key":"global_name","message":"global_name exceeds its declared text length limit"}]}),
+        json!({"name":"structured-integer-valid","issues":[]}),
+        json!({"name":"structured-malformed","issues":[{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"}]}),
+        json!({"name":"structured-unknown-envelope","issues":[{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"}]}),
+        json!({"name":"legacy-null","issues":[{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"}]}),
+        json!({"name":"legacy-nul-text","issues":[{"code":"type","key":"global_name","message":"unsupported or invalid adapter option: global_name"}]}),
+        json!({"name":"structured-empty-text","issues":[]}),
+        json!({"name":"launch-json-limit","issues":[{"code":"type","key":"payload","message":"option value contains NUL or exceeds its size limit"}]}),
+        json!({"name":"launch-json-too-large","issues":[{"code":"type","key":"payload","message":"unsupported or invalid adapter option: payload"}]}),
+        json!({"name":"request-json-limit","issues":[{"code":"type","key":"request_payload","message":"option value contains NUL or exceeds its size limit"}]}),
+        json!({"name":"request-json-too-large","issues":[{"code":"type","key":"request_payload","message":"unsupported or invalid adapter option: request_payload"}]}),
+        json!({"name":"launch-json-envelope-looking","issues":[]}),
+        json!({"name":"request-json-envelope-looking","issues":[{"code":"type","key":"request_payload","message":"saved alias is absent from this schema"}]}),
+        json!({"name":"unknown-key","issues":[{"code":"unknown","key":"unknown_saved_key","message":"unknown_saved_key is absent from this runtime's reviewed help; its saved value was retained"}]}),
+        json!({"name":"unmapped-target","issues":[{"code":"help","key":"target","message":"this positional's place in the launch command is not mapped; confirm its role in the reviewed help first. Its saved value was retained"}]}),
+        json!({"name":"unicode-structured-text","issues":[]}),
+        json!({"name":"mixed-errors","issues":[{"code":"type","key":"payload","message":"unsupported or invalid adapter option: payload"},{"code":"type","key":"temperature","message":"unsupported or invalid adapter option: temperature"},{"code":"type","key":"worker_count","message":"unsupported or invalid adapter option: worker_count"},{"code":"type","key":"global_name","message":"global_name exceeds its declared text length limit"},{"code":"unknown","key":"unknown_saved_key","message":"unknown_saved_key is absent from this runtime's reviewed help; its saved value was retained"}]}),
+    ];
+    assert_eq!(
+        observed_cases, expected_cases,
+        "all saved-option issue cases"
+    );
     assert!(
         providers::registry::saved_option_issues(
             &invalid,

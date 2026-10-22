@@ -681,29 +681,35 @@ pub fn saved_option_issues(
     m: &RuntimeManifest,
     values: &Map<String, Value>,
 ) -> Vec<super::options::OptionIssue> {
-    let keys = manifest_keys(m);
-    let declared: Map<String, Value> = values
-        .iter()
-        .filter(|(key, _)| keys.contains(key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
     // Common GUI/import values carry occurrence and spelling records. The
     // scalar-only legacy validator must not reject that storage envelope;
     // the effective schema below validates its type, arity, order and facts.
-    let structured_launch = |key: &str, value: &Value| {
-        serde_json::from_value::<super::runtime_options::Override>(value.clone()).is_ok()
-            && m.options.iter().any(|option| {
+    let structured: BTreeMap<&str, super::runtime_options::Override> = values
+        .iter()
+        .filter_map(|(key, value)| {
+            let launch_non_json = m.options.iter().any(|option| {
                 // JSON values are already objects in the legacy contract;
                 // retain its whole-record 64 KiB check for both shapes.
-                option.key == key && option.target == "launch" && option.kind["type"] != "json"
-            })
-    };
-    let scalar = declared
+                option.key == *key && option.target == "launch" && option.kind["type"] != "json"
+            });
+            if !launch_non_json {
+                return None;
+            }
+            super::runtime_options::Override::deserialize(value)
+                .ok()
+                .map(|parsed| (key.as_str(), parsed))
+        })
+        .collect();
+    let scalar = values
         .iter()
-        .filter(|(key, value)| !structured_launch(key, value))
+        .filter(|(key, _)| {
+            m.options.iter().any(|option| option.key == **key)
+                && !structured.contains_key(key.as_str())
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     let mut issues = option_issues(m, &scalar);
+    drop(scalar);
     // max_len is an existing manifest text limit beyond the common schema's
     // bounded text policy. Keep applying it to every explicit occurrence.
     for option in m
@@ -711,30 +717,25 @@ pub fn saved_option_issues(
         .iter()
         .filter(|option| option.target == "launch" && option.kind["type"] == "text")
     {
-        let Some(value) = declared
-            .get(&option.key)
-            .filter(|value| structured_launch(&option.key, value))
-        else {
+        let Some(value) = structured.get(option.key.as_str()) else {
             continue;
         };
-        if let Ok(value) = serde_json::from_value::<super::runtime_options::Override>(value.clone())
+        let max = option.kind["max_len"].as_u64().unwrap_or(0) as usize;
+        if value
+            .occurrences
+            .iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|text| text.len() > max)
         {
-            let max = option.kind["max_len"].as_u64().unwrap_or(0) as usize;
-            if value
-                .occurrences
-                .iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .any(|text| text.len() > max)
-            {
-                issues.push(super::options::OptionIssue {
-                    key: option.key.clone(),
-                    code: "type",
-                    message: format!("{} exceeds its declared text length limit", option.key),
-                });
-            }
+            issues.push(super::options::OptionIssue {
+                key: option.key.clone(),
+                code: "type",
+                message: format!("{} exceeds its declared text length limit", option.key),
+            });
         }
     }
+    drop(structured);
     let reported = issues.iter().map(|issue| issue.key.clone()).collect();
     issues.extend(super::runtime_schema::saved_issues(
         &root(),
