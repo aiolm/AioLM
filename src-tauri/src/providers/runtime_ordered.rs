@@ -277,10 +277,6 @@ pub fn overrides_from_plan(plan: &OrderedPlan) -> Overrides {
     out
 }
 
-fn scope_of<'a>(schema: &'a OptionSchema, key: &str) -> Option<&'a OptionDefinition> {
-    schema.options.iter().find(|o| o.key == key)
-}
-
 /// Authoritative resolution following plan order within each scope depth.
 pub fn resolve_plan(
     schema: &OptionSchema,
@@ -311,7 +307,11 @@ pub fn resolve_plan(
             .or_default()
             .push((occurrence.spelling.clone(), occurrence.values.clone()));
     }
-    let canonical = schema.resolve_occurrences(selected_scope, &grouped)?;
+    let (request, options_by_key) = {
+        let (canonical, options_by_key) =
+            schema.resolve_occurrences_indexed(selected_scope, &grouped)?;
+        (canonical.request, options_by_key)
+    };
     // Re-emit flags in plan order within each scope depth. Positionals keep
     // slot order (never plan order) so reordered input cannot rebind a later
     // saved value into an earlier slot. Dash delimiters mirror the grouped
@@ -319,7 +319,7 @@ pub fn resolve_plan(
     let mut flags_by_depth: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut positionals_by_depth: BTreeMap<usize, Vec<(u16, Vec<String>)>> = BTreeMap::new();
     for occurrence in plan {
-        let Some(option) = scope_of(schema, &occurrence.key) else {
+        let Some(option) = options_by_key.get(occurrence.key.as_str()) else {
             continue;
         };
         if option.target == super::runtime_options::Target::Request {
@@ -369,7 +369,7 @@ pub fn resolve_plan(
     Ok(ResolvedOptions {
         scope_boundaries,
         argv,
-        request: canonical.request,
+        request,
     })
 }
 

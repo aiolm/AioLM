@@ -335,6 +335,8 @@ pub struct ResolvedOptions {
     pub request: Map<String, Value>,
 }
 
+type IndexedResolution<'a> = (ResolvedOptions, BTreeMap<&'a str, &'a OptionDefinition>);
+
 impl ResolvedOptions {
     pub(crate) fn sections(&self, scope: &[String]) -> Result<Vec<Vec<String>>, String> {
         if self.scope_boundaries.len() != scope.len() {
@@ -625,6 +627,16 @@ impl OptionSchema {
         selected_scope: &[String],
         overrides: &BTreeMap<String, Vec<Occurrence>>,
     ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
+        self.resolve_occurrences_indexed(selected_scope, overrides)
+            .map(|(resolved, _)| resolved)
+    }
+
+    /// Keep this canonical call's validated key index for ordered re-emission.
+    pub(super) fn resolve_occurrences_indexed(
+        &self,
+        selected_scope: &[String],
+        overrides: &BTreeMap<String, Vec<Occurrence>>,
+    ) -> Result<IndexedResolution<'_>, Vec<OptionIssue>> {
         let options_by_key = match self.validate_indexed() {
             Ok(options_by_key) => options_by_key,
             Err(message) => {
@@ -804,11 +816,14 @@ impl OptionSchema {
             });
         }
         if issues.is_empty() {
-            Ok(ResolvedOptions {
-                argv,
-                request,
-                scope_boundaries,
-            })
+            Ok((
+                ResolvedOptions {
+                    argv,
+                    request,
+                    scope_boundaries,
+                },
+                options_by_key,
+            ))
         } else {
             Err(issues)
         }
