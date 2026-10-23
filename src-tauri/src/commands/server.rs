@@ -299,7 +299,7 @@ pub(super) async fn start_on_target(
                 });
             }
             server.lifecycle = server::Lifecycle::Ready;
-            server.execution = Some(saved.clone());
+            server.execution = Some(saved);
             server.last_error = None;
             server.touch_activity();
             server::cleanup_api_key_file(api_key_file.as_deref());
