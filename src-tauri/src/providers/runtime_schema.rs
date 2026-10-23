@@ -2227,8 +2227,12 @@ fn strip_scope(argv: Vec<String>, scope: &[String]) -> Result<Vec<String>, Strin
 
 /// Identity of everything help-derived that changes the launched process.
 pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> Value {
-    let saved = super::launch::provider_options(cfg, super::provider_of(cfg));
-    let values = help_values(&saved, compat_keys);
+    let empty = Map::new();
+    let saved = cfg
+        .provider_options
+        .get(super::provider_of(cfg).as_str())
+        .unwrap_or(&empty);
+    let values = help_values(saved, compat_keys);
     let accepted = runtime_key(cfg)
         .ok()
         .and_then(|key| {
@@ -2237,17 +2241,25 @@ pub fn launch_identity(root: &Path, cfg: &AppConfig, compat_keys: &[String]) -> 
                 .flatten()
         })
         .map(|accepted| accepted.fingerprint);
-    let mut identity = serde_json::json!({"help": accepted, "values": values});
+    let mut identity = Map::new();
+    identity.insert(
+        "help".into(),
+        accepted.map(Value::String).unwrap_or(Value::Null),
+    );
+    identity.insert("values".into(), Value::Object(values));
     // Profiles without the newer records keep their exact earlier identity.
     if let Some(order) = saved.get(ORDER_KEY) {
-        identity["order"] = order.clone();
+        identity.insert("order".into(), order.clone());
     }
     if let Ok(key) = runtime_key(cfg) {
         if let Ok(Some(supplement)) = load_supplement(root, &key.engine, &key.runtime) {
-            identity["confirmed"] = serde_json::to_value(supplement).unwrap_or(Value::Null);
+            identity.insert(
+                "confirmed".into(),
+                serde_json::to_value(supplement).unwrap_or(Value::Null),
+            );
         }
     }
-    identity
+    Value::Object(identity)
 }
 
 /// Written over a secret in display and record copies of argv or settings.
