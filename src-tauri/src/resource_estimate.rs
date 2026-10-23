@@ -1193,7 +1193,6 @@ fn shape(model: FoundModel) -> Result<Shape, EstimateNote> {
     // an MHA fallback or overflowing arithmetic later in the estimate.
     const MAX_DIM: u64 = 1 << 24;
     if n_embd > MAX_DIM
-        || tensors.total() == 0
         || tensors.layers.len() != n_layer
         || tensors.layers.iter().any(|layer| layer.total() == 0)
         || (0..n_layer).any(|il| {
@@ -3055,6 +3054,31 @@ mod tests {
         let (values, _) = plain("llama");
         let empty = scratch.write("empty.gguf", &fixture::file(&values, &[]));
         assert!(estimate(&config(&empty), &environment(GPU)).ram.is_none());
+
+        // Non-layer weights cannot make an incomplete repeating layer valid.
+        let (values, mut tensors) = plain("llama");
+        tensors.retain(|(name, _, _)| !name.starts_with("blk.1."));
+        let gap = scratch.write("missing-layer.gguf", &fixture::file(&values, &tensors));
+        let bytes = size(&gap);
+        let env = environment(GPU);
+        assert_eq!(
+            super::estimate(&config(&gap), &env),
+            ResourceEstimate {
+                vram_bytes: None,
+                ram_offload_bytes: None,
+                ssd_offload_bytes: None,
+                required_vram_bytes: None,
+                host_memory_bytes: None,
+                vram_capacity_bytes: env.vram_capacity_bytes,
+                ram_capacity_bytes: env.ram_capacity_bytes,
+                disk_bytes: bytes,
+                disk_complete: true,
+                model_bytes: bytes,
+                auxiliary_bytes: 0,
+                kv_bytes: None,
+                notes: vec![EstimateNote::MissingMetadata],
+            }
+        );
     }
 
     #[test]
