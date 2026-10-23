@@ -137,7 +137,51 @@ pub struct Attachment {
 pub fn import_selected(path: &Path, mut file: fs::File) -> Result<Attachment, String> {
     import_to(&root()?, path, &mut file)
 }
+
+/// Store a sampled frame without constructing an unused attachment preview.
+fn import_selected_reference(path: &Path, mut file: fs::File) -> Result<String, String> {
+    import_reference_to(&root()?, path, &mut file)
+}
+
+fn import_reference_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<String, String> {
+    store_to(root, path, file).map(|stored| stored.reference)
+}
+
+struct StoredMedia {
+    reference: String,
+    kind: &'static str,
+    mime: &'static str,
+    bytes: Vec<u8>,
+    size: u64,
+}
+
 fn import_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<Attachment, String> {
+    let StoredMedia {
+        reference,
+        kind,
+        mime,
+        bytes,
+        size,
+    } = store_to(root, path, file)?;
+    Ok(Attachment {
+        name: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        reference,
+        kind,
+        mime,
+        data_url: if kind == "image" {
+            format!("data:{mime};base64,{}", STANDARD.encode(bytes))
+        } else {
+            String::new()
+        },
+        size_bytes: size,
+    })
+}
+
+fn store_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<StoredMedia, String> {
     let (kind, mime) = mime(path).ok_or("unsupported media format")?;
     let size = file.metadata().map_err(|error| error.to_string())?.len();
     if size == 0 || size > MAX_MEDIA_BYTES {
@@ -161,21 +205,12 @@ fn import_to(root: &Path, path: &Path, file: &mut fs::File) -> Result<Attachment
     if !target.exists() {
         crate::config::atomic_write(&target, &bytes)?;
     }
-    Ok(Attachment {
-        name: path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned(),
+    Ok(StoredMedia {
         reference,
         kind,
         mime,
-        data_url: if kind == "image" {
-            format!("data:{mime};base64,{}", STANDARD.encode(bytes))
-        } else {
-            String::new()
-        },
-        size_bytes: size,
+        bytes,
+        size,
     })
 }
 
@@ -252,22 +287,173 @@ mod tests {
     }
     #[test]
     fn owned_import_keeps_bytes_and_has_a_content_identity() {
+        use std::io::{Seek, SeekFrom};
+
         let root = std::env::temp_dir().join(format!("aiolm-media-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
+        let owned = root.join("owned");
         let original = root.join("source.wav");
         fs::write(&original, b"RIFF fixture").unwrap();
-        let media = import_to(
-            &root.join("owned"),
-            &original,
-            &mut fs::File::open(&original).unwrap(),
-        )
-        .unwrap();
+        let media = import_to(&owned, &original, &mut fs::File::open(&original).unwrap()).unwrap();
+        assert_eq!(media.name, "source.wav");
         assert_eq!(media.kind, "audio");
+        assert_eq!(media.mime, "audio/wav");
+        assert_eq!(media.size_bytes, 12);
         assert!(media.data_url.is_empty());
         assert_eq!(
-            fs::read(root.join("owned").join(media.reference)).unwrap(),
+            media.reference,
+            format!("{:x}.wav", Sha256::digest(b"RIFF fixture"))
+        );
+        assert_eq!(
+            fs::read(owned.join(&media.reference)).unwrap(),
             b"RIFF fixture"
         );
+
+        let image = root.join("source.JPG");
+        let image_bytes = [0, 255, 128, 42];
+        fs::write(&image, image_bytes).unwrap();
+        let imported = import_to(&owned, &image, &mut fs::File::open(&image).unwrap()).unwrap();
+        assert_eq!(imported.name, "source.JPG");
+        assert_eq!(imported.kind, "image");
+        assert_eq!(imported.mime, "image/jpeg");
+        assert_eq!(imported.size_bytes, 4);
+        assert_eq!(imported.data_url, "data:image/jpeg;base64,AP+AKg==");
+        assert_eq!(
+            imported.reference,
+            format!("{:x}.jpg", Sha256::digest(image_bytes))
+        );
+        let target = owned.join(&imported.reference);
+        assert_eq!(fs::read(&target).unwrap(), image_bytes);
+        // Existing target bytes stay untouched; the preview still comes from
+        // the selected source, as it does for the original import path.
+        fs::write(&target, b"existing target bytes").unwrap();
+        let duplicate = import_to(&owned, &image, &mut fs::File::open(&image).unwrap()).unwrap();
+        assert_eq!(duplicate.reference, imported.reference);
+        assert_eq!(duplicate.name, imported.name);
+        assert_eq!(duplicate.kind, imported.kind);
+        assert_eq!(duplicate.mime, imported.mime);
+        assert_eq!(duplicate.size_bytes, imported.size_bytes);
+        assert_eq!(duplicate.data_url, imported.data_url);
+        assert_eq!(fs::read(&target).unwrap(), b"existing target bytes");
+
+        let video = root.join("source.webm");
+        fs::write(&video, b"video").unwrap();
+        let video = import_to(&owned, &video, &mut fs::File::open(&video).unwrap()).unwrap();
+        assert_eq!(video.name, "source.webm");
+        assert_eq!(video.kind, "video");
+        assert_eq!(video.mime, "video/webm");
+        assert_eq!(video.size_bytes, 5);
+        assert!(video.data_url.is_empty());
+        assert_eq!(
+            video.reference,
+            format!("{:x}.webm", Sha256::digest(b"video"))
+        );
+        assert_eq!(fs::read(owned.join(&video.reference)).unwrap(), b"video");
+
+        // Import reads from the caller's current offset while reporting the
+        // full source metadata size; do not turn this change into a rewind.
+        let mut offset = fs::File::open(&image).unwrap();
+        offset.seek(SeekFrom::Start(1)).unwrap();
+        let suffix = import_to(&owned, &image, &mut offset).unwrap();
+        assert_eq!(suffix.size_bytes, 4);
+        assert_eq!(suffix.data_url, "data:image/jpeg;base64,/4Aq");
+        assert_eq!(
+            suffix.reference,
+            format!("{:x}.jpg", Sha256::digest([255, 128, 42]))
+        );
+        assert_eq!(
+            fs::read(owned.join(&suffix.reference)).unwrap(),
+            [255, 128, 42]
+        );
+        offset.seek(SeekFrom::End(0)).unwrap();
+        let at_end = import_to(&owned, &image, &mut offset).unwrap();
+        assert_eq!(at_end.size_bytes, 4);
+        assert_eq!(at_end.reference, format!("{:x}.jpg", Sha256::digest([])));
+        assert_eq!(at_end.data_url, "data:image/jpeg;base64,");
+        assert!(fs::read(owned.join(&at_end.reference)).unwrap().is_empty());
+
+        let empty = root.join("empty.jpg");
+        fs::write(&empty, b"").unwrap();
+        let oversized = root.join("oversized.jpg");
+        fs::File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_MEDIA_BYTES + 1)
+            .unwrap();
+        // MIME rejection precedes the empty-file metadata check.
+        let unsupported = root.join("unsupported.txt");
+        fs::write(&unsupported, b"").unwrap();
+        let rejected_root = root.join("rejected");
+        for (path, expected) in [
+            (&empty, "media must be nonempty and at most 64 MiB"),
+            (&oversized, "media must be nonempty and at most 64 MiB"),
+            (&unsupported, "unsupported media format"),
+        ] {
+            let error = import_to(&rejected_root, path, &mut fs::File::open(path).unwrap())
+                .err()
+                .unwrap();
+            assert_eq!(error, expected);
+        }
+        assert!(!rejected_root.exists());
+        // Reference-only imports preserve image identity, bytes and import
+        // errors without building a preview.
+        let reference_owned = root.join("reference-owned");
+        let reference = import_reference_to(
+            &reference_owned,
+            &image,
+            &mut fs::File::open(&image).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reference, imported.reference);
+        let reference_target = reference_owned.join(&reference);
+        assert_eq!(fs::read(&reference_target).unwrap(), image_bytes);
+        fs::write(&reference_target, b"existing reference target bytes").unwrap();
+        assert_eq!(
+            import_reference_to(
+                &reference_owned,
+                &image,
+                &mut fs::File::open(&image).unwrap(),
+            )
+            .unwrap(),
+            reference
+        );
+        assert_eq!(
+            fs::read(&reference_target).unwrap(),
+            b"existing reference target bytes"
+        );
+
+        let mut reference_offset = fs::File::open(&image).unwrap();
+        reference_offset.seek(SeekFrom::Start(1)).unwrap();
+        let reference_suffix =
+            import_reference_to(&reference_owned, &image, &mut reference_offset).unwrap();
+        assert_eq!(reference_suffix, suffix.reference);
+        assert_eq!(
+            fs::read(reference_owned.join(&reference_suffix)).unwrap(),
+            [255, 128, 42]
+        );
+        reference_offset.seek(SeekFrom::End(0)).unwrap();
+        let reference_at_end =
+            import_reference_to(&reference_owned, &image, &mut reference_offset).unwrap();
+        assert_eq!(reference_at_end, at_end.reference);
+        assert!(fs::read(reference_owned.join(&reference_at_end))
+            .unwrap()
+            .is_empty());
+
+        let reference_rejected = root.join("reference-rejected");
+        for (path, expected) in [
+            (&empty, "media must be nonempty and at most 64 MiB"),
+            (&oversized, "media must be nonempty and at most 64 MiB"),
+            (&unsupported, "unsupported media format"),
+        ] {
+            let error = import_reference_to(
+                &reference_rejected,
+                path,
+                &mut fs::File::open(path).unwrap(),
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error, expected);
+        }
+        assert!(!reference_rejected.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

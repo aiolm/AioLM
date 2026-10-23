@@ -257,7 +257,7 @@ fn spawn_system_ffmpeg(
 /// URL are never persisted.
 fn import_frame_to_store(path: &Path) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-    super::import_selected(path, file).map(|attachment| attachment.reference)
+    super::import_selected_reference(path, file)
 }
 
 /// Shared extraction orchestration. All filesystem/process collaborators are
