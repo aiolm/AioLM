@@ -90,8 +90,9 @@ export function rankVectorDocumentChunks(
 ): RankedDocumentChunk[] {
   const query = vectors[queryIndex];
   if (!query || query.length === 0 || chunks.length === 0) return [];
+  const queryNorms = new Map<number, number>();
   return chunks
-    .map((chunk, index) => ({ chunk, score: cosineSimilarity(vectors[index] ?? [], query) }))
+    .map((chunk, index) => ({ chunk, score: cosineSimilarity(vectors[index] ?? [], query, queryNorms) }))
     .filter((item) => Number.isFinite(item.score))
     .sort((left, right) => right.score - left.score || left.chunk.order - right.chunk.order);
 }
@@ -126,15 +127,20 @@ export function buildVectorDocumentRetrieval(
   };
 }
 
-function cosineSimilarity(left: number[], right: number[]): number {
+function cosineSimilarity(left: number[], right: number[], rightNorms: Map<number, number>): number {
   const length = Math.min(left.length, right.length);
+  // Different vector lengths use different query prefixes within this ranking.
+  let rightNorm = rightNorms.get(length);
+  if (rightNorm === undefined) {
+    rightNorm = 0;
+    for (let index = 0; index < length; index += 1) rightNorm += right[index] ** 2;
+    rightNorms.set(length, rightNorm);
+  }
   let dot = 0;
   let leftNorm = 0;
-  let rightNorm = 0;
   for (let index = 0; index < length; index += 1) {
     dot += left[index] * right[index];
     leftNorm += left[index] ** 2;
-    rightNorm += right[index] ** 2;
   }
   return leftNorm > 0 && rightNorm > 0 ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
 }
