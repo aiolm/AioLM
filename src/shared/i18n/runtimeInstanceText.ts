@@ -14,6 +14,6 @@ export function runtimeInstanceLabel(runtime: RuntimeInstance, locale: Locale): 
   return runtimeLabel({
     ...runtime,
     installation: runtime.installation === 'managed' ? text.managed : runtime.installation === 'external' ? text.external : runtime.installation,
-    accelerator: runtime.accelerator === 'unverified' || runtime.accelerator === 'unknown' ? text.unknown : runtime.accelerator,
+    accelerator: runtime.accelerator === '' || runtime.accelerator === 'unverified' || runtime.accelerator === 'unknown' ? text.unknown : runtime.accelerator,
   });
 }

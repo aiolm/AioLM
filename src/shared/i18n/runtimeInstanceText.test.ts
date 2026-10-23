@@ -29,4 +29,18 @@ describe('runtime inventory wording', () => {
       expect(label).not.toContain(' · managed');
     }
   });
+  it.each([
+    ['en', 'Accelerator not checked', 'Registered installation'],
+    ['ko', '가속 장치 미확인', '직접 등록한 설치본'],
+    ['ja', 'アクセラレーター未確認', '登録したインストール先'],
+    ['zh', '加速设备未检查', '已注册的安装'],
+  ] as const)('describes missing native acceleration metadata without claiming verification in %s', (locale, unknown, external) => {
+    const unprobed = { ...runtime, version: undefined, accelerator: '', available: false };
+    const before = structuredClone(unprobed);
+    expect(runtimeInstanceLabel(unprobed, locale)).toBe(`build-one · ${unknown} · ${external}`);
+    expect(unprobed).toEqual(before);
+    const future = { ...unprobed, accelerator: 'future-device · literal', installation: 'future-installation' };
+    expect(runtimeInstanceLabel(future, locale)).toBe('build-one · future-device · literal · future-installation');
+    expect(future).toEqual({ ...before, accelerator: 'future-device · literal', installation: 'future-installation' });
+  });
 });

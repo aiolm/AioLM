@@ -791,7 +791,7 @@ describe('model settings editor', { timeout: 45000 }, () => {
     // not loaded yet, so the selected runtime must be reported as missing.
     vi.mocked(api.rtList).mockResolvedValueOnce([]);
     mount();
-    expect(await screen.findByText('This runtime is not installed. Install it or select another runtime.')).toBeVisible();
+    expect(await screen.findByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
   });
 
@@ -813,14 +813,14 @@ describe('model settings editor', { timeout: 45000 }, () => {
       ...cfg, active_provider: provider, active_runtime: provider === 'llama.cpp' ? '' : 'synthetic',
     } });
     await waitFor(() => expect(api.deviceProfile).toHaveBeenCalled());
-    expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
-    expect(screen.queryByText('This runtime is not installed. Install it or select another runtime.')).not.toBeInTheDocument();
+    expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
     expect(onApply).not.toHaveBeenCalled();
     expect(onProfileCommit).not.toHaveBeenCalled();
     await act(async () => { finish(); });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeEnabled());
-    expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
   });
 
   it.each(['vllm', 'mlx-vlm'] as const)('asks to select a %s runtime without claiming an unselected runtime is missing', async provider => {
@@ -831,8 +831,8 @@ describe('model settings editor', { timeout: 45000 }, () => {
     const { onApply, onProfileCommit } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: '' } });
     expect(await screen.findByText('No runtime is selected.')).toBeVisible();
     await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalled());
-    expect(screen.queryByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).not.toBeInTheDocument();
-    expect(screen.queryByText('This runtime is not installed. Install it or select another runtime.')).not.toBeInTheDocument();
+    expect(screen.queryByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continue to profile' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Save profile & start' })).not.toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
@@ -845,12 +845,33 @@ describe('model settings editor', { timeout: 45000 }, () => {
     vi.spyOn(api, 'providerOptionIssues').mockResolvedValue([]);
     vi.spyOn(api, 'providerRuntimeOptions').mockResolvedValue([]);
     const { onApply } = mount({ initialSection: 'runtime', initialConfig: { ...cfg, active_provider: provider, active_runtime: 'synthetic' } });
-    expect(await screen.findByText('The selected runtime is not installed. You can save these settings, but install the runtime before starting.')).toBeVisible();
+    expect(await screen.findByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).toBeVisible();
     openOptions();
-    expect(screen.getByText('This runtime is not installed. Install it or select another runtime.')).toBeVisible();
+    expect(screen.getByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile & start' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Save profile & start' }));
     expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('keeps a registered but unprobed runtime blocked without describing it as uninstalled', async () => {
+    const provider = 'custom.unprobed';
+    const entry: api.RuntimeInstance = { provider, id: 'build-one', engine: 'external', server: 'openai-v1',
+      accelerator: '', installation: 'external', location: 'synthetic-runtime', available: false, problems: [] };
+    const initialConfig: api.AppConfig = { ...cfg, active_provider: provider, active_runtime: entry.id, active_backend: '', active_build: '' };
+    const before = structuredClone({ entry, initialConfig });
+    vi.spyOn(api, 'providerCatalog').mockResolvedValue([{ id: provider, engine: 'Synthetic engine', server: 'openai-v1', availability: { supported: true, detail: '' }, options: [] }]);
+    vi.spyOn(api, 'providerRuntimes').mockResolvedValue([entry]);
+    const { onApply, onProfileCommit, getSaved } = mount({ initialSection: 'runtime', initialConfig });
+    const selected = await screen.findByRole('radio', { name: /build-one/ });
+    expect(selected).toBeChecked(); expect(selected).toBeDisabled();
+    expect(await screen.findByText('The selected runtime is not ready to use. You can save these settings, but check it in runtime management and install it if needed before starting.')).toBeVisible();
+    openOptions();
+    expect(screen.getByText('This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.')).toBeVisible();
+    const start = screen.getByRole('button', { name: 'Save profile & start' });
+    expect(start).toBeDisabled(); fireEvent.click(start);
+    expect(onApply).not.toHaveBeenCalled(); expect(onProfileCommit).not.toHaveBeenCalled();
+    expect(getSaved()).toEqual(before.initialConfig);
+    expect({ entry, initialConfig }).toEqual(before);
   });
 
   it('keeps numeric edits out of persistence until apply, and discards them on cancel', async () => {

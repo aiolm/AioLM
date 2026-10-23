@@ -4,7 +4,7 @@ const en = {
   title: 'Run a model', setup: 'Execution setup', setupAction: 'Configure & run',
   hint: 'Choose a model, review its setup, and start it here.', remembered: 'Settings are remembered for each model.',
   runtime: 'Runtime', manageRuntime: 'Inference engines', back: 'Back to model', systemRuntime: 'System PATH runtime',
-  runtimeMissing: 'This runtime is not installed. Install it or select another runtime.',
+  runtimeMissing: 'This runtime is not ready to use. Check it in runtime management, install it if needed, or select another runtime.',
   runtimeError: 'Could not load runtimes or devices. Retry before starting.',
   blockedTitle: 'Before this can run', needModel: 'No model is selected.', needModelAction: 'Choose a model',
   needModelParts: 'The selected split model is missing some of its parts. Download the rest, or pick another model.',
@@ -22,7 +22,7 @@ export const executionText: Record<Locale, Copy> = {
   en,
   ko: {
     title: '모델 실행', setup: '실행 구성', setupAction: '설정 및 실행', hint: '모델을 선택하고 설정을 확인한 뒤 여기서 실행하세요.', remembered: '모델마다 마지막 설정을 기억합니다.',
-    runtime: '런타임', manageRuntime: '추론 엔진', back: '모델로 돌아가기', systemRuntime: '시스템 PATH 런타임', runtimeMissing: '설치되지 않은 런타임입니다. 설치하거나 다른 런타임을 선택하세요.', runtimeError: '런타임 또는 장치 정보를 불러오지 못했습니다. 실행 전에 다시 시도하세요.',
+    runtime: '런타임', manageRuntime: '추론 엔진', back: '모델로 돌아가기', systemRuntime: '시스템 PATH 런타임', runtimeMissing: '이 런타임은 아직 사용할 준비가 되지 않았습니다. 런타임 관리에서 상태를 확인하고 필요하면 설치하거나 다른 런타임을 선택하세요.', runtimeError: '런타임 또는 장치 정보를 불러오지 못했습니다. 실행 전에 다시 시도하세요.',
     blockedTitle: '실행하려면 먼저', needModel: '선택된 모델이 없습니다.', needModelAction: '모델 선택',
     needModelParts: '선택한 분할 모델의 일부 파일이 없습니다. 나머지를 내려받거나 다른 모델을 선택하세요.',
     needRuntime: '선택된 런타임이 없습니다.', needRuntimeAction: '런타임 선택',
@@ -33,7 +33,7 @@ export const executionText: Record<Locale, Copy> = {
   },
   ja: {
     title: 'モデル実行', setup: '実行設定', setupAction: '設定して実行', hint: 'モデルを選択し、設定を確認して実行します。', remembered: 'モデルごとに最後の設定を記憶します。',
-    runtime: 'ランタイム', manageRuntime: '推論エンジン', back: 'モデルに戻る', systemRuntime: 'システム PATH ランタイム', runtimeMissing: 'ランタイムが未インストールです。インストールするか別のものを選択してください。', runtimeError: 'ランタイムまたはデバイスを取得できません。実行前に再試行してください。',
+    runtime: 'ランタイム', manageRuntime: '推論エンジン', back: 'モデルに戻る', systemRuntime: 'システム PATH ランタイム', runtimeMissing: 'このランタイムはまだ使用できません。ランタイム管理で状態を確認し、必要に応じてインストールするか、別のランタイムを選択してください。', runtimeError: 'ランタイムまたはデバイスを取得できません。実行前に再試行してください。',
     blockedTitle: '実行する前に', needModel: 'モデルが選択されていません。', needModelAction: 'モデルを選択',
     needModelParts: '選択した分割モデルの一部のファイルがありません。残りをダウンロードするか、別のモデルを選択してください。',
     needRuntime: 'ランタイムが選択されていません。', needRuntimeAction: 'ランタイムを選択',
@@ -42,7 +42,7 @@ export const executionText: Record<Locale, Copy> = {
   },
   zh: {
     title: '运行模型', setup: '运行配置', setupAction: '配置并运行', hint: '选择模型，检查配置，然后在此运行。', remembered: '记住每个模型的上次配置。',
-    runtime: '运行时', manageRuntime: '推理引擎', back: '返回模型', systemRuntime: '系统 PATH 运行时', runtimeMissing: '尚未安装此运行时。请安装或选择其他运行时。', runtimeError: '无法加载运行时或设备。请在运行前重试。',
+    runtime: '运行时', manageRuntime: '推理引擎', back: '返回模型', systemRuntime: '系统 PATH 运行时', runtimeMissing: '此运行时尚不可用。请在运行时管理中检查状态，按需安装，或选择其他运行时。', runtimeError: '无法加载运行时或设备。请在运行前重试。',
     blockedTitle: '运行前需要', needModel: '尚未选择模型。', needModelAction: '选择模型',
     needModelParts: '所选分片模型缺少部分文件。请下载其余文件或选择其他模型。',
     needRuntime: '尚未选择运行时。', needRuntimeAction: '选择运行时',
