@@ -6,6 +6,11 @@ import { PROVIDERS, isExternalProvider, type ProviderId } from './providerIdenti
 export { PROVIDERS, isProviderId, isExternalProvider } from './providerIdentity.ts';
 export type { ProviderId, BuiltinProviderId } from './providerIdentity.ts';
 const optionSchemas = new Map<string, ProviderOption[]>();
+const optionSchemaPublishers = new Map<string, symbol>();
+function invalidateRuntimeOptionSchema(key: string) {
+  optionSchemas.delete(key);
+  optionSchemaPublishers.delete(key);
+}
 export const runtimeOptionSchema = (provider: ProviderId, runtimeId?: string): ProviderOption[] | undefined => runtimeId ? optionSchemas.get(`${provider}/${runtimeId}`) : catalogSnapshot.find(item => item.id === provider)?.options;
 let catalogSnapshot: ProviderDescription[] = [];
 const catalogListeners = new Set<() => void>();
@@ -71,12 +76,24 @@ export const providerCatalog = (fresh = false): Promise<ProviderDescription[]> =
   return catalogRequest;
 };
 export const pickRuntimeAdapter = () => invoke<string | null>('pick_runtime_adapter');
-export const runtimeAdapterRegister = async (manifestPath: string) => { const registered = await invoke<{ engine_id: ProviderId; runtime_id: string; display_name: string }>('runtime_adapter_register', { manifestPath }); optionSchemas.delete(`${registered.engine_id}/${registered.runtime_id}`); return registered; };
+export const runtimeAdapterRegister = async (manifestPath: string) => { const registered = await invoke<{ engine_id: ProviderId; runtime_id: string; display_name: string }>('runtime_adapter_register', { manifestPath }); invalidateRuntimeOptionSchema(`${registered.engine_id}/${registered.runtime_id}`); return registered; };
 export const providerRuntimes = () => invoke<RuntimeInstance[]>('provider_runtimes');
-export const providerRuntimeOptions = async (providerId: ProviderId, runtimeId: string) => { const schema = await invoke<ProviderOption[]>('provider_runtime_options', { providerId, runtimeId }); optionSchemas.set(`${providerId}/${runtimeId}`, schema); return schema; };
+export const providerRuntimeOptions = async (providerId: ProviderId, runtimeId: string) => {
+  const key = `${providerId}/${runtimeId}`;
+  const publisher = Symbol();
+  optionSchemaPublishers.set(key, publisher);
+  try {
+    const schema = await invoke<ProviderOption[]>('provider_runtime_options', { providerId, runtimeId });
+    // Superseded reads still answer their caller, but cannot replace newer facts.
+    if (optionSchemaPublishers.get(key) === publisher) optionSchemas.set(key, schema);
+    return schema;
+  } finally {
+    if (optionSchemaPublishers.get(key) === publisher) optionSchemaPublishers.delete(key);
+  }
+};
 export const providerInstall = (providerId: ProviderId, python?: string) => invoke('provider_install', { providerId, python: python ?? null });
 export const providerRegister = (providerId: ProviderId, python: string) => invoke('provider_register', { providerId, python });
-export const providerRemove = async (providerId: ProviderId, runtimeId: string) => { await invoke<void>('provider_remove', { providerId, runtimeId }); optionSchemas.delete(`${providerId}/${runtimeId}`); };
+export const providerRemove = async (providerId: ProviderId, runtimeId: string) => { await invoke<void>('provider_remove', { providerId, runtimeId }); invalidateRuntimeOptionSchema(`${providerId}/${runtimeId}`); };
 /** Portable bundle export result. Identities stay provider-scoped: `provider`
  * plus `runtime_id`, never the native llama `(backend, build)` vocabulary. */
 export interface PortableExportInfo {

@@ -1,7 +1,8 @@
+import { serverSettingsChanged } from '../config/executionSettings';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAdapterRegister, publishRuntimeCatalog, type ProviderDescription, listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
+import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAdapterRegister, providerRemove, type ProviderOption, publishRuntimeCatalog, type ProviderDescription, listModelArtifacts, modelCompatibleForLibrary, modelLoadable, runtimeLabel, providerPortableExport, providerPortableImport, type ModelArtifact, type ModelCompatibility, type RuntimeInstance } from './providers';
 import { invoke } from './transport.ts';
-import type { GgufModel } from './types';
+import type { AppConfig, GgufModel } from './types';
 import { modelSelectable, providerImportCommand } from './providers';
 import { entrypointHelpDiscover, runtimeHelpImport, type EntrypointHelp } from './runtimeHelp';
 import { effectiveSchema } from '../../testing/effectiveSchema';
@@ -187,5 +188,117 @@ describe('external runtime inventory publication', () => {
     vi.mocked(invoke).mockResolvedValueOnce({ engine_id: 'custom.cache', runtime_id: 'build-1', display_name: 'Synthetic' });
     await runtimeAdapterRegister('/synthetic/new-manifest.json');
     expect(runtimeOptionSchema('custom.cache', 'build-1')).toBeUndefined();
+  });
+});
+
+function pendingRuntimeOptions() {
+  let resolve!: (schema: ProviderOption[]) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<ProviderOption[]>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+const publicationSchema = (target: ProviderOption['target']): ProviderOption[] => [
+  { key: 'mode', flag: '--mode', target, group: 'synthetic', kind: { type: 'text' } },
+];
+
+describe('runtime option response publication ownership', () => {
+  it.each(['remove', 'register'] as const)('does not republish a pending schema after successful %s invalidation', async mutation => {
+    const provider = `custom.pending.${mutation}` as const;
+    const runtime = 'build-1';
+    const cached = publicationSchema('launch');
+    const old = publicationSchema('request');
+    const unrelated = publicationSchema('launch');
+    vi.mocked(invoke).mockResolvedValueOnce(cached).mockResolvedValueOnce(unrelated);
+    await expect(providerRuntimeOptions(provider, runtime)).resolves.toBe(cached);
+    await providerRuntimeOptions(provider, 'other-build');
+    const delayed = pendingRuntimeOptions();
+    vi.mocked(invoke).mockReturnValueOnce(delayed.promise);
+    const pending = providerRuntimeOptions(provider, runtime);
+    expect(invoke).toHaveBeenLastCalledWith('provider_runtime_options', { providerId: provider, runtimeId: runtime });
+    if (mutation === 'remove') {
+      vi.mocked(invoke).mockResolvedValueOnce(undefined);
+      await expect(providerRemove(provider, runtime)).resolves.toBeUndefined();
+      expect(invoke).toHaveBeenLastCalledWith('provider_remove', { providerId: provider, runtimeId: runtime });
+    } else {
+      const registration = { engine_id: provider, runtime_id: runtime, display_name: 'Synthetic replacement' };
+      vi.mocked(invoke).mockResolvedValueOnce(registration);
+      await expect(runtimeAdapterRegister('/synthetic/replacement-manifest.json')).resolves.toBe(registration);
+      expect(invoke).toHaveBeenLastCalledWith('runtime_adapter_register', { manifestPath: '/synthetic/replacement-manifest.json' });
+    }
+    expect(runtimeOptionSchema(provider, runtime)).toBeUndefined();
+    expect(runtimeOptionSchema(provider, 'other-build')).toBe(unrelated);
+    delayed.resolve(old);
+    await expect(pending).resolves.toBe(old);
+    expect(runtimeOptionSchema(provider, runtime)).toBeUndefined();
+    expect(runtimeOptionSchema(provider, 'other-build')).toBe(unrelated);
+    const base = { ...testConfig, active_provider: provider, active_runtime: runtime, provider_options: { [provider]: { mode: 'before' } } };
+    expect(serverSettingsChanged(base, { ...base, provider_options: { [provider]: { mode: 'after' } } })).toBe(true);
+  });
+
+  it('retains the latest same-runtime result and other runtime identities when an older read finishes last', async () => {
+    const provider = 'custom.latest';
+    const runtime = 'same-build';
+    const otherRuntime = publicationSchema('request');
+    const otherProvider = publicationSchema('request');
+    vi.mocked(invoke).mockResolvedValueOnce(otherRuntime).mockResolvedValueOnce(otherProvider);
+    await providerRuntimeOptions(provider, 'other-build');
+    await providerRuntimeOptions('custom.other', runtime);
+    const old = publicationSchema('request');
+    const fresh = publicationSchema('launch');
+    const delayed = pendingRuntimeOptions();
+    vi.mocked(invoke).mockReturnValueOnce(delayed.promise).mockResolvedValueOnce(fresh);
+    const pending = providerRuntimeOptions(provider, runtime);
+    await expect(providerRuntimeOptions(provider, runtime)).resolves.toBe(fresh);
+    expect(runtimeOptionSchema(provider, runtime)).toBe(fresh);
+    delayed.resolve(old);
+    await expect(pending).resolves.toBe(old);
+    expect(runtimeOptionSchema(provider, runtime)).toBe(fresh);
+    expect(runtimeOptionSchema(provider, 'other-build')).toBe(otherRuntime);
+    expect(runtimeOptionSchema('custom.other', runtime)).toBe(otherProvider);
+    const base: AppConfig = { ...testConfig, active_provider: provider, active_runtime: runtime, provider_options: { [provider]: { mode: 'before' } } };
+    expect(serverSettingsChanged(base, { ...base, provider_options: { [provider]: { mode: 'after' } } })).toBe(true);
+  });
+
+  it.each(['remove', 'register'] as const)('preserves cached facts and a pending publisher when %s fails', async mutation => {
+    const provider = `custom.failed.${mutation}` as const;
+    const runtime = 'build-1';
+    const cached = publicationSchema('launch');
+    const fresh = publicationSchema('request');
+    vi.mocked(invoke).mockResolvedValueOnce(cached);
+    await providerRuntimeOptions(provider, runtime);
+    const delayed = pendingRuntimeOptions();
+    vi.mocked(invoke).mockReturnValueOnce(delayed.promise);
+    const pending = providerRuntimeOptions(provider, runtime);
+    const failure = new Error(`Synthetic ${mutation} failure`);
+    vi.mocked(invoke).mockRejectedValueOnce(failure);
+    if (mutation === 'remove') await expect(providerRemove(provider, runtime)).rejects.toBe(failure);
+    else await expect(runtimeAdapterRegister('/synthetic/failed-manifest.json')).rejects.toBe(failure);
+    expect(runtimeOptionSchema(provider, runtime)).toBe(cached);
+    delayed.resolve(fresh);
+    await expect(pending).resolves.toBe(fresh);
+    expect(runtimeOptionSchema(provider, runtime)).toBe(fresh);
+  });
+
+  it('preserves the exact read failure and leaves a newer pending publisher intact', async () => {
+    const provider = 'custom.pending.error';
+    const runtime = 'build-1';
+    const cached = publicationSchema('launch');
+    const fresh = publicationSchema('request');
+    vi.mocked(invoke).mockResolvedValueOnce(cached);
+    await providerRuntimeOptions(provider, runtime);
+    const older = pendingRuntimeOptions();
+    const newer = pendingRuntimeOptions();
+    vi.mocked(invoke).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const oldRequest = providerRuntimeOptions(provider, runtime);
+    const newRequest = providerRuntimeOptions(provider, runtime);
+    const failure = new Error('Synthetic declaration read failed');
+    const rejection = expect(oldRequest).rejects.toBe(failure);
+    older.reject(failure);
+    await rejection;
+    expect(runtimeOptionSchema(provider, runtime)).toBe(cached);
+    newer.resolve(fresh);
+    await expect(newRequest).resolves.toBe(fresh);
+    expect(runtimeOptionSchema(provider, runtime)).toBe(fresh);
   });
 });
