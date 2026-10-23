@@ -178,7 +178,13 @@ export function rebaseStaleProfileEdit(base: SettingsProfileLibrary | undefined,
 /** Persist replacement settings with the library when a profile is deleted. */
 export function profileLibraryConfigPatch(current: AppConfig, edit: ProfileEditorResult): Partial<AppConfig> {
   const library = mergeProfileEditor(current, edit);
-  const removed = new Set((current.settings_profiles?.entries ?? []).filter(entry => !library.entries.some(next => next.id === entry.id)).map(entry => entry.id));
+  const removed = new Set((current.settings_profiles?.entries ?? []).map(entry => entry.id));
+  if (removed.size) {
+    for (const entry of library.entries) {
+      removed.delete(entry.id);
+      if (!removed.size) break;
+    }
+  }
   const replacement = (model: string, sessionId = 'default', provider = providerOf(current)) => {
     const key = profileTargetKey(model, sessionId, provider);
     const previous = current.settings_profiles?.applied[key];

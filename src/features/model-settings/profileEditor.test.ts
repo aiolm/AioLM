@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { AppConfig } from '../../shared/api/types';
 import { testConfig } from '../../testing/appStore';
-import { captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
+import { captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileTargetKey, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
 import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, rebaseStaleProfileEdit, requestProfileFromApplication, type ProfileEditorResult } from './profileEditor';
 import { emptyGpuPlacement, sessionConfig } from '../../shared/runtime/sessionUtils';
 
@@ -189,5 +190,145 @@ describe('profile editor persistence', () => {
     request.chat_options.stop = [];
     expect(application.settings.chat_options?.stop).toEqual([' end ', '\n']);
     expect(requestProfileFromApplication(undefined)).toBeNull();
+  });
+});
+
+describe('profile removal membership', () => {
+  function removalFixture(removedId: string, retainedId: string) {
+    const fallbackOptions = { synthetic_unknown: { items: ['끝', 'first', '끝'], count: 0, enabled: false } };
+    const fallbackChat = { stop: [' end ', '\n'], synthetic_unknown: { order: ['second', 'first'] } };
+    const fallback: SettingsProfileLibrary['entries'][number] = { ...defaultSettingsProfile(), name: 'Fallback', revision: 4,
+      coverage: ['temperature', 'provider_options', 'chat_options'],
+      settings: { temperature: 0.45, provider_options: { 'llama.cpp': fallbackOptions }, chat_options: fallbackChat },
+      legacy_runtime: { active_runtime: 'synthetic-history', synthetic_unknown: { order: ['second', 'first'] } },
+      system_prompt: '  Fallback prompt\n' };
+    const removed = { ...fallback, id: removedId, name: 'Removed', revision: 1 };
+    const retained = { ...fallback, id: retainedId, name: 'Retained', revision: 2 };
+    const removedOther = { ...fallback, id: 'synthetic-deleted-other', name: 'Removed other', revision: 1 };
+    const tail = { ...fallback, id: 'synthetic-retained-tail', name: 'Retained tail', revision: 1 };
+    const sessions: NonNullable<AppConfig['sessions']> = [
+      { id: 'work', name: 'Work', enabled: false, models: { primary_model: 'C:\\Synthetic\\Work.gguf', mmproj: '/synthetic/work-projector.gguf', draft_model: '/synthetic/work-draft.gguf' },
+        gpu: emptyGpuPlacement(), execution: { temperature: 0.2, runtime_defaults: [], chat_options: { stop: ['old work'] } }, model_profile_id: 'legacy-work' },
+      { id: 'keep', name: 'Keep', enabled: true, models: { primary_model: '/synthetic/Keep.gguf', mmproj: '', draft_model: '' },
+        gpu: emptyGpuPlacement(), execution: { temperature: 0.73, runtime_defaults: [] }, model_profile_id: 'legacy-keep' },
+    ];
+    const current: AppConfig = { ...structuredClone(testConfig), active_provider: 'llama.cpp', active_model: 'c:/synthetic/active.gguf',
+      port: 9090, runtime_defaults: [], gpu: emptyGpuPlacement(), sessions,
+      provider_options: { 'llama.cpp': { synthetic_unknown: { items: ['old'], enabled: true } } }, chat_options: { stop: ['old active'] } };
+    const activeKey = profileTargetKey(current.active_model);
+    const active = materializeProfileApplication({ ...current, active_model: 'C:\\Synthetic\\Active.gguf' }, 'Active prompt', removed);
+    const work = materializeProfileApplication(sessionConfig(current, sessions[0]), 'Work prompt', removedOther);
+    const keep = materializeProfileApplication(sessionConfig(current, sessions[1]), 'Keep prompt', retained);
+    current.settings_profiles = ensureProfileLibrary({ ...emptyProfileLibrary(), revision: 12, legacy_imported: true,
+      entries: [removed, retained, fallback, removedOther, tail], default_profile_id: fallback.id,
+      provider_defaults: { 'llama.cpp': fallback.id }, provider_recent: { 'llama.cpp': removed.id },
+      applied: { [activeKey]: active, 'session:work': work, 'session:keep': keep } });
+    const library = structuredClone(current.settings_profiles);
+    library.entries = library.entries.filter(entry => entry.id !== removed.id && entry.id !== removedOther.id);
+    library.provider_recent = {};
+    for (const key of [activeKey, 'session:work']) {
+      const saved = library.applied[key];
+      library.applied[key] = { ...saved, profile_id: fallback.id, profile_name: fallback.name, profile_revision: fallback.revision,
+        settings: { ...saved.settings, temperature: 0.45, provider_options: { 'llama.cpp': structuredClone(fallbackOptions) }, chat_options: structuredClone(fallbackChat) },
+        system_prompt: '  Fallback prompt\n' };
+    }
+    const edit: ProfileEditorResult = { baseRevision: 12, baseLibrary: structuredClone(current.settings_profiles), library,
+      application: structuredClone(library.applied[activeKey]) };
+    const expectedWorkExecution = { ...structuredClone(library.applied['session:work'].settings), active_provider: 'llama.cpp' as const,
+      active_backend: current.active_backend, active_build: current.active_build };
+    delete expectedWorkExecution.gpu;
+    delete expectedWorkExecution.mmproj;
+    delete expectedWorkExecution.spec_draft_model;
+    const expectedWork = { ...structuredClone(sessions[0]), execution: expectedWorkExecution };
+    delete expectedWork.model_profile_id;
+    const expected: Partial<AppConfig> = { settings_profiles: { ...structuredClone(library), revision: 13, legacy_imported: true },
+      provider_options: { 'llama.cpp': structuredClone(fallbackOptions) }, temperature: 0.45, chat_options: structuredClone(fallbackChat),
+      sessions: [expectedWork, sessions[1]] };
+    return { current, edit, removed, retained, fallback, activeKey, fallbackOptions, expected };
+  }
+
+  it.each([['\u00e9', 'e\u0301'], ['Exact', 'exact'], ['__proto__', 'constructor']])('preserves complete replacements while distinguishing literal ids %s and %s', (removedId, retainedId) => {
+    const { current, edit, removed, retained, activeKey, fallbackOptions, expected } = removalFixture(removedId, retainedId);
+    const before = structuredClone({ current, edit });
+    const patch = profileLibraryConfigPatch(current, edit);
+    expect(patch).toEqual(expected);
+    expect(patch.settings_profiles!.entries.map(entry => entry.id)).toEqual(expected.settings_profiles!.entries.map(entry => entry.id));
+    expect(Object.keys(patch.settings_profiles!.applied)).toEqual(Object.keys(expected.settings_profiles!.applied));
+    expect(patch.settings_profiles!.applied['session:keep'].profile_id).toBe(retained.id);
+    expect(patch.sessions![1]).toBe(current.sessions![1]);
+    expect(patch.sessions![0]).not.toBe(current.sessions![0]);
+    expect(patch.settings_profiles!.entries).not.toBe(edit.library.entries);
+    expect(patch.settings_profiles!.applied[activeKey].settings).not.toBe(edit.library.applied[activeKey].settings);
+    const sessionOptions = patch.sessions![0].execution!.provider_options!['llama.cpp'] as typeof fallbackOptions;
+    expect(sessionOptions).not.toBe(patch.settings_profiles!.applied['session:work'].settings.provider_options!['llama.cpp']);
+    sessionOptions.synthetic_unknown.items.push('output-only');
+    expect(patch.provider_options!['llama.cpp']).toEqual(fallbackOptions);
+    expect(patch.settings_profiles!.applied['session:work'].settings.provider_options!['llama.cpp']).toEqual(fallbackOptions);
+    expect({ current, edit }).toEqual(before);
+
+    edit.library.entries.push(structuredClone(removed));
+    const fresh = profileLibraryConfigPatch(current, edit);
+    expect(fresh).toEqual({ settings_profiles: { ...structuredClone(edit.library), revision: 13, legacy_imported: true }, sessions: expected.sessions });
+    expect(fresh).not.toHaveProperty('temperature');
+    expect(current).toEqual(before.current);
+  });
+
+  it.each(['missing', 'empty'] as const)('returns only the merged library when prior entries are %s', prior => {
+    const library = ensureProfileLibrary(emptyProfileLibrary());
+    const current: AppConfig = { ...structuredClone(testConfig), ...(prior === 'empty' ? { settings_profiles: emptyProfileLibrary() } : {}) };
+    const edit: ProfileEditorResult = { baseRevision: 0, library,
+      application: materializeProfileApplication(current, '', library.entries[0]) };
+    const before = structuredClone({ current, edit });
+    const patch = profileLibraryConfigPatch(current, edit);
+    expect(patch).toEqual({ settings_profiles: { ...structuredClone(library), revision: 1, legacy_imported: true } });
+    expect(patch.settings_profiles!.entries).not.toBe(library.entries);
+    expect({ current, edit }).toEqual(before);
+  });
+
+  it('uses the completed rebase result when a concurrent writer retained an added profile', () => {
+    const { current, edit, retained, expected } = removalFixture('synthetic-removed', 'synthetic-kept');
+    const background = { ...structuredClone(retained), id: 'synthetic-background', name: 'Background' };
+    current.settings_profiles!.entries.push(background);
+    current.settings_profiles!.revision = 13;
+    const before = structuredClone({ current, edit });
+    const patch = profileLibraryConfigPatch(current, edit);
+    expect(patch).toEqual({ ...expected, settings_profiles: { ...expected.settings_profiles!,
+      entries: [...expected.settings_profiles!.entries, background], revision: 14 } });
+    expect({ current, edit }).toEqual(before);
+  });
+
+  it('leaves a named session unchanged when its replacement belongs to a different model', () => {
+    const { current, edit, expected } = removalFixture('synthetic-removed', 'synthetic-kept');
+    edit.library.applied['session:work'].model = '/synthetic/Different.gguf';
+    const before = structuredClone({ current, edit });
+    const wanted = { ...expected, settings_profiles: { ...structuredClone(edit.library), revision: 13, legacy_imported: true } };
+    delete wanted.sessions;
+    expect(profileLibraryConfigPatch(current, edit)).toEqual(wanted);
+    expect({ current, edit }).toEqual(before);
+  });
+
+  it('retains upstream merge and malformed-data error priority before removal membership is computed', () => {
+    type Data = ReturnType<typeof removalFixture>;
+    const cases: Array<{ mutate: (data: Data) => void; error: string | typeof TypeError }> = [
+      { mutate: ({ edit }) => { edit.baseRevision = 11; edit.baseLibrary = undefined; edit.library.entries = []; }, error: 'Profiles changed elsewhere. Reopen settings to review the latest profiles.' },
+      { mutate: ({ edit }) => { edit.library.entries = []; }, error: 'At least one profile must remain.' },
+      { mutate: ({ edit }) => {
+        const saved = { ...edit.application, model: '/synthetic/Case.gguf' };
+        edit.library.applied['model:/synthetic/case.gguf'] = saved;
+        edit.library.applied['model:/synthetic/Case.gguf'] = { ...saved, system_prompt: 'Conflicting prompt' };
+        edit.saveMode = 'all'; edit.application.profile_id = 'missing';
+      }, error: 'Conflicting saved settings for the same model path.' },
+      { mutate: ({ edit }) => { edit.saveMode = 'all'; edit.application.profile_id = 'missing'; }, error: 'This profile is no longer available.' },
+      { mutate: ({ edit, retained }) => { edit.library.entries = edit.library.entries.filter(entry => entry.id !== retained.id); }, error: 'Every model must reference an available profile.' },
+      { mutate: ({ edit }) => { edit.library.entries[0].settings = null as unknown as SettingsProfileLibrary['entries'][number]['settings'];
+        edit.saveMode = 'all'; edit.application.profile_id = 'missing'; }, error: TypeError },
+    ];
+    for (const scenario of cases) {
+      const data = removalFixture('synthetic-removed', 'synthetic-kept');
+      scenario.mutate(data);
+      const before = structuredClone({ current: data.current, edit: data.edit });
+      expect(() => profileLibraryConfigPatch(data.current, data.edit)).toThrow(scenario.error);
+      expect({ current: data.current, edit: data.edit }).toEqual(before);
+    }
   });
 });
