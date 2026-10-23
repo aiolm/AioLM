@@ -989,19 +989,17 @@ pub fn discovery_saved_keys(cfg: &AppConfig, selected: &Selected) -> Result<Vec<
         .iter()
         .map(|option| option.key.as_str())
         .collect::<BTreeSet<_>>();
-    Ok(generic_values(&values)
-        .keys()
-        .filter(|key| !known.contains(key.as_str()))
-        .cloned()
+    Ok(generic_entries(&values)
+        .filter(|(key, _)| !known.contains(key.as_str()))
+        .map(|(key, _)| key.clone())
         .collect())
 }
 
 /// A new entry point has no manifest option catalog. Its saved provider values
 /// must be reviewed against its new help, even before any help was accepted.
 pub fn entrypoint_saved_keys(cfg: &AppConfig, provider: ProviderId) -> Vec<String> {
-    generic_values(&super::launch::provider_options(cfg, provider))
-        .into_iter()
-        .map(|(key, _)| key)
+    generic_entries(&super::launch::provider_options(cfg, provider))
+        .map(|(key, _)| key.clone())
         .collect()
 }
 
@@ -1759,20 +1757,28 @@ pub(crate) fn binding_for(placeholder: &str) -> ManagedBinding {
     }
 }
 
-/// Saved values a generic option may hold (dedicated bindings excluded).
-fn generic_values(values: &Map<String, Value>) -> Map<String, Value> {
+/// Saved entries a generic option may hold (dedicated bindings excluded).
+fn generic_entries(values: &Map<String, Value>) -> impl Iterator<Item = (&String, &Value)> + '_ {
     values
         .iter()
         .filter(|(key, _)| !RESERVED_KEYS.contains(&key.as_str()))
+}
+
+fn generic_values(values: &Map<String, Value>) -> Map<String, Value> {
+    generic_entries(values)
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
 
 /// Saved values only accepted help can describe.
 fn help_values(values: &Map<String, Value>, compat_keys: &[String]) -> Map<String, Value> {
-    generic_values(values)
-        .into_iter()
-        .filter(|(key, _)| !compat_keys.iter().any(|k| k == key))
+    generic_entries(values)
+        .filter(|(key, _)| {
+            !compat_keys
+                .iter()
+                .any(|compat| compat.as_str() == key.as_str())
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
 
@@ -1796,13 +1802,13 @@ pub fn saved_issues_for(
     values: &Map<String, Value>,
     reported: &BTreeSet<String>,
 ) -> Vec<options::OptionIssue> {
-    let all = generic_values(values);
+    let has_generic = generic_entries(values).next().is_some();
     let issue = |key: &str, code: &'static str, message: String| options::OptionIssue {
         key: key.into(),
         code,
         message,
     };
-    if all.is_empty() {
+    if !has_generic {
         // A record ordering nothing still names values that do not exist.
         return match runtime_ordered::saved_order(values) {
             Err(message) => vec![issue(ORDER_KEY, "order", message)],
@@ -1812,10 +1818,9 @@ pub fn saved_issues_for(
     let effective = match selected.and_then(|selected| effective_for(root, cfg, &selected, false)) {
         Ok(effective) => effective,
         Err(error) => {
-            return all
-                .keys()
-                .filter(|key| !reported.contains(*key))
-                .map(|key| {
+            return generic_entries(values)
+                .filter(|(key, _)| !reported.contains(key.as_str()))
+                .map(|(key, _)| {
                     issue(
                         key,
                         "unknown",
@@ -1828,42 +1833,40 @@ pub fn saved_issues_for(
     let mut issues = Vec::new();
     let mut describable = Map::new();
     let mut blocked = BTreeSet::new();
-    for (key, value) in all {
-        if reported.contains(&key) {
+    for (key, value) in generic_entries(values) {
+        if reported.contains(key.as_str()) {
             continue;
         }
-        let sensitive = effective
-            .schema
-            .options
-            .iter()
-            .any(|option| option.key == key && option.sensitive.supported() == Some(&true));
+        let sensitive = effective.schema.options.iter().any(|option| {
+            option.key.as_str() == key.as_str() && option.sensitive.supported() == Some(&true)
+        });
         let refusal = effective
             .conflicts
             .iter()
             .chain(effective.metadata.iter().flat_map(|view| &view.conflicts))
-            .filter(|conflict| conflict.blocking && conflict.key == key)
-            .find_map(|conflict| blocking_issue(conflict, &value, sensitive));
+            .filter(|conflict| conflict.blocking && conflict.key.as_str() == key.as_str())
+            .find_map(|conflict| blocking_issue(conflict, value, sensitive));
         if let Some(message) = refusal {
-            issues.push(issue(&key, "conflict", message));
-            blocked.insert(key);
+            issues.push(issue(key, "conflict", message));
+            blocked.insert(key.clone());
             continue;
         }
         if effective
             .schema
             .options
             .iter()
-            .any(|option| option.key == key)
+            .any(|option| option.key.as_str() == key.as_str())
         {
-            describable.insert(key, value);
+            describable.insert(key.clone(), value.clone());
         } else if effective.accepted_fingerprint.is_none() {
             issues.push(issue(
-                &key,
+                key,
                 "unknown",
                 format!("{key} is not an option this runtime describes; discover and accept its help, or remove the retained value"),
             ));
         } else {
             issues.push(issue(
-                &key,
+                key,
                 "unknown",
                 format!("{key} is absent from this runtime's reviewed help; its saved value was retained"),
             ));
@@ -2138,9 +2141,11 @@ pub fn help_launch_args(
     compat_keys: &[String],
 ) -> Result<Vec<String>, String> {
     let mut launch = help_values(values, compat_keys);
-    let generic = generic_values(values);
     for key in runtime_ordered::recorded_keys(values) {
-        if let Some(value) = generic.get(&key) {
+        if RESERVED_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        if let Some(value) = values.get(&key) {
             launch.insert(key, value.clone());
         }
     }

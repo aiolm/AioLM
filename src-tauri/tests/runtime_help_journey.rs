@@ -15,7 +15,7 @@ use aiolm_lib::{
 };
 use serde_json::{json, Map, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -142,6 +142,13 @@ fn issues(cfg: &AppConfig, manifest: &RuntimeManifest) -> Vec<String> {
     .into_iter()
     .map(|issue| format!("{}:{}:{}", issue.key, issue.code, issue.message))
     .collect()
+}
+
+fn issue_texts(issues: Vec<providers::options::OptionIssue>) -> Vec<String> {
+    issues
+        .into_iter()
+        .map(|issue| format!("{}:{}:{}", issue.key, issue.code, issue.message))
+        .collect()
 }
 
 #[tokio::test]
@@ -277,6 +284,131 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         .filter(|option| option.position.is_some())
         .all(|option| option.managed.is_some()));
 
+    // An empty generic projection preserves the early order-only branch, even
+    // when the selected runtime cannot be resolved.
+    let empty = Map::new();
+    assert!(runtime_schema::saved_issues_for(
+        &root,
+        &cfg,
+        Err("unused selection error".into()),
+        &empty,
+        &BTreeSet::new(),
+    )
+    .is_empty());
+    let mut malformed_order = Map::new();
+    malformed_order.insert("@option_order".into(), json!({"version": 2}));
+    assert_eq!(
+        issue_texts(runtime_schema::saved_issues_for(
+            &root,
+            &cfg,
+            Err("unused selection error".into()),
+            &malformed_order,
+            &BTreeSet::new(),
+        )),
+        vec!["@option_order:order:the saved option order uses version 2, which this app does not support; the saved values were retained".to_string()]
+    );
+
+    // Effective errors retain exact key order and do not mutate the input;
+    // reported keys are filtered only after the effective call returns.
+    let mut unavailable_values = Map::new();
+    unavailable_values.insert("zeta_unknown".into(), json!("z"));
+    unavailable_values.insert("alpha_unknown".into(), json!("a"));
+    unavailable_values.insert("already_reported".into(), json!("r"));
+    let unavailable_before = unavailable_values.clone();
+    let unavailable_values_bytes = serde_json::to_vec(&unavailable_values).unwrap();
+    let unavailable_cfg_bytes = serde_json::to_vec(&cfg).unwrap();
+    let reported = BTreeSet::from(["already_reported".to_string()]);
+    assert_eq!(
+        issue_texts(runtime_schema::saved_issues_for(
+            &root,
+            &cfg,
+            Err("synthetic unavailable".into()),
+            &unavailable_values,
+            &reported,
+        )),
+        vec![
+            "alpha_unknown:unknown:alpha_unknown: runtime options unavailable: synthetic unavailable".to_string(),
+            "zeta_unknown:unknown:zeta_unknown: runtime options unavailable: synthetic unavailable".to_string(),
+        ]
+    );
+    assert_eq!(unavailable_values, unavailable_before);
+    assert_eq!(
+        serde_json::to_vec(&unavailable_values).unwrap(),
+        unavailable_values_bytes
+    );
+    assert_eq!(serde_json::to_vec(&cfg).unwrap(), unavailable_cfg_bytes);
+
+    // A valid effective selection keeps the complete ordered issue vector:
+    // reported managed values are filtered, describable values pass through,
+    // and an unknown value remains in deterministic key order.
+    let mut mixed_values = Map::new();
+    mixed_values.insert("zeta_unknown".into(), json!("z"));
+    mixed_values.insert("workers".into(), json!(2));
+    mixed_values.insert("fresh_label".into(), json!("kept"));
+    mixed_values.insert("port".into(), json!("9000"));
+    let mixed_values_bytes = serde_json::to_vec(&mixed_values).unwrap();
+    let mixed_cfg_bytes = serde_json::to_vec(&cfg).unwrap();
+    assert_eq!(
+        issue_texts(runtime_schema::saved_issues_for(
+            &root,
+            &cfg,
+            Ok(runtime_schema::Selected::from_config(&cfg).unwrap()),
+            &mixed_values,
+            &BTreeSet::from(["port".to_string()]),
+        )),
+        vec![
+            "zeta_unknown:unknown:zeta_unknown is absent from this runtime's reviewed help; its saved value was retained".to_string()
+        ]
+    );
+    assert_eq!(
+        serde_json::to_vec(&mixed_values).unwrap(),
+        mixed_values_bytes
+    );
+    assert_eq!(serde_json::to_vec(&cfg).unwrap(), mixed_cfg_bytes);
+
+    // A missing selected runtime still takes the effective-error branch even
+    // when every generic key is reported. Its error must precede malformed
+    // order handling, and the caller-owned map remains unchanged.
+    let mut missing_cfg = cfg.clone();
+    missing_cfg.active_runtime = "missing-build".into();
+    let all_reported_selected = runtime_schema::Selected::from_config(&missing_cfg).unwrap();
+    let mut all_reported_values = Map::new();
+    all_reported_values.insert("all_reported".into(), json!("kept"));
+    all_reported_values.insert("@option_order".into(), json!({"version": 2}));
+    let all_reported_before = all_reported_values.clone();
+    let all_reported_values_bytes = serde_json::to_vec(&all_reported_values).unwrap();
+    let all_reported_cfg_bytes = serde_json::to_vec(&cfg).unwrap();
+    let all_reported = BTreeSet::from(["all_reported".to_string()]);
+    assert!(runtime_schema::saved_issues_for(
+        &root,
+        &cfg,
+        Ok(all_reported_selected),
+        &all_reported_values,
+        &all_reported,
+    )
+    .is_empty());
+    assert_eq!(all_reported_values, all_reported_before);
+    assert_eq!(
+        serde_json::to_vec(&all_reported_values).unwrap(),
+        all_reported_values_bytes
+    );
+    assert_eq!(serde_json::to_vec(&cfg).unwrap(), all_reported_cfg_bytes);
+
+    // The same malformed order is reported when the selected runtime is
+    // valid, proving the effective-error branch did not hide it.
+    let valid_all_reported_values = all_reported_values.clone();
+    assert_eq!(
+        issue_texts(runtime_schema::saved_issues_for(
+            &root,
+            &cfg,
+            Ok(runtime_schema::Selected::from_config(&cfg).unwrap()),
+            &valid_all_reported_values,
+            &all_reported,
+        )),
+        vec!["@option_order:order:the saved option order uses version 2, which this app does not support; the saved values were retained".to_string()]
+    );
+    assert_eq!(valid_all_reported_values, all_reported_values);
+
     // Explicit zero, explicit empty text, a fixed tuple keeping spaces and
     // Unicode as single arguments, and a switch, in the stored profile shapes.
     let values = json!({
@@ -288,6 +420,47 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
     });
     saved(&mut cfg, engine.as_str(), values.clone());
     assert!(issues(&cfg, &v1).is_empty(), "{:?}", issues(&cfg, &v1));
+
+    let before_projection = cfg.provider_options.clone();
+    let selected = runtime_schema::Selected::from_config(&cfg).unwrap();
+    let expected_help_args = [
+        "--fresh-count",
+        "0",
+        "--fresh-label",
+        "",
+        "--fresh-pair",
+        "x y",
+        "한글",
+        "--fresh-switch",
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(
+        runtime_schema::help_launch_args(
+            &root,
+            &cfg,
+            &selected,
+            cfg.provider_options.get(engine.as_str()).unwrap(),
+            &effective.compat_keys,
+        )
+        .unwrap(),
+        expected_help_args
+    );
+    let identity = runtime_schema::launch_identity(&root, &cfg, &effective.compat_keys);
+    assert_eq!(identity["help"], json!(descriptor.fingerprint.clone()));
+    assert_eq!(
+        identity["values"],
+        json!({
+            "fresh_count": "0",
+            "fresh_label": "",
+            "fresh_pair": {"spelling": null, "occurrences": [["x y", "한글"]]},
+            "fresh_switch": true
+        })
+    );
+    assert!(identity.get("order").is_none());
+    assert!(identity.get("confirmed").is_none());
+    assert_eq!(cfg.provider_options, before_projection);
+
     cfg.validate().unwrap();
     aiolm_lib::config::save(&cfg).unwrap();
     let loaded = aiolm_lib::config::load_result().unwrap();
@@ -393,6 +566,18 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         &runtime_schema::Selected::from_config(&review_cfg).unwrap(),
     )
     .unwrap();
+    assert_eq!(
+        saved_keys,
+        [
+            "fresh_count",
+            "fresh_label",
+            "fresh_pair",
+            "fresh_switch",
+            "removed_only",
+        ]
+        .map(String::from)
+        .to_vec()
+    );
     assert!(
         !saved_keys.contains(&"workers".into()),
         "manifest option remains valid without a help row"
@@ -419,6 +604,20 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         .unwrap()
         .added
         .contains(&"fresh_extra".to_string()));
+    let entrypoint_keys = runtime_schema::entrypoint_saved_keys(&review_cfg, engine);
+    assert_eq!(
+        entrypoint_keys,
+        [
+            "fresh_count",
+            "fresh_label",
+            "fresh_pair",
+            "fresh_switch",
+            "removed_only",
+            "workers",
+        ]
+        .map(String::from)
+        .to_vec()
+    );
     // Reopening registration after this unaccepted discovery still shows
     // the changes from the reviewed build, rather than comparing v2 to v2.
     let (_, reopened) = runtime_help_store::discover_against(
@@ -428,7 +627,7 @@ async fn accepted_help_options_reach_the_launched_engine_argv() {
         engine.as_str(),
         "build-1",
         &command,
-        &runtime_schema::entrypoint_saved_keys(&review_cfg, engine),
+        &entrypoint_keys,
         runtime_schema::entrypoint_baseline(&root, engine.as_str(), "build-1").unwrap(),
     )
     .unwrap();

@@ -88,6 +88,18 @@ fn issues(cfg: &AppConfig, engine: providers::ProviderId) -> Vec<String> {
     .collect()
 }
 
+fn expected_arity_issue() -> String {
+    "fresh_switch:conflict:--fresh-switch: the reviewed help shows 0 value(s) for this option but custom.conflictfixture manifest-v1 declares 1; the saved value was retained because launching it would misplace arguments. Remove the saved value, or correct that option declaration and register the runtime again (or select a runtime whose help matches it)".into()
+}
+
+fn expected_choice_issue() -> String {
+    "speed:conflict:--fresh-mode: the reviewed help accepts choices fast, safe but the saved (hidden) value is outside it, although custom.conflictfixture manifest-v1 declares it; the saved value was retained. Choose a value the help documents, remove the saved value, or correct that declaration and register the runtime again (or select a runtime whose help matches it)".into()
+}
+
+fn expected_constraint_issue() -> String {
+    r#"fresh_count:conflict:--fresh-count: synthetic.adapter r1 declares a constraint the reviewed help cannot honor ({"kind":"requires","other":{"flag":"--gone-flag"},"when":{"flag":"--fresh-count"}}); the saved value was retained instead of launching without it. Correct the option metadata and register the runtime again, or remove the saved value"#.into()
+}
+
 #[tokio::test]
 async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsafe_ones_block() {
     let area = TestHome::new();
@@ -186,10 +198,8 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     let unsafe_values = json!({"fresh_switch": "on", "workers": 2});
     saved(&mut cfg, engine.as_str(), unsafe_values.clone());
     let found = issues(&cfg, engine);
-    let blocking = found
-        .iter()
-        .find(|issue| issue.starts_with("fresh_switch:conflict:"))
-        .unwrap_or_else(|| panic!("{found:?}"));
+    assert_eq!(found, vec![expected_arity_issue()]);
+    let blocking = &found[0];
     assert!(
         blocking.contains("retained") && blocking.contains("Remove the saved value"),
         "{blocking}"
@@ -202,13 +212,7 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
         json!({"version": 1, "occurrences": [{"key": "workers"}, {"key": "fresh_switch"}]});
     saved(&mut ordered, engine.as_str(), values_with_order);
     let found = issues(&ordered, engine);
-    assert!(
-        found
-            .iter()
-            .any(|i| i.starts_with("fresh_switch:conflict:"))
-            && !found.iter().any(|i| i.starts_with("@option_order")),
-        "{found:?}"
-    );
+    assert_eq!(found, vec![expected_arity_issue()]);
     providers::adapter::refresh(&cfg, None).await.unwrap();
     let error = providers::registry::command(&cfg, port, "synthetic-key").unwrap_err();
     assert!(error.contains("--fresh-switch"), "{error}");
@@ -236,10 +240,8 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     let outside = json!({"speed": "exact", "workers": 2});
     saved(&mut cfg, engine.as_str(), outside.clone());
     let found = issues(&cfg, engine);
-    let refused = found
-        .iter()
-        .find(|issue| issue.starts_with("speed:conflict:"))
-        .unwrap_or_else(|| panic!("{found:?}"));
+    assert_eq!(found, vec![expected_choice_issue()]);
+    let refused = &found[0];
     assert!(
         refused.contains("fast, safe") && refused.contains("retained"),
         "{refused}"
@@ -259,12 +261,7 @@ async fn declared_option_facts_that_contradict_reviewed_help_are_shown_and_unsaf
     // applying: the value it governs is refused with the reason and kept.
     saved(&mut cfg, engine.as_str(), json!({"fresh_count": "1"}));
     let found = issues(&cfg, engine);
-    assert!(
-        found
-            .iter()
-            .any(|i| i.starts_with("fresh_count:conflict:") && i.contains("--gone-flag")),
-        "{found:?}"
-    );
+    assert_eq!(found, vec![expected_constraint_issue()]);
 
     // Informational differences never break a valid launch: the alias key
     // and the declared choice keep their legacy serialization.
