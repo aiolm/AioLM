@@ -21,31 +21,29 @@ function request<T>(): FixtureRequest<T> {
   return { result: undefined as T, error: null, onsuccess: null, onerror: null, onupgradeneeded: null };
 }
 
-const clone = (record: DocumentIndexRecord): DocumentIndexRecord => ({
-  ...record,
-  offsets: [...record.offsets],
-  vectors: record.vectors.map((vector) => [...vector]),
-});
+const clone = <T,>(value: T): T => structuredClone(value);
 
 /** Only the IndexedDB surface used by this cache, with independently staged
- * transactions. Puts update one key; omitted keys survive until explicit deletion.
- * Request success and transaction completion are separate, controllable events. */
+ * transactions and string primary keys. This does not model native RW locking
+ * or active/inactive event windows. Request success and commit are separate. */
 function indexDbFixture() {
-  let committed = new Map<string, DocumentIndexRecord>();
+  let committed = new Map<string, unknown>();
+  const calls = { clear: 0, put: 0, delete: 0 };
   let created = false;
   let connections = 0;
   const active = new Set<Promise<void>>();
   type Gate = { requestsDone: Promise<void>; ready: () => void; complete: () => void; abort: () => void };
   let nextGate: Gate | undefined;
-
-  const snapshot = () => [...committed.values()]
-    .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
-    .map(clone);
+  type OpenGate = { opened: Promise<void>; ready: () => void; release: () => void };
+  let nextOpen: OpenGate | undefined;
+  const entries = (records: Map<string, unknown>) => [...records.entries()]
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  const snapshot = () => entries(committed).map(([, value]) => clone(value)) as DocumentIndexRecord[];
   const factory = {
     open(name: string, version: number) {
       if (name !== "aiolm-document-index" || version !== 1) throw new Error("Unexpected database identity");
       const opened = request<unknown>();
-      queueMicrotask(() => {
+      const open = () => queueMicrotask(() => {
         connections += 1;
         let closed = false;
         const db = {
@@ -57,7 +55,7 @@ function indexDbFixture() {
           close() { if (!closed) { closed = true; connections -= 1; } },
           transaction(name: string, mode: IDBTransactionMode) {
             if (name !== "embeddings" || !created) throw new Error("Unexpected store");
-            const staged = new Map(snapshot().map((record) => [record.key, record]));
+            const staged = new Map([...committed].map(([key, value]) => [key, clone(value)]));
             const operations: Array<() => void> = [];
             const gate = mode === "readwrite" ? nextGate : undefined;
             if (mode === "readwrite") nextGate = undefined;
@@ -83,14 +81,15 @@ function indexDbFixture() {
                   return enqueue(operation);
                 };
                 return {
-                  getAll: () => enqueue(() => [...staged.values()]
-                    .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0).map(clone)),
+                  getAll: () => enqueue(() => entries(staged).map(([, value]) => clone(value))),
+                  getAllKeys: () => enqueue(() => entries(staged).map(([key]) => key)),
                   put: (record: DocumentIndexRecord) => {
                     const stored = clone(record);
+                    calls.put += 1;
                     return mutate(() => { staged.set(stored.key, stored); return stored.key; });
                   },
-                  delete: (key: string) => mutate(() => { staged.delete(key); }),
-                  clear: () => mutate(() => { staged.clear(); }),
+                  delete: (key: string) => { calls.delete += 1; return mutate(() => { staged.delete(key); }); },
+                  clear: () => { calls.clear += 1; return mutate(() => { staged.clear(); }); },
                 };
               },
               abort() { complete(false); },
@@ -109,7 +108,10 @@ function indexDbFixture() {
               finish();
             };
             queueMicrotask(() => {
-              for (const operation of operations) operation();
+              for (const operation of operations) {
+                if (finished) break;
+                operation();
+              }
               if (gate) {
                 gate.complete = () => complete(true);
                 gate.abort = () => complete(false);
@@ -123,6 +125,9 @@ function indexDbFixture() {
         if (!created) opened.onupgradeneeded?.();
         opened.onsuccess?.();
       });
+      const gate = nextOpen;
+      nextOpen = undefined;
+      if (gate) { gate.release = open; gate.ready(); } else open();
       return opened;
     },
   };
@@ -130,11 +135,23 @@ function indexDbFixture() {
   return {
     factory: factory as unknown as IDBFactory,
     snapshot,
+    calls,
     // Pre-existing persisted rows are setup data, never filtered or bounded by
     // the fixture. All mutations under test run through the production API.
     seed(records: DocumentIndexRecord[]) {
       created = true;
       committed = new Map(records.map((record) => [record.key, clone(record)]));
+    },
+    seedRaw(records: Array<[string, unknown]>) {
+      created = true;
+      committed = new Map(records.map(([key, value]) => [key, clone(value)]));
+    },
+    holdNextOpen() {
+      let ready!: () => void;
+      const opened = new Promise<void>((resolve) => { ready = resolve; });
+      const gate = { opened, ready, release: () => {} };
+      nextOpen = gate;
+      return gate;
     },
     holdNextWrite() {
       let ready!: () => void;
@@ -200,6 +217,20 @@ describe("IndexedDB document vector persistence", () => {
     expect(await removeDocumentVectorsForPaths([])).toBe(0);
     expect(database.snapshot()).toEqual([betaBefore]);
     expect(Object.keys(localStorage)).toEqual([]);
+
+    const full = Array.from({ length: 256 }, (_, index) =>
+      indexRecordForChunks("model", [chunk(`/synthetic/retained-${index}.txt`)], [[index, 1]], index, "endpoint"));
+    database.seed(full);
+    const expected = full.slice(1).sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+    const beforeCalls = { ...database.calls };
+    expect(await removeDocumentVectorsForPaths([full[0].path])).toBe(1);
+    expect(database.snapshot()).toEqual(expected);
+    // A single-path removal must not rewrite the other retained records.
+    expect({
+      clear: database.calls.clear - beforeCalls.clear,
+      put: database.calls.put - beforeCalls.put,
+      delete: database.calls.delete - beforeCalls.delete,
+    }).toEqual({ clear: 0, put: 0, delete: 1 });
   });
 
   it("removes the exact path across models and namespaces without changing another path", async () => {
@@ -221,7 +252,19 @@ describe("IndexedDB document vector persistence", () => {
   it("updates one key and preserves cloned records and serialized concurrent mutations", async () => {
     const alpha = chunk("/synthetic/alpha.txt"), beta = chunk("/synthetic/beta.txt");
     const vectors = [[1, 2]];
-    await saveDocumentVectors("a", [alpha], vectors, "one");
+    await expect(saveDocumentVectors("a", [alpha], [[Number.POSITIVE_INFINITY]], "one"))
+      .rejects.toThrow("invalid embedding vector");
+    expect(database.snapshot()).toEqual([]);
+    expect(Object.keys(localStorage)).toEqual([]);
+    const open = database.holdNextOpen();
+    const saving = saveDocumentVectors("a", [alpha], vectors, "one");
+    await open.opened;
+    try {
+      vectors[0][0] = 99;
+    } finally {
+      open.release();
+    }
+    await saving;
     vectors[0][0] = 99;
     expect(await loadDocumentVectors("a", [alpha], "one")).toEqual([[1, 2]]);
     await saveDocumentVectors("a", [beta], [[3, 4]], "one");
@@ -253,6 +296,11 @@ describe("IndexedDB document vector persistence", () => {
     const newest = chunk(records[0].path), oldest = chunk(records.at(-1)!.path);
     expect(await loadDocumentVectors("a", [newest], "one")).toEqual(records[0].vectors);
     expect(await loadDocumentVectors("a", [oldest], "one")).toBeNull();
+    const noMatch = database.snapshot();
+    const noMatchCalls = { ...database.calls };
+    expect(await removeDocumentVectorsForPaths([oldest.document.path])).toBe(0);
+    expect(database.snapshot()).toEqual(noMatch);
+    expect(database.calls).toEqual(noMatchCalls);
     vi.spyOn(Date, "now").mockReturnValue(2000);
     const fresh = chunk("/synthetic/fresh.txt");
     await saveDocumentVectors("a", [fresh], [[50, 60]], "one");
@@ -262,6 +310,21 @@ describe("IndexedDB document vector persistence", () => {
     expect(await loadDocumentVectors("a", [newest], "one")).toEqual(records[0].vectors);
     expect(await loadDocumentVectors("a", [fresh], "one")).toEqual([[50, 60]]);
     expect(await loadDocumentVectors("a", [oldest], "one")).toBeNull();
+
+    const legacy = clone(expected.slice(0, 2));
+    Object.assign(legacy[0], { updatedAt: Number.NaN, extra: { nested: ["retained", { value: 7 }] } });
+    Reflect.deleteProperty(legacy[1], "updatedAt");
+    database.seedRaw([
+      ...legacy.map((record) => [record.key, record] as [string, unknown]),
+      ["actual-corrupt-primary", { ...legacy[0], key: "different-claimed-key", vectors: [[Number.POSITIVE_INFINITY]] }],
+    ]);
+    const raw = database.snapshot();
+    const beforeCleanup = { ...database.calls };
+    expect(await removeDocumentVectorsForPaths(["/synthetic/no-match.txt"])).toBe(0);
+    expect(database.snapshot()).toEqual(raw);
+    expect(database.calls).toEqual(beforeCleanup);
+    await saveDocumentVectors("a", [], [], "one");
+    expect(database.snapshot()).toEqual(legacy.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
   });
 
   it("waits for commit and retains the entire old snapshot on abort before a successful retry", async () => {
@@ -287,6 +350,21 @@ describe("IndexedDB document vector persistence", () => {
     expect(await removeDocumentVectorsForPaths([alpha.document.path])).toBe(1);
     expect(database.snapshot()).toEqual(before.filter((record) => record.path !== alpha.document.path));
     expect(await loadDocumentVectors("a", [beta], "one")).toEqual([[3, 4]]);
+
+    const retained = database.snapshot();
+    const gamma = chunk("/synthetic/gamma.txt");
+    const fallbackGate = database.holdNextWrite();
+    const saving = saveDocumentVectors("a", [gamma], [[5, 6]], "one");
+    await fallbackGate.requestsDone;
+    fallbackGate.abort();
+    await saving;
+    expect(database.snapshot()).toEqual(retained);
+    vi.stubGlobal("indexedDB", undefined);
+    expect(await loadDocumentVectors("a", [gamma], "one")).toEqual([[5, 6]]);
+    vi.stubGlobal("indexedDB", database.factory);
+    await saveDocumentVectors("a", [gamma], [[7, 8]], "one");
+    expect(await loadDocumentVectors("a", [gamma], "one")).toEqual([[7, 8]]);
+    expect(database.snapshot().find((record) => record.path === beta.document.path)).toEqual(retained[0]);
   });
 
   it("does not publish staged writes before transaction completion", async () => {
