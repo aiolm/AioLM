@@ -1,6 +1,7 @@
 //! Bounded audio form parsing. Binary uploads stay intact while public model
 //! aliases and validated text fields are adapted for the selected session.
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 const MAX_PARTS: usize = 32;
@@ -216,14 +217,15 @@ impl AudioForm {
     }
 
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
+        let boundary = self.boundary.as_bytes();
         let mut body = Vec::new();
         for (name, value) in &self.fields {
             let values = match value {
-                Value::Array(values) if name == "timestamp_granularities" => values.clone(),
+                Value::Array(values) if name == "timestamp_granularities" => values.as_slice(),
                 Value::Array(_) | Value::Object(_) | Value::Null => {
                     return Err("audio form contains an invalid adapted field".into())
                 }
-                value => vec![value.clone()],
+                value => std::slice::from_ref(value),
             };
             let field = if name == "timestamp_granularities" {
                 "timestamp_granularities[]"
@@ -231,25 +233,39 @@ impl AudioForm {
                 name
             };
             for value in values {
+                // Text fields are written from the form itself; only
+                // non-string values are rendered as JSON text first.
                 let value = value
                     .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| value.to_string());
+                    .map_or_else(|| Cow::Owned(value.to_string()), Cow::Borrowed);
                 if value
                     .as_bytes()
-                    .windows(self.boundary.len())
-                    .any(|window| window == self.boundary.as_bytes())
+                    .windows(boundary.len())
+                    .any(|window| window == boundary)
                 {
                     return Err("audio text field contains its multipart boundary".into());
                 }
-                body.extend_from_slice(format!("--{}\r\nContent-Disposition: form-data; name=\"{field}\"\r\n\r\n{value}\r\n", self.boundary).as_bytes());
+                body.extend_from_slice(b"--");
+                body.extend_from_slice(boundary);
+                body.extend_from_slice(b"\r\nContent-Disposition: form-data; name=\"");
+                body.extend_from_slice(field.as_bytes());
+                body.extend_from_slice(b"\"\r\n\r\n");
+                body.extend_from_slice(value.as_bytes());
+                body.extend_from_slice(b"\r\n");
             }
         }
-        body.extend_from_slice(format!("--{}\r\n", self.boundary).as_bytes());
+        // Reserve the whole remaining file section before copying the audio, so
+        // appending it and the closing boundary needs no further growth.
+        body.reserve(2 * boundary.len() + 16 + self.file_headers.len() + self.file.len());
+        body.extend_from_slice(b"--");
+        body.extend_from_slice(boundary);
+        body.extend_from_slice(b"\r\n");
         body.extend_from_slice(&self.file_headers);
         body.extend_from_slice(b"\r\n\r\n");
         body.extend_from_slice(&self.file);
-        body.extend_from_slice(format!("\r\n--{}--\r\n", self.boundary).as_bytes());
+        body.extend_from_slice(b"\r\n--");
+        body.extend_from_slice(boundary);
+        body.extend_from_slice(b"--\r\n");
         Ok(body)
     }
 }
@@ -280,6 +296,10 @@ mod tests {
             .fields
             .insert("model".into(), Value::String("private-alias".into()));
         let encoded = parsed.encode().unwrap();
+        assert_eq!(
+            encoded,
+            form(&fields.replace("public@session", "private-alias"), audio)
+        );
         let roundtrip = AudioForm::parse(&parsed.content_type(), &encoded).unwrap();
         assert_eq!(roundtrip.file, audio);
         assert_eq!(roundtrip.fields["model"], "private-alias");
@@ -287,6 +307,99 @@ mod tests {
             roundtrip.fields["timestamp_granularities"],
             serde_json::json!(["word", "segment"])
         );
+    }
+
+    #[test]
+    fn adapted_fields_encode_in_key_order_and_invalid_ones_are_refused() {
+        let part = |name: &str, value: &str| {
+            format!("--test-boundary\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+        };
+        let audio = b"\0audio\xff\r\n--test-boundary-nearly";
+        let mut adapted = AudioForm::parse(
+            "multipart/form-data; boundary=test-boundary",
+            &form("", audio),
+        )
+        .unwrap();
+        let encode = |target: &mut AudioForm, fields: Value| {
+            target.fields = fields.as_object().unwrap().clone();
+            target.encode()
+        };
+        let stamps = "timestamp_granularities[]";
+        let expected = [
+            part("language", ""),
+            part("prompt", "h\u{e9}llo\r\n--test-boundar"),
+            part("seed", "-7"),
+            part("stream", "false"),
+            part("temperature", "0.25"),
+            part(stamps, "word"),
+            part(stamps, "1"),
+            part(stamps, "null"),
+            part(stamps, "[\"segment\"]"),
+            part(stamps, "{\"k\":\"v\"}"),
+        ]
+        .concat();
+        assert_eq!(
+            encode(
+                &mut adapted,
+                serde_json::json!({
+                    "temperature": 0.25,
+                    "timestamp_granularities": ["word", 1, null, ["segment"], {"k": "v"}],
+                    "stream": false,
+                    "seed": -7,
+                    "prompt": "h\u{e9}llo\r\n--test-boundar",
+                    "language": "",
+                })
+            )
+            .unwrap(),
+            form(&expected, audio)
+        );
+        assert_eq!(
+            encode(
+                &mut adapted,
+                serde_json::json!({"timestamp_granularities": []})
+            )
+            .unwrap(),
+            form("", audio)
+        );
+        assert_eq!(
+            encode(
+                &mut adapted,
+                serde_json::json!({"timestamp_granularities": "word"})
+            )
+            .unwrap(),
+            form(&part(stamps, "word"), audio)
+        );
+        let invalid = "audio form contains an invalid adapted field";
+        let contains = "audio text field contains its multipart boundary";
+        for (fields, error) in [
+            (serde_json::json!({"a": null}), invalid),
+            (serde_json::json!({"a": {}}), invalid),
+            (serde_json::json!({"a": []}), invalid),
+            (serde_json::json!({"a": ["word"]}), invalid),
+            (serde_json::json!({"a": "xtest-boundaryx"}), contains),
+            (
+                serde_json::json!({"a": "test-boundary", "b": null}),
+                contains,
+            ),
+            (
+                serde_json::json!({"a": null, "b": "test-boundary"}),
+                invalid,
+            ),
+            (
+                serde_json::json!({"timestamp_granularities": ["word", ["test-boundary"]]}),
+                contains,
+            ),
+            (
+                serde_json::json!({"a": 1, "timestamp_granularities": {"word": true}}),
+                invalid,
+            ),
+        ] {
+            assert_eq!(
+                encode(&mut adapted, fields.clone()),
+                Err(error.to_string()),
+                "{fields}"
+            );
+        }
     }
 
     #[test]

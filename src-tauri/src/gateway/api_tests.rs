@@ -2193,6 +2193,22 @@ async fn audio_transcription_rewrites_public_alias_and_preserves_binary_and_time
         body_contains(&recorded.body, audio),
         "binary file bytes must travel unchanged"
     );
+    assert_eq!(
+        recorded.body,
+        audio_body(
+            AUDIO_BOUNDARY,
+            &[
+                ("language", "en"),
+                ("model", "synthetic-stt-private"),
+                ("response_format", "json"),
+                ("temperature", "0.0"),
+                ("timestamp_granularities[]", "word"),
+                ("timestamp_granularities[]", "segment"),
+            ],
+            audio,
+        ),
+        "the upstream form is re-encoded exactly in field order"
+    );
     assert_eq!(api.active(), 0, "the audio lease must be released");
 }
 
@@ -2603,6 +2619,17 @@ async fn native_transcribe_uses_the_exact_named_session_without_fallback() {
     );
     let recorded = named_upstream.requests().pop().unwrap();
     assert_eq!(recorded.headers["authorization"], "Bearer k-named");
+    let boundary = recorded.headers["content-type"]
+        .strip_prefix("multipart/form-data; boundary=")
+        .unwrap();
+    assert_eq!(
+        recorded.body,
+        audio_body(
+            boundary,
+            &[("model", "private-named"), ("response_format", "json")],
+            b"RIFF named",
+        )
+    );
 
     let before = (default_upstream.count(), named_upstream.count());
     let missing = super::transcribe_audio(
