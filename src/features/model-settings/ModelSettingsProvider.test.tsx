@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestStore as createBaseTestStore } from '../../testing/appStore';
 import type { AppConfig, SessionDefinition, SessionStatus } from '../../shared/api/types';
 import type { AppStore } from '../../shared/state/store';
-import { executionSettings } from '../../shared/config/executionSettings';
+import { executionConfig, executionSettings, settingsForSession } from '../../shared/config/executionSettings';
 import { sessionConfig } from '../../shared/runtime/sessionUtils';
 import { setSessionActivity } from '../../shared/state/sessionActivity';
 import type { ModelSettingsDialogProps } from './ModelSettingsDialog';
 import { MANAGE_MODEL_RUNTIMES, ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
-import { captureProfile, deleteSettingsProfile, emptyProfileLibrary, materializeProfileApplication, profileTargetKey, setDefaultSettingsProfile } from '../../shared/config/settingsProfiles';
-import { SettingsDeliveryError, type ProfileEditorResult } from './profileEditor';
+import { applySettingsProfile, captureProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileSettingsSnapshot, profileTargetKey, setDefaultSettingsProfile } from '../../shared/config/settingsProfiles';
+import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliveryError, type ProfileEditorResult } from './profileEditor';
+import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
 
 const mocks = vi.hoisted(() => ({
   dialog: null as ModelSettingsDialogProps | null,
@@ -712,5 +713,216 @@ describe('model launch preparation', () => {
     act(() => context.open({ target: { kind: 'default' } }));
     expect(mocks.dialog?.liveApplication?.system_prompt).toBe('New prompt');
     expect(mocks.dialog?.liveApplication?.profile_id).toBe('profile-new');
+  });
+});
+
+describe('post-save profile removal snapshots', () => {
+  function removalStore(removedId = 'profile-old', retainedId = 'profile-new') {
+    const store = createTestStore({ runtime_defaults: [], sessions: [namedSession()],
+      chat_options: { stop: ['old request'] }, provider_options: { 'llama.cpp': { synthetic: { order: ['old'] } } } });
+    const library = store.cfg!.settings_profiles!;
+    library.entries[0].id = removedId;
+    library.entries[1].id = retainedId;
+    library.entries[1].settings = { ...library.entries[1].settings, temperature: 0.25, ctx_size: 32768,
+      chat_options: { stop: [' retained ', '\n'], synthetic: { order: ['second', 'first'] } } };
+    library.entries[1].system_prompt = '  Replacement prompt\n';
+    for (const application of Object.values(library.applied)) application.profile_id = removedId;
+    store.cfg!.sessions![0].model_profile_id = removedId;
+    library.default_profile_id = retainedId;
+    store.cfg!.settings_profiles = ensureProfileLibrary(library);
+    return store;
+  }
+
+  function expectedTarget(saved: AppConfig, initial: AppConfig, kind: 'default' | 'session' | 'project' | 'benchmark', retainedId: string) {
+    const target = kind === 'session' ? sessionConfig(saved, saved.sessions!.find(item => item.id === 'work')!)
+      : kind === 'default' ? saved : executionConfig(saved, executionSettings(initial));
+    const profile = saved.settings_profiles!.entries.find(entry => entry.id === retainedId)!;
+    const application = materializeProfileApplication(applySettingsProfile(target, profile), profile.system_prompt ?? '', profile);
+    return { config: { ...executionConfig(target, application.settings), settings_profiles: saved.settings_profiles }, application };
+  }
+
+  it.each([
+    { kind: 'default', removedId: '\u00e9', retainedId: 'e\u0301' },
+    { kind: 'session', removedId: 'Exact', retainedId: 'exact' },
+    { kind: 'project', removedId: '__proto__', retainedId: 'constructor' },
+    { kind: 'benchmark', removedId: 'constructor', retainedId: '__proto__' },
+  ] as const)('uses the returned queued-save snapshot for $kind and literal id $removedId', async ({ kind, removedId, retainedId }) => {
+    const store = removalStore(removedId, retainedId);
+    const liveBase = structuredClone(store.cfg!);
+    const live = running(liveBase); store.status = live;
+    mocks.serverStatus.mockResolvedValue(live);
+    const prime = await open(store, { target: { kind: 'default' } });
+    await act(async () => { await apply(prime, { ...prime.initialConfig, ctx_size: 8192 }, 'save', removedId); });
+    expect(context.getRequestProfile('default', liveBase)?.id).toBe(removedId);
+
+    const onApply = vi.fn();
+    const targetConfig = { ...store.cfg!, active_model: 'target.gguf' };
+    const request: ModelSettingsRequest = kind === 'default' ? { target: { kind }, onApply }
+      : kind === 'session' ? { target: { kind, sessionId: 'work' }, onApply }
+      : { target: { kind, id: 'target' }, config: targetConfig,
+        application: materializeProfileApplication(targetConfig, 'Old prompt', store.cfg!.settings_profiles!.entries.find(entry => entry.id === removedId)!), onApply };
+    act(() => context.open(request));
+    const dialog = mocks.dialog!;
+    const edit = editorResult(dialog, dialog.initialConfig, removedId);
+    edit.baseLibrary = structuredClone(edit.library);
+    edit.library.entries.find(entry => entry.id === retainedId)!.name = 'Retained after save';
+    const editBefore = structuredClone(edit);
+    const previousLibrary = store.cfg!.settings_profiles!;
+    const previousBefore = structuredClone(previousLibrary);
+    const baseRevision = previousLibrary.revision;
+
+    // A real save queue holds an unrelated write, then a background deletion,
+    // then the provider's metadata-only edit. Its patch is resolved against the
+    // latest configuration, while the provider captured the earlier library.
+    let current = store.cfg!;
+    let release!: () => void;
+    let persistenceCalls = 0;
+    const queue = createConfigSaveQueue<AppConfig>(() => current, value => { current = value; store.cfg = value; }, async value => {
+      if (++persistenceCalls === 1) await new Promise<void>(resolve => { release = resolve; });
+      return structuredClone(value);
+    }, () => undefined);
+    store.getConfig = () => current;
+    store.updateConfig = vi.fn(queue);
+    let blocker!: Promise<AppConfig>;
+    await act(async () => { blocker = queue({}); await waitFor(() => expect(release).toBeTypeOf('function')); });
+    const background = queue(latestCfg => {
+      const library = deleteSettingsProfile(latestCfg.settings_profiles!, removedId);
+      return profileLibraryConfigPatch(latestCfg, { baseRevision: latestCfg.settings_profiles!.revision, library,
+        application: structuredClone(library.applied[profileTargetKey(latestCfg.active_model)]) });
+    });
+    let pending!: ReturnType<ModelSettingsDialogProps['onProfileCommit']>;
+    act(() => { pending = dialog.onProfileCommit(dialog.initialConfig, edit, false); });
+    expect(onApply).not.toHaveBeenCalled();
+    expect(store.updateConfig).toHaveBeenCalledOnce();
+    let backgroundSaved!: AppConfig;
+    let result!: Awaited<typeof pending>;
+    await act(async () => { release(); await blocker; backgroundSaved = await background; result = await pending; });
+    expect(edit.library.entries.some(entry => entry.id === removedId)).toBe(true);
+    expect(backgroundSaved.settings_profiles!.entries.some(entry => entry.id === removedId)).toBe(false);
+    const expectedSaved: AppConfig = { ...structuredClone(backgroundSaved), settings_profiles: {
+      ...structuredClone(backgroundSaved.settings_profiles!), revision: baseRevision + 2,
+      entries: backgroundSaved.settings_profiles!.entries.map(entry => entry.id === retainedId ? { ...structuredClone(entry), name: 'Retained after save' } : structuredClone(entry)),
+      applied: Object.fromEntries(Object.entries(backgroundSaved.settings_profiles!.applied).map(([key, application]) => [key,
+        application.profile_id === retainedId ? { ...structuredClone(application), profile_name: 'Retained after save' } : structuredClone(application)])),
+    } };
+    const expected = expectedTarget(expectedSaved, dialog.initialConfig, kind, retainedId);
+    expect(store.cfg).toEqual(expectedSaved);
+    expect(result).toEqual(expected);
+    expect(previousLibrary).toEqual(previousBefore);
+    expect(edit).toEqual(editBefore);
+    expect(result.config).not.toBe(store.cfg);
+    expect(result.config.settings_profiles).not.toBe(store.cfg!.settings_profiles);
+    expect(result.application.settings).not.toBe(edit.application.settings);
+    expect(result.application.settings.chat_options).not.toBe(store.cfg!.settings_profiles!.entries.find(entry => entry.id === retainedId)!.settings.chat_options);
+    if (kind === 'default' || kind === 'session') expect(result.application.settings).not.toBe(store.cfg!.settings_profiles!.applied[profileTargetKey(result.config.active_model, kind === 'session' ? 'work' : 'default')].settings);
+    if (kind === 'project' || kind === 'benchmark') expect(onApply.mock.calls).toEqual([[expected.config, expected.application]]);
+    else expect(onApply).not.toHaveBeenCalled();
+
+    const activeKey = profileTargetKey(expectedSaved.active_model);
+    const activeApplication = expectedSaved.settings_profiles!.applied[activeKey];
+    const requestConfig = context.getRequestConfig('default', store.cfg!, live);
+    expect(requestConfig).toEqual({ ...executionConfig(expectedSaved, live.execution!),
+      temperature: 0.25, top_p: activeApplication.settings.top_p, top_k: activeApplication.settings.top_k,
+      reasoning_effort: activeApplication.settings.reasoning_effort, chat_options: structuredClone(activeApplication.settings.chat_options), runtime_defaults: [] });
+    expect(context.getRequestProfile('default', requestConfig)).toEqual(requestProfileFromApplication(activeApplication));
+    const work = sessionConfig(expectedSaved, expectedSaved.sessions![0]);
+    const workRequest = context.getRequestConfig('work', work, running(sessionConfig(liveBase, liveBase.sessions![0]), 'work'));
+    expect(context.getRequestProfile('work', workRequest)).toEqual(requestProfileFromApplication(expectedSaved.settings_profiles!.applied['session:work']));
+
+    const freshEdit: ProfileEditorResult = { baseRevision: expectedSaved.settings_profiles!.revision,
+      baseLibrary: structuredClone(expectedSaved.settings_profiles!), library: structuredClone(expectedSaved.settings_profiles!), application: structuredClone(result.application) };
+    freshEdit.library.entries.find(entry => entry.id === retainedId)!.name = 'Fresh retained';
+    let fresh!: Awaited<typeof pending>;
+    await act(async () => { fresh = await mocks.dialog!.onProfileCommit(result.config, freshEdit, false); });
+    const freshLibrary = { ...structuredClone(expectedSaved.settings_profiles!), revision: baseRevision + 3,
+      entries: expectedSaved.settings_profiles!.entries.map(entry => entry.id === retainedId ? { ...structuredClone(entry), name: 'Fresh retained' } : structuredClone(entry)),
+      applied: Object.fromEntries(Object.entries(expectedSaved.settings_profiles!.applied).map(([key, application]) => [key,
+        application.profile_id === retainedId ? { ...structuredClone(application), profile_name: 'Fresh retained' } : structuredClone(application)])) };
+    const freshSaved = { ...expectedSaved, settings_profiles: freshLibrary };
+    expect(store.cfg).toEqual(freshSaved);
+    expect(fresh).toEqual(expectedTarget(freshSaved, expected.config, kind, retainedId));
+    expect(onApply).toHaveBeenCalledTimes(kind === 'project' || kind === 'benchmark' ? 1 : 0);
+    expect(store.start).not.toHaveBeenCalled(); expect(store.stop).not.toHaveBeenCalled();
+    expect(mocks.sessionStart).not.toHaveBeenCalled(); expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
+    expect(mocks.preflightLaunch).not.toHaveBeenCalled();
+    expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
+
+    (result.application.settings.chat_options!.stop as string[]).push('output only');
+    result.config.settings_profiles!.entries[0].name = 'Output only';
+    expect(store.cfg).toEqual(freshSaved);
+    expect(edit).toEqual(editBefore);
+    if (kind === 'project' || kind === 'benchmark') expect(onApply.mock.calls).toEqual([[expected.config, expected.application]]);
+
+    // Invalidate the deletion fallback. The live cache must also have dropped
+    // the deleted ID, so request-profile resolution now uses the saved identity.
+    store.cfg!.settings_profiles!.applied[activeKey].system_prompt = 'Later saved prompt';
+    const incoming = executionConfig(store.cfg!, live.execution!);
+    expect(context.getRequestProfile('default', incoming)).toEqual(requestProfileFromApplication({
+      ...store.cfg!.settings_profiles!.applied[activeKey], settings: profileSettingsSnapshot(incoming),
+    }));
+  });
+
+  it.each(['project', 'benchmark'] as const)('retains the successful metadata save when %s deletion delivery rejects, then retries without redelivery', async kind => {
+    const store = removalStore();
+    const onApply = vi.fn().mockRejectedValueOnce(new Error('replacement delivery failed'));
+    const target = { ...store.cfg!, active_model: 'target.gguf' };
+    const dialog = await open(store, { target: { kind, id: 'target' }, config: target,
+      application: materializeProfileApplication(target, 'Old prompt', store.cfg!.settings_profiles!.entries[0]), onApply });
+    const before = structuredClone(store.cfg!);
+    const edit = editorResult(dialog, dialog.initialConfig);
+    edit.library = deleteSettingsProfile(edit.library, 'profile-old');
+    const editBefore = structuredClone(edit);
+    let failure: unknown;
+    await act(async () => { try { await dialog.onProfileCommit(dialog.initialConfig, edit, false); } catch (cause) { failure = cause; } });
+    const expectedSaved = { ...executionConfig(before, edit.library.applied[profileTargetKey(before.active_model)].settings),
+      settings_profiles: { ...structuredClone(edit.library), revision: before.settings_profiles!.revision + 1, legacy_imported: true } };
+    expect(before).not.toHaveProperty('gpu');
+    expect(expectedSaved.gpu).toEqual({ gpu_ids: [], main_gpu: null, split_mode: 'none', tensor_split: [], draft_gpu_id: null });
+    // Equivalent empty placement is not a saved change from an absent GPU.
+    delete expectedSaved.gpu;
+    // No named-session replacement is omitted from this full expected config.
+    const definition = before.sessions![0];
+    const replacement = edit.library.applied['session:work'];
+    const expectedWork = settingsForSession(definition, executionConfig(sessionConfig(before, definition), replacement.settings));
+    delete expectedWork.model_profile_id;
+    expectedSaved.sessions = [expectedWork];
+    const expected = expectedTarget(expectedSaved, dialog.initialConfig, kind, 'profile-new');
+    expect(store.cfg).toEqual(expectedSaved);
+    expect(failure).toBeInstanceOf(SettingsDeliveryError);
+    expect((failure as SettingsDeliveryError).saved).toEqual(expected.config);
+    expect((failure as SettingsDeliveryError).application).toEqual(expected.application);
+    expect(onApply.mock.calls).toEqual([[expected.config, expected.application]]);
+    expect(edit).toEqual(editBefore);
+    const retry: ProfileEditorResult = { baseRevision: expectedSaved.settings_profiles.revision,
+      library: structuredClone(expectedSaved.settings_profiles), application: structuredClone(expected.application) };
+    let retried!: Awaited<ReturnType<ModelSettingsDialogProps['onProfileCommit']>>;
+    await act(async () => { retried = await mocks.dialog!.onProfileCommit(expected.config, retry, false); });
+    const retriedSaved = { ...expectedSaved, settings_profiles: { ...expectedSaved.settings_profiles, revision: expectedSaved.settings_profiles.revision + 1 } };
+    expect(store.cfg).toEqual(retriedSaved);
+    expect(retried).toEqual(expectedTarget(retriedSaved, expected.config, kind, 'profile-new'));
+    expect(onApply).toHaveBeenCalledOnce();
+    expect(store.start).not.toHaveBeenCalled(); expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
+    expect(screen.getByTestId('settings-dialog')).toBeInTheDocument();
+  });
+
+  it('leaves metadata, callbacks and request state unchanged when the library save rejects, then releases the lock', async () => {
+    const store = removalStore();
+    const onApply = vi.fn();
+    const dialog = await open(store, { target: { kind: 'default' }, onApply });
+    const edit = editorResult(dialog, dialog.initialConfig);
+    edit.library = deleteSettingsProfile(edit.library, 'profile-old');
+    const before = structuredClone({ cfg: store.cfg, edit });
+    const originalError = new Error('profile library save failed');
+    vi.mocked(store.updateConfig).mockRejectedValueOnce(originalError);
+    let failure: unknown;
+    await act(async () => { try { await dialog.onProfileCommit(dialog.initialConfig, edit, false); } catch (cause) { failure = cause; } });
+    expect(failure).toBe(originalError);
+    expect({ cfg: store.cfg, edit }).toEqual(before);
+    expect(onApply).not.toHaveBeenCalled();
+    expect(context.getRequestProfile('default', store.cfg!)?.id).toBe('profile-old');
+    await act(async () => { await mocks.dialog!.onProfileCommit(dialog.initialConfig, edit, false); });
+    expect(store.cfg!.settings_profiles!.revision).toBe(before.cfg!.settings_profiles!.revision + 1);
+    expect(context.getRequestProfile('default', store.cfg!)?.id).toBe('profile-new');
+    expect(store.start).not.toHaveBeenCalled(); expect(mocks.applyRequestSettings).not.toHaveBeenCalled();
   });
 });

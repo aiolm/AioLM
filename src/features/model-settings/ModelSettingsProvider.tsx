@@ -202,7 +202,13 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
         const externalApplication = target.kind === 'project' || target.kind === 'benchmark'
           ? savedTarget(current, draft.active_model).application : undefined;
         const saved = await latest.current.updateConfig(latestCfg => profileLibraryConfigPatch(latestCfg, { ...profile, saveMode: undefined }));
-        const removed = new Set((previousLibrary?.entries ?? []).filter(entry => !saved.settings_profiles?.entries.some(next => next.id === entry.id)).map(entry => entry.id));
+        const removed = new Set((previousLibrary?.entries ?? []).map(entry => entry.id));
+        if (removed.size && saved.settings_profiles) {
+          for (const entry of saved.settings_profiles.entries) {
+            removed.delete(entry.id);
+            if (!removed.size) break;
+          }
+        }
         for (const [key, previous] of Object.entries(previousLibrary?.applied ?? {})) {
           const replacement = saved.settings_profiles?.applied[key];
           if (previous.profile_id && removed.has(previous.profile_id) && replacement) deletedProfileFallbacks.current.set(key, structuredClone(replacement));
