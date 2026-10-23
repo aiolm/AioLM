@@ -1460,13 +1460,17 @@ pub fn option_scope_digest(manifest: &RuntimeManifest) -> Option<String> {
 }
 
 fn launch_fingerprint(manifest: &RuntimeManifest, cfg: &AppConfig) -> String {
-    let values = options(cfg)
-        .into_iter()
+    let empty = Map::new();
+    let values = cfg
+        .provider_options
+        .get(&cfg.active_provider)
+        .unwrap_or(&empty)
+        .iter()
         .filter(|(key, _)| {
             manifest
                 .options
                 .iter()
-                .any(|option| option.key == *key && option.target == "launch")
+                .any(|option| option.key == key.as_str() && option.target == "launch")
         })
         .collect::<BTreeMap<_, _>>();
     let templates = manifest
