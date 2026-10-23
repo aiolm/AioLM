@@ -438,6 +438,50 @@ mod tests {
     use super::*;
     use crate::models::{GgufModel, ModelScan, ModelShards};
 
+    #[test]
+    fn entrypoint_partial_errors_are_opt_in_and_keep_ordinary_string_errors() {
+        use providers::runtime_schema::EntrypointRegistration;
+        let manifest: providers::registry::RuntimeManifest = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"adapter_version":1,"engine_id":"custom.wire","runtime_id":"local",
+            "display_name":"Synthetic wire engine","platforms":[{"os":"windows","arch":"x86_64"}],
+            "protocol":"openai-v1","probe":{"program":"synthetic","args":["{model}"]},
+            "launch":{"program":"synthetic","args":["{model}","{port}"]},
+            "model_formats":["unknown"],"health_path":"/health"
+        })).unwrap();
+        let cause = r#"{"version":1,"code":"entrypoint_help_pending"}"#.to_string();
+        let pending = || EntrypointRegistration::HelpPending {
+            manifest: manifest.clone(),
+            fingerprint: "a".repeat(64),
+            cause: cause.clone(),
+        };
+        assert_eq!(
+            serde_json::to_value(entrypoint_registration_result(pending(), false).unwrap_err())
+                .unwrap(),
+            serde_json::json!(cause)
+        );
+        assert_eq!(
+            serde_json::to_value(entrypoint_registration_result(pending(), true).unwrap_err())
+                .unwrap(),
+            serde_json::json!({"version":1,"code":"entrypoint_help_pending","engine_id":"custom.wire",
+                "runtime_id":"local","fingerprint":"a".repeat(64),"cause":cause})
+        );
+        for report in [false, true] {
+            assert_eq!(
+                entrypoint_registration_result(
+                    EntrypointRegistration::Complete(manifest.clone()),
+                    report
+                )
+                .unwrap(),
+                manifest
+            );
+        }
+        let ordinary = EntrypointRegisterError::from("probe failed before publication".to_string());
+        assert_eq!(
+            serde_json::to_value(ordinary).unwrap(),
+            "probe failed before publication"
+        );
+    }
+
     fn model(path: &str, shards: Option<&str>) -> GgufModel {
         GgufModel {
             name: path.rsplit('/').next().unwrap_or(path).into(),
@@ -638,28 +682,94 @@ pub(crate) async fn runtime_adapter_register(
     .await
 }
 
-/// Register an executable/entry point from explicit choices: launch prefix,
-/// model/host/port/credential bindings, serving protocol (or bridge), probe
-/// command and health endpoint. When the draft carries reviewed help, it must
-/// describe exactly this engine and document every binding flag; it is then
-/// accepted for the new registration. A fresh model probe still decides Ready.
+/// Ordinary failures keep their legacy JSON string. Only an opted-in caller
+/// receives structured evidence of a known post-publication help-write failure.
+#[derive(Debug, serde::Serialize)]
+#[serde(untagged)]
+pub(crate) enum EntrypointRegisterError {
+    Message(String),
+    HelpPending(Box<EntrypointHelpPending>),
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct EntrypointHelpPending {
+    version: u32,
+    code: &'static str,
+    engine_id: ProviderId,
+    runtime_id: String,
+    fingerprint: String,
+    cause: String,
+}
+
+impl From<String> for EntrypointRegisterError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+fn entrypoint_registration_result(
+    outcome: providers::runtime_schema::EntrypointRegistration,
+    report_help_pending: bool,
+) -> Result<providers::registry::RuntimeManifest, EntrypointRegisterError> {
+    use providers::runtime_schema::EntrypointRegistration;
+    match outcome {
+        EntrypointRegistration::Complete(manifest) => Ok(manifest),
+        EntrypointRegistration::HelpPending {
+            manifest,
+            fingerprint,
+            cause,
+        } => {
+            if report_help_pending {
+                Err(EntrypointRegisterError::HelpPending(Box::new(
+                    EntrypointHelpPending {
+                        version: 1,
+                        code: "entrypoint_help_pending",
+                        engine_id: manifest.engine_id,
+                        runtime_id: manifest.runtime_id,
+                        fingerprint,
+                        cause,
+                    },
+                )))
+            } else {
+                Err(EntrypointRegisterError::Message(cause))
+            }
+        }
+    }
+}
+
+/// Register explicit entry-point choices and their reviewed help, or finish
+/// saving only that help for an unchanged, checked registration. Neither path
+/// promotes a registration to Ready; a fresh model probe still decides that.
 #[tauri::command]
 pub(crate) async fn runtime_entrypoint_register(
     state: State<'_, AppState>,
     draft: providers::registry::EntrypointDraft,
-) -> Result<providers::registry::RuntimeManifest, String> {
+    report_help_pending: Option<bool>,
+    resume_help: Option<bool>,
+) -> Result<providers::registry::RuntimeManifest, EntrypointRegisterError> {
     let _busy = super::runtimes::RuntimeBusyGuard::acquire(&state.runtime_busy)?;
     let _operation = state.operation.lock().await;
     if super::runtimes::runtime_resources_in_use(&state)? {
-        return Err("stop model sessions before registering a runtime".into());
+        return Err(EntrypointRegisterError::Message(
+            "stop model sessions before registering a runtime".into(),
+        ));
     }
     state.runtime_cancel.store(false, Ordering::Release);
-    providers::runtime_schema::register_entrypoint(
+    if resume_help.unwrap_or(false) {
+        return tokio::task::spawn_blocking(move || {
+            providers::runtime_schema::resume_entrypoint_help(&providers::registry::root(), &draft)
+        })
+        .await
+        .map_err(|error| EntrypointRegisterError::Message(error.to_string()))?
+        .map_err(EntrypointRegisterError::Message);
+    }
+    let outcome = providers::runtime_schema::register_entrypoint_outcome(
         &providers::registry::root(),
         &draft,
         Some(state.runtime_cancel.clone()),
     )
-    .await
+    .await?;
+    entrypoint_registration_result(outcome, report_help_pending.unwrap_or(false))
 }
 
 /// Pick an executable, script or file (`file`) or a working directory

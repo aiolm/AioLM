@@ -259,6 +259,8 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
         server::kill(&mut state.child, Some(err.clone()));
     }
 
+    observe_post_registration_help_pin_failure(&root, &entry, &request, &draft, &cfg).await;
+
     // Another script through the same interpreter is not this engine's help.
     let mut other_args = prefix.clone();
     other_args[0] = other_script.to_string_lossy().into_owned();
@@ -281,6 +283,113 @@ async fn explicit_entrypoint_registration_pins_reviewed_help_for_launch() {
     assert!(providers::registry::command(&cfg, port, "synthetic-key")
         .unwrap_err()
         .contains("changed"));
+}
+// Characterize the original split-publication outcome before choosing a recovery policy.
+async fn observe_post_registration_help_pin_failure(
+    root: &std::path::Path,
+    entry: &EntrypointHelp,
+    request: &HelpRequest,
+    draft: &EntrypointDraft,
+    cfg: &AppConfig,
+) {
+    let runtime = "pin-write-fault";
+    let mut fault_entry = entry.clone();
+    fault_entry.runtime_id = runtime.into();
+    let provisional = providers::registry::provisional_manifest(&fault_entry).unwrap();
+    let command = runtime_schema::manifest_help_command(&provisional, request).unwrap();
+    let (report, descriptor) = runtime_help_store::discover_against(
+        &HelpService::default(),
+        root,
+        "entry-owner-pin-fault",
+        entry.engine_id.as_str(),
+        runtime,
+        &command,
+        &[],
+        Baseline::Latest,
+    )
+    .unwrap();
+    assert!(report.complete());
+    let mut fault_draft = draft.clone();
+    fault_draft.runtime_id = runtime.into();
+    fault_draft.probe.args = vec![
+        "--adapter-probe".into(),
+        entry.engine_id.as_str().into(),
+        runtime.into(),
+        "{model}".into(),
+    ];
+    let probe_marker = root.join("pin-write-fault-probed.txt");
+    fault_draft.probe.env.insert(
+        "FAKE_PROBE_MARKER".into(),
+        probe_marker.to_string_lossy().into_owned(),
+    );
+    fault_draft.help = Some(DraftHelp {
+        fingerprint: descriptor.fingerprint.clone(),
+        request: request.clone(),
+    });
+    let manifest = providers::registry::manifest_from_draft(&fault_draft).unwrap();
+    let runtime_dir = root.join(entry.engine_id.as_str()).join(runtime);
+    let accepted_path = runtime_dir.join("help").join("accepted.json");
+    let registration_path = runtime_dir.join("registration.json");
+    assert!(!accepted_path.exists());
+    assert!(!registration_path.exists());
+    fs::create_dir(&accepted_path).unwrap();
+    // Only the final pin-write target is faulty; reviewed help is still valid.
+    let acceptance = runtime_schema::draft_acceptance(root, &fault_draft, &manifest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(acceptance.fingerprint, descriptor.fingerprint);
+    let first_error = runtime_schema::register_entrypoint(root, &fault_draft, None)
+        .await
+        .unwrap_err();
+    assert!(!first_error.is_empty());
+    assert!(accepted_path.is_dir());
+    assert!(registration_path.is_file());
+    assert_eq!(fs::read(&probe_marker).unwrap(), b"probed");
+    assert_eq!(
+        providers::registry::manifest(entry.engine_id, runtime).unwrap(),
+        manifest
+    );
+    let registration_bytes = fs::read(&registration_path).unwrap();
+    let record: Value = serde_json::from_slice(&registration_bytes).unwrap();
+    assert_eq!(
+        record["probe"]["engine_id"].as_str(),
+        Some(entry.engine_id.as_str())
+    );
+    assert_eq!(record["probe"]["runtime_id"].as_str(), Some(runtime));
+    let accepted_error =
+        runtime_schema::load_accepted(root, entry.engine_id.as_str(), runtime).unwrap_err();
+    assert!(
+        accepted_error.contains("bounded regular file"),
+        "{accepted_error}"
+    );
+    let retry_error = runtime_schema::register_entrypoint(root, &fault_draft, None)
+        .await
+        .unwrap_err();
+    assert!(retry_error.contains("already registered"), "{retry_error}");
+    assert_eq!(fs::read(&registration_path).unwrap(), registration_bytes);
+    // Remove only this empty synthetic fault directory, preserving the published build.
+    fs::remove_dir(&accepted_path).unwrap();
+    let mut recovered_cfg = cfg.clone();
+    recovered_cfg.active_runtime = runtime.into();
+    let accepted =
+        runtime_schema::accept(root, &recovered_cfg, &descriptor.fingerprint, request).unwrap();
+    assert_eq!(accepted.fingerprint, descriptor.fingerprint);
+    assert!(accepted_path.is_file());
+    let recovered = runtime_schema::effective(root, &recovered_cfg, true).unwrap();
+    assert_eq!(recovered.help_state, HelpState::Current);
+    let registration_preserved = fs::read(&registration_path).unwrap() == registration_bytes;
+    assert!(registration_preserved);
+    eprintln!(
+        "entrypoint_help_pin_write_observation: {}",
+        json!({
+            "first_error": first_error,
+            "accepted_record_error": accepted_error,
+            "retry_error": retry_error,
+            "registration_preserved": registration_preserved,
+            "probe_completed": record["probe"]["runtime_id"].as_str() == Some(runtime),
+            "public_accept_recovered_current": recovered.help_state == HelpState::Current,
+        })
+    );
 }
 // Synthetic Windows checks retain ownership of every fixture child and file.
 #[cfg(windows)]
@@ -833,7 +942,6 @@ fn reviewed_binding_arity_before_registration() {
     } else {
         json!("not-applicable")
     };
-    eprintln!("R65_BINDING_ARITY_PREFLIGHT={receipt}");
     assert!(
         receipt_cleanup.is_ok(),
         "parent receipt cleanup: {receipt:#}"
@@ -871,7 +979,6 @@ fn reviewed_binding_arity_before_registration() {
         observations.get("setup_error").is_none(),
         "{observations:#}"
     );
-    eprintln!("R64_BINDING_ARITY_OBSERVATIONS={observations}");
     let rows = observations["rows"]
         .as_array()
         .expect("complete child observations");

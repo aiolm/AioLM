@@ -452,6 +452,27 @@ pub async fn register_entrypoint(
     draft: &registry::EntrypointDraft,
     cancel: Option<std::sync::Arc<AtomicBool>>,
 ) -> Result<registry::RuntimeManifest, String> {
+    match register_entrypoint_outcome(root, draft, cancel).await? {
+        EntrypointRegistration::Complete(manifest) => Ok(manifest),
+        EntrypointRegistration::HelpPending { cause, .. } => Err(cause),
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum EntrypointRegistration {
+    Complete(registry::RuntimeManifest),
+    HelpPending {
+        manifest: registry::RuntimeManifest,
+        fingerprint: String,
+        cause: String,
+    },
+}
+
+pub(crate) async fn register_entrypoint_outcome(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+    cancel: Option<std::sync::Arc<AtomicBool>>,
+) -> Result<EntrypointRegistration, String> {
     let manifest = registry::manifest_from_draft(draft)?;
     let check = (root.to_path_buf(), draft.clone(), manifest.clone());
     let accepted =
@@ -460,13 +481,44 @@ pub async fn register_entrypoint(
             .map_err(|e| e.to_string())??;
     let registered = registry::register_manifest(manifest, cancel).await?;
     if let Some(accepted) = accepted {
-        write_accepted(
-            root,
-            registered.engine_id.as_str(),
-            &registered.runtime_id,
-            &accepted,
-        )?;
+        let fingerprint = accepted.fingerprint.clone();
+        let target = (
+            root.to_path_buf(),
+            registered.engine_id,
+            registered.runtime_id.clone(),
+        );
+        let saved = tokio::task::spawn_blocking(move || {
+            write_accepted(&target.0, target.1.as_str(), &target.2, &accepted)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if let Err(cause) = saved {
+            return Ok(EntrypointRegistration::HelpPending {
+                manifest: registered,
+                fingerprint,
+                cause,
+            });
+        }
     }
+    Ok(EntrypointRegistration::Complete(registered))
+}
+
+/// Complete only the reviewed-help write for this exact, still-valid
+/// registration. Callers serialize this with runtime lifecycle operations.
+pub(crate) fn resume_entrypoint_help(
+    root: &Path,
+    draft: &registry::EntrypointDraft,
+) -> Result<registry::RuntimeManifest, String> {
+    let expected = registry::manifest_from_draft(draft)?;
+    let registered = registry::manifest_for_help_resume(&expected)?;
+    let accepted = draft_acceptance(root, draft, &registered)?
+        .ok_or("this entry point has no reviewed help to finish saving")?;
+    write_accepted(
+        root,
+        registered.engine_id.as_str(),
+        &registered.runtime_id,
+        &accepted,
+    )?;
     Ok(registered)
 }
 
@@ -2505,6 +2557,268 @@ pub fn mask_config(root: &Path, cfg: &AppConfig, projection: &mut Value, placeho
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn entrypoint_help_resume_preserves_the_checked_registration_without_running_a_probe() {
+        use registry::{
+            ArgBinding, AuthBinding, DraftHelp, EntrypointDraft, ProcessSpec, ServingProtocol,
+        };
+        use std::fs;
+        const CHILD: &str = "AIOLM_ENTRYPOINT_HELP_RESUME_FIXTURE";
+        const FILTER: &str = "providers::runtime_schema::tests::entrypoint_help_resume_preserves_the_checked_registration_without_running_a_probe";
+        if std::env::var_os(CHILD).is_none() {
+            let previous = std::env::var_os("AIOLM_HOME");
+            let home = owned_fixture_home();
+            fs::write(
+                home.join(".help-resume-fixture-owner"),
+                b"synthetic help resume fixture",
+            )
+            .unwrap();
+            let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", FILTER, "--nocapture"])
+                .env(CHILD, &home)
+                .env("AIOLM_HOME", &home);
+            let output = crate::procutil::capture_output_cancellable(
+                &mut command,
+                std::time::Duration::from_secs(30),
+                256 * 1024,
+                None,
+            )
+            .unwrap();
+            assert_eq!(std::env::var_os("AIOLM_HOME"), previous);
+            assert!(
+                output.status.success(),
+                "isolated help resume failed; retained home: {}\nstdout:{}\nstderr:{}",
+                home.display(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed"));
+            remove_owned_fixture_home(&home);
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os("AIOLM_HOME").unwrap());
+        assert_eq!(PathBuf::from(std::env::var_os(CHILD).unwrap()), home);
+        let canonical = fs::canonicalize(&home).unwrap();
+        let temporary = fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert_eq!(canonical, home);
+        assert_eq!(canonical.parent(), Some(temporary.as_path()));
+        assert_eq!(
+            fs::read(home.join(".help-resume-fixture-owner")).unwrap(),
+            b"synthetic help resume fixture"
+        );
+        let launch = home.join("synthetic-launch.bin");
+        let probe_program = home.join("synthetic-probe.bin");
+        let artifact = home.join("synthetic-artifact.data");
+        let marker = home.join("probe-marker.txt");
+        // These are deliberately not executable. A successful repair cannot
+        // have re-run a probe; the marker also detects accidental rewrites.
+        for path in [&launch, &probe_program, &artifact] {
+            fs::write(path, b"synthetic engine bytes").unwrap();
+        }
+        fs::write(&marker, b"preserve later probe sentinel").unwrap();
+        let engine = ProviderId::parse("custom.helpresume").unwrap();
+        let request = HelpRequest {
+            encoding: None,
+            locale: None,
+            working_directory: None,
+            program: None,
+            args: vec!["--help".into()],
+            scope: vec![],
+        };
+        let mut draft = EntrypointDraft {
+            command_layout: None,
+            options_separator: None,
+            launch_resources: None,
+            models: vec![],
+            engine_id: engine,
+            runtime_id: "pending-help".into(),
+            display_name: "Synthetic help recovery".into(),
+            program: launch.to_string_lossy().into_owned(),
+            prefix: vec![],
+            working_directory: Some(home.to_string_lossy().into_owned()),
+            artifacts: vec![artifact.to_string_lossy().into_owned()],
+            environment: BTreeMap::new(),
+            model: ArgBinding::Flag {
+                flag: "--model".into(),
+                equals: false,
+            },
+            port: ArgBinding::Flag {
+                flag: "--port".into(),
+                equals: false,
+            },
+            host: None,
+            served_model: None,
+            auth: AuthBinding::None,
+            protocol: ServingProtocol::OpenaiHttp,
+            probe: ProcessSpec {
+                program: probe_program.to_string_lossy().into_owned(),
+                args: vec!["{model}".into()],
+                env: BTreeMap::from([(
+                    "FAKE_PROBE_MARKER".into(),
+                    marker.to_string_lossy().into_owned(),
+                )]),
+                working_directory: None,
+            },
+            health_path: "/health".into(),
+            health_authenticated: false,
+            model_formats: vec!["unknown".into()],
+            help: None,
+            option_metadata: None,
+        };
+        let manifest = registry::manifest_from_draft(&draft).unwrap();
+        let identity = manifest_help_command(&manifest, &request)
+            .unwrap()
+            .identity(&AtomicBool::new(false))
+            .unwrap();
+        let mut report = complete_help_report(&identity.fingerprint);
+        report.identity = identity.clone();
+        report.stdout.text =
+            "Options:\n  --model MODEL  model path\n  --port PORT  listen port\n".into();
+        report.stdout.clean_text = report.stdout.text.clone();
+        let schema = super::super::runtime_help_parse::parse_help_report(
+            &report,
+            super::super::runtime_options::SchemaBinding {
+                engine: engine.as_str().into(),
+                runtime: draft.runtime_id.clone(),
+                fingerprint: identity.fingerprint.clone(),
+            },
+        )
+        .unwrap();
+        let root = registry::root();
+        let snapshot = HelpSnapshot { report, schema };
+        let snapshot_path =
+            runtime_help_store::save_snapshot(&root, engine.as_str(), &draft.runtime_id, &snapshot)
+                .unwrap();
+        draft.help = Some(DraftHelp {
+            fingerprint: identity.fingerprint.clone(),
+            request: request.clone(),
+        });
+        let digest = |path: &Path| format!("{:x}", Sha256::digest(fs::read(path).unwrap()));
+        let mut record = json!({"manifest":manifest,"executable_sha256":digest(&launch),"probe_sha256":digest(&probe_program),
+            "artifacts_sha256":BTreeMap::from([(artifact.to_string_lossy().into_owned(),digest(&artifact))]),
+            "probe":{"schema_version":1,"engine_id":engine,"runtime_id":draft.runtime_id,"version":"synthetic-1","accelerator":"cpu",
+                "model":"","model_supported":true,"served_model":"synthetic","capabilities":{"tasks":["generate"],
+                "modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}}});
+        let directory = root.join(engine.as_str()).join(&draft.runtime_id);
+        let registered = directory.join("registration.json");
+        let accepted = directory.join("help").join("accepted.json");
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let reject = |draft: &EntrypointDraft, needle: &str| {
+            let current = fs::read(&registered).unwrap();
+            let pin = fs::read(&accepted).ok();
+            let error = resume_entrypoint_help(&root, draft).unwrap_err();
+            assert!(error.contains(needle), "{error}");
+            assert_eq!(fs::read(&registered).unwrap(), current);
+            assert_eq!(fs::read(&accepted).ok(), pin);
+            assert_eq!(fs::read(&marker).unwrap(), b"preserve later probe sentinel");
+        };
+        fs::create_dir(&accepted).unwrap();
+        reject(&draft, "");
+        reject(&draft, "");
+        fs::remove_dir(&accepted).unwrap();
+        let initial_bytes = fs::read(&registered).unwrap();
+        assert_eq!(resume_entrypoint_help(&root, &draft).unwrap(), manifest);
+        assert_eq!(fs::read(&registered).unwrap(), initial_bytes);
+        assert_eq!(
+            load_accepted(&root, engine.as_str(), &draft.runtime_id)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            identity.fingerprint
+        );
+        assert_eq!(fs::read(&marker).unwrap(), b"preserve later probe sentinel");
+
+        let mut changed = draft.clone();
+        changed.health_path = "/different-health".into();
+        let different = registry::manifest_from_draft(&changed).unwrap();
+        assert_eq!(
+            manifest_help_command(&different, &request)
+                .unwrap()
+                .identity(&AtomicBool::new(false))
+                .unwrap()
+                .fingerprint,
+            identity.fingerprint
+        );
+        reject(&changed, "registered runtime changed");
+        let mut without_help = draft.clone();
+        without_help.help = None;
+        reject(&without_help, "no reviewed help");
+        for path in [&launch, &probe_program, &artifact] {
+            let bytes = fs::read(path).unwrap();
+            fs::write(path, b"changed engine bytes").unwrap();
+            reject(&draft, "changed");
+            fs::remove_file(path).unwrap();
+            reject(&draft, "unreadable");
+            fs::write(path, bytes).unwrap();
+        }
+        let snapshot_bytes = fs::read(&snapshot_path).unwrap();
+        fs::remove_file(&snapshot_path).unwrap();
+        reject(&draft, "missing");
+        fs::write(&snapshot_path, b"not a snapshot").unwrap();
+        reject(&draft, "");
+        fs::write(&snapshot_path, &snapshot_bytes).unwrap();
+        let baseline_record = record.clone();
+        for bad in [
+            Value::Null,
+            json!({"schema_version":2}),
+            json!({"runtime_id":"another-runtime"}),
+            json!({"version":""}),
+            json!({"accelerator":"x".repeat(129)}),
+            json!({"capabilities":{"tasks":["invented-task"],"modalities":{"text":true,"image":false,"audio":false,"video":false},"chat":true,"tools":false}}),
+        ] {
+            record = baseline_record.clone();
+            if bad.is_null() {
+                record["probe"] = Value::Null;
+            } else {
+                for (key, value) in bad.as_object().unwrap() {
+                    record["probe"][key] = value.clone();
+                }
+            }
+            fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+            reject(&draft, "");
+        }
+        record = baseline_record.clone();
+        record["artifacts_sha256"] = json!({});
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        reject(&draft, "artifact hashes");
+        // The complete manifest matches, but help must still document its bindings.
+        let mut bad_binding = draft.clone();
+        bad_binding.model = ArgBinding::Flag {
+            flag: "--typo".into(),
+            equals: false,
+        };
+        record = baseline_record.clone();
+        record["manifest"] =
+            serde_json::to_value(registry::manifest_from_draft(&bad_binding).unwrap()).unwrap();
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        reject(&bad_binding, "--typo");
+        record = baseline_record.clone();
+        // A legitimate later selected-model result need not claim model support
+        // or Ready to allow saving the reviewed options of this same build.
+        record["probe"]["model"] = json!(home.join("selected-model").to_string_lossy());
+        record["probe"]["model_supported"] = json!(false);
+        record["probe"]["capabilities"]["tasks"] = json!([]);
+        record["probe"]["version"] = json!("synthetic-later-model-probe");
+        fs::write(&registered, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let current_bytes = fs::read(&registered).unwrap();
+        assert_eq!(resume_entrypoint_help(&root, &draft).unwrap(), manifest);
+        assert_eq!(fs::read(&registered).unwrap(), current_bytes);
+        assert_eq!(fs::read(&marker).unwrap(), b"preserve later probe sentinel");
+        assert!(
+            matches!(register_entrypoint_outcome(&root,&draft,None).await,Err(error) if error.contains("already registered"))
+        );
+        assert!(register_entrypoint(&root, &draft, None)
+            .await
+            .unwrap_err()
+            .contains("already registered"));
+        fs::remove_file(&registered).unwrap();
+        assert!(resume_entrypoint_help(&root, &draft)
+            .unwrap_err()
+            .contains("cannot read runtime registration"));
+        assert!(!registered.exists());
+    }
 
     /// What the catalog emitted before it was mapped onto the common schema.
     fn legacy_arguments(spec: &OptionSpec, value: &Value) -> Vec<String> {

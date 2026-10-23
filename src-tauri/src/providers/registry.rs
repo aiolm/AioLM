@@ -341,6 +341,36 @@ fn registration_for_inventory(mut registered: Registration) -> Result<Registrati
 pub fn manifest(engine: ProviderId, runtime: &str) -> Result<RuntimeManifest, String> {
     Ok(read_registration(engine, runtime)?.manifest)
 }
+
+/// Repairing reviewed help must not complete a different registration or run
+/// another probe. A later model-specific probe may legitimately replace the
+/// original model-independent result, while the manifest and files stay fixed.
+pub(crate) fn manifest_for_help_resume(
+    expected: &RuntimeManifest,
+) -> Result<RuntimeManifest, String> {
+    let registered = read_registration(expected.engine_id, &expected.runtime_id)?;
+    if registered.manifest != *expected {
+        return Err("the registered runtime changed; review its entry point again".into());
+    }
+    if expected
+        .artifacts
+        .iter()
+        .any(|path| !registered.artifacts_sha256.contains_key(path))
+        || registered
+            .artifacts_sha256
+            .keys()
+            .any(|path| !expected.artifacts.contains(path))
+    {
+        return Err("the registered runtime's artifact hashes are incomplete".into());
+    }
+    check_files(&registered)?;
+    let probe = registered
+        .probe
+        .as_ref()
+        .ok_or("the registered runtime has no completed probe")?;
+    validate_probe_result(probe, &registered.manifest, None)?;
+    Ok(registered.manifest)
+}
 /// The exact bytes a registration is stored as, refused when the reader
 /// (`bounded_json`) could not read them back. Nothing is written then.
 fn record_bytes(registered: &Registration) -> Result<Vec<u8>, String> {
@@ -906,10 +936,26 @@ fn run_probe(
     }
     let probe: ProbeResult = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("invalid adapter probe JSON: {e}"))?;
+    validate_probe_result(&probe, m, Some(&cfg.active_model))?;
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err("runtime probe cancelled".into());
+    }
+    check_files(r)?;
+    if before != fingerprint(&cfg.active_model) {
+        return Err("model changed during adapter probe".into());
+    }
+    Ok(probe)
+}
+
+fn validate_probe_result(
+    probe: &ProbeResult,
+    manifest: &RuntimeManifest,
+    model: Option<&str>,
+) -> Result<(), String> {
     if probe.schema_version != VERSION
-        || probe.engine_id != m.engine_id
-        || probe.runtime_id != m.runtime_id
-        || probe.model != cfg.active_model
+        || probe.engine_id != manifest.engine_id
+        || probe.runtime_id != manifest.runtime_id
+        || model.is_some_and(|model| probe.model != model)
         || !valid_text(&probe.version, 256)
         || !valid_text(&probe.accelerator, 128)
         || !valid_text(&probe.served_model, 256)
@@ -926,14 +972,7 @@ fn run_probe(
     {
         return Err("adapter probe reports invalid tasks".into());
     }
-    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
-        return Err("runtime probe cancelled".into());
-    }
-    check_files(r)?;
-    if before != fingerprint(&cfg.active_model) {
-        return Err("model changed during adapter probe".into());
-    }
-    Ok(probe)
+    Ok(())
 }
 pub async fn register(
     source: &Path,
