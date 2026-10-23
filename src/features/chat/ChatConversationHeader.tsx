@@ -38,9 +38,18 @@ export default function ChatConversationHeader({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (detailsRef.current?.open && !detailsRef.current.contains(event.target as Node)) {
-        detailsRef.current.open = false;
+      const details = detailsRef.current;
+      if (!details?.open || details.contains(event.target as Node)) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const listbox = target?.closest('[role="listbox"]');
+      // A portalled menu still belongs to its control inside these settings.
+      if (listbox) {
+        for (const control of details.querySelectorAll('[role="combobox"][aria-expanded="true"][aria-controls]')) {
+          const controlledIds = control.getAttribute('aria-controls')?.split(/\s+/) ?? [];
+          if (controlledIds.some(id => details.ownerDocument.getElementById(id) === listbox)) return;
+        }
       }
+      details.open = false;
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
