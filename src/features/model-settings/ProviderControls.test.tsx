@@ -553,6 +553,9 @@ describe('registered engine options from accepted help (G04)', () => {
     const workers = schemaOption({ key: 'workers', flag: '--workers', target: 'launch', group: 'options', kind: { type: 'integer' } });
     vi.mocked(api.providerOptionSchema).mockResolvedValue(effectiveSchema([], [amber, workers]));
     vi.mocked(api.providerOptionIssues).mockClear();
+    let finishRevalidation!: (issues: Awaited<ReturnType<typeof api.providerOptionIssues>>) => void;
+    const revalidation = new Promise<Awaited<ReturnType<typeof api.providerOptionIssues>>>(resolve => { finishRevalidation = resolve; });
+    vi.mocked(api.providerOptionIssues).mockResolvedValueOnce([]).mockReturnValueOnce(revalidation);
     const imported = vi.spyOn(api, 'runtimeHelpImport').mockResolvedValue({ plan: [{ key: 'workers', values: [4] }], managed: ['--amber', secret], unrecognized: [`--unknown=${secret}`] });
     const onInvalid = vi.fn();
     // The app applies each patch to its own configuration state, which
@@ -567,6 +570,7 @@ describe('registered engine options from accepted help (G04)', () => {
     render(<I18nProvider initialLocale="en"><Controlled /></I18nProvider>);
     await screen.findByLabelText(/^--workers/);
     await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
     const text = `--amber ${secret} --workers 4 --unknown=${secret}`;
     const input = screen.getByRole('textbox', { name: 'Import command' });
     fireEvent.change(input, { target: { value: text } });
@@ -574,12 +578,22 @@ describe('registered engine options from accepted help (G04)', () => {
     fireEvent.click(screen.getByRole('option', { name: 'POSIX argument quoting' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import command' }));
     await waitFor(() => expect(screen.getByLabelText(/^--workers/)).toHaveValue('4'));
-    // The applied configuration is validated again; the review survives it.
+    // Observe the applied configuration while its second validation is pending.
     await waitFor(() => expect(api.providerOptionIssues).toHaveBeenCalledTimes(2));
     const review = screen.getByText(/--unknown=•••/);
     expect(review).toBeVisible();
     expect(review).toHaveTextContent('--amber •••');
     expect(review).not.toHaveTextContent(secret);
+    expect(input).toHaveValue(text);
+    expect(vi.mocked(api.providerOptionIssues).mock.calls[1][0].provider_options?.['custom.synthetic']).toEqual({ workers: 4 });
+    expect(onInvalid).toHaveBeenLastCalledWith('provider-options', true);
+    await act(async () => { finishRevalidation([]); });
+    await waitFor(() => expect(onInvalid).toHaveBeenLastCalledWith('provider-options', false));
+    const settledReview = screen.getByText(/--unknown=•••/);
+    expect(settledReview).toBeVisible();
+    expect(settledReview).toHaveTextContent('--amber •••');
+    expect(settledReview).not.toHaveTextContent(secret);
+    expect(screen.getByLabelText(/^--workers/)).toHaveValue('4');
     expect(input).toHaveValue(text);
     // Ignored words were never applied, so the valid result stays savable.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
