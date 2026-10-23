@@ -21,7 +21,7 @@ import { PanelBoundary } from "../shared/ui/ErrorBoundary";
 import { AioMark } from "../shared/ui/AppIcons";
 import { navigationGroups, navigationText, type ViewId } from "./navigation";
 import InitialSurface, { SurfaceLoading } from "../shared/ui/InitialSurface";
-import Onboarding, { type SetupChoices } from "../features/onboarding/Onboarding";
+import type { SetupChoices } from "../features/onboarding/Onboarding";
 import PanelFeedback, { ActivePanelContext, PanelFeedbackProvider, PanelFeedbackOutlet, PanelFeedbackIndicator, PanelFeedbackActivity } from "../shared/ui/PanelFeedback";
 
 import { detectLocale, useI18n } from "../shared/i18n/i18n";
@@ -97,7 +97,18 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
   // may open the workspace; a pending save must keep this wizard mounted.
   const [needsSetup, setNeedsSetup] = useState(() => baseStore.cfg?.onboarding_completed === false);
   const [preferencesReady, setPreferencesReady] = useState(needsSetup);
-  const { setLocale } = useI18n();
+  const [setupModule, setSetupModule] = useState<typeof import("../features/onboarding/Onboarding") | null>(null);
+  const [setupError, setSetupError] = useState<Error | null>(null);
+  const { setLocale, t } = useI18n();
+  useEffect(() => {
+    if (!needsSetup) return;
+    let current = true;
+    void import("../features/onboarding/Onboarding").then(
+      module => { if (current) setSetupModule(module); },
+      cause => { if (current) setSetupError(cause instanceof Error ? cause : new Error(String(cause))); },
+    );
+    return () => { current = false; };
+  }, [needsSetup]);
   useEffect(() => {
     if (preferencesReady) return;
     // Earlier releases followed the OS until a language was explicitly saved.
@@ -111,6 +122,13 @@ function InitializedApp({ preferences, setPreferences, baseStore }: InitializedA
   }, [preferencesReady, setPreferences, setLocale]);
   if (!preferencesReady) return <SurfaceLoading />;
   if (needsSetup && baseStore.cfg) {
+    if (setupError) {
+      // No wizard edits exist yet. A user-requested reload creates a fresh
+      // document module map instead of relying on a cached failed import.
+      return <div className="app-runtime-empty" role="alert"><EmptyState title={t('error.attention')} description={normalizeDisplayText(setupError.message)} action={{ label: t('common.retry'), onClick: () => window.location.reload() }} /></div>;
+    }
+    if (!setupModule) return <SurfaceLoading />;
+    const Onboarding = setupModule.default;
     const completeSetup = async (choices: SetupChoices) => {
       const next = { ...preferences, locale: choices.locale, theme: choices.theme };
       savePreferences(next, { required: true });
