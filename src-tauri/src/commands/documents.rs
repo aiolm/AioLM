@@ -203,7 +203,10 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     extraction.map_err(|error| {
         format!("PDF text extraction failed; scanned/image-only PDFs need OCR: {error}")
     })?;
-    Ok(String::from_utf8_lossy(&writer.bytes).into_owned())
+    Ok(match String::from_utf8(writer.bytes) {
+        Ok(text) => text,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    })
 }
 
 fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, String> {
@@ -546,6 +549,44 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// One page using the standard Helvetica font, so text extraction relies on the
+    /// built-in font metrics and encoding rather than data embedded in the file.
+    fn synthetic_pdf(content: &[u8]) -> Vec<u8> {
+        use pdf_extract::{Dictionary, Document, Object, Stream};
+
+        let mut document = Document::with_version("1.5");
+        let mut font = Dictionary::new();
+        font.set("Type", "Font");
+        font.set("Subtype", "Type1");
+        font.set("BaseFont", "Helvetica");
+        let mut fonts = Dictionary::new();
+        fonts.set("F1", document.add_object(font));
+        let mut resources = Dictionary::new();
+        resources.set("Font", fonts);
+        let contents = document.add_object(Stream::new(Dictionary::new(), content.to_vec()));
+        let pages_id = document.new_object_id();
+        let mut page = Dictionary::new();
+        page.set("Type", "Page");
+        page.set("Parent", pages_id);
+        page.set("MediaBox", [0, 0, 612, 792].map(Object::Integer).to_vec());
+        page.set("Resources", resources);
+        page.set("Contents", contents);
+        let page_id = document.add_object(page);
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Kids", vec![Object::Reference(page_id)]);
+        pages.set("Count", 1);
+        document.set_object(pages_id, pages);
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", "Catalog");
+        catalog.set("Pages", pages_id);
+        let catalog_id = document.add_object(catalog);
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).expect("write PDF fixture");
+        bytes
+    }
+
     #[tokio::test]
     async fn document_read_requires_native_selection_and_text_extension() {
         let root =
@@ -630,6 +671,41 @@ mod tests {
                 expected
             );
         }
+
+        // Plain-text layout puts two newlines before the first line and one newline before
+        // a following line placed less than 1.5 font sizes below it. Rewriting the bound
+        // path must return only the new document's text.
+        let pdf = root.join("manual.pdf");
+        for (content, expected) in [
+            (
+                b"BT /F1 12 Tf 72 712 Td (Alpha beta 1) Tj 0 -14 Td (Line two.) Tj ET".as_slice(),
+                "\n\nAlpha beta 1\nLine two.",
+            ),
+            (
+                b"BT /F1 12 Tf 72 712 Td (Gamma 22 delta) Tj 0 -14 Td (End.) Tj ET".as_slice(),
+                "\n\nGamma 22 delta\nEnd.",
+            ),
+        ] {
+            fs::write(&pdf, synthetic_pdf(content)).expect("write PDF fixture");
+            assert_eq!(
+                read_document_binding(pdf.to_string_lossy().into_owned())
+                    .await
+                    .expect("read PDF document"),
+                expected
+            );
+        }
+        fs::write(&pdf, synthetic_pdf(b"q Q")).expect("write PDF fixture without text");
+        assert_eq!(
+            read_document_binding(pdf.to_string_lossy().into_owned())
+                .await
+                .expect_err("reject PDF without text"),
+            "document has no extractable text; scanned/image-only PDFs need OCR"
+        );
+        fs::write(&pdf, b"%PDF-1.7\nnot a complete PDF document\n").expect("write malformed PDF");
+        let error = read_document_binding(pdf.to_string_lossy().into_owned())
+            .await
+            .expect_err("reject malformed PDF");
+        assert!(error.starts_with("cannot load PDF: "), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 
