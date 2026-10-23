@@ -210,3 +210,133 @@ describe('imported integer values at the JavaScript boundary', () => {
       .toEqual({ count: '9007199254740993' });
   });
 });
+
+describe('expanded saved occurrences', () => {
+  it('keeps complete mixed plans, aliases and moved output while preserving saved input', () => {
+    const values = {
+      alpha: { spelling: '-a', occurrences: [['A1'], [], ['A3']] },
+      beta: 'B', cache: false, port: 999, untouched: { nested: ['kept'] },
+      gone: { spelling: null, occurrences: [[null], [{ literal: true }]] },
+      [ORDER_KEY]: { version: 1, occurrences: [
+        { key: 'alpha', spelling: '-a' }, { key: 'gone' }, { key: 'beta' },
+        { key: 'alpha', spelling: '--alpha' }, { key: 'gone', spelling: '--gone' }, { key: 'alpha' },
+      ] },
+    };
+    const before = structuredClone(values);
+    const state = readOrder(values);
+    expect(state).toEqual({ ok: true, order: [
+      { key: 'alpha', spelling: '-a' }, { key: 'gone', spelling: null }, { key: 'beta', spelling: null },
+      { key: 'alpha', spelling: '--alpha' }, { key: 'gone', spelling: '--gone' }, { key: 'alpha', spelling: null },
+    ] });
+    if (!state.ok) throw new Error(state.error);
+    const plan = expandPlan(schema, values, state.order);
+    expect(plan).toEqual([
+      { key: 'cache', spelling: null, values: [false] },
+      { key: 'alpha', spelling: '-a', values: ['A1'] },
+      { key: 'gone', spelling: null, values: [null] },
+      { key: 'beta', spelling: null, values: ['B'] },
+      { key: 'alpha', spelling: '--alpha', values: [] },
+      { key: 'gone', spelling: '--gone', values: [{ literal: true }] },
+      { key: 'alpha', spelling: null, values: ['A3'] },
+    ]);
+    // This is the form's rowSpellings projection, including every empty row.
+    expect(plan.filter(item => item.key === 'alpha').map(item => item.spelling ?? null))
+      .toEqual(['-a', '--alpha', null]);
+    expect(new Set(plan.map(item => item.values)).size).toBe(plan.length);
+    expect(moveOccurrence(schema, values, 1, 1)).toEqual({
+      alpha: { spelling: '-a', occurrences: [['A1'], [], ['A3']] },
+      beta: 'B', cache: false, port: 999, untouched: { nested: ['kept'] },
+      gone: { spelling: null, occurrences: [[null], [{ literal: true }]] },
+      [ORDER_KEY]: { version: 1, occurrences: [
+        { key: 'cache' }, { key: 'gone' }, { key: 'alpha', spelling: '-a' }, { key: 'beta' },
+        { key: 'alpha' }, { key: 'gone', spelling: '--gone' }, { key: 'alpha' },
+      ] },
+    });
+    expect(values).toEqual(before);
+  });
+
+  it('keeps schema order and permissive saved shapes for null, empty and direct recorded orders', () => {
+    const current: OptionSchema = { ...schema, options: [
+      option('absent'), option('alpha'), option('beta'), option('cache'),
+      option('position', { position: 0 }), option('request', { target: 'request' }), option('port', { managed: 'port' }),
+    ] };
+    const scalarArray = ['scalar-array'];
+    const scalarObject = { occurrences: 'not-an-array', spelling: '--ignored', extra: true };
+    const values = {
+      alpha: { occurrences: ['legacy-row', [], ['last']], spelling: 7, extra: true },
+      beta: scalarArray, cache: null, position: 'slot', request: 'body', port: 42,
+      empty: { occurrences: [] }, ghost: scalarObject,
+    };
+    const before = structuredClone(values);
+    const expected = [
+      { key: 'alpha', spelling: null, values: ['legacy-row'] },
+      { key: 'alpha', spelling: null, values: [] },
+      { key: 'alpha', spelling: null, values: ['last'] },
+      { key: 'beta', spelling: null, values: [scalarArray] },
+      { key: 'cache', spelling: null, values: [null] },
+    ];
+    expect(expandPlan(current, values, null)).toEqual(expected);
+    expect(expandPlan(current, values, [])).toEqual(expected);
+    // expandPlan is also exported directly: do not silently validate or drop
+    // unknown keys, legacy rows, missing rows or extra recorded occurrences.
+    const plan = expandPlan(current, values, [
+      { key: 'alpha', spelling: null }, { key: 'beta', spelling: '--b' },
+      { key: 'alpha', spelling: '-legacy' }, { key: 'ghost', spelling: null },
+      { key: 'alpha', spelling: null }, { key: 'alpha', spelling: null },
+      { key: 'empty', spelling: null }, { key: 'missing', spelling: null },
+      { key: 'missing', spelling: null }, { key: 'ghost', spelling: '--ghost' },
+    ]);
+    expect(plan).toEqual([
+      { key: 'cache', spelling: null, values: [null] },
+      { key: 'alpha', spelling: null, values: ['legacy-row'] },
+      { key: 'beta', spelling: '--b', values: [scalarArray] },
+      { key: 'alpha', spelling: '-legacy', values: [] },
+      { key: 'ghost', spelling: null, values: [scalarObject] },
+      { key: 'alpha', spelling: null, values: ['last'] },
+      { key: 'alpha', spelling: null, values: [] },
+      { key: 'empty', spelling: null, values: [] },
+      { key: 'missing', spelling: null, values: [] },
+      { key: 'missing', spelling: null, values: [] },
+      { key: 'ghost', spelling: '--ghost', values: [] },
+    ]);
+    expect(plan[2].values[0]).toBe(scalarArray);
+    expect(plan[4].values[0]).toBe(scalarObject);
+    expect(new Set(plan.map(item => item.values)).size).toBe(plan.length);
+    expect(values).toEqual(before);
+  });
+
+  it('isolates equal and aliased source rows and reads changed saved content on the next invocation', () => {
+    const shared = ['same'];
+    const stored = { spelling: null, occurrences: [shared, shared, [] as unknown[]] };
+    const values = { alpha: stored, [ORDER_KEY]: { version: 1, occurrences: [
+      { key: 'alpha' }, { key: 'alpha', spelling: '-a' }, { key: 'alpha' },
+    ] } };
+    const before = structuredClone(values);
+    const state = readOrder(values);
+    if (!state.ok) throw new Error(state.error);
+    const first = expandPlan(schema, values, state.order);
+    expect(first).toEqual([
+      { key: 'alpha', spelling: null, values: ['same'] },
+      { key: 'alpha', spelling: '-a', values: ['same'] },
+      { key: 'alpha', spelling: null, values: [] },
+    ]);
+    expect(new Set(first.map(item => item.values)).size).toBe(3);
+    first[0].values[0] = 'output-only';
+    first[2].values.push('output-only');
+    expect(first[1].values).toEqual(['same']);
+    expect(values).toEqual(before);
+    shared[0] = 'changed';
+    stored.occurrences[2].push('new-input');
+    const changed = structuredClone(values);
+    const second = expandPlan(schema, values, state.order);
+    expect(second).toEqual([
+      { key: 'alpha', spelling: null, values: ['changed'] },
+      { key: 'alpha', spelling: '-a', values: ['changed'] },
+      { key: 'alpha', spelling: null, values: ['new-input'] },
+    ]);
+    expect(second.every((item, index) => item.values !== first[index].values)).toBe(true);
+    expect(new Set(second.map(item => item.values)).size).toBe(3);
+    expect(first.map(item => item.values)).toEqual([['output-only'], ['same'], ['output-only']]);
+    expect(values).toEqual(changed);
+  });
+});

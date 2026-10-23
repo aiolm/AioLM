@@ -147,11 +147,17 @@ export function expandPlan(schema: OptionSchema, values: Record<string, unknown>
     const stored = readStored(values[option.key]);
     for (const row of stored?.rows ?? []) plan.push({ key: option.key, spelling: stored?.spelling ?? null, values: row });
   }
+  if (!order?.length) return plan;
   const seen = new Map<string, number>();
-  for (const entry of order ?? []) {
+  const storedByKey = new Map<string, StoredOption | undefined>();
+  // Each key consumes distinct rows already isolated by readStored.
+  for (const entry of order) {
     const index = seen.get(entry.key) ?? 0;
     seen.set(entry.key, index + 1);
-    plan.push({ key: entry.key, spelling: entry.spelling, values: readStored(values[entry.key])?.rows[index] ?? [] });
+    if (!storedByKey.has(entry.key)) {
+      storedByKey.set(entry.key, readStored(values[entry.key]));
+    }
+    plan.push({ key: entry.key, spelling: entry.spelling, values: storedByKey.get(entry.key)?.rows[index] ?? [] });
   }
   return plan;
 }
