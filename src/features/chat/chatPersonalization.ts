@@ -181,9 +181,15 @@ export function resolveSkillSelection(text: string, selectedIds: string[], catal
     else missingIds.push(id);
   }
   const unknownNames: string[] = [];
-  for (const name of findSkillReferences(text)) {
-    const catalogName = (item: ChatSkill) => item.name.normalize("NFC");
-    const skill = catalog.find((item) => catalogName(item) === name) ?? catalog.find((item) => catalogName(item).toLowerCase() === name.toLowerCase());
+  const referencedNames = findSkillReferences(text);
+  // Reuse only visited names across references; a single lookup needs no cache.
+  const normalizedNames: Array<string | undefined> | undefined = referencedNames.length > 1 ? [] : undefined;
+  for (const name of referencedNames) {
+    const catalogName = (item: ChatSkill, index: number) => {
+      if (!normalizedNames) return item.name.normalize("NFC");
+      return normalizedNames[index] ??= item.name.normalize("NFC");
+    };
+    const skill = catalog.find((item, index) => catalogName(item, index) === name) ?? catalog.find((item, index) => catalogName(item, index).toLowerCase() === name.toLowerCase());
     if (skill) add(skill);
     else unknownNames.push(name);
   }
