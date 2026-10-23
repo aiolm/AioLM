@@ -982,14 +982,18 @@ fn value_count(arity: &Value) -> String {
 /// Saved keys for help review. Kept separate from discovery so catalog and
 /// dedicated settings can be compared against the effective option contract.
 pub fn discovery_saved_keys(cfg: &AppConfig, selected: &Selected) -> Result<Vec<String>, String> {
-    let values = super::launch::provider_options(cfg, selected.key.provider);
+    let empty = Map::new();
+    let values = cfg
+        .provider_options
+        .get(selected.key.provider.as_str())
+        .unwrap_or(&empty);
     let catalog = compat(selected)?;
     let known = catalog
         .options
         .iter()
         .map(|option| option.key.as_str())
         .collect::<BTreeSet<_>>();
-    Ok(generic_entries(&values)
+    Ok(generic_entries(values)
         .filter(|(key, _)| !known.contains(key.as_str()))
         .map(|(key, _)| key.clone())
         .collect())
@@ -998,7 +1002,12 @@ pub fn discovery_saved_keys(cfg: &AppConfig, selected: &Selected) -> Result<Vec<
 /// A new entry point has no manifest option catalog. Its saved provider values
 /// must be reviewed against its new help, even before any help was accepted.
 pub fn entrypoint_saved_keys(cfg: &AppConfig, provider: ProviderId) -> Vec<String> {
-    generic_entries(&super::launch::provider_options(cfg, provider))
+    let empty = Map::new();
+    let values = cfg
+        .provider_options
+        .get(provider.as_str())
+        .unwrap_or(&empty);
+    generic_entries(values)
         .map(|(key, _)| key.clone())
         .collect()
 }
@@ -2611,14 +2620,67 @@ mod tests {
             probe: None,
         };
         let selected = Selected::python(&runtime).unwrap();
-        let values = json!({"temperature":0.7,"extra_args":["--synthetic"],"@option_order":{"version":1,"occurrences":[]},"request_lora":"selected","removed":"retained"}).as_object().unwrap().clone();
-        let cfg = AppConfig {
-            provider_options: BTreeMap::from([("vllm".into(), values)]),
-            ..Default::default()
-        };
-        let before = serde_json::to_value(&cfg).unwrap();
-        assert_eq!(discovery_saved_keys(&cfg, &selected).unwrap(), ["removed"]);
-        assert_eq!(serde_json::to_value(&cfg).unwrap(), before);
+        let reserved = json!({
+            "@option_order": {"version": 1, "occurrences": []},
+            "draft_model": "/synthetic/draft",
+            "extra_args": ["--synthetic"],
+            "lora_adapters": [{"name": "selected", "path": "/synthetic/adapter"}],
+            "request_lora": "selected",
+            "trust_remote_code": false
+        });
+        let mut mixed = reserved.as_object().unwrap().clone();
+        mixed.insert(
+            "alpha".into(),
+            json!({"nested": ["값", false, null, 18446744073709551615_u64]}),
+        );
+        mixed.insert("removed".into(), json!("retained"));
+        mixed.insert("temperature".into(), json!(0.7));
+        mixed.insert("한글".into(), json!({"unchanged": [0, ""]}));
+        for (label, values, expected_discovery, expected_entrypoint) in [
+            ("absent", None, vec![], vec![]),
+            ("empty", Some(Map::new()), vec![], vec![]),
+            (
+                "all reserved",
+                Some(reserved.as_object().unwrap().clone()),
+                vec![],
+                vec![],
+            ),
+            (
+                "mixed",
+                Some(mixed),
+                vec!["alpha", "removed", "한글"],
+                vec!["alpha", "removed", "temperature", "한글"],
+            ),
+        ] {
+            let mut provider_options = BTreeMap::from([(
+                "mlx-vlm".into(),
+                json!({"other_provider_only": {"nested": ["foreign"]}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )]);
+            if let Some(values) = values {
+                provider_options.insert("vllm".into(), values);
+            }
+            let cfg = AppConfig {
+                active_provider: "mlx-vlm".into(),
+                provider_options,
+                ..Default::default()
+            };
+            assert_ne!(cfg.active_provider, selected.key.provider.as_str());
+            let before = serde_json::to_vec(&cfg).unwrap();
+            assert_eq!(
+                discovery_saved_keys(&cfg, &selected).unwrap(),
+                expected_discovery,
+                "{label}",
+            );
+            assert_eq!(
+                entrypoint_saved_keys(&cfg, ProviderId::Vllm),
+                expected_entrypoint,
+                "{label}",
+            );
+            assert_eq!(serde_json::to_vec(&cfg).unwrap(), before, "{label}");
+        }
     }
 
     #[test]
