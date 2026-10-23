@@ -1,8 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pickModelsDir } from '../../shared/api';
 import { defaultPreferences } from '../../shared/config/preferences';
 import { I18nProvider } from '../../shared/i18n/i18n';
+import InitialSurface from '../../shared/ui/InitialSurface';
+import { trackInitialRead } from '../../shared/ui/initialLayout';
 import Onboarding from './Onboarding';
 
 vi.mock('../../shared/api', () => ({ pickModelsDir: vi.fn() }));
@@ -22,6 +25,53 @@ describe('First-run setup', () => {
 
   it('starts in English and translates every subsequent step immediately after language selection', async () => {
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('ko-KR');
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(callback => { frames.set(++frameId, callback); return frameId; });
+    vi.spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id); });
+    const paint = async () => { await act(async () => { const queued = [...frames.values()]; frames.clear(); queued.forEach(callback => callback(0)); }); };
+    // JSDOM does not enforce inert's native focus rejection. Model only that
+    // browser boundary while exercising the real surfaces and focus effect.
+    const nativeFocus = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if (!this.closest('[inert]')) nativeFocus.call(this, options);
+    });
+    const nested = (show: boolean) => <I18nProvider><InitialSurface>{show && <InitialSurface>
+      <Onboarding preferences={defaultPreferences()} modelsDir="C:/test/models" onComplete={complete} />
+    </InitialSurface>}</InitialSurface></I18nProvider>;
+    const deferredView = render(nested(false));
+    let release!: () => void;
+    const pending = trackInitialRead(() => new Promise<void>(resolve => { release = resolve; }));
+    deferredView.rerender(nested(true));
+    const deferredHeading = screen.getByRole('heading', { name: 'Choose your language' });
+    expect(deferredHeading).not.toHaveFocus();
+    await paint(); await paint();
+    expect([...deferredView.container.querySelectorAll('.initial-surface-content')].map(node => node.getAttribute('data-ready'))).toEqual(['false', 'true']);
+    expect(deferredHeading).not.toHaveFocus();
+    await act(async () => { release(); await pending; });
+    await paint();
+    expect(deferredHeading).not.toHaveFocus();
+    await paint();
+    expect(deferredHeading.closest('[inert]')).toBeNull();
+    expect(deferredHeading).toHaveFocus();
+    deferredView.unmount();
+
+    // An already-revealed parent can receive its lazy child while a window
+    // control owns focus. StrictMode replay must keep that deliberate focus.
+    const existingFocus = (show: boolean) => <StrictMode><I18nProvider>
+      <button type="button">Existing window control</button><InitialSurface>{show &&
+        <Onboarding preferences={defaultPreferences()} modelsDir="C:/test/models" onComplete={complete} />
+      }</InitialSurface></I18nProvider></StrictMode>;
+    const focusedView = render(existingFocus(false));
+    await paint(); await paint();
+    const control = screen.getByRole('button', { name: 'Existing window control' });
+    control.focus(); focusedView.rerender(existingFocus(true));
+    expect(control).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: /Continue/ }));
+    expect(screen.getByRole('heading', { name: 'Make yourself at home' })).toHaveFocus();
+    focusedView.unmount();
+    expect(frames.size).toBe(0);
+
     mount();
     expect(screen.getByRole('heading', { name: 'Choose your language' })).toHaveFocus();
     expect(screen.getByRole('radio', { name: 'English' })).toBeChecked();

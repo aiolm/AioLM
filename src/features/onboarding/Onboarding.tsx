@@ -6,6 +6,7 @@ import { localeOptions, useI18n, type Locale } from '../../shared/i18n/i18n';
 import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { AioMark } from '../../shared/ui/AppIcons';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import { useInitialSurfaceReady } from '../../shared/ui/InitialSurface';
 import { onboardingCopy } from './onboardingCopy';
 import './onboarding.css';
 
@@ -17,6 +18,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
   onComplete: (choices: SetupChoices) => Promise<void>;
 }) {
   const { locale, setLocale, t } = useI18n();
+  const surfaceReady = useInitialSurfaceReady();
   const copy = onboardingCopy[locale];
   const [step, setStep] = useState(0);
   const [defaultFolder] = useState(modelsDir);
@@ -29,6 +31,7 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
   const folderInput = useRef<HTMLInputElement>(null);
   const errorMessage = useRef<HTMLDivElement>(null);
   const inFlight = useRef(false);
+  const lastReadyStep = useRef(step);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -37,7 +40,19 @@ export default function Onboarding({ preferences, modelsDir, onComplete }: {
     applyTheme(theme);
     if (theme === 'system') return subscribeToSystemTheme(() => applyTheme('system'));
   }, [theme]);
-  useEffect(() => { heading.current?.focus(); }, [step]);
+  useEffect(() => {
+    if (!surfaceReady) return;
+    const stepChanged = lastReadyStep.current !== step;
+    lastReadyStep.current = step;
+    const target = heading.current;
+    if (!target) return;
+    const owner = target.ownerDocument;
+    const active = owner.activeElement;
+    // Initial exposure yields to a control the user already focused. Step
+    // navigation still announces its heading, including after a deferred reveal.
+    if (!stepChanged && active && active !== owner.body && active !== owner.documentElement && active !== owner.getElementById('root')) return;
+    target.focus();
+  }, [step, surfaceReady]);
   useEffect(() => { if (error) errorMessage.current?.focus(); }, [error]);
 
   const chooseFolder = async () => {
