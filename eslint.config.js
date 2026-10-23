@@ -91,6 +91,10 @@ export default [
     files: ["src/features/**/*.{ts,tsx}"],
     ignores: ["**/*.test.{ts,tsx}"],
     rules: {
+      "no-restricted-syntax": ["error", nativeDropdownRestriction, {
+        selector: "TSImportType[source.value=/(^|\\/)(app|testing)\\//i]",
+        message: "Features receive application callbacks through props and use shared contracts instead of importing the app shell.",
+      }],
       "no-restricted-imports": ["error", {
         patterns: [{
           group: ["**/app/**", "**/testing/**"],
