@@ -263,10 +263,11 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
     void send(false, undefined, canSend);
   };
 
+  const enterToSend = preferences?.chat.enterToSend ?? true;
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition (including the keyCode 229 some engines report) must never send.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key === "Enter" && !event.shiftKey && (preferences?.chat.enterToSend ?? true)) {
+    if (event.key === "Enter" && !event.shiftKey && enterToSend) {
       event.preventDefault();
       sendMessage();
     }
@@ -439,6 +440,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
             input={input}
             setInput={setInput}
             onKeyDown={onKeyDown}
+            enterToSend={enterToSend}
             disabled={disabled}
             phase={phase}
             loadingModel={loadingModel}
