@@ -251,7 +251,10 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
     {action && action.kind !== 'delete' && <div className="settings-profile-action app-card app-card--tight" role="group" aria-label={action.kind === 'create' ? copy.saveAs : copy.rename}>
       <>
         <label htmlFor={`${formId}-name`}>{copy.name}</label>
-        <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } }} />
+        <input ref={inputRef} id={`${formId}-name`} className="app-input" value={action.name} maxLength={120} disabled={locked} onChange={event => setAction({ ...action, name: event.target.value })} onKeyDown={event => {
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.keyCode === 229) return;
+          event.preventDefault(); submit();
+        }} />
         {action.kind === 'create' && <p className="settings-profile-hint">{copy.saveGlobalHint}</p>}
       </>
       <div className="settings-profile-buttons">
