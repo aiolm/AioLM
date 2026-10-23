@@ -138,7 +138,10 @@ pub fn run() {
         // desktop OS. The frontend awaits its `notify` command directly: on
         // desktop that call only confirms the toast was prepared and handed to
         // the OS, never that the OS displayed it.
-        .plugin(tauri_plugin_notification::init());
+        .plugin(tauri_plugin_notification::init())
+        // The tray menu is handled once for the whole process; see
+        // `tray::on_menu_event` for why not with each tray icon.
+        .on_menu_event(tray::on_menu_event);
     // Native WKWebView acceptance needs an embedded driver on macOS. It is
     // explicitly opted into by CI and can never open an automation endpoint in
     // a release build, even if a caller enables every Cargo feature.
