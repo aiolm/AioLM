@@ -104,20 +104,37 @@ pub fn save_snapshot(
     runtime: &str,
     snapshot: &HelpSnapshot,
 ) -> Result<PathBuf, String> {
-    if !snapshot.report.complete() {
+    save_snapshot_parts(root, engine, runtime, &snapshot.report, &snapshot.schema)
+}
+
+#[derive(Serialize)]
+struct SnapshotRef<'a> {
+    report: &'a HelpReport,
+    schema: &'a OptionSchema,
+}
+
+fn save_snapshot_parts(
+    root: &Path,
+    engine: &str,
+    runtime: &str,
+    report: &HelpReport,
+    schema: &OptionSchema,
+) -> Result<PathBuf, String> {
+    if !report.complete() {
         return Err("only complete help results become persistent snapshots".into());
     }
-    snapshot.schema.validate()?;
-    if snapshot.schema.binding.fingerprint != snapshot.report.identity.fingerprint {
+    schema.validate()?;
+    if schema.binding.fingerprint != report.identity.fingerprint {
         return Err("snapshot schema must match its help fingerprint".into());
     }
     // The schema binding pins the exact engine/runtime the snapshot was
     // discovered for; a foreign binding must never be filed under this path.
-    if snapshot.schema.binding.engine != engine || snapshot.schema.binding.runtime != runtime {
+    if schema.binding.engine != engine || schema.binding.runtime != runtime {
         return Err("snapshot schema binding must match its engine and runtime".into());
     }
-    let path = snapshot_path_for(root, engine, runtime, &snapshot.report.identity.fingerprint)?;
-    let bytes = serde_json::to_vec_pretty(snapshot).map_err(|e| e.to_string())?;
+    let path = snapshot_path_for(root, engine, runtime, &report.identity.fingerprint)?;
+    let bytes =
+        serde_json::to_vec_pretty(&SnapshotRef { report, schema }).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_SNAPSHOT_BYTES {
         return Err("help snapshot exceeds 12 MiB".into());
     }
@@ -407,15 +424,7 @@ fn publish_current(
 ) -> Result<(), String> {
     service.publish(ticket, report, || {
         if scope.persist && report.complete() {
-            save_snapshot(
-                scope.root,
-                scope.engine,
-                scope.runtime,
-                &HelpSnapshot {
-                    report: report.clone(),
-                    schema: schema.clone(),
-                },
-            )?;
+            save_snapshot_parts(scope.root, scope.engine, scope.runtime, report, schema)?;
         }
         Ok(())
     })
@@ -1398,6 +1407,24 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(loaded.schema, descriptor.schema);
+        assert_eq!(loaded.report, report);
+        let expected = HelpSnapshot {
+            report: report.clone(),
+            schema: descriptor.schema.clone(),
+        };
+        let path = snapshot_path_for(
+            &root,
+            "custom.example",
+            "build-bulk",
+            &report.identity.fingerprint,
+        )
+        .unwrap();
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(bytes, serde_json::to_vec_pretty(&expected).unwrap());
+        assert_eq!(
+            serde_json::from_slice::<HelpSnapshot>(&bytes).unwrap(),
+            expected
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
