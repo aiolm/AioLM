@@ -822,9 +822,16 @@ fn raw_argument_problem(
 /// an unsupported saved value stays visible until the user corrects or resets
 /// it, and a launch with any issue is refused.
 pub fn validate(provider: ProviderId, options: &Map<String, Value>) -> Vec<OptionIssue> {
+    validate_entries(provider, options)
+}
+
+pub(super) fn validate_entries<'a>(
+    provider: ProviderId,
+    entries: impl IntoIterator<Item = (&'a String, &'a Value)>,
+) -> Vec<OptionIssue> {
     let specs = schema(provider);
     let mut issues = Vec::new();
-    for (key, value) in options {
+    for (key, value) in entries {
         if key == EXTRA_ARGS_KEY {
             match value.as_array() {
                 Some(arguments) if arguments.len() <= MAX_EXTRA_ARGS => {

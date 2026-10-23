@@ -38,14 +38,6 @@ pub fn provider_options(cfg: &AppConfig, provider: ProviderId) -> Map<String, Va
         .unwrap_or_default()
 }
 
-fn schema_view(options: &Map<String, Value>) -> Map<String, Value> {
-    options
-        .iter()
-        .filter(|(key, _)| !BINDING_KEYS.contains(&key.as_str()))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
-}
-
 /// Catalog values without a saved command-line position.
 fn unordered(
     provider: ProviderId,
@@ -323,7 +315,12 @@ pub fn lora_adapters(options: &Map<String, Value>) -> Result<Vec<ProviderLora>, 
 
 /// Schema issues plus binding issues, for display and to refuse a launch.
 pub fn option_issues(provider: ProviderId, options: &Map<String, Value>) -> Vec<OptionIssue> {
-    let mut issues = options::validate(provider, &schema_view(options));
+    let mut issues = options::validate_entries(
+        provider,
+        options
+            .iter()
+            .filter(|(key, _)| !BINDING_KEYS.contains(&key.as_str())),
+    );
     let mut binding = |key: &str, message: String| {
         issues.push(OptionIssue {
             key: key.to_owned(),
@@ -1760,30 +1757,46 @@ mod tests {
             ProviderId::Vllm,
             json!({"max_model_len": 8192, "enable_prefix_caching": false, "temperature": 0.3}),
         );
-        let command = engine_command(&cfg, &runtime(ProviderId::Vllm), 41000, "secret").unwrap();
+        let runtime = runtime(ProviderId::Vllm);
+        let saved_cfg = serde_json::to_vec(&cfg).unwrap();
+        let saved_runtime = serde_json::to_vec(&runtime).unwrap();
+        let command = engine_command(&cfg, &runtime, 41000, "secret").unwrap();
         assert_eq!(
-            command.args,
-            vec![
-                "-I",
-                "-m",
-                "vllm.entrypoints.cli.main",
-                "serve",
-                "/models/Qwen2.5-VL-7B",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                "41000",
-                "--served-model-name",
-                "Qwen2.5-VL-7B",
-                "--max-model-len",
-                "8192",
-                "--no-enable-prefix-caching",
-            ]
+            command,
+            EngineCommand {
+                program: PathBuf::from(&runtime.python),
+                args: [
+                    "-I",
+                    "-m",
+                    "vllm.entrypoints.cli.main",
+                    "serve",
+                    "/models/Qwen2.5-VL-7B",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "41000",
+                    "--served-model-name",
+                    "Qwen2.5-VL-7B",
+                    "--max-model-len",
+                    "8192",
+                    "--no-enable-prefix-caching",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+                env: vec![("VLLM_API_KEY".into(), "secret".into())],
+                working_directory: None,
+                upstream_model: "Qwen2.5-VL-7B".into(),
+                readiness: Readiness {
+                    health_path: "/health".into(),
+                    health_authenticated: false,
+                    expected_model: "Qwen2.5-VL-7B".into(),
+                },
+            }
         );
         assert!(!command.args.iter().any(|arg| arg.contains("secret")));
-        assert_eq!(command.env, vec![("VLLM_API_KEY".into(), "secret".into())]);
-        assert_eq!(command.upstream_model, "Qwen2.5-VL-7B");
-        assert!(!command.readiness.health_authenticated);
+        assert_eq!(serde_json::to_vec(&cfg).unwrap(), saved_cfg);
+        assert_eq!(serde_json::to_vec(&runtime).unwrap(), saved_runtime);
     }
 
     #[test]
@@ -1849,13 +1862,171 @@ mod tests {
             ProviderId::MlxVlm,
             &provider_options(&cfg, ProviderId::MlxVlm),
         );
-        assert!(issues.iter().any(|issue| issue.code == "binding"));
+        assert_eq!(
+            serde_json::to_value(&issues).unwrap(),
+            json!([{
+                "key": "lora_adapters",
+                "code": "binding",
+                "message": "mlx-vlm loads one adapter per server (--adapter-path)"
+            }])
+        );
         let cfg = config(
             ProviderId::Vllm,
             json!({"draft_model": "/d", "request_lora": "missing"}),
         );
         let issues = option_issues(ProviderId::Vllm, &provider_options(&cfg, ProviderId::Vllm));
-        assert_eq!(issues.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&issues).unwrap(),
+            json!([
+                {"key": "request_lora", "code": "binding", "message": "the request adapter must name a configured adapter"},
+                {"key": "draft_model", "code": "binding", "message": "vLLM configures draft models through speculative_config"}
+            ])
+        );
+
+        // Catalog errors keep input order; dedicated bindings are checked afterward.
+        let mixed = json!({
+            "aaa_unknown": {"nested": ["한글", false, null]},
+            "draft_model": "/synthetic/draft",
+            "dtype": "fp4",
+            "enable_auto_tool_choice": true,
+            "lora_adapters": [{"name": "style", "path": "/synthetic/adapter"}],
+            "max_lora_rank": 24,
+            "max_model_len": "big",
+            "request_lora": "missing",
+            "trust_remote_code": true,
+            "zzz_unknown": false
+        });
+        let values = mixed.as_object().unwrap();
+        let saved_values = serde_json::to_vec(&mixed).unwrap();
+        let expected = [
+            (
+                "aaa_unknown",
+                "unknown",
+                "aaa_unknown is not an option of vllm",
+            ),
+            ("dtype", "choice", "dtype does not accept 'fp4'"),
+            ("max_model_len", "type", "max_model_len must be an integer"),
+            (
+                "trust_remote_code",
+                "managed",
+                "AioLM does not run code from model repositories; clear trust_remote_code",
+            ),
+            (
+                "zzz_unknown",
+                "unknown",
+                "zzz_unknown is not an option of vllm",
+            ),
+            (
+                "request_lora",
+                "binding",
+                "the request adapter must name a configured adapter",
+            ),
+            (
+                "draft_model",
+                "binding",
+                "vLLM configures draft models through speculative_config",
+            ),
+            (
+                "max_lora_rank",
+                "choice",
+                "max_lora_rank must be one of [1, 8, 16, 32, 64, 128, 256, 320, 512]",
+            ),
+            (
+                "enable_auto_tool_choice",
+                "binding",
+                "enable_auto_tool_choice requires tool_call_parser",
+            ),
+        ]
+        .into_iter()
+        .map(|(key, code, message)| OptionIssue {
+            key: key.into(),
+            code,
+            message: message.into(),
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(option_issues(ProviderId::Vllm, values), expected);
+        let standard = runtime(ProviderId::Vllm);
+        assert_eq!(runtime_option_issues(&standard, values), expected);
+        assert_eq!(serde_json::to_vec(&mixed).unwrap(), saved_values);
+
+        // Direct catalog validation still reports these dedicated keys as unknown.
+        let bindings = json!({
+            "draft_model": "/synthetic/draft",
+            "lora_adapters": [{"name": "style", "path": "/synthetic/adapter"}],
+            "request_lora": "style"
+        });
+        let saved_bindings = serde_json::to_vec(&bindings).unwrap();
+        assert_eq!(
+            serde_json::to_value(options::validate(
+                ProviderId::Vllm,
+                bindings.as_object().unwrap(),
+            ))
+            .unwrap(),
+            json!([
+                {"key": "draft_model", "code": "unknown", "message": "draft_model is not an option of vllm"},
+                {"key": "lora_adapters", "code": "unknown", "message": "lora_adapters is not an option of vllm"},
+                {"key": "request_lora", "code": "unknown", "message": "request_lora is not an option of vllm"}
+            ])
+        );
+        assert_eq!(serde_json::to_vec(&bindings).unwrap(), saved_bindings);
+
+        let mut missing_model = config(ProviderId::Vllm, json!({"dtype": "fp4"}));
+        missing_model.active_model.clear();
+        let saved_cfg = serde_json::to_vec(&missing_model).unwrap();
+        let saved_runtime = serde_json::to_vec(&standard).unwrap();
+        assert_eq!(
+            engine_command(&missing_model, &standard, 1, "").unwrap_err(),
+            "vllm settings need attention before starting: dtype does not accept 'fp4'"
+        );
+        assert_eq!(serde_json::to_vec(&missing_model).unwrap(), saved_cfg);
+        assert_eq!(serde_json::to_vec(&standard).unwrap(), saved_runtime);
+
+        // Offline editing validates bindings without loading runtimes or model files.
+        let mut dormant = config(ProviderId::Vllm, json!({"max_model_len": 16}));
+        dormant.active_runtime.clear();
+        let saved_dormant = serde_json::to_vec(&dormant).unwrap();
+        let valid_input = json!({
+            "mlx-vlm": {
+                "draft_model": "/synthetic/draft",
+                "enable_thinking": true,
+                "lora_adapters": [{"name": "solo", "path": "/synthetic/solo"}]
+            },
+            "vllm": {
+                "lora_adapters": [{"name": "style", "path": "/synthetic/style"}],
+                "max_model_len": 4,
+                "request_lora": "style",
+                "temperature": 0.25,
+                "@option_order": {"version": 1, "occurrences": [{"key": "max_model_len"}]}
+            }
+        })
+        .to_string();
+        let saved_input = valid_input.as_bytes().to_vec();
+        let parsed = super::super::adapter::parse_option_maps(&dormant, &valid_input).unwrap();
+        assert_eq!(
+            serde_json::to_value(&parsed).unwrap(),
+            serde_json::from_str::<Value>(&valid_input).unwrap()
+        );
+        assert_eq!(valid_input.as_bytes(), saved_input);
+        assert_eq!(serde_json::to_vec(&dormant).unwrap(), saved_dormant);
+
+        let mut invalid_values = values.clone();
+        invalid_values.insert(
+            "@option_order".into(),
+            json!({"version": 2, "occurrences": []}),
+        );
+        let invalid_input = json!({"vllm": invalid_values}).to_string();
+        let saved_invalid_input = invalid_input.as_bytes().to_vec();
+        let expected_messages = expected
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert_eq!(
+            super::super::adapter::parse_option_maps(&dormant, &invalid_input).unwrap_err(),
+            format!("invalid vllm options: {expected_messages}; the saved option order uses version 2, which this app does not support; the saved values were retained")
+        );
+        assert_eq!(invalid_input.as_bytes(), saved_invalid_input);
+        assert_eq!(serde_json::to_vec(&dormant).unwrap(), saved_dormant);
     }
 
     fn temp_dir(label: &str) -> PathBuf {
