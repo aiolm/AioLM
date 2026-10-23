@@ -1369,6 +1369,82 @@ describe('model settings editor', { timeout: 45000 }, () => {
     expect(getSaved()).toEqual(saved);
     expect(onProfileCommit).not.toHaveBeenCalled(); expect(onApply).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { draft: 'clean', confirmation: 'native composition', dirty: false, isComposing: true, keyCode: 13 },
+    { draft: 'edited', confirmation: 'native composition', dirty: true, isComposing: true, keyCode: 13 },
+    { draft: 'clean', confirmation: '229 fallback', dirty: false, isComposing: false, keyCode: 229 },
+    { draft: 'edited', confirmation: '229 fallback', dirty: true, isComposing: false, keyCode: 229 },
+  ] as const)('keeps the $draft model preview during $confirmation Enter and loads only after confirmation', async ({ dirty, isComposing, keyCode }) => {
+    const nextPath = 'models/模型-한글-🦊.gguf';
+    vi.spyOn(api, 'listModels').mockResolvedValue({ models: [
+      { name: 'a.gguf', path: cfg.active_model, size_mb: 3000, is_vision: false },
+      { name: '模型-한글-🦊.gguf', path: nextPath, size_mb: 1500, is_vision: false },
+    ], truncated: false });
+    vi.spyOn(api, 'modelMetadata').mockResolvedValue({});
+    rememberExecution({ ...cfg, active_model: nextPath, ctx_size: 16384 });
+    const stored = localStorage.getItem('aiolm-model-execution');
+    const initial = structuredClone(cfg);
+    const initialBefore = structuredClone(initial);
+    const { onApply, onClose, onProfileCommit, onReloadProfile, getSaved } = mount({ initialSection: 'tuning', initialConfig: initial });
+    const savedBefore = structuredClone(getSaved());
+    if (dirty) {
+      fireEvent.change(numeric('ctx_size'), { target: { value: '8192' } });
+      fireEvent.blur(numeric('ctx_size'));
+    }
+    fireEvent.click(screen.getByRole('tab', { name: 'Model' }));
+    const oldModel = await screen.findByRole('button', { name: /^a\.gguf/ });
+    const nextModel = screen.getByRole('button', { name: /^模型-한글-🦊\.gguf/ });
+    const path = screen.getByRole('textbox', { name: 'Model path' });
+    fireEvent.change(path, { target: { value: nextPath } });
+    let nativeDefaultAvailable = false;
+    await act(async () => { nativeDefaultAvailable = fireEvent.keyDown(path, { key: 'Enter', keyCode, isComposing }); });
+    const header = () => document.querySelector('.model-settings-header p[title]');
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    expect(header()).toHaveAttribute('title', cfg.active_model);
+    expect(oldModel).toHaveAttribute('aria-pressed', 'true');
+    expect(nextModel).toHaveAttribute('aria-pressed', 'false');
+    expect(numeric('ctx_size')).toHaveValue(dirty ? 8192 : cfg.ctx_size);
+    expect(path).toHaveValue(nextPath);
+    expect(screen.getByRole('button', { name: 'Load into editor' })).toBeEnabled();
+    expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onReloadProfile).not.toHaveBeenCalled();
+    expect(getSaved()).toEqual(savedBefore);
+    expect(initial).toEqual(initialBefore);
+    expect(localStorage.getItem('aiolm-model-execution')).toBe(stored);
+    expect(nativeDefaultAvailable).toBe(true);
+
+    await act(async () => {
+      expect(fireEvent.keyDown(path, { key: 'Enter', keyCode: 13, isComposing: false })).toBe(false);
+    });
+    if (dirty) {
+      expect(screen.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
+      expect(header()).toHaveAttribute('title', cfg.active_model);
+      expect(numeric('ctx_size')).toHaveValue(8192);
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument());
+      expect(header()).toHaveAttribute('title', cfg.active_model);
+      expect(numeric('ctx_size')).toHaveValue(8192);
+      expect(path).toHaveValue(nextPath);
+      fireEvent.click(screen.getByRole('button', { name: 'Load into editor' }));
+      expect(screen.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    }
+    await waitFor(() => expect(nextModel).toHaveAttribute('aria-pressed', 'true'));
+    openOptions();
+    await waitFor(() => expect(header()).toHaveAttribute('title', nextPath));
+    expect(screen.queryByRole('dialog', { name: 'Discard unsaved changes?' })).not.toBeInTheDocument();
+    expect(oldModel).toHaveAttribute('aria-pressed', 'false');
+    expect(nextModel).toHaveAttribute('aria-pressed', 'true');
+    expect(numeric('ctx_size')).toHaveValue(16384);
+    expect(path).toHaveValue(nextPath);
+    expect(screen.queryByRole('button', { name: 'Load into editor' })).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
+    expect(onProfileCommit).not.toHaveBeenCalled(); expect(onReloadProfile).not.toHaveBeenCalled();
+    expect(getSaved()).toEqual(savedBefore);
+    expect(initial).toEqual(initialBefore);
+    expect(localStorage.getItem('aiolm-model-execution')).toBe(stored);
+  });
 });
 
 const tensorLog = [
