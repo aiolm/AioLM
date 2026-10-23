@@ -403,10 +403,18 @@ pub(super) async fn write_event(
     event: &str,
     value: Value,
 ) -> Result<(), String> {
-    let data = serde_json::to_string(&value)
+    // One buffer sized for the framing, the event name and a typical token
+    // event's JSON, which is serialized straight into it; larger events grow
+    // it. The whole frame still goes out in one write.
+    let mut frame = Vec::with_capacity(event.len() + 144);
+    frame.extend_from_slice(b"event: ");
+    frame.extend_from_slice(event.as_bytes());
+    frame.extend_from_slice(b"\ndata: ");
+    serde_json::to_writer(&mut frame, &value)
         .map_err(|error| format!("gateway SSE encode failed: {error}"))?;
+    frame.extend_from_slice(b"\n\n");
     stream
-        .write_all(format!("event: {event}\ndata: {data}\n\n").as_bytes())
+        .write_all(&frame)
         .await
         .map_err(|error| format!("gateway SSE write failed: {error}"))
 }
@@ -594,6 +602,34 @@ mod tests {
         assert_eq!(&interim, b"HTTP/1.1 100 Continue\r\n\r\n");
         client.write_all(b"{}").await.unwrap();
         assert_eq!(reader.await.unwrap().unwrap().body, b"{}");
+    }
+
+    #[tokio::test]
+    async fn an_event_frame_is_compact_escaped_json_and_a_closed_stream_fails_to_write() {
+        let (mut client, mut server) = connected_pair().await;
+        write_event(
+            &mut server,
+            "response.output_text.delta",
+            json!({"type":"response.output_text.delta","delta":"q\"b\\s\n\r\t\u{1}\u{7f}\u{e9}\u{1f600}\u{2028}</"}),
+        )
+        .await
+        .unwrap();
+        server.shutdown().await.unwrap();
+        let error = write_event(&mut server, "message_stop", json!({"type":"message_stop"}))
+            .await
+            .unwrap_err();
+        assert!(error.starts_with("gateway SSE write failed: "), "{error}");
+
+        let mut wire = Vec::new();
+        client.read_to_end(&mut wire).await.unwrap();
+        let expected = concat!(
+            "event: response.output_text.delta\n",
+            r#"data: {"delta":"q\"b\\s\n\r\t\u0001"#,
+            "\u{7f}\u{e9}\u{1f600}\u{2028}</",
+            r#"","type":"response.output_text.delta"}"#,
+            "\n\n",
+        );
+        assert_eq!(String::from_utf8(wire).unwrap(), expected);
     }
 
     #[test]

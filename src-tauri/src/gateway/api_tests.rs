@@ -1168,7 +1168,35 @@ async fn anthropic_streams_are_translated_event_by_event() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-    let events = sse_events(&drain(&mut response).await);
+    let body = drain(&mut response).await;
+    // Everything after the randomly identified message_start frame is exact.
+    let (start, rest) = body.split_once("\n\n").unwrap();
+    assert!(
+        start.starts_with(concat!(
+            "event: message_start\n",
+            r#"data: {"message":{"content":[],"id":"msg_"#,
+        )),
+        "{start}"
+    );
+    assert_eq!(
+        rest,
+        concat!(
+            "event: content_block_start\n",
+            r#"data: {"content_block":{"text":"","type":"text"},"index":0,"type":"content_block_start"}"#,
+            "\n\nevent: content_block_delta\n",
+            r#"data: {"delta":{"text":"Hel","type":"text_delta"},"index":0,"type":"content_block_delta"}"#,
+            "\n\nevent: content_block_delta\n",
+            r#"data: {"delta":{"text":"lo","type":"text_delta"},"index":0,"type":"content_block_delta"}"#,
+            "\n\nevent: content_block_stop\n",
+            r#"data: {"index":0,"type":"content_block_stop"}"#,
+            "\n\nevent: message_delta\n",
+            r#"data: {"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"output_tokens":2}}"#,
+            "\n\nevent: message_stop\n",
+            r#"data: {"type":"message_stop"}"#,
+            "\n\n",
+        )
+    );
+    let events = sse_events(&body);
     let names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
