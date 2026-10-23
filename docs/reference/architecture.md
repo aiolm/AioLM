@@ -60,7 +60,7 @@ folder put in its place would hide the models behind it. `list_models` reports
 why the application's own folder could not be created.
 
 Closing the main window exits the application and stops every managed
-llama-server, the gateway and the background jobs, unless `close_to_tray` is
+inference process, the gateway and the background jobs, unless `close_to_tray` is
 on. That setting is saved in `config.json`, defaults to off, and is absent from
 configurations written before it existed, so an upgrade keeps closing the way it
 always has. While it is on, a tray icon is present and closing the main window
@@ -86,8 +86,10 @@ On macOS, Dock and Finder reopen events restore the existing window as well.
 ## Model processes and the local API
 
 Desktop model sessions and the external API listener have separate lifecycles.
-`start_server` and the session commands load models into private `llama-server`
-processes. Their ports are selected at launch, and their live URLs are used by
+`start_server` and the session commands resolve the selected runtime adapter and
+launch its inference process. The adapter supplies the executable, arguments,
+environment and working directory; AioLM owns process cleanup. Private ports
+are selected at launch, and the live session URLs are used by
 internal chat. The configured `port` belongs to the external API; private ports
 are never written back to saved configuration or execution profiles.
 
@@ -121,8 +123,10 @@ and the distinction from the standalone CLI.
   Use explicit imports when features collaborate; avoid feature-wide barrels that
   accidentally load unrelated screens or create import cycles.
 - Production `shared` modules do not import `app`, `features`, or test helpers.
-  ESLint checks these boundaries for static imports, including type imports,
-  and checks inline `import(...).Type` references in production shared modules.
+  Production features do not import `app` or test helpers. ESLint checks both
+  boundaries for static imports, including type imports, and inline
+  `import(...).Type` references. Tests retain their exemptions, and explicit
+  collaboration between features remains allowed.
 - Shared UI owns its input contracts. For example, `TooltipContent` belongs to
   `Tooltip`, while tuning metadata supplies values that implement that contract.
 - Use `import type` for contracts. Media attachment/preparation contracts live
@@ -157,6 +161,12 @@ React snapshot together through one synchronous operation. That count gates
 first-load auto-start and is independent of the persisted profile-library revision.
 The save queue still owns optimistic publication, accepted responses and rollback;
 the outer save serialization keeps conflict reload and retry in the same operation.
+
+Profile metadata saves compare the earlier library reference with the queue's
+returned configuration after persistence. That accepted result determines
+deleted-profile request fallbacks and live-profile cache eviction; neither the
+editor payload nor a helper-local merge result can replace it. Merge-local
+indexes do not persist across calls or bypass normalization and copy boundaries.
 
 ## Native command layer
 
