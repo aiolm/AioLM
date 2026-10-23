@@ -47,6 +47,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanTruncated, setScanTruncated] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
+  const modelFilterInput = useRef<HTMLInputElement>(null);
   const [providerFilter, setProviderFilter] = useState<api.ProviderId | 'all'>('all');
   const [dir, setDir] = useState(cfg?.models_dir ?? "");
   const [folderSaved, setFolderSaved] = useState(false);
@@ -153,6 +154,13 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
     if (!normalizedQuery) return true;
     return `${model.name} ${normalizeDisplayPath(model.path)}`.toLowerCase().includes(normalizedQuery);
   });
+  const onlyHiddenVision = visible.length === 0 && !showVision && models !== null && models.length > 0 && models.every(model => model.is_vision);
+  const hasModelFilters = normalizedQuery.length > 0 || providerFilter !== 'all';
+  const clearModelFilters = () => {
+    setModelQuery('');
+    setProviderFilter('all');
+    modelFilterInput.current?.focus();
+  };
   const liveModel = loadedModelPath(store.status);
   const serverRunning = isServerBusy(store.status.state);
   const statusCopy = statusDisplayCopy[locale];
@@ -432,7 +440,7 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
 
       {focus !== "lora" && <div className="models-list-toolbar">
         <div className="models-list-heading"><h2>{t("panel.models")}</h2>{models && <span className="models-list-count">{visible.length}</span>}</div>
-        <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
+        <input ref={modelFilterInput} value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder={t("panel.modelFilterPlaceholder")} aria-label={t("panel.searchModels")} className="app-input models-list-filter" />
         <CustomSelect ariaLabel={providerCopy[locale].engine} value={providerFilter} onChange={value => setProviderFilter(value as api.ProviderId | 'all')} options={[{ value: 'all', label: providerCopy[locale].all }, ...api.registeredProviderIds().map(provider => ({ value: provider, label: api.providerDisplayName(provider) }))]} />
         <label className="models-list-toggle" ><input type="checkbox" checked={showVision} onChange={(event) => setShowVision(event.target.checked)} /> {t("panel.visionModels")}</label>
         {scanning ? <button type="button" onClick={cancelScan} className="app-button app-button--secondary app-button--sm">{t("panel.cancelScan")}</button> : <button type="button" data-icon="refresh" onClick={() => setScanRequest((current) => current + 1)} className="app-button app-button--secondary app-button--sm">{scanError ? t("panel.retry") : t("panel.rescan")}</button>}
@@ -457,8 +465,12 @@ export default function ModelsPanel({ store, focus = "library", onSelectModel, o
         {scanning && <div className="p-6 text-center text-sm ui-color-muted" role="status">{t("panel.scanning")}</div>}
         {!scanning && models === null && !scanError && <div className="p-6 text-center text-sm ui-color-faint"  role="status">{t("ui.modelsLoading")}</div>}
         {!scanning && models !== null && !scanError && visible.length === 0 && (
-          <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
+          models.length === 0 ? <EmptyState title={t("panel.noModels")} description={t("ui.modelsEmptyBody", { dir: dir ? normalizeDisplayPath(dir) : t("ui.modelsEmptyFolder") })}
             action={dir.trim() ? { label: t("panel.chooseFolder"), onClick: () => void browse() } : undefined} />
+            : onlyHiddenVision ? <EmptyState title={t("ui.modelsVisionHidden")} description={t("ui.modelsVisionHiddenBody")}
+              action={{ label: t(hasModelFilters ? "ui.modelsClearAndShowVision" : "ui.modelsShowVision"), onClick: () => { clearModelFilters(); setShowVision(true); } }} />
+              : <EmptyState title={t("ui.modelsNoMatches")} description={t("ui.modelsNoMatchesBody")}
+                action={{ label: t("ui.modelsClearFilters"), onClick: clearModelFilters }} />
         )}
         {visible.map((model) => {
           const displayName = normalizeDisplayText(model.name);
