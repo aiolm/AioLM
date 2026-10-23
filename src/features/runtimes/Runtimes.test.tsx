@@ -11,6 +11,7 @@ import { modelSettingsCopy } from "../model-settings/modelSettingsCopy";
 import * as runtimeHelp from "../../shared/api/runtimeHelp";
 import { notifyRuntimeInventoryChanged } from "../../shared/runtime/runtimeInventoryEvents";
 import { effectiveSchema } from "../../testing/effectiveSchema";
+import { testConfig } from "../../testing/appStore";
 
 vi.mock("../../shared/api/index", () => ({
   isNativeRuntimeAvailable: () => false,
@@ -987,5 +988,144 @@ describe('neutral inference engine inventory', () => {
     expect(await screen.findByRole('button', { name: 'Add inference engine' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Install isolated environment' })).not.toBeInTheDocument();
     expect(mocked.providerInstall).toHaveBeenCalledOnce();
+  });
+
+  describe('registration operation ownership', () => {
+    beforeEach(() => {
+      vi.mocked(runtimeHelp.entrypointHelpDiscover).mockReset().mockResolvedValue(HELP_RESULT);
+      vi.mocked(runtimeHelp.entrypointHelpCancel).mockReset().mockResolvedValue(true);
+      mocked.runtimeAdapterRegister.mockReset().mockResolvedValue(REGISTERED);
+      mocked.rtCancel.mockReset().mockResolvedValue(undefined);
+    });
+
+    const protectedStore = () => {
+      const cfg: api.AppConfig = { ...structuredClone(testConfig), active_provider: 'custom.kept', active_runtime: 'kept-build',
+        provider_options: { 'custom.kept': { retained: ['second', 'first'] } } };
+      const updateConfig = vi.fn();
+      return { cfg, before: structuredClone(cfg), updateConfig, selectedStore: { ...store, cfg, updateConfig } as AppStore };
+    };
+    const prepareBothForms = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
+      fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
+      fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
+      fireEvent.click(screen.getByText('Advanced: import registration file (manifest)'));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Registration file path (manifest)' }), { target: { value: '/synthetic/runtime.json' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    };
+
+    it('holds the manifest controls and parent busy state until the wizard help operation actually settles after cancellation', async () => {
+      let finishHelp!: (value: typeof HELP_RESULT) => void;
+      vi.mocked(runtimeHelp.entrypointHelpDiscover).mockReturnValueOnce(new Promise(resolve => { finishHelp = resolve; }));
+      const state = protectedStore(); const onBusyChange = vi.fn();
+      render(panel({ store: state.selectedStore, onBusyChange }));
+      await prepareBothForms();
+      fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+      try {
+        await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+        const manifest = screen.getByRole('textbox', { name: 'Registration file path (manifest)' });
+        const register = screen.getByRole('button', { name: 'Probe & register' });
+        expect(manifest).toBeDisabled(); expect(register).toBeDisabled();
+        fireEvent.click(register);
+        expect(mocked.runtimeAdapterRegister).not.toHaveBeenCalled();
+        const cancel = screen.getByRole('button', { name: 'Cancel' });
+        expect(cancel).toBeEnabled(); fireEvent.click(cancel);
+        await waitFor(() => expect(runtimeHelp.entrypointHelpCancel).toHaveBeenCalledWith(vi.mocked(runtimeHelp.entrypointHelpDiscover).mock.calls[0][0]));
+        expect(onBusyChange).toHaveBeenLastCalledWith(true);
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+        await act(async () => { finishHelp(HELP_RESULT); });
+        await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+        expect(register).toBeEnabled(); expect(manifest).toHaveValue('/synthetic/runtime.json');
+        expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+        expect(screen.queryByText(/Discovered: 2 options/)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+        expect(screen.getByLabelText('Executable or interpreter')).toBeVisible();
+        expect(screen.getByLabelText('Executable or interpreter')).toBeEnabled();
+        expect(screen.getByLabelText('Executable or interpreter')).toHaveValue('/synthetic/python');
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeEnabled();
+        expect(state.cfg).toEqual(state.before); expect(state.updateConfig).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => { finishHelp(HELP_RESULT); });
+      }
+    });
+
+    it('locks wizard discovery while the manifest probe is pending and keeps its own cancellation available until rejection', async () => {
+      let failManifest!: (cause: string) => void;
+      mocked.runtimeAdapterRegister.mockReturnValueOnce(new Promise((_resolve, reject) => { failManifest = reject; }));
+      const state = protectedStore(); const onBusyChange = vi.fn();
+      render(panel({ store: state.selectedStore, onBusyChange }));
+      await prepareBothForms();
+      fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
+      try {
+        await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+        const discover = screen.getByRole('button', { name: 'Discover help' });
+        expect(discover).toBeDisabled();
+        const helpArgument = screen.getByRole('textbox', { name: 'Help arguments after the entry point Argument 1' });
+        expect(helpArgument).toBeVisible(); expect(helpArgument).toHaveValue('--help');
+        expect(helpArgument).toBeDisabled();
+        fireEvent.click(discover);
+        expect(runtimeHelp.entrypointHelpDiscover).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+        const cancel = screen.getByRole('button', { name: 'Cancel' });
+        expect(cancel).toBeEnabled(); fireEvent.click(cancel);
+        await waitFor(() => expect(mocked.rtCancel).toHaveBeenCalledOnce());
+        expect(onBusyChange).toHaveBeenLastCalledWith(true);
+        expect(discover).toBeDisabled();
+        await act(async () => { failManifest('runtime probe cancelled'); });
+        await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+        expect(discover).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Probe & register' })).toBeEnabled();
+        expect(screen.getByRole('textbox', { name: 'Registration file path (manifest)' })).toHaveValue('/synthetic/runtime.json');
+        expect(helpArgument).toBeEnabled(); expect(helpArgument).toHaveValue('--help');
+        fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+        expect(screen.getByLabelText('Executable or interpreter')).toBeVisible();
+        expect(screen.getByLabelText('Executable or interpreter')).toBeEnabled();
+        expect(screen.getByLabelText('Executable or interpreter')).toHaveValue('/synthetic/python');
+        expect(screen.queryByRole('group', { name: 'Synthetic · build-1 is registered' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeEnabled();
+        expect(state.cfg).toEqual(state.before); expect(state.updateConfig).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => { failManifest('runtime probe cancelled'); });
+      }
+    });
+
+    it('keeps the manifest refresh busy when Add another engine replaces an idle wizard', async () => {
+      let finishCatalog!: (value: api.ProviderDescription[]) => void;
+      const catalog = new Promise<api.ProviderDescription[]>(resolve => { finishCatalog = resolve; });
+      mocked.runtimeAdapterRegister.mockImplementationOnce(async () => {
+        mocked.providerCatalog.mockReturnValue(catalog);
+        return REGISTERED;
+      });
+      const state = protectedStore(); const onBusyChange = vi.fn();
+      render(panel({ store: state.selectedStore, onBusyChange }));
+      await prepareBothForms();
+      fireEvent.click(screen.getByRole('button', { name: 'Probe & register' }));
+      try {
+        const announcement = await screen.findByRole('group', { name: 'Synthetic · build-1 is registered' });
+        expect(onBusyChange).toHaveBeenLastCalledWith(true);
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+        fireEvent.click(within(announcement).getByRole('button', { name: 'Add another engine' }));
+        // Replacing the retained wizard runs its real unmount busy=false cleanup.
+        // That must not release the manifest's still-pending catalog refresh.
+        expect(onBusyChange).toHaveBeenLastCalledWith(true);
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+        expect(screen.getByLabelText('Executable or interpreter')).toHaveValue('');
+        expect(screen.getByLabelText('Executable or interpreter')).toBeDisabled();
+        expect(screen.getByRole('textbox', { name: 'Registration file path (manifest)' })).toHaveValue('/synthetic/runtime.json');
+        expect(screen.getByRole('button', { name: 'Probe & register' })).toBeDisabled();
+        expect(mocked.runtimeAdapterRegister).toHaveBeenCalledExactlyOnceWith('/synthetic/runtime.json');
+        expect(runtimeHelp.entrypointHelpDiscover).not.toHaveBeenCalled();
+        await act(async () => { finishCatalog(BUILTINS); });
+        await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+        expect(screen.getByRole('button', { name: 'All inference engines' })).toBeEnabled();
+        expect(screen.getByLabelText('Executable or interpreter')).toBeEnabled();
+        expect(screen.getByRole('button', { name: 'Probe & register' })).toBeEnabled();
+        expect(state.cfg).toEqual(state.before); expect(state.updateConfig).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => { finishCatalog(BUILTINS); });
+      }
+    });
   });
 });

@@ -63,7 +63,9 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
   const inventoryRef = useRef<HTMLDivElement>(null);
   const [providerRevision, setProviderRevision] = useState(0);
   const [providerBusy, setProviderBusy] = useState(false);
-  const [adapterBusy, setAdapterBusy] = useState(false);
+  const [wizardBusy, setWizardBusy] = useState(false);
+  const [manifestBusy, setManifestBusy] = useState(false);
+  const adapterBusy = wizardBusy || manifestBusy;
   const [wizardOpened, setWizardOpened] = useState(false);
   const [wizardKey, setWizardKey] = useState(0);
   const [registered, setRegistered] = useState<{ engine: ProviderId; name: string; runtime: string } | null>(null);
@@ -193,12 +195,12 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
       {wizardOpened && (
         <div className="runtimes-main" hidden={view.kind !== 'add'}>
           <div className="adapter-context">{backButton(adapterBusy)}</div>
-          <EntrypointRegistration key={wizardKey} titleRef={wizardHeading} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy}
-            onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setAdapterBusy} />
+          <EntrypointRegistration key={wizardKey} titleRef={wizardHeading} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy}
+            onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setWizardBusy} />
           <details className="runtime-advanced">
             <summary>{copy.advancedManifest}</summary>
             <div className="runtime-advanced__body">
-              <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy} onRegistered={onRegistered} onBusyChange={setAdapterBusy} />
+              <ExternalRuntimeRegistration locked={rt.serverRunning || rt.runtimeBusy || providerBusy || wizardBusy} onRegistered={onRegistered} onBusyChange={setManifestBusy} />
             </div>
           </details>
         </div>
