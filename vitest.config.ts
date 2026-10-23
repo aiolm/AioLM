@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { availableParallelism } from "node:os";
 
 export default defineConfig({
   plugins: [react()],
@@ -7,6 +8,9 @@ export default defineConfig({
     "process.env.NODE_ENV": JSON.stringify("test"),
   },
   test: {
+    // Bound simultaneous DOM environments so large UI tests keep their normal
+    // time budget on many-core hosts, without exceeding smaller CPU allocations.
+    maxWorkers: Math.min(4, availableParallelism()),
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
