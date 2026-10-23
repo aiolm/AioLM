@@ -517,19 +517,24 @@ async fn proxy_audio(
         .unwrap_or_default();
     let mut form = multipart::AudioForm::parse(content_type, &request.body)
         .map_err(|error| ApiError::new(400, "invalid_audio_form", error))?;
-    let mut fields = Value::Object(form.fields.clone());
+    let mut fields = Value::Object(std::mem::take(&mut form.fields));
     let lease = ctx
         .models
         .acquire(requested_model(&fields)?)
         .map_err(RouteError::into_api_error)?;
     lease.adapt(endpoint, &mut fields)?;
-    form.fields = fields.as_object().cloned().ok_or_else(|| {
-        ApiError::new(
-            400,
-            "invalid_audio_form",
-            "audio fields must remain an object",
-        )
-    })?;
+    let fields = match fields {
+        Value::Object(fields) => fields,
+        _ => {
+            return Err(ApiError::new(
+                400,
+                "invalid_audio_form",
+                "audio fields must remain an object",
+            )
+            .into())
+        }
+    };
+    form.fields = fields;
     let body = form
         .encode()
         .map_err(|error| ApiError::new(400, "invalid_audio_form", error))?;
@@ -594,15 +599,16 @@ pub(crate) async fn transcribe_audio(
     lease
         .adapt("audio/transcriptions", &mut fields)
         .map_err(|error| error.message)?;
-    form.fields = fields
-        .as_object()
-        .cloned()
-        .ok_or("transcription fields must be an object")?;
+    let fields = match fields {
+        Value::Object(fields) => fields,
+        _ => return Err("transcription fields must be an object".into()),
+    };
     let model = fields
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
+    form.fields = fields;
     let body = form.encode()?;
     let work = async {
         let response = upstream_post(&lease, "audio/transcriptions")
