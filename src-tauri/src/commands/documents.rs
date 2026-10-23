@@ -153,6 +153,9 @@ fn xml_text(value: &str) -> String {
             _ => output.push(character),
         }
     }
+    if !output.contains('&') {
+        return output;
+    }
     output
         .replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -203,15 +206,15 @@ fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&writer.bytes).into_owned())
 }
 
-fn extract_document_text(path: &Path, bytes: &[u8]) -> Result<String, String> {
+fn extract_document_text(path: &Path, bytes: Vec<u8>) -> Result<String, String> {
     match path
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
         .as_deref()
     {
-        Some("docx") => extract_docx_text(bytes),
-        Some("pdf") => extract_pdf_text(bytes),
+        Some("docx") => extract_docx_text(&bytes),
+        Some("pdf") => extract_pdf_text(&bytes),
         _ => {
             if bytes.contains(&0) {
                 return Err(
@@ -219,7 +222,10 @@ fn extract_document_text(path: &Path, bytes: &[u8]) -> Result<String, String> {
                         .into(),
                 );
             }
-            Ok(String::from_utf8_lossy(bytes).into_owned())
+            Ok(match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+            })
         }
     }
 }
@@ -292,7 +298,7 @@ async fn read_document_path(canonical: PathBuf) -> Result<String, String> {
         if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
             return Err("document exceeds the 8 MiB limit".into());
         }
-        let text = extract_document_text(&canonical, &bytes)?;
+        let text = extract_document_text(&canonical, bytes)?;
         if text.trim().is_empty() {
             return Err(
                 "document has no extractable text; scanned/image-only PDFs need OCR".into(),
@@ -540,8 +546,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn document_read_requires_native_selection_and_text_extension() {
+    #[tokio::test]
+    async fn document_read_requires_native_selection_and_text_extension() {
         let root =
             std::env::temp_dir().join(format!("aiolm-document-path-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create document test directory");
@@ -563,6 +569,67 @@ mod tests {
         assert!(ensure_selected_document_path(Some(&canonical), &other).is_err());
         assert!(ensure_selected_document_path(None, &selected).is_err());
         assert!(ensure_selected_document_path(Some(&canonical), &binary).is_err());
+
+        for (bytes, expected) in [
+            (
+                "\u{feff}한글\r\nAlpha & beta\n".as_bytes(),
+                "\u{feff}한글\r\nAlpha & beta\n",
+            ),
+            (b"a\xff\xc3(b".as_slice(), "a\u{fffd}\u{fffd}(b"),
+        ] {
+            fs::write(&selected, bytes).expect("write text encoding fixture");
+            assert_eq!(
+                read_document_binding(canonical.to_string_lossy().into_owned())
+                    .await
+                    .expect("read document text"),
+                expected
+            );
+        }
+        for (bytes, expected) in [
+            (
+                b"text\0data".as_slice(),
+                "binary documents are not supported; choose a text, DOCX, or PDF document",
+            ),
+            (
+                b" \r\n\t".as_slice(),
+                "document has no extractable text; scanned/image-only PDFs need OCR",
+            ),
+        ] {
+            fs::write(&selected, bytes).expect("write rejected text fixture");
+            assert_eq!(
+                read_document_binding(canonical.to_string_lossy().into_owned())
+                    .await
+                    .expect_err("reject unusable document"),
+                expected
+            );
+        }
+        fs::write(&selected, vec![b'x'; MAX_DOCUMENT_BYTES as usize + 1])
+            .expect("write oversized document");
+        assert_eq!(
+            read_document_binding(canonical.to_string_lossy().into_owned())
+                .await
+                .expect_err("reject oversized document"),
+            "document exceeds the 8 MiB limit"
+        );
+
+        let docx = root.join("manual.docx");
+        for (xml, expected) in [
+            ("<w:p><w:t>한글 Alpha</w:t><w:tab/><w:t>Beta</w:t></w:p>", "한글 Alpha\tBeta\n"),
+            ("<w:p><w:t>&amp;lt; &amp;amp; &amp;gt; &amp;quot; &amp;apos; &lt;w:p&gt;</w:t></w:p>", "< &amp; > \" ' <w:p>\n"),
+        ] {
+            let file = fs::File::create(&docx).expect("create DOCX fixture");
+            let mut archive = zip::ZipWriter::new(file);
+            archive.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
+                .expect("start document.xml");
+            archive.write_all(xml.as_bytes()).expect("write DOCX XML");
+            archive.finish().expect("finish DOCX fixture");
+            assert_eq!(
+                read_document_binding(docx.to_string_lossy().into_owned())
+                    .await
+                    .expect("read DOCX document"),
+                expected
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
 
