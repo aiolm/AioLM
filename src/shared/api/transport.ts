@@ -9,9 +9,11 @@ const layoutReads = new Set([
 
 export const NATIVE_RUNTIME_ERROR = "Native desktop runtime is unavailable. Run the packaged aiolm desktop app instead of the browser preview.";
 
-export function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+export type LayoutReadPhase = "initial" | "refresh";
+
+export function invoke<T>(command: string, args?: Record<string, unknown>, phase: LayoutReadPhase = "initial"): Promise<T> {
   if (!isNativeRuntimeAvailable()) return Promise.reject(new Error(NATIVE_RUNTIME_ERROR));
-  return layoutReads.has(command)
+  return phase !== "refresh" && layoutReads.has(command)
     ? trackInitialRead(() => tauriInvoke<T>(command, args))
     : tauriInvoke<T>(command, args);
 }

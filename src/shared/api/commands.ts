@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR } from "./transport.ts";
+import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase } from "./transport.ts";
 import type { HfInstalledFile, HfSortKey } from "./models.ts";
 import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
@@ -96,11 +96,11 @@ export const applyRequestSettings = (cfg: AppConfig, sessionId = 'default') => i
 export const stopServer = () => invoke<void>("stop_server");
 export const unloadModel = () => invoke<void>("unload_model");
 export const serverActivity = (phase: "start" | "end" | "touch", sessionId?: string) => invoke<void>("server_activity", { phase, ...(sessionId ? { sessionId } : {}) });
-export const serverStatus = () => invoke<ServerStatus>("server_status");
+export const serverStatus = (phase: LayoutReadPhase = "initial") => invoke<ServerStatus>("server_status", undefined, phase);
 /** The public API listener has its own lifecycle; loading or unloading a model never touches it. */
 export const startApiServer = () => invoke<ApiServerStatus>("start_api_server");
 export const stopApiServer = () => invoke<void>("stop_api_server");
-export const apiServerStatus = () => invoke<ApiServerStatus>("api_server_status");
+export const apiServerStatus = (phase: LayoutReadPhase = "initial") => invoke<ApiServerStatus>("api_server_status", undefined, phase);
 export const startAnthropicGateway = () => invoke<string>("start_anthropic_gateway");
 export const stopAnthropicGateway = () => invoke<void>("stop_anthropic_gateway");
 export const anthropicGatewayStatus = () => invoke<{ running: boolean; url?: string }>("anthropic_gateway_status");
@@ -110,7 +110,7 @@ export const runPerformanceBench = (cfg: AppConfig, request: PerformanceBenchmar
 export const benchCancel = () => invoke<void>("bench_cancel");
 
 /** Multi-session facade. The default legacy commands remain the source of truth for id=default. */
-export const sessionList = () => invoke<SessionStatus[] | SessionListResult>("session_list");
+export const sessionList = (phase: LayoutReadPhase = "initial") => invoke<SessionStatus[] | SessionListResult>("session_list", undefined, phase);
 export const sessionSummaryList = () => invoke<SessionSummary[]>("session_summary_list");
 export const sessionStart = (sessionId: string, cfg: AppConfig, stopExisting?: boolean) =>
   withSessionTransition(() => invoke<SessionStatus>("session_start", { sessionId, cfg, stopExisting }));

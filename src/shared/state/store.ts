@@ -5,6 +5,7 @@ import { isLifecycleCancellation, lifecycleErrorMessage, nextPollDelay, shouldAu
 import { normalizeAppConfig, normalizeConfigPatch } from "./storeConfig";
 import { withManualOverrides } from "../config/tuningDefaults";
 import { migrateProfileLibrary } from "../config/profileMigration";
+import { trackInitialRead } from "../ui/initialLayout";
 
 export interface AppStore {
   cfg: api.AppConfig | null;
@@ -89,6 +90,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const saveConfigQueue = useRef<((patch: ConfigPatch<api.AppConfig>) => Promise<api.AppConfig>) | null>(null);
   const saveMutex = useRef<Promise<unknown>>(Promise.resolve());
   const pollInFlight = useRef(false);
+  // The initial attempt exposes either data or its error; later polls refresh it.
+  const initialStatusSettled = useRef(false);
   const operationInFlight = useRef(false);
   const autoStartConsumedRef = useRef(false);
   const statusGeneration = useRef(0);
@@ -125,7 +128,8 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     pollInFlight.current = true;
     const generation = statusGeneration.current;
     try {
-      const next = await api.serverStatus();
+      const read = () => api.serverStatus("refresh");
+      const next = await (initialStatusSettled.current ? read() : trackInitialRead(read));
       if (generation === statusGeneration.current && !operationInFlight.current) setStatus((current) => sameServerStatus(current, next) ? current : next);
       if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(null);
       pollFailures.current = 0;
@@ -133,6 +137,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       pollFailures.current += 1;
       if (generation === statusGeneration.current && !operationInFlight.current) setStatusPollError(`Model status unavailable: ${errorMessage(error)}`);
     } finally {
+      initialStatusSettled.current = true;
       pollInFlight.current = false;
     }
   }, []);
