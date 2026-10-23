@@ -10,18 +10,19 @@ src/
   app/                      Bootstrap, app shell, navigation, shell tests
   features/
     chat/                   Conversations, attachments, document retrieval, streaming
-    models/                 GGUF library and remembered per-model settings
-    model-settings/         Shared model selection and execution settings editor
+    models/                 Local model library and remembered per-model settings
+    model-settings/         Runtime, profile and execution-option editing journey
     discover/               Hugging Face search and download UI
-    runtimes/               Runtime installation and device assignment UI
+    runtimes/               Engine registration, installation and device assignment UI
     sessions/               Independent running sessions
     tuning/                 Configuration editors and their controllers
-    profiles/               Saved execution profiles
     projects/               Project bindings and persistence
     bench/                  Benchmark UI and result records
     developer/              API server and diagnostics views
     mcp/                    Tool servers and approval policy
     settings/               User preference editor
+    onboarding/             First-launch setup and recovery
+    updates/                Application update workflow
   shared/
     api/                    Native/HTTP boundary and wire types
     config/                 Defaults, option catalogs, validation, preferences
@@ -120,12 +121,14 @@ and the distinction from the standalone CLI.
   Use explicit imports when features collaborate; avoid feature-wide barrels that
   accidentally load unrelated screens or create import cycles.
 - Production `shared` modules do not import `app`, `features`, or test helpers.
-  ESLint checks these boundaries for static imports, including type imports.
+  ESLint checks these boundaries for static imports, including type imports,
+  and checks inline `import(...).Type` references in production shared modules.
 - Shared UI owns its input contracts. For example, `TooltipContent` belongs to
   `Tooltip`, while tuning metadata supplies values that implement that contract.
-- Use `import type` for contracts. Chat attachment, chunk and citation types live
-  in `features/chat/chatTypes.ts` so history and document utilities do not depend
-  on each other.
+- Use `import type` for contracts. Media attachment/preparation contracts live
+  in `shared/api/mediaTypes.ts`, allowing native commands and chat to share them
+  without a shared-to-feature dependency. `features/chat/chatTypes.ts` retains
+  compatible type exports and owns document, chunk and citation types.
 
 ## Frontend API
 
@@ -136,6 +139,7 @@ Internal API modules import their dependencies directly, never through the facad
 | Module | Responsibility |
 | --- | --- |
 | `types.ts` | Native and HTTP request/response contracts |
+| `mediaTypes.ts` | Shared attachment, media preparation and video-frame contracts |
 | `transport.ts` | Native-runtime check, invoke wrapper and native initial-read tracking |
 | `http.ts` | UI-independent bounded responses, cancellation, deadlines and typed HTTP failures |
 | `commands.ts` | Tauri commands and event subscriptions |
@@ -147,6 +151,12 @@ Internal API modules import their dependencies directly, never through the facad
 The bootstrap migrates storage **before** dynamically importing the application,
 preferences and translation catalogs. Preserve that ordering: some modules read
 stored values during initialization. `App` also keeps feature screens lazy-loaded.
+
+The app store publishes its configuration reference, local publication count and
+React snapshot together through one synchronous operation. That count gates
+first-load auto-start and is independent of the persisted profile-library revision.
+The save queue still owns optimistic publication, accepted responses and rollback;
+the outer save serialization keeps conflict reload and retry in the same operation.
 
 ## Native command layer
 
