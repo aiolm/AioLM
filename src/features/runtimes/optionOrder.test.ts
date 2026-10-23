@@ -340,3 +340,128 @@ describe('expanded saved occurrences', () => {
     expect(values).toEqual(changed);
   });
 });
+
+describe('imported values without an orderable position', () => {
+  it('keeps full mixed launch, request, positional and unknown output with independent shallow rows', () => {
+    const current: OptionSchema = { ...schema, options: [
+      ...schema.options,
+      option('request', { target: 'request', spellings: [{ flag: '--request' }, { flag: '-r' }] }),
+      option('position', { position: 0, spellings: [] }), option('noFlag', { spellings: [] }),
+    ] };
+    const cell = { nested: ['shared-cell'] };
+    const shared = [cell];
+    const saved = { alpha: 'old-A', beta: 'B', request: 'old-R', position: 'old-slot', port: 99, untouched: { nested: ['kept'] } };
+    const imported: Parameters<typeof applyPlan>[2] = { plan: [
+      { key: 'request', spelling: '-r', values: ['R1'] },
+      { key: 'alpha', spelling: '-a', values: ['A1'] },
+      { key: 'position', spelling: null, values: [] },
+      { key: 'unknown', spelling: '--first', values: shared },
+      { key: 'request', spelling: '--request', values: ['R2'] },
+      { key: 'alpha', spelling: '--alpha', values: ['A2'] },
+      { key: 'unknown', spelling: '--last', values: shared },
+      { key: 'port', spelling: '--port', values: [0] },
+      { key: 'noFlag', values: ['literal'] },
+      // The helper already accepts an iterable non-array row; do not add validation here.
+      { key: 'legacy', spelling: null, values: 'ab' as unknown as unknown[] },
+    ] };
+    const before = structuredClone({ saved, imported });
+    const result = applyPlan(current, saved, imported);
+    expect(result).toEqual({
+      alpha: { spelling: '-a', occurrences: [['A1'], ['A2']] }, beta: 'B',
+      request: { spelling: null, occurrences: [['R1'], ['R2']] },
+      position: { spelling: null, occurrences: [[]] }, port: 0, untouched: { nested: ['kept'] },
+      unknown: { spelling: '--last', occurrences: [[cell], [cell]] }, noFlag: 'literal',
+      legacy: { spelling: null, occurrences: [['a', 'b']] },
+      [ORDER_KEY]: { version: 1, occurrences: [{ key: 'beta' }, { key: 'alpha', spelling: '-a' }, { key: 'alpha' }] },
+    });
+    const request = (result.request as { occurrences: unknown[][] }).occurrences;
+    const position = (result.position as { occurrences: unknown[][] }).occurrences;
+    const unknownRows = (result.unknown as { occurrences: unknown[][] }).occurrences;
+    expect(new Set([...request, ...position, ...unknownRows]).size).toBe(5);
+    expect(unknownRows[0]).not.toBe(shared);
+    expect(unknownRows[1]).not.toBe(shared);
+    expect(unknownRows[0][0]).toBe(cell);
+    expect(unknownRows[1][0]).toBe(cell);
+    request[0][0] = 'output-only';
+    unknownRows[0].push('output-only');
+    expect(request[1]).toEqual(['R2']);
+    expect(unknownRows[1]).toEqual([cell]);
+    expect({ saved, imported }).toEqual(before);
+  });
+
+  it('uses the last item spelling normalized against its own polarity and refreshes rows on another call', () => {
+    const current: OptionSchema = { ...schema, options: [option('feature', {
+      target: 'request', kind: known('boolean'), arity: known({ min: 0, max: 0 }),
+      spellings: [{ flag: '--feature', polarity: true }, { flag: '--no-feature', polarity: false }, { flag: '--disable-feature', polarity: false }],
+    })] };
+    const saved = { untouched: 'kept' };
+    const imported: Parameters<typeof applyPlan>[2] = { plan: [
+      { key: 'feature', spelling: '--feature', values: [true] },
+      { key: 'feature', spelling: '--disable-feature', values: [false] },
+    ] };
+    const before = structuredClone({ saved, imported });
+    const first = applyPlan(current, saved, imported);
+    expect(first).toEqual({ untouched: 'kept', feature: { spelling: '--disable-feature', occurrences: [[true], [false]] } });
+    expect({ saved, imported }).toEqual(before);
+    imported.plan[0].values[0] = false;
+    imported.plan[1].values[0] = true;
+    imported.plan[1].spelling = '--feature';
+    const changed = structuredClone({ saved, imported });
+    const second = applyPlan(current, saved, imported);
+    expect(second).toEqual({ untouched: 'kept', feature: { spelling: null, occurrences: [[false], [true]] } });
+    const firstRows = (first.feature as { occurrences: unknown[][] }).occurrences;
+    const secondRows = (second.feature as { occurrences: unknown[][] }).occurrences;
+    expect(secondRows.every((row, index) => row !== firstRows[index])).toBe(true);
+    secondRows[0].push('output-only');
+    expect(secondRows[1]).toEqual([true]);
+    expect(first).toEqual({ untouched: 'kept', feature: { spelling: '--disable-feature', occurrences: [[true], [false]] } });
+    expect({ saved, imported }).toEqual(changed);
+  });
+
+  it('keeps empty and all-orderable plans plus single scalar and empty request rows', () => {
+    const current: OptionSchema = { ...schema, options: [...schema.options, option('request', { target: 'request' })] };
+    const saved = { alpha: 'old-A', request: 'old-R', untouched: 'kept' };
+    const before = structuredClone(saved);
+    expect(applyPlan(current, saved, { plan: [] })).toEqual(saved);
+    expect(applyPlan(current, saved, { plan: [
+      { key: 'alpha', spelling: '--alpha', values: ['new-A'] }, { key: 'beta', spelling: '--beta', values: ['new-B'] },
+    ] })).toEqual({ alpha: 'new-A', beta: 'new-B', request: 'old-R', untouched: 'kept' });
+    expect(applyPlan(current, saved, { plan: [{ key: 'request', spelling: '--request', values: [null] }] }))
+      .toEqual({ alpha: 'old-A', request: null, untouched: 'kept' });
+    expect(applyPlan(current, saved, { plan: [{ key: 'request', values: [] }] }))
+      .toEqual({ alpha: 'old-A', request: { spelling: null, occurrences: [[]] }, untouched: 'kept' });
+    expect(saved).toEqual(before);
+  });
+
+  it('keeps refusal, unsafe integer, row-copy and per-item normalization error priority atomic', () => {
+    const malformedSwitch = option('switch', {
+      target: 'request', kind: known('boolean'), arity: known({ min: 0, max: 0 }),
+      spellings: null as unknown as OptionSchemaDefinition['spellings'],
+    });
+    const current: OptionSchema = { ...schema, options: [malformedSwitch, option('count', { target: 'request', kind: known('integer') })] };
+    const saved = { untouched: { nested: ['kept'] } };
+    const imported: Parameters<typeof applyPlan>[2] = { plan: [
+      { key: 'switch', spelling: '--switch', values: [true] },
+      { key: 'other', values: null as unknown as unknown[] },
+      { key: 'switch', spelling: '--switch', values: [false] },
+    ] };
+    const before = structuredClone({ saved, imported });
+    // First switch rows copy successfully, then its normalization fails before
+    // the later key's malformed row is copied. Eager copying changes this error.
+    expect(() => applyPlan(current, saved, imported)).toThrow(/find/);
+    expect({ saved, imported }).toEqual(before);
+    imported.plan[2].values = null as unknown as unknown[];
+    const malformedRows = structuredClone({ saved, imported });
+    // All rows of the first key are copied before that first item normalizes.
+    expect(() => applyPlan(current, saved, imported)).toThrow(/iterable/);
+    expect({ saved, imported }).toEqual(malformedRows);
+    imported.plan.push({ key: 'count', values: [9007199254740992] });
+    const unsafe = structuredClone({ saved, imported });
+    expect(() => applyPlan(current, saved, imported)).toThrow('Review the original pasted command before applying.');
+    expect({ saved, imported }).toEqual(unsafe);
+    const refused = { ...saved, [ORDER_KEY]: { version: 2, occurrences: [] } };
+    const refusedBefore = structuredClone({ refused, imported });
+    expect(() => applyPlan(current, refused, imported)).toThrow('saved option order needs review before importing');
+    expect({ refused, imported }).toEqual(refusedBefore);
+  });
+});

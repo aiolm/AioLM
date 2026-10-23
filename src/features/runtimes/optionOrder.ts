@@ -282,9 +282,21 @@ export function applyPlan(schema: OptionSchema, values: Record<string, unknown>,
   const next = writePlan(schema, values, [...kept, ...incoming]);
   // Imported values without a command-line position (requests, positional
   // slots) are grouped as before.
+  // Index references first; copy each group's rows at its original first use.
+  let grouped: Map<string, { items: PlannedOccurrence[]; rows?: unknown[][] }> | undefined;
   for (const item of imported.plan) {
     if (orderable(options.get(item.key))) continue;
-    const rows = imported.plan.filter(other => other.key === item.key).map(other => [...other.values]);
+    if (!grouped) {
+      grouped = new Map();
+      for (const other of imported.plan) {
+        if (orderable(options.get(other.key))) continue;
+        const group = grouped.get(other.key);
+        if (group) group.items.push(other);
+        else grouped.set(other.key, { items: [other] });
+      }
+    }
+    const group = grouped.get(item.key)!;
+    const rows = group.rows ??= group.items.map(other => [...other.values]);
     next[item.key] = writeStored(rows, normalizeSpelling(options.get(item.key), item.spelling, item.values));
   }
   return next;
