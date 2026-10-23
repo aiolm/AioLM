@@ -275,7 +275,7 @@ export default function SettingsPanel({ preferences, update, reset, store, updat
             : <Row id="settings-auto-stop" label={t("settings.autoStop")} description={t("settings.autoStopDesc")}>{bool("settings-auto-stop", preferences.server.autoStopOnExit, (value) => patch({ server: { ...preferences.server, autoStopOnExit: value } }))}</Row>}
           {isNativeRuntimeAvailable() && store?.cfg && <Row id="settings-close-to-tray" label={trayCopy.label} description={trayCopy.description}>
             <div>
-              <Switch id="settings-close-to-tray" checked={store.cfg.close_to_tray === true} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
+              <Switch id="settings-close-to-tray" aria-describedby="settings-close-to-tray-description" checked={store.cfg.close_to_tray === true} disabled={traySaving || store.busy} onChange={(value) => { void saveCloseToTray(value); }} />
               {trayError && <FeedbackBanner tone="error" className="mt-2">{normalizeDisplayText(trayError)}</FeedbackBanner>}
             </div>
           </Row>}
