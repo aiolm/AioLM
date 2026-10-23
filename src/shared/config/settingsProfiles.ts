@@ -171,13 +171,19 @@ export function profileDeletionReason(library: SettingsProfileLibrary, id: strin
 
 export function deleteSettingsProfile(source: SettingsProfileLibrary, id: string): SettingsProfileLibrary {
   const library = ensureProfileLibrary(source);
-  if (profileDeletionReason(library, id)) throw new Error('The default profile cannot be deleted. Choose another default profile first.');
+  if (Object.values(library.provider_defaults ?? {}).includes(id)) throw new Error('The default profile cannot be deleted. Choose another default profile first.');
   const removed = profileDeletionIds(library, id);
   if (!removed.size) throw new Error('This profile is no longer available.');
   const entries = library.entries.filter(entry => !removed.has(entry.id));
+  let fallbacks: Map<ProviderId, SettingsProfile> | undefined;
   const applied = Object.fromEntries(Object.entries(library.applied).map(([key, application]) => {
     if (!application.profile_id || !removed.has(application.profile_id)) return [key, application];
-    const fallback = defaultSettingsProfileEntry(library, application.provider ?? 'llama.cpp');
+    const provider = application.provider ?? 'llama.cpp';
+    let fallback = fallbacks?.get(provider);
+    if (!fallback) {
+      fallback = defaultSettingsProfileEntry(library, provider);
+      (fallbacks ??= new Map()).set(provider, fallback);
+    }
     const cfg = applySettingsProfile(profileApplicationConfig(application), fallback);
     return [key, materializeProfileApplication(cfg, fallback.system_prompt ?? application.system_prompt, fallback)];
   }));

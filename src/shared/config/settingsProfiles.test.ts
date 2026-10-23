@@ -136,6 +136,98 @@ describe('settings profiles', () => {
     expect(canDeleteSettingsProfile(next, other.id)).toBe(false);
   });
 
+  const deletionFixture = (provider: 'llama.cpp' | 'vllm' | 'custom.synthetic') => {
+    const fallbackOptions = { synthetic_extra: { items: ['끝', 'first', '끝'], enabled: false, count: 0 } };
+    const fallback: SettingsProfile = { provider, id: 'synthetic-fallback', name: 'Fallback', scope: 'global', revision: 7,
+      legacy: true, coverage: ['provider_options', 'request_timeout_seconds', 'sleep_idle_seconds'],
+      legacy_runtime: { active_runtime: 'synthetic-history', synthetic_extra: { retained: ['second', 'first'] } },
+      settings: { provider_options: { [provider]: fallbackOptions }, request_timeout_seconds: 17, sleep_idle_seconds: 0 },
+      system_prompt: '  Fallback prompt\n' };
+    const discarded: SettingsProfile = { ...fallback, id: 'synthetic-discarded', name: 'Discarded', revision: 3 };
+    const cfg = { ...structuredClone(testConfig), active_provider: provider, runtime_defaults: [],
+      gpu: { gpu_ids: [], main_gpu: null, split_mode: 'none' as const, tensor_split: [], draft_gpu_id: null },
+      provider_options: { [provider]: { synthetic_extra: { items: ['old'] } } } };
+    const affected = [profileTargetKey('/synthetic/model-0', 'default', provider), 'session:first',
+      profileTargetKey('/synthetic/model-2', 'default', provider), 'session:second'];
+    const applications = Object.fromEntries(affected.map((key, index) => [key,
+      materializeProfileApplication({ ...cfg, active_model: `/synthetic/model-${index}` }, `Saved prompt ${index}`, discarded)]));
+    const library = ensureProfileLibrary({ ...emptyProfileLibrary(), revision: 11,
+      entries: provider === 'llama.cpp' ? [discarded, fallback] : [discarded, defaultSettingsProfile(), fallback],
+      default_profile_id: provider === 'llama.cpp' ? fallback.id : defaultSettingsProfile().id,
+      provider_defaults: { [provider]: fallback.id }, provider_recent: { [provider]: discarded.id },
+      applied: { ...applications, untouched: materializeProfileApplication(cfg, 'Keep prompt', fallback) } });
+    return { provider, library, discarded, fallback, fallbackOptions, affected };
+  };
+
+  it.each(['llama.cpp', 'vllm', 'custom.synthetic'] as const)('preserves complete %s deletion results and independent target snapshots', provider => {
+    const { library, discarded, fallback, fallbackOptions, affected } = deletionFixture(provider);
+    const before = structuredClone(library);
+    const expectedApplications = Object.fromEntries(Object.entries(before.applied).map(([key, application]) => affected.includes(key)
+      ? [key, { model: application.model, provider, profile_id: fallback.id, profile_name: fallback.name, profile_revision: fallback.revision,
+        settings: { ...application.settings, provider_options: { [provider]: fallbackOptions }, request_timeout_seconds: 17, sleep_idle_seconds: 0 },
+        system_prompt: '  Fallback prompt\n' }]
+      : [key, application]));
+    const next = deleteSettingsProfile(library, discarded.id);
+    expect(next).toEqual({ ...before, entries: before.entries.filter(entry => entry.id !== discarded.id),
+      applied: expectedApplications, provider_recent: {} });
+    expect(Object.keys(next.applied)).toEqual(Object.keys(before.applied));
+    expect(next.entries.map(entry => entry.id)).toEqual(before.entries.filter(entry => entry.id !== discarded.id).map(entry => entry.id));
+    expect(library).toEqual(before);
+    expect(next.applied.untouched).toBe(library.applied.untouched);
+    const first = next.applied[affected[0]].settings.provider_options![provider] as typeof fallbackOptions;
+    const second = next.applied[affected[1]].settings.provider_options![provider] as typeof fallbackOptions;
+    expect(first).not.toBe(second);
+    first.synthetic_extra.items.push('output-only');
+    expect(second).toEqual(fallbackOptions);
+    expect(library).toEqual(before);
+
+    const latestFallback = library.entries.find(entry => entry.id === fallback.id)!;
+    const latestOptions = latestFallback.settings.provider_options![provider] as typeof fallbackOptions;
+    latestOptions.synthetic_extra.items.push('fresh-input');
+    latestFallback.revision += 1;
+    latestFallback.system_prompt = 'Fresh prompt';
+    const fresh = deleteSettingsProfile(library, discarded.id);
+    expect(fresh.applied[affected[0]]).toMatchObject({ profile_revision: 8, system_prompt: 'Fresh prompt',
+      settings: { provider_options: { [provider]: { synthetic_extra: { items: ['끝', 'first', '끝', 'fresh-input'] } } } } });
+  });
+
+  it('keeps per-provider fallback synthesis for plain legacy applications whose provider has no entries', () => {
+    const { library, discarded } = deletionFixture('llama.cpp');
+    const provider = 'custom.missing' as const;
+    const saved = { provider, model: '/synthetic/missing', profile_id: discarded.id, profile_name: discarded.name,
+      profile_revision: discarded.revision, system_prompt: 'Saved prompt',
+      settings: { provider_options: { [provider]: { synthetic_extra: ['old'] } }, request_timeout_seconds: 31, sleep_idle_seconds: -1 } };
+    library.applied['session:missing-first'] = saved;
+    library.applied['session:missing-second'] = { ...structuredClone(saved), model: '/synthetic/missing-second' };
+    library.applied.anonymous = { ...structuredClone(saved), profile_id: undefined };
+    const before = structuredClone(library);
+    const next = deleteSettingsProfile(library, discarded.id);
+    for (const key of ['session:missing-first', 'session:missing-second']) {
+      expect(next.applied[key]).toEqual({ model: before.applied[key].model, provider,
+        profile_id: 'profile-default-custom.missing', profile_name: 'Default', profile_revision: 1,
+        settings: { provider_options: { [provider]: {} }, request_timeout_seconds: 31, sleep_idle_seconds: -1 }, system_prompt: '' });
+    }
+    expect(next.entries.some(entry => entry.provider === provider)).toBe(false);
+    expect(next.applied.anonymous).toBe(library.applied.anonymous);
+    expect(next.applied['session:missing-first'].settings.provider_options![provider])
+      .not.toBe(next.applied['session:missing-second'].settings.provider_options![provider]);
+    expect(library).toEqual(before);
+  });
+
+  it('retains migration failure priority before default and missing-profile deletion errors', () => {
+    const { library, discarded, fallback } = deletionFixture('llama.cpp');
+    expect(() => deleteSettingsProfile(library, fallback.id)).toThrow('The default profile cannot be deleted. Choose another default profile first.');
+    expect(() => deleteSettingsProfile(library, 'missing')).toThrow('This profile is no longer available.');
+    const application = { ...library.applied['session:first'], model: '/synthetic/Case.gguf' };
+    const conflicting = { ...library, applied: { 'model:/synthetic/case.gguf': application,
+      'model:/synthetic/Case.gguf': { ...application, system_prompt: 'Conflicting prompt' } } };
+    const before = structuredClone(conflicting);
+    for (const id of [fallback.id, discarded.id, 'missing']) {
+      expect(() => deleteSettingsProfile(conflicting, id)).toThrow('Conflicting saved settings for the same model path.');
+    }
+    expect(conflicting).toEqual(before);
+  });
+
   it('promotes a model profile in place when designated as default and detaches it from its source', () => {
     const source = { ...defaultSettingsProfile(), name: 'Chosen' };
     const copy = { ...captureProfile({ ...testConfig, ngl: 17, temperature: 0.2 }, 'Chosen', 'model', 'Chosen prompt'),
