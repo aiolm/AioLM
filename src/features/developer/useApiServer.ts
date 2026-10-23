@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../../shared/api/index";
+import type { LayoutReadPhase } from "../../shared/api/transport";
 
 export type ApiServerPending = "starting" | "stopping" | "restarting" | null;
 
@@ -34,12 +35,12 @@ export function useApiServer(fallbackPort: number, active = true) {
   const readSequence = useRef(0);
   const hasRead = useRef(false);
 
-  const refresh = useCallback(async (quiet = false) => {
+  const refresh = useCallback(async (quiet = false, phase: LayoutReadPhase = "initial") => {
     if (busy.current) return;
     const requested = generation.current;
     const read = ++readSequence.current;
     try {
-      const next = await api.apiServerStatus();
+      const next = await api.apiServerStatus(phase);
       if (requested === generation.current && read === readSequence.current) setStatus(next);
     } catch (cause) {
       // A background read that fails keeps the last known status; only an explicit one reports.
@@ -58,11 +59,12 @@ export function useApiServer(fallbackPort: number, active = true) {
     const schedule = () => {
       if (disposed) return;
       timer = window.setTimeout(async () => {
-        if (isVisible()) await refresh(true);
+        if (isVisible()) await refresh(true, "refresh");
         schedule();
       }, POLL_INTERVAL_MS);
     };
-    const onVisibility = () => { if (isVisible()) void refresh(true); };
+    // Background re-reads keep the displayed page; only its activation read prepares it.
+    const onVisibility = () => { if (isVisible()) void refresh(true, "refresh"); };
     document.addEventListener("visibilitychange", onVisibility);
     schedule();
     return () => {
