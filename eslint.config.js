@@ -4,6 +4,11 @@ import reactHooks from "eslint-plugin-react-hooks";
 import jsxA11y from "eslint-plugin-jsx-a11y";
 import tseslint from "typescript-eslint";
 
+const nativeDropdownRestriction = {
+  selector: "JSXOpeningElement[name.name=/^(select|datalist)$/]",
+  message: "Use the shared CustomSelect for dropdowns (its editable variant for free-text suggestions) instead of native <select> or <datalist>.",
+};
+
 export default [
   {
     ignores: ["dist/**", "packages/*/dist/**", "**/node_modules/**", "src-tauri/**", "*.config.js", "scripts/build-cli.mjs"],
@@ -43,10 +48,7 @@ export default [
     files: ["src/**/*.tsx"],
     ignores: ["**/*.test.tsx", "src/testing/**"],
     rules: {
-      "no-restricted-syntax": ["error", {
-        selector: "JSXOpeningElement[name.name=/^(select|datalist)$/]",
-        message: "Use the shared CustomSelect for dropdowns (its editable variant for free-text suggestions) instead of native <select> or <datalist>.",
-      }],
+      "no-restricted-syntax": ["error", nativeDropdownRestriction],
     },
   },
   {
@@ -73,6 +75,10 @@ export default [
     files: ["src/shared/**/*.{ts,tsx}"],
     ignores: ["**/*.test.{ts,tsx}"],
     rules: {
+      "no-restricted-syntax": ["error", nativeDropdownRestriction, {
+        selector: "TSImportType[source.value=/(^|\\/)(app|features|testing)\\//i]",
+        message: "Shared modules must stay independent of application composition, features, and test helpers.",
+      }],
       "no-restricted-imports": ["error", {
         patterns: [{
           group: ["**/app/**", "**/features/**", "**/testing/**"],

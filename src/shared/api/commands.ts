@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke, isNativeRuntimeAvailable, NATIVE_RUNTIME_ERROR, type LayoutReadPhase } from "./transport.ts";
 import type { HfInstalledFile, HfSortKey } from "./models.ts";
+import type { ImageAttachment, PreparedVideoFrame } from "./mediaTypes.ts";
 import { withSessionTransition } from '../state/sessionTransitions.ts';
 import type {
   ApiServerStatus, AppConfig, DeviceReport, ResourceEstimate,
@@ -38,7 +39,7 @@ export const hfDownloadSnapshot = (repoId: string, modelsDir: string) => invoke<
 export const pickAttachment = () => invoke<string | null>("pick_attachment");
 export const pickImage = () => invoke<string | null>("pick_image");
 export const readImageData = (path: string) => invoke<string>("read_image_data", { path });
-export const importMedia = (path: string) => invoke<import('../../features/chat/chatTypes').ImageAttachment>('import_media', { path });
+export const importMedia = (path: string) => invoke<ImageAttachment>('import_media', { path });
 export const resolveMedia = (reference: string, providerId: import('./providers').ProviderId) => invoke<import('./types').ChatContentPart>('resolve_media', { reference, providerId });
 export interface MediaTranscription { text: string; sessionId: string; model: string }
 async function mediaOperation<T>(command: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
@@ -57,7 +58,7 @@ async function mediaOperation<T>(command: string, args: Record<string, unknown>,
 /** Uses one explicitly selected local speech session and immutable audio. */
 export const transcribeMedia = (reference: string, sessionId: string, signal?: AbortSignal) =>
   mediaOperation<MediaTranscription>('transcribe_media', { reference, sessionId }, signal);
-export interface VideoFrames { frames: import('../../features/chat/chatTypes').PreparedVideoFrame[] }
+export interface VideoFrames { frames: PreparedVideoFrame[] }
 /** Samples local video into immutable images; never reads a caller URL. */
 export const extractVideoFrames = (reference: string, signal?: AbortSignal, maxFrames = 4) =>
   mediaOperation<VideoFrames>('extract_video_frames', { reference, maxFrames }, signal);
