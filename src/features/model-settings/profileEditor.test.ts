@@ -332,3 +332,101 @@ describe('profile removal membership', () => {
     }
   });
 });
+
+describe('applied profile name refresh boundaries', () => {
+  it('preserves first literal-id matches and full snapshots across independent name and entry-order changes', () => {
+    for (const [firstProvider, secondProvider, firstName, secondName] of [
+      ['vllm', 'llama.cpp', 'First name', 'Later duplicate'],
+      ['llama.cpp', 'vllm', 'Fresh first name', 'Earlier duplicate'],
+    ] as const) {
+      const { current, edit } = fixture();
+      const original = edit.library.entries[0];
+      const literal = { ...structuredClone(original), id: '__proto__', name: 'Literal key' };
+      edit.library.entries = [
+        { ...structuredClone(original), provider: firstProvider, name: firstName },
+        { ...structuredClone(original), provider: secondProvider, name: secondName },
+        literal, edit.library.entries[1],
+      ];
+      edit.library.applied['session:literal'] = { ...structuredClone(edit.application), model: 'literal.gguf',
+        profile_id: literal.id, profile_name: 'Old literal name', profile_revision: 0, system_prompt: ' Keep literal prompt\n' };
+      const before = structuredClone({ current, edit });
+      const expected = structuredClone(ensureProfileLibrary(edit.library));
+      expected.applied[profileTargetKey(current.active_model)].profile_name = firstName;
+      expected.applied[profileTargetKey('other.gguf')].profile_name = firstName;
+      expected.applied['session:literal'].profile_name = 'Literal key';
+      expected.revision = current.settings_profiles.revision + 1;
+      expected.legacy_imported = true;
+      const next = mergeProfileEditor(current, edit);
+      expect(next).toEqual(expected);
+      expect({ current, edit }).toEqual(before);
+    }
+  });
+
+  it('preserves edit and target isolation while retaining the latest-only application settings boundary', () => {
+    const { current, edit, other } = fixture();
+    const activeKey = profileTargetKey(current.active_model);
+    const latestKey = profileTargetKey('latest.gguf');
+    const latestOnly = { ...structuredClone(other), model: 'latest.gguf', profile_revision: 0, system_prompt: 'Latest-only prompt\n' };
+    current.settings_profiles.applied[latestKey] = latestOnly;
+    edit.library.applied[activeKey].system_prompt = 'Edit takes precedence\n';
+    edit.library.applied[activeKey].settings.provider_options = {
+      'custom.engine': { synthetic_unknown: { order: [' second ', '\n', 'first'], enabled: false } },
+    };
+    edit.application = { ...edit.application, profile_revision: 0, system_prompt: 'Target prompt\n', settings: {
+      ...edit.application.settings, chat_options: { stop: [' target ', '\n'] },
+      provider_options: { 'custom.engine': { synthetic_unknown: { order: ['two', 'one'] } } },
+    } };
+    const before = structuredClone({ current, edit });
+    const expected = structuredClone(ensureProfileLibrary(edit.library));
+    expected.applied = { ...expected.applied, [latestKey]: structuredClone(latestOnly), 'session:work': structuredClone(edit.application) };
+    for (const application of Object.values(expected.applied)) application.profile_name = 'Shared';
+    expected.revision = current.settings_profiles.revision + 1;
+    expected.legacy_imported = true;
+    const next = mergeProfileEditor(current, edit, 'work');
+    expect(next).toEqual(expected);
+    expect(next.applied[activeKey]).not.toBe(edit.library.applied[activeKey]);
+    expect(next.applied[activeKey].settings).not.toBe(edit.library.applied[activeKey].settings);
+    expect(next.applied['session:work'].settings).not.toBe(edit.application.settings);
+    expect(next.applied[latestKey]).not.toBe(latestOnly);
+    expect(next.applied[latestKey].settings).toBe(latestOnly.settings);
+    expect(next.entries[0]).not.toBe(edit.library.entries[0]);
+    next.entries[0].settings.temperature = 1.75;
+    (next.applied['session:work'].settings.chat_options!.stop as string[]).push('output only');
+    expect({ current, edit }).toEqual(before);
+  });
+
+  it('preserves ordered errors, invalid final references and an unused invalid selected application', () => {
+    const priorities: Array<{ mutate: (edit: ProfileEditorResult) => void; error: string }> = [
+      { mutate: edit => { edit.baseRevision = 3; edit.library.entries = []; edit.saveMode = 'all'; edit.application.profile_id = 'missing'; },
+        error: 'Profiles changed elsewhere. Reopen settings to review the latest profiles.' },
+      { mutate: edit => { edit.library.entries = []; edit.saveMode = 'all'; edit.application.profile_id = 'missing'; },
+        error: 'At least one profile must remain.' },
+      { mutate: edit => { edit.saveMode = 'all'; edit.application.profile_id = 'missing'; edit.library.applied[profileTargetKey(testConfig.active_model)].profile_id = 'also-missing'; },
+        error: 'This profile is no longer available.' },
+    ];
+    for (const { mutate, error } of priorities) {
+      const { current, edit } = fixture();
+      mutate(edit);
+      const before = structuredClone({ current, edit });
+      expect(() => mergeProfileEditor(current, edit, 'work')).toThrow(error);
+      expect({ current, edit }).toEqual(before);
+    }
+    for (const id of [undefined, null, '', 'missing']) {
+      const { current, edit } = fixture();
+      if (id === '') edit.library.entries.push({ ...structuredClone(edit.library.entries[0]), id: '', name: 'Empty id' });
+      edit.library.applied[profileTargetKey(current.active_model)].profile_id = id as typeof edit.application.profile_id;
+      const before = structuredClone({ current, edit });
+      expect(() => mergeProfileEditor(current, edit)).toThrow('Every model must reference an available profile.');
+      expect({ current, edit }).toEqual(before);
+    }
+    const { current, edit } = fixture();
+    edit.application.profile_id = 'unused-missing';
+    const before = structuredClone({ current, edit });
+    const expected = structuredClone(ensureProfileLibrary(edit.library));
+    expected.revision = current.settings_profiles.revision + 1;
+    expected.legacy_imported = true;
+    expect(mergeProfileEditor(current, edit)).toEqual(expected);
+    expect(() => mergeProfileEditor(current, edit, 'work')).toThrow('Every model must reference an available profile.');
+    expect({ current, edit }).toEqual(before);
+  });
+});

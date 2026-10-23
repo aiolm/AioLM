@@ -74,10 +74,13 @@ export function mergeProfileEditor(current: AppConfig, edit: ProfileEditorResult
   if (sessionId !== undefined) {
     next.applied[profileTargetKey(application.model, sessionId, application.provider ?? 'llama.cpp')] = application;
   }
-  const available = new Set(next.entries.map(profile => profile.id));
+  const available = new Map<string, SettingsProfileLibrary['entries'][number]>();
+  for (const entry of next.entries) {
+    if (!available.has(entry.id)) available.set(entry.id, entry);
+  }
   for (const [key, application] of Object.entries(next.applied)) {
-    if (!application.profile_id || !available.has(application.profile_id)) throw new Error('Every model must reference an available profile.');
-    const entry = next.entries.find(profile => profile.id === application.profile_id)!;
+    const entry = application.profile_id ? available.get(application.profile_id) : undefined;
+    if (!entry) throw new Error('Every model must reference an available profile.');
     next.applied[key] = { ...application, profile_name: entry.name };
   }
   next.revision = latest.revision + 1;
