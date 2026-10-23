@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { I18nProvider } from '../../shared/i18n/i18n';
@@ -781,5 +781,185 @@ describe('catalog command import before runtime selection', () => {
     expect(await screen.findByText('Review app-managed arguments: --port 8000')).toBeVisible();
     expect(onChange).not.toHaveBeenCalled();
     imported.mockRestore();
+  });
+});
+
+describe('in-place runtime and option recovery', () => {
+  const provider = 'custom.retry';
+  const options: api.ProviderOption[] = [
+    { key: 'workers', flag: '--workers', target: 'launch', group: 'memory', kind: { type: 'integer' } },
+  ];
+  const catalog: api.ProviderDescription[] = [
+    { id: provider, engine: 'Retry engine', server: 'synthetic', availability: { supported: true, detail: '' }, options },
+  ];
+  const runtimes: api.RuntimeInstance[] = [
+    { provider, id: 'build', engine: 'Retry engine', server: 'synthetic', accelerator: 'cpu', installation: 'external', location: 'synthetic-runtime', available: true, problems: [] },
+  ];
+  const configuration = (): api.AppConfig => ({
+    ...structuredClone(testConfig), active_provider: provider, active_runtime: 'build', active_model: 'models/retained.gguf',
+    provider_options: { [provider]: { workers: 2 }, 'llama.cpp': { future: { order: ['second', 'first'] } } },
+    chat_options: { stop: ['second', 'first'] },
+    settings_profiles: {
+      version: 1, revision: 7, legacy_imported: true, default_profile_id: 'retry-profile',
+      entries: [{ provider, id: 'retry-profile', name: 'Retry profile', scope: 'global', revision: 2,
+        settings: { provider_options: { [provider]: { workers: 2 } } }, system_prompt: '  Keep instructions\n' }],
+      applied: { 'session:work': { provider, model: 'models/retained.gguf', profile_id: 'retry-profile',
+        settings: { chat_options: { stop: ['second', 'first'] } }, system_prompt: '  Keep instructions\n' } },
+    },
+  });
+
+  beforeEach(() => {
+    vi.mocked(api.providerCatalog).mockReset().mockResolvedValue(catalog);
+    vi.mocked(api.providerRuntimes).mockReset().mockResolvedValue(runtimes);
+    vi.mocked(api.providerRuntimeOptions).mockReset().mockResolvedValue(options);
+    // These are separate production reads. Neither mock calls the other.
+    vi.mocked(api.providerOptionSchema).mockReset().mockResolvedValue(effectiveSchema(options));
+    vi.mocked(api.providerOptionIssues).mockReset().mockResolvedValue([]);
+  });
+
+  function mountOptions(cfg: api.AppConfig, initiallyDisabled = false) {
+    const onChange = vi.fn(); const onInvalid = vi.fn(); const onChecking = vi.fn();
+    function RecoveryHost({ disabled }: { disabled: boolean }) {
+      const [invalid, setInvalid] = useState<Set<string>>(new Set());
+      const [checking, setChecking] = useState(true);
+      const reportInvalid = useCallback((key: string, value: boolean) => {
+        onInvalid(key, value);
+        setInvalid(previous => {
+          if (previous.has(key) === value) return previous;
+          const next = new Set(previous); if (value) next.add(key); else next.delete(key); return next;
+        });
+      }, [onInvalid]);
+      const reportChecking = useCallback((value: boolean) => { onChecking(value); setChecking(value); }, [onChecking]);
+      return <>
+        <ProviderOptions cfg={cfg} disabled={disabled} onChange={onChange} onInvalid={reportInvalid} onChecking={reportChecking} />
+        <button type="button" disabled={disabled || checking || invalid.size > 0}>Save recovery draft</button>
+      </>;
+    }
+    const view = (disabled: boolean) => <I18nProvider initialLocale="en"><RecoveryHost disabled={disabled} /></I18nProvider>;
+    const rendered = render(view(initiallyDisabled));
+    return { ...rendered, onChange, onInvalid, onChecking, setDisabled: (disabled: boolean) => rendered.rerender(view(disabled)) };
+  }
+
+  it('retries a failed inventory locally without claiming readiness or changing the selected configuration', async () => {
+    vi.mocked(api.providerRuntimes).mockRejectedValueOnce(new Error('Synthetic inventory retry failure'));
+    const cfg = configuration(); const before = structuredClone(cfg);
+    const onReady = vi.fn(); const onChange = vi.fn(); const onProvider = vi.fn();
+    const view = (disabled: boolean) => <I18nProvider initialLocale="en"><ProviderRuntimeControl cfg={cfg} disabled={disabled} onReady={onReady} onChange={onChange} onProvider={onProvider} /></I18nProvider>;
+    const rendered = render(view(true));
+    expect(await screen.findByText(/Synthetic inventory retry failure/)).toBeVisible();
+    expect(onReady).toHaveBeenLastCalledWith(null);
+    const locked = screen.getByRole('button', { name: 'Refresh' });
+    expect(locked).toBeDisabled(); fireEvent.click(locked);
+    expect(api.providerCatalog).toHaveBeenCalledTimes(1);
+    expect(api.providerRuntimes).toHaveBeenCalledTimes(1);
+    rendered.rerender(view(false));
+    let resolveCatalog!: (value: api.ProviderDescription[]) => void;
+    let resolveRuntimes!: (value: api.RuntimeInstance[]) => void;
+    vi.mocked(api.providerCatalog).mockReturnValueOnce(new Promise(resolve => { resolveCatalog = resolve; }));
+    vi.mocked(api.providerRuntimes).mockReturnValueOnce(new Promise(resolve => { resolveRuntimes = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(api.providerRuntimes).toHaveBeenCalledTimes(2));
+    expect(api.providerCatalog).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole('status')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    expect(onReady).toHaveBeenLastCalledWith(null);
+    await act(async () => { resolveCatalog(structuredClone(catalog)); });
+    expect(onReady).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole('status')).toBeVisible();
+    await act(async () => { resolveRuntimes(structuredClone(runtimes)); });
+    await waitFor(() => expect(onReady).toHaveBeenLastCalledWith(true));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /build/ })).toBeChecked();
+    expect(api.providerCatalog).toHaveBeenCalledTimes(2);
+    expect(api.providerRuntimes).toHaveBeenCalledTimes(2);
+    expect(onChange).not.toHaveBeenCalled(); expect(onProvider).not.toHaveBeenCalled();
+    expect(cfg).toEqual(before);
+  });
+
+  it.each(['declaration', 'effective'] as const)('recovers an independent %s failure only after both fresh schema reads and validation settle', async failure => {
+    const message = `Synthetic ${failure} retry failure`;
+    if (failure === 'declaration') vi.mocked(api.providerRuntimeOptions).mockRejectedValueOnce(new Error(message));
+    else vi.mocked(api.providerOptionSchema).mockRejectedValueOnce(new Error(message));
+    const cfg = configuration(); const before = structuredClone(cfg);
+    const state = mountOptions(cfg, true);
+    expect(await screen.findByText(message, { exact: false })).toBeVisible();
+    await waitFor(() => expect(state.onChecking).toHaveBeenLastCalledWith(false));
+    expect(state.onInvalid).toHaveBeenCalledWith('provider-options', true);
+    expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Clear value' })).not.toBeInTheDocument();
+    const locked = screen.getByRole('button', { name: 'Retry' });
+    expect(locked).toBeDisabled(); fireEvent.click(locked);
+    expect(api.providerRuntimeOptions).toHaveBeenCalledTimes(1);
+    expect(api.providerOptionSchema).toHaveBeenCalledTimes(1);
+    state.setDisabled(false);
+    let resolveDeclarations!: (value: api.ProviderOption[]) => void;
+    let resolveEffective!: (value: ReturnType<typeof effectiveSchema>) => void;
+    vi.mocked(api.providerRuntimeOptions).mockReturnValueOnce(new Promise(resolve => { resolveDeclarations = resolve; }));
+    vi.mocked(api.providerOptionSchema).mockReturnValueOnce(new Promise(resolve => { resolveEffective = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(api.providerRuntimeOptions).toHaveBeenCalledTimes(2));
+    expect(api.providerOptionSchema).toHaveBeenCalledTimes(2);
+    expect(api.providerCatalog).toHaveBeenCalledTimes(2);
+    expect(state.onChecking).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear value' })).not.toBeInTheDocument();
+    await act(async () => { resolveDeclarations(structuredClone(options)); });
+    expect(state.onChecking).toHaveBeenLastCalledWith(true);
+    expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeDisabled();
+    await act(async () => { resolveEffective(structuredClone(effectiveSchema(options))); });
+    await waitFor(() => expect(state.onChecking).toHaveBeenLastCalledWith(false));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeEnabled());
+    expect(screen.getByLabelText(/^--workers/)).toHaveValue('2');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(state.onInvalid).toHaveBeenLastCalledWith('provider-options', false);
+    expect(api.providerOptionIssues).toHaveBeenLastCalledWith(cfg);
+    expect(api.providerRuntimeOptions).toHaveBeenCalledTimes(2);
+    expect(api.providerOptionSchema).toHaveBeenCalledTimes(2);
+    expect(state.onChange).not.toHaveBeenCalled(); expect(cfg).toEqual(before);
+  });
+
+  it('keeps invalid input and search hidden during retry and restores them only with fresh same-runtime facts', async () => {
+    vi.mocked(api.providerRuntimeOptions).mockRejectedValueOnce(new Error('Synthetic declarations temporarily unavailable'));
+    const cfg = configuration(); const before = structuredClone(cfg);
+    const state = mountOptions(cfg);
+    expect(await screen.findByText(/Synthetic declarations temporarily unavailable/)).toBeVisible();
+    const field = await screen.findByLabelText(/^--workers/);
+    const search = screen.getByRole('searchbox', { name: 'Search options' });
+    fireEvent.change(field, { target: { value: 'invalid-number' } });
+    fireEvent.change(search, { target: { value: 'workers' } });
+    expect(field).toHaveValue('invalid-number'); expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeDisabled();
+    let resolveDeclarations!: (value: api.ProviderOption[]) => void;
+    let resolveEffective!: (value: ReturnType<typeof effectiveSchema>) => void;
+    vi.mocked(api.providerRuntimeOptions).mockReturnValueOnce(new Promise(resolve => { resolveDeclarations = resolve; }));
+    vi.mocked(api.providerOptionSchema).mockReturnValueOnce(new Promise(resolve => { resolveEffective = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(api.providerOptionSchema).toHaveBeenCalledTimes(2));
+    expect(field).toBeInTheDocument(); expect(search).toBeInTheDocument();
+    expect(field).not.toBeVisible(); expect(search).not.toBeVisible();
+    expect(field).toBeDisabled();
+    expect(field.closest('[hidden]')).toHaveAttribute('inert');
+    expect(screen.queryByRole('textbox', { name: /^--workers/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('searchbox', { name: 'Search options' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reset options to defaults' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeDisabled();
+    expect(state.onChange).not.toHaveBeenCalled(); expect(cfg).toEqual(before);
+    await act(async () => {
+      resolveDeclarations(structuredClone(options));
+      resolveEffective(structuredClone(effectiveSchema(options)));
+    });
+    await waitFor(() => expect(state.onChecking).toHaveBeenLastCalledWith(false));
+    expect(screen.getByLabelText(/^--workers/)).toBe(field);
+    expect(screen.getByRole('searchbox', { name: 'Search options' })).toBe(search);
+    expect(field).toBeVisible(); expect(field).toBeEnabled();
+    expect(field).toHaveValue('invalid-number'); expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(search).toBeVisible(); expect(search).toHaveValue('workers');
+    expect(field.closest('[hidden], [inert]')).toBeNull();
+    expect(state.onInvalid).toHaveBeenCalledWith('schema:workers', true);
+    expect(state.onInvalid).toHaveBeenLastCalledWith('provider-options', false);
+    expect(screen.getByRole('button', { name: 'Save recovery draft' })).toBeDisabled();
+    expect(state.onChange).not.toHaveBeenCalled(); expect(cfg).toEqual(before);
   });
 });

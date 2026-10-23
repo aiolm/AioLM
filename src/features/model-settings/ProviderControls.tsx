@@ -22,6 +22,7 @@ import { normalizeDisplayText } from '../../shared/lib/displayPaths';
 import { clearRuntimeOptionOverrides } from '../runtimes/runtimeOptionDefaults';
 import { runtimeDefaultsCopy } from './runtimeDefaultsCopy';
 import { useProfileRuntimeSchema } from './useProfileRuntimeSchema';
+import { profileSchemaCopy } from './profileSchemaCopy';
 import { runtimeInstanceLabel } from '../../shared/i18n/runtimeInstanceText';
 
 export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, onReady, revision = 0 }: {
@@ -32,6 +33,7 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   const flowCopy = settingsFlowCopy[locale];
   const groupId = useId();
   const inventoryRevision = useRuntimeInventoryRevision();
+  const [retryRevision, setRetryRevision] = useState(0);
   const provider = api.providerOf(cfg);
   const [descriptions, setDescriptions] = useState<api.ProviderDescription[]>([]);
   const [runtimes, setRuntimes] = useState<api.RuntimeInstance[]>([]);
@@ -40,11 +42,11 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
   useEffect(() => {
     let active = true;
     setInventoryState('loading'); setError('');
-    void Promise.all([api.providerCatalog(inventoryRevision > 0), api.providerRuntimes()]).then(([catalog, runtimes]) => {
+    void Promise.all([api.providerCatalog(inventoryRevision > 0 || retryRevision > 0), api.providerRuntimes()]).then(([catalog, runtimes]) => {
       if (active) { setDescriptions(catalog); setRuntimes(runtimes); setInventoryState('ready'); }
     }).catch(cause => { if (active) { setError(String(cause)); setInventoryState('error'); } });
     return () => { active = false; };
-  }, [revision, inventoryRevision]);
+  }, [revision, inventoryRevision, retryRevision]);
   const selected = provider === 'llama.cpp' ? cfg.active_build && cfg.active_backend ? `${cfg.active_build}-${cfg.active_backend}` : '' : cfg.active_runtime ?? '';
   const description = descriptions.find(item => item.id === provider);
   const entries = runtimes.filter(item => item.provider === provider);
@@ -76,7 +78,10 @@ export function ProviderRuntimeControl({ cfg, disabled, onProvider, onChange, on
     </fieldset>
     {description?.availability.supported === false && <FeedbackBanner tone="warning">{copy.unsupported} {description.availability.detail}</FeedbackBanner>}
     {inventoryState === 'loading' && <p role="status">{copy.loading}</p>}
-    {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+    {error && <FeedbackBanner tone="error" action={{ label: modelSettingsCopy[locale].refresh, disabled: disabled || inventoryState === 'loading', onClick: () => {
+      if (disabled || inventoryState === 'loading') return;
+      setRetryRevision(value => value + 1);
+    } }}>{error}</FeedbackBanner>}
   </div>;
 }
 
@@ -97,6 +102,12 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
   const usesEffective = !!selectedRuntime;
   const checkedSchema = useProfileRuntimeSchema(cfg, usesEffective);
   const effective = checkedSchema.view ?? null;
+  // Preserve local form drafts for this runtime without presenting old facts
+  // while its checked schema is pending or unavailable.
+  const retainedForm = useRef<{ provider: api.ProviderId; runtime: string; view: EffectiveSchema } | null>(null);
+  if (retainedForm.current && (retainedForm.current.provider !== provider || retainedForm.current.runtime !== checkedSchema.runtime)) retainedForm.current = null;
+  if (effective) retainedForm.current = { provider, runtime: checkedSchema.runtime, view: effective };
+  const formEffective = effective ?? retainedForm.current?.view ?? null;
   const defaultsCopy = runtimeDefaultsCopy[locale];
   const [defaultsRevision, setDefaultsRevision] = useState(0);
   const [defaultsRestored, setDefaultsRestored] = useState(false);
@@ -294,14 +305,16 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {runtimeNeeded && <p className="app-section-hint">{copy.choose}</p>}
     {issues.map((issue, index) => <FeedbackBanner key={`${issue.key}:${index}`} tone="error">{issue.message}</FeedbackBanner>)}
     {unknown.map(key => <FeedbackBanner key={key} tone="error">{key} <button type="button" disabled={disabled} className="app-button app-button--secondary" onClick={() => update(key, undefined)}>{copy.reset}</button></FeedbackBanner>)}
-    {effective && (editor === 'schema' || effective.schema.options.length > 0) && <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} showNoMatch={hasSchemaOptions} schema={effective.schema} values={values} scope={effective.scope} disabled={disabled}
-      onChange={next => { setDefaultsRestored(false); onChange({ provider_options: { ...cfg.provider_options, [provider]: next } }); }}
-      filter={schemaFilter}
-      inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
-      hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
-      onInvalid={onInvalid}
-      confirmSyntaxFor={option => effective.help_keys.includes(option.key)}
-      onConfirmSyntax={confirmable ? (option, syntax) => confirmSyntax(option.key, syntax) : undefined} />}
+    {formEffective && (editor === 'schema' || formEffective.schema.options.length > 0) && <div hidden={!effective} inert={!effective}>
+      <RuntimeOptionSchemaForm key={defaultsRevision} compact showAll={external} showNoMatch={hasSchemaOptions} schema={formEffective.schema} values={values} scope={formEffective.scope} disabled={disabled || !effective}
+        onChange={next => { setDefaultsRestored(false); onChange({ provider_options: { ...cfg.provider_options, [provider]: next } }); }}
+        filter={schemaFilter}
+        inheritLabel={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].automatic : undefined}
+        hint={option => automaticProviderTelemetry(provider, option.key, runtimeFlags, values) ? providerTelemetryCopy[locale].hint : undefined}
+        onInvalid={onInvalid}
+        confirmSyntaxFor={option => formEffective.help_keys.includes(option.key)}
+        onConfirmSyntax={confirmable ? (option, syntax) => confirmSyntax(option.key, syntax) : undefined} />
+    </div>}
     {visible.map(option => <OptionField key={`${provider}:${option.key}`} option={option} value={values[option.key]} disabled={disabled} automaticTelemetry={automaticProviderTelemetry(provider, option.key, runtimeFlags, values)} onChange={value => update(option.key, value)} onInvalid={onInvalid} />)}
     {adapters && (showLora || showBinding) && <h3>{copy.adapters}</h3>}
     {adapters && showLora && <OptionField option={{ key: 'lora_adapters', target: 'launch', group: 'adapters', kind: { type: 'json' } }} value={values.lora_adapters} disabled={disabled} onChange={value => update('lora_adapters', value)} onInvalid={onInvalid} />}
@@ -342,7 +355,10 @@ export function ProviderOptions({ cfg, disabled, onChange, onInvalid, onChecking
     {effective && <RuntimeHelpReview key={`${provider}:${selectedRuntime}`} cfg={cfg} effective={effective} disabled={disabled} draftPrefixSecrets={draftSecretIndices} onAccepted={() => { setEffectiveRevision(current => current + 1); checkedSchema.retry(); }} />}
     </OptionTools>}
     {!validating && !loadingSchema && !error && !schemaError && !runtimeNeeded && !advanced && !hasSchemaOptions && !(adapters && (showLora || showBinding)) && <p className="app-section-hint">{copy.noOptions}</p>}
-    {schemaError && <FeedbackBanner tone="error">{schemaError}</FeedbackBanner>}
+    {schemaError && <FeedbackBanner tone="error" action={{ label: profileSchemaCopy[locale].retry, disabled: disabled || loadingSchema, onClick: () => {
+      if (disabled || loadingSchema) return;
+      setEffectiveRevision(value => value + 1); checkedSchema.retry();
+    } }}>{schemaError}</FeedbackBanner>}
     {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
     {importReview && <FeedbackBanner tone="warning">{importReview}</FeedbackBanner>}
   </div>;
