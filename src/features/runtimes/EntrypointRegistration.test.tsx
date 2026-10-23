@@ -57,6 +57,184 @@ async function enter() {
   fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 }
 
+async function reviewHelpRegistration() {
+  await enter();
+  fireEvent.click(screen.getByRole('combobox', { name: 'Help encoding' }));
+  fireEvent.click(screen.getByRole('option', { name: 'Korean (Windows CP949)' }));
+  fireEvent.change(screen.getByLabelText('Help locale (optional)'), { target: { value: 'ko_KR.UTF-8' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  for (const [label, flag] of [['Model binding', '--model'], ['Port binding', '--port']]) {
+    fireEvent.click(screen.getByRole('combobox', { name: `${label} Option from help` }));
+    fireEvent.click(screen.getByRole('option', { name: flag }));
+  }
+  fireEvent.change(screen.getByLabelText('Compatibility check program'), { target: { value: '/synthetic/probe' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Insert {model}' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Insert {options_json}' }));
+  fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review registration details' }));
+  await screen.findByRole('button', { name: 'Register' });
+  return vi.mocked(api.entrypointManifestPreview).mock.calls.at(-1)![0];
+}
+
+function helpPendingError(submitted: api.EntrypointDraft) {
+  return new api.EntrypointHelpPendingError({ version: 1, code: 'entrypoint_help_pending',
+    engine_id: submitted.engine_id, runtime_id: submitted.runtime_id, fingerprint: submitted.help!.fingerprint, cause: 'Synthetic help storage refused' });
+}
+
+it('keeps the focused registration action available to focus while busy guards reject repeated activation', async () => {
+  const onRegistered = vi.fn(); const onPublished = vi.fn();
+  const view = render(<I18nProvider initialLocale="en"><dialog open><EntrypointRegistration locked={false} onRegistered={onRegistered} onPublished={onPublished} /></dialog></I18nProvider>);
+  let reject!: (cause: unknown) => void;
+  try {
+    const submitted = await reviewHelpRegistration();
+    vi.mocked(api.runtimeEntrypointRegister).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    const action = screen.getByRole('button', { name: 'Register' });
+    // fireEvent.click does not focus; start at the native keyboard focus point.
+    action.focus(); expect(action).toHaveFocus();
+    fireEvent.click(action);
+    expect(action).toBeEnabled(); expect(action).toHaveAttribute('aria-disabled', 'true'); expect(action).toHaveFocus();
+    fireEvent.click(action); fireEvent.click(action);
+    expect(fireEvent.submit(action.closest('form')!)).toBe(false);
+    expect(api.runtimeEntrypointRegister).toHaveBeenCalledTimes(1);
+    await act(async () => { reject(helpPendingError(submitted)); });
+    const retry = screen.getByRole('button', { name: 'Retry saving help' });
+    await waitFor(() => expect(retry).toHaveAttribute('aria-disabled', 'false'));
+    expect(retry).toBe(action); expect(retry).toHaveFocus(); expect(onPublished).toHaveBeenCalledOnce();
+    vi.mocked(api.runtimeEntrypointRegister).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    retry.focus(); fireEvent.click(retry);
+    expect(retry).toBeEnabled(); expect(retry).toHaveAttribute('aria-disabled', 'true'); expect(retry).toHaveFocus();
+    fireEvent.click(retry); fireEvent.click(retry);
+    expect(fireEvent.submit(retry.closest('form')!)).toBe(false);
+    expect(api.runtimeEntrypointRegister).toHaveBeenCalledTimes(2);
+    await act(async () => { reject('Synthetic help write still refused'); });
+    await waitFor(() => expect(retry).toHaveAttribute('aria-disabled', 'false'));
+    expect(retry).toHaveFocus(); expect(onRegistered).not.toHaveBeenCalled();
+    expect(api.runtimeEntrypointRegister).toHaveBeenLastCalledWith(expect.any(Object), { reportHelpPending: true, resumeHelp: true });
+  } finally { await act(async () => { reject?.('Synthetic settled during cleanup'); }); view.unmount(); }
+});
+
+it.each(['moved', 'hidden', 'unmounted'] as const)('does not take help-save focus back after its owner is %s', async mode => {
+  const onRegistered = vi.fn(); const onPublished = vi.fn();
+  const view = render(<I18nProvider initialLocale="en"><dialog open><div data-testid="kept-wizard">
+    <EntrypointRegistration locked={false} onRegistered={onRegistered} onPublished={onPublished} />
+  </div></dialog><button type="button">Elsewhere</button></I18nProvider>);
+  let reject!: (cause: unknown) => void; let restoreFocus: (() => void) | undefined;
+  try {
+    const submitted = await reviewHelpRegistration();
+    vi.mocked(api.runtimeEntrypointRegister).mockRejectedValueOnce(helpPendingError(submitted));
+    fireEvent.click(screen.getByRole('button', { name: 'Register' }));
+    const retry = await screen.findByRole('button', { name: 'Retry saving help' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    vi.mocked(api.runtimeEntrypointRegister).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    retry.focus(); expect(retry).toHaveFocus();
+    const focus = vi.spyOn(retry, 'focus'); restoreFocus = () => { focus.mockRestore(); };
+    fireEvent.click(retry); expect(api.runtimeEntrypointRegister).toHaveBeenCalledTimes(2);
+    const elsewhere = screen.getByRole('button', { name: 'Elsewhere' });
+    const kept = screen.getByTestId('kept-wizard');
+    if (mode === 'moved') { elsewhere.focus(); expect(elsewhere).toHaveFocus(); }
+    if (mode === 'hidden') { kept.hidden = true; retry.blur(); }
+    if (mode === 'unmounted') view.unmount();
+    await act(async () => { reject('Synthetic help write still refused'); });
+    expect(focus).not.toHaveBeenCalled(); expect(onRegistered).not.toHaveBeenCalled(); expect(onPublished).toHaveBeenCalledOnce();
+    if (mode === 'moved') expect(elsewhere).toHaveFocus();
+    else expect(document.body).toHaveFocus();
+    if (mode === 'hidden') { kept.hidden = false; await act(async () => undefined); expect(focus).not.toHaveBeenCalled(); expect(document.body).toHaveFocus(); }
+  } finally { await act(async () => { reject?.('Synthetic settled during cleanup'); }); view.unmount(); restoreFocus?.(); }
+});
+
+it('retains the full published submission across help-save failure and config changes, and retries only that help', async () => {
+  const onRegistered = vi.fn(); const onPublished = vi.fn(); const onBusyChange = vi.fn();
+  const props = { locked: false, onRegistered, onPublished, onBusyChange };
+  const view = render(<I18nProvider initialLocale="en"><EntrypointRegistration {...props} cfg={testConfig} /></I18nProvider>);
+  const preview = await reviewHelpRegistration();
+  const expected: api.EntrypointDraft = {
+    engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'custom.synthetic', program: '/synthetic/python',
+    prefix: ['/synthetic path/한글 engine.py'], working_directory: null, artifacts: ['/synthetic path/한글 engine.py'], environment: {}, protocol: { kind: 'openai_http' },
+    model: { kind: 'flag', flag: '--model', equals: false }, port: { kind: 'flag', flag: '--port', equals: false }, host: null, served_model: null, auth: { kind: 'none' },
+    probe: { program: '/synthetic/probe', args: ['{model}', '{options_json}'], env: {}, working_directory: null },
+    health_path: '/health', health_authenticated: false, model_formats: ['gguf'],
+    help: { fingerprint: report.identity.fingerprint, request: { program: null, args: ['/synthetic path/한글 engine.py', '--help'], scope: [], encoding: 'cp949', locale: 'ko_KR.UTF-8' } },
+  };
+  expect(preview).toEqual(expected);
+  vi.mocked(api.runtimeEntrypointRegister).mockRejectedValueOnce(helpPendingError(preview));
+  const action = screen.getByRole('button', { name: 'Register' });
+  fireEvent.click(action);
+  const retry = await screen.findByRole('button', { name: 'Retry saving help' });
+  expect(retry).toBe(action);
+  await waitFor(() => expect(retry).toHaveAttribute('aria-disabled', 'false'));
+  expect(retry).toBeEnabled();
+  expect(screen.getByText(/The engine was added, but its reviewed help could not be saved/)).toBeVisible();
+  expect(screen.getByText('Synthetic help storage refused', { selector: '.app-diagnostic-summary' })).toBeVisible();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(onPublished).toHaveBeenCalledOnce(); expect(onRegistered).not.toHaveBeenCalled();
+  const submitted = vi.mocked(api.runtimeEntrypointRegister).mock.calls[0][0];
+  expect(submitted).toEqual(expected); expect(submitted).not.toBe(preview);
+  expect(submitted.prefix).not.toBe(preview.prefix); expect(submitted.help).not.toBe(preview.help);
+  expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  expect(screen.getByText('Browse provided adapters').closest('button')).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+  expect(screen.queryByLabelText('Compatibility check program')).not.toBeInTheDocument();
+  const changed: typeof testConfig = { ...testConfig, active_provider: 'custom.other', active_runtime: 'other-build' };
+  view.rerender(<I18nProvider initialLocale="en"><EntrypointRegistration {...props} locked cfg={changed} /></I18nProvider>);
+  expect(retry).toBeDisabled();
+  expect(retry).toHaveAttribute('aria-disabled', 'true');
+  fireEvent.click(retry); expect(api.runtimeEntrypointRegister).toHaveBeenCalledTimes(1);
+  view.rerender(<I18nProvider initialLocale="en"><EntrypointRegistration {...props} cfg={changed} /></I18nProvider>);
+  vi.mocked(api.runtimeEntrypointRegister).mockRejectedValueOnce('Synthetic help write still refused');
+  fireEvent.click(retry);
+  await screen.findByText('Synthetic help write still refused', { selector: '.app-diagnostic-summary' });
+  expect(retry).toBeEnabled(); expect(retry).toHaveAttribute('aria-disabled', 'false'); expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  expect(onRegistered).not.toHaveBeenCalled(); expect(onPublished).toHaveBeenCalledOnce();
+  let finish!: (value: api.RegisteredManifest) => void;
+  vi.mocked(api.runtimeEntrypointRegister).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  try {
+    fireEvent.click(retry);
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+    expect(retry).toBeEnabled(); expect(retry).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(retry); expect(api.runtimeEntrypointRegister).toHaveBeenCalledTimes(3);
+    await act(async () => { finish(registered); });
+    await waitFor(() => expect(onRegistered).toHaveBeenCalledExactlyOnceWith('custom.synthetic', registered));
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByRole('button', { name: 'Retry saving help' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/The engine was added, but/)).not.toBeInTheDocument();
+    expect(api.runtimeEntrypointRegister).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(api.runtimeEntrypointRegister).mock.calls[0]).toEqual([expected, { reportHelpPending: true }]);
+    for (const call of vi.mocked(api.runtimeEntrypointRegister).mock.calls.slice(1)) {
+      expect(call).toEqual([expected, { reportHelpPending: true, resumeHelp: true }]); expect(call[0]).toBe(submitted);
+    }
+    expect(preview).toEqual(expected); expect(submitted).toEqual(expected);
+    expect(api.entrypointHelpDiscover).toHaveBeenCalledOnce(); expect(api.entrypointManifestPreview).toHaveBeenCalledOnce();
+    expect(api.adapterSetupPrepare).not.toHaveBeenCalled(); expect(api.entrypointHelpCancel).not.toHaveBeenCalled();
+  } finally { await act(async () => { finish?.(registered); }); view.unmount(); }
+});
+
+it('ignores late partial publication and late resumed completion after their registration owner unmounts', async () => {
+  for (const phase of ['register', 'resume'] as const) {
+    vi.mocked(api.runtimeEntrypointRegister).mockReset().mockResolvedValue(registered);
+    const onRegistered = vi.fn(); const onPublished = vi.fn();
+    const view = render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={onRegistered} onPublished={onPublished} /></I18nProvider>);
+    const submitted = await reviewHelpRegistration();
+    if (phase === 'resume') {
+      vi.mocked(api.runtimeEntrypointRegister).mockRejectedValueOnce(helpPendingError(submitted));
+      fireEvent.click(screen.getByRole('button', { name: 'Register' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Retry saving help' })).toHaveAttribute('aria-disabled', 'false'));
+    }
+    let resolve!: (value: api.RegisteredManifest) => void; let reject!: (value: unknown) => void;
+    vi.mocked(api.runtimeEntrypointRegister).mockReturnValueOnce(new Promise((done, fail) => { resolve = done; reject = fail; }));
+    try {
+      fireEvent.click(screen.getByRole('button', { name: phase === 'register' ? 'Register' : 'Retry saving help' }));
+      const published = onPublished.mock.calls.length;
+      view.unmount();
+      await act(async () => { if (phase === 'register') reject(helpPendingError(submitted)); else resolve(registered); });
+      expect(onRegistered).not.toHaveBeenCalled(); expect(onPublished).toHaveBeenCalledTimes(published);
+      expect(api.entrypointHelpCancel).not.toHaveBeenCalled();
+    } finally { await act(async () => { resolve?.(registered); }); view.unmount(); }
+  }
+});
+
 it('discovers with explicit help encoding and locale and clears that review when either changes', async () => {
   render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
   await enter();
@@ -153,7 +331,7 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
   expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Register' }));
   await waitFor(() => expect(onRegistered).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic' })));
-  expect(api.runtimeEntrypointRegister).toHaveBeenCalledWith(draft);
+  expect(api.runtimeEntrypointRegister).toHaveBeenCalledWith(draft, { reportHelpPending: true });
 });
 
 it('does not treat a cancelled late help result as a binding source and can retry', async () => {

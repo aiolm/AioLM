@@ -4,7 +4,7 @@ import { providerCatalog, providerRuntimeOptions, runtimeOptionSchema, runtimeAd
 import { invoke } from './transport.ts';
 import type { AppConfig, GgufModel } from './types';
 import { modelSelectable, providerImportCommand } from './providers';
-import { entrypointHelpDiscover, runtimeHelpImport, type EntrypointHelp } from './runtimeHelp';
+import { entrypointHelpDiscover, runtimeHelpImport, runtimeEntrypointRegister, EntrypointHelpPendingError, type EntrypointDraft, type EntrypointHelp, type RegisteredManifest } from './runtimeHelp';
 import { effectiveSchema } from '../../testing/effectiveSchema';
 import { testConfig } from '../../testing/appStore';
 
@@ -16,6 +16,74 @@ vi.mock('./transport.ts', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('entry point registration recovery transport', () => {
+  const draft = (): EntrypointDraft => ({ engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic',
+    program: '/synthetic/engine', prefix: [], artifacts: [], environment: {}, protocol: { kind: 'openai_http' },
+    model: { kind: 'flag', flag: '--model' }, port: { kind: 'flag', flag: '--port' }, auth: { kind: 'none' },
+    probe: { program: '/synthetic/probe', args: [], env: {} }, health_path: '/health', health_authenticated: false, model_formats: ['unknown'],
+    help: { fingerprint: 'a'.repeat(64), request: { args: ['--help'], scope: [] } } });
+  const manifest: RegisteredManifest = { engine_id: 'custom.synthetic', runtime_id: 'build-1', display_name: 'Synthetic',
+    launch: { program: '/synthetic/engine', args: [], env: {} }, probe: { program: '/synthetic/probe', args: [], env: {} } };
+  const pending = { version: 1 as const, code: 'entrypoint_help_pending' as const, engine_id: 'custom.synthetic', runtime_id: 'build-1', fingerprint: 'a'.repeat(64), cause: 'Synthetic accepted help write refused' };
+
+  it('preserves the default invoke Promise, exact payload and result while adding only requested flags', async () => {
+    const submitted = draft();
+    for (const options of [undefined, {}, { reportHelpPending: false, resumeHelp: false }, { resumeHelp: true }]) {
+      const promise = Promise.resolve(manifest);
+      vi.mocked(invoke).mockReturnValueOnce(promise);
+      const result = runtimeEntrypointRegister(submitted, options);
+      expect(result).toBe(promise);
+      expect(invoke).toHaveBeenLastCalledWith('runtime_entrypoint_register', options?.resumeHelp ? { draft: submitted, resumeHelp: true } : { draft: submitted });
+      await expect(result).resolves.toBe(manifest);
+    }
+    const rejection = Promise.reject(pending);
+    vi.mocked(invoke).mockReturnValueOnce(rejection);
+    const legacy = runtimeEntrypointRegister(submitted);
+    expect(legacy).toBe(rejection);
+    await expect(legacy).rejects.toBe(pending);
+    vi.mocked(invoke).mockResolvedValueOnce(manifest);
+    await expect(runtimeEntrypointRegister(submitted, { reportHelpPending: true, resumeHelp: true })).resolves.toBe(manifest);
+    expect(invoke).toHaveBeenLastCalledWith('runtime_entrypoint_register', { draft: submitted, reportHelpPending: true, resumeHelp: true });
+  });
+
+  it('classifies only matching native objects and leaves hostile probe strings and foreign errors unchanged', async () => {
+    const invalid: unknown[] = [JSON.stringify(pending), new Error(JSON.stringify(pending)), null, [pending],
+      { ...pending, version: 2 }, { ...pending, engine_id: 'custom.foreign' }, { ...pending, runtime_id: 'other' },
+      { ...pending, fingerprint: 'b'.repeat(64) }, { ...pending, fingerprint: 'invalid' }, { ...pending, cause: null }, { ...pending, code: 'future_code' }];
+    for (const value of invalid) {
+      vi.mocked(invoke).mockRejectedValueOnce(value);
+      await expect(runtimeEntrypointRegister(draft(), { reportHelpPending: true })).rejects.toBe(value);
+    }
+    vi.mocked(invoke).mockRejectedValueOnce(pending);
+    const withoutHelp = { ...draft(), help: null };
+    await expect(runtimeEntrypointRegister(withoutHelp, { reportHelpPending: true })).rejects.toBe(pending);
+    vi.mocked(invoke).mockRejectedValueOnce(pending);
+    const error = await runtimeEntrypointRegister(draft(), { reportHelpPending: true }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(EntrypointHelpPendingError);
+    expect(error).toMatchObject({ name: 'EntrypointHelpPendingError', message: pending.cause, outcome: pending });
+    expect((error as EntrypointHelpPendingError).outcome).not.toBe(pending);
+  });
+
+  it('captures all submitted identity scalars before asynchronous rejection instead of following caller mutation', async () => {
+    for (const useOriginalIdentity of [true, false]) {
+      const submitted = draft();
+      let reject!: (value: unknown) => void;
+      vi.mocked(invoke).mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+      const options = { reportHelpPending: true, resumeHelp: false };
+      const result = runtimeEntrypointRegister(submitted, options).catch((cause: unknown) => cause);
+      expect(invoke).toHaveBeenLastCalledWith('runtime_entrypoint_register', { draft: submitted, reportHelpPending: true });
+      expect(vi.mocked(invoke).mock.calls.at(-1)?.[1]).not.toHaveProperty('resumeHelp');
+      submitted.engine_id = 'custom.mutated'; submitted.runtime_id = 'mutated'; submitted.help!.fingerprint = 'c'.repeat(64);
+      options.reportHelpPending = false; options.resumeHelp = true;
+      const outcome = useOriginalIdentity ? pending : { ...pending, engine_id: submitted.engine_id, runtime_id: submitted.runtime_id, fingerprint: submitted.help!.fingerprint };
+      reject(outcome);
+      const error = await result;
+      if (useOriginalIdentity) expect(error).toBeInstanceOf(EntrypointHelpPendingError);
+      else expect(error).toBe(outcome);
+    }
+  });
 });
 
 describe('additive command import syntax contract', () => {

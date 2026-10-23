@@ -710,6 +710,79 @@ describe('neutral inference engine inventory', () => {
     mocked.onRuntimeProgress.mockResolvedValue(() => undefined);
   });
 
+  it('refreshes a published engine without announcing success and keeps real sibling locks during help-only recovery', async () => {
+    vi.mocked(runtimeHelp.entrypointHelpDiscover).mockReset().mockResolvedValue(HELP_RESULT);
+    vi.mocked(runtimeHelp.entrypointManifestPreview).mockReset().mockResolvedValue(REGISTERED);
+    let finish!: (value: runtimeHelp.RegisteredManifest) => void;
+    vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockReset()
+      .mockImplementationOnce(async submitted => {
+        mocked.providerCatalog.mockResolvedValue([...BUILTINS, SYNTHETIC]);
+        mocked.providerRuntimes.mockResolvedValue([{ ...SYNTHETIC_RUNTIME, available: false }]);
+        throw new runtimeHelp.EntrypointHelpPendingError({ version: 1, code: 'entrypoint_help_pending',
+          engine_id: submitted.engine_id, runtime_id: submitted.runtime_id, fingerprint: submitted.help!.fingerprint, cause: 'Synthetic help storage refused' });
+      })
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const updateConfig = vi.fn(); const onBusyChange = vi.fn();
+    const cfg = structuredClone(testConfig); const before = structuredClone(cfg);
+    const view = render(panel({ store: { ...store, cfg, updateConfig } as AppStore, onBusyChange }));
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Add inference engine' }));
+      fireEvent.change(screen.getByLabelText('Engine ID (custom.*)'), { target: { value: 'custom.synthetic' } });
+      fireEvent.change(screen.getByLabelText('Runtime ID'), { target: { value: 'build-1' } });
+      fireEvent.change(screen.getByLabelText('Executable or interpreter'), { target: { value: '/synthetic/python' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      for (const [label, flag] of [['Model binding', '--model'], ['Port binding', '--port']]) {
+        fireEvent.click(screen.getByRole('combobox', { name: `${label} Option from help` }));
+        fireEvent.click(screen.getByRole('option', { name: flag }));
+      }
+      fireEvent.change(screen.getByLabelText('Compatibility check program'), { target: { value: '/synthetic/probe' } });
+      fireEvent.change(screen.getByLabelText('Health path'), { target: { value: '/health' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: 'gguf' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Review registration details' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Register' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Retry saving help' })).toHaveAttribute('aria-disabled', 'false'));
+      await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
+      expect(screen.getByRole('button', { name: 'All inference engines' })).toBeEnabled();
+      expect(mocked.providerCatalog).toHaveBeenCalledWith(true);
+      expect(screen.queryByRole('group', { name: /is registered/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Open Synthetic' })).not.toBeInTheDocument();
+      const submitted = vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[0][0];
+      const saved = structuredClone(submitted);
+      expect(submitted.help).toEqual({ fingerprint: HELP_REPORT.identity.fingerprint, request: { program: null, args: ['--help'], scope: [] } });
+      expect(runtimeHelp.runtimeEntrypointRegister).toHaveBeenLastCalledWith(submitted, { reportHelpPending: true });
+      fireEvent.click(screen.getByRole('button', { name: 'All inference engines' }));
+      expect(await screen.findByRole('button', { name: 'Synthetic' })).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Add inference engine' }));
+      const retry = screen.getByRole('button', { name: 'Retry saving help' });
+      expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+      expect(screen.getByText(/The engine was added, but its reviewed help could not be saved/)).toBeVisible();
+      fireEvent.click(screen.getByText('Advanced: import registration file (manifest)'));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Registration file path (manifest)' }), { target: { value: '/synthetic/other.json' } });
+      expect(screen.getByRole('button', { name: 'Probe & register' })).toBeEnabled();
+      fireEvent.click(retry);
+      await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(true));
+      expect(screen.getByRole('button', { name: 'All inference engines' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Refresh list' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Probe & register' })).toBeDisabled();
+      expect(retry).toBeEnabled(); expect(retry).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(retry); expect(runtimeHelp.runtimeEntrypointRegister).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[1]).toEqual([saved, { reportHelpPending: true, resumeHelp: true }]);
+      expect(vi.mocked(runtimeHelp.runtimeEntrypointRegister).mock.calls[1][0]).toBe(submitted);
+      await act(async () => { finish(REGISTERED); });
+      const success = await screen.findByRole('group', { name: 'Synthetic · build-1 is registered' });
+      await waitFor(() => expect(success).toHaveFocus());
+      expect(onBusyChange).toHaveBeenLastCalledWith(false);
+      expect(runtimeHelp.runtimeEntrypointRegister).toHaveBeenCalledTimes(2);
+      expect(runtimeHelp.entrypointHelpDiscover).toHaveBeenCalledOnce(); expect(runtimeHelp.entrypointManifestPreview).toHaveBeenCalledOnce();
+      expect(mocked.runtimeAdapterRegister).not.toHaveBeenCalled();
+      expect(submitted).toEqual(saved); expect(cfg).toEqual(before); expect(updateConfig).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Retry saving help' })).not.toBeInTheDocument();
+    } finally { await act(async () => { finish?.(REGISTERED); }); view.unmount(); vi.mocked(runtimeHelp.runtimeEntrypointRegister).mockReset(); }
+  });
+
   it('opens on the neutral inventory for a saved llama.cpp execution engine without reading llama releases or changing settings', async () => {
     const updateConfig = vi.fn();
     const saved = { ...store, cfg: { active_provider: 'llama.cpp', active_backend: 'cuda', active_build: 'b10638' }, updateConfig } as unknown as AppStore;

@@ -196,6 +196,7 @@ export default function RuntimesPanel({ store, active = true, onOpenProfiles, en
         <div className="runtimes-main" hidden={view.kind !== 'add'}>
           <div className="adapter-context">{backButton(adapterBusy)}</div>
           <EntrypointRegistration key={wizardKey} titleRef={wizardHeading} cfg={store.cfg ?? undefined} locked={rt.serverRunning || rt.runtimeBusy || providerBusy || manifestBusy}
+            onPublished={() => { setProviderRevision(value => value + 1); notifyRuntimeInventoryChanged(); }}
             onRegistered={(engine, identity) => { notifyRuntimeInventoryChanged(); onRegistered(engine, identity); }} onBusyChange={setWizardBusy} />
           <details className="runtime-advanced">
             <summary>{copy.advancedManifest}</summary>

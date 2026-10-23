@@ -3,6 +3,7 @@ import {
   entrypointHelpCancel,
   entrypointHelpDiscover,
   entrypointManifestPreview,
+  EntrypointHelpPendingError,
   pickRuntimePath,
   runtimeEntrypointRegister,
   type ArgBinding,
@@ -19,6 +20,7 @@ import type { AppConfig } from '../../shared/api/types';
 import { useI18n } from '../../shared/i18n/i18n';
 import { entrypointCopy } from '../../shared/i18n/entrypointCopy';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner';
+import DiagnosticDetails, { summarizeDiagnostic } from '../../shared/ui/DiagnosticDetails';
 import { CustomSelect } from '../../shared/ui/CustomSelect';
 import { LocalTaskCancelButton } from '../../shared/ui/TaskCancellation';
 import { finishTask, registerTask, updateTask } from '../../shared/state/taskRegistry';
@@ -96,9 +98,10 @@ function BindingField({ label, state, optional, documented, positionalDocumented
 /** Executable/entry point → help → explicit bindings, protocol and probe →
  * reviewed manifest → register. Nothing is inferred; a fresh model probe
  * after registration decides Ready. */
-export default function EntrypointRegistration({ locked, onRegistered, onBusyChange, titleRef, cfg }: {
+export default function EntrypointRegistration({ locked, onRegistered, onPublished, onBusyChange, titleRef, cfg }: {
   locked: boolean; onRegistered: (engine: ProviderId, registered: { runtime_id: string; display_name: string }) => void; onBusyChange?: (busy: boolean) => void; titleRef?: Ref<HTMLHeadingElement>;
   cfg?: AppConfig;
+  onPublished?: () => void;
 }) {
   const { locale } = useI18n();
   const copy = entrypointCopy[locale];
@@ -143,11 +146,14 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const [error, setError] = useState('');
   const [manifest, setManifest] = useState('');
   const [done, setDone] = useState(false);
+  const [helpPending, setHelpPending] = useState<EntrypointDraft | null>(null);
+  const pendingRegistration = useRef<EntrypointDraft | null>(null);
   const generation = useRef(0);
   const pendingHelp = useRef<EntrypointHelp | null>(null);
   const cancelled = useRef(false);
   useEffect(() => () => {
     generation.current += 1;
+    pendingRegistration.current = null;
     if (pendingHelp.current) void entrypointHelpCancel(pendingHelp.current).catch(() => undefined);
     pendingHelp.current = null;
     finishTask(taskId, 'cancelled');
@@ -183,7 +189,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   const summary = current ? helpSummary(current.result[1]) : null;
 
   const discover = async () => {
-    if (busy) return;
+    if (busy || locked || pendingRegistration.current) return;
     const ownGeneration = ++generation.current;
     cancelled.current = false; pendingHelp.current = entry;
     const request: HelpRequest = { program: null, args: [...(protocol === 'bridge' ? bridgePrefix : prefix), ...helpArgs], scope: commandLayout?.subcommands.map(index => (protocol === 'bridge' ? bridgePrefix : prefix)[index] ?? '') ?? [], ...textChoice };
@@ -235,7 +241,7 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     .find(([, state]) => state.mode !== 'none' && !toBinding(state))?.[0];
 
   const review = async () => {
-    if (busy || locked) return;
+    if (busy || locked || pendingRegistration.current) return;
     const incomplete = incompleteBinding();
     if (incomplete) { setError(`${incomplete}: ${copy.bindingIncomplete}`); return; }
     const next = draft();
@@ -255,26 +261,51 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
   };
 
   const register = async () => {
-    if (busy || locked) return;
+    if (busy || locked || pendingRegistration.current) return;
     const incomplete = incompleteBinding();
     if (incomplete) { setError(`${incomplete}: ${copy.bindingIncomplete}`); return; }
     const next = draft();
     if (!next) { setError(copy.required); return; }
+    const submitted = structuredClone(next);
     const ownGeneration = ++generation.current;
     setBusy(true); setError('');
     try {
-      const registered = await runtimeEntrypointRegister(next);
+      const registered = await runtimeEntrypointRegister(submitted, { reportHelpPending: true });
       if (generation.current !== ownGeneration) return;
       setDone(true);
       onRegistered(registered.engine_id as ProviderId, registered);
     } catch (cause) {
-      if (generation.current === ownGeneration) setError(cause instanceof Error ? cause.message : String(cause));
+      if (generation.current !== ownGeneration) return;
+      if (cause instanceof EntrypointHelpPendingError) {
+        pendingRegistration.current = submitted;
+        setHelpPending(submitted);
+        onPublished?.();
+      }
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (generation.current === ownGeneration) setBusy(false);
     }
   };
 
-  const disabled = locked || busy;
+  const retryHelp = async () => {
+    const submitted = pendingRegistration.current;
+    if (busy || locked || !submitted) return;
+    const ownGeneration = ++generation.current;
+    setBusy(true); setError('');
+    try {
+      const registered = await runtimeEntrypointRegister(submitted, { reportHelpPending: true, resumeHelp: true });
+      if (generation.current !== ownGeneration || pendingRegistration.current !== submitted) return;
+      pendingRegistration.current = null;
+      setHelpPending(null); setDone(true);
+      onRegistered(registered.engine_id as ProviderId, registered);
+    } catch (cause) {
+      if (generation.current === ownGeneration && pendingRegistration.current === submitted) setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (generation.current === ownGeneration) setBusy(false);
+    }
+  };
+
+  const disabled = locked || busy || !!helpPending;
   const steps = [copy.stepEntry, copy.stepHelp, copy.stepBindings, copy.stepReview];
   const canContinue = [
     !!engine.trim() && !!runtime.trim() && !!program.trim() && (protocol === 'openai_http' || (!!bridgeProgram.trim() && !!bridgeArgvEnv.trim())) && metadata.ok,
@@ -287,7 +318,8 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
     <section className="app-card app-card--tight mb-4 entrypoint-registration" aria-labelledby={`${id}-title`}>
       <h3 id={`${id}-title`} ref={titleRef} tabIndex={-1} className="app-section-title">{copy.title}</h3>
       <p className="app-section-hint">{copy.hint}</p>
-      <div hidden={step !== 0}><AdapterSetupPanel disabled={locked || busy} onBusyChange={setBusy} onPrepared={prepared => {
+      <div hidden={step !== 0}><AdapterSetupPanel disabled={disabled} onBusyChange={setBusy} onPrepared={prepared => {
+        if (pendingRegistration.current) return;
         const binding = (value: ArgBinding | null | undefined): BindingState => value?.kind === 'flag'
           ? { mode: 'flag', flag: value.flag, equals: value.equals ?? false }
           : value?.kind === 'positional' ? { mode: 'positional', flag: '', equals: false } : noBinding;
@@ -450,18 +482,21 @@ export default function EntrypointRegistration({ locked, onRegistered, onBusyCha
             {manifest && <pre className="entrypoint-review-manifest">{manifest}</pre>}
             {done ? <p role="status">{copy.registered}</p> : (
               <div className="app-page-actions">
-                <button type="submit" className="app-button app-button--primary" disabled={disabled} onClick={() => void register()}>{copy.register}</button>
+                <button type="submit" className="app-button app-button--primary" disabled={locked} aria-disabled={locked || busy} onClick={() => void (helpPending ? retryHelp() : register())}>{helpPending ? copy.retryHelp : copy.register}</button>
               </div>
             )}
           </div>
         )}
         <div className="app-page-actions mt-3">
-          {step > 0 && <button type="button" className="app-button app-button--secondary" disabled={busy} onClick={() => setStep((step - 1) as Step)}>{copy.previous}</button>}
-          {step < 2 && <button type="button" className="app-button app-button--secondary" disabled={busy || !canContinue} onClick={() => setStep((step + 1) as Step)}>{copy.next}</button>}
-          {step === 2 && <button type="button" className="app-button app-button--secondary" disabled={busy} onClick={() => void review()}>{copy.review}</button>}
+          {step > 0 && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => { if (!pendingRegistration.current) setStep((step - 1) as Step); }}>{copy.previous}</button>}
+          {step < 2 && <button type="button" className="app-button app-button--secondary" disabled={disabled || !canContinue} onClick={() => { if (!pendingRegistration.current) setStep((step + 1) as Step); }}>{copy.next}</button>}
+          {step === 2 && <button type="button" className="app-button app-button--secondary" disabled={disabled} onClick={() => void review()}>{copy.review}</button>}
         </div>
       </form>
-      {error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
+      {helpPending ? <FeedbackBanner tone="warning">
+        <p>{copy.helpPending}</p>
+        {error && <DiagnosticDetails summary={summarizeDiagnostic(error)} detail={error} />}
+      </FeedbackBanner> : error && <FeedbackBanner tone="error">{error}</FeedbackBanner>}
     </section>
   );
 }

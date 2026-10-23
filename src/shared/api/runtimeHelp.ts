@@ -454,8 +454,48 @@ export const entrypointHelpCancel = (entry: EntrypointHelp): Promise<boolean> =>
 export const entrypointManifestPreview = (draft: EntrypointDraft): Promise<RegisteredManifest> =>
   invoke<RegisteredManifest>('entrypoint_manifest_preview', { draft });
 
-export const runtimeEntrypointRegister = (draft: EntrypointDraft): Promise<RegisteredManifest> =>
-  invoke<RegisteredManifest>('runtime_entrypoint_register', { draft });
+export interface EntrypointHelpPending {
+  version: 1;
+  code: 'entrypoint_help_pending';
+  engine_id: string;
+  runtime_id: string;
+  fingerprint: string;
+  cause: string;
+}
+
+export class EntrypointHelpPendingError extends Error {
+  readonly outcome: Readonly<EntrypointHelpPending>;
+
+  constructor(outcome: EntrypointHelpPending) {
+    super(outcome.cause);
+    this.name = 'EntrypointHelpPendingError';
+    this.outcome = Object.freeze({ version: outcome.version, code: outcome.code, engine_id: outcome.engine_id,
+      runtime_id: outcome.runtime_id, fingerprint: outcome.fingerprint, cause: outcome.cause });
+  }
+}
+
+export const runtimeEntrypointRegister = (draft: EntrypointDraft, options?: { reportHelpPending?: boolean; resumeHelp?: boolean }): Promise<RegisteredManifest> => {
+  const reportHelpPending = options?.reportHelpPending === true;
+  const resumeHelp = options?.resumeHelp === true;
+  // Capture the submission before invoke; callers may reuse their mutable draft.
+  const identity = reportHelpPending ? { engine: draft.engine_id, runtime: draft.runtime_id, fingerprint: draft.help?.fingerprint } : null;
+  const result = invoke<RegisteredManifest>('runtime_entrypoint_register', {
+    draft, ...(reportHelpPending ? { reportHelpPending: true } : {}), ...(resumeHelp ? { resumeHelp: true } : {}),
+  });
+  if (!identity) return result;
+  return result.catch((cause: unknown) => {
+    if (cause && typeof cause === 'object' && !Array.isArray(cause)) {
+      const pending = cause as Partial<EntrypointHelpPending>;
+      if (pending.version === 1 && pending.code === 'entrypoint_help_pending' && typeof pending.cause === 'string'
+        && typeof pending.engine_id === 'string' && typeof pending.runtime_id === 'string'
+        && typeof pending.fingerprint === 'string' && /^[a-fA-F0-9]{64}$/.test(pending.fingerprint)
+        && pending.engine_id === identity.engine && pending.runtime_id === identity.runtime && pending.fingerprint === identity.fingerprint) {
+        throw new EntrypointHelpPendingError(pending as EntrypointHelpPending);
+      }
+    }
+    throw cause;
+  });
+};
 
 export const pickRuntimePath = (kind: 'file' | 'folder'): Promise<string | null> =>
   invoke<string | null>('pick_runtime_path', { kind });
