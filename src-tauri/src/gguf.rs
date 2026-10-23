@@ -1188,7 +1188,7 @@ fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, Stri
                         None => read_raw(&mut reader, kind)?,
                     };
                     if let Some(value) = value {
-                        values.insert(key.clone(), value);
+                        values.insert(key, value);
                     }
                     continue;
                 }
@@ -1216,21 +1216,16 @@ fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, Stri
     )?;
     facts.tensors = tensor_scan.bytes;
 
-    let Some(architecture) = facts.architecture.clone() else {
+    let Some(architecture) = facts.architecture.as_deref() else {
         return Ok(ModelScan {
             facts,
             tensor_types: tensor_scan.tensor_types,
         });
     };
-    facts.recurrent_state = recurrent_prefixes.contains(&architecture);
+    facts.recurrent_state = recurrent_prefixes.contains(architecture);
     let value = |suffix: &str| values.get(&format!("{architecture}.{suffix}"));
     let int = |suffix: &str| match value(suffix) {
         Some(RawValue::Int(value)) => Some(*value),
-        _ => None,
-    };
-    let per_layer = |suffix: &str| match value(suffix) {
-        Some(RawValue::Int(value)) => Some(PerLayer::Uniform(*value)),
-        Some(RawValue::Ints(values)) => Some(PerLayer::Layers(values.clone())),
         _ => None,
     };
     facts.block_count = int("block_count");
@@ -1238,17 +1233,11 @@ fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, Stri
     facts.context_length = int("context_length");
     facts.embedding_length = int("embedding_length");
     facts.vocab_size = int("vocab_size");
-    facts.feed_forward_length = per_layer("feed_forward_length");
-    facts.expert_feed_forward_length = per_layer("expert_feed_forward_length");
     facts.expert_shared_feed_forward_length = int("expert_shared_feed_forward_length");
-    facts.expert_used_count = per_layer("expert_used_count");
-    facts.head_count = per_layer("attention.head_count");
-    facts.head_count_kv = per_layer("attention.head_count_kv");
     facts.key_length = int("attention.key_length");
     facts.value_length = int("attention.value_length");
     facts.sliding_window = int("attention.sliding_window");
     facts.kv_lora_rank = int("attention.kv_lora_rank");
-    facts.recurrent_layers = per_layer("attention.recurrent_layers");
     facts.full_attention_interval = int("full_attention_interval");
     facts.ssm_conv_kernel = int("ssm.conv_kernel");
     facts.ssm_inner_size = int("ssm.inner_size");
@@ -1256,11 +1245,23 @@ fn scan_model(path: &Path, collect_tensor_types: bool) -> Result<ModelScan, Stri
     facts.ssm_group_count = int("ssm.group_count");
     facts.indexer_key_length = int("attention.indexer.key_length");
     facts.hyper_connections = int("hyper_connection.count");
-    if let Some(RawValue::Ints(layers)) = value("ple.layers") {
-        facts.ple_layers = layers.clone();
-    }
     facts.ple_conv_kernel = int("ple.conv_kernel");
     facts.ple_ngram_size = int("ple.ngram_size");
+    // Read scalar metadata first so owned layer arrays can move into the facts.
+    let mut per_layer = |suffix: &str| match values.remove(&format!("{architecture}.{suffix}")) {
+        Some(RawValue::Int(value)) => Some(PerLayer::Uniform(value)),
+        Some(RawValue::Ints(values)) => Some(PerLayer::Layers(values)),
+        _ => None,
+    };
+    facts.feed_forward_length = per_layer("feed_forward_length");
+    facts.expert_feed_forward_length = per_layer("expert_feed_forward_length");
+    facts.expert_used_count = per_layer("expert_used_count");
+    facts.head_count = per_layer("attention.head_count");
+    facts.head_count_kv = per_layer("attention.head_count_kv");
+    facts.recurrent_layers = per_layer("attention.recurrent_layers");
+    if let Some(RawValue::Ints(layers)) = values.remove(&format!("{architecture}.ple.layers")) {
+        facts.ple_layers = layers;
+    }
     Ok(ModelScan {
         facts,
         tensor_types: tensor_scan.tensor_types,
@@ -1905,8 +1906,43 @@ mod tests {
     fn combined_facts_and_tensor_types_match_the_public_scans() {
         use fixture::Value;
         let values = vec![
-            ("general.architecture".to_string(), Value::Str("qwen3")),
             ("qwen3.context_length".to_string(), Value::U32(32_768)),
+            (
+                "qwen3.feed_forward_length".to_string(),
+                Value::U32s(vec![8, 16]),
+            ),
+            (
+                "qwen3.expert_feed_forward_length".to_string(),
+                Value::U32s(vec![4, 12]),
+            ),
+            (
+                "qwen3.expert_used_count".to_string(),
+                Value::U32s(vec![2, 3]),
+            ),
+            (
+                "qwen3.attention.head_count".to_string(),
+                Value::U32s(vec![8, 12]),
+            ),
+            (
+                "qwen3.attention.head_count_kv".to_string(),
+                Value::U32s(vec![2, 4]),
+            ),
+            (
+                "qwen3.attention.recurrent_layers".to_string(),
+                Value::U32s(vec![0, 1]),
+            ),
+            ("qwen3.ple.layers".to_string(), Value::U32s(vec![1, 0])),
+            // Array-valued scalar metadata is absent, and other architecture
+            // prefixes must not replace the selected architecture's facts.
+            (
+                "qwen3.attention.key_length".to_string(),
+                Value::U32s(vec![64, 128]),
+            ),
+            (
+                "foreign.attention.head_count_kv".to_string(),
+                Value::U32s(vec![99]),
+            ),
+            ("general.architecture".to_string(), Value::Str("qwen3")),
         ];
         let tensors = vec![
             tensor("token_embd.weight", &[256, 1_000], 4_096),
@@ -1915,6 +1951,33 @@ mod tests {
         ];
         in_temporary_file(&fixture::file(&values, &tensors), |path| {
             let expected_facts = read_model_facts(path).unwrap();
+            assert_eq!(expected_facts.context_length, Some(32_768));
+            assert_eq!(
+                expected_facts.feed_forward_length,
+                Some(PerLayer::Layers(vec![8, 16]))
+            );
+            assert_eq!(
+                expected_facts.expert_feed_forward_length,
+                Some(PerLayer::Layers(vec![4, 12]))
+            );
+            assert_eq!(
+                expected_facts.expert_used_count,
+                Some(PerLayer::Layers(vec![2, 3]))
+            );
+            assert_eq!(
+                expected_facts.head_count,
+                Some(PerLayer::Layers(vec![8, 12]))
+            );
+            assert_eq!(
+                expected_facts.head_count_kv,
+                Some(PerLayer::Layers(vec![2, 4]))
+            );
+            assert_eq!(
+                expected_facts.recurrent_layers,
+                Some(PerLayer::Layers(vec![0, 1]))
+            );
+            assert_eq!(expected_facts.ple_layers, vec![1, 0]);
+            assert_eq!(expected_facts.key_length, None);
             let expected_types = read_tensor_types(path).unwrap();
             let (facts, tensor_types) = read_model_facts_and_tensor_types(path).unwrap();
             assert_eq!(facts, expected_facts);
