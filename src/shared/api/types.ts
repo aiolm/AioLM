@@ -493,6 +493,8 @@ export interface SessionDefinition {
   gpu: GpuPlacement;
   enabled: boolean;
   execution?: SessionExecutionSettings;
+  /** Legacy preset reference read during migration. Saving current profile values
+   * records the session assignment in settings_profiles.applied and removes this field. */
   model_profile_id?: string;
 }
 
