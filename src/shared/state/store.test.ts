@@ -353,3 +353,84 @@ it("keeps a late failure from a stopped slow start from overwriting a newer laun
   expect(result.current.status.state).toBe("running");
   expect(result.current.busy).toBe(false);
 });
+
+it.each(['accepted', 'rolled back'] as const)('keeps config references and the local publication count coherent when a deferred save is %s', async outcome => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  const previous = result.current.cfg!;
+  const previousValues = structuredClone(previous);
+  const revision = result.current.getConfigRevision();
+  expect(revision).toBe(1);
+  expect(result.current.getConfig()).toBe(previous);
+  const persistence = deferred<api.AppConfig>();
+  vi.mocked(api.saveConfig).mockReturnValueOnce(persistence.promise);
+  let operation!: Promise<api.AppConfig>;
+  await act(async () => {
+    operation = result.current.updateConfig({ port: 8081 });
+    await Promise.resolve();
+  });
+  await waitFor(() => expect(result.current.cfg?.port).toBe(8081));
+  const optimistic = result.current.cfg!;
+  expect(optimistic).not.toBe(previous);
+  expect(result.current.getConfig()).toBe(optimistic);
+  expect(result.current.getConfigRevision()).toBe(revision + 1);
+  if (outcome === 'accepted') {
+    const accepted = { ...optimistic, port: 8082 };
+    let saved!: api.AppConfig;
+    await act(async () => { persistence.resolve(accepted); saved = await operation; });
+    expect(saved).toBe(accepted);
+    expect(result.current.cfg).toBe(accepted);
+    expect(result.current.actionError).toBeNull();
+  } else {
+    const failure = new Error('Synthetic disk full');
+    const rejected = expect(operation).rejects.toBe(failure);
+    await act(async () => { persistence.reject(failure); await rejected; });
+    expect(result.current.cfg).toBe(previous);
+    expect(result.current.actionError).toBe('Configuration was not saved: Synthetic disk full');
+  }
+  expect(result.current.getConfig()).toBe(result.current.cfg);
+  expect(result.current.getConfigRevision()).toBe(revision + 2);
+  expect(previous).toEqual(previousValues);
+});
+
+it('publishes a coherent reloaded snapshot and reevaluates the patch before a deferred conflict retry', async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe('ready'));
+  const previous = result.current.cfg!;
+  const revision = result.current.getConfigRevision();
+  const disk = structuredClone({ ...previous, port: 9999 });
+  const retry = deferred<api.AppConfig>();
+  const conflict = new Error('settings profiles changed since this configuration was opened; reload before saving');
+  vi.mocked(api.getConfig).mockResolvedValueOnce(disk);
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(conflict).mockReturnValueOnce(retry.promise);
+  const evaluations: Array<{ value: api.AppConfig; live: api.AppConfig | null; revision: number }> = [];
+  let operation!: Promise<api.AppConfig>;
+  await act(async () => {
+    operation = result.current.updateConfig(fresh => {
+      evaluations.push({ value: fresh, live: result.current.getConfig(), revision: result.current.getConfigRevision() });
+      return { port: 8081 };
+    });
+    await Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(evaluations.map(entry => entry.value.port)).toEqual([previous.port, 9999]);
+    expect(result.current.cfg?.port).toBe(8081);
+    expect(result.current.getConfig()).toBe(result.current.cfg);
+    expect(result.current.getConfigRevision()).toBe(revision + 4);
+  });
+  const pendingRetry = result.current.cfg!;
+  expect(evaluations[0].live).toBe(previous);
+  expect(evaluations[0].revision).toBe(revision);
+  expect(evaluations[1].live).toBe(evaluations[1].value);
+  expect(evaluations[1].revision).toBe(revision + 3);
+  expect(pendingRetry).not.toBe(previous);
+  expect(pendingRetry.settings_profiles).toBe(disk.settings_profiles);
+  let saved!: api.AppConfig;
+  await act(async () => { retry.resolve(pendingRetry); saved = await operation; });
+  expect(saved).toBe(pendingRetry);
+  expect(result.current.cfg).toBe(pendingRetry);
+  expect(result.current.getConfig()).toBe(pendingRetry);
+  expect(result.current.getConfigRevision()).toBe(revision + 5);
+  expect(result.current.actionError).toBeNull();
+  expect(disk.port).toBe(9999);
+});

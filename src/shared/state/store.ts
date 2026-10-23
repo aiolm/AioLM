@@ -100,6 +100,13 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
   const pollStopped = useRef(false);
   const configLoadInFlight = useRef<Promise<void> | null>(null);
 
+  // Local publications gate first-load auto-start; profile revisions remain independent.
+  const publishConfigSnapshot = useCallback((next: api.AppConfig) => {
+    cfgRef.current = next;
+    configRevisionRef.current += 1;
+    setCfg(next);
+  }, []);
+
   const loadConfig = useCallback((): Promise<void> => {
     if (configLoadInFlight.current) return configLoadInFlight.current;
     if (!api.isNativeRuntimeAvailable()) {
@@ -108,9 +115,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       return Promise.resolve();
     }
     const pending = loadMigratedConfig().then(normalized => {
-        cfgRef.current = normalized;
-        configRevisionRef.current += 1;
-        setCfg(normalized);
+        publishConfigSnapshot(normalized);
         setBootError(null);
         setBootState("ready");
       }).catch(error => {
@@ -121,7 +126,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       }).finally(() => { configLoadInFlight.current = null; });
     configLoadInFlight.current = pending;
     return pending;
-  }, []);
+  }, [publishConfigSnapshot]);
 
   const refreshStatus = useCallback(async () => {
     if (!api.isNativeRuntimeAvailable() || pollInFlight.current || operationInFlight.current || !shouldPoll(typeof document === "undefined" ? "unknown" : document.visibilityState)) return;
@@ -146,7 +151,7 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
     if (!saveConfigQueue.current) {
       saveConfigQueue.current = createConfigSaveQueue(
         () => cfgRef.current,
-        (next) => { cfgRef.current = next; configRevisionRef.current += 1; setCfg(next); },
+        publishConfigSnapshot,
         (next) => api.saveConfig(next),
         (error) => setActionError(`Configuration was not saved: ${errorMessage(error)}`),
       );
@@ -168,14 +173,12 @@ export function useAppStore(options: { pollIntervalMs?: number; autoStart?: bool
       } catch {
         throw error;
       }
-      cfgRef.current = reloaded;
-      configRevisionRef.current += 1;
-      setCfg(reloaded);
+      publishConfigSnapshot(reloaded);
       const saved = await attempt();
       setActionError(null);
       return saved;
     }
-  }, []);
+  }, [publishConfigSnapshot]);
 
   const updateConfig = useCallback(async (patch: ConfigPatch<api.AppConfig>) => {
     // Serialize whole saves (not just persistence) so a conflict recovery
