@@ -801,7 +801,14 @@ fn expand(
             "model" => cfg.active_model.clone(),
             "model_alias" => model_alias.into(),
             "api_key" => key.into(),
-            "options_json" => serde_json::to_string(&options(cfg)).map_err(|e| e.to_string())?,
+            "options_json" => {
+                let empty = Map::new();
+                let values = cfg
+                    .provider_options
+                    .get(&cfg.active_provider)
+                    .unwrap_or(&empty);
+                serde_json::to_string(values).map_err(|e| e.to_string())?
+            }
             "ctx_size" => cfg.ctx_size.to_string(),
             "parallel" => cfg.parallel.max(1).to_string(),
             _ => return Err(format!("unknown adapter binding: {name}")),
@@ -2528,6 +2535,46 @@ mod tests {
             .unwrap(),
             "--model=/synthetic/model with spaces"
         );
+
+        // Literal output includes every saved value; provider lookup stays raw.
+        const ENCODED: &str = r#"{"array":[null,true,false,-7,1.25,-0.0],"nested":{"escaped":"\"\\\n","unicode":"한글🙂"},"scalar":7}"#;
+        let raw_provider = " custom.example ";
+        let mut cfg = AppConfig {
+            active_provider: raw_provider.into(),
+            provider_options: BTreeMap::from([(
+                "custom.example".into(),
+                serde_json::from_value(serde_json::json!({"wrong":true})).unwrap(),
+            )]),
+            ..Default::default()
+        };
+        for (saved, encoded) in [
+            (None, "{}"),
+            (Some(Map::new()), "{}"),
+            (Some(serde_json::from_str(ENCODED).unwrap()), ENCODED),
+        ] {
+            cfg.provider_options.remove(raw_provider);
+            if let Some(saved) = saved {
+                cfg.provider_options.insert(raw_provider.into(), saved);
+            }
+            let before = serde_json::to_value(&cfg).unwrap();
+            let output = expand(
+                "before={options_json};again={options_json}",
+                &cfg,
+                123,
+                "private",
+                "served",
+            )
+            .unwrap();
+            let expected = format!("before={encoded};again={encoded}");
+            assert_eq!(output, expected);
+            assert_eq!(serde_json::to_value(&cfg).unwrap(), before);
+            cfg.provider_options.remove(raw_provider);
+            assert_eq!(
+                expand("{options_json}", &cfg, 123, "private", "served").unwrap(),
+                "{}"
+            );
+            assert_eq!(output, expected);
+        }
     }
     #[test]
     fn launch_template_defines_entry_prefix_and_app_owned_bindings() {
