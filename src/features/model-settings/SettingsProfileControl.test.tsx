@@ -240,16 +240,19 @@ describe('settings profile workspace', () => {
     expect(within(screen.getByRole('region', { name: 'Current values' })).getByText('0.2')).toBeInTheDocument();
   });
 
-  it('applies a preview only through its explicit action and closes after saving succeeds', async () => {
+  it('applies a preview through its explicit action and returns focus to the profile choice', async () => {
     let complete!: () => void;
     const onApply = vi.fn(() => new Promise<void>(resolve => { complete = resolve; }));
     mount({ onApply }); preview('Creative');
-    fireEvent.click(screen.getByRole('button', { name: 'Select this profile' }));
+    const apply = screen.getByRole('button', { name: 'Select this profile' });
+    apply.focus();
+    fireEvent.click(apply);
     expect(onApply).toHaveBeenCalledWith('creative');
     expect(screen.getByRole('region', { name: 'Preview' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Select this profile' })).toBeDisabled();
     await act(async () => complete());
     expect(screen.queryByRole('region', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Creative' })).toHaveFocus();
   });
 
   it('retains the preview and offers retry when application fails', async () => {

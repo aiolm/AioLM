@@ -301,7 +301,7 @@ export default function SettingsProfileControl({ items, state, activeId, basedOn
             {selectionOnly && !preview && draftActions}
             {selectionOnly && state === 'working' && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(onRevert, () => setPreviewId(null))}>{copy.revert}</button>}
             {preview && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={closePreview}>{copy.closePreview}</button>}
-            {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked} onClick={() => void run(() => onApply(preview.id), () => setPreviewId(null))}>{copy.apply}</button>}
+            {preview && preview.id !== active?.id && <button type="button" className="app-button app-button--primary app-button--sm" disabled={mutationLocked || blocked} onClick={() => void run(() => onApply(preview.id), closePreview)}>{copy.apply}</button>}
             {detailItem && detailItem.scope !== 'preset' && <>
               {!isDefault(detailItem) && <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={() => void run(() => onSetDefault(detailItem.id))}>{copy.setDefault}</button>}
               <button type="button" className="app-button app-button--ghost app-button--sm" disabled={mutationLocked} onClick={event => openAction({ kind: 'rename', id: detailItem.id, name: detailItem.name, model: modelPath }, event.currentTarget)}>{copy.rename}</button>
