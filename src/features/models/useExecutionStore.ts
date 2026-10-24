@@ -53,6 +53,25 @@ function applicationPatch(current: AppConfig, patch: Partial<AppConfig>): Partia
   return { ...patch, settings_profiles: library };
 }
 
+/** Keys of a plain object or array whose own properties are all enumerable string keys. */
+function dataKeys(value: object): string[] | undefined {
+  const array = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return undefined;
+  const keys = Object.keys(value);
+  return Reflect.ownKeys(value).length === keys.length + (array ? 1 : 0) ? keys : undefined;
+}
+
+/** Equal configuration data, keeping key order, array length, and undefined and absent fields distinct. */
+function sameData(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) return Object.is(left, right);
+  const keys = dataKeys(left);
+  const other = dataKeys(right);
+  if (!keys || !other || Array.isArray(left) !== Array.isArray(right) || (Array.isArray(left) && left.length !== (right as unknown[]).length)) return false;
+  return keys.length === other.length && keys.every((key, index) => key === other[index]
+    && sameData((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
+}
+
 /** All screens persist model settings through the same serialized native config queue. */
 export function useExecutionStore(base: AppStore) {
   const latest = useRef(base);
@@ -66,13 +85,30 @@ export function useExecutionStore(base: AppStore) {
       // Expand against the latest config at persist time. The base store
       // re-expands after a revision-conflict reload, so a computed profile
       // library must never pin the snapshot read here.
-      const expand = (fresh: AppConfig): Partial<AppConfig> => {
+      const resolve = (fresh: AppConfig): Partial<AppConfig> => {
         let next = typeof patch === 'function' ? patch(fresh) : patch;
         const changesExecution = Object.keys(executionChanges(fresh, { ...fresh, ...next })).length > 0;
         if (changesExecution) next = withManualOverrides(fresh, next);
-        return applicationPatch(fresh, next);
+        return next;
       };
-      const preview = expand(current);
+      const input = resolve(current);
+      let inputs: [Partial<AppConfig>, AppConfig] | undefined;
+      // A patch carrying a whole library would copy both libraries for little saving; it always expands again.
+      if (input.settings_profiles === undefined) {
+        try { inputs = structuredClone<[Partial<AppConfig>, AppConfig]>([input, current]); } catch { inputs = undefined; }
+      }
+      const preview = applicationPatch(current, input);
+      // The patch is evaluated again for every expansion. Only the first one may
+      // reuse the preview's profile expansion, and only while the same snapshot
+      // and the evaluated patch hold the data the preview expanded.
+      let reusable = inputs && { inputs, input, preview };
+      const expand = (fresh: AppConfig): Partial<AppConfig> => {
+        const next = resolve(fresh);
+        const previewed = reusable;
+        reusable = undefined;
+        if (!previewed || fresh !== current || !sameData(previewed.inputs, [next, fresh])) return applicationPatch(fresh, next);
+        return previewed.preview === previewed.input ? next : { ...next, settings_profiles: previewed.preview.settings_profiles };
+      };
       if (!Object.keys(executionChanges(current, { ...current, ...preview })).length) {
         const saved = await latest.current.updateConfig(expand);
         setError(null);

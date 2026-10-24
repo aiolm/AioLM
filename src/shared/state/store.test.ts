@@ -299,6 +299,54 @@ it("heals a stale execution-store save through reload and re-expansion", async (
   expect(finalRev).toBeLessThanOrEqual(diskRev + 1);
 });
 
+it("evaluates an execution-store patch for its preview, native save and conflict retry", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const previous = result.current.getConfig()!;
+  const disk = structuredClone({ ...previous, port: 9999 });
+  vi.mocked(api.getConfig).mockResolvedValueOnce(disk);
+  vi.mocked(api.saveConfig).mockRejectedValueOnce(new Error("settings profiles changed since this configuration was opened; reload before saving"));
+  const wrapped = renderHook(() => useExecutionStore(result.current));
+  const evaluated: api.AppConfig[] = [];
+  let saved!: api.AppConfig;
+  await act(async () => { saved = await wrapped.result.current.store.updateConfig(fresh => { evaluated.push(fresh); return { temperature: 0.3 }; }); });
+  expect(evaluated).toHaveLength(3);
+  expect(evaluated[0]).toBe(previous);
+  expect(evaluated[1]).toBe(previous);
+  expect(evaluated[2]).not.toBe(previous);
+  expect(evaluated[2].port).toBe(9999);
+  expect(saved).toMatchObject({ port: 9999, temperature: 0.3 });
+  expect(saved.settings_profiles?.revision).toBe((disk.settings_profiles?.revision ?? 0) + 1);
+  expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings.temperature).toBe(0.3);
+  expect(result.current.actionError).toBeNull();
+});
+
+it("expands a waiting execution-store save against the snapshot a preceding save published", async () => {
+  const { result } = renderHook(() => useAppStore({ pollIntervalMs: 60_000 }));
+  await waitFor(() => expect(result.current.bootState).toBe("ready"));
+  const savesBefore = vi.mocked(api.saveConfig).mock.calls.length;
+  const persisting = deferred<api.AppConfig>();
+  vi.mocked(api.saveConfig).mockReturnValueOnce(persisting.promise);
+  const wrapped = renderHook(() => useExecutionStore(result.current));
+  const evaluated: api.AppConfig[] = [];
+  let direct!: Promise<api.AppConfig>;
+  let queued!: Promise<api.AppConfig>;
+  await act(async () => { direct = result.current.updateConfig({ temperature: 0.5 }); });
+  await waitFor(() => expect(api.saveConfig).toHaveBeenCalledTimes(savesBefore + 1));
+  await act(async () => { queued = wrapped.result.current.store.updateConfig(fresh => { evaluated.push(fresh); return { ctx_size: 8192 }; }); });
+  await waitFor(() => expect(evaluated).toHaveLength(1));
+  // The native save responds with a normalized snapshot the preview never saw.
+  const request = vi.mocked(api.saveConfig).mock.calls[savesBefore][0];
+  await act(async () => { persisting.resolve({ ...structuredClone(request), top_k: 7 }); await direct; await queued; });
+  expect(evaluated).toHaveLength(2);
+  expect(evaluated[0]).toMatchObject({ temperature: 0.5, top_k: testConfig.top_k });
+  expect(evaluated[1]).not.toBe(evaluated[0]);
+  expect(evaluated[1]).toMatchObject({ temperature: 0.5, top_k: 7 });
+  const saved = result.current.cfg!;
+  expect(saved).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
+  expect(saved.settings_profiles?.applied[profileTargetKey(saved.active_model)].settings).toMatchObject({ temperature: 0.5, top_k: 7, ctx_size: 8192 });
+});
+
 it("ignores a cancelled start settling after a new start begins", async () => {
   const first = deferred<string>();
   const second = deferred<string>();

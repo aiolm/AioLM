@@ -1,11 +1,41 @@
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
+import type { ConfigPatch } from '../../shared/state/configSaveQueue';
 import { createTestStore } from '../../testing/appStore';
 import { useExecutionStore } from './useExecutionStore';
-import { restoreExecution } from './modelExecutionState';
+import { MODEL_EXECUTION_KEY, restoreExecution } from './modelExecutionState';
 import { captureProfile, defaultSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileTargetKey } from '../../shared/config/settingsProfiles';
 import { emptyGpuPlacement } from '../../shared/runtime/sessionUtils';
+
+function savedProfileConfig(): AppConfig {
+  const cfg = createTestStore({ active_model: 'a.gguf', gpu: { ...emptyGpuPlacement(), gpu_ids: ['0'] } }).cfg!;
+  const profile = { ...captureProfile(cfg, 'Saved', 'model', 'Saved prompt'), id: 'saved-profile' };
+  cfg.settings_profiles = { ...emptyProfileLibrary(), revision: 1, legacy_imported: true, default_profile_id: defaultSettingsProfile().id,
+    entries: [defaultSettingsProfile(), profile], applied: { [profileTargetKey('a.gguf')]: materializeProfileApplication(cfg, 'Saved prompt', profile) } };
+  return cfg;
+}
+
+// A save that waited for the native queue must store what an immediate save of
+// the inputs present when it persists stores.
+async function saveNow(cfg: AppConfig, patch: ConfigPatch<AppConfig>) {
+  const base = createTestStore(structuredClone(cfg));
+  const hook = renderHook(() => useExecutionStore(base));
+  await act(async () => { await hook.result.current.store.updateConfig(patch); });
+  hook.unmount();
+  const saved = { cfg: base.cfg, memory: localStorage.getItem(MODEL_EXECUTION_KEY) };
+  localStorage.clear();
+  return saved;
+}
+
+function waitingStore(cfg: AppConfig) {
+  const base = createTestStore(structuredClone(cfg));
+  const save = base.updateConfig;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  base.updateConfig = vi.fn(async patch => { await gate; return save(patch); });
+  return { base, release, hook: renderHook(() => useExecutionStore(base)) };
+}
 
 describe('execution store', () => {
   beforeEach(() => localStorage.clear());
@@ -50,6 +80,132 @@ describe('execution store', () => {
     expect(expanded.models_dir).toBe('D:\\models');
     if (expanded.settings_profiles) expect(expanded.settings_profiles.revision).toBe(10);
   });
+  it('saves the latest contents of a caller-owned patch changed while the native save waits', async () => {
+    const cfg = savedProfileConfig();
+    const expected = await saveNow(cfg, { temperature: 0.9 });
+    const { base, release, hook } = waitingStore(cfg);
+    const patch: Partial<AppConfig> = { temperature: 0.3 };
+    let saving!: Promise<AppConfig>;
+    await act(async () => { saving = hook.result.current.store.updateConfig(patch); });
+    expect(base.updateConfig).toHaveBeenCalledOnce();
+    patch.temperature = 0.9;
+    await act(async () => { release(); await saving; });
+    expect(base.cfg).toStrictEqual(expected.cfg);
+    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('a.gguf')].settings.temperature).toBe(0.9);
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(expected.memory);
+  });
+  it('distinguishes an optional field cleared while the native save waits from an absent one', async () => {
+    const cfg = savedProfileConfig();
+    const expected = await saveNow(cfg, { temperature: 0.3, gpu: undefined });
+    const { base, release, hook } = waitingStore(cfg);
+    const patch: Partial<AppConfig> = { temperature: 0.3 };
+    let saving!: Promise<AppConfig>;
+    await act(async () => { saving = hook.result.current.store.updateConfig(patch); });
+    patch.gpu = undefined;
+    await act(async () => { release(); await saving; });
+    expect(base.cfg).toStrictEqual(expected.cfg);
+    expect(base.cfg).toHaveProperty('gpu', undefined);
+    expect(base.cfg!.settings_profiles!.applied[profileTargetKey('a.gguf')].settings).not.toHaveProperty('gpu');
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(expected.memory);
+  });
+  it('re-evaluates a functional patch whose captured value changed while the native save waits', async () => {
+    const cfg = savedProfileConfig();
+    const expected = await saveNow(cfg, { temperature: 0.9 });
+    const { base, release, hook } = waitingStore(cfg);
+    let temperature = 0.3;
+    const evaluated: Array<{ fresh: AppConfig; temperature: number }> = [];
+    let saving!: Promise<AppConfig>;
+    await act(async () => { saving = hook.result.current.store.updateConfig(fresh => { evaluated.push({ fresh, temperature }); return { temperature }; }); });
+    temperature = 0.9;
+    await act(async () => { release(); await saving; });
+    // The preview and the native save each evaluate the patch against the same live snapshot.
+    expect(evaluated.map(entry => entry.temperature)).toEqual([0.3, 0.9]);
+    expect(evaluated.every(entry => entry.fresh === base.cfg)).toBe(true);
+    expect(base.cfg).toStrictEqual(expected.cfg);
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(expected.memory);
+  });
+  it('expands against an in-place edit of the same snapshot made while the native save waits', async () => {
+    const cfg = savedProfileConfig();
+    const key = profileTargetKey('a.gguf');
+    const edited = structuredClone(cfg);
+    edited.settings_profiles!.applied[key].system_prompt = 'Edited while saving';
+    const expected = await saveNow(edited, { temperature: 0.3 });
+    const { base, release, hook } = waitingStore(cfg);
+    let saving!: Promise<AppConfig>;
+    await act(async () => { saving = hook.result.current.store.updateConfig({ temperature: 0.3 }); });
+    base.getConfig()!.settings_profiles!.applied[key].system_prompt = 'Edited while saving';
+    await act(async () => { release(); await saving; });
+    expect(base.cfg).toStrictEqual(expected.cfg);
+    expect(base.cfg!.settings_profiles!.applied[key]).toMatchObject({ profile_id: 'saved-profile', system_prompt: 'Edited while saving', settings: { temperature: 0.3 } });
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBe(expected.memory);
+  });
+  it('assigns a session appended to a caller-owned session list while the native save waits', async () => {
+    const definition = (id: string, model: string, temperature: number) => ({ id, name: id, enabled: false,
+      models: { primary_model: model, mmproj: '', draft_model: '' }, gpu: emptyGpuPlacement(), execution: { temperature } });
+    const cfg = savedProfileConfig();
+    const first = definition('first', 'first.gguf', 0.4);
+    const second = definition('second', 'second.gguf', 0.6);
+    const expected = await saveNow(cfg, { sessions: [first, second] });
+    const { base, release, hook } = waitingStore(cfg);
+    const patch: Partial<AppConfig> = { sessions: [first] };
+    let saving!: Promise<AppConfig>;
+    await act(async () => { saving = hook.result.current.store.updateConfig(patch); });
+    patch.sessions!.push(second);
+    await act(async () => { release(); await saving; });
+    expect(base.cfg).toStrictEqual(expected.cfg);
+    expect(base.cfg!.sessions).toEqual([first, second]);
+    const library = base.cfg!.settings_profiles!;
+    expect(library.applied['session:second']).toMatchObject({ model: 'second.gguf', settings: { temperature: 0.6 } });
+    expect(library.entries.find(entry => entry.id === library.applied['session:second'].profile_id)).toMatchObject({ settings: { temperature: 0.6 } });
+  });
+  it('expands against an array length changed in place on the same snapshot while the native save waits', async () => {
+    const cfg = savedProfileConfig();
+    const key = profileTargetKey('a.gguf');
+    const edited = structuredClone(cfg);
+    edited.lora_adapters.length = 1;
+    const expected = await saveNow(edited, { temperature: 0.3 });
+    const { base, release, hook } = waitingStore(cfg);
+    let saving!: Promise<AppConfig>;
+    await act(async () => { saving = hook.result.current.store.updateConfig({ temperature: 0.3 }); });
+    // A sparse length change keeps the same own keys as the empty array.
+    base.getConfig()!.lora_adapters.length = 1;
+    await act(async () => { release(); await saving; });
+    expect(base.cfg).toStrictEqual(expected.cfg);
+    expect(base.cfg!.settings_profiles!.applied[key].settings.lora_adapters).toHaveLength(1);
+  });
+  it('re-expands the native save callback again after its snapshot changes in place', async () => {
+    const base = createTestStore(savedProfileConfig());
+    const hook = renderHook(() => useExecutionStore(base));
+    await act(async () => { await hook.result.current.store.updateConfig({ temperature: 0.3 }); });
+    const patch = vi.mocked(base.updateConfig).mock.calls[0][0] as (fresh: AppConfig) => Partial<AppConfig>;
+    const live = base.cfg!;
+    const revision = live.settings_profiles!.revision;
+    live.temperature = 0.5;
+    live.settings_profiles!.applied[profileTargetKey('a.gguf')].settings.temperature = 0.5;
+    expect(patch(live)).toMatchObject({ temperature: 0.3, settings_profiles: { revision: revision + 1 } });
+  });
+  it('rejects a conflicting profile library before writing model memory or calling the native save', async () => {
+    const base = createTestStore({ active_model: 'a.gguf' });
+    const cfg = { ...base.cfg!, active_model: '/models/Example.gguf' };
+    const application = materializeProfileApplication(cfg, '', captureProfile(cfg, 'Saved', 'model', ''));
+    const conflicting = { ...emptyProfileLibrary(), entries: [defaultSettingsProfile()], applied: {
+      'model:/models/example.gguf': application, 'model:/models/Example.gguf': { ...application, system_prompt: 'Different' } } };
+    const before = structuredClone(base.cfg);
+    const hook = renderHook(() => useExecutionStore(base));
+    const patch = { active_model: 'b.gguf', settings_profiles: conflicting };
+    await act(async () => { await expect(hook.result.current.store.updateConfig(patch)).rejects.toThrow('Conflicting saved settings'); });
+    expect(base.updateConfig).not.toHaveBeenCalled();
+    expect(localStorage.getItem(MODEL_EXECUTION_KEY)).toBeNull();
+    expect(base.cfg).toStrictEqual(before);
+    expect(hook.result.current.store.actionError).toContain('Conflicting saved settings');
+    // Unusable model memory must not mask the profile conflict.
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage full'); });
+    try {
+      await act(async () => { await expect(hook.result.current.store.updateConfig(patch)).rejects.toThrow('Conflicting saved settings'); });
+      expect(write).not.toHaveBeenCalled();
+      expect(base.updateConfig).not.toHaveBeenCalled();
+    } finally { write.mockRestore(); }
+  });
   it('restores a model after edits, switching and remounting', async () => {
     const base = createTestStore({ active_model: 'a.gguf' });
     const hook = renderHook(() => useExecutionStore(base));
@@ -73,6 +229,18 @@ describe('execution store', () => {
     expect(base.start).toHaveBeenCalledOnce();
     await act(async () => { await hook.result.current.selectModel('b.gguf'); });
     expect(base.cfg?.active_model).toBe('b.gguf');
+  });
+  it('keeps the departing model snapshot and rolls back the new selection after a native save failure', async () => {
+    const base = createTestStore({ active_model: 'a.gguf', temperature: 0.3 });
+    const save = base.updateConfig;
+    base.updateConfig = vi.fn().mockRejectedValueOnce(new Error('disk full')).mockImplementation(save);
+    const hook = renderHook(() => useExecutionStore(base));
+    await act(async () => { await expect(hook.result.current.store.updateConfig({ active_model: 'b.gguf', temperature: 0.9 })).rejects.toThrow('disk full'); });
+    const memory = JSON.parse(localStorage.getItem(MODEL_EXECUTION_KEY)!).models;
+    expect(memory['a.gguf']).toMatchObject({ temperature: 0.3 });
+    expect(memory).not.toHaveProperty('b.gguf');
+    expect(base.cfg).toMatchObject({ active_model: 'a.gguf', temperature: 0.3 });
+    expect(hook.result.current.store.actionError).toContain('disk full');
   });
 
   it('starts the persisted selected profile after a failed override save instead of launching the failed draft', async () => {
