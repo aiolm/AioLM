@@ -54,6 +54,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const lock = useRef(false);
   const liveProfiles = useRef(new Map<string, { model: string; pid?: number; application: ProfileApplication }>());
   const deletedProfileFallbacks = useRef(new Map<string, ProfileApplication>());
+  const runningProfile = useRef<{ key: string; application?: ProfileApplication }>(undefined);
   const cancelPreflight = () => {
     const owner = preflightOwner.current;
     if (!owner || owner.cancelled) return;
@@ -362,8 +363,23 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const liveState = liveStatus?.state ?? (target?.kind === 'session' ? 'stopped' : undefined);
   const cachedApplication = liveProfiles.current.get(id);
   const liveModel = loadedModelPath(liveStatus);
+  // Session polling re-renders an open editor every 1.5 s. Resolving the saved
+  // profile copies and serializes the whole library, so the result is reused
+  // while the configuration content is unchanged. Content, not the reference,
+  // is the key because a configuration can be updated in place. A library
+  // migrated from browser storage is resolved again on every render. The entry
+  // is kept only by a render that resolves a stored library, so a closed editor,
+  // a live cache hit or a migrated library releases the copied configuration.
+  const previousRunningProfile = runningProfile.current;
+  runningProfile.current = undefined;
+  const savedRunningProfile = (cfg: api.AppConfig, sessionId: string) => {
+    if (!cfg.settings_profiles) return appliedProfile(cfg, sessionId);
+    const key = JSON.stringify([sessionId, cfg]);
+    runningProfile.current = previousRunningProfile?.key === key ? previousRunningProfile : { key, application: appliedProfile(cfg, sessionId) };
+    return runningProfile.current.application;
+  };
   const liveApplication = cachedApplication && cachedApplication.pid === liveStatus?.pid && cachedApplication.model === liveModel
-    ? cachedApplication.application : store.cfg && liveModel ? appliedProfile({ ...store.cfg, active_model: liveModel }, id) : undefined;
+    ? cachedApplication.application : store.cfg && liveModel ? savedRunningProfile({ ...store.cfg, active_model: liveModel }, id) : undefined;
   const stopsOtherSessions = (target?.kind === 'session' || target?.kind === 'default') && store.cfg?.stop_existing_sessions_on_load !== false
     && (sessions.some(session => session.id !== id && ['running', 'starting', 'stopping'].includes(session.state))
       || (target.kind === 'session' && ['running', 'starting', 'stopping'].includes(store.status.state)));

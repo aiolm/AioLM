@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestStore as createBaseTestStore } from '../../testing/appStore';
@@ -13,7 +14,7 @@ import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliv
 import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
 
 const mocks = vi.hoisted(() => ({
-  dialog: null as ModelSettingsDialogProps | null,
+  dialog: null as ModelSettingsDialogProps | null, native: false,
   sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(), cancelLaunchPreflight: vi.fn(),
   sessionStart: vi.fn(), sessionStop: vi.fn(), applyRequestSettings: vi.fn(),
 }));
@@ -25,7 +26,7 @@ vi.mock('./ModelSettingsDialog', () => ({ default: (props: ModelSettingsDialogPr
 vi.mock('../runtimes/Runtimes', () => ({ default: ({ engineRequest }: { engineRequest: { provider: string } }) => <p>Inline runtime manager: {engineRequest.provider}</p> }));
 vi.mock('../../shared/i18n/i18n', () => ({ useI18n: () => ({ locale: 'en' }) }));
 vi.mock('../../shared/api/index', () => ({
-  isNativeRuntimeAvailable: () => false,
+  isNativeRuntimeAvailable: () => mocks.native,
   sessionList: mocks.sessionList, serverStatus: mocks.serverStatus,
   normalizeSessionList: (value: SessionStatus[]) => value,
   preflightLaunch: mocks.preflightLaunch, cancelLaunchPreflight: mocks.cancelLaunchPreflight, sessionStart: mocks.sessionStart,
@@ -74,7 +75,7 @@ function running(cfg: AppConfig, id = 'default'): SessionStatus {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear(); mocks.dialog = null;
+  vi.clearAllMocks(); localStorage.clear(); mocks.dialog = null; mocks.native = false;
   mocks.sessionList.mockResolvedValue([]);
   mocks.serverStatus.mockResolvedValue({ state: 'stopped' });
   mocks.preflightLaunch.mockImplementation(async (cfg: AppConfig) => structuredClone(cfg));
@@ -713,6 +714,152 @@ describe('model launch preparation', () => {
     act(() => context.open({ target: { kind: 'default' } }));
     expect(mocks.dialog?.liveApplication?.system_prompt).toBe('New prompt');
     expect(mocks.dialog?.liveApplication?.profile_id).toBe('profile-new');
+  });
+});
+
+describe('running profile without a live cache', () => {
+  class Failure extends Component<{ children: ReactNode }, { error?: Error }> {
+    state: { error?: Error } = {};
+    static getDerivedStateFromError(error: Error) { return { error }; }
+    render() { return this.state.error ? <p role="alert">{this.state.error.message}</p> : this.props.children; }
+  }
+  // Each re-render stands in for a session poll: the provider renders again
+  // with whatever the store holds at that moment.
+  async function openView(store: AppStore, request: ModelSettingsRequest) {
+    const tree = () => <Failure><ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider></Failure>;
+    const view = render(tree());
+    act(() => context.open(request));
+    await waitFor(() => expect(mocks.dialog).not.toBeNull());
+    return () => view.rerender(tree());
+  }
+  const live = () => mocks.dialog?.liveApplication;
+  const key = profileTargetKey('model.gguf');
+
+  it('follows saved and in-place configuration changes, the loaded model and the engine of the default target', async () => {
+    const store = createTestStore();
+    const cfg = store.cfg!;
+    store.status = running(cfg);
+    const rerender = await openView(store, { target: { kind: 'default' } });
+    expect(live()).toMatchObject({ model: 'model.gguf', profile_id: 'profile-old', profile_name: 'Old', system_prompt: 'Old prompt' });
+
+    // The test store assigns each saved patch onto the same configuration object.
+    await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!,
+      entries: current.settings_profiles!.entries.map(entry => entry.id === 'profile-old' ? { ...entry, name: 'Renamed' } : entry) } }));
+    rerender();
+    expect(store.cfg).toBe(cfg);
+    expect(live()).toMatchObject({ profile_id: 'profile-old', profile_name: 'Renamed', system_prompt: 'Old prompt' });
+
+    await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
+      [key]: { ...current.settings_profiles!.applied[key], system_prompt: 'Saved prompt' } } } }));
+    rerender();
+    expect(live()).toMatchObject({ profile_id: 'profile-old', system_prompt: 'Saved prompt' });
+
+    cfg.settings_profiles!.applied[key].profile_id = 'profile-new';
+    rerender();
+    expect(live()).toMatchObject({ profile_id: 'profile-new', profile_name: 'New', system_prompt: 'Saved prompt' });
+
+    await store.updateConfig(current => ({ settings_profiles: setDefaultSettingsProfile(current.settings_profiles!, 'profile-old') }));
+    rerender();
+    expect(cfg.settings_profiles!.default_profile_id).toBe('profile-old');
+    expect(live()).toMatchObject({ profile_id: 'profile-new', profile_name: 'New', system_prompt: 'Saved prompt' });
+
+    // Without a saved snapshot, the running target is recovered from the execution values.
+    await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!,
+      applied: Object.fromEntries(Object.entries(current.settings_profiles!.applied).filter(([target]) => target !== key)) } }));
+    rerender();
+    expect(live()).toMatchObject({ model: 'model.gguf', settings: { temperature: 0.8 } });
+    await store.updateConfig({ temperature: 0.3 });
+    rerender();
+    expect(live()).toMatchObject({ model: 'model.gguf', settings: { temperature: 0.3 } });
+
+    const other = { ...cfg, active_model: 'other.gguf', temperature: 0.6 };
+    await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
+      [profileTargetKey('other.gguf')]: materializeProfileApplication(other, 'Other prompt', current.settings_profiles!.entries[1]) } } }));
+    rerender();
+    expect(live()).toMatchObject({ model: 'model.gguf', settings: { temperature: 0.3 } });
+    store.status = running(other);
+    rerender();
+    expect(live()).toMatchObject({ model: 'other.gguf', profile_id: 'profile-new', system_prompt: 'Other prompt', settings: { temperature: 0.6 } });
+    const shown = structuredClone(live());
+    store.status = { ...running(other), pid: 5678 };
+    rerender();
+    expect(live()).toEqual(shown);
+
+    await store.updateConfig({ active_provider: 'vllm' });
+    rerender();
+    expect(live()).toMatchObject({ provider: 'vllm', model: 'other.gguf' });
+    expect(store.updateConfig).toHaveBeenCalledTimes(7);
+    expect(store.start).not.toHaveBeenCalled();
+  });
+
+  it('prefers the live cache of the same process and returns to it after another process was shown', async () => {
+    const store = createTestStore();
+    const status = running(store.cfg!); store.status = status;
+    mocks.serverStatus.mockResolvedValue(status);
+    const rerender = await openView(store, { target: { kind: 'default' } });
+    const edit = editorResult(mocks.dialog!, mocks.dialog!.initialConfig);
+    edit.application.system_prompt = 'Delivered prompt';
+    await act(async () => { await mocks.dialog!.onProfileCommit(mocks.dialog!.initialConfig, { ...edit, saveMode: 'all' }, true); });
+    expect(mocks.applyRequestSettings).toHaveBeenCalledOnce();
+    expect(live()?.system_prompt).toBe('Delivered prompt');
+
+    await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
+      [key]: { ...current.settings_profiles!.applied[key], system_prompt: 'Later saved prompt' } } } }));
+    rerender();
+    expect(live()?.system_prompt).toBe('Delivered prompt');
+    store.status = { ...status, pid: 5678 };
+    rerender();
+    expect(live()?.system_prompt).toBe('Later saved prompt');
+    store.status = status;
+    rerender();
+    expect(live()?.system_prompt).toBe('Delivered prompt');
+  });
+
+  it('shows the saved profile of each running session target', async () => {
+    mocks.native = true;
+    const work = namedSession();
+    const play = { ...namedSession(), id: 'play', name: 'Play', models: { ...work.models, primary_model: 'play.gguf' } };
+    const store = createTestStore({ sessions: [work, play] });
+    const cfg = store.cfg!;
+    cfg.settings_profiles!.applied['session:play'] = materializeProfileApplication(sessionConfig(cfg, play), 'Play prompt', cfg.settings_profiles!.entries[1]);
+    mocks.sessionList.mockImplementation(async () => [running(sessionConfig(cfg, work), 'work'), running(sessionConfig(cfg, play), 'play')]);
+    await openView(store, { target: { kind: 'session', sessionId: 'work' } });
+    await waitFor(() => expect(live()).toMatchObject({ model: 'work.gguf', profile_id: 'profile-old', system_prompt: 'Old prompt' }));
+    act(() => context.open({ target: { kind: 'session', sessionId: 'play' } }));
+    await waitFor(() => expect(live()).toMatchObject({ model: 'play.gguf', profile_id: 'profile-new', system_prompt: 'Play prompt' }));
+    act(() => context.open({ target: { kind: 'session', sessionId: 'work' } }));
+    await waitFor(() => expect(live()).toMatchObject({ model: 'work.gguf', profile_id: 'profile-old', system_prompt: 'Old prompt' }));
+  });
+
+  it('reads a target without a stored library from browser storage on every render and reports invalid storage', async () => {
+    const legacy = (prompt: string) => JSON.stringify({ version: 4, server: [], model: [{ id: 'old', name: 'Old', system_prompt: prompt }] });
+    localStorage.setItem('aiolm-model-profiles', legacy('Legacy prompt'));
+    const store = createBaseTestStore();
+    store.status = running(store.cfg!);
+    const rerender = await openView(store, { target: { kind: 'default' } });
+    expect(store.cfg).not.toHaveProperty('settings_profiles');
+    expect(live()).toMatchObject({ model: 'model.gguf', system_prompt: 'Legacy prompt' });
+    localStorage.setItem('aiolm-model-profiles', legacy('Changed legacy prompt'));
+    rerender();
+    expect(live()).toMatchObject({ model: 'model.gguf', system_prompt: 'Changed legacy prompt' });
+    localStorage.setItem('aiolm-model-profiles', '{invalid');
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent('Cannot import saved profiles: invalid aiolm-model-profiles. The original data has been preserved.');
+    expect(localStorage.getItem('aiolm-model-profiles')).toBe('{invalid');
+    expect(store.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('reports a stored library error on the next render instead of the earlier running profile', async () => {
+    const store = createTestStore();
+    store.status = running(store.cfg!);
+    const rerender = await openView(store, { target: { kind: 'default' } });
+    expect(live()?.system_prompt).toBe('Old prompt');
+    const posix = '/Models/Example.gguf';
+    const saved = { ...store.cfg!.settings_profiles!.applied[key], model: posix };
+    await store.updateConfig(current => ({ settings_profiles: { ...current.settings_profiles!, applied: { ...current.settings_profiles!.applied,
+      'model:/models/example.gguf': saved, [profileTargetKey(posix)]: { ...saved, system_prompt: 'Different prompt' } } } }));
+    rerender();
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Conflicting saved settings for the same model path\.$/);
   });
 });
 
