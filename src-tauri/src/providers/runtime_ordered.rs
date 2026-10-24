@@ -283,12 +283,12 @@ pub fn resolve_plan(
     selected_scope: &[String],
     plan: &OrderedPlan,
 ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
-    if let Err(message) = schema.validate() {
-        return Err(vec![OptionIssue {
+    let validated = schema.validated().map_err(|message| {
+        vec![OptionIssue {
             key: String::new(),
             message,
-        }]);
-    }
+        }]
+    })?;
     if plan.len() > MAX_PLAN {
         return Err(vec![OptionIssue {
             key: String::new(),
@@ -307,11 +307,9 @@ pub fn resolve_plan(
             .or_default()
             .push((occurrence.spelling.clone(), occurrence.values.clone()));
     }
-    let (request, options_by_key) = {
-        let (canonical, options_by_key) =
-            schema.resolve_occurrences_indexed(selected_scope, &grouped)?;
-        (canonical.request, options_by_key)
-    };
+    let request = validated
+        .resolve_occurrences(selected_scope, &grouped)?
+        .request;
     // Re-emit flags in plan order within each scope depth. Positionals keep
     // slot order (never plan order) so reordered input cannot rebind a later
     // saved value into an earlier slot. Dash delimiters mirror the grouped
@@ -319,7 +317,7 @@ pub fn resolve_plan(
     let mut flags_by_depth: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut positionals_by_depth: BTreeMap<usize, Vec<(u16, Vec<String>)>> = BTreeMap::new();
     for occurrence in plan {
-        let Some(option) = options_by_key.get(occurrence.key.as_str()) else {
+        let Some(option) = validated.option(&occurrence.key) else {
             continue;
         };
         if option.target == super::runtime_options::Target::Request {
@@ -2600,5 +2598,105 @@ mod tests {
                 assert!(resolved.request.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn ordered_resolution_keeps_schema_before_plan_scope_and_value_errors() {
+        let mut count = option("count", "--count", 1, Some(1));
+        count.kind = known(ValueKind::Integer);
+        let mut schema = schema(vec![count]);
+        let invalid_scope = vec!["--invalid".into()];
+        let invalid_value = vec![PlannedOccurrence {
+            key: "count".into(),
+            spelling: None,
+            values: vec![json!("not an integer")],
+        }];
+        let oversized_plan = vec![invalid_value[0].clone(); MAX_PLAN + 1];
+        schema.schema_version += 1;
+        let schema_error = schema.validate().unwrap_err();
+        for plan in [&invalid_value, &oversized_plan] {
+            let issues = resolve_plan(&schema, &invalid_scope, plan).unwrap_err();
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].key, "");
+            assert_eq!(issues[0].message, schema_error);
+        }
+        schema.schema_version = SCHEMA_VERSION;
+        assert_eq!(
+            resolve_plan(&schema, &invalid_scope, &oversized_plan).unwrap_err()[0].message,
+            "too many planned option occurrences"
+        );
+        assert_eq!(
+            resolve_plan(&schema, &invalid_scope, &invalid_value).unwrap_err()[0].message,
+            "invalid selected subcommand"
+        );
+        let issues = resolve_plan(&schema, &[], &invalid_value).unwrap_err();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].key, "count");
+
+        // This reaches the final serialized-size check, after all option facts
+        // and identities pass. It must still win over the plan/scope errors.
+        schema.options = (0..100)
+            .map(|index| {
+                let mut option = option(
+                    &format!("item{index}"),
+                    &format!("--item{index}"),
+                    1,
+                    Some(1),
+                );
+                option.help = "x".repeat(32_768);
+                option
+            })
+            .collect();
+        assert_eq!(
+            schema.validate().unwrap_err(),
+            "runtime option schema exceeds 3 MiB"
+        );
+        assert_eq!(
+            resolve_plan(&schema, &invalid_scope, &oversized_plan).unwrap_err()[0].message,
+            "runtime option schema exceeds 3 MiB"
+        );
+    }
+
+    #[test]
+    fn ordered_and_direct_calls_revalidate_repaired_schema_and_own_their_results() {
+        let mut schema = schema(vec![option("label", "--label", 1, Some(1))]);
+        let scope = vec!["serve".into()];
+        schema.options[0].scope = scope.clone();
+        let plan = vec![PlannedOccurrence {
+            key: "label".into(),
+            spelling: None,
+            values: vec![json!("literal ; $HOME λ")],
+        }];
+        let grouped = overrides_from_plan(&plan);
+        let schema_before = serde_json::to_vec(&schema).unwrap();
+        let plan_before = serde_json::to_vec(&plan).unwrap();
+        let grouped_before = serde_json::to_vec(&grouped).unwrap();
+        let expected = resolve_plan(&schema, &scope, &plan).unwrap();
+        assert_eq!(expected.scope_boundaries, vec![0]);
+        assert_eq!(schema.resolve(&scope, &grouped).unwrap(), expected);
+
+        schema.binding.fingerprint = "invalid".into();
+        for issues in [
+            resolve_plan(&schema, &scope, &plan).unwrap_err(),
+            schema.resolve(&scope, &grouped).unwrap_err(),
+        ] {
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].key, "");
+            assert_eq!(
+                issues[0].message,
+                "option schema needs an engine, runtime and SHA-256 fingerprint"
+            );
+        }
+        schema.binding.fingerprint = "a".repeat(64);
+        assert_eq!(resolve_plan(&schema, &scope, &plan).unwrap(), expected);
+        assert_eq!(schema.resolve(&scope, &grouped).unwrap(), expected);
+        let mut owned = resolve_plan(&schema, &scope, &plan).unwrap();
+        owned.argv[2].push_str(" changed");
+        owned.request.insert("new".into(), json!(false));
+        owned.scope_boundaries.clear();
+        assert_eq!(serde_json::to_vec(&schema).unwrap(), schema_before);
+        assert_eq!(serde_json::to_vec(&plan).unwrap(), plan_before);
+        assert_eq!(serde_json::to_vec(&grouped).unwrap(), grouped_before);
+        assert_eq!(resolve_plan(&schema, &scope, &plan).unwrap(), expected);
     }
 }

@@ -335,7 +335,12 @@ pub struct ResolvedOptions {
     pub request: Map<String, Value>,
 }
 
-type IndexedResolution<'a> = (ResolvedOptions, BTreeMap<&'a str, &'a OptionDefinition>);
+/// Full validation and its key index belong to this exact immutable schema.
+/// The borrow keeps public schema fields unchanged until resolution ends.
+pub(super) struct ValidatedSchema<'a> {
+    schema: &'a OptionSchema,
+    options_by_key: BTreeMap<&'a str, &'a OptionDefinition>,
+}
 
 impl ResolvedOptions {
     pub(crate) fn sections(&self, scope: &[String]) -> Result<Vec<Vec<String>>, String> {
@@ -426,6 +431,14 @@ impl OptionSchema {
             .map_err(|e| format!("invalid runtime option schema: {e}"))?;
         schema.validate()?;
         Ok(schema)
+    }
+
+    pub(super) fn validated(&self) -> Result<ValidatedSchema<'_>, String> {
+        self.validate_indexed()
+            .map(|options_by_key| ValidatedSchema {
+                schema: self,
+                options_by_key,
+            })
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -627,25 +640,30 @@ impl OptionSchema {
         selected_scope: &[String],
         overrides: &BTreeMap<String, Vec<Occurrence>>,
     ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
-        self.resolve_occurrences_indexed(selected_scope, overrides)
-            .map(|(resolved, _)| resolved)
+        self.validated()
+            .map_err(|message| {
+                vec![OptionIssue {
+                    key: String::new(),
+                    message,
+                }]
+            })?
+            .resolve_occurrences(selected_scope, overrides)
+    }
+}
+
+impl<'a> ValidatedSchema<'a> {
+    pub(super) fn option(&self, key: &str) -> Option<&'a OptionDefinition> {
+        self.options_by_key.get(key).copied()
     }
 
-    /// Keep this canonical call's validated key index for ordered re-emission.
-    pub(super) fn resolve_occurrences_indexed(
+    /// Resolve only against the schema that produced this validated index.
+    pub(super) fn resolve_occurrences(
         &self,
         selected_scope: &[String],
         overrides: &BTreeMap<String, Vec<Occurrence>>,
-    ) -> Result<IndexedResolution<'_>, Vec<OptionIssue>> {
-        let options_by_key = match self.validate_indexed() {
-            Ok(options_by_key) => options_by_key,
-            Err(message) => {
-                return Err(vec![OptionIssue {
-                    key: String::new(),
-                    message,
-                }]);
-            }
-        };
+    ) -> Result<ResolvedOptions, Vec<OptionIssue>> {
+        let schema = self.schema;
+        let options_by_key = &self.options_by_key;
         if overrides.len() > MAX_OPTIONS {
             return Err(vec![OptionIssue {
                 key: String::new(),
@@ -714,7 +732,7 @@ impl OptionSchema {
                     })
             })
         };
-        for constraint in &self.constraints {
+        for constraint in &schema.constraints {
             match constraint.supported() {
                 Some(Relation::Requires { when, other }) if matches(when) && !matches(other) => {
                     issues.push(OptionIssue {
@@ -739,7 +757,7 @@ impl OptionSchema {
                 argv.push(selected_scope[depth - 1].clone());
             }
             let mut positional = Vec::new();
-            for option in &self.options {
+            for option in &schema.options {
                 if option.scope != selected_scope[..depth] {
                     continue;
                 }
@@ -758,7 +776,7 @@ impl OptionSchema {
             // A slot whose confirmed role gives it to the launch template (a
             // binding or an entry token) is filled before user values.
             if let Some((last, _, _)) = positional.last() {
-                for earlier in self.options.iter().filter(|o| {
+                for earlier in schema.options.iter().filter(|o| {
                     o.scope == selected_scope[..depth]
                         && o.position.is_some_and(|p| p < *last)
                         && o.managed.is_none_or(|m| m == ManagedBinding::Discovery)
@@ -779,7 +797,7 @@ impl OptionSchema {
             // Only the last supplied positional may take a varying number of
             // values; otherwise the parser could not tell where it ends.
             let varying = |key: &str| {
-                self.options.iter().any(|o| {
+                schema.options.iter().any(|o| {
                     o.key == key
                         && (o.repeatable.supported() == Some(&true)
                             || o.arity.supported().is_none_or(|a| a.max != Some(a.min)))
@@ -797,7 +815,8 @@ impl OptionSchema {
                 .iter()
                 .any(|(_, _, args)| args.iter().any(|s| s.starts_with('-')))
             {
-                if depth != selected_scope.len() || self.end_of_options.supported() != Some(&true) {
+                if depth != selected_scope.len() || schema.end_of_options.supported() != Some(&true)
+                {
                     issues.push(OptionIssue { key: positional[0].1.clone(), message: "leading-dash positional values need an explicitly supported end-of-options delimiter".into() });
                 } else {
                     argv.push("--".into());
@@ -816,14 +835,11 @@ impl OptionSchema {
             });
         }
         if issues.is_empty() {
-            Ok((
-                ResolvedOptions {
-                    argv,
-                    request,
-                    scope_boundaries,
-                },
-                options_by_key,
-            ))
+            Ok(ResolvedOptions {
+                argv,
+                request,
+                scope_boundaries,
+            })
         } else {
             Err(issues)
         }
