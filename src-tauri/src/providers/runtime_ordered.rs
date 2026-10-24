@@ -70,6 +70,13 @@ fn order_key_valid(key: &str) -> bool {
 /// The saved order record, checked against the grouped values it orders.
 /// `Ok(None)` means the profile has no record and resolves canonically.
 pub fn saved_order(values: &Map<String, Value>) -> Result<Option<SavedOrder>, String> {
+    checked_saved_order(values).map(|checked| checked.map(|(order, _)| order))
+}
+
+// Keep the grouped values checked by the record for this resolution only.
+fn checked_saved_order(
+    values: &Map<String, Value>,
+) -> Result<Option<(SavedOrder, Overrides)>, String> {
     let Some(raw) = values.get(ORDER_KEY) else {
         return Ok(None);
     };
@@ -128,7 +135,7 @@ pub fn saved_order(values: &Map<String, Value>) -> Result<Option<SavedOrder>, St
             ));
         }
     }
-    Ok(Some(order))
+    Ok(Some((order, grouped)))
 }
 
 /// Keys whose position the saved order decides. Empty without a valid record.
@@ -148,7 +155,14 @@ pub fn saved_plan(
     values: &Map<String, Value>,
     order: &SavedOrder,
 ) -> OrderedPlan {
-    let grouped = overrides_from_map(values);
+    saved_plan_from_grouped(schema, &overrides_from_map(values), order)
+}
+
+fn saved_plan_from_grouped(
+    schema: &OptionSchema,
+    grouped: &Overrides,
+    order: &SavedOrder,
+) -> OrderedPlan {
     let recorded = order.keys();
     let mut plan = Vec::new();
     let mut push_all = |key: &str, value: &Override| {
@@ -167,7 +181,7 @@ pub fn saved_plan(
             }
         }
     }
-    for (key, value) in &grouped {
+    for (key, value) in grouped {
         if !recorded.contains(key.as_str()) && !schema.options.iter().any(|o| o.key == *key) {
             push_all(key, value);
         }
@@ -198,7 +212,7 @@ pub fn resolve_saved(
             message,
         }]
     };
-    let Some(order) = saved_order(values).map_err(issue)? else {
+    let Some((order, grouped)) = checked_saved_order(values).map_err(issue)? else {
         return schema.resolve(selected_scope, &overrides_from_map(values));
     };
     for key in order.keys() {
@@ -212,7 +226,9 @@ pub fn resolve_saved(
             )));
         }
     }
-    resolve_plan(schema, selected_scope, &saved_plan(schema, values, &order))
+    let plan = saved_plan_from_grouped(schema, &grouped, &order);
+    drop(grouped);
+    resolve_plan(schema, selected_scope, &plan)
 }
 
 /// One planned occurrence in input order.
@@ -2698,5 +2714,74 @@ mod tests {
         assert_eq!(serde_json::to_vec(&plan).unwrap(), plan_before);
         assert_eq!(serde_json::to_vec(&grouped).unwrap(), grouped_before);
         assert_eq!(resolve_plan(&schema, &scope, &plan).unwrap(), expected);
+    }
+
+    #[test]
+    fn saved_calls_rebuild_after_map_changes_and_return_independent_owned_values() {
+        let mut schema = interleaving_schema();
+        let mut values = saved(json!({
+            "alpha": {"occurrences": [["one"], ["three"]]}, "beta": "two",
+            ORDER_KEY: {"version": 1, "occurrences": [{"key":"alpha"}, {"key":"beta"}, {"key":"alpha","spelling":"-a"}]}
+        }));
+        let before = serde_json::to_vec(&values).unwrap();
+        let order = saved_order(&values).unwrap().unwrap();
+        let mut plan = saved_plan(&schema, &values, &order);
+        let expected = resolve_saved(&schema, &[], &values).unwrap();
+        let mut result = expected.clone();
+        plan[0].values[0] = json!("edited owned row");
+        result.argv.clear();
+        result.request.insert("owned".into(), json!(false));
+        result.scope_boundaries.push(42);
+        assert_eq!(serde_json::to_vec(&values).unwrap(), before);
+        assert_eq!(
+            saved_plan(&schema, &values, &order)[0].values,
+            [json!("one")]
+        );
+        assert_eq!(resolve_saved(&schema, &[], &values).unwrap(), expected);
+
+        values.insert("beta".into(), json!("fresh"));
+        assert_eq!(
+            saved_plan(&schema, &values, &order)[1].values,
+            [json!("fresh")]
+        );
+        assert_eq!(
+            resolve_saved(&schema, &[], &values).unwrap().argv,
+            ["--alpha", "one", "--beta", "fresh", "-a", "three"]
+        );
+        values.insert("alpha".into(), json!({"occurrences": [["one"]]}));
+        assert!(saved_order(&values)
+            .unwrap_err()
+            .contains("but 1 are saved"));
+        assert!(recorded_keys(&values).is_empty());
+        assert_eq!(
+            resolve_saved(&schema, &[], &values).unwrap_err()[0].key,
+            ORDER_KEY
+        );
+        values.insert("alpha".into(), json!({"occurrences": [["one"], ["three"]]}));
+        schema.schema_version += 1;
+        assert_eq!(resolve_saved(&schema, &[], &values).unwrap_err()[0].key, "");
+        schema.schema_version = SCHEMA_VERSION;
+        assert!(resolve_saved(&schema, &[], &values).is_ok());
+    }
+
+    #[test]
+    fn saved_order_and_request_errors_keep_priority_over_invalid_schema() {
+        let mut request = option("temperature", "--temperature", 1, Some(1));
+        request.target = Target::Request;
+        request.spellings.clear();
+        request.request_field = known("temperature".into());
+        let mut schema = schema(vec![request]);
+        schema.schema_version += 1;
+        let mut values = saved(json!({"temperature": "0.5", ORDER_KEY: {
+            "version": 1, "occurrences": [{"key":"temperature"}]
+        }}));
+        let issue = &resolve_saved(&schema, &[], &values).unwrap_err()[0];
+        assert_eq!(issue.key, ORDER_KEY);
+        assert_eq!(issue.message, "temperature is sent with requests and has no command-line position; remove it from the saved order");
+        values.insert(ORDER_KEY.into(), json!({"version":2,"occurrences":[]}));
+        assert_eq!(resolve_saved(&schema, &[], &values).unwrap_err()[0].message,
+            "the saved option order uses version 2, which this app does not support; the saved values were retained");
+        values.insert(ORDER_KEY.into(), json!({"version":1,"occurrences":[]}));
+        assert_eq!(resolve_saved(&schema, &[], &values).unwrap_err()[0].key, "");
     }
 }
