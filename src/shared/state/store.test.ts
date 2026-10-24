@@ -18,6 +18,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const engineStatus: api.EngineInfo = {
+  provider: 'custom.status', runtime_id: 'synthetic-runtime', runtime_variant: 'external-process',
+  upstream_model: 'synthetic-model', speech_model_type: null,
+  modalities: { text: true, image: true, audio: false, video: false }, tasks: ['generate', 'embed'],
+  request_option_keys: ['temperature', 'payload', 'unsaved'],
+  request_fields: { temperature: 0.75, payload: { text: '한글🙂\n"\\', values: [null, true, -7] } },
+  embedding_model: 'synthetic-embedding', embedding_namespace: 'synthetic-namespace',
+  chat_supported: true, tools_auto: true, tool_parser: false,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
@@ -110,6 +120,8 @@ it("serializes concurrent initialization so migration is saved only once", async
 it("preserves the rendered snapshot when polling returns unchanged nested status", async () => {
   const snapshot: api.ServerStatus = {
     state: "running", url: "http://localhost:8080/v1", log_tail: "ready",
+    engine: structuredClone(engineStatus), active_requests: 1, idle_seconds: 0,
+    execution: { active_provider: engineStatus.provider, active_runtime: engineStatus.runtime_id, provider_options: { [engineStatus.provider]: engineStatus.request_fields } },
     memory: { model_mb: 10, context_mb: 1, kv_mb: 1, projector_mb: 0, adapters_mb: 0, total_mb: 12, source: "metadata" },
     lifecycle: { sleep_idle_seconds: 0, request_timeout_seconds: 60, parallel: 1 },
   };
@@ -141,6 +153,7 @@ it('clears transient notices without erasing authoritative runtime failure diagn
 it("still publishes changed diagnostics and removes stale optional status fields", async () => {
   const initial: api.ServerStatus = {
     state: "running", log_tail: "ready",
+    engine: structuredClone(engineStatus), active_requests: 1, idle_seconds: 0,
     memory: { model_mb: 10, context_mb: 1, kv_mb: 1, projector_mb: 0, adapters_mb: 0, total_mb: 12, source: "metadata" },
     lifecycle: { sleep_idle_seconds: 0, request_timeout_seconds: 60, parallel: 1 },
   };
@@ -151,6 +164,15 @@ it("still publishes changed diagnostics and removes stale optional status fields
     { memory: { ...initial.memory!, total_mb: 20 } },
     { lifecycle: { ...initial.lifecycle!, active_requests: 1 } },
     { log_tail: "request completed" },
+    { idle_seconds: 1 },
+    { active_requests: 0 },
+    { engine: { ...engineStatus, runtime_id: 'replacement-runtime' } },
+    { engine: { ...engineStatus, modalities: { ...engineStatus.modalities, audio: true } } },
+    { engine: { ...engineStatus, tasks: ['generate'] } },
+    { engine: { ...engineStatus, request_fields: { ...engineStatus.request_fields, payload: { text: 'updated', values: [false, null, 7] } } } },
+    { engine: { ...engineStatus, request_option_keys: ['temperature'] } },
+    { engine: { ...engineStatus, chat_supported: false, tool_parser: true, request_lora: 'synthetic-adapter' } },
+    { engine: { ...engineStatus, embedding_namespace: 'replacement-namespace' } },
   ];
   for (const patch of updates) {
     const next = { ...result.current.status, ...patch };
@@ -158,6 +180,12 @@ it("still publishes changed diagnostics and removes stale optional status fields
     await act(async () => { await result.current.refreshStatus(); });
     expect(result.current.status).toEqual(next);
   }
+  const withoutEngine = { ...result.current.status };
+  delete withoutEngine.engine;
+  vi.mocked(api.serverStatus).mockResolvedValue(withoutEngine);
+  await act(async () => { await result.current.refreshStatus(); });
+  expect(result.current.status).toEqual(withoutEngine);
+  expect(result.current.status).not.toHaveProperty('engine');
   vi.mocked(api.serverStatus).mockResolvedValue({ state: "stopped" });
   await act(async () => { await result.current.refreshStatus(); });
   expect(result.current.status).toEqual({ state: "stopped" });

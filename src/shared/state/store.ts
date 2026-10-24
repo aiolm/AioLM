@@ -72,7 +72,7 @@ function sameServerStatus(left: api.ServerStatus, right: api.ServerStatus): bool
   return keys.length === Object.keys(right).length && keys.every((key) => {
     if (key === "memory") return shallowEqual(left.memory, right.memory);
     if (key === "lifecycle") return shallowEqual(left.lifecycle, right.lifecycle);
-    if (key === 'execution') return JSON.stringify(left.execution) === JSON.stringify(right.execution);
+    if (key === 'execution' || key === 'engine') return JSON.stringify(left[key]) === JSON.stringify(right[key]);
     return Object.is(left[key], right[key]);
   });
 }
