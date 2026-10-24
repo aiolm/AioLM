@@ -776,12 +776,6 @@ pub fn saved_option_issues(
     issues
 }
 
-fn options(cfg: &AppConfig) -> Map<String, Value> {
-    cfg.provider_options
-        .get(&cfg.active_provider)
-        .cloned()
-        .unwrap_or_default()
-}
 fn expand(
     text: &str,
     cfg: &AppConfig,
@@ -1283,8 +1277,14 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
     if p.model != cfg.active_model || model_fingerprint != fingerprint(&cfg.active_model) {
         return Err("selected model requires a successful adapter probe".into());
     }
-    let values = options(cfg);
-    let issues = saved_option_issues(cfg, &r.manifest, &values);
+    // Validate every saved option without copying launch values that the
+    // returned engine metadata does not own.
+    let empty = Map::new();
+    let values = cfg
+        .provider_options
+        .get(&cfg.active_provider)
+        .unwrap_or(&empty);
+    let issues = saved_option_issues(cfg, &r.manifest, values);
     if !issues.is_empty() {
         return Err(issues
             .iter()
@@ -1311,13 +1311,14 @@ pub fn info(cfg: &AppConfig) -> Result<EngineInfo, String> {
             .map(|s| s.key.clone())
             .collect(),
         request_fields: values
-            .into_iter()
+            .iter()
             .filter(|(key, _)| {
                 r.manifest
                     .options
                     .iter()
-                    .any(|s| s.key == *key && s.target == "request")
+                    .any(|s| s.key == key.as_str() && s.target == "request")
             })
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
         request_lora: None,
         embedding_model: embedding.then_some(upstream),

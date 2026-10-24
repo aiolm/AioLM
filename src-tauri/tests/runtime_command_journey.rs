@@ -133,6 +133,49 @@ async fn declared_global_and_nested_scope_options_reach_the_actual_parser_in_ord
     cfg = aiolm_lib::config::load_result().unwrap();
     assert_eq!(cfg.provider_options[&cfg.active_provider], values);
     providers::adapter::refresh(&cfg, None).await.unwrap();
+
+    // Engine metadata owns only request settings, while validating the whole
+    // saved map. Reading it must leave launch options and ordered help intact.
+    let empty_request = providers::registry::info(&cfg).unwrap();
+    assert!(empty_request.request_fields.is_empty());
+    assert_eq!(
+        empty_request.request_option_keys,
+        ["temperature", "request_payload"]
+    );
+    let mut request_cfg = cfg.clone();
+    let expected: Map<String, Value> = serde_json::from_value(json!({
+        "temperature": 0.75,
+        "request_payload": {"nested": [null, true, -7, {"text": "한글🙂\n\"\\".repeat(256)}]}
+    }))
+    .unwrap();
+    request_cfg
+        .provider_options
+        .get_mut(&cfg.active_provider)
+        .unwrap()
+        .extend(expected.clone());
+    let before = serde_json::to_value(&request_cfg).unwrap();
+    let metadata = providers::registry::info(&request_cfg).unwrap();
+    assert_eq!(metadata.request_fields, expected);
+    assert_eq!(
+        metadata.request_option_keys,
+        empty_request.request_option_keys
+    );
+    assert_eq!(serde_json::to_value(&request_cfg).unwrap(), before);
+    request_cfg
+        .provider_options
+        .get_mut(&cfg.active_provider)
+        .unwrap()
+        .insert("temperature".into(), json!(1.25));
+    assert_eq!(
+        providers::registry::info(&request_cfg)
+            .unwrap()
+            .request_fields["temperature"],
+        json!(1.25)
+    );
+    request_cfg.provider_options.clear();
+    assert_eq!(metadata.request_fields, expected);
+    assert_eq!(cfg.provider_options[&cfg.active_provider], values);
+
     let mut invalid = cfg.clone();
     invalid
         .provider_options
