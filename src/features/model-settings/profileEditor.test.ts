@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AppConfig } from '../../shared/api/types';
+import { providerOf } from '../../shared/api/providers';
+import { migrateProfileLibrary } from '../../shared/config/profileMigration';
 import { testConfig } from '../../testing/appStore';
 import { captureProfile, defaultSettingsProfile, deleteSettingsProfile, emptyProfileLibrary, ensureProfileLibrary, materializeProfileApplication, profileTargetKey, type SettingsProfileLibrary } from '../../shared/config/settingsProfiles';
 import { appliedProfile, mergeProfileEditor, profileLibrary, profileLibraryConfigPatch, rebaseStaleProfileEdit, requestProfileFromApplication, type ProfileEditorResult } from './profileEditor';
@@ -428,5 +430,109 @@ describe('applied profile name refresh boundaries', () => {
     expect(mergeProfileEditor(current, edit)).toEqual(expected);
     expect(() => mergeProfileEditor(current, edit, 'work')).toThrow('Every model must reference an available profile.');
     expect({ current, edit }).toEqual(before);
+  });
+});
+
+describe('profile library read normalization', () => {
+  function corpus() {
+    const shared = { ...captureProfile(testConfig, 'Shared', 'global', 'Shared prompt'), id: 'shared' };
+    const application = materializeProfileApplication(testConfig, 'Shared prompt', shared);
+    const library = (overrides: Partial<SettingsProfileLibrary>): SettingsProfileLibrary => ({ ...emptyProfileLibrary(), revision: 3, legacy_imported: true,
+      entries: [structuredClone(shared)], applied: {}, ...overrides });
+    const saved = { ...testConfig, settings_profiles: library({ entries: [structuredClone(shared), defaultSettingsProfile()], default_profile_id: 'profile-default',
+      applied: { [profileTargetKey(testConfig.active_model)]: structuredClone(application) } }) };
+    const legacyEntry = { ...structuredClone(shared), id: 'legacy', scope: 'model' as const, model_key: 'model:model.gguf', source_id: 'preset-1', source_scope: 'preset' as const,
+      settings: { ...shared.settings, active_backend: 'cuda', active_build: 'b9' }, coverage: [...(shared.coverage ?? []), 'active_backend'] };
+    const posix = '/Models/Example.gguf';
+    const posixApplication = { ...structuredClone(application), model: posix };
+    return {
+      missing: { ...testConfig } as AppConfig,
+      empty: { ...testConfig, settings_profiles: emptyProfileLibrary() },
+      saved,
+      normalized: { ...testConfig, settings_profiles: profileLibrary(saved) },
+      legacy: { ...testConfig, settings_profiles: library({ entries: [legacyEntry],
+        applied: { [profileTargetKey(testConfig.active_model)]: { ...structuredClone(application), profile_id: 'legacy', settings: { ...application.settings, active_runtime: 'runtime-1' } } } }) },
+      providers: { ...testConfig, active_provider: 'custom.synthetic' as const, settings_profiles: library({
+        entries: [structuredClone(shared), { ...defaultSettingsProfile(), id: 'profile-default-vllm' }, { ...structuredClone(shared), id: 'vllm-old', provider: 'vllm' as const }],
+        provider_defaults: { 'llama.cpp': 'shared', vllm: 'missing' }, provider_recent: { vllm: 'vllm-old', 'mlx-vlm': 'missing', 'llama.cpp': 'vllm-old' } }) },
+      paths: { ...testConfig, settings_profiles: library({ applied: { 'model:/models/example.gguf': posixApplication,
+        'model:remote-model': { ...structuredClone(application), provider: 'vllm' as const, model: 'remote-model' } } }) },
+      sessions: { ...testConfig, sessions: [
+        { id: 'first', name: 'First', enabled: true, models: { primary_model: 'first.gguf', mmproj: '', draft_model: '' }, gpu: emptyGpuPlacement(), execution: { temperature: 0.2 } },
+        { id: 'moved', name: 'Moved', enabled: true, models: { primary_model: 'moved.gguf', mmproj: '', draft_model: '' }, gpu: emptyGpuPlacement() },
+      ], settings_profiles: library({ applied: {
+        [profileTargetKey(testConfig.active_model)]: { model: testConfig.active_model, settings: { temperature: 1.7 }, system_prompt: 'Anonymous' },
+        'session:moved': { ...structuredClone(application), model: 'previous.gguf' },
+      } }) },
+      conflict: { ...testConfig, settings_profiles: library({ applied: { 'model:/models/example.gguf': posixApplication,
+        [profileTargetKey(posix)]: { ...posixApplication, system_prompt: 'Different prompt' } } }) },
+    } satisfies Record<string, AppConfig>;
+  }
+  const readable = Object.entries(corpus()).filter(([name]) => name !== 'conflict').map(([name]) => name as Exclude<keyof ReturnType<typeof corpus>, 'conflict'>);
+
+  it.each(readable)('%s: reads without changing its source, returns owned data and stays stable after it is persisted', name => {
+    const cfg = corpus()[name];
+    const before = structuredClone(cfg);
+    const read = profileLibrary(cfg);
+    const bytes = JSON.stringify(read);
+    expect(cfg).toEqual(before);
+    const source = cfg.settings_profiles ?? migrateProfileLibrary(cfg);
+    const once = ensureProfileLibrary(source, providerOf(cfg));
+    expect(ensureProfileLibrary(once, providerOf(cfg))).toBe(once);
+    expect(JSON.stringify(profileLibrary({ ...cfg, settings_profiles: JSON.parse(bytes) as SettingsProfileLibrary }))).toBe(bytes);
+    const again = profileLibrary(cfg);
+    expect(again).not.toBe(read);
+    for (const entry of read.entries) { entry.settings.temperature = 9; entry.name = 'Changed'; }
+    for (const value of Object.values(read.applied)) { value.settings.temperature = 9; value.system_prompt = 'Changed'; }
+    read.provider_defaults = {};
+    expect(cfg).toEqual(before);
+    expect(JSON.stringify(again)).toBe(bytes);
+    expect(JSON.stringify(profileLibrary(cfg))).toBe(bytes);
+  });
+
+  it('normalizes legacy scope, runtime selections, provider selections, model paths and session recovery', () => {
+    const cases = corpus();
+    const missing = profileLibrary(cases.missing);
+    expect(missing.default_profile_id).toBe('profile-default');
+    const current = missing.applied[profileTargetKey(testConfig.active_model)];
+    expect(missing.entries.find(item => item.id === current.profile_id)).toMatchObject({ name: 'Recovered profile', provider: 'llama.cpp', system_prompt: '' });
+    expect(profileLibrary(cases.empty).provider_defaults).toEqual({ 'llama.cpp': 'profile-default', vllm: 'profile-default-vllm', 'mlx-vlm': 'profile-default-mlx-vlm' });
+
+    const legacy = profileLibrary(cases.legacy);
+    const entry = legacy.entries.find(item => item.id === 'legacy')!;
+    expect(entry).toMatchObject({ scope: 'global', legacy: true, legacy_runtime: { active_backend: 'cuda', active_build: 'b9' } });
+    expect(entry).not.toHaveProperty('model_key');
+    expect(entry).not.toHaveProperty('source_id');
+    expect(entry).not.toHaveProperty('source_scope');
+    expect(entry.settings).not.toHaveProperty('active_backend');
+    expect(entry.coverage).not.toContain('active_backend');
+    expect(legacy.default_profile_id).toBe('legacy');
+    expect(legacy.applied[profileTargetKey(testConfig.active_model)].settings).not.toHaveProperty('active_runtime');
+
+    const providers = profileLibrary(cases.providers);
+    expect(providers.provider_defaults).toMatchObject({ 'llama.cpp': 'shared', vllm: 'profile-default-vllm-2', 'custom.synthetic': 'profile-default-custom.synthetic' });
+    expect(providers.provider_recent).toEqual({ vllm: 'vllm-old' });
+    expect(providers.applied[profileTargetKey(testConfig.active_model, 'default', 'custom.synthetic')]).toMatchObject({ provider: 'custom.synthetic' });
+
+    const paths = profileLibrary(cases.paths);
+    expect(Object.keys(paths.applied)).toEqual(expect.arrayContaining(['model:/Models/Example.gguf', 'provider:vllm:model:remote-model']));
+    expect(paths.applied).not.toHaveProperty('model:/models/example.gguf');
+    expect(paths.applied).not.toHaveProperty('model:remote-model');
+    expect(paths.applied['model:/Models/Example.gguf']).toMatchObject({ model: '/Models/Example.gguf', profile_id: 'shared', system_prompt: 'Shared prompt' });
+
+    const sessions = profileLibrary(cases.sessions);
+    const recovered = sessions.entries.find(item => item.name === 'Recovered profile' && item.id.startsWith('profile-recovered-'));
+    expect(sessions.applied[profileTargetKey(testConfig.active_model)]).toMatchObject({ profile_id: recovered?.id, system_prompt: 'Anonymous', settings: { temperature: 1.7 } });
+    expect(sessions.applied['session:first']).toMatchObject({ model: 'first.gguf' });
+    expect(sessions.applied['session:first'].profile_id).toBeTruthy();
+    expect(sessions.applied['session:moved']).toMatchObject({ model: 'moved.gguf' });
+  });
+
+  it('rejects conflicting model path snapshots with the same error and without changing the source', () => {
+    const cfg = corpus().conflict;
+    const before = structuredClone(cfg);
+    expect(() => profileLibrary(cfg)).toThrowError(/^Conflicting saved settings for the same model path\.$/);
+    expect(() => appliedProfile(cfg)).toThrowError(/^Conflicting saved settings for the same model path\.$/);
+    expect(cfg).toEqual(before);
   });
 });

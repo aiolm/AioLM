@@ -36,8 +36,9 @@ export interface ProfileEditorResult {
 }
 export interface ProfileCommitResult { config: AppConfig; application: ProfileApplication }
 
+/** Assignment resolution normalizes the stored or migrated library for the same engine, so it is read once. */
 export function profileLibrary(cfg: AppConfig): SettingsProfileLibrary {
-  return ensureProfileAssignments(cfg, ensureProfileLibrary(cfg.settings_profiles ?? migrateProfileLibrary(cfg), providerOf(cfg)));
+  return ensureProfileAssignments(cfg, cfg.settings_profiles ?? migrateProfileLibrary(cfg));
 }
 
 export function appliedProfile(cfg: AppConfig, sessionId = 'default'): ProfileApplication | undefined {
