@@ -191,7 +191,7 @@ Windows 기준 검증과 새 등록의 실제 사용을 관찰해 설정 발견�
 
 ## 7. Linux에서 이어서 검증
 
-Windows에서 확인한 종료 commit을 받아 `codex/linux-runtime-adapter-validation`에서 시작한다. [최신 Linux 인계](linux-device-handoff.ko.md)와 [/goal 지시문](linux-device-validation-goal-prompt.ko.md)의 bundle·manifest로 Windows 최종 source를 확인한다. 현재 source의 Linux 기능은 아직 미실행이며 과거 Linux 결과를 현재 pass로 옮기지 않는다. raw는 `tmp/linux-acceptance/`, 새 익명화 결과는 `docs/reference/linux-device-validation-results.ko.md`에 남긴다.
+Windows에서 확인한 종료 commit을 받아 `codex/linux-runtime-adapter-validation`에서 시작한다. [최신 Linux 인계](linux-device-handoff.ko.md)의 Git 수신 절차로 원격 Windows 작업 브랜치와 검증 기준 commit을 확인한다. 현재 source의 Linux 기능은 아직 미실행이며 과거 Linux 결과를 현재 pass로 옮기지 않는다. raw는 `tmp/linux-acceptance/`, 새 익명화 결과는 `docs/reference/linux-device-validation-results.ko.md`에 남긴다.
 
 | ID | 순서와 완료 조건 |
 | --- | --- |

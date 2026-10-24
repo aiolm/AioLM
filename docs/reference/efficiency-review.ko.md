@@ -1,6 +1,6 @@
 # 프로젝트 효율 검토 기록
 
-Windows에서는 진행 중이던 updater 수정까지 마쳤고, 사용자 요청에 따라 이후 기능 검증·효율·UI/UX·가독성·구조 개선은 [Linux 인계](linux-device-handoff.ko.md)와 [/goal 지시문](linux-device-validation-goal-prompt.ko.md)으로 이어간다. 아래 결과는 완료한 항목의 근거이며, 프로젝트 전체의 검토나 최적화가 끝났다는 판정이 아니다. 시작 소스는 `08c0916`이다.
+Windows에서는 진행 중이던 updater 수정까지 마쳤고, 사용자 요청에 따라 이후 기능 검증·효율·UI/UX·가독성·구조 개선은 [Linux 인계](linux-device-handoff.ko.md)의 기능 점검과 Git 수신 절차로 이어간다. 아래 결과는 완료한 항목의 근거이며, 프로젝트 전체의 검토나 최적화가 끝났다는 판정이 아니다. 시작 소스는 `08c0916`이다.
 
 ## 1차 프런트엔드 개선
 

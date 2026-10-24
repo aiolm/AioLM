@@ -26,7 +26,7 @@ Windows 근거의 범위:
 ## 2. 시작 전에 읽을 문서와 확인할 사실
 
 1. 저장소 `AGENTS.md`, 존재하면 `tmp/AGENTS.local.md`.
-2. 이 문서 전체와 [Linux /goal 지시문](linux-device-validation-goal-prompt.ko.md).
+2. 이 문서 전체. goal은 사용자가 Linux 세션에 직접 입력한다.
 3. 필요할 때 다음 1차 문서: [엔진 중립 GUI 어댑터의 Linux·Mac 후속 인계](engine-adapter-linux-macos-handoff.ko.md)(L01–L04 정의·공통 수정 재검증 연결), [Windows 검증과 구조 전환 계획](windows-device-handoff.ko.md)(L/M 순서), [외부 런타임 어댑터 계약](runtime-adapter-handoff.ko.md), [교체 가능한 추론 런타임](pluggable-inference-runtimes.ko.md), [Inference runtimes](inference-runtimes.md), [Provider native acceptance](provider-native-acceptance.md), [Cross-platform validation](cross-platform-validation.md), [개발](../guides/development.ko.md)·[설치](../guides/install.ko.md) 안내, [효율 검토의 남은 검토](efficiency-review.ko.md#남은-검토).
 4. 실행 전에 다시 읽을 실제 파일: `package.json`(`engines`, `packageManager`, scripts), `.node-version`, `rust-toolchain.toml`, `src-tauri/Cargo.toml`(features·target 의존성), `src-tauri/tauri.conf.json`, `scripts/package-tauri.mjs`, `.github/workflows/{ci,desktop-packages,linux-desktop-acceptance,release}.yml`, 각 smoke 스크립트 머리말.
 
@@ -34,65 +34,64 @@ Windows 근거의 범위:
 
 **“Orca” 이름 구분:** Linux 접근성 검사의 화면 낭독기는 GNOME **Orca**(AT-SPI)다. Orca IDE가 설치된 경우 해당 세션의 skill로 실행 파일을 확인한다. `ORCA_CLI_COMMAND`가 있으면 그 값을 우선하며, Linux의 Orca IDE 터미널 밖에서는 `orca-ide`를 확인하고 bare `orca`를 실행하지 않는다. GNOME 화면 낭독기와 IDE 명령을 혼동하지 않는다.
 
-## 3. 소스 전달과 무결성 확인 (L01-S)
+## 3. Git으로 소스 받기와 무결성 확인 (L01-S)
 
-원격 push는 승인되지 않았다. `origin`(GitHub)에 Windows의 미공개 commit이 있다고 가정하지 않고, 자동으로 push·pull하지 않는다. 전달 파일은 최종 문서 commit을 포함한 자체 포함 Git bundle, 별도 manifest, SHA-256 checksum이다. bundle에는 Git 객체만 들어가며 `tmp/`·사용자 데이터·`node_modules`·build 산출물·Git 설정은 들어가지 않는다.
+사용자의 Git 공유 요청에 따라 다음 원격 저장소의 Windows 작업 브랜치를 Linux의 시작점으로 사용한다.
 
-순환 hash를 피하는 규칙:
+- 저장소: [aiolm/AioLM](https://github.com/aiolm/AioLM)
+- 수신 브랜치: `codex/windows-runtime-adapter-validation`
+- Linux 작업 브랜치: `codex/linux-runtime-adapter-validation`
+- Windows 검증·인계 기준점: `31d7cc2253d0fa18d53f9beab3ce16049a155708`
+- 마지막으로 검증한 제품 코드: `43b50686627df9631210419739544f3e5e317fc1`
+- 해당 `src-tauri/src/app_update.rs` SHA-256: `72cef2c6ee6ae39588dad6791665516c87858b05f1740d41d89c8bfb7b8e429a`
 
-- 이 문서와 /goal 지시문에는 **검증된 코드 commit** `43b50686627df9631210419739544f3e5e317fc1`(40자리)만 고정한다. 이 commit은 최종 HEAD의 조상이다.
-- bundle 파일의 SHA-256과 **최종 HEAD**(이 문서를 포함한 commit)는 bundle 옆의 별도 manifest `delivery-manifest.json`와 checksum 파일 `aiolm-windows-validation.bundle.sha256`에만 기록한다. manifest 자신의 hash는 manifest 안에 넣지 않는다.
-
-동봉 manifest의 필수 항목: bundle 파일명·SHA-256·포함 ref(`refs/heads/codex/windows-runtime-adapter-validation`)·`final_head`·`validated_code_commit`·필수 조상 목록·`validated_code_commit..final_head`에서 바뀐 경로 목록(문서만이어야 함)·생성에 쓴 Git 버전.
+이 문서를 포함한 최신 수신 commit은 clone/fetch 뒤 원격 브랜치 ref에서 확정해 기록한다. 검증된 코드 commit 이후 수신 commit까지는 문서만 달라야 한다. Windows에서 사용한 `tmp/`·사용자 설정·모델·`node_modules`·build 산출물을 전달하지 않는다. 저장소에 없는 로컬 기록이나 별도 manifest 없이 시작할 수 있다. 이전 Linux 기록은 현재 source의 실행 근거가 아니다.
 
 | ID | 확인 | 통과 조건 | 증거 | 상태 |
 | --- | --- | --- | --- | --- |
-| L01-S01 | bundle checksum과 Git 검사 | `sha256sum -c`가 OK, `git bundle verify` 성공, `git bundle list-heads`에 manifest의 ref가 있음 | 명령·exit·출력 | unrun |
-| L01-S02 | 최종 HEAD와 조상 | 받은 ref == manifest `final_head`. `validated_code_commit`, `df3264bad99deb0144b947f96300e8625f7a2da5`, `53df1491cbb6dc790e9594221c3191a6c210937e`, `908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1`, `4ad1f1fdadfcca736342a36fc4636f5613a2b866`가 조상. `git diff --name-only <validated>..<final_head>`가 manifest 목록과 같고 문서 경로만 포함 | 명령·exit·목록 | unrun |
-| L01-S03 | 기존 checkout 보존 | 기존 저장소의 `git status --short`·branch를 먼저 기록하고 바꾸지 않음. 같은 이름 작업 branch가 있으면 초기화하지 않고 상태를 확인 | 전후 status | unrun |
+| L01-S01 | 원격 저장소와 수신 ref | 저장소 URL 확인 후 지정 브랜치를 clone/fetch. 받은 commit과 원격 ref가 일치 | URL·명령·exit·수신 commit | unrun |
+| L01-S02 | 기준점·코드 보존 | 아래 필수 commit이 수신 commit의 조상이고, 검증된 코드 이후 문서 밖 diff가 없음. updater SHA-256 일치 | 명령·exit·diff·hash | unrun |
+| L01-S03 | 기존 checkout 보존 | 기존 저장소의 status·branch·worktree를 먼저 확인. 기존 Linux 작업 branch가 있으면 초기화하지 않고 이어감 | 전후 status | unrun |
 
-새 폴더로 받기(bundle·manifest·checksum을 둔 폴더에서 변수만 실제 값으로 바꾼다):
+새 작업 폴더로 받기(대상 폴더가 없을 때만 실행):
 
 ```sh
 set -eu
-BUNDLE='aiolm-windows-validation.bundle'
-sha256sum -c "$BUNDLE.sha256"
-cat 'delivery-manifest.json'          # final_head·validated_code_commit 확인
-FINAL_HEAD='<manifest의 final_head>'
-VALIDATED='43b50686627df9631210419739544f3e5e317fc1'
-git clone --no-checkout "$BUNDLE" AioLM-linux
+git clone --single-branch --branch codex/windows-runtime-adapter-validation \
+  https://github.com/aiolm/AioLM.git AioLM-linux
 cd AioLM-linux
-git bundle verify "../$BUNDLE"
-git remote rename origin windows-bundle      # bundle 경로 remote를 GitHub origin과 구분
-test "$(git rev-parse windows-bundle/codex/windows-runtime-adapter-validation)" = "$FINAL_HEAD"
-for c in "$VALIDATED" df3264bad99deb0144b947f96300e8625f7a2da5 \
+WINDOWS_HEAD="$(git rev-parse origin/codex/windows-runtime-adapter-validation)"
+VALIDATED='43b50686627df9631210419739544f3e5e317fc1'
+git log -1 --format='%H %s' "$WINDOWS_HEAD"
+for c in df3264bad99deb0144b947f96300e8625f7a2da5 \
   53df1491cbb6dc790e9594221c3191a6c210937e \
-  908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1 4ad1f1fdadfcca736342a36fc4636f5613a2b866; do
-  git merge-base --is-ancestor "$c" "$FINAL_HEAD" || { echo "MISSING $c"; exit 1; }
+  908a2fb6bd5bdb4742eb4db6e8f6ac9e352956c1 \
+  4ad1f1fdadfcca736342a36fc4636f5613a2b866 \
+  31d7cc2253d0fa18d53f9beab3ce16049a155708 "$VALIDATED"; do
+  git merge-base --is-ancestor "$c" "$WINDOWS_HEAD"
 done
-git diff --name-only "$VALIDATED" "$FINAL_HEAD"   # manifest 목록과 비교
-git switch -c 'codex/linux-runtime-adapter-validation' "$FINAL_HEAD"
+git diff --exit-code "$VALIDATED" "$WINDOWS_HEAD" -- . ':(exclude)docs/**'
+printf '%s  %s\n' \
+  72cef2c6ee6ae39588dad6791665516c87858b05f1740d41d89c8bfb7b8e429a \
+  src-tauri/src/app_update.rs | sha256sum -c -
+git switch -c codex/linux-runtime-adapter-validation "$WINDOWS_HEAD"
 git status --short
 ```
 
-이미 있는 저장소에 받기(사용자 변경 보존, 작업 트리를 건드리지 않는 별도 ref와 worktree 사용):
+이미 저장소가 있으면 먼저 `git status --short`, `git branch -vv`, `git worktree list`를 확인한다. 기존 작업 branch가 있으면 해당 작업 트리의 변경과 commit 관계를 확인해 이어간다. 새 Linux 작업 branch가 필요할 때만 아래처럼 별도 ref와 worktree를 만든다. 같은 이름 ref·branch·폴더가 있으면 덮어쓰거나 reset하지 않는다.
 
 ```sh
 set -eu
-git status --short                           # 결과 기록, 아무것도 지우지 않음
-BUNDLE_PATH='<checksum을 확인한 bundle의 절대 경로>'
-FINAL_HEAD='<manifest의 final_head>'
-git bundle verify "$BUNDLE_PATH"
-git fetch "$BUNDLE_PATH" \
-  'refs/heads/codex/windows-runtime-adapter-validation:refs/aiolm-handoff/windows-final'
-test "$(git rev-parse refs/aiolm-handoff/windows-final)" = "$FINAL_HEAD"
-VALIDATED='43b50686627df9631210419739544f3e5e317fc1'
-# 위와 같은 조상·경로 검사 후, 같은 이름 branch/worktree가 없을 때만 생성한다.
-# 이미 있으면 git branch --list / git worktree list로 확인하고 기존 상태에서 이어간다.
-git worktree add ../AioLM-linux-validation -b 'codex/linux-runtime-adapter-validation' "$FINAL_HEAD"
+git status --short
+git fetch https://github.com/aiolm/AioLM.git \
+  refs/heads/codex/windows-runtime-adapter-validation:refs/aiolm-handoff/windows-final
+WINDOWS_HEAD="$(git rev-parse refs/aiolm-handoff/windows-final)"
+# 위와 같은 필수 조상·문서 밖 diff·코드 hash 검사 후 생성한다.
+git worktree add ../AioLM-linux-validation \
+  -b codex/linux-runtime-adapter-validation "$WINDOWS_HEAD"
 ```
 
-`refs/aiolm-handoff/windows-final`이 이미 있으면 다른 새 이름을 쓴다. Windows의 `node_modules`·`dist`·`.codex-target`·실행 파일·venv·설치 파일·`tmp/` 자료를 복사하지 않는다. Git에 없는 Windows raw 증거는 이 인계의 전제가 아니다.
+`refs/aiolm-handoff/windows-final`이 이미 있으면 새 이름을 정해 사용한다. 이 수신 과정에서 기존 checkout을 자동 merge·rebase·reset하지 않는다. 이후 Linux 변경의 원격 push는 사용자가 별도로 요청할 때 수행한다.
 
 ## 4. 판정 규칙
 
