@@ -15,7 +15,7 @@
 .model-settings-flow button > span:last-child { min-width: 0; }
 .model-settings-flow strong, .model-settings-flow small { display: block; overflow-wrap: anywhere; }
 .model-settings-flow strong { font-size: var(--ui-text-support); }
-.model-settings-flow small { color: var(--ui-muted); font-size: var(--ui-text-caption); max-height: 2.8em; overflow: auto; }
+.model-settings-flow small { color: var(--ui-muted); font-size: var(--ui-text-caption); max-height: 2lh; overflow: auto; }
 .model-settings-step-number { flex: 0 0 auto; font-weight: 650; }
 .model-settings-shell [hidden] { display: none !important; }
 .settings-profile-selected-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
@@ -77,6 +77,8 @@
 .model-settings-footer { display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; padding: 14px 24px 18px; border-top: 1px solid var(--ui-border); background: var(--ui-panel); max-height: 42%; overflow: hidden; }
 /* Notices and estimates may scroll; the target's launch/cancel action stays visible. */
 .model-settings-footer-summary { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+/* With only the always-rendered notices container and no notice, skip the empty scroller in keyboard order. */
+.model-settings-footer-summary:has(> .model-settings-notices:only-child:empty) { display: none; }
 .model-settings-notices { display: grid; gap: 8px; font-size: var(--ui-text-support); color: var(--ui-muted); margin-bottom: 12px; line-height: 1.5; }
 .model-settings-notices:empty { display: none; }
 .model-settings-blocked { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
