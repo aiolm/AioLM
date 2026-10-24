@@ -1,11 +1,11 @@
-import { Component, type ReactNode } from 'react';
+import { Component, StrictMode, type ReactNode } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestStore as createBaseTestStore } from '../../testing/appStore';
 import type { AppConfig, SessionDefinition, SessionStatus } from '../../shared/api/types';
 import type { AppStore } from '../../shared/state/store';
 import { executionConfig, executionSettings, settingsForSession } from '../../shared/config/executionSettings';
-import { sessionConfig } from '../../shared/runtime/sessionUtils';
+import { sessionConfig, notifySessionStatusChanged } from '../../shared/runtime/sessionUtils';
 import { setSessionActivity } from '../../shared/state/sessionActivity';
 import type { ModelSettingsDialogProps } from './ModelSettingsDialog';
 import { MANAGE_MODEL_RUNTIMES, ModelSettingsProvider, useModelSettings, type ModelSettingsContext, type ModelSettingsRequest } from './ModelSettingsProvider';
@@ -14,17 +14,18 @@ import { profileLibraryConfigPatch, requestProfileFromApplication, SettingsDeliv
 import { createConfigSaveQueue } from '../../shared/state/configSaveQueue';
 
 const mocks = vi.hoisted(() => ({
-  dialog: null as ModelSettingsDialogProps | null, native: false,
+  dialog: null as ModelSettingsDialogProps | null, native: false, renders: 0, locale: 'en' as 'en' | 'ko',
   sessionList: vi.fn(), serverStatus: vi.fn(), preflightLaunch: vi.fn(), cancelLaunchPreflight: vi.fn(),
   sessionStart: vi.fn(), sessionStop: vi.fn(), applyRequestSettings: vi.fn(),
 }));
 
 vi.mock('./ModelSettingsDialog', () => ({ default: (props: ModelSettingsDialogProps) => {
   mocks.dialog = props;
+  mocks.renders += 1;
   return <div data-testid="settings-dialog" />;
 } }));
 vi.mock('../runtimes/Runtimes', () => ({ default: ({ engineRequest }: { engineRequest: { provider: string } }) => <p>Inline runtime manager: {engineRequest.provider}</p> }));
-vi.mock('../../shared/i18n/i18n', () => ({ useI18n: () => ({ locale: 'en' }) }));
+vi.mock('../../shared/i18n/i18n', () => ({ useI18n: () => ({ locale: mocks.locale, t: (key: string) => key }) }));
 vi.mock('../../shared/api/index', () => ({
   isNativeRuntimeAvailable: () => mocks.native,
   sessionList: mocks.sessionList, serverStatus: mocks.serverStatus,
@@ -73,9 +74,21 @@ function running(cfg: AppConfig, id = 'default'): SessionStatus {
   return { id, name: id, state: 'running', model: cfg.active_model, active_requests: 0, idle_seconds: 0,
     execution: executionSettings(cfg), pid: 1234 };
 }
+async function pollSessions() {
+  const calls = mocks.sessionList.mock.calls.length;
+  await act(async () => {
+    notifySessionStatusChanged();
+    await vi.waitFor(() => expect(mocks.sessionList.mock.calls.length).toBeGreaterThan(calls));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+}
+async function initialPoll() {
+  await waitFor(() => expect(mocks.sessionList).toHaveBeenCalled());
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+}
 
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear(); mocks.dialog = null; mocks.native = false;
+  vi.clearAllMocks(); localStorage.clear(); mocks.dialog = null; mocks.native = false; mocks.renders = 0; mocks.locale = 'en';
   mocks.sessionList.mockResolvedValue([]);
   mocks.serverStatus.mockResolvedValue({ state: 'stopped' });
   mocks.preflightLaunch.mockImplementation(async (cfg: AppConfig) => structuredClone(cfg));
@@ -714,6 +727,165 @@ describe('model launch preparation', () => {
     act(() => context.open({ target: { kind: 'default' } }));
     expect(mocks.dialog?.liveApplication?.system_prompt).toBe('New prompt');
     expect(mocks.dialog?.liveApplication?.profile_id).toBe('profile-new');
+  });
+});
+
+describe('session polling', () => {
+  it('skips editor renders when a poll only changes usage counters and delivers lifecycle changes', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    mocks.native = true;
+    let idle = 0;
+    mocks.sessionList.mockImplementation(async () => [{ ...running(cfg, 'work'), idle_seconds: ++idle, active_requests: idle % 2 }]);
+    const dialog = await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    await initialPoll();
+    const renders = mocks.renders;
+    const props = mocks.dialog;
+    await pollSessions();
+    await pollSessions();
+    await pollSessions();
+    expect(mocks.renders).toBe(renders);
+    expect(mocks.dialog).toBe(props);
+    expect(dialog.liveState).toBe('running');
+
+    mocks.sessionList.mockResolvedValue([{ ...running({ ...cfg, temperature: 0.4 }, 'work'), state: 'starting' }]);
+    await pollSessions();
+    expect(mocks.renders).toBe(renders + 1);
+    expect(mocks.dialog?.liveState).toBe('starting');
+    expect(mocks.dialog?.liveConfig?.temperature).toBe(0.4);
+  });
+
+  it('keeps another target current for a later session editor opened after the poll', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    mocks.native = true;
+    mocks.sessionList.mockResolvedValue([running(cfg, 'work')]);
+    await open(store, { target: { kind: 'default' } });
+    await initialPoll();
+
+    mocks.sessionList.mockResolvedValue([{ ...running({ ...cfg, temperature: 0.3 }, 'work'), state: 'starting', pid: 5678 }]);
+    await pollSessions();
+    act(() => context.open({ target: { kind: 'session', sessionId: 'work' } }));
+    await waitFor(() => expect(mocks.dialog?.liveState).toBe('starting'));
+    expect(mocks.dialog?.liveConfig?.temperature).toBe(0.3);
+  });
+
+  it('delivers nested execution changes when the same session object is reused in StrictMode', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const status = running(cfg, 'work');
+    mocks.native = true;
+    mocks.sessionList.mockResolvedValue([status]);
+    render(<StrictMode><ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider></StrictMode>);
+    act(() => context.open({ target: { kind: 'session', sessionId: 'work' } }));
+    await waitFor(() => expect(mocks.dialog?.liveConfig?.temperature).toBe(cfg.temperature));
+
+    status.execution!.temperature = 0.35;
+    status.execution!.gpu = { ...cfg.gpu!, gpu_ids: ['gpu-2'] };
+    await pollSessions();
+    expect(mocks.dialog?.liveConfig).toMatchObject({ temperature: 0.35, gpu: { gpu_ids: ['gpu-2'] } });
+    status.execution!.gpu!.gpu_ids[0] = 'gpu-3';
+    await pollSessions();
+    expect(mocks.dialog?.liveConfig?.gpu?.gpu_ids).toEqual(['gpu-3']);
+
+    status.state = 'stopping';
+    await pollSessions();
+    expect(mocks.dialog?.liveState).toBe('stopping');
+    status.model = 'replacement.gguf';
+    status.execution!.active_model = 'replacement.gguf';
+    await pollSessions();
+    expect(mocks.dialog?.liveConfig?.active_model).toBe('replacement.gguf');
+    // An unassigned replacement must not keep the previous model's profile.
+    expect(mocks.dialog?.liveApplication).toBeUndefined();
+  });
+
+  it.each([
+    { name: 'omitted to native null', initialPid: undefined, nextPid: null },
+    { name: 'native null to omitted', initialPid: null, nextPid: undefined },
+  ])('refreshes the displayed profile when only the PID changes from $name', async ({ initialPid, nextPid }) => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    // Native Option<u32> serializes as null; optional frontend status fields
+    // may be absent. Both wire shapes must retain their process identity.
+    const wireStatus = (pid: number | null | undefined): SessionStatus => JSON.parse(JSON.stringify({ ...running(cfg, 'work'), pid }));
+    let status = wireStatus(initialPid);
+    mocks.native = true;
+    mocks.sessionList.mockImplementation(async () => [status]);
+    await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    await initialPoll();
+    const dialog = mocks.dialog!;
+    const draft = { ...dialog.initialConfig, ctx_size: 8192 };
+    await act(async () => { await dialog.onProfileCommit(draft, { ...editorResult(dialog, draft, 'profile-new'), saveMode: 'all' }, true); });
+    expect(mocks.dialog?.liveApplication?.system_prompt).toBe('Old prompt');
+
+    status = wireStatus(nextPid);
+    await pollSessions();
+    expect(mocks.dialog?.liveApplication?.system_prompt).toBe('New prompt');
+    status = wireStatus(initialPid);
+    await pollSessions();
+    expect(mocks.dialog?.liveApplication?.system_prompt).toBe('Old prompt');
+  });
+
+  it('updates the load-policy notice when another session arrives, stops or disappears', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    const selected = running(cfg, 'work');
+    let statuses = [selected];
+    mocks.native = true;
+    mocks.sessionList.mockImplementation(async () => statuses);
+    await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    await initialPoll();
+    expect(mocks.dialog?.executionNotice).toBeUndefined();
+
+    statuses = [selected, { ...running(cfg, 'other'), state: 'starting' }];
+    await pollSessions();
+    expect(mocks.dialog?.executionNotice).toBeTruthy();
+    statuses = [selected, { ...running(cfg, 'other'), state: 'stopped' }];
+    await pollSessions();
+    expect(mocks.dialog?.executionNotice).toBeUndefined();
+    statuses = [{ ...running(cfg, 'other'), state: 'running' }];
+    await pollSessions();
+    expect(mocks.dialog?.liveState).toBe('stopped');
+    expect(mocks.dialog?.liveConfig).toBeUndefined();
+    expect(mocks.dialog?.executionNotice).toBeTruthy();
+  });
+
+  it('refreshes the editor label and missing-session feedback when the locale changes between polls', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    mocks.native = true;
+    mocks.sessionList.mockResolvedValue([running(sessionConfig(store.cfg!, store.cfg!.sessions![0]), 'work')]);
+    const view = render(<ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider>);
+    act(() => context.open({ target: { kind: 'session', sessionId: 'work' } }));
+    await initialPoll();
+    expect(mocks.dialog?.targetLabel).toBe('Session: Work');
+    mocks.locale = 'ko';
+    view.rerender(<ModelSettingsProvider store={store}><Consumer /></ModelSettingsProvider>);
+    expect(mocks.dialog?.targetLabel).toBe('세션: Work');
+    act(() => context.open({ target: { kind: 'session', sessionId: 'removed' } }));
+    expect(screen.getByRole('alert')).toHaveTextContent('선택한 세션이 삭제되었습니다. 설정을 다시 열어 세션을 선택해 주세요.');
+  });
+
+  it('reopens with a fresh first result after a pending poll completes while closed', async () => {
+    const store = createTestStore({ sessions: [namedSession()] });
+    const cfg = sessionConfig(store.cfg!, store.cfg!.sessions![0]);
+    mocks.native = true;
+    mocks.sessionList.mockImplementation(async () => [running(cfg, 'work')]);
+    await open(store, { target: { kind: 'session', sessionId: 'work' } });
+    await initialPoll();
+    expect(mocks.dialog?.liveState).toBe('running');
+    let finish!: (value: SessionStatus[]) => void;
+    mocks.sessionList.mockImplementationOnce(() => new Promise<SessionStatus[]>(resolve => { finish = resolve; }));
+    const calls = mocks.sessionList.mock.calls.length;
+    act(() => notifySessionStatusChanged());
+    await vi.waitFor(() => expect(mocks.sessionList.mock.calls.length).toBeGreaterThan(calls));
+    act(() => mocks.dialog!.onClose());
+    await act(async () => { finish([{ ...running(cfg, 'work'), state: 'failed' }]); });
+    expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
+
+    mocks.sessionList.mockImplementation(async () => [{ ...running({ ...cfg, temperature: 0.25 }, 'work'), state: 'starting' }]);
+    act(() => context.open({ target: { kind: 'session', sessionId: 'work' } }));
+    await waitFor(() => expect(mocks.dialog?.liveState).toBe('starting'));
+    expect(mocks.dialog?.liveConfig?.temperature).toBe(0.25);
   });
 });
 

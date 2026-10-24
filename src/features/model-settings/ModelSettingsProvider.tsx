@@ -1,6 +1,6 @@
 import { providerOf } from '../../shared/api/providers';
 import { mergeProviderRequestSettings } from '../../shared/config/providerRequestSettings';
-import { lazy, Suspense, useCallback, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api/index';
 import type { AppStore } from '../../shared/state/store';
 import { executionChanges, executionConfig, executionSettings, mergeExecutionChanges, REQUEST_KEYS, serverSettingsChanged, settingsForSession, ExecutionConflictError } from '../../shared/config/executionSettings';
@@ -31,6 +31,15 @@ function assignedTarget(config: api.AppConfig, application?: ProfileApplication,
   const resolved = resolveProfileForExecution(config, library, application, profileTargetKey(config.active_model, sessionId, providerOf(config)));
   return { config: { ...executionConfig(config, resolved.application.settings), settings_profiles: resolved.library }, application: resolved.application };
 }
+// Only these session fields reach the editor. Poll deliveries that differ in
+// usage telemetry alone must not re-render the provider and every reader below
+// it. Compare every session so switching targets cannot surface a value that
+// was never committed while the editor was open on another one.
+function sessionRefreshKey(list: api.SessionStatus[]): string {
+  // Object fields keep a native null PID distinct from an omitted one: the
+  // live-profile cache compares process identities with strict equality.
+  return JSON.stringify(list.map(({ id, state, pid, model, execution }) => ({ id, state, pid, model, execution })));
+}
 const messages = {
   en: { default: 'Default execution', session: 'Session', benchmark: 'Benchmark target', project: 'Project settings', busy: 'Wait for the current model operation to finish.', activity: 'Stop the current response before changing its model.', conflict: 'These settings changed elsewhere. Close and reopen settings to review the latest values: ', loading: 'Loading model settings…', stopOthers: 'Starting this model will stop other model sessions according to your load policy.', live: 'Saving server settings keeps the current model running. Reload to use the new settings.', resume: 'Return to model settings', missing: 'The selected session was removed. Reopen settings to choose a session.' },
   ko: { default: '기본 실행', session: '세션', benchmark: '벤치마크 대상', project: '프로젝트 설정', busy: '진행 중인 모델 작업이 끝날 때까지 기다려 주세요.', activity: '모델을 변경하기 전에 현재 응답을 중지해 주세요.', conflict: '다른 곳에서 설정이 변경되었습니다. 창을 다시 열어 최신 값을 확인해 주세요: ', loading: '모델 설정 불러오는 중…', stopOthers: '이 모델을 실행하면 현재 로드 정책에 따라 다른 모델 세션이 중지됩니다.', live: '서버 설정을 저장해도 현재 모델은 계속 실행됩니다. 새 설정은 다시 실행할 때 적용됩니다.', resume: '모델 설정으로 돌아가기', missing: '선택한 세션이 삭제되었습니다. 설정을 다시 열어 세션을 선택해 주세요.' },
@@ -51,6 +60,14 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const preflightOwner = useRef<{ id: string; cancelled: boolean } | null>(null);
   const [error, setError] = useState('');
   const [sessions, setSessions] = useState<api.SessionStatus[]>([]);
+  const lastSessionsKey = useRef<string | null>(null);
+  const applySessionData = useCallback((next: api.SessionStatus[]) => {
+    const key = sessionRefreshKey(next);
+    if (key === lastSessionsKey.current) return;
+    lastSessionsKey.current = key;
+    // A delivery may reuse its array after updating a session in place.
+    setSessions([...next]);
+  }, []);
   const lock = useRef(false);
   const liveProfiles = useRef(new Map<string, { model: string; pid?: number; application: ProfileApplication }>());
   const deletedProfileFallbacks = useRef(new Map<string, ProfileApplication>());
@@ -116,12 +133,18 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
       existingSession: !!definition && !!cfg.sessions?.some(item => item.id === definition.id) });
     setSuspended(false); setError('');
   }, [copy.missing]);
+  const pollingActive = editor !== null && !suspended && api.isNativeRuntimeAvailable();
   useSessionPolling({
-    active: editor !== null && !suspended && api.isNativeRuntimeAvailable(),
+    active: pollingActive,
     details: true,
-    onData: setSessions,
+    onData: applySessionData,
     intervalMs: 1500,
   });
+  useEffect(() => {
+    // The poller unsubscribes before this effect, so a pending IPC cannot
+    // repopulate the extra fingerprint while this editor is inactive.
+    if (!pollingActive) lastSessionsKey.current = null;
+  }, [pollingActive]);
   const getRequestConfig = useCallback((id: string, fallback: api.AppConfig, status?: api.ServerStatus | api.SessionStatus) => {
     const cached = liveProfiles.current.get(id);
     if (cached && status?.pid !== undefined && cached.pid !== status.pid) liveProfiles.current.delete(id);
@@ -363,7 +386,7 @@ export function ModelSettingsProvider({ store, children }: { store: AppStore; ch
   const liveState = liveStatus?.state ?? (target?.kind === 'session' ? 'stopped' : undefined);
   const cachedApplication = liveProfiles.current.get(id);
   const liveModel = loadedModelPath(liveStatus);
-  // Session polling re-renders an open editor every 1.5 s. Resolving the saved
+  // Relevant session changes refresh an open editor after polling. Resolving the saved
   // profile copies and serializes the whole library, so the result is reused
   // while the configuration content is unchanged. Content, not the reference,
   // is the key because a configuration can be updated in place. A library
