@@ -57,7 +57,8 @@ pub struct UpdateStatus {
     /// `latest_version` is strictly newer than `current_version`.
     pub available: bool,
     /// This build can install that update itself: a supported platform, a
-    /// recognised installation, and a matching installer asset in the release.
+    /// recognised installation, and a matching installer asset in the release
+    /// with a SHA-256 digest, or a trusted `checksums.txt`, to verify it against.
     pub can_install: bool,
     pub release_url: Option<String>,
     pub published_at: Option<String>,
@@ -225,12 +226,23 @@ fn find_asset<'a>(assets: &'a [ReleaseAsset], name: &str) -> Result<&'a ReleaseA
 }
 
 /// Whether `install` could actually run for this release: a platform with a
-/// published installer, an installation this app recognises, and an asset for
-/// that installer with a download URL this app is willing to fetch.
+/// published installer, an installation this app recognises, an asset for
+/// that installer with a download URL this app is willing to fetch, and a
+/// digest source `expected_digest` would not refuse before any request: the
+/// asset's own digest when it carries one, otherwise the release's first
+/// `checksums.txt` asset on a trusted URL. That file's entry, and the
+/// installer's hash, can only be checked when `install` downloads them.
 fn installable(kind: Option<InstallKind>, assets: &[ReleaseAsset], version: &str) -> bool {
     kind.is_some_and(|kind| {
-        find_asset(assets, &installer_asset_name(kind, version))
-            .is_ok_and(|asset| validate_asset_url(&asset.browser_download_url).is_ok())
+        find_asset(assets, &installer_asset_name(kind, version)).is_ok_and(|asset| {
+            validate_asset_url(&asset.browser_download_url).is_ok()
+                && match asset.digest.as_deref() {
+                    Some(digest) => normalize_digest(digest).is_ok(),
+                    None => find_asset(assets, CHECKSUMS_ASSET).is_ok_and(|checksums| {
+                        validate_asset_url(&checksums.browser_download_url).is_ok()
+                    }),
+                }
+        })
     })
 }
 
@@ -1417,7 +1429,11 @@ mod tests {
         ] {
             let kind = unix_install_kind(os, arch).unwrap();
             assert_eq!(installer_asset_name(kind, "0.1.12"), expected);
-            assert!(installable(Some(kind), &[asset(expected, None)], "0.1.12"));
+            assert!(installable(
+                Some(kind),
+                &[asset(expected, Some(&"c".repeat(64)))],
+                "0.1.12"
+            ));
             assert!(!installable(
                 Some(kind),
                 &release("v0.1.12").assets,
@@ -1596,6 +1612,168 @@ mod tests {
     async fn a_malformed_published_digest_is_refused_rather_than_worked_around() {
         let assets = vec![asset("AioLM_0.1.12_x64-setup.exe", Some("sha256:nope"))];
         assert!(expected_digest(&assets[0], &assets).await.is_err());
+    }
+
+    /// `can_install` must not offer an install that `install` refuses before
+    /// downloading anything. A published digest is the only source when there
+    /// is one, so a malformed one is never replaced by `checksums.txt`; without
+    /// one, only a trusted `checksums.txt` can supply it, and its contents are
+    /// fetched and matched at install time rather than here.
+    #[tokio::test]
+    async fn an_install_is_offered_only_when_its_installer_has_a_digest_to_match() {
+        let valid = "c".repeat(64);
+        let padded = format!("  sha256:{}  ", "C".repeat(64));
+        let checksums = asset(CHECKSUMS_ASSET, None);
+        let untrusted_checksums = ReleaseAsset {
+            browser_download_url: format!("https://cdn.attacker.example/{CHECKSUMS_ASSET}"),
+            ..asset(CHECKSUMS_ASSET, None)
+        };
+        let not_sha256: Result<String, String> =
+            Err("release asset digest is not a SHA-256 value".to_string());
+        let untrusted: Result<String, String> =
+            Err("release asset host is not trusted: cdn.attacker.example".to_string());
+        let mut failures = Vec::new();
+        for kind in [
+            InstallKind::Nsis,
+            InstallKind::Msi,
+            InstallKind::Dmg(InstallerArch::X64),
+            InstallKind::Dmg(InstallerArch::Arm64),
+            InstallKind::Deb(InstallerArch::X64),
+            InstallKind::Deb(InstallerArch::Arm64),
+        ] {
+            let name = installer_asset_name(kind, "0.1.12");
+            let installer = |digest: Option<&str>| asset(&name, digest);
+            let unverified: Result<String, String> = Err(format!(
+                "release publishes no SHA-256 digest for {name} and no {CHECKSUMS_ASSET}; refusing an unverified installer"
+            ));
+            // (case, assets with the installer first, offered, what
+            // `expected_digest` decides without a request; `None` where it
+            // would have to download `checksums.txt`)
+            let cases = [
+                (
+                    "no digest or checksums",
+                    vec![installer(None)],
+                    false,
+                    Some(unverified.clone()),
+                ),
+                (
+                    "malformed digest",
+                    vec![installer(Some("sha256:nope"))],
+                    false,
+                    Some(not_sha256.clone()),
+                ),
+                (
+                    "malformed digest beside trusted checksums",
+                    vec![installer(Some("sha256:nope")), checksums.clone()],
+                    false,
+                    Some(not_sha256.clone()),
+                ),
+                (
+                    "blank digest beside trusted checksums",
+                    vec![installer(Some("  ")), checksums.clone()],
+                    false,
+                    Some(not_sha256.clone()),
+                ),
+                (
+                    "bare digest",
+                    vec![installer(Some(&valid))],
+                    true,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "prefixed upper-case padded digest",
+                    vec![installer(Some(&padded))],
+                    true,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "digest beside untrusted checksums",
+                    vec![installer(Some(&valid)), untrusted_checksums.clone()],
+                    true,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "digest on an untrusted installer URL",
+                    vec![ReleaseAsset {
+                        browser_download_url: format!("https://cdn.attacker.example/{name}"),
+                        ..installer(Some(&valid))
+                    }],
+                    false,
+                    Some(Ok(valid.clone())),
+                ),
+                (
+                    "no digest, trusted checksums",
+                    vec![installer(None), checksums.clone()],
+                    true,
+                    None,
+                ),
+                (
+                    "no digest, untrusted checksums",
+                    vec![installer(None), untrusted_checksums.clone()],
+                    false,
+                    Some(untrusted.clone()),
+                ),
+                (
+                    "no digest, checksums under another name",
+                    vec![installer(None), asset("Checksums.txt", None)],
+                    false,
+                    Some(unverified.clone()),
+                ),
+                (
+                    "no digest, untrusted checksums listed first",
+                    vec![
+                        installer(None),
+                        untrusted_checksums.clone(),
+                        checksums.clone(),
+                    ],
+                    false,
+                    Some(untrusted.clone()),
+                ),
+                (
+                    "no digest, trusted checksums listed first",
+                    vec![
+                        installer(None),
+                        checksums.clone(),
+                        untrusted_checksums.clone(),
+                    ],
+                    true,
+                    None,
+                ),
+            ];
+            for (case, assets, offered, offline) in cases {
+                if installable(Some(kind), &assets, "0.1.12") != offered {
+                    failures.push(format!("{name}, {case}: offered should be {offered}"));
+                }
+                if let Some(decision) = offline {
+                    let actual = expected_digest(&assets[0], &assets).await;
+                    if actual != decision {
+                        failures.push(format!("{name}, {case}: expected_digest gave {actual:?}"));
+                    }
+                }
+            }
+            // A digest never stands in for a recognised installation or the
+            // requested version's asset.
+            let verified = [installer(Some(&valid))];
+            assert!(!installable(None, &verified, "0.1.12"), "{name}");
+            assert!(!installable(Some(kind), &verified, "0.1.13"), "{name}");
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+        // Nor for the installer of another architecture.
+        for (kind, other) in [
+            (
+                InstallKind::Dmg(InstallerArch::Arm64),
+                "AioLM_0.1.12_x64.dmg",
+            ),
+            (
+                InstallKind::Deb(InstallerArch::Arm64),
+                "AioLM_0.1.12_amd64.deb",
+            ),
+        ] {
+            assert!(
+                !installable(Some(kind), &[asset(other, Some(&valid))], "0.1.12"),
+                "{other}"
+            );
+        }
     }
 
     /// `INSTALL_RUNNING` is process-wide, exactly as it is for the app, so the
