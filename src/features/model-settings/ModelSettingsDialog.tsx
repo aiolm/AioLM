@@ -1,7 +1,7 @@
 import ModelName from '../../shared/ui/ModelName';
 import ModelBadges, { unknownFormat } from '../../shared/ui/ModelBadges';
 import ModelIcon from '../../shared/ui/ModelIcon';
-import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as api from '../../shared/api';
 import { executionConfig, executionSettings, serverSettingsChanged, type ExecutionSettings } from '../../shared/config/executionSettings';
 import { withManualOverrides } from '../../shared/config/tuningDefaults';
@@ -159,13 +159,19 @@ export function ModelSettingsDialog({ open, initialConfig, targetLabel, mode, in
   const canProfile = !!runtimeSelection && flow.runtime === runtimeKey;
   const canOptions = canProfile && flow.profile === profiles.selected.id;
   const step: SettingsStep = !runtimeSelection || flow.step !== 'runtime' && !canProfile ? 'runtime' : flow.step === 'options' && !canOptions ? 'profile' : flow.step;
-  const focusStepHeading = () => {
-    const previous = document.activeElement;
+  // The new step is focused and back at its top in the commit that shows it,
+  // before paint. Deferred to a frame, the focus scroll moved the painted step
+  // under a pointer press already aimed at it.
+  // Every step request sets a new flow, so the request is consumed by that commit.
+  const stepFocus = useRef<{ previous: Element | null } | null>(null);
+  const focusStepHeading = () => { stepFocus.current = { previous: document.activeElement }; };
+  useLayoutEffect(() => {
+    const request = stepFocus.current;
+    if (!request) return;
+    stepFocus.current = null;
+    if (document.activeElement === request.previous || document.activeElement === document.body || document.activeElement === heading.current) flowHeading.current?.focus({ preventScroll: true });
     body.current?.scrollTo({ top: 0 });
-    window.requestAnimationFrame(() => {
-      if (document.activeElement === previous || document.activeElement === document.body || document.activeElement === heading.current) flowHeading.current?.focus();
-    });
-  };
+  }, [flow]);
   const navigateStep = (next: SettingsStep) => {
     if (disabled || profileDirty || next === 'profile' && !canProfile || next === 'options' && !canOptions) return;
     setFlow(previous => ({ ...previous, step: next }));

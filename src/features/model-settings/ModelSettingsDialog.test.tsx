@@ -215,14 +215,27 @@ describe('model settings editor', { timeout: 45000 }, () => {
   });
   it('focuses the new stage heading and exposes the current stage to assistive technology', async () => {
     mount({ initialSection: undefined });
+    const stage = document.querySelector<HTMLElement>('.model-settings-body')!;
+    stage.scrollTo = ((options: ScrollToOptions) => { stage.scrollTop = options.top ?? stage.scrollTop; }) as typeof stage.scrollTo;
+    // The new stage arrives focused and at its top in the same update, before a
+    // frame can paint it elsewhere and move what the next pointer press aims at.
+    const navigate = (button: string | RegExp, heading: string) => {
+      stage.scrollTop = 302;
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      expect(screen.getByRole('heading', { name: heading })).toHaveFocus();
+      expect(stage.scrollTop).toBe(0);
+    };
     expect(screen.getByRole('button', { name: /^Choose runtime/ })).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to profile' }));
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose profile' })).toHaveFocus());
+    navigate('Continue to profile', 'Choose profile');
     expect(screen.getByRole('button', { name: /^Choose profile/ })).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(screen.getByRole('button', { name: 'Use this profile and adjust options' }));
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Adjust options' })).toHaveFocus());
-    fireEvent.click(screen.getByRole('button', { name: /^Choose runtime/ }));
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Choose runtime' })).toHaveFocus());
+    navigate('Use this profile and adjust options', 'Adjust options');
+    navigate('Back to profile', 'Choose profile');
+    // A control used once the stage has arrived keeps its focus in later frames.
+    const chip = document.querySelector<HTMLButtonElement>('.settings-profile-chip')!;
+    chip.focus();
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(chip).toHaveFocus();
+    navigate(/^Choose runtime/, 'Choose runtime');
   });
   it('shows only the chosen external engine profiles and reconfirms after changing runtime builds', async () => {
     const provider = 'custom.new-engine';
