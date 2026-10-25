@@ -16,13 +16,13 @@ function savePrefs(notifications: Partial<AppPreferences["notifications"]>, loca
   savePreferences({ ...base, locale, notifications: { ...base.notifications, ...notifications } });
 }
 
-/** Native plugin double: permission state plus every notify payload it accepted. */
+/** Native service double: permission state plus every payload it accepted. */
 function plugin(permission: boolean | null = true, notify: () => Promise<unknown> = async () => undefined) {
   const sent: Array<{ title: string; body: string }> = [];
   invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
     if (command === "plugin:notification|is_permission_granted") return permission;
     if (command === "plugin:notification|request_permission") return "granted";
-    if (command === "plugin:notification|notify") {
+    if (command === "send_desktop_notification") {
       await notify();
       sent.push((args as { options: { title: string; body: string } }).options);
       return undefined;

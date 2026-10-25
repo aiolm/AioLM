@@ -13,6 +13,7 @@ pub(crate) mod gateway;
 pub(crate) mod launch;
 pub(crate) mod mcp;
 pub(crate) mod models;
+pub(crate) mod notifications;
 pub(crate) mod personalization;
 pub(crate) mod projects;
 pub(crate) mod providers;

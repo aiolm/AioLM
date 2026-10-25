@@ -5,9 +5,11 @@ import type { Locale } from "../i18n/i18nCatalog";
 /**
  * Operating-system notifications for finished work.
  *
- * Every desktop OS goes through the official Tauri notification plugin. Its
- * commands are invoked directly rather than through the plugin's JavaScript
- * wrappers: `sendNotification` is fire-and-forget through a patched
+ * Permission calls use the official Tauri notification plugin. Submissions
+ * use the native desktop adapter: Linux retains its bus connection so GNOME
+ * does not dismiss the alert when the request ends; other platforms delegate
+ * to the plugin. We bypass the plugin's JavaScript wrappers because
+ * `sendNotification` is fire-and-forget through a patched
  * `window.Notification`, so a failure never reaches the caller, and on Windows
  * the wrapper's permission check reads a cached "denied" until a request has
  * been made in the same session, which would silence every alert after a
@@ -16,8 +18,9 @@ import type { Locale } from "../i18n/i18nCatalog";
  *
  * Desktop limits of the plugin: permission calls report granted without
  * checking actual OS authorization. The OS can ask for permission when the
- * first notification is submitted. `notify` resolves once the toast has been
- * prepared and handed to the OS. Whether the OS then shows it (permission,
+ * first notification is submitted. Submission resolves once the native
+ * service accepts the request (or the plugin prepares it on other platforms).
+ * Whether the OS then shows it (permission,
  * per-app settings, Focus Assist, an unregistered development app on Windows)
  * is not observable, so a resolved call means "submitted", not "delivered".
  */
@@ -93,7 +96,7 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
 }
 
 async function submit(copy: NoticeCopy): Promise<void> {
-  await invoke<void>("plugin:notification|notify", { options: { title: copy.title, body: copy.body } });
+  await invoke<void>("send_desktop_notification", { options: { title: copy.title, body: copy.body } });
 }
 
 /**

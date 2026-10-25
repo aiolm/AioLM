@@ -7,6 +7,8 @@ pub mod branding;
 mod commands;
 pub mod config;
 mod conversations;
+#[cfg(target_os = "linux")]
+mod desktop_notifications;
 mod discover;
 mod gateway;
 pub mod gguf;
@@ -135,14 +137,14 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::restore_main_window(app);
         }))
-        // Completion alerts use the official plugin's native path on every
-        // desktop OS. The frontend awaits its `notify` command directly: on
-        // desktop that call only confirms the toast was prepared and handed to
-        // the OS, never that the OS displayed it.
+        // Permission calls and non-Linux alerts use the official plugin.
+        // Linux submissions retain their bus sender for the app's lifetime.
         .plugin(tauri_plugin_notification::init())
         // The tray menu is handled once for the whole process; see
         // `tray::on_menu_event` for why not with each tray icon.
         .on_menu_event(tray::on_menu_event);
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(desktop_notifications::NotificationService::default());
     // Native WKWebView acceptance needs an embedded driver on macOS. It is
     // explicitly opted into by CI and can never open an automation endpoint in
     // a release build, even if a caller enables every Cargo feature.
@@ -152,6 +154,7 @@ pub fn run() {
         .manage(AppState::default())
         .on_window_event(attachment_drop::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            commands::notifications::send_desktop_notification,
             commands::providers::provider_catalog,
             commands::providers::runtime_adapter_register,
             commands::providers::pick_runtime_adapter,
