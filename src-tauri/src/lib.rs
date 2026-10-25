@@ -150,7 +150,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     let app = builder
         .manage(AppState::default())
-        .on_webview_event(attachment_drop::on_webview_event)
+        .on_window_event(attachment_drop::on_window_event)
         .invoke_handler(tauri::generate_handler![
             commands::providers::provider_catalog,
             commands::providers::runtime_adapter_register,

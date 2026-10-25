@@ -3,7 +3,7 @@ use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tauri::{DragDropEvent, Emitter, EventTarget, Manager, Webview, WebviewEvent};
+use tauri::{DragDropEvent, Emitter, EventTarget, Manager, Webview, Window, WindowEvent};
 use uuid::Uuid;
 
 const EVENT: &str = "aiolm://attachments-dropped";
@@ -41,7 +41,7 @@ pub(crate) struct AttachmentDrops {
 }
 
 impl AttachmentDrops {
-    /// Only the native webview callback inserts selections. Keep this bounded
+    /// Only the native window callback inserts selections. Keep this bounded
     /// and free of filesystem work: readers validate paths after a claim.
     pub(crate) fn capture(
         &mut self,
@@ -183,13 +183,22 @@ struct DroppedAttachments {
     error: Option<String>,
 }
 
-pub(crate) fn on_webview_event(webview: &Webview, event: &WebviewEvent) {
+pub(crate) fn on_window_event(window: &Window, event: &WindowEvent) {
+    if window.label() != "main" {
+        return;
+    }
+    // Tauri routes a window-content webview's native drop through WindowEvent;
+    // child-webview events are separate and must not capture a second batch.
+    let WindowEvent::DragDrop(DragDropEvent::Drop { paths, position }) = event else {
+        return;
+    };
+    let Some(main) = window.get_webview_window("main") else {
+        return;
+    };
+    let webview: &Webview = main.as_ref();
     if ensure_main_webview(webview.label(), webview.window().label()).is_err() {
         return;
     }
-    let WebviewEvent::DragDrop(DragDropEvent::Drop { paths, position }) = event else {
-        return;
-    };
     let state = webview.state::<AppState>();
     // Never wait for a command or touch the filesystem on the GUI thread.
     let result = match state.attachment_drops.try_lock() {
