@@ -132,6 +132,17 @@ fn truncate_text(value: &mut String, max: usize) {
     }
 }
 
+impl PendingOption {
+    fn append_help(&mut self, text: &str, line: u32) {
+        if !self.help.is_empty() {
+            self.help.push(' ');
+        }
+        self.help.push_str(text);
+        self.end_line = line;
+        truncate_text(&mut self.help, 32_768);
+    }
+}
+
 fn parse_choices(metavar: &str) -> Option<Vec<serde_json::Value>> {
     let trimmed = metavar.trim();
     // Explicit `{a,b,c}` or `[a|b]` in the flag spec only; prose after two
@@ -453,6 +464,12 @@ fn parse_positional(
     if spec.contains("--") {
         return None;
     }
+    let wrapped = spec.strip_suffix("...").unwrap_or(&spec).trim();
+    if (wrapped.starts_with('[') && !wrapped.ends_with(']'))
+        || (wrapped.starts_with('<') && !wrapped.ends_with('>'))
+    {
+        return None;
+    }
     let name = spec
         .trim()
         .trim_start_matches('[')
@@ -464,7 +481,7 @@ fn parse_positional(
         .unwrap_or("")
         .trim_matches(|c| c == '<' || c == '>' || c == '[' || c == ']')
         .replace('-', "_");
-    if name.is_empty() || name.len() > 128 {
+    if !super::runtime_options::identifier(&name) {
         return None;
     }
     Some(PendingOption {
@@ -539,19 +556,27 @@ pub fn parse_help_report(
     let mut in_usage_wrap = false;
     let mut positional_slot: u16 = 0;
     let mut last_option: Option<usize> = None;
+    let mut last_option_indent = 0;
     let mut end_of_options = Fact::default();
 
     for (index, line) in text.lines().enumerate() {
         let line_no = u32::try_from(index + 1).unwrap_or(u32::MAX);
-        // A bare `--` line documents an explicitly supported delimiter.
-        if line.trim() == "--" {
-            end_of_options = verified(true, document, line_no, line_no);
-            last_option = None;
-            continue;
-        }
         let trimmed = line.trim();
         if trimmed.is_empty() {
             in_usage_wrap = false;
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        // A wrapped description may itself contain headers, bracketed links,
+        // JSON, flag examples or `--`. Its deeper indent keeps that prose on
+        // the option instead of inventing another option or positional slot.
+        if let Some(idx) = last_option.filter(|_| indent > last_option_indent) {
+            options[idx].append_help(trimmed, line_no);
+            continue;
+        }
+        // A bare `--` line documents an explicitly supported delimiter.
+        if trimmed == "--" {
+            end_of_options = verified(true, document, line_no, line_no);
             last_option = None;
             continue;
         }
@@ -582,7 +607,6 @@ pub fn parse_help_report(
             in_usage_wrap = false;
         }
         let indented = line.starts_with(' ') || line.starts_with('\t');
-        let indent = line.len() - line.trim_start().len();
         let section_row = positional_section && *section_indent.get_or_insert(indent) == indent;
         // Continuation of the previous option's description. Only indented
         // lines continue: COLUMN0 prose ends the previous option so it stays
@@ -599,15 +623,7 @@ pub fn parse_help_report(
                         .is_some_and(|c| c.is_ascii_uppercase())
                         && split_spec_help(trimmed, &current_group, line_no).0.len() <= 64);
                 if !looks_new {
-                    let entry = &mut options[idx];
-                    if !entry.help.is_empty() {
-                        entry.help.push(' ');
-                    }
-                    entry.help.push_str(trimmed);
-                    entry.end_line = line_no;
-                    if entry.help.len() > 32_768 {
-                        truncate_text(&mut entry.help, 32_768);
-                    }
+                    options[idx].append_help(trimmed, line_no);
                     continue;
                 }
             }
@@ -627,6 +643,7 @@ pub fn parse_help_report(
                 if options.len() < 4096 {
                     options.push(pending);
                     last_option = Some(options.len() - 1);
+                    last_option_indent = indent;
                 } else {
                     last_option = None;
                 }
@@ -649,6 +666,7 @@ pub fn parse_help_report(
                 if options.len() < 4096 {
                     options.push(pending);
                     last_option = Some(options.len() - 1);
+                    last_option_indent = indent;
                 } else {
                     last_option = None;
                 }
@@ -1569,6 +1587,78 @@ mod tests {
         let prose =
             parse("Options:\n  --port PORT   port\n\nnotes:\n  model files are read lazily\n");
         assert!(prose.options.iter().all(|o| o.position.is_none()));
+    }
+
+    #[test]
+    fn wrapped_option_prose_keeps_links_code_and_examples_out_of_positional_slots() {
+        let text = "positional arguments:\n  model_tag             model to serve\n\noptions:\n  --config VALUE        configuration\n                        [synthetic.module][]. Documentation link.\n                        [reader](https://example.invalid/reader)\n                        Note:\n                        <Mode.FLAGGED: 'example'>,\n                        [\"first\", \"second\"]). Module list.\n\n                        Examples:\n                        --example-only VALUE\n                        --\n  <other-file>          another input\n  --next VALUE          next setting\n";
+        for stderr in [false, true] {
+            let mut report = report(text);
+            if stderr {
+                report.stderr = report.stdout.clone();
+                report.stdout.text.clear();
+                report.stdout.clean_text.clear();
+            }
+            let schema = parse_help_report(&report, binding(&report.identity.fingerprint)).unwrap();
+            assert_eq!(
+                schema
+                    .options
+                    .iter()
+                    .filter(|option| option.position.is_some())
+                    .map(|option| (option.key.as_str(), option.position))
+                    .collect::<Vec<_>>(),
+                vec![("model_tag", Some(0)), ("other_file", Some(1))]
+            );
+            assert_eq!(schema.options.len(), 4);
+            let config = schema
+                .options
+                .iter()
+                .find(|option| option.key == "config")
+                .unwrap();
+            for prose in [
+                "[synthetic.module][]",
+                "[reader](https://example.invalid/reader)",
+                "<Mode.FLAGGED: 'example'>",
+                "[\"first\", \"second\"]",
+                "--example-only VALUE",
+            ] {
+                assert!(config.help.contains(prose), "missing description {prose}");
+            }
+            assert_eq!(config.group, "options");
+            assert_eq!(
+                config.raw_spans,
+                vec![help_source(if stderr { "stderr" } else { "stdout" }, 5, 14)]
+            );
+            assert_eq!(schema.end_of_options.certainty, Certainty::Unknown);
+            assert!(schema.raw_help.iter().any(|help| help.text == text));
+        }
+    }
+
+    #[test]
+    fn unrecognized_bracketed_prose_stays_raw_without_invalidating_documented_options() {
+        let text = "Options:\n  --threads N           workers\n\nNotes:\n  [reader](https://example.invalid/reader)\n  [synthetic.module][]. Documentation link.\n  <Mode.FLAGGED: 'example'>,\n  [unclosed\n  <mismatched]\n";
+        let schema = parse(text);
+        assert_eq!(schema.options.len(), 1);
+        assert_eq!(schema.options[0].key, "threads");
+        assert_eq!(schema.raw_help[0].text, text);
+    }
+
+    #[test]
+    fn real_section_headers_reset_continuation_indent_and_standalone_delimiters_still_parse() {
+        let text = "Options:\n--first VALUE  first option\n    --prose-example VALUE\n\nAdditional:\n  --second VALUE  second option\n\n--\n";
+        let schema = parse(text);
+        assert_eq!(
+            schema
+                .options
+                .iter()
+                .map(|option| option.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert_eq!(schema.options[0].group, "options");
+        assert!(schema.options[0].help.contains("--prose-example VALUE"));
+        assert_eq!(schema.options[1].group, "additional");
+        assert_eq!(schema.end_of_options.supported(), Some(&true));
     }
 
     #[test]

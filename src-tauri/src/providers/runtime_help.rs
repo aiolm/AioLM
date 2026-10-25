@@ -24,7 +24,8 @@ use std::{
 /// own indent (argparse's default), now that user positionals can launch.
 /// Version 4 distinguishes `--flag=VALUE` from a separate `KEY=VALUE` metavar.
 /// Version 5 fingerprints every declared artifact alias and its resolved target.
-pub const PARSER_VERSION: u32 = 5;
+/// Version 6 keeps wrapped descriptions separate from positional declarations.
+pub const PARSER_VERSION: u32 = 6;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 
