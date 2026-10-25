@@ -193,7 +193,7 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 | L02-N05 | vLLM portable 왕복 | pass | 진짜 index 출처219개 원래 wheel 해시의 export→새 홈 offline import→실제37+3/취소·재시작 통과. SHA/OS/ABI 손상·실행 중 거부·SIGINT 정리/같은ZIP 재시도·기존 파일 보존도 통과. 고정12 CLI도 같은 import 대상의 probe·원래32/0 산술35+23·종료/metadata 보존을 재검증했다. |
 | L02-N06 | 원본 Strata | pass | 고정12 원래 manifest/current SDK 두 native stock 실행의6개 lifecycle/provenance 항목 통과, 산술32의 A03/A05/A07 실패는 보존했다. 별도 같은32 SSE는 reasoning-only/65+32/length였다. 앞선 실제 GUI/MCP 결과와 구분한다. |
 | L02-N07 | 실제 개인 엔진(Strata 외) | pass | Actual18개인help263/문서화1–32·0/33/abc거부/첫단일Save3재열기·argv3/n_threads3·native5와UI저장32+2·StopRetry/재시작·정상Quit재열기3/최종Close. 원래32T0조건과CLI A/B·coreexit1/등록audit한계 보존. |
-| L02-N08 | MLX·vllm-metal | unsupported | 관리형 mlx-vlm·vllm-metal 어댑터는 macOS/Apple Silicon 계약에 따라 Linux 미지원으로 판정했다. MLX 라이브러리 전체의 Linux 지원과 구분한다. |
+| L02-N08 | MLX·vllm-metal | unsupported | 관리형 mlx-vlm·vllm-metal 어댑터의 macOS/Apple Silicon 계약을 따른다. 고정19의 실제 Linux MLX 선택/관리 화면에서 미지원 안내·진행/설치/등록 차단과 저장값 보존도 확인했다. MLX 라이브러리 전체의 Linux 지원과 구분한다. |
 | L02-N09 | 원래 품질 잔여 대조(선택) | unrun | 원래 Windows 품질 입력/산출물이 없어 동등 대조는 미실행이다. 별도 Linux 입력 결과로 대체하지 않는다. |
 | L02-F01 | 최초 실행·설정 이전(`src/features/onboarding`, `src-tauri/src/home.rs`, `src-tauri/src/config`) | pass | 빈 홈/구버전 이전·원본backup·미등록 session 보존·EACCES 복구 통과. 후속 VM ATK crash는 stale AT-SPI GUID를 인과 대조했고 child 주소만 복구해 같은 앱 onboarding/정상 종료를 확인했다. |
 | L02-F02 | 런타임→프로필→옵션(`src/features/model-settings`, `src/features/runtimes`, `src/features/tuning`) | pass | 고정12 실제UI profile CRUD/default/dirty/DeleteCancelConfirm/fallback·fieldReset/Revert/allReset/지침timeout·runtime관리복귀/KeepDiscard 유지.17 실제 첫Save는 값재입력 없는 한 번pointer/저장3 재열기와 후속core뒤 재열기3까지 확인. 저장라이브러리와 active실행map 보존은 F05의 분리판정이다. |
@@ -283,3 +283,9 @@ UTC2026-10-25T21:48:40.580945Z까지의 별도 실제 검증이다. 같은 고�
 정상 Close 검사1.438초 뒤 소유 GUI/WebKit 세 프로세스·관찰한 포트의 IPv4/IPv6·해당 세션이 종료됐다. 격리 broker는 처음 생성한 Popen 소유자가 정상 종료 요청과 실제 wait0을 확인했고 소켓·임시 runtime·소유자도 정리됐다. 최종 root 검사에서 원본 Source34/DB family·복사한 합성7파일·데스크톱 설정과878/1,560개 사용자 파일의 hash-only 변경·누락·오류는0이었다. 기존 driver는 빈 ready 상태로 유지했다. 앞 절에 남겨 둔 새 Linux 전송 경로의 실패/앱 동작 유지 하위 검증은 이 범위에서 완료했으며, 실제 OS 표시가 남아 D05는unrun이다. 제품 코드·배포 해시·앞선 전체 자동 검사 범위는 그대로이고 원격 push는 하지 않았다.
 
 이후 읽기 전용 재확인에서도 UTC21:51:29의 공식 latest API는 HTTP200/v0.3.1로 현재 소스0.3.1과 같았고, [공식 최신 페이지](https://github.com/aiolm/AioLM/releases/latest)도 같은 태그로 연결됐다. 실제 새 버전 업데이트의 차단 조건은 유지한다. UTC21:52:01의 화면 조회는 물리2개 중 활성logical/output1개·scale2였으며 다중 활성 화면 이동 검증도 남는다. 모니터 식별자는 저장하지 않았고 OS 설정은 변경하지 않았다.
+
+## 고정19 Linux MLX 미지원 안내와 저장값 보존
+
+UTC2026-10-25T22:35:28.758040Z, 같은 고정19 release GUI의 격리된 사용자 환경에서 실제 모델/API가 모두 정지한 상태로 일반 모델설정의 MLX 선택과 Manage runtimes를 방문했다. Apple Silicon macOS 전용 안내, 비활성 runtime fieldset과 Continue to profile을 확인했다. 이 단계에는 Start 버튼이 없으므로 이를 표시된 Start 버튼의 비활성화로 표현하지 않는다. 관리 화면에서는 동일한 미지원 안내와 비활성 Install isolated environment/Register existing Python environment를 실제 캡처로 확인했고 두 동작을 실행하지 않았다.
+
+일반 Back→원래 엔진 선택→Close 뒤 native11파일·전체 설정·저장 프로필/적용 설정·runtime/model 선택·채팅 저장값4개·preferences가 실행 전/후/최종 표본에서 정확히 같았다. 관찰기8.521초는 exit0이다. 실제 MLX 기준선은 빈 Default 프로필 한 개, 적용 설정 없음, 옵션 bank 키 없음이었으며 임의의 비어 있지 않은 MLX 값을 심어 보존했다고 주장하지 않는다. 이 하위 검증은 N08의 Linux 미지원 처리 근거를 보강하며 관리형 MLX 실행 판정은 unsupported로 유지한다. 이 시점에 앱은 정지 상태로 계속 열려 있어 전체 종료 검증이나 다른 엔진 여정의 완료를 뜻하지 않는다. 제품 코드·고정 배포 해시·전체65/1/6/1/1 집계는 바꾸지 않았다.
