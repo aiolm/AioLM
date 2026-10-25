@@ -100,7 +100,9 @@ export default function RuntimeHelpReview({ cfg, effective, disabled, onAccepted
     } catch (cause) {
       if (!current()) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      const cancelled = message.includes('cancelled');
+      // Captured stderr may itself mention cancellation; only the owned user
+      // request or the native cancellation result makes this task cancelled.
+      const cancelled = cancelRequested.current || message === 'help discovery cancelled';
       if (!cancelled) setError(message);
       finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
     } finally {

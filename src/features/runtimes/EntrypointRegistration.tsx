@@ -203,9 +203,10 @@ export default function EntrypointRegistration({ locked, onRegistered, onPublish
     } catch (cause) {
       if (generation.current !== ownGeneration) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      const cancelled = message.includes('cancelled');
-      if (!cancelled) setError(message);
-      finishTask(taskId, cancelled ? 'cancelled' : 'failed', message);
+      // Child diagnostics can mention cancellation without cancelling this run.
+      const wasCancelled = cancelled.current || message === 'help discovery cancelled';
+      if (!wasCancelled) setError(message);
+      finishTask(taskId, wasCancelled ? 'cancelled' : 'failed', message);
     } finally {
       if (generation.current === ownGeneration) { pendingHelp.current = null; setBusy(false); }
     }

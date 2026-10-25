@@ -4,6 +4,7 @@ import * as api from '../../shared/api/runtimeHelp';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { effectiveSchema } from '../../testing/effectiveSchema';
 import { testConfig } from '../../testing/appStore';
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import EntrypointRegistration from './EntrypointRegistration';
 
 vi.mock('../../shared/api/runtimeHelp', async origin => ({
@@ -22,6 +23,7 @@ const registered: api.RegisteredManifest = { engine_id: 'custom.synthetic', runt
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const task of getTaskSnapshot()) removeTask(task.id);
   vi.mocked(api.entrypointHelpDiscover).mockResolvedValue(result);
   vi.mocked(api.entrypointManifestPreview).mockResolvedValue(registered);
   vi.mocked(api.runtimeEntrypointRegister).mockResolvedValue(registered);
@@ -332,6 +334,68 @@ it('keeps exact entry tokens and requires explicit model, port and probe binding
   fireEvent.click(screen.getByRole('button', { name: 'Register' }));
   await waitFor(() => expect(onRegistered).toHaveBeenCalledWith('custom.synthetic', expect.objectContaining({ runtime_id: 'build-1', display_name: 'Synthetic' })));
   expect(api.runtimeEntrypointRegister).toHaveBeenCalledWith(draft, { reportHelpPending: true });
+});
+
+it('keeps failed entrypoint help mentioning cancelled visible and retries the unchanged draft', async () => {
+  const diagnostic = 'help output is incomplete; rediscover before building options\n'
+    + 'Help capture: success=false, exit_code=17, timed_out=false\n'
+    + 'stderr (encoding=utf-8, decoding_loss=false, truncated=false, read_error=none):\n'
+    + 'An earlier operation was cancelled; this help command failed.';
+  vi.mocked(api.entrypointHelpDiscover).mockRejectedValueOnce(diagnostic);
+  const onRegistered = vi.fn();
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={onRegistered} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(api.entrypointHelpDiscover).toHaveBeenCalledOnce());
+  const submitted = vi.mocked(api.entrypointHelpDiscover).mock.calls[0];
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('help output is incomplete');
+  const disclosure = alert.querySelector('details')!;
+  fireEvent.click(disclosure.querySelector('summary')!);
+  expect(alert.querySelector('pre')).toBeVisible();
+  expect(alert.querySelector('pre')).toHaveTextContent('exit_code=17');
+  expect(alert.querySelector('pre')).toHaveTextContent('earlier operation was cancelled');
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'failed', detail: diagnostic })]);
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  expect(screen.queryByRole('combobox', { name: 'Model binding Option from help' })).not.toBeInTheDocument();
+  expect(api.entrypointManifestPreview).not.toHaveBeenCalled();
+  expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
+  expect(onRegistered).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+  expect(screen.getByLabelText('Engine ID (custom.*)')).toHaveValue('custom.synthetic');
+  expect(screen.getByLabelText('Runtime ID')).toHaveValue('build-1');
+  expect(screen.getByLabelText('Executable or interpreter')).toHaveValue('/synthetic/python');
+  expect(screen.getAllByDisplayValue('/synthetic path/한글 engine.py')).toHaveLength(2);
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[1]).toEqual(submitted);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  expect(screen.getByRole('combobox', { name: 'Model binding Option from help' })).toBeVisible();
+  expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
+});
+
+it.each(['canonical', 'requested'] as const)('keeps %s entrypoint help cancellation quiet and permits retry', async mode => {
+  let reject!: (cause: string) => void;
+  vi.mocked(api.entrypointHelpDiscover).mockReturnValueOnce(new Promise((_, failure) => { reject = failure; }));
+  render(<I18nProvider initialLocale="en"><EntrypointRegistration locked={false} onRegistered={vi.fn()} /></I18nProvider>);
+  await enter();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  const submitted = vi.mocked(api.entrypointHelpDiscover).mock.calls[0];
+  if (mode === 'requested') {
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.entrypointHelpCancel).toHaveBeenCalledWith(submitted[0]);
+  }
+  await act(async () => { reject(mode === 'canonical' ? 'help discovery cancelled' : 'process stopped before complete help'); });
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  expect(api.entrypointManifestPreview).not.toHaveBeenCalled();
+  expect(api.runtimeEntrypointRegister).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
+  expect(vi.mocked(api.entrypointHelpDiscover).mock.calls[1]).toEqual(submitted);
 });
 
 it('does not treat a cancelled late help result as a binding source and can retry', async () => {

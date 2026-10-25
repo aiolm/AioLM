@@ -4,6 +4,7 @@ import * as api from '../../shared/api';
 import { I18nProvider } from '../../shared/i18n/i18n';
 import { testConfig } from '../../testing/appStore';
 import { effectiveSchema } from '../../testing/effectiveSchema';
+import { getTaskSnapshot, removeTask } from '../../shared/state/taskRegistry';
 import RuntimeHelpReview from './RuntimeHelpReview';
 
 vi.mock('../../shared/api', async origin => ({
@@ -29,6 +30,7 @@ const result: [api.HelpReport, api.RuntimeDescriptor] = [report, {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  for (const task of getTaskSnapshot()) removeTask(task.id);
   vi.mocked(api.runtimeHelpTarget).mockImplementation(async config => ({
     engine: config.active_provider!, runtime: config.active_runtime!, program: '/synthetic/python', fixed: false,
     prefix: ['-I', '/synthetic path/engine.py'], request: { args: ['-I', '/synthetic path/engine.py', '--help'], scope: [] },
@@ -131,6 +133,58 @@ it('discovers only on explicit action, preserves token boundaries, reviews the d
   fireEvent.click(screen.getByRole('button', { name: "Use these options" }));
   await waitFor(() => expect(accepted).toHaveBeenCalledOnce());
   expect(api.runtimeHelpAccept).toHaveBeenCalledWith(cfg, report.identity.fingerprint, expect.objectContaining({ args: ['-I', '/synthetic path/engine.py', '--help', 'a b 한글'] }));
+});
+
+it('shows failed help diagnostics containing cancelled without allowing acceptance', async () => {
+  const diagnostic = 'help output is incomplete; rediscover before building options\n'
+    + 'Help capture: success=false, exit_code=17, timed_out=false\n'
+    + 'stderr (encoding=utf-8, decoding_loss=false, truncated=false, read_error=none):\n'
+    + 'An optional earlier operation was cancelled; this help command failed.';
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(diagnostic);
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(api.runtimeHelpDiscoverSelected).toHaveBeenCalledOnce());
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('help output is incomplete');
+  const disclosure = alert.querySelector('details')!;
+  expect(disclosure).not.toHaveAttribute('open');
+  fireEvent.click(disclosure.querySelector('summary')!);
+  expect(alert.querySelector('pre')).toBeVisible();
+  expect(alert.querySelector('pre')).toHaveTextContent('exit_code=17');
+  expect(alert.querySelector('pre')).toHaveTextContent('earlier operation was cancelled');
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'failed', detail: diagnostic })]);
+  expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled();
+});
+
+it('keeps canonical native cancellation quiet and permits a fresh discovery', async () => {
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockRejectedValueOnce(new Error('help discovery cancelled'));
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  await waitFor(() => expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  expect(await screen.findByRole('button', { name: 'Use these options' })).toBeEnabled();
+});
+
+it('keeps an actual Cancel quiet even when the child failure has no cancellation keyword', async () => {
+  let reject!: (cause: string) => void;
+  vi.mocked(api.runtimeHelpDiscoverSelected).mockReturnValueOnce(new Promise((_, failure) => { reject = failure; }));
+  render(view());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Discover help' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(api.runtimeHelpCancelSelected).toHaveBeenCalledWith(cfg);
+  await act(async () => { reject('process stopped before complete help'); });
+  expect(getTaskSnapshot()).toEqual([expect.objectContaining({ state: 'cancelled' })]);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Use these options' })).not.toBeInTheDocument();
+  expect(api.runtimeHelpAccept).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Discover help' })).toBeEnabled();
 });
 
 it('cancels the old runtime when selection changes and rejects its late help publication', async () => {

@@ -455,6 +455,42 @@ pub fn discover_persist_describe(
     )
 }
 
+// Failed captures remain diagnostics, never schema snapshots. Keep the IPC
+// error bounded even when a child fills the capture limit or emits long lines.
+fn diagnostic_excerpt(value: &str, max_bytes: usize) -> String {
+    const MARKER: &str = "\n[excerpt truncated]";
+    if value.len() <= max_bytes {
+        return value.into();
+    }
+    let end = value.floor_char_boundary(max_bytes - MARKER.len());
+    format!("{}{MARKER}", &value[..end])
+}
+
+fn discovery_diagnostic(reason: &str, report: &HelpReport) -> String {
+    let stream = |name: &str, output: &super::runtime_help::TextOutput| {
+        format!(
+            "{name} (encoding={}, decoding_loss={}, truncated={}, read_error={}):\n{}",
+            diagnostic_excerpt(&output.encoding, 128),
+            output.decoding_loss,
+            output.truncated,
+            diagnostic_excerpt(output.read_error.as_deref().unwrap_or("none"), 512),
+            diagnostic_excerpt(&output.clean_text, 4096),
+        )
+    };
+    format!(
+        "{}\nHelp capture: success={}, exit_code={}, timed_out={}, cancelled={}, elapsed_ms={}\nCapture error: {}\n{}\n{}",
+        diagnostic_excerpt(reason, 512),
+        report.success,
+        report.exit_code.map_or_else(|| "unavailable".into(), |code| code.to_string()),
+        report.timed_out,
+        report.cancelled,
+        report.elapsed_ms,
+        diagnostic_excerpt(report.error.as_deref().unwrap_or("none"), 512),
+        stream("stdout", &report.stdout),
+        stream("stderr", &report.stderr),
+    )
+}
+
 /// What a new discovery is compared with: the latest saved snapshot, or the
 /// snapshot a user reviewed and accepted for launch (possibly none).
 pub enum Baseline {
@@ -503,7 +539,7 @@ pub fn discover_against(
         Ok(schema) => schema,
         Err(error) => {
             service.failed(&ticket);
-            return Err(error);
+            return Err(discovery_diagnostic(&error, &report));
         }
     };
     let previous = match baseline {
@@ -1280,6 +1316,129 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_child() {
+        if std::env::var_os("AIOLM_HELP_STORE_DIAGNOSTIC_CHILD").is_none() {
+            return;
+        }
+        use std::io::Write;
+        print!("{}UNEXPOSED_STDOUT_TAIL", "한🦀".repeat(1000));
+        std::io::stdout().flush().unwrap();
+        eprint!(
+            "earlier operation cancelled\n{}UNEXPOSED_STDERR_TAIL",
+            "🙂é".repeat(1100)
+        );
+        std::io::stderr().flush().unwrap();
+        std::process::exit(17);
+    }
+
+    #[test]
+    fn failed_help_bounds_utf8_streams_and_labels_capture_truncation() {
+        let root = temp_root();
+        let service = HelpService::default();
+        let mut command = help_command("normal", 10_000);
+        command.args = vec![
+            "--exact".into(),
+            "providers::runtime_help_store::tests::diagnostic_child".into(),
+            "--nocapture".into(),
+        ];
+        command
+            .environment
+            .insert("AIOLM_HELP_STORE_DIAGNOSTIC_CHILD".into(), "1".into());
+        command.output_limit = 16384;
+        let error = discover_persist_describe(
+            &service,
+            &root,
+            "owner-bounded",
+            "custom.example",
+            "build-a",
+            &command,
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("exit_code=17"), "{error}");
+        assert!(error.contains("earlier operation cancelled"), "{error}");
+        assert!(error.contains("한🦀") && error.contains("🙂é"), "{error}");
+        assert!(!error.contains('\u{fffd}'), "UTF-8 was split: {error}");
+        assert!(
+            !error.contains("UNEXPOSED_STDOUT_TAIL") && !error.contains("UNEXPOSED_STDERR_TAIL")
+        );
+        let (_, streams) = error.split_once("stdout (").unwrap();
+        let (stdout, stderr) = streams.split_once("\nstderr (").unwrap();
+        for stream in [stdout, stderr] {
+            assert!(stream.starts_with(
+                "encoding=utf-8, decoding_loss=false, truncated=false, read_error=none):\n"
+            ));
+            let (_, excerpt) = stream.split_once("):\n").unwrap();
+            assert!(excerpt.len() <= 4096, "{} bytes", excerpt.len());
+            assert!(excerpt.ends_with("[excerpt truncated]"));
+        }
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        let error = discover_persist_describe(
+            &service,
+            &root,
+            "owner-bounded",
+            "custom.example",
+            "build-a",
+            &help_command("overflow", 10_000),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("stdout (encoding=utf-8, decoding_loss=false, truncated=true"),
+            "{error}"
+        );
+        assert!(
+            error.contains("stderr (encoding=utf-8, decoding_loss=false, truncated=true"),
+            "{error}"
+        );
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        assert!(!service.cancel_owner("owner-bounded").unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_help_returns_separate_diagnostics_without_publishing_and_can_retry() {
+        let root = temp_root();
+        let service = HelpService::default();
+        let error = discover_persist_describe(
+            &service,
+            &root,
+            "owner-diagnostic",
+            "custom.example",
+            "build-a",
+            &help_command("failure", 10_000),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.starts_with("help output is incomplete"), "{error}");
+        assert!(error.contains("exit_code=9"), "{error}");
+        assert!(error.contains("timed_out=false"), "{error}");
+        assert!(error.contains("stdout (encoding=utf-8"), "{error}");
+        assert!(error.contains("stderr (encoding=utf-8"), "{error}");
+        assert!(error.contains("synthetic help failed"), "{error}");
+        assert!(!service.cancel_owner("owner-diagnostic").unwrap());
+        assert!(latest_snapshot(&root, "custom.example", "build-a")
+            .unwrap()
+            .is_none());
+        let (report, _) = discover_persist_describe(
+            &service,
+            &root,
+            "owner-diagnostic",
+            "custom.example",
+            "build-a",
+            &help_command("normal", 10_000),
+            &[],
+        )
+        .unwrap();
+        assert!(report.complete());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_discovery_frees_its_owner_for_immediate_retry() {
         let root = temp_root();
         let service = HelpService::default();
@@ -1297,6 +1456,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("incomplete"), "unexpected error: {error}");
+        assert!(error.contains("timed_out=true"), "{error}");
+        assert!(error.contains("partial help before timeout"), "{error}");
         // No stale active ticket may survive the failure path.
         assert!(!service.cancel_owner("owner-x").unwrap());
         assert!(latest_snapshot(&root, "custom.example", "build-a")
