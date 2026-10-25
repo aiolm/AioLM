@@ -15,7 +15,7 @@ export interface RunSetup {
   activeModel: string;
   activeBackend: string;
   activeBuild: string;
-  /** Selected model is a split GGUF with parts absent from the library. */
+  /** Required model files are missing or the download has not completed. */
   modelIncomplete?: boolean;
   /**
    * Whether the selected backend and build are actually installed. Leave it
