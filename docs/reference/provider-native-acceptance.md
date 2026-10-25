@@ -6,7 +6,7 @@ verify shared behavior; they never certify native inference on Linux or macOS.
 This harness runs the remaining checks from
 [Cross-platform validation](cross-platform-validation.md) and
 [Inference runtimes](inference-runtimes.md) with a real engine, a real model
-and an isolated temporary `AIOLM_HOME`.
+and an isolated temporary profile (`HOME`, `XDG_*` and `AIOLM_HOME`).
 
 Primary sources for runtime contracts are the pinned engine trees:
 [vLLM 0.31.0](https://github.com/vllm-project/vllm/tree/v0.31.0),
@@ -76,6 +76,13 @@ prove engine behavior only:
   `--expect-tools` and `--expect-transcription` declare the operator verified
   support from the model registry or processor. A refused expected
   capability is a `fail`, not `unsupported`.
+- Cancellation evidence: the shared SSE parser waits for actual content or
+  reasoning and aborts while generation remains open. Role-only, malformed,
+  empty or already terminal output cannot pass cancellation. One operation
+  deadline covers response headers, generation and the healthy follow-up;
+  the harness does not increase token limits when a short stream finishes.
+  Final summary counts include the cleanup result, and cleanup failure still
+  retains the isolated profile for recovery.
 - Shareable privacy: the JSON written via `--out` keeps basenames only and
   never carries user model/Python paths, PIDs or URLs. Full local paths
   appear on the console only (`--keep-home` logging, or the retained-home
@@ -86,6 +93,77 @@ prove engine behavior only:
   `src-tauri/tests/provider_runtime_acceptance.rs` runs synthetic schema and
   platform checks by default; its live test is `#[ignore]`d behind
   `AIOLM_PROVIDER_ACCEPTANCE=1`.
+
+## Isolated manual commands
+
+The harness isolates itself. Run any manual `aiolm-cli` or desktop command
+in a throwaway profile, not just with `AIOLM_HOME` set. On startup the CLI and
+the desktop app import data from earlier layouts:
+- On Linux, the import reads `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` (by
+  default `~/.config` and `~/.local/share`), including their `aiolm`,
+  `com.aiolm.desktop`, `com.llamaboard.desktop` and `llama-board` folders.
+- On macOS, it reads `~/Library/Application Support`.
+- Old runtimes are *moved*, not copied.
+- On Linux, WebKitGTK keeps desktop storage under
+  `$XDG_DATA_HOME/com.aiolm.desktop`.
+
+An export of `AIOLM_HOME` alone therefore still reads and moves the operator's
+real data. The two shell functions below give one child process a temporary
+`HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` and `AIOLM_HOME`.
+They also drop the inherited `AIOLM_*` and `LLAMA_BOARD_*` variables, because
+the app falls back from `AIOLM_*` names to `LLAMA_BOARD_*`. The parent shell
+keeps its own `HOME` and environment:
+
+```sh
+# Run from the repository root in sh, bash or zsh.
+aiolm_profile() {
+  _aiolm_root="$(mktemp -d "${TMPDIR:-/tmp}/aiolm-iso.XXXXXX")" &&
+    mkdir -p "$_aiolm_root/home" "$_aiolm_root/config" \
+      "$_aiolm_root/data" "$_aiolm_root/cache" &&
+    printf '%s\n' "$_aiolm_root"
+}
+aiolm_isolated() {
+  _aiolm_root="$1"
+  shift
+  # The unquoted substitution intentionally expands to "-u NAME" pairs.
+  env $(env | sed -n -e 's/^\(AIOLM_[A-Za-z0-9_]*\)=.*/-u \1/p' \
+      -e 's/^\(LLAMA_BOARD_[A-Za-z0-9_]*\)=.*/-u \1/p') \
+    HOME="$_aiolm_root/home" \
+    XDG_CONFIG_HOME="$_aiolm_root/config" \
+    XDG_DATA_HOME="$_aiolm_root/data" \
+    XDG_CACHE_HOME="$_aiolm_root/cache" \
+    AIOLM_HOME="$_aiolm_root/aiolm" \
+    "$@"
+}
+PROFILE="$(aiolm_profile)"
+aiolm_isolated "$PROFILE" .codex-target/release/aiolm-cli doctor
+```
+
+Constraints of this recipe:
+- Build first, outside the wrapper. `rustup`, `cargo` and npm keep their
+  toolchains and caches under the real `HOME`, so `npm run tauri -- dev`,
+  `cargo` and `npm run build*` must not run inside it.
+- A registered interpreter must carry its packages in its own prefix, such as
+  a venv. A `pip install --user` package lives under the real `HOME` and is
+  invisible inside the profile. The harness applies the same rule.
+- The session bus, `XDG_RUNTIME_DIR` and the display are shared with your
+  login session. Your Secret Service keyring or macOS Keychain, notifications,
+  the tray and the system package database are the real ones.
+- Credential save/load/delete, first-run and legacy migration from a real
+  layout, installation, upgrade and removal still need a separate throwaway OS
+  account (see [Cross-platform validation](cross-platform-validation.md#native-acceptance)).
+- The desktop app enforces one instance per session. On Linux it claims the
+  session-bus name `com.aiolm.desktop.SingleInstance`, so a launch would hand
+  over to a running AioLM instead of starting isolated. Quit AioLM first and
+  check that `busctl --user list | grep -F com.aiolm.desktop.SingleInstance`
+  prints nothing.
+- On macOS, `HOME` redirects the app's own folders. WKWebView storage and the
+  Keychain are not shown to follow `HOME`, so run macOS GUI checks in a
+  separate user account.
+- To clean up, stop any server with
+  `aiolm_isolated "$PROFILE" .codex-target/release/aiolm-cli server stop`.
+  Confirm that no owned process or port remains, then remove only that folder
+  with `rm -rf -- "$PROFILE"`.
 
 ## Harness
 
@@ -229,8 +307,10 @@ with a recorded 40-char revision, and a free loopback port.
 
 ```sh
 /usr/bin/python3 -c "import vllm, sys; print(vllm.__version__, sys.version)"
-export AIOLM_HOME="$(mktemp -d)/aiolm"   # throwaway only; harness uses its own temp home
-.codex-target/release/aiolm-cli doctor
+# Optional manual diagnosis in a throwaway profile ("Isolated manual commands");
+# the harness below creates its own temporary profile.
+PROFILE="$(aiolm_profile)"
+aiolm_isolated "$PROFILE" .codex-target/release/aiolm-cli doctor
 node scripts/smoke-provider-runtime.mjs --engine vllm \
   --python /usr/bin/python3 \
   --model /data/models/qwen2.5-0.5b-snapshot \
@@ -287,17 +367,22 @@ node scripts/smoke-provider-runtime.mjs --engine mlx-vlm \
 `runtime export` / `runtime import` move a registered runtime between homes
 as an offline bundle (fresh ABI-matched interpreter on import). Both refuse
 while the headless server runs, export refuses an existing destination, and
-Ctrl-C cancels with staging cleanup. Exact commands on a native host:
+Ctrl-C cancels with staging cleanup. These are the exact commands on a native
+host. Each home is a separate throwaway profile ("Isolated manual commands"),
+so neither step registers in or reads from the operator's real home:
 
 ```sh
+CLI=.codex-target/release/aiolm-cli
+SOURCE="$(aiolm_profile)"
+TARGET="$(aiolm_profile)"
+
 # 1. Register explicitly, then export the runtime to a NEW zip path.
-.codex-target/release/aiolm-cli runtime register vllm /usr/bin/python3
-.codex-target/release/aiolm-cli runtime export vllm <runtime-id> /data/bundles/vllm-0.31.0-linux.zip
+aiolm_isolated "$SOURCE" "$CLI" runtime register vllm /usr/bin/python3
+aiolm_isolated "$SOURCE" "$CLI" runtime export vllm <runtime-id> /data/bundles/vllm-0.31.0-linux.zip
 
 # 2. Import into a fresh isolated home and prove the id resolves there.
-export AIOLM_HOME="$(mktemp -d)/aiolm"
-.codex-target/release/aiolm-cli runtime import /data/bundles/vllm-0.31.0-linux.zip
-.codex-target/release/aiolm-cli runtime list        # imported id present, available:true
+aiolm_isolated "$TARGET" "$CLI" runtime import /data/bundles/vllm-0.31.0-linux.zip
+aiolm_isolated "$TARGET" "$CLI" runtime list        # imported id present, available:true
 
 # 3. The harness creates its own fresh home: import the bundle there too.
 node scripts/smoke-provider-runtime.mjs --engine vllm \
@@ -459,12 +544,20 @@ them. Run them with an isolated home and a throwaway OS account. Never reuse
 production settings, credentials or deletion targets.
 
 ```sh
-# Linux example: isolated home, system Tauri prerequisites installed.
-export AIOLM_HOME="$(mktemp -d)/aiolm"
-npm run build:cli && npm run build
-npm run tauri -- dev
-# macOS equivalent uses the same AIOLM_HOME override and `npm run tauri -- dev`.
+# Linux example, with the system Tauri prerequisites installed. Build in the
+# normal environment, because toolchains and caches live under the real HOME.
+npm run package:tauri        # release GUI and CLI in .codex-target/release
+# Quit any running AioLM first (single-instance; see "Isolated manual commands").
+PROFILE="$(aiolm_profile)"
+aiolm_isolated "$PROFILE" .codex-target/release/aiolm
 ```
+
+Only the packaged release binary, launched in an isolated profile, is
+production GUI evidence. A `npm run tauri -- dev` window loads the development
+server and is not acceptance evidence. That command also cannot run inside the
+wrapper. On macOS, the wrapper isolates the app's own folders only. Run macOS
+GUI checks in a separate user account, because WKWebView storage and the
+Keychain are not shown to follow `HOME`.
 
 For each engine, in order: onboarding with a fresh home; Settings persistence
 (engine, runtime, profile, model path with spaces and Unicode); all navigation
