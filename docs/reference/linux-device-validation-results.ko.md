@@ -9,22 +9,22 @@
 - 승인된 native 개발 의존성과 Node 22.23.2/npm 12.0.2/Rust 1.98.0, 격리 CPython을 사용했다. Linux 의존성·바이너리를 새로 만들고 lockfile을 보존했다. 시스템 Python 3.14.4의 pip 부재 등 환경 실패는 별도 기록했다.
 - 테스트 자식의 HOME/XDG/AIOLM 경로를 격리했다. 설치·업그레이드·제거는 공식 Ubuntu image 서명/SHA를 확인한 KVM VM과 합성 계정에서 실행했다. 실제 사용자 자료를 fixture로 복사하지 않았다. UTC 2026-10-25 07:47:30의 원래 878개 및 확장 1,560개 파일 해시 재검사에서 변경·누락·읽기 오류는 각각 0개였다. 모든 여정 종료 뒤 최종 검사도 수행한다.
 
-GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 실제 native229·조합 입력·compositionend를 확인했다. 마지막 조합 종료 4ms 뒤 Enter가 keyCode13/isComposing=false로 전달되며 첫 Enter에 모델 경로를 불러오는 결함이 재현됐다. 설정 저장·모델 시작은 없었고, 정상 Discard/Close 후 원래 설정과 main IBus/접근성 상태는 그대로였다. 기존 Chat의 상태 기반 IME 보호를 공통 입력 로직으로 옮긴 수정 `69a463b`는 실제 순서를 재현한 RED4→관련195개 검사 통과, 전체 npm 110.100초/220개 파일·2,571개 검사, typecheck8.983초·lint5.083초로 확인했다. 새 production의 직접 입력 재검증을 진행 중이다. 자동 검사 성공을 실제 첫 Enter 성공으로 기록하지 않는다.
+GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 실제 native229·조합 입력·compositionend를 확인했다. 마지막 조합 종료 4ms 뒤 Enter가 keyCode13/isComposing=false로 전달되며 첫 Enter에 모델 경로를 불러오는 결함이 재현됐다. 설정 저장·모델 시작은 없었고, 정상 Discard/Close 후 원래 설정과 main IBus/접근성 상태는 그대로였다. 기존 Chat의 상태 기반 IME 보호를 공통 입력 로직으로 옮긴 수정 `69a463b`는 실제 순서를 재현한 RED4→관련195개 검사 통과, 전체 npm 110.100초/220개 파일·2,571개 검사, typecheck8.983초·lint5.083초로 확인했다. 고정13의 실제 직접 입력에서는 같은 조합 종료→4ms 뒤 비조합 Enter 순서가 관측됐고, 첫 Enter가 경로를 불러오지 않고 입력·기존 헤더를 보존했다. 설정·main 상태와 엔진 중지 상태도 같았다. 별도로 누를 다음 Enter의 정상 Load는 사용자 입력을 기다리고 있으며, 그 완료 전 전체 IME 판정을 pass로 바꾸지 않는다. 고정14의 프런트엔드 소스와 빌드 파일67개는13과 바이트가 같다. 이는14에서 새로 직접 입력한 결과를 뜻하지 않는다.
 
 ## 현재 production 고정점
 
-열세 번째 기본 `npm run package:tauri`는149.376초에 exit0이었다. 제품 source는 `69a463b9dd8e6c3b760360034e9dfd6b200c9433`, 고정 시각은 UTC `2026-10-25T07:38:18.399558+00:00`다. 당시 미커밋 변경은 이 결과 문서 하나였고 제품 코드는 커밋된 상태였다. 네 산출물을 독립 사본으로 보존했다. 519개 staging 파일의 UTF-8/UTF-16 개인 개발 경로·가짜 서버 검출은0개, 현재 SDK helper 세 파일의 전체 바이트 포함은 모든 GUI payload에서 확인했다.
+열네 번째 기본 `npm run package:tauri`는148.416초에 exit0이었다. 제품 source는 `fc22b28d8b4847c7f9d74a83110cfae04492eb82`, 고정 시각은 UTC `2026-10-25T09:14:10.410294+00:00`다. 고정 당시 tracked/untracked 제품 변경은 없었다. 네 산출물과 해시·검사 기록을 독립 사본으로 보존했다. 519개 staging 파일의 UTF-8/UTF-16 개인 개발 경로·가짜 서버 검출은0개, 현재 SDK helper 세 파일의 전체 바이트 포함은 모든 GUI payload에서 확인했다.
 
 | 산출물 | SHA-256 |
 | --- | --- |
-| `aiolm` | `761a517a923126ddc096a19917418052bb8e591b6ddf4b3545da7920efce56d8` |
-| `aiolm-cli` | `2fcc0b84123164ab8b0147bb41b92fdf7d9ed48e68c20f230e8f8cb39c158e32` |
-| `AioLM_0.3.1_amd64.deb` | `f00e99c9f60dab5b1f367c6889c0cfd1e7f796d66e113ae7b5ae649c98696ec4` |
-| `AioLM_0.3.1_amd64.AppImage` | `5d96985d6f64a5e44c7ab4ae066718925b93ae0bb1bdb0fc6c5fb24ddbcc3b38` |
+| `aiolm` | `d301d61d31d8c2a8bccc996f064e090cf369056d70272c552e7431c6b68a54a8` |
+| `aiolm-cli` | `04cc42a0e26636d9d98488faf8ede051e7db4da2976f179dfcae52d815e3cbde` |
+| `AioLM_0.3.1_amd64.deb` | `f00ede99eb70a32482766f6e6df033d3527fae6440844e640012fbe73aa1125c` |
+| `AioLM_0.3.1_amd64.AppImage` | `fd7857254121e067a7f59a34c743c9d90a34b3394f04bf5f293726f512937073` |
 
-고정13 DEB GUI는 `9bae7f690077a5404e49e3e1fe580a6cdd6440e8da317ab96fba0ca3c715b5cb`, AppImage GUI는 `c4153b8fd1eb99917dc4ed87a0baf30231ff4388ebd349681b66c88120140ebe`, AppImage CLI는 `95c623ccfff7f232e1c0ba5598da57a59c5f1a11aa0740e8761fa5b094f10475`다. Bundle marker·strip/RPATH 처리를 구분한다. 새 native CLI smoke도0.317초에 통과했다. 고정13 뒤 새 flag를 생성·개인 CPU 엔진을 빌드한 뒤 CLI A01–A09를 두 설정에서 각각3.689/3.841초에 통과했다. 같은32/temp0의 실제 답변5/native42+2와 정상 소유 정리를 확인했다. 실제 GUI·새 flag 여정은 검증 중이며 앞선12 GUI 실행을13 실행으로 바꾸지 않는다.
+고정14 DEB GUI는 `15200ce5da035945d0d1a884b621c9db159582be9f654b5fad3ad4edfd4442bf`, AppImage GUI는 `6d7b4ed462617ce57d3ca83c7198e540817cdd4eee8e393e33aaecadda80778f`, AppImage CLI는 `c798a3c79cca262474a106cb74d234607e996708cbfe6432561f64277c435b44`다. Bundle marker·strip/RPATH 처리를 구분한다. 새 native CLI smoke는0.265초에 통과했다. 고정14 이후 새 flag를 가진 개인 CPU 엔진을 새로 빌드하고, CLI A01–A09를 기본 thread와 명시3의 두 설정에서 각각3.739/3.875초에 통과했다. 실제 답변5/native42+2·내용 생성 뒤 취소·재시작·제거/재등록·정상 종료와 원래 자료4,032개 해시 보존을 확인했다. 두 설정은 같은32/temp0 조건이며 새 GUI 여정은 남아 있다. 앞선12 GUI나13 CLI 실행을14 실행으로 바꾸지 않는다.
 
-마지막 IME 수정 뒤 전체 기본 npm110.100초, Vitest220개 파일/2,571개 검사와 contracts/scripts/direct/coverage, typecheck8.983초·lint5.083초가 통과했다. Rust 소스는 고정12 이후 바뀌지 않았으며 마지막 관련 전체 기본 thread/all-target/all-feature Rust195.406초·Clippy5.455초·fmt0.819초·no-default/all-target4.242초 결과를 유지한다. 고정13은 변경된 frontend와 native embedding을 새로 production 빌드했다. ignored 실제 엔진 검사는 자동 검사 수치에 합치지 않는다.
+마지막 IME 수정 뒤 전체 기본 npm110.100초, Vitest220개 파일/2,571개 검사와 contracts/scripts/direct/coverage, typecheck8.983초·lint5.083초가 통과했다. 그 뒤 프런트엔드 변경은 없었다. 마지막 불완전 스냅샷 탐색 수정 뒤 전체 기본 thread/all-target/all-feature Rust175.843초·Clippy5.625초·fmt0.820초·no-default/all-target4.357초가 통과했다. 고정14는 두 Rust 파일의 수정과 동일 프런트엔드를 새로 production 빌드했다. ignored 실제 엔진 검사는 자동 검사 수치에 합치지 않는다.
 
 최신12 CLI의 실제 CPU `launch_resources` 정상/반복 종료·준비 중 소유 프로세스 중단 뒤 UUID 회수·실행 중/잠금/불일치/symlink canary 보존이 통과했다. 고정 뒤 새로 생성한 개인 CPU 엔진의 A01–A09 두 실행도 각각 3.700/3.858초에 통과했다. 최신 GUI에서는 고정 뒤 생성한 합성 `q3c88d9`의1,030개 help/1,012개 공통 입력·실제 값9·정확한 rich argv·가림·합성 echo·프로필 재열기를 확인했다. 실제 개인 `--ped7f245-threads`는 문서화한1–32 범위/오류 거부·저장3·실제 argv/native threads3·답변5/32+2·Stop/Retry·새 PID 재시작·정상 Quit/재열기3을 확인했다. 오래된 harness 설명 문자열은 raw에 보존하고 실제 post-freeze12 해시/시각/완료 단계로 명시 정정했다. 기본 AppImage12의 실제 FUSE/extract/NO_CLEANUP·두 번째 실행·GUI 답변5와 정상 소유 정리/데이터 보존은 통과했다.
 
@@ -45,6 +45,7 @@ GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 
 | AppImage runtime이 정상 종료 뒤 추출 폴더를 남기고 인스턴스가 같은 경로를 공유함 | `8454091`: pinned type2 runtime의 nftw fd 한도64와 인스턴스별 mkdtemp를 적용했다. 기본 고정8 AppImage의 FUSE/extract/NO_CLEANUP·두 번째 실행·실제 답변·0700 폴더·소유 정리/canary 보존이 통과했다. 최신12 기본 산출물도 세 모드의 GUI 답변5·두 번째 인스턴스의 정확한 GUI/CPU PID/birth/URL 유지·0700 추출/정리·원래31개 파일/4개 저장값 보존을 통과했다. |
 | 실제 옵션 오류와 discard 판단이 입력/선택 소유 경계를 제대로 나타내지 못함 | `4cc7de2`: input/combobox의 ARIA 오류 연결과 runtime 선택의 dirty 판단·Enter 처리를 보완했다. 전체 검사와 실제 GUI의 ARIA/키보드/값 보존을 확인했다. 실제 한글 입력에서 조합 종료 뒤 첫 Enter가 조기 Load를 실행하는 추가 결함을 재현했다. 69a463b의 자동 회귀와 실제 재검증 범위를 구분한다. Orca 낭독은 미실행이다. |
 | 실제 OS 파일 드롭이 Chat 첨부로 연결되지 않고, 첫 수정도 Wry 창 이벤트를 놓침 | `7c1b8a5`/`347c7f7`: 실제 main-window drop만 제한된 일회 UUID 선택으로 기록하고 현재 보이는 composer에서 직렬 처리한다. 고정11의 raw event/커스텀 이벤트0 실패를 보존했다. 고정12 실제 8회 드롭의 Unicode PDF·순서/중복·4개 제한/다섯째 거부·text-only 이미지 거부·composer 밖/모달 무시와 native Cancel/Tab/Space 선택이 통과했다. 실제 Smol PNG/혼합 첨부도 Ready였다. Send 동작 없이 초안·31개 파일/4개 저장값 보존·모든 소유 프로세스/포트 정리를 확인했다. |
+| 설정 파일 게시가 실패한 스냅샷이 오류·Retry 기록을 남기면서 모델 목록에서는 사라짐 | `fc22b28`: 명시 다운로드 manifest를 config 파일보다 먼저 검사 대상으로 인정한다. 실제659바이트 config의 hard-link 게시 실패에서 목록0개, 같은 실제 Retry 완료 후1개가 되는 경계를 확인했다. 파일 누락·Unknown·불완전·소유권 판단은 기존 검사기에 유지한다. 공개 catalogue 회귀의 RED→GREEN과 전체 Rust 검사는 통과했으며, 실제 실패 파일 사본을 사용한 고정14 GUI 재검증은 진행 중이다. |
 
 첨부 취소/만료와 canonicalization 완료의 경합은 실제 barrier로 RED 두 개→GREEN 두 개를 확인했고, invalid/replay/wrong-window token은 이전 읽기 권한을 취소하지 않는다. 전체 Rust 및 frontend 검사에 포함했다. 실제 드롭 검사를 합성 DOM DataTransfer·임의 경로 grant로 대체하지 않았다. Busy/reset/unmount/expiry·DPR 경계는 명시된 자동 검사 범위이며 실제 IME/이미지 정답 검사로 세지 않는다.
 
@@ -72,15 +73,15 @@ GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 
 - VM에서 같은 GUI와 새 빈 profile도 WebKit→ATK 등록 중 SIGSEGV했다. 원래 core와 실제 OS 라이브러리로 조사해 cached AT-SPI 주소의 오래된 GUID를 확인했다. 실제 socket AUTH EXTERNAL과 classic libdbus의 old/current GUID 대조 뒤 **자식 주소만** 올바르게 전달하자 같은 binary의 onboarding/Close가 성공했다. 서비스 재시작·bridge/sandbox/접근성 비활성화·제품 수정으로 우회하지 않았다. 원래 private driver/bus와 사용자 파일을 보존했다.
 - 같은 Node·실제 약104MB 입력·warm-cache 조건의 새 process 각5회에서 AppImage 검증을 전체 파일 대신944,632바이트 prefix로 제한한 결과 median21.418→0.336ms/peakRSS151,880→50,468KiB였다. 앱 시작·WebView 렌더·엔진 추론·전체 빌드 속도 개선으로 확대하지 않는다.
 - 책임/의존 방향은 adapter 계약·registry/launch·공통 기능을 나누어 검토했다. 새 native drop 저장소·feature hook과 공통 진단 helper는 해당 책임에 두었다. 마지막 변경의 정적 감사에서 새 고정3엔진 분기/모델 형식 추정 필터가 추가되지 않았으며, 최신12의 실제 새 합성/개인 flag 여정과 결합해 H07을 판정했다. 근거 없는 폴더 이동은 하지 않았다.
-- 현재 공개 최신 v0.3.1과 source v0.3.1이 같아 실제 새 버전 updater 설치는 blocked다. 동률 확인은 설치 판별 분기를 실행하지 않는다. 가짜 상위 버전·신뢰하지 않는 release·거부된 browser origin 우회로 대체하지 않는다. Updater native 진행률 검사는 첫/최종 바이트·기본500ms pending read·부분 쓰기·오류/취소 순서를 확인하며 write/flush 대기 상한이나 실제 다운로드 가속을 뜻하지 않는다.
+- 2026-10-25 UTC09:18의 [공식 latest API](https://api.github.com/repos/aiolm/AioLM/releases/latest) 재확인에서도 공개 최신 v0.3.1(공개2026-10-06)과 source v0.3.1이 같아 실제 새 버전 updater 설치는 blocked다. 동률 확인은 설치 판별 분기를 실행하지 않는다. 가짜 상위 버전·신뢰하지 않는 release·거부된 browser origin 우회로 대체하지 않는다. Updater native 진행률 검사는 첫/최종 바이트·기본500ms pending read·부분 쓰기·오류/취소 순서를 확인하며 write/flush 대기 상한이나 실제 다운로드 가속을 뜻하지 않는다.
 
 ## 앞선 고정점의 보존
 
-고정8의 GUI/CLI/package 및 자동 검사·STT/gateway/AppImage 결과는 별도 raw 사본에 보존했다. 고정9는 `220d1f9` CLI 수정 뒤 GUI payload가8과 동일 바이트임을 확인했다. 고정10은 parser6 수정 뒤 GUI가 바뀌어 실제 vLLM/새 개인 엔진을 다시 검증했다. 고정11은 parser7·진단·첫 drop 구현을 포함하며 실제 drop 실패를 삭제하지 않았다. 고정12는 그 실제 실패의 WindowEvent 수정 뒤 고정했다. 고정13은 직접 한글 첫 Enter 결함의 공통 입력 수정 뒤 고정했다. 서로 다른 고정점의 hash나 실행을 현재 전체 기능 성공으로 합치지 않는다.
+고정8의 GUI/CLI/package 및 자동 검사·STT/gateway/AppImage 결과는 별도 raw 사본에 보존했다. 고정9는 `220d1f9` CLI 수정 뒤 GUI payload가8과 동일 바이트임을 확인했다. 고정10은 parser6 수정 뒤 GUI가 바뀌어 실제 vLLM/새 개인 엔진을 다시 검증했다. 고정11은 parser7·진단·첫 drop 구현을 포함하며 실제 drop 실패를 삭제하지 않았다. 고정12는 그 실제 실패의 WindowEvent 수정 뒤 고정했다. 고정13은 직접 한글 첫 Enter 결함의 공통 입력 수정 뒤 고정했고, 고정14는 실제 불완전 스냅샷 누락의 탐색 수정 뒤 고정했다. 서로 다른 고정점의 hash나 실행을 현재 전체 기능 성공으로 합치지 않는다.
 
 ## 74개 세부 항목
 
-현재 60 pass / 3 fail / 1 unsupported / 9 unrun / 1 blocked다. 부분 실행은 전체 행의 pass로 확대하지 않는다.
+현재 60 pass / 4 fail / 1 unsupported / 8 unrun / 1 blocked다. 부분 실행은 전체 행의 pass로 확대하지 않는다.
 
 | ID | 항목 | 판정 | 실행 근거 또는 남은 범위 |
 | --- | --- | --- | --- |
@@ -94,18 +95,18 @@ GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 
 | L01-E05 | native 의존성 | pass | 승인된 native 개발 패키지 설치와 pkg-config 해석을 확인했다. |
 | L01-E06 | 새 의존성·binary | pass | Linux에서 npm 의존성/esbuild와 Cargo 산출물을 새로 만들었고 두 lockfile은 유지했다. |
 | L01-E07 | 사용자 데이터 격리 | pass | 자식 HOME/XDG/AIOLM 격리와 VM 합성 계정 사용. 기존878/1560개 사용자 파일 중간 재검사 변경0개; 최종 재검사는 남는다. |
-| L01-T01 | `npm run typecheck` | pass | 최종 도움말/wizard 수정 후 typecheck8.781초 통과. |
-| L01-T02 | `npm run lint` | pass | 최종 도움말/wizard 수정 후 전체 lint4.784초 통과. |
-| L01-T03 | `npm run test:unit` | pass | 최종 전체 npm109.286초, Vitest220파일/2567검사와 contracts/scripts/direct/coverage 통과. |
-| L01-T04 | `npm run build` | pass | 최종 main WindowEvent 수정 후 기본 package12의 production frontend build 통과. |
-| L01-T05 | `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` | pass | 최종 main WindowEvent 수정 후 fmt0.819초 통과. |
-| L01-T06 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` | pass | 최종 main WindowEvent 수정 후 전체 Clippy5.455초 통과. |
-| L01-T07 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features` | pass | 최종 main WindowEvent 수정 전체 Rust195.406초 통과. 첨부 취소 ticket/도움말 진단의 전체 검사도 별도 보존했다. |
-| L01-T08 | `cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features` | pass | 최종 main WindowEvent 수정 후 no-default/all-target check4.242초 통과. |
+| L01-T01 | `npm run typecheck` | pass | 마지막 IME 프런트엔드 수정 뒤 typecheck8.983초 통과. 이후 프런트엔드 소스는 같다. |
+| L01-T02 | `npm run lint` | pass | 마지막 IME 프런트엔드 수정 뒤 전체 lint5.083초 통과. 이후 프런트엔드 소스는 같다. |
+| L01-T03 | `npm run test:unit` | pass | 마지막 IME 프런트엔드 수정 뒤 전체 npm110.100초, Vitest220파일/2571검사와 contracts/scripts/direct/coverage 통과. |
+| L01-T04 | `npm run build` | pass | 불완전 스냅샷 탐색 수정 뒤 기본 package14의 production frontend build 통과. 빌드 파일67개는13과 같은 바이트다. |
+| L01-T05 | `cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check` | pass | 마지막 스냅샷 탐색 수정 뒤 fmt0.820초 통과. |
+| L01-T06 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` | pass | 마지막 스냅샷 탐색 수정 뒤 전체 Clippy5.625초 통과. |
+| L01-T07 | `cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features` | pass | 마지막 스냅샷 탐색 수정 뒤 전체 기본 thread/all-target/all-feature Rust175.843초 통과. 기존 실제 엔진 opt-in 범위는 별도다. |
+| L01-T08 | `cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets --no-default-features` | pass | 마지막 스냅샷 탐색 수정 뒤 no-default/all-target check4.357초 통과. |
 | L01-T09 | `cargo build --locked --manifest-path src-tauri/Cargo.toml --bins` 후 `npm run test:native-cli` | pass | Linux debug CLI build/격리 smoke 통과. Release 결과는 T12와 구분한다. |
 | L01-T10 | Python: `python3 -B -m unittest discover -s scripts/runtime-adapters -p 'test_*.py'`, `-s scripts/model-repair`, `-s scripts/provider-compatibility`, `-s src-tauri/src/providers -p '*_tests.py'`, `-s src-tauri/src/providers/tests -p 'test_*.py'`, `-s scripts -p 'test_linux_desktop.py'` | pass | 어댑터·모델복구·provider·Linux desktop Python 검사 통과. 실제 엔진 결과와 합산하지 않는다. |
 | L01-T11 | `npm run test:provider-runtime` | pass | provider harness 단위/self-test 및 실제 native gate를 각각 기록했다. |
-| L01-T12 | `npm run build:cli` 후 `npm run test:native-cli -- .codex-target/release/aiolm-cli` | pass | 기본 package12 CLI build와 실제 격리 native CLI smoke0.169초 통과. |
+| L01-T12 | `npm run build:cli` 후 `npm run test:native-cli -- .codex-target/release/aiolm-cli` | pass | 기본 package14 CLI build와 실제 격리 native CLI smoke0.265초 통과. |
 | L01-T13 | `python3 scripts/smoke-linux-vault.py` | pass | 격리 합성 Secret Service의 실제 vault CRUD smoke 통과. 앱 복구 여정은 D06이다. |
 | L01-T14 | `AIOLM_TEST_PYTHON=<실제 Python> cargo test --locked --manifest-path src-tauri/Cargo.toml --test runtime_interpreter_command_journey -- --ignored` 및 같은 방식의 `runtime_positional_metadata_journey` | pass | 실제 CPython interpreter/positional metadata의 opt-in argv 검사를 실행했다. |
 | L01-T15 | updater 모듈: `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib app_update` | pass | Linux native updater 모듈 전체 회귀를 실행했다. 실제 업데이트와 별도다. |
@@ -129,7 +130,7 @@ GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 
 | L02-N09 | 원래 품질 잔여 대조(선택) | unrun | 원래 Windows 품질 입력/산출물이 없어 동등 대조는 미실행이다. 별도 Linux 입력 결과로 대체하지 않는다. |
 | L02-F01 | 최초 실행·설정 이전(`src/features/onboarding`, `src-tauri/src/home.rs`, `src-tauri/src/config`) | pass | 빈 홈/구버전 이전·원본backup·미등록 session 보존·EACCES 복구 통과. 후속 VM ATK crash는 stale AT-SPI GUID를 인과 대조했고 child 주소만 복구해 같은 앱 onboarding/정상 종료를 확인했다. |
 | L02-F02 | 런타임→프로필→옵션(`src/features/model-settings`, `src/features/runtimes`, `src/features/tuning`) | pass | 최신12 실제 UI의 profile 이름/ID·기본/dirty보호·Delete Cancel/Confirm/fallback·재실행, field reset/Revert/전체옵션 reset/지침·timeout 보존·runtime 관리 복귀/Keep/Discard 통과. CPU/default 대상이며 optional binding은 빈 값이었다. |
-| L02-F03 | UX 품질 | fail | ARIA·작은 창·대량 옵션·키보드 검증은 유지한다. 실제 한글 조합 첫 Enter의 조기 Load를 재현했고69a463b/전체 자동 검사로 수정했다. 새 production 직접 재검증과 GNOME Orca 낭독이 남아 fail 판정을 유지한다. |
+| L02-F03 | UX 품질 | fail | ARIA·작은 창·대량 옵션·키보드 결과는 유지한다. 실제 한글 첫 Enter의 조기 Load를69a463b로 수정했고 고정13 같은 native 순서에서 첫 Enter 보존을 확인했다. 별도 다음 Enter·GNOME Orca 낭독은 남아 fail 유지. |
 | L02-F04 | Chat(`src/features/chat`) | pass | 실제 두 CPU 모델×안내 on/off 4회에서 정확한 대상·system 메시지 유무·SSE/usage와 저장 이력 재열기를 확인했다. Qwen은5, Smol의 숫자만 출력 형식 실패는 보존했다. 활성 빈 초안만 저장하는 기존 계약과 구분했다. |
 | L02-F05 | 데이터 보존 | unrun | 각 여정의 profile/runtime/model·대화·benchmark·네 workspace 저장값을 실제 재실행/해시로 확인했다. 마지막 통합 및 원본 사용자 자료 검사를 남긴다. |
 | L02-F06 | 프로젝트·RAG·문서(`src/features/projects`, `src-tauri/src/commands/documents.rs`) | pass | 실제 PDF/DOCX·Nomic768·프로젝트/namespace·명시 embedding·keyword fallback을 확인했다. 모델의 ORBIT47 내용 오류는 별도로 보존했다. |
@@ -138,17 +139,17 @@ GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 
 | L02-F09 | 미디어 내용 | fail | 원본 Linux Smol 이미지/영상 질문의 내용 정확도가 native 직접 대조에서도 실패했다. 입력·모델·한도를 바꾸지 않았고 첨부 전송/순서는 별도로 확인했다. |
 | L02-F10 | gateway(`src/features/developer`, `src-tauri/src/gateway`) | pass | 고정8 native 같은 요청32+2와 OpenAI/Anthropic/Responses 최종 usage 일치·인증/alias·lease 반환·API/모델 독립 종료 통과. |
 | L02-F11 | 측정·공유(`src/features/bench`, `src-tauri/src/benchmark`) | pass | 실제 완료2/취소1의 native 측정·이력·CSV/XLSX·공유 미리보기를 확인했다. 업로드하지 않았다. |
-| L02-F12 | 모델 탐색·관리(`src/features/discover`, `src/features/models`) | unrun | 실제 Hub immutable GGUF 검색/다운로드·26% 취소/재시도·Ready·활성 삭제 보호 확인. shards/snapshot/companion·불완전/hard-link 실패·외부 삭제 보호가 남는다. |
+| L02-F12 | 모델 탐색·관리(`src/features/discover`, `src/features/models`) | fail | 실제 GGUF 취소/재시도·삭제 보호 및 CLI snapshot/shard/companion 검사를 확인했다. 실제 config 게시 실패 때 불완전 snapshot이 목록에서 누락돼 fail. fc22b28 자동 회귀는 통과했고 고정14 실제 실패 사본의 GUI 재검증이 남는다. |
 | L02-F13 | 개인화·스킬(`src/features/settings/PersonalizationSettings.tsx`, `src-tauri/src/personalization.rs`) | pass | 개인화·AGENTS revision/초안 보존·실제 요청 반영·연결 skill/symlink 정책을 확인했다. 임의 skill 실행은 하지 않았다. |
 | L02-F14 | 프로세스·포트 소유 | pass | 최신12 실제 Qwen+Smol Ready/API401·200/MCP native 승인 대기를 동시 유지한 뒤 정상 Quit로 모든 소유 PID·포트·승인창 정리, 재실행의 API key없음/임시ID없음을 확인했다. 활성 ffmpeg/pip/CMake 취소 검사는 이 사례에 포함하지 않았다. |
 | L03-D01 | 파일·폴더 선택 | pass | 최신12 실제 OS 드롭8회: Unicode PDF·순서/중복·4개 제한·지원 거부·composer 밖/모달 무시와 native picker Cancel/Tab/Space 통과. Smol 실제 이미지/혼합 첨부 수락, Send 없이 초안·31파일/4저장값 보존·소유 정리 확인. 품질은 F09와 별도다. |
-| L03-D02 | clipboard·IME | fail | 실제 clipboard 왕복에 이어 직접 한글 입력을 확인했다. WebKit의 compositionend→4ms 뒤 Enter13/비조합 순서에서 첫 Enter가 조기 Load를 실행해 fail. 상태 기반 수정의 자동 검사는 통과했으며 새 production 직접 재검증이 남았다. |
+| L03-D02 | clipboard·IME | fail | 실제 clipboard 왕복·직접 한글 입력을 확인했다.13에서 실제 조합 종료4ms 뒤 첫 Enter가 조기 Load 없이 입력을 보존했다. 별도 다음 Enter의 정상 동작 확인 전 fail을 유지한다. |
 | L03-D03 | tray | pass | 최신12 실제 host에서 Close→숨김 중 같은 CPU/포트/답변5 유지→own Show→own Quit/정리·설정false 복원 통과. host 없는 VM fallback도 별도 확인했다. Off의 Passive 등록과 활성 아이콘을 구분했다. |
 | L03-D04 | 창·인스턴스 | unrun | 최초 표시·360×520/DPR1·2·두 번째 실행 복원 확인. 실제 물리화면2개 중 활성출력은1개여서 다중 활성화면 이동은 미실행이며 전역 설정을 바꾸지 않았다. |
 | L03-D05 | 알림 | unrun | 최신12 실제 desktop 수신자와 own 알림ID31/정상 closure를 확인했다. 실제 banner 렌더링/사람의 수신 확인은 남는다. |
 | L03-D06 | Secret Service | pass | native CRUD와 실제 앱 잠금·인증 취소·사용 불가·잠금 해제/동일 키 backup 복구 확인. 평문 대체 없음. |
 | L03-D07 | 4개 언어 안내 | unrun | 네 언어의 종료/숨김·현재 버전 안내와 작은 창 줄바꿈 확인. updater 설치 가능/불가 설명의 실제 조합이 남는다. |
-| L03-P01 | package 생성 | pass | 기본 package13 149.376초/519 staging 개인 경로·fake0/SDK3 전체 바이트·6개 payload 해시를 고정했다. GUI 실제 검사는 산출물 생성과 구분한다. |
+| L03-P01 | package 생성 | pass | 기본 package14 148.416초/519 staging 개인 경로·fake0/SDK3 전체 바이트·6개 payload 해시를 고정했다. 실제 GUI 검사는 생성과 구분한다. |
 | L03-P02 | DEB 설치 수명 | pass | 별도 VM의 DEB 설치·메뉴·재설치/제거·공개 버전 업그레이드 보존과 최신12 동일버전 교체의31파일/4저장값 보존 확인. |
 | L03-P03 | AppImage | pass | 기본 AppImage12의 실제 FUSE/extract/NO_CLEANUP·각GUI답변5·두 번째 인스턴스·정확한 PID/birth 유지·0700 추출/정리·canary/31파일/4저장값 보존까지 통과했다. |
 | L03-P04 | 실제 업그레이드 | pass | 실제 공개0.3.0→새0.3.1 DEB의 설정/schema14·프로필/이력·앱 소유 OS vault 키와 backup 보존을 확인했다. |
