@@ -79,8 +79,52 @@ describe('generic runtime option renderer', () => {
     expect(screen.getByLabelText(/^--threads/)).toHaveAccessibleDescription('threads help');
   });
 
+  it.each([
+    ['en', 'numeric range'], ['ko', '숫자 범위'], ['ja', '数値範囲'], ['zh', '数值范围'],
+  ] as const)('shows the documented bounds with the field and its native error in %s', async (locale, label) => {
+    const message = 'value is outside the documented numeric range';
+    const threads = textOption('threads', { kind: known('integer'), range: known({ min: 1, max: 32 }) });
+    render(<I18nProvider initialLocale={locale}><p id="range-error">{message}</p>
+      <RuntimeOptionSchemaForm compact schema={schema([threads, textOption('label')])} values={{ threads: 0 }} scope={[]}
+        validationDescriptions={new Map([['threads', 'range-error']])} onChange={() => undefined} />
+    </I18nProvider>);
+    expect(screen.getByText(`${label}: 1–32`)).toBeVisible();
+    expect(screen.getByLabelText(/^--threads/)).toHaveAccessibleDescription(`threads help ${label}: 1–32 ${message}`);
+    expect(screen.getByLabelText(/^--threads/)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(/^--label/)).toHaveAccessibleDescription('label help');
+    await waitFor(() => expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalled());
+  });
+
+  it('shows a documented zero boundary without inventing an unknown or absent bound', async () => {
+    const lower = textOption('lower', { kind: known('number'), range: known({ min: 0 }) });
+    const upper = textOption('upper', { kind: known('number'), range: known({ max: 0 }) });
+    const unknown = textOption('unknown', { range: { value: { min: 1, max: 32 }, certainty: 'unknown' } });
+    render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([lower, upper, unknown])}
+      values={{}} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    expect(screen.getByText('numeric range: ≥ 0')).toBeVisible();
+    expect(screen.getByText('numeric range: ≤ 0')).toBeVisible();
+    expect(screen.getByLabelText(/^--lower/)).toHaveAccessibleDescription('lower help numeric range: ≥ 0');
+    expect(screen.getByLabelText(/^--upper/)).toHaveAccessibleDescription('upper help numeric range: ≤ 0');
+    expect(screen.getByLabelText(/^--unknown/)).toHaveAccessibleDescription('unknown help');
+    expect(screen.queryByText('numeric range: 1–32')).not.toBeInTheDocument();
+    await waitFor(() => expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalled());
+  });
+
+  it('does not disclose a sensitive option through its numeric bounds', async () => {
+    const pin = textOption('pin', {
+      kind: known('integer'), sensitive: known(true), range: known({ min: 1234, max: 1234 }),
+      runtime_default: known({ literal: 1234 }),
+    });
+    const view = render(<I18nProvider initialLocale="en"><RuntimeOptionSchemaForm compact schema={schema([pin])}
+      values={{}} scope={[]} onChange={() => undefined} /></I18nProvider>);
+    expect(screen.getByLabelText(/^--pin/)).toHaveAttribute('type', 'password');
+    expect(view.container).not.toHaveTextContent('1234');
+    expect(screen.getByLabelText(/^--pin/)).toHaveAccessibleDescription('pin help');
+    await waitFor(() => expect(runtimeHelp.runtimeHelpResolve).toHaveBeenCalled());
+  });
+
   it('marks each rejected tuple value without clearing its own parse error when native issues clear', () => {
-    const pair = textOption('pair', { kind: known('integer'), arity: known({ min: 2, max: 2 }) });
+    const pair = textOption('pair', { kind: known('integer'), arity: known({ min: 2, max: 2 }), range: known({ min: 0, max: 4 }) });
     const current = schema([pair, textOption('label')]);
     const values = { pair: { occurrences: [[1, 2]] } };
     const descriptions = new Map([['pair', 'native-range native-rule']]);
@@ -94,7 +138,7 @@ describe('generic runtime option renderer', () => {
     const second = screen.getByLabelText('--pair Occurrence 1 Value 2');
     for (const value of [first, second]) {
       expect(value).toHaveAttribute('aria-invalid', 'true');
-      expect(value).toHaveAccessibleDescription('pair help Outside range Must be different');
+      expect(value).toHaveAccessibleDescription('pair help numeric range: 0–4 Outside range Must be different');
     }
     expect(screen.getByLabelText(/^--label/)).not.toHaveAttribute('aria-invalid');
     fireEvent.change(first, { target: { value: 'unfinished-number' } });
@@ -102,7 +146,7 @@ describe('generic runtime option renderer', () => {
     expect(first).toHaveAttribute('aria-invalid', 'true');
     expect(first).not.toHaveAccessibleDescription(expect.stringContaining('Outside range'));
     expect(second).not.toHaveAttribute('aria-invalid');
-    expect(second).toHaveAccessibleDescription('pair help');
+    expect(second).toHaveAccessibleDescription('pair help numeric range: 0–4');
   });
 
   it('connects host validation messages to choice and switch comboboxes', () => {

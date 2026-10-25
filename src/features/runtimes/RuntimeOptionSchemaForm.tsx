@@ -210,6 +210,15 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   const copy = runtimeOptionsCopy[locale];
   const id = useId();
   const helpId = `${id}-help`;
+  const rangeId = `${id}-range`;
+  // Literal bounds can disclose a secret just as its documented default can.
+  const range = supported(option.sensitive) === true ? undefined : supported(option.range);
+  const minimum = typeof range?.min === 'number' && Number.isFinite(range.min) ? range.min : undefined;
+  const maximum = typeof range?.max === 'number' && Number.isFinite(range.max) ? range.max : undefined;
+  const bounds = minimum !== undefined && maximum !== undefined ? `${minimum}–${maximum}`
+    : minimum !== undefined ? `≥ ${minimum}` : maximum !== undefined ? `≤ ${maximum}` : undefined;
+  const rangeHint = bounds === undefined ? null : <p id={rangeId} className="app-section-hint">{copy.field_range}: {bounds}</p>;
+  const describedBy = [option.help ? helpId : undefined, bounds === undefined ? undefined : rangeId].filter(Boolean).join(' ') || undefined;
   const name = optionName(option);
   const current = readStored(stored);
   const arity = supported(option.arity);
@@ -280,9 +289,10 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
     return (
       <div className="schema-option">
         {header}
+        {rangeHint}
         <CustomSelect
           ariaLabel={name}
-          ariaDescribedBy={[option.help ? helpId : undefined, validationDescription].filter(Boolean).join(' ') || undefined}
+          ariaDescribedBy={[describedBy, validationDescription].filter(Boolean).join(' ') || undefined}
           ariaInvalid={!!validationDescription || undefined}
           value={value === true ? 'true' : value === false ? 'false' : ''}
           disabled={locked}
@@ -304,13 +314,14 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
     return (
       <div className="schema-option">
         <label htmlFor={`${id}-single`}>{header}</label>
+        {rangeHint}
         {explicitEmpty ? (
           <span className="schema-option__value">
             <span>{copy.emptySet}</span>
             <button type="button" className="app-button app-button--secondary" disabled={locked} onClick={() => onStore(undefined)}>{copy.useDefault}</button>
           </span>
         ) : (
-          <SingleValue option={option} value={value} label={name} disabled={locked} copy={copy} describedBy={option.help ? helpId : undefined} validationDescription={validationDescription}
+          <SingleValue option={option} value={value} label={name} disabled={locked} copy={copy} describedBy={describedBy} validationDescription={validationDescription}
             inputId={`${id}-single`}
             onValue={next => onStore(next === undefined ? undefined : writeStored([[next]], current?.spelling ?? null))}
             onInvalid={invalid => report('single', invalid)} />
@@ -331,12 +342,13 @@ export const SchemaOptionField = memo(function SchemaOptionField({ option, store
   return (
     <fieldset className="schema-option">
       <legend>{header}</legend>
+      {rangeHint}
       {rows.map((row, rowIndex) => (
         <div key={rowIndex} className="schema-option__row" role="group" aria-label={`${name} ${copy.occurrence} ${rowIndex + 1}`}>
           {row.map((cell, cellIndex) => (
             <span key={cellIndex} className="schema-option__cell">
               <ValueInput option={option} value={cell} label={`${name} ${copy.occurrence} ${rowIndex + 1} ${copy.value} ${cellIndex + 1}`}
-                disabled={locked} emptyMeans="empty" copy={copy} describedBy={option.help ? helpId : undefined} validationDescription={validationDescription}
+                disabled={locked} emptyMeans="empty" copy={copy} describedBy={describedBy} validationDescription={validationDescription}
                 onValue={next => store(rows.map((r, i) => (i === rowIndex ? r.map((c, j) => (j === cellIndex ? next : c)) : r)))}
                 onInvalid={invalid => report(`${rowIndex}:${cellIndex}`, invalid)} />
               {canRemoveValue(row) && (
