@@ -1,6 +1,6 @@
 # Linux 기기 검증 결과
 
-최신 추가 검증은 아래 [고정19 알림 연결 수정](#고정19-알림-연결-수정과-실제-재검증)에 기록했다. 제품 `37c0343`의 동일 바이트 빌드에서 즉시 연결 종료 결함은 해소됐으며, 배너의 사람 확인은 대기 중이다. 전체 집계는65 pass/1 fail/6 unrun/1 unsupported/1 blocked로 유지한다.
+최신 추가 검증은 아래 [고정19 알림 연결 수정](#고정19-알림-연결-수정과-실제-재검증)과 [최소화 상태의 실제 채팅 완료](#고정19-최소화-상태의-실제-채팅-완료)에 기록했다. 제품 `37c0343`의 동일 바이트 빌드에서 즉시 연결 종료 결함은 해소됐고 백그라운드 완료 알림 제출을 확인했으며, OS의 실제 표시는 아직 확인 전이다. 전체 집계는65 pass/1 fail/6 unrun/1 unsupported/1 blocked로 유지한다.
 
 고정18 결과의 근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. **고정18의 새 옵션 GUI 등록·저장/실제 CPU 동작, 두 정상 Close·재열기, 네 언어 최소 창·native DPR2·빠른 검색을 확인했고 원래 대표 UX 범위 F03은 root 판정으로 pass다. Core의 원래 exit1·등록 metadata 감사와 RAPID 실패는 그대로 보존한다. 최종18 ROCm CLI의 실제 offload/추론·내용 취소/같은 PID HTTP 재요청·재시작/정상 종료와 최종 사용자 자료 guard도 완료했다. 다른 backend/GUI로 확대하지 않는다.** 실제 실행 시각은 2026-10-25 UTC 기준으로 기록한다. 후속 문서 정리 시각은 KST 2026-10-26이지만 실행 날짜를 옮기지 않는다. 전체 수락은 **진행 중**이다. 아래 판정은 해당 source와 실제 실행 범위에 한정하며, 과거 Windows 결과를 이번 Linux pass로 옮기지 않았다. 원본 명령·종료 코드·source/diff 해시·캡처와 실패 기록은 저장소의 커밋하지 않는 `tmp/linux-acceptance/`에 보관한다.
 
@@ -212,8 +212,8 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 | L03-D01 | 파일·폴더 선택 | pass | 고정12 실제 OS 드롭8회: Unicode PDF·순서/중복·4개 제한·지원 거부·composer 밖/모달 무시와 native picker Cancel/Tab/Space 통과. Smol 실제 이미지/혼합 첨부 수락, Send 없이 초안·31파일/4저장값 보존·소유 정리 확인. 품질은 F09와 별도다. |
 | L03-D02 | clipboard·IME | pass | PASS: 실제clipboard·13물리한글첫Enter보존/별도EndEnterLoad·원래eventprefix/config/main/정상정리 유지. 같은IMEguard를18에서도carried근거로구분하며새18물리IME재실행이나다른OSpass는아님. |
 | L03-D03 | tray | pass | 고정12 실제 host에서 Close→숨김 중 같은 CPU/포트/답변5 유지→own Show→own Quit/정리·설정false 복원 통과. host 없는 VM fallback도 별도 확인했다. Off의 Passive 등록과 활성 아이콘을 구분했다. |
-| L03-D04 | 창·인스턴스 | unrun | UNRUN조건유지: 기존설치8minimize/두번째실행·360x520와HOST18nativeDPR2는각범위실제. 최신readonly18:38:46은물리2/활성logical·output1/scale2, 식별자 미보존·OS변경 없음. 두번째실제출력준비사용자응답대기; 다중활성화면이동성공아님. |
-| L03-D05 | 알림 | unrun | 고정18에서 발신 연결의 즉시 소실→닫힘을 재현했다. 수정37c0343/고정19의 ordinary Send는 연결을 약130.558초 유지하고 정상Close 때 해제했다. 배너/알림센터의 사람 확인은 대기 중이며 실제 표시 pass는 남는다. |
+| L03-D04 | 창·인스턴스 | unrun | 기존설치8의 최소화/두번째실행·360×520와HOST18 nativeDPR2, 별도19의 최소화/복원은 각 범위의 실제 근거다. 최신 읽기 전용20:50:35 조회는 물리2/활성logical·output1/scale2이며 식별자 미보존·OS변경 없음. 다중 활성 화면 이동 검사는 남는다. |
+| L03-D05 | 알림 | unrun | 고정18의 즉시 연결 소실→닫힘을 수정37c0343/고정19에서 해소했다. ordinary Send의 약130.558초 연결 유지와 별도 최소화 채팅의 정상 응답·완료 알림 제출을 확인했다. OS 배너/알림센터의 실제 표시 확인은 남는다. |
 | L03-D06 | Secret Service | pass | native CRUD와 실제 앱 잠금·인증 취소·사용 불가·잠금 해제/동일 키 backup 복구 확인. 평문 대체 없음. |
 | L03-D07 | 4개 언어 안내 | unrun | 기존 네언어 종료/숨김·현재버전 안내 유지. 설치16 ordinary Notifications는 r1 ENKO/r3 JAZH 설명/category·좁은창키보드, ENstatus는 DOM한계 명시. updater 가능/불가의 실제조건부 조합은 여전히 남는다. |
 | L03-P01 | package 생성 | pass | 기본package18 139.034초/519privacyfake0/SDK3·6payload·독립archive8SHA고정. nlink1은archive8만/원래CargoGUI·CLI nlink2구분. Actual18fresh/F03/native동작/두Close·DPR2/빠른검색/인프라정리+최종ROCmCLI·userdatazero근거연결; 다른backend/GUI패키지실행확대아님. |
@@ -253,3 +253,15 @@ UTC2026-10-25T19:53:59.154607Z까지의 추가 근거다. 고정18의 ordinary S
 519개 staging 파일의 개발 경로/가짜 fixture 검사, 여섯 payload, 세 SDK helper의 현재 전체 바이트 포함과 독립 archive8사본을 확인했다. GUI는 고정한 release 사본으로 실행했다. 실제 같은 데스크톱의 ordinary Settings Send 한 번에서 새 요청·수락 ID·relay의 원래 발신자/PID를 연결했고,28.224초 뒤에도 live bus PID 조회가 같은 앱을 가리켰다.30.401초 관찰 checkpoint에 즉시 소실/닫힘이 없었으며, 약130.558초 뒤 정상Close 때 발신자 소실과 같은 ID의 Closed2를 관찰했다. 관찰기133.517초와 별도 normalClose1.366초가 모두 exit0이고, 소유 GUI/WebKit3birth·관찰한 포트의 IPv4/IPv6가 종료됐다. 기존 driver는 빈 ready 상태로 남겼다. Source34/DB family·복사한 합성7파일·데스크톱 설정과 원래878/확장1560개 사용자 파일의 hash-only 검사는 변경·누락·오류0이었다.
 
 즉시 연결 종료 결함은 이 전후 결과로 해소됐지만 실제 배너/알림센터의 사람 확인은 대기 중이므로 D05는unrun이다. 원래18 RED와 중간fail 판정은 그대로 보존한다. 엔진·대표 UX·설치 VM·직접 IME·Reader의 근거는 각 절의18/16/13/17 범위로 유지하며 이 알림 재검증을 해당 전체 여정의19 재실행으로 계산하지 않는다. Windows W07/W08/G07과 Mac M01/M02/M04·MAC-R06/MAC-R11에서 새 제출 IPC·권한/오류·네 언어·실제 표시·정상 종료를 다시 확인한다. 전체 Linux 목표는 진행 중이며 원격 push는 하지 않았다.
+
+## 고정19 최소화 상태의 실제 채팅 완료
+
+UTC2026-10-25T20:54:07.500770Z까지의 별도 실제 실행이다. 같은 고정19 release GUI와 원래 개인 CPU 엔진·모델을 새 임시 사용자 환경에서 사용했다. 첫 Start는 환경이 달라진 help fingerprint 때문에 native 실행 전에 정상 거부됐다. 전체261개 옵션/제약/help 본문은 같았고 차이는 임시 HOME/XDG 환경에 대응했다. 정상 Discover help→검토→Use these options로 새 fingerprint를 수락한 뒤 기존 옵션3/max32/temperature0을 유지해 Ready를 확인했다. 캐시를 직접 고치거나 최신성 검사를 생략하지 않았다. 잘못된 대기 버튼명과 최초 자식 식별 실패도 원본으로 남겼다.
+
+일반 Chat에 `Compute 2 + 3. Reply with the number only.`를 입력하고 Send 한 번 직후 표준 창 최소화를 요청했다. 실제 HTTP200/SSE는 자연 종료 `5`, native usage32+2=34, finish reason `stop`, DONE 한 번이었다. 앱의 완료 경로에서 일반 알림 제목/본문과 양성 식별한 발신 PID·relay·수락 ID44를 연결했다. Settings 테스트나 직접 알림 주입이 아니다. 최초 관찰기 모듈명 충돌은 Send 전에 발생했고, 별도 수정본에서 실제 Chat 요청은 한 번만 보냈다.
+
+원본 관찰기의 `background_proven:false`는 그대로 보존했다. 이 판정은 최소화 조건에 X11 map_state0/1까지 요구했으나, [EWMH의 HIDDEN](https://specifications.freedesktop.org/wm/1.5/ar01s05.html)과 [X11의 viewable 정의](https://xorg.freedesktop.org/releases/current/doc/xproto/x11protocol.html#glossary:Viewable)는 compositor에서 숨김과 X 서버의 매핑을 구분한다. 별도 원본 감사와 root 재계산에서 Notify 직전4.104ms/직후12.726ms의 표본이 모두 WM_STATE Iconic·HIDDEN·비활성이었고, 복원 전까지 약150.290초의18개 일치 표본과 DOM hidden/blur를 확인했다. 모순 표본이나 기록된 Map/Reparent/Circulate/Destroy 이벤트는 없었다. 따라서 실제 최소화·백그라운드 상태의 완료 알림 제출 근거로 수락하되 정확한 서버 전환 시각이나 화면 픽셀 관찰로 확대하지 않는다. 원본 실패 값을 고치거나 요청을 반복하지 않았다.
+
+일반 설정 화면에서 채팅 알림 선택을 원래 raw 값으로 정확히 복원했고, 모델은 정상 Unload0.356초, 앱은 정상 Close1.363초에 종료했다. 모델·GUI/WebKit의 소유 프로세스와 관찰한 포트는 종료됐고 기존 driver는 빈 ready 상태로 유지했다. 임시 프로필에는 정상 help/등록 fingerprint 갱신·선택 프로필 revision과 이번 합성 대화 한 건만 반영됐으며 나머지 값은 같았다. 원본 Source34/DB family·데스크톱 설정과878/1,560개 사용자 파일의 hash-only 최종 검사는 변경·누락·오류0이었다. 모델 Unload 뒤에도 알림 연결은 앱이 소유했고 앱 Quit 뒤 해제됐다.
+
+배너/알림센터의 실제 표시는 아직 확인되지 않아 D05는unrun이며 전체 집계도 그대로다. 이 실행은 해당 개인 CPU 엔진의 실제 채팅·백그라운드 알림 경로만 추가하며 다른 엔진/GPU·설치본 전체의 고정19 재실행을 뜻하지 않는다. 같은 시점의 읽기 전용 화면 조회도 물리2개 중 활성1개/scale2였으므로 다중 활성 화면 검사는 남는다. 제품 코드는 바꾸지 않았으며 앞 절의 전체 자동 검사·배포 해시를 유지한다.
