@@ -139,7 +139,7 @@ GNOME Wayland 세션의 자식 X11 backend 창에서 직접 입력한 한글의 
 | L02-F09 | 미디어 내용 | fail | 원본 Linux Smol 이미지/영상 질문의 내용 정확도가 native 직접 대조에서도 실패했다. 입력·모델·한도를 바꾸지 않았고 첨부 전송/순서는 별도로 확인했다. |
 | L02-F10 | gateway(`src/features/developer`, `src-tauri/src/gateway`) | pass | 고정8 native 같은 요청32+2와 OpenAI/Anthropic/Responses 최종 usage 일치·인증/alias·lease 반환·API/모델 독립 종료 통과. |
 | L02-F11 | 측정·공유(`src/features/bench`, `src-tauri/src/benchmark`) | pass | 실제 완료2/취소1의 native 측정·이력·CSV/XLSX·공유 미리보기를 확인했다. 업로드하지 않았다. |
-| L02-F12 | 모델 탐색·관리(`src/features/discover`, `src/features/models`) | fail | 실제 GGUF 취소/재시도·삭제 보호 및 CLI snapshot/shard/companion 검사를 확인했다. 실제 config 게시 실패 때 불완전 snapshot이 목록에서 누락돼 fail. fc22b28 자동 회귀는 통과했고 고정14 실제 실패 사본의 GUI 재검증이 남는다. |
+| L02-F12 | 모델 탐색·관리(`src/features/discover`, `src/features/models`) | fail | 실제 GGUF 취소/재시도·삭제 보호와 CLI16개 catalogue/삭제 거부를 확인했다. config 게시 실패의 목록 누락을fc22b28로 수정했고14 GUI 재검증 중이다. GUI 묶음 삭제·같은 저장소 GGUF companion 다운로드는 별도 잔여다. |
 | L02-F13 | 개인화·스킬(`src/features/settings/PersonalizationSettings.tsx`, `src-tauri/src/personalization.rs`) | pass | 개인화·AGENTS revision/초안 보존·실제 요청 반영·연결 skill/symlink 정책을 확인했다. 임의 skill 실행은 하지 않았다. |
 | L02-F14 | 프로세스·포트 소유 | pass | 최신12 실제 Qwen+Smol Ready/API401·200/MCP native 승인 대기를 동시 유지한 뒤 정상 Quit로 모든 소유 PID·포트·승인창 정리, 재실행의 API key없음/임시ID없음을 확인했다. 활성 ffmpeg/pip/CMake 취소 검사는 이 사례에 포함하지 않았다. |
 | L03-D01 | 파일·폴더 선택 | pass | 최신12 실제 OS 드롭8회: Unicode PDF·순서/중복·4개 제한·지원 거부·composer 밖/모달 무시와 native picker Cancel/Tab/Space 통과. Smol 실제 이미지/혼합 첨부 수락, Send 없이 초안·31파일/4저장값 보존·소유 정리 확인. 품질은 F09와 별도다. |
