@@ -21,6 +21,34 @@ git merge-base --is-ancestor 53df1491cbb6dc790e9594221c3191a6c210937e HEAD
 
 ## 공통 실행 조건
 
+### 2026-10-25 Linux 수정의 수신과 재검증
+
+Linux 검증은 [Linux 기기 결과](linux-device-validation-results.ko.md)에 별도로 기록하며 아직 전체 완료가 아니다. 아래는 검토·커밋한 공통 변경의 재실행 연결이다. Windows production23과 과거 Mac 결과의 판정은 유지한다. Linux의 실제 성공도 그때 고정한 GUI·CLI·runtime·모델 해시의 범위이며 Windows/Mac pass가 아니다. 수신자는 이 표의 수정과 후속 결과 문서 commit을 함께 받고 정확한 HEAD·작업 트리·배포 파일 해시를 기록한다.
+
+| 수정 commit | 새 동작과 Windows 재검증 | Mac 연결 |
+| --- | --- | --- |
+| `e454065` | 세션 summary URL에서 실제 port 표시. W03/W06: 모델·embedding·STT 세션 전환, 이름과 실제 URL/model/auth 보존. | M01/M02, R05/R06 |
+| `cf99641` | Responses/Anthropic SSE가 native usage를 요청·보존하고 없는 count는 명시 오류로 끝낸다. W04/W06/W07, G04/G05: 세 protocol의 같은 요청, JSON/SSE, auth/alias, 취소 lease, 후속 응답과 API/모델 독립 종료. | M02, R05/R06 |
+| `b9668ae` | 실패 probe 출력은 진단으로 남기고 장치/flag 근거로 쓰지 않는다. Indexed 장치 ID를 중복 없이 센다. W01/W04/W08: 성공·실패·복구와 실제 지원 GPU 장치 표시. | M01/M02, R12 |
+| `befe3a4` | Python help의 bounded stdout/stderr·실패 원인·strict UTF-8. Help에만 `-X utf8`/`PYTHONIOENCODING=utf-8`; managed `-I`와 external 환경 구분 유지. W01/W03/W07: 실제 CPython pipe Unicode, 오류/잘림/취소·자손 정리. Windows native vLLM/MLX 지원을 추가하지 않는다. | M01/M02, R05/R07/R12 |
+| `4cc7de2` | 런타임 선택만으로 false dirty/discard를 만들지 않고 실제 편집은 보호한다. Input/select 오류를 ARIA 상태·설명에 연결한다. W02/W03/W06/W08, G04–G07: 첫 저장/Enter, 진짜 미저장 편집, 포커스·작은 창·키보드·오류 해제. | M01/M02/M04, R06/R11 |
+| `b3e1017` | Help identity v5의 선언 alias→target, 같은 파일 한 번 해시, `KEY=VALUE` 해석·256 artifact/byte 상한. W02/W03/W07, G01–G05: retarget/stale/diff/보존, Unicode argv와 예산 거부. Strata ELF 검사는 Linux에서만 실행하며 원본 pin의 Mac 지원을 선언하지 않는다. | M01/M02, R13의 Mac 지원 개인 엔진 |
+| `220d1f9` | Ready 후 아직 소유한 실제 process image를 저장해 `exec` entry point도 안전하게 stop한다. W04/W07/W08: interpreter redirector·실제 image 조회 실패·잘못된 image의 종료 거부·정상 stop/restart/staging. | M01/M02/M04, 실제 macOS process-image 조회와 R07/R13 |
+| `e99e9fd` | Provider 검사는 생성 content/reasoning 후 열린 stream을 취소한다. Role-only/empty/malformed/terminal은 거부하며 headers/body/recovery에 한 deadline을 쓴다. 최종 cleanup을 summary에 반영한다. W01/W04 및 D83: 실제 socket 종료·healthy follow-up, 원래 token/모델/입력과 실패 exit 보존. | M01/M02, R05/R13의 실제 엔진 |
+| `e829df6` | Typed 잠금/키 없음과 백업 저장·복원·복사의 복구 안내를 구분하고 native 상세/비밀은 숨긴다. W06/W08: Credential Manager와 파일·clipboard·browser 오류, 취소·재시도, 4개 언어. | M02, R08/R11의 별도 계정 Keychain |
+| `8454091`, `25fb4ce` | Linux AppImage pinned runtime의 인스턴스별 추출·정리와 prefix 검증, DEB `libgomp1`. 공통 패키지 script 검사 후 Windows GUI/CLI/NSIS/MSI를 새로 검증한다. 비 Linux provisioning은 그대로다. | M01/M04, R06/R08/R09의 새 APP/DMG. Linux bwrap/sysctl을 Mac에 적용하지 않는다. |
+
+기본 도구 버전을 확인하고 `npm ci --ignore-scripts`, `npm rebuild esbuild`, typecheck·lint·전체 `npm run test:unit`·production package, Rust fmt·전체 all-target/all-feature clippy/test·no-default-feature check, runtime adapter Python 검사를 대상 OS에서 실행한다. Default suite의 ignored 항목을 실제 실행으로 세지 않는다. 실제 CPython help 대조는 native interpreter를 `AIOLM_TEST_PYTHON`으로 지정해 아래 명령을 별도 실행한다.
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib providers::python_env::tests::real_python_server_help_uses_utf8_and_preserves_interpreter_isolation -- --ignored --exact --nocapture
+npm run test:provider-runtime
+```
+
+실제 vllm-metal/MLX는 [native 수락 절차](provider-native-acceptance.md)와 explicit Rust live gate를 별도로 실행한다. CLI harness는 앱 gateway·history·WKWebView를 우회하므로 이를 GUI 성공으로 쓰지 않는다. 새 홈은 [수동 격리 명령](provider-native-acceptance.md#isolated-manual-commands)을 따르고, Mac GUI·Keychain·설치/업그레이드는 별도 OS 계정에서 수행한다. 새 source의 VoiceOver/IME와 실제 창 조작은 component ARIA 검사로 대체하지 않는다.
+
+아래 M01–M04와 MAC-R01–R13은 계속 Mac 작업이다. R01–R04의 과거 fail, R10의 blocked와 나머지 unrun을 Linux 실행으로 닫지 않는다. 원래 Windows WIN-Q01/WIN-Q02와 Linux의 별도 품질 실패도 입력·모델·token 한도를 유지해 구분한다.
+
 Windows D83 검사 commit은 `fdb48af66d66dff3f4b607c11ee28ba7c61830f0`이며 제품 binary 변경 없이 공통 CLI 수락 검사의 reasoning 취소와 독립 검사 실행을 수정했다. 후속 기기는 이 수정이 포함된 최신 검사 소스를 사용해 같은 원래 모델/질문/32·1024 한도를 유지하고, reasoning 또는 content 출력 후 실제 HTTP abort/서버 정상 상태와 엔진 내부 취소 ACK를 별도로 기록한다. A03의 답변 실패가 A04–A07을 가리지 않게 하되 실제 선행 조건이 실패한 항목은 이유 있는 unrun으로 남기고 전체 실패 exit를 보존한다. `npm run test:scripts`의 실제 연결 회귀와 [D83 결과](windows-device-validation-results.ko.md)를 함께 확인한다. Windows에서 남은 산술/미디어 fail을 새 검사 성공으로 지우지 않는다.
 
 W02/W08은 별도 Windows VM과 OneDrive에 연결하지 않은 로컬 테스트 계정에서 실제 검증했다. 최신23의 허용된9개 파일은 게스트 전체 hash·크기가 고정본과 일치했다. portable의 원래 CPU/Qwen 추론·Vault 동일 여부, NSIS·MSI 새 설치/설치본 추론/정상 종료/데이터 보존 제거와 MSI 재시작·공식0.2 MSI→최신23 패키지 업그레이드/구버전 등록 제거/실제 추론/정상 종료/76개 파일 보존 제거는 명시 범위에서 pass다. 원래0.2→고정20 NSIS의 schema12→14/프로필/이력/Vault 이전은 별도 근거이며, MSI 업그레이드에서 같은 schema 이전을 다시 실행했다고 주장하지 않는다. 최초 취소·TPM 조회 오류·MSI 경로 오류와 인증 취소/1602 기록도 보존했다. MSI는 같은 UpgradeCode·서로 다른 ProductCode·`ALLUSERS=1`이며 컴퓨터 전체 설치를 새 사용자 계정만으로 격리하지 않는다. 후속 OS도 실제 패키지 범위와 기존 데이터/설치의 격리 범위를 확인하고, 정적 패키지 대조를 실제 설치 성공으로 계산하지 않는다.
