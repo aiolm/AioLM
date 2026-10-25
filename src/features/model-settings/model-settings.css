@@ -23,7 +23,8 @@
 .model-settings-nav .app-tab { flex-shrink: 0; text-align: start; white-space: normal; }
 .model-settings-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .model-settings-context { flex: 0 0 auto; min-width: 0; padding: 8px 24px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); }
-.model-settings-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 28px; overscroll-behavior: contain; }
+/* Keep the focused control clear of the clipped scroll edges during keyboard navigation. */
+.model-settings-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 28px; scroll-padding-block: 1em; overscroll-behavior: contain; }
 .model-settings-runtime-selection { min-width: 0; margin-block-end: 6px; }
 .model-settings-runtime-selection > .model-settings-fields { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); align-items: start; gap: 20px; }
 .runtime-choice-group { display: grid; align-content: start; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
