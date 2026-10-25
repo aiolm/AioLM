@@ -16,7 +16,7 @@ import ChatConversationHeader from "./ChatConversationHeader";
 import ChatMessageLog from "./ChatMessageLog";
 import ChatComposer from "./ChatComposer";
 import { providerCopy } from '../../shared/i18n/providerCopy';
-import { notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus } from "../../shared/runtime/sessionUtils";
+import { notifySessionStatusChanged, sessionConfig, sessionDefinitionFromStatus, sessionPort } from "../../shared/runtime/sessionUtils";
 import { useSessionPolling } from "../../shared/hooks/useSessionPolling";
 import { anySessionActivity, sessionHasActivity } from "../../shared/state/sessionActivity";
 import { useModelSettings } from "../model-settings/ModelSettingsProvider";
@@ -315,7 +315,7 @@ export default function ChatPanel({ store, preferences, onOpenModels, onOpenDiag
         sessionLabel={t("ui.sessionsTitle")}
         sessionOptions={[
           { id: "default", label: t("ui.defaultSession") },
-          ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${session.port ?? "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
+          ...availableSessions.map((session) => ({ id: session.id, label: `${session.name || session.id} · ${sessionPort(session) || "—"} · ${executionText[locale][session.state] ?? session.state}`, disabled: session.state === "starting" || session.state === "stopping" })),
         ]}
         selectedSessionId={selectedSessionId}
         embedding={selectedStatus.engine || availableEmbeddingSessions.length ? {

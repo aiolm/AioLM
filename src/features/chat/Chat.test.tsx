@@ -384,7 +384,7 @@ describe("ChatPanel document context warning", () => {
     mocked.embedText.mockImplementation(async (_url: string, _key: string, _model: string, input: string[]) => input.map(() => [1]));
   });
 
-  it("lets the user target a running independent session", async () => {
+  it.each([undefined, 8091])("lets the user target a running independent session with reported port %s", async (port) => {
     mocked.sessionList.mockResolvedValue([{
       id: "vision-session",
       name: "Vision",
@@ -392,7 +392,7 @@ describe("ChatPanel document context warning", () => {
       url: "http://127.0.0.1:8091",
       api_key: "session-key",
       model: "C:/models/vision.gguf",
-      port: 8091,
+      port,
     }]);
     mocked.normalizeSessionList.mockImplementation((value: unknown) => value);
 
