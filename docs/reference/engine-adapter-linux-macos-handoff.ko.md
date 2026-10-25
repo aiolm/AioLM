@@ -75,7 +75,7 @@ W02/W08은 별도 Windows VM과 OneDrive에 연결하지 않은 로컬 테스트
 | L03 | 사용 가능한 실제 X11/Wayland desktop에서 IME·clipboard·portal/picker·tray 유/무·알림·Secret Service·패키지 설치/업데이트/제거를 검사한다. CSV/XLSX·공유 미리보기·이력 재로드와 새 홈 runtime bundle→Ready→실제 추론을 확인한다. | headless/합성/자식 PATH에서 도구를 뺀 성공은 전체 desktop·별도 계정·SDK 파일 부재 검증과 구분한다. 인증값·개인 기록·공유 게시를 임의 전송하지 않는다. |
 | L04 | 먼저 이번 source의 fail을 재현·원인 조사·최소 수정·관련 검사·실제 GUI 재검증으로 처리한다. source와 OS별 결과·잔여 조건을 고정하고 Mac에 전달한다. | 공통 소스 수정은 아래 연결표에 따라 Windows 관련 W/G 재검증을 실행한다. Linux 완료 commit과 Windows 재검증 source가 다르면 그 차이를 명시한다. |
 
-Strata의 원래 32-token 산술 요청과 SmolVLM의 원래 색·도형 질문은 Windows에 내용 fail이 남아 있다. Linux에서 모델·질문·제한을 바꾼 성공으로 이전 fail을 지우지 않는다. 실제 조건의 차이와 각 결과를 병기하고, 실행/전송 계약의 결함과 모델 내용 실패의 원인을 증명 없이 합치지 않는다. Linux에서 MLX/Metal을 지원으로 선언하거나 Windows의 WSL 결과를 native OS 성공으로 옮기지 않는다.
+Strata의 원래 32-token 산술 요청과 SmolVLM의 원래 색·도형 질문은 Windows에 내용 fail이 남아 있다. Linux에서 모델·질문·제한을 바꾼 성공으로 이전 fail을 지우지 않는다. 실제 조건의 차이와 각 결과를 병기하고, 실행/전송 계약의 결함과 모델 내용 실패의 원인을 증명 없이 합치지 않는다. Linux에서 관리형 mlx-vlm·vllm-metal 어댑터의 지원을 선언하거나 Windows의 WSL 결과를 native OS 성공으로 옮기지 않는다.
 
 Strata17 원래 A04의 1,024-token 요청은 reasoning만 생성한 뒤 DONE에 도달해 기존 content 기반 관찰기의 취소 조건에 도달하지 않았다. 이 원본 실패는 보존한다. D83은 그 검사 결함을 수정한 커밋의 같은 원래 요청으로 A04 HTTP abort·서버 유지·정상 stop/소유 정리를 pass로 추가했다. 해당 실행 자체의 엔진 내부 취소 ACK를 증명한 것은 아니며, 별도18 native STOP→DONE ACK 근거와도 실행을 구분한다. 후속 OS는 요청 body·실제 중단 trigger·DONE/finish·서버 상태를 함께 기록하고, 이 한정 성공을 이전 실행이나 정답 품질의 pass로 바꾸지 않는다.
 
@@ -210,3 +210,56 @@ Windows production23의 GUI/CLI·설치 파일 hash는 결과 문서에 고정�
 제품 수정 `fc22b28d8b4847c7f9d74a83110cfae04492eb82`는 다운로드 기록이 있는 스냅샷을 `config.json` 도착 전에도 모델 목록의 검사 대상으로 포함한다. Linux 실제 다운로드의 설정 파일 게시 실패에서 오류·Retry·불완전 manifest는 남았지만 모델 목록이 비던 결함을 재현했다. 목록에 포함한 뒤 형식·모달리티·파일 완결성·소유권은 기존 검사기가 판단하며, 파일 누락을 Ready로 바꾸거나 엔진별 형식을 추정하지 않는다. 불완전 기록과 잘못된 JSON 기록, 기록 없는 가중치의 제외, 정상 파일 도착 이후의 완결성 전환을 공개 catalogue 경로의 회귀 검사로 확인했다.
 
 Windows W03/W05/G03/G06/G07과 Mac M01/M02에서는 해당 OS의 새 production에서 실제 중단·실패한 다운로드를 목록에서 다시 찾을 수 있는지 확인한다. 설정 파일이 없으면 Unknown/누락/불완전 상태를 표시하고 실행 선택을 차단해야 한다. 같은 revision의 실제 Retry가 완료된 뒤에만 정상 파일 상태로 전환되는지, 기존 binding·프로필·외부 파일·삭제 보호가 보존되는지 확인한다. Linux의 실제 파일시스템 실패와 자동 검사 결과를 Windows/Mac 실행 결과로 계산하지 않는다. 정확한 Linux source·고정 binary·실제 재검증 범위는 [Linux 결과](linux-device-validation-results.ko.md)에 연결한다.
+
+근거 마감은 UTC2026-10-25T18:46:35.549445Z/KST2026-10-26T03:46:35.549445+09:00다. 고정18의 새 옵션 GUI/저장·실제 native 동작·두 정상 Close/재열기·키보드·네 언어/native DPR2·빠른 검색과 private 인프라 정리까지 실제 범위를 확인했다. Core 원래 exit1/scoped 등록 감사와 각 harness/Reader 실패는 보존하며 최종18 managed ROCm CLI의 실제 offload/원래 요청 추론·내용 취소/같은 PID HTTP 재요청·재시작·정상 정리와 최종 사용자 자료 guard를 추가 확인했다.
+
+## Linux 파일 누락 안내와 미확정 GGUF 기능의 공통 재검증
+
+제품 수정 `9a6d64dde49f956b736d615de4f181ec150067fe`는 불완전 HF 스냅샷을 분할 모델의 조각 누락으로 설명하던 네 언어 안내를 필수 파일 누락/다운로드 불완전으로 바꾼다. 상태 로직·저장 schema·readiness는 바꾸지 않는다. Linux 고정15의 같은 실제 실패 파일 사본에서 네 언어360×520 안내·구체적인 설정 누락 원인·비활성 Start·기존 binding 보존과 native 키보드 스크롤의 마지막 줄 접근을 확인했다. 좁은 footer에서 안내 전체가 동시에 표시됐다는 결과는 아니다. 정상 언어/크기 복구·같은 profile의 정상 Quit/재열기와 기존 프로필·이력·runtime 보존도 확인했다.
+
+제품 수정 `faa7d613b3036e91e1f392e772a9d416f7e248ef`는 일반 GGUF metadata를 읽지 못한 파일의 Text/tokenizer/chat-template 기능을 추정하지 않으며, projector 전용 판독도 일반 판독 성공 이후에만 수행한다. 잘못된 magic과 세 번째 key가 잘린95바이트 mmproj 회귀의 RED→GREEN 및 최종 전체 Rust 검사를 통과했다. 기존 파일명 역할 힌트와 정상 GGUF의 기능 판단 정책, 저장·호환성·readiness·소유권은 유지한다. 정상 파일의 기존 tokenizer/template 정책을 모든 GGUF의 실제 데이터 존재 증명으로 확대하지 않는다. 정확한 고정16 payload·실제 GUI 재검증 상태는 [Linux 결과](linux-device-validation-results.ko.md)에 연결한다.
+
+Windows W03/W05/G03/G06/G07과 Mac M01/M02에서는 해당 OS의 새 production으로 같은 불완전 snapshot·분할 GGUF의 일반 안내/구체적 누락 이유·disabled Start를 확인한다. 보통/mmproj의 읽기 실패는 Unknown/원인·미확정 기능으로 남기고 정상 GGUF/projector를 별도 대조한다. 실제 Linux12/14/15/16의 F12 요청 최소범위 pass에는 같은-origin companion 전체바이트와 nondefault CPU 세션의 독립 사본 삭제/다운로드 보호까지 포함한다. 모든 optional later-shard/projector/draft/LoRA live-role 조합·새 large-shard 전송·품질·17 VM 실행을 뜻하지 않는다. 후속 OS의 실제 바이트·binding/프로필/argv·Stop/Unload와 소유권 보호를 별도로 기록한다.
+
+## Linux 수치 범위 안내의 표시와 접근성 재검증
+
+제품 수정 `f1959c2201663c49bab854961bc022596317302a`는 알려진 유한 수치 범위만 기존 네 언어로 입력 위/ARIA 설명에 연결하고0/한쪽 경계를 보존한다. 미확정 범위는 추정하지 않으며 알려진 민감 옵션의 범위 리터럴/설명 ID는 생략한다. 실제16의0·33·abc 거부/linked error/Save 차단은 정상이나 문서화1–32 안내가 없었던 관측을 보존한다. 의미 있는5개 회귀와 동료 검토의 민감한 같은 양끝값 노출 회귀는 각각 수정 전 RED를 확인했고, 최종84개/전체frontend 검사는 통과했다.17은 공통 옵션 표시/검사 두 파일뿐이며 native/IPC/validation/IME 소스는16과 같다. 실제 고정17 private X11의 새 합성 q270e5c는 help1030/common1012·값9/정확한 argv·마스킹·명시SYNTHETIC echo/저장9 재열기를 확인했다. 실제 개인 ped1c544는0·33·abc 거부/모든Save 차단→미저장3의 linked1–32/native description 뒤, Reader 정리/원래 helper 복원 후 값을 다시 쓰지 않은 한 번pointer의 첫Save/저장3 재열기까지 확인했다. max32/T0·provider/runtime를 보존했다. 이후 실제17 native GUI core는 새flag3/실제 argv와n_threads3·첫/새PID재시작 답변5·native/GUI/저장32+2·내용Stop/같은PID Retry·정상Unload/재시작을 통과했다. 긴 숫자Retry의 원래32 한도 도달은 lifecycle 경계이며 품질pass로 쓰지 않는다. 직접raw control3의21packet/130656B는 Reader를 대신하지 않고 원래 control/Reader1–5 실패·한계를 보존한다.
+
+Private Reader6은 정상 Tab→같은 entry의 ordinary pointer return 뒤 실제 필드명/role·값3/help·범위1–32와 invalid33/valid3, 상세 WhereAmI와 Tab/현재위치 발화를 확인했다. 전체 validation 오류 문장·사람 청취/이해도는 입증하지 않았다.39완료/7취소와705 packet 8,217,702B/실제 ALSA·RAW 8,142,586B의 취소차이를 보존하고, watchdog36회 뒤 정상stop구간 Processdefunct 실패도 전체pass로 바꾸지 않는다. 정상stop/fullcleanup·실제자식회수/keeper무신호정상종료·소유speech폴더제거·main/config/private접근성/원래focus/common/fresh19 복원과 deadtyped42/binding0을 확인했다. 이 Reader 정리 당시 private bus/driver/mount teardown은 별도였으며 이후18의 실제 최종 정상 정리는 아래에 구분한다.
+
+Source17 small-window 최초 actual은 UTC2026-10-25T14:56:15.221344에 locale/resize 전 General selector 가시/noninert match와 finally복구가 실패했다. 실패 순간 geometry가 없으므로 inert 원인으로 단정하지 않으며, 나중read-only en1280×800/Generalvisible/noModal은 원래 실패를 닫지 않는다. 원래PREP_ONLY 호출은 검사가 아니다. 복구helper의 두 가정 실패를 남기고 정상 두Continue UI로 baseline을 복구했다. R2의3ms geometry assertion 뒤 R3는 최소250ms/같은3frame 안정화에서도 입력 아래9px가 가려졌고, 독립 native XTest Tab에서도 같은9px가 재현됐다. 각 정상복구는 저장3 editor/search·locale/넓은창·native21파일/UI6키·중지상태를 보존했다. 첫Save 완료는 UTC2026-10-25T14:55:03.600739이며 KST26일로 실행일을 바꾸지 않는다. 이 당시 네언어/전체F03 판정은 남았으며 후속18 대표 요구사항의 pass 판정은 아래와 구분한다.
+
+실제17은 모델 실행 중 정상Quit→동일profile의 새GUI 재열기3/자동시작없음→최종정상Close를 완료했고 소유GUI/WebKit/model birth·포트가 사라졌다. 마지막 원래 보존assertion은 top-level provider_options의 특정dict가 현재실행map에서 없어져 exit1/동일성false였고 그대로 보존했다. 별도 source/닫힌파일 감사와 독립재계산에서 기존저장5프로필·과거applied snapshot·그dict의21값이 전부 정확히 남았음을 확인했다. 이는 저장라이브러리와 현재실행map을 구분하는 해당사례의 판정이며 임의미저장값의 무손실 주장이 아니다. 수정하지 않은 strict lifecycle importer의 실제2Close/24pins와current-gone 검사는 pass지만 원래rawfalse를 pass로 바꾸지 않는다.18 baseline은 닫힌17의 현재9프로필/3applied와별도기존5프로필/21값으로 잡았으며 GUI/설정변경 없이 기록했다. 이후 실제18 DPR2/private 정리 뒤와 최종 GPU 뒤878/1560 guard는 각각 변경·누락·오류0개였다.
+
+## Linux 작은 창 포커스 가림의 source18 수정과 실제 제한된 재검증
+
+제품 `9f9dbac921ca5837aa5e9594658362d872a79d5f`는 공통 모델설정 scroll영역의 주석과 `scroll-padding-block: 1em`만 바꾼다.17의 실제안정화/nativeTab9px가림을 보존하며 JS/validation/Save/schema/API/IME/native엔진은 바꾸지 않는다. 같은최종CSS diff에서 type8.609초·lint4.783초·전체220파일/2577검사110.497초, commit뒤기본package139.034초·nativeCLI smoke0.260초가 통과했다. UTC15:36:16.107862 고정18은519 staging privacy/fake0·현재SDK3의전체바이트·여섯payload와독립archive8개로 검사했다. nlink1은독립archive8사본의범위이며 원래Cargo releaseGUI/CLI의nlink2와구분한다.18 Rust재실행은 없으며 동일native소스의16 최종결과를 구분해 유지한다.
+
+고정뒤새 qb420d5/pefcaecb와CPU native를 만들었고 원래upstream/pin/license/모델/32T0를 유지했다.18 archivedCLI의A01–A09 기본/명시3은3.712/3.882초·실제5/native42+2·내용취소/재시작/재등록/정상종료를 통과했다.6PID/두포트종료·4033원래입력/4009새artifact와고정payload/8archive 해시를 확인했다. 18 첫준비R1은기존5서비스기록의미기록exeSHA를요구해GUI시작전KeyError로중단했고24native파일/빈driver/기존birth·원래실패를보존했다. 별도R2는원래positive5생성/기록4argv·과거exe/부모graph와독립systempackageprogram/privatebus/단계별env를연결했다. 가짜과거SHA/AT-SPI전체argv·소유밖manager채택은없다. 실제prepare/attach가통과했고복사DBfamily20,480B/WALSHM유무와native24개를보존했다. 실제UI4키는2부재/2UTF16LE후보와정확히일치했다.
+
+보존된17저장3/32T0의 실제18 영어 nativeTab 뒤 네언어47.396초/UTC16:09:06 replay가 통과했다. 각360×520/DPR1의 linked 안내/입력 전체, 영어H87의4px 여유와 JA H75.594 포함, own native editable id/현지화1–32, 각16forwardTab의 header SUMMARY/Close·footer두버튼 가시 순환 및 native24/UI6/critical4·영어wideChat/noModal/quiet 복구를 확인했다. 이는 그 visibility replay의 범위다. 이후 별도18 keyboard-only 진입·wrap·이탈/같은 opener focus, fresh 등록/Save/native 동작·두Close·DPR2/빠른 검색 및 원래 F03 root판정은 다음 절에 기록한다.
+
+별도 고정13 직접한글에서는 조합종료4ms 뒤 첫 Enter가 기존 헤더/입력을 보존하고, 사용자의 별도 물리 End→Enter가 같은 정확한 한글 경로를 정상 Load했다. 원래27개 event prefix/현재36개 기록·139자 필드·config/main 상태/allStopped/noSave를 보존해 Linux D02의 해당 경계는 pass다. defaultPreventedAfter의 측정 시점은 확인되지 않아 근거로 쓰지 않으며 이후 정상 Discard/Close·main/manual13 소유 자원 정리·config/main 보존도 완료했다. 별도private17 전체 종료로 확대하지 않는다. 이 물리 입력만으로 일반 Orca·다른 OS의 pass로 확대하지 않으며, 후속 Linux F03 대표 범위의 근거로 source를 구분한다.
+
+Windows W03/G03은 명시한 범위·0/한쪽 경계·미확정 사실/민감 값, G06은 같은 값/프로필/dirty·binding 보존, G07은 실제 keyboard/접근성 description·오류 해제/작은 창을 재검증한다. W07/G07의 실패·취소·포커스 복구와 기존69a463b IME 인계를 함께 유지해 실제 조합 첫 Enter 보존→키 해제 뒤 다음 Enter를 각각 확인한다. W05의 원래 내용 품질 실패를 모델 관리나 UI 범위 안내로 닫지 않는다. Mac은 기존 M01/M02의 실제 새 flag·옵션/프로필/실행, M04/MAC-R06의 새 APP/DMG, MAC-R11의 WKWebView/VoiceOver·키보드/IME·작은 창, MAC-R13의 지원 개인 엔진에 연결한다. M03/M04와 나머지 MAC-R01–R13의 원래 입력·판정·재개점을 유지한다. Linux 자동/GUI 결과를 Windows/Mac pass로 옮기지 않는다.
+
+
+## Linux 최종18의 실제 대표 UX 판정과 후속 OS 경계
+
+새18 합성 GUI의39.008초 여정은 help1030/pre-import plain1012·fresh9·masked rich argv·명시SYNTHETIC echo/저장9를 확인했다. 실제 개인 CPU17.318초는 help263·0/33/abc 오류/linked1–32/모든Save 차단→첫 한 번pointerSave/저장3 재열기를 확인했다. 이후 실제 native argv3/n_threads3·첫/새PID재시작5와 native/GUI/저장32+2, 내용Stop/부분응답·같은PIDRetry·정상Unload/재시작을 원래32/T0/입력/모델로 기록했다. 원래 core 전체exit1은 선택등록의 정상 모델별probe/fingerprint 여섯경로 갱신 때문이며 source/정확한 beforeSHA 재구성의 scoped 감사만 수락했다. Rawbefore 사본이나 원래wholecorePASS로 바꾸지 않았다. 나머지29nonconfig/기존9저장·3applied·별도기존5/21값은 보존됐고 새선택revision1→3은 명시두Save&start에 대응한다.
+
+실행중 정상Quit 검사1.127초 뒤 동일고정18/profile의 새GUI에서 저장3/같은binding·32T0/noautostart를 확인하고 최종정상Close했다. 재열기·확인·최종Close 전체검사는8.068초였으며, 소유9birth/다섯포트Gone·native34/DBfamily/UI4exact를 확인했다. currentgone0.269초/strict파생import0.465초는 닫힌역사만 추가하며 원래exit1·과거topmapfalse를 유지했다. 키보드-only13.416초는16nativeX11Tab/KPEnter와1ordinaryWDShiftTab으로 entry/wrap/Close/같은논리opener focus를 실제 확인했다. 포인터/DOMfocus·scroll로 대체하지 않았다.
+
+별도 main X11/XWayland actualDPR2는6.293초에360×520logical/720×1040physical과 전체1–32hint/focused3·4px여유/nooverflow 및 실제wide복구를 확인했다. RAPIDv1의 잘못된 rich-profile 선행가정과 v2의 pre-import1012 rawcount 가정/모든실패를 보존했다. v2 ordinary model Load 자체는 실제 empty-pathDefault→정확한모델/rich9를 확인했다. v3는 schema/manifest/저장occurrence/renderer로 정확한 plain1012+14expanded=1026 전체이름을 도출해 unknown/missing/duplicate를 숨기지 않고17.686초에 A100/B1saved9/missing0/reset을 통과했다.37trustedinput/300rAF한도에서 실제 A100→완성B입력직후옛A100→최종B1의 deferred전이를 기록했다. 원래2초상한·입력 그대로이며 모든interleaving 보장이 아니다.
+
+Root는 UTC18:15:14에 원래 대표 조항을 감사해 Linux F03을pass로 판정했고 전체집계는65pass/1fail/6unrun/1unsupported/1blocked다. 실제13물리IME와17stockOrca는 그대로source를 밝힌 carried근거다. named invalid33+사용가능1–32+Entryvalid3는 원래 오류안내로 충분하다고 판단했으나, 전체오류문장 미발화/청취미검사/Reader36검사뒤 종료probe실패/취소PCM차이는 남는다. 다른OS·모든GNOME·IME·경합조합의 포괄 인증으로 옮기지 않는다.
+
+Main18정상Close0.901초 뒤 소유GUI/WebKit·포트·session과 copied7/source34/DB/UI·원래main상태를 확인했다. Private인프라의 두 소유FUSE는 정상unmount했지만 원래cleanup은 portal exe 판독FileNotFound/exit1이었다. 원래실패·grant/raw를 남기고 prepare/unmount 재실행 없이 원래positive12개만의 continuation0.556초·별도tail0.077초로 전부Gone/포트·X11socket·lock/자기인증파일제거·maincontrols/mount동일성을 확인했다. 밖manager읽기·신규채택·그룹/강제신호 없이 원래main driver/sharedstate는 보존됐다. 실제DPR2뒤와UTC18:39:49 private정리뒤878/1560guard도각각0변경/누락/오류다. 첫GPU시도5.669초/exit1의serverStart전supported목록harnessTypeError와 두번째긴SSE수집상한실패는 보존하며, 이후 별도v3 실제범위는 다음과 같다.
+
+최종18 archived CLI/같은managedROCm b11869/Qwen의 실제v3는 UTC18:45:23 시작/17.594초exit0이었다. 첫/새PID재시작 모두 원래32/T0 산술5/native42+2/DONE와 요청전 실제offloaded25/25를 확인했다. 원래별도1024/T0의 실제내용1/2/3 뒤 terminal전 clientsocketclose→같은nativePID·동일body의새HTTP요청200/usage34+708/DONE(436132B)를 기록했다. Native취소ACK·GUIRetrybutton·1–200전체품질·새18Vulkan pass는 주장하지 않는다. 진단verbosity4는성능비교가아니다. 두번째13.996초실패의256KiB 긴timings수집상한만 고정1024/실제frame근거의유한2MiB로 구분했고 quality256KiB/32T0·모델/입력/token/timeouts는바꾸지않았다. 두원래harness실패/정리도남겼다. 정상Stop/all4native·collectorBirth/IPv4+6포트Gone·683원본/독립사본/모델/CLI/보호자료exact를확인했다. Private정리와GPU뒤 UTC18:46:35 최종878/1560hash-onlyguard도0변경/누락/오류이며 사용자자료복사는없다.
+
+Windows/Mac은 앞선 W/G·M/MAC-R 대응을 그대로 적용한다. 해당OS 실제 production의 새flag/프로필·Start/Stop/Retry·읽기실패/호환성·keyboard/IME·native접근성/작은창을 자기OS에서 다시 확인한다. Linux F03pass를 Windows/Mac의 pass로 옮기지 않으며 원래 Windows 내용품질 실패와 나머지 외부엔진의 실제 source/요청/품질 한계는 유지한다.
+
+## Linux 알림 문구와 updater 오류/회복의 제한된 실제 범위
+
+설치16 VM의 ordinary Notifications는 r1 EN/KO와 r3 JA/ZH의360×520 설명/category·키보드 접근을 확인했으나 EN 상태의 별도 가시 PNG는 없다. r3의 wide 실제 Check2회 오류/재활성 Retry→정상Quit/같은profile 원래환경 재열기의0.3.1 동률회복·데이터/자원 보존은 실제 하위 경계만의 pass다. U02/U03 전체 classifier·설치/진행/installer·조건부 D07을 닫지 않는다. main13 own ID35의 native 수락/closure와 달리 사용자는 배너/알림센터를 확인하지 못했다고 명시했으므로 D05의 사람 확인은 unrun이며 추가Send/OS설정 변경은 없었다. UTC17:18:40의 기존 공식 latest API 재확인도 공개v0.3.1과source0.3.1 동률이므로 실제새버전업데이트는blocked다. 기존 Windows W07/W08/G07과 Mac M01/M02/M04와 MAC-R06/MAC-R11의 native 실패복구·작은창/접근성·알림/패키지 검사를 각 OS에서 실행한다. Linux의 proxy 자식만의 환경/키보드 경로나 직접 PCM control을 다른 OS의 알림·VoiceOver/Reader·업데이트 설치 pass로 옮기지 않는다.
