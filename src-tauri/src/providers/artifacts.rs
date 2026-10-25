@@ -828,13 +828,18 @@ pub fn inspect_gguf(path: &Path, size_bytes: u64, missing_shards: &[usize]) -> M
     let metadata = crate::gguf::read_metadata(path)
         .map_err(|error| notes.push(error))
         .ok();
+    let identified = metadata.is_some();
     let architecture = metadata
         .as_ref()
         .and_then(|value| value.architecture.clone());
     let projector =
         architecture.as_deref() == Some("clip") || name.to_ascii_lowercase().contains("mmproj");
-    let mut modalities = Modalities::text_only();
-    if projector {
+    let mut modalities = if identified {
+        Modalities::text_only()
+    } else {
+        Modalities::default()
+    };
+    if identified && projector {
         modalities = match crate::gguf::read_projector_modalities(path) {
             Ok(found) => Modalities {
                 text: false,
@@ -851,7 +856,7 @@ pub fn inspect_gguf(path: &Path, size_bytes: u64, missing_shards: &[usize]) -> M
     ModelArtifact {
         path: path.to_string_lossy().into_owned(),
         name,
-        format: if metadata.is_some() {
+        format: if identified {
             ArtifactFormat::Gguf
         } else {
             ArtifactFormat::Unknown
@@ -866,9 +871,9 @@ pub fn inspect_gguf(path: &Path, size_bytes: u64, missing_shards: &[usize]) -> M
         architectures: architecture.into_iter().collect(),
         model_type: metadata.as_ref().and_then(|value| value.model_type.clone()),
         quantization: metadata.and_then(|value| value.quantization),
-        has_tokenizer: true,
-        has_processor: projector,
-        has_chat_template: true,
+        has_tokenizer: identified,
+        has_processor: identified && projector,
+        has_chat_template: identified,
         modalities,
         missing: missing_shards
             .iter()
@@ -894,6 +899,64 @@ pub fn snapshot_files(dir: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn unreadable_gguf_does_not_claim_model_capabilities() {
+        let dir = temp_dir("unreadable-gguf-facts");
+        for name in ["unreadable.gguf", "mmproj-unreadable.gguf"] {
+            let bytes = b"not a GGUF file";
+            write(&dir, name, bytes);
+            let artifact = inspect_gguf(&dir.join(name), bytes.len() as u64, &[]);
+            assert_eq!(artifact.format, ArtifactFormat::Unknown);
+            assert!(!artifact.notes.is_empty());
+            assert_eq!(
+                (
+                    artifact.modalities,
+                    artifact.has_tokenizer,
+                    artifact.has_processor,
+                    artifact.has_chat_template,
+                ),
+                (Modalities::default(), false, false, false),
+                "{name}"
+            );
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn incomplete_gguf_metadata_cannot_publish_early_projector_facts() {
+        let dir = temp_dir("incomplete-projector-facts");
+        let path = dir.join("mmproj-truncated.gguf");
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        for (key, value) in [
+            ("clip.has_vision_encoder", 1u8),
+            ("clip.has_audio_encoder", 0u8),
+        ] {
+            bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key.as_bytes());
+            bytes.extend_from_slice(&7u32.to_le_bytes());
+            bytes.push(value);
+        }
+        fs::write(&path, &bytes).unwrap();
+        // The specialized reader finishes before the missing third field.
+        assert!(crate::gguf::read_metadata(&path).is_err());
+        assert_eq!(
+            crate::gguf::read_projector_modalities(&path).unwrap(),
+            crate::gguf::ProjectorModalities {
+                vision: Some(true),
+                audio: Some(false),
+            }
+        );
+        let artifact = inspect_gguf(&path, bytes.len() as u64, &[]);
+        assert_eq!(artifact.format, ArtifactFormat::Unknown);
+        assert_eq!(artifact.modalities, Modalities::default());
+        assert!(!artifact.has_tokenizer && !artifact.has_processor && !artifact.has_chat_template);
+        assert!(!artifact.notes.is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn tokenizer_chat_templates_require_nonempty_template_contents() {
