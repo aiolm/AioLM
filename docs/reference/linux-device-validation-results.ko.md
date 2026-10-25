@@ -212,8 +212,8 @@ Main18은0.901초의 정상 Close로 실제 소유 GUI/WebKit 세 birth·listene
 | L03-D01 | 파일·폴더 선택 | pass | 고정12 실제 OS 드롭8회: Unicode PDF·순서/중복·4개 제한·지원 거부·composer 밖/모달 무시와 native picker Cancel/Tab/Space 통과. Smol 실제 이미지/혼합 첨부 수락, Send 없이 초안·31파일/4저장값 보존·소유 정리 확인. 품질은 F09와 별도다. |
 | L03-D02 | clipboard·IME | pass | PASS: 실제clipboard·13물리한글첫Enter보존/별도EndEnterLoad·원래eventprefix/config/main/정상정리 유지. 같은IMEguard를18에서도carried근거로구분하며새18물리IME재실행이나다른OSpass는아님. |
 | L03-D03 | tray | pass | 고정12 실제 host에서 Close→숨김 중 같은 CPU/포트/답변5 유지→own Show→own Quit/정리·설정false 복원 통과. host 없는 VM fallback도 별도 확인했다. Off의 Passive 등록과 활성 아이콘을 구분했다. |
-| L03-D04 | 창·인스턴스 | unrun | 기존설치8의 최소화/두번째실행·360×520와HOST18 nativeDPR2, 별도19의 최소화/복원은 각 범위의 실제 근거다. 최신 읽기 전용21:52:01 조회는 물리2/활성logical·output1/scale2이며 식별자 미보존·OS변경 없음. 다중 활성 화면 이동 검사는 남는다. |
-| L03-D05 | 알림 | unrun | 수정37c0343/고정19에서 연결 수명 결함 해소·백그라운드 제출과 실제 ServiceUnknown 뒤 오류 안내/버튼 재활성화/화면 이동·상태 보존을 확인했다. 별도 Shell 객체의 초기5표본은 SHOWING=false/유효하지 않은 좌표였으므로 실제 OS 표시 확인은 남는다. |
+| L03-D04 | 창·인스턴스 | unrun | 기존설치8의 최소화/두번째실행·360×520와HOST18 nativeDPR2, 별도19의 최소화/복원은 각 범위의 실제 근거다. 최신 읽기 전용23:22 조회는 물리2/활성logical·output1/scale2이며 식별자 미보존·OS변경 없음. 다중 활성 화면 이동 검사는 남는다. |
+| L03-D05 | 알림 | unrun | 수정37c0343/고정19에서 연결 수명 결함 해소·백그라운드 제출과 실제 ServiceUnknown 뒤 오류 안내/버튼 재활성화/화면 이동·상태 보존을 확인했다. Shell 객체의 초기5표본과 별도 연속277표본(검출 후27.632초)은 SHOWING=false/유효하지 않은 좌표였다. 실제 OS 표시 확인은 남는다. |
 | L03-D06 | Secret Service | pass | native CRUD와 실제 앱 잠금·인증 취소·사용 불가·잠금 해제/동일 키 backup 복구 확인. 평문 대체 없음. |
 | L03-D07 | 4개 언어 안내 | unrun | 기존 네언어 종료/숨김·현재버전 안내 유지. 설치16 ordinary Notifications는 r1 ENKO/r3 JAZH 설명/category·좁은창키보드, ENstatus는 DOM한계 명시. updater 가능/불가의 실제조건부 조합은 여전히 남는다. |
 | L03-P01 | package 생성 | pass | 기본package18 139.034초/519privacyfake0/SDK3·6payload·독립archive8SHA고정. nlink1은archive8만/원래CargoGUI·CLI nlink2구분. Actual18fresh/F03/native동작/두Close·DPR2/빠른검색/인프라정리+최종ROCmCLI·userdatazero근거연결; 다른backend/GUI패키지실행확대아님. |
@@ -289,3 +289,11 @@ UTC2026-10-25T21:48:40.580945Z까지의 별도 실제 검증이다. 같은 고�
 UTC2026-10-25T22:35:28.758040Z, 같은 고정19 release GUI의 격리된 사용자 환경에서 실제 모델/API가 모두 정지한 상태로 일반 모델설정의 MLX 선택과 Manage runtimes를 방문했다. Apple Silicon macOS 전용 안내, 비활성 runtime fieldset과 Continue to profile을 확인했다. 이 단계에는 Start 버튼이 없으므로 이를 표시된 Start 버튼의 비활성화로 표현하지 않는다. 관리 화면에서는 동일한 미지원 안내와 비활성 Install isolated environment/Register existing Python environment를 실제 캡처로 확인했고 두 동작을 실행하지 않았다.
 
 일반 Back→원래 엔진 선택→Close 뒤 native11파일·전체 설정·저장 프로필/적용 설정·runtime/model 선택·채팅 저장값4개·preferences가 실행 전/후/최종 표본에서 정확히 같았다. 관찰기8.521초는 exit0이다. 실제 MLX 기준선은 빈 Default 프로필 한 개, 적용 설정 없음, 옵션 bank 키 없음이었으며 임의의 비어 있지 않은 MLX 값을 심어 보존했다고 주장하지 않는다. 이 하위 검증은 N08의 Linux 미지원 처리 근거를 보강하며 관리형 MLX 실행 판정은 unsupported로 유지한다. 이 시점에 앱은 정지 상태로 계속 열려 있어 전체 종료 검증이나 다른 엔진 여정의 완료를 뜻하지 않는다. 제품 코드·고정 배포 해시·전체65/1/6/1/1 집계는 바꾸지 않았다.
+
+## 고정19 OS 알림 객체의 연속 표시 관찰
+
+UTC2026-10-25T23:22:03.431489Z에 완료했다. 앞선 ID45의5표본은 실제로0.451430779초만 덮었고 이후 같은 경로를 다시 측정하지 않았다. 이를30초 동안 계속 표시되지 않았다는 근거로 쓰지 않는다. 새 관찰기는 원래의30초 관찰 틀을 유지하면서 정확한 일반 테스트 제목/본문이 일치하는 Shell 알림 객체를 목표100ms 간격으로 계속 측정했다. 기존 Shell/Registry·접근성 설정을 사용했고 OS 정책을 바꾸거나 별도 서비스를 켜지 않았다.
+
+같은 고정19 GUI와 로드된 개인 CPU 엔진을 유지한 채 일반 Settings Send를 한 번 실행했다. 실제 앱 PID/발신 연결·relay·수락 ID48을 확인했으며 자동 재전송·연결 상실·CloseNotification은 관찰되지 않았다. 정확한 객체 하나에서277표본을 얻었고 실제 표본 구간은27.631969189초, 첫 표본은 Send 요청 기록 뒤212.064ms였다. 모든 표본에서 정확한 문구를 다시 확인했지만 SHOWING=false와 유효하지 않은 SCREEN 좌표였으며 양성 표시 표본이나 질의 불가 표본은 없었다. 관찰기의 실제 armed 구간30.008초와 객체 검출 뒤 표본 구간을 구분한다. AT-SPI가 FDO ID를 제공한 것은 아니므로 두 근거는 문구/시간으로 연결하며 ID 동일성을 만들어 쓰지 않는다.
+
+native 관찰기와 전송 관찰기는 모두 exit0으로 끝났고 자체 구독·연결·resolver를 정리했다. 전후 접근성 flags와 화면 geometry는 같았고, 식별자 없는 조회는 활성1개/1920×1080 logical·3840×2160 mode·scale2였다. 좌표 단위를 임의로 변환하거나 알림 역할만으로 배너/센터를 구분하지 않았다. native16파일·전체 설정·채팅4값/preferences·같은 엔진 PID/로드 상태·원본 Source34/DB가 유지됐고 일반 Chat 복귀 뒤에도 보존을 재확인했다. 앱/엔진의 최종 Quit은 후속 개인 엔진 여정에 남긴다. 이 결과도 실제 OS 표시 성공을 입증하지 못하므로 D05와65/1/6/1/1 집계는 그대로다. 제품 코드·배포 해시는 변경하지 않았다.
