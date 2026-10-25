@@ -713,6 +713,29 @@ fn state_process_is_managed(state: &HeadlessState) -> bool {
         && process_matches_executable(state.pid, Path::new(&state.executable))
 }
 
+fn owned_server_executable(child: &mut server::Child) -> Result<String, String> {
+    let running =
+        |child: &mut server::Child| match child.try_wait().map_err(|error| error.to_string())? {
+            None => Ok(()),
+            Some(status) => Err(format!(
+                "headless server exited before ownership transfer: {status}"
+            )),
+        };
+    running(child)?;
+    // An entry point can exec its native engine during startup. Capture the
+    // image while this exact child is still owned, rather than retaining the
+    // interpreter from the launch plan for later status/stop checks.
+    let executable = process_image_path(child.id())
+        .ok_or("cannot identify the owned headless server executable")?
+        .canonicalize()
+        .map_err(|error| format!("cannot retain the owned headless server executable: {error}"))?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "cannot retain a non-UTF-8 headless server executable")?;
+    running(child)?;
+    Ok(executable)
+}
+
 fn terminate_pid(pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -1010,6 +1033,21 @@ async fn server_start_unlocked() -> Result<Value, String> {
     {
         return Err("headless log collector exited during server startup".into());
     }
+    let executable = {
+        let mut owned = shared.lock().unwrap_or_else(|error| error.into_inner());
+        let result = owned
+            .child
+            .as_mut()
+            .ok_or_else(|| "headless server ownership was lost before transfer".to_string())
+            .and_then(owned_server_executable);
+        match result {
+            Ok(executable) => executable,
+            Err(error) => {
+                server::kill(&mut owned.child, Some(Arc::clone(&err)));
+                return Err(error);
+            }
+        }
+    };
     let state = HeadlessState {
         launch_resources: resource_id,
         pid,
@@ -1020,7 +1058,7 @@ async fn server_start_unlocked() -> Result<Value, String> {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default(),
-        executable: bin.clone(),
+        executable,
         log_path: log_file_path.to_string_lossy().into_owned(),
         log_collector: Some(collector_identity),
         engine: Some(serde_json::to_value(engine_info).map_err(|error| error.to_string())?),
@@ -2482,6 +2520,63 @@ mod tests {
                 assert_eq!(result.unwrap_err(), "headless state exceeds 65536 bytes");
             }
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_exec_child() {
+        let Some(ready) = std::env::var_os("AIOLM_HEADLESS_EXEC_READY") else {
+            return;
+        };
+        fs::write(ready, b"executed").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_exec_entrypoint_retains_the_owned_running_image_for_status_and_stop() {
+        let root = env::temp_dir().join(format!("aiolm-exec-image-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let ready = root.join("ready");
+        let image = env::current_exe().unwrap().canonicalize().unwrap();
+        let launcher = which::which("sh").unwrap();
+        let mut child = server::Child::from(
+            Command::new(&launcher)
+                .args(["-c", "exec \"$@\"", "aiolm-exec-fixture"])
+                .arg(&image)
+                .args(["--exact", "tests::headless_exec_child", "--nocapture"])
+                .env("AIOLM_HEADLESS_EXEC_READY", &ready)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            ready.exists(),
+            "the child must actually exec before inspection"
+        );
+        let executable = owned_server_executable(&mut child).unwrap();
+        assert_eq!(Path::new(&executable), image);
+        let mut state: HeadlessState = serde_json::from_value(json!({
+            "pid":child.id(),"url":"http://127.0.0.1:1/v1","model":"",
+            "started_at":1,"executable":executable
+        }))
+        .unwrap();
+        assert!(state_process_is_managed(&state));
+        state.executable = launcher.to_string_lossy().into_owned();
+        assert!(
+            !state_process_is_managed(&state),
+            "a different image is still refused"
+        );
+        child.terminate();
+        assert!(owned_server_executable(&mut child).is_err());
+        drop(child);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
