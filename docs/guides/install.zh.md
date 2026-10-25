@@ -57,10 +57,12 @@ sudo apt install ./AioLM_*_amd64.deb
 
 安装后从应用菜单启动 AioLM。DEB 会注册启动项和图标。使用 `sudo apt remove aio-lm` 卸载后，`~/.aiolm` 或 `AIOLM_HOME` 中的数据会保留。
 
-将 AppImage 放在长期保留的文件夹，验证校验和后赋予执行权限。Ubuntu 24.04 或更新版本若缺少 FUSE 2，请安装 `libfuse2t64`:
+托管的 Linux llama.cpp CPU 运行时需要 GNU OpenMP（`libgomp.so.1`）。DEB 会将 `libgomp1` 作为依赖项安装。
+
+将 AppImage 放在长期保留的文件夹，验证校验和后赋予执行权限。请为托管 CPU 运行时安装 `libgomp1`，Ubuntu 24.04 或更新版本若缺少 FUSE 2，还需安装 `libfuse2t64`:
 
 ```bash
-sudo apt install libfuse2t64
+sudo apt install libgomp1 libfuse2t64
 chmod +x ./AioLM_*.AppImage
 ./AioLM_*.AppImage
 ```

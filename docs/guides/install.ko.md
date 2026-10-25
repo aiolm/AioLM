@@ -61,10 +61,12 @@ sudo apt install ./AioLM_*_amd64.deb
 
 설치 후 앱 메뉴에서 AioLM을 실행하세요. DEB가 실행 항목과 아이콘을 등록합니다. `sudo apt remove aio-lm`으로 제거해도 `~/.aiolm` 또는 `AIOLM_HOME`의 데이터는 남습니다.
 
-AppImage는 계속 보관할 폴더에 두고 체크섬을 확인한 뒤 실행 권한을 부여하세요. Ubuntu 24.04 이상에서 FUSE 2가 없다면 `libfuse2t64`를 설치합니다:
+관리형 Linux llama.cpp CPU 런타임에는 GNU OpenMP(`libgomp.so.1`)가 필요합니다. DEB는 `libgomp1`을 의존성으로 설치합니다.
+
+AppImage는 계속 보관할 폴더에 두고 체크섬을 확인한 뒤 실행 권한을 부여하세요. 관리형 CPU 런타임용 `libgomp1`과, Ubuntu 24.04 이상에서 FUSE 2가 없다면 `libfuse2t64`를 설치합니다:
 
 ```bash
-sudo apt install libfuse2t64
+sudo apt install libgomp1 libfuse2t64
 chmod +x ./AioLM_*.AppImage
 ./AioLM_*.AppImage
 ```

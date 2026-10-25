@@ -36,7 +36,7 @@
     ],
     "linux": {
       "deb": {
-        "depends": ["zenity"]
+        "depends": ["zenity", "libgomp1"]
       }
     },
     "macOS": {
