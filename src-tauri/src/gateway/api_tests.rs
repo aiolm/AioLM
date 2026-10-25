@@ -1190,7 +1190,7 @@ async fn anthropic_streams_are_translated_event_by_event() {
             "\n\nevent: content_block_stop\n",
             r#"data: {"index":0,"type":"content_block_stop"}"#,
             "\n\nevent: message_delta\n",
-            r#"data: {"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"output_tokens":2}}"#,
+            r#"data: {"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta","usage":{"input_tokens":3,"output_tokens":2}}"#,
             "\n\nevent: message_stop\n",
             r#"data: {"type":"message_stop"}"#,
             "\n\n",
@@ -1212,6 +1212,69 @@ async fn anthropic_streams_are_translated_event_by_event() {
     );
     assert_eq!(events[2].1["delta"]["text"], "Hel");
     assert_eq!(events[5].1["delta"]["stop_reason"], "end_turn");
+    eventually(|| api.active() == 0).await;
+}
+
+#[tokio::test]
+async fn translated_streams_request_and_preserve_native_usage() {
+    for route in ["messages", "responses"] {
+        let api = TestApi::start().await;
+        let upstream = Upstream::spawn(|request| {
+            let mut chunks = vec![delta("5")];
+            if request.json()["stream_options"]["include_usage"] == true {
+                chunks.push(sse_data(json!({"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":2,"total_tokens":44}})));
+            }
+            // A null usage field on another chunk never erases known totals.
+            chunks.push(sse_data(json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":null})));
+            chunks.push(done());
+            Reply::sse(chunks)
+        })
+        .await;
+        api.load_default(&upstream, "worker", "m.gguf");
+        let mut response = request_for(&api, route, true).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        let events = sse_events(&drain(&mut response).await);
+        let usage = if route == "messages" {
+            assert_eq!(events.last().unwrap().0, "message_stop");
+            &events
+                .iter()
+                .find(|(name, _)| name == "message_delta")
+                .unwrap()
+                .1["usage"]
+        } else {
+            assert_eq!(events.last().unwrap().0, "response.completed");
+            &events.last().unwrap().1["response"]["usage"]
+        };
+        assert_eq!(usage["input_tokens"], 42, "{route}");
+        assert_eq!(usage["output_tokens"], 2, "{route}");
+        eventually(|| api.active() == 0).await;
+    }
+}
+
+#[tokio::test]
+async fn anthropic_stream_without_native_usage_reports_an_error_instead_of_character_counts() {
+    let api = TestApi::start().await;
+    let upstream = Upstream::spawn(|_| {
+        Reply::sse(vec![
+            delta("A synthetic answer with many characters"),
+            sse_data(json!({"choices":[{"delta":{},"finish_reason":"stop"}]})),
+            done(),
+        ])
+    })
+    .await;
+    api.load_default(&upstream, "worker", "m.gguf");
+    let mut response = request_for(&api, "messages", true).send().await.unwrap();
+    let events = sse_events(&drain(&mut response).await);
+    assert!(events.iter().any(|(name, _)| name == "content_block_delta"));
+    assert!(!events
+        .iter()
+        .any(|(name, _)| name == "message_delta" || name == "message_stop"));
+    let (_, error) = events.last().unwrap();
+    assert_eq!(error["type"], "error");
+    assert!(error["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("did not report token usage"));
     eventually(|| api.active() == 0).await;
 }
 
@@ -1267,7 +1330,7 @@ async fn anthropic_stream_parser_preserves_crlf_chunk_boundaries_and_done_leftov
     let first = format!("{before}data: [DONE]\r\n\r\ndata: {after_value}",);
     let finish_line = format!(
         "data: {}\r\n\r\n",
-        json!({"choices":[{"delta":{},"finish_reason":"stop"}]})
+        json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}})
     );
     let second = format!("\r\n\r\n{finish_line}data: [DONE]\r\n\r\n");
     let first_output = first.clone();

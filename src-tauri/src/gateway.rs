@@ -919,6 +919,9 @@ fn responses_to_openai(request: &Value, messages: Vec<Value>) -> Result<Value, S
         "stream".into(),
         request.get("stream").cloned().unwrap_or(Value::Bool(false)),
     );
+    if request.get("stream").and_then(Value::as_bool) == Some(true) {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
     for (source, target) in [
         ("temperature", "temperature"),
         ("top_p", "top_p"),
@@ -1113,9 +1116,8 @@ struct ResponseStreamState {
 
 impl ResponseStreamState {
     async fn apply(&mut self, value: &Value, stream: &mut TcpStream) -> Result<(), String> {
-        if let Some(usage) = value.get("usage") {
+        if value.get("usage").is_some_and(Value::is_object) {
             self.usage = Some(response_usage(value));
-            let _ = usage;
         }
         let Some(choice) = value
             .get("choices")
@@ -1205,14 +1207,13 @@ async fn stream_response(
 struct OpenAiStream {
     thinking_index: Option<u32>,
     text_index: Option<u32>,
-    output_tokens: u64,
     finish_reason: Option<String>,
     usage: Option<Value>,
 }
 
 impl OpenAiStream {
     async fn apply(&mut self, value: &Value, stream: &mut TcpStream) -> Result<(), String> {
-        if let Some(usage) = value.get("usage") {
+        if let Some(usage) = value.get("usage").filter(|usage| usage.is_object()) {
             self.usage = Some(usage.clone());
         }
         let Some(choice) = value
@@ -1242,7 +1243,6 @@ impl OpenAiStream {
                 write_event(stream, "content_block_start", json!({"type":"content_block_start","index":index,"content_block":{"type":"thinking","thinking":""}})).await?;
                 index
             };
-            self.output_tokens += text.chars().count() as u64;
             write_event(stream, "content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":text}})).await?;
         }
         if let Some(text) = delta
@@ -1258,7 +1258,6 @@ impl OpenAiStream {
                 write_event(stream, "content_block_start", json!({"type":"content_block_start","index":index,"content_block":{"type":"text","text":""}})).await?;
                 index
             };
-            self.output_tokens += text.chars().count() as u64;
             write_event(stream, "content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"text_delta","text":text}})).await?;
         }
         Ok(())
@@ -1287,8 +1286,24 @@ impl OpenAiStream {
             Some("content_filter") => "refusal",
             _ => "end_turn",
         };
-        write_event(stream, "message_delta", json!({"type":"message_delta","delta":{"stop_reason":stop_reason,"stop_sequence":null},"usage":{"output_tokens":self.usage.as_ref().and_then(|v| v.get("completion_tokens")).and_then(Value::as_u64).unwrap_or(self.output_tokens)}})).await?;
-        write_event(stream, "message_stop", json!({"type":"message_stop"})).await?;
+        let input_tokens = self
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.get("prompt_tokens"))
+            .and_then(Value::as_u64);
+        let output_tokens = self
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.get("completion_tokens"))
+            .and_then(Value::as_u64);
+        if let (Some(input_tokens), Some(output_tokens)) = (input_tokens, output_tokens) {
+            write_event(stream, "message_delta", json!({"type":"message_delta","delta":{"stop_reason":stop_reason,"stop_sequence":null},"usage":{"input_tokens":input_tokens,"output_tokens":output_tokens}})).await?;
+            write_event(stream, "message_stop", json!({"type":"message_stop"})).await?;
+        } else {
+            // Anthropic completion requires token counts; character counts
+            // cannot replace an engine's missing usage report.
+            write_event(stream, "error", json!({"type":"error","error":{"type":"api_error","message":"The inference engine did not report token usage for this streamed response."}})).await?;
+        }
         stream
             .shutdown()
             .await
@@ -1366,6 +1381,9 @@ fn anthropic_to_openai(request: &Value) -> Result<Value, String> {
         "stream".into(),
         request.get("stream").cloned().unwrap_or(Value::Bool(false)),
     );
+    if request.get("stream").and_then(Value::as_bool) == Some(true) {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
     for field in ["temperature", "top_p", "stop", "max_tokens"] {
         if let Some(value) = request.get(field) {
             body.insert(field.into(), value.clone());
