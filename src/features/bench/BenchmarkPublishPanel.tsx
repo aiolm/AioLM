@@ -10,7 +10,7 @@ import {
 } from '../../shared/api/benchmarkSharing.ts';
 import { isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
-import { benchmarkManagementError } from './benchmarkManagementError';
+import { benchmarkManagementError } from './benchmarkSharingActionError';
 import { createNativeSelectedTransport } from '../../shared/sharing/nativeTransport.ts';
 import { createPublicationController, type PublicationOutbox } from '../../shared/sharing/publicationController.ts';
 import { dispatchSelectedBenchmark, enqueuePublicationBenchmark, getQueuedBenchmark, retryQueuedBenchmark } from '../../shared/sharing/benchmarkOutbox.ts';

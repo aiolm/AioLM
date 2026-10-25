@@ -10,7 +10,7 @@ import {
 import { isNativeRuntimeAvailable } from '../../shared/api/transport.ts';
 import { getTaskSnapshot } from '../../shared/state/taskRegistry.ts';
 import FeedbackBanner from '../../shared/ui/FeedbackBanner.tsx';
-import { benchmarkManagementError } from './benchmarkManagementError';
+import { benchmarkManagementError, benchmarkRecoveryError } from './benchmarkSharingActionError';
 
 type Copy = ReturnType<typeof import('./benchmarkCopy.ts').benchmarkCopy>;
 
@@ -119,8 +119,8 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
       setCursor(null);
       setStarted(false);
       await loadPage();
-    } catch {
-      setActionError(copy.ownedActionError);
+    } catch (error) {
+      setActionError(benchmarkRecoveryError(error, copy, 'import'));
     } finally {
       setImporting(false);
     }
@@ -137,8 +137,8 @@ export function BenchmarkOwnedList({ busy, copy, revision = 0 }: { busy: boolean
       } else {
         if (await benchmarkSharingRecoveryExport(submissionId)) setNotice(copy.recoverySaved);
       }
-    } catch {
-      setActionError(copy.ownedActionError);
+    } catch (error) {
+      setActionError(benchmarkRecoveryError(error, copy, action));
     } finally {
       setWorking(null);
     }
