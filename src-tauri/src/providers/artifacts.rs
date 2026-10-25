@@ -212,9 +212,12 @@ fn read_json(path: &Path, limit: u64) -> Option<Result<Value, String>> {
     )
 }
 
-/// A directory is a snapshot candidate when it has a model configuration and
-/// either safetensors weights or a weight index.
+/// A download manifest identifies a snapshot even before its configuration
+/// arrives. Unmarked directories need a configuration and weights or an index.
 pub fn is_snapshot_dir(dir: &Path) -> bool {
+    if dir.join(SNAPSHOT_MANIFEST).is_file() {
+        return true;
+    }
     if !dir.join("config.json").is_file() {
         return false;
     }
@@ -229,7 +232,7 @@ pub fn is_snapshot_dir(dir: &Path) -> bool {
                     .iter()
                     .any(|suffix| name.ends_with(&format!(".safetensors{suffix}")))
         })
-    }) || dir.join(SNAPSHOT_MANIFEST).is_file()
+    })
 }
 
 fn has_any(dir: &Path, names: &[&str]) -> bool {

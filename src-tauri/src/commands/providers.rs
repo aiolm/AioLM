@@ -559,6 +559,78 @@ mod tests {
         assert!(scan_by_path.is_empty());
         assert!(binding_path_set.is_empty());
     }
+
+    #[test]
+    fn catalog_keeps_interrupted_snapshots_visible_before_configuration_arrives() {
+        use providers::artifacts::{
+            ArtifactFormat, SnapshotFile, SnapshotManifest, SNAPSHOT_MANIFEST,
+        };
+        use std::sync::atomic::AtomicBool;
+
+        let root =
+            std::env::temp_dir().join(format!("aiolm-partial-catalog-{}", uuid::Uuid::new_v4()));
+        let snapshot = root.join("snapshots").join("a".repeat(40));
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("model.safetensors"), b"x").unwrap();
+        std::fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+        let scan = || {
+            inspect_catalog(root.to_str().unwrap(), &AtomicBool::new(false), None)
+                .unwrap()
+                .models
+                .into_iter()
+                .find(|model| Path::new(&model.artifact.path) == snapshot)
+                .map(|model| model.artifact)
+        };
+        // Unmarked weights alone do not establish a snapshot's format.
+        assert!(scan().is_none());
+        let config = br#"{"model_type":"synthetic"}"#;
+        let mut manifest = SnapshotManifest {
+            format: 1,
+            repository: "synthetic/model".into(),
+            revision: "a".repeat(40),
+            files: vec![SnapshotFile {
+                path: "config.json".into(),
+                size: config.len() as u64,
+                oid: None,
+            }],
+            complete: false,
+        };
+        let write_manifest = |manifest: &SnapshotManifest| {
+            std::fs::write(
+                snapshot.join(SNAPSHOT_MANIFEST),
+                serde_json::to_vec(manifest).unwrap(),
+            )
+            .unwrap();
+        };
+        write_manifest(&manifest);
+        let interrupted = scan().expect("the failed download must stay in the model library");
+        assert_eq!(interrupted.ownership, "app");
+        assert_eq!(interrupted.repository.as_deref(), Some("synthetic/model"));
+        assert_eq!(interrupted.format, ArtifactFormat::Unknown);
+        assert_eq!(
+            interrupted.modalities,
+            providers::artifacts::Modalities::default()
+        );
+        assert!(interrupted.incomplete && !interrupted.ready_files());
+        assert!(interrupted.missing.contains(&"config.json".to_string()));
+
+        std::fs::write(snapshot.join("config.json"), config).unwrap();
+        assert!(
+            !scan().unwrap().ready_files(),
+            "an unfinished manifest still blocks readiness"
+        );
+        manifest.complete = true;
+        write_manifest(&manifest);
+        assert!(scan().unwrap().ready_files());
+
+        std::fs::remove_file(snapshot.join("config.json")).unwrap();
+        std::fs::write(snapshot.join(SNAPSHOT_MANIFEST), b"{invalid").unwrap();
+        let invalid = scan().expect("an unreadable download record must remain visible");
+        assert_eq!(invalid.ownership, "external");
+        assert_eq!(invalid.format, ArtifactFormat::Unknown);
+        assert!(!invalid.ready_files() && invalid.incomplete && !invalid.notes.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[tauri::command]
