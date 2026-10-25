@@ -11,6 +11,8 @@ AioLM selects an inference engine, an installed runtime instance, a settings pro
 
 Native Windows vLLM and WSL/remote execution are not local runtime targets in this implementation. The runtime picker explains operating-system availability. Python environments are isolated managed environments or explicitly registered existing interpreters. Registration probes the installed package, accelerator, model registry and available server flags. Removing a registered environment removes AioLM's registration and preserves the external interpreter and its packages.
 
+The Linux managed vLLM plan installs the pinned PyPI package with its default CUDA dependencies. An AMD GPU does not make that wheel a ROCm build. For ROCm, prepare a compatible environment using the [upstream GPU installation instructions](https://docs.vllm.ai/en/v0.31.0/getting_started/installation/gpu/) and register its interpreter. The wheel, PyTorch, ROCm userspace and system driver must work together; registration and a real model launch establish readiness. AioLM does not install system GPU drivers or silently replace the host's ROCm libraries.
+
 On supported Macs, choose the existing vLLM engine to use vllm-metal. Its profiles remain vLLM profiles; the selected installation determines Metal compatibility and available options. Managed installation uses the matching official core and plugin wheels in an owned environment. It does not run upstream shell installers or install the generic PyPI vllm-metal package. Registration checks that the Metal platform is active and its native device and extension work. Intel Macs, Rosetta Python, earlier macOS releases and mismatched core/plugin versions cannot become ready Metal runtimes.
 
 ## Model selection and profiles

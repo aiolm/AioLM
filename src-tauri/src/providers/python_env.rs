@@ -25,6 +25,7 @@ pub(crate) const MANIFEST: &str = "aiolm-provider-runtime.json";
 pub(crate) const MANIFEST_FORMAT: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(180);
 const PROBE_OUTPUT_CAP: usize = 1024 * 1024;
+const HELP_DIAGNOSTIC_CHARS: usize = 1024;
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(3 * 60 * 60);
 const MAX_ID_LEN: usize = 64;
 
@@ -339,6 +340,15 @@ fn interpreter_flags(kind: InstallationKind) -> &'static [&'static str] {
     }
 }
 
+fn configure_server_help_output(command: &mut std::process::Command) {
+    // Help is captured as strict UTF-8, including on Windows locale-encoded
+    // pipes. -I ignores PYTHON* settings, so managed help needs the flag;
+    // external help also needs the stream override if its environment grows.
+    command
+        .args(["-X", "utf8"])
+        .env("PYTHONIOENCODING", "utf-8");
+}
+
 const VLLM_PROBE: &str = include_str!("vllm_probe.py");
 
 const MLX_VLM_PROBE: &str = r#"
@@ -437,6 +447,125 @@ pub fn parse_probe_output(stdout: &str) -> Result<ProbeRecord, String> {
     Ok(record)
 }
 
+/// Keep a short cause of failed help in the readiness error. Redact before
+/// bounding so a cut cannot expose
+/// the value of a credential whose label was outside the retained excerpt.
+fn server_help_diagnostic(output: &crate::procutil::CaptureReport) -> String {
+    let (stream, bytes) = if output.stderr.bytes.is_empty() {
+        ("stdout", &output.stdout.bytes)
+    } else {
+        ("stderr", &output.stderr.bytes)
+    };
+    let text = crate::server::strip_ansi(&String::from_utf8_lossy(bytes));
+    let text = text
+        .lines()
+        .map(|line| {
+            let line = line
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .collect::<String>();
+            let lower = line.to_ascii_lowercase();
+            let credential = [
+                "authorization",
+                "api-key",
+                "api_key",
+                "password",
+                "secret",
+                "token",
+                "credential",
+                "access_key",
+                "private_key",
+                "bearer ",
+            ]
+            .iter()
+            .any(|marker| lower.contains(marker));
+            let environment = line.split_whitespace().any(|word| {
+                word.split_once('=').is_some_and(|(name, _)| {
+                    !name.is_empty()
+                        && name.bytes().any(|ch| ch.is_ascii_uppercase())
+                        && name
+                            .bytes()
+                            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == b'_')
+                })
+            });
+            if credential || environment || (line.contains("://") && line.contains('@')) {
+                "[REDACTED]".into()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut tail = text
+        .chars()
+        .rev()
+        .take(HELP_DIAGNOSTIC_CHARS)
+        .collect::<Vec<_>>();
+    tail.reverse();
+    let tail = tail.into_iter().collect::<String>();
+    if tail.trim().is_empty() {
+        String::new()
+    } else {
+        format!("; {stream}: {}", tail.trim())
+    }
+}
+
+fn record_server_options(
+    record: &mut ProbeRecord,
+    output: crate::procutil::CaptureReport,
+) -> Result<(), String> {
+    // A partial or failed help report is diagnostic evidence only.
+    record.server_flags.clear();
+    let problem = match &output.status {
+        Err(error) => {
+            let reason = match error.kind() {
+                std::io::ErrorKind::TimedOut => "server option probe timed out".to_string(),
+                std::io::ErrorKind::Interrupted => "server option probe cancelled".to_string(),
+                _ => format!("server option probe failed: {error}"),
+            };
+            return Err(format!("{reason}{}", server_help_diagnostic(&output)));
+        }
+        Ok(status) if !status.success() => Some(format!(
+            "the installed engine server could not report its supported options ({status})"
+        )),
+        Ok(_) => [(&output.stdout, "stdout"), (&output.stderr, "stderr")]
+            .into_iter()
+            .find_map(|(stream, name)| {
+                let reason = if stream.truncated {
+                    "was truncated"
+                } else if stream.read_error.is_some() {
+                    "could not be read completely"
+                } else if std::str::from_utf8(&stream.bytes).is_err() {
+                    "was not valid UTF-8"
+                } else {
+                    return None;
+                };
+                Some(format!("server option probe {name} {reason}"))
+            }),
+    };
+    if let Some(problem) = problem {
+        record
+            .errors
+            .push(format!("{problem}{}", server_help_diagnostic(&output)));
+        return Ok(());
+    }
+    let text = std::str::from_utf8(&output.stdout.bytes).expect("validated help stdout");
+    record.server_flags = text
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
+        .filter(|word| word.starts_with("--") && word.len() > 2)
+        .map(str::to_owned)
+        .collect();
+    record.server_flags.sort();
+    record.server_flags.dedup();
+    if record.server_flags.is_empty() {
+        record.errors.push(format!(
+            "the installed server did not report any supported options{}",
+            server_help_diagnostic(&output)
+        ));
+    }
+    Ok(())
+}
+
 pub async fn probe_interpreter(
     provider: ProviderId,
     python: &Path,
@@ -479,6 +608,7 @@ pub async fn probe_interpreter(
             help.env_clear()
                 .envs(engine_environment())
                 .args(interpreter_flags(kind));
+            configure_server_help_output(&mut help);
             match provider {
                 ProviderId::Vllm => {
                     help.args(["-m", "vllm.entrypoints.cli.main", "serve", "--help=all"]);
@@ -491,31 +621,14 @@ pub async fn probe_interpreter(
                     return Err("external engines use their registered probe".into())
                 }
             }
-            let output = crate::procutil::capture_stdout_cancellable(
+            let output = crate::procutil::capture_help_cancellable(
                 &mut help,
                 PROBE_TIMEOUT,
                 PROBE_OUTPUT_CAP,
                 cancel.as_deref(),
             )
             .map_err(|error| format!("server option probe failed: {error}"))?;
-            if !output.status.success() {
-                record.errors.push(
-                    "the installed engine server could not report its supported options".into(),
-                );
-            }
-            let text = String::from_utf8_lossy(&output.stdout);
-            record.server_flags = text
-                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
-                .filter(|word| word.starts_with("--") && word.len() > 2)
-                .map(str::to_owned)
-                .collect();
-            record.server_flags.sort();
-            record.server_flags.dedup();
-            if record.server_flags.is_empty() {
-                record
-                    .errors
-                    .push("the installed server did not report any supported options".into());
-            }
+            record_server_options(&mut record, output)?;
         }
         Ok(record)
     })
@@ -1156,6 +1269,314 @@ impl Drop for StagingCleanup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    const HELP_CHILD: &str = "AIOLM_PYTHON_HELP_TEST_CHILD";
+    const HELP_CHILD_NAME: &str = "providers::python_env::tests::server_option_probe_child";
+
+    fn help_command(mode: &str) -> std::process::Command {
+        let mut command = crate::procutil::std_command(std::env::current_exe().unwrap());
+        command
+            .env_clear()
+            .envs(engine_environment())
+            .env(HELP_CHILD, mode)
+            .args(["--exact", HELP_CHILD_NAME, "--nocapture"]);
+        command
+    }
+
+    fn capture_help(mode: &str, cap: usize) -> crate::procutil::CaptureReport {
+        crate::procutil::capture_help_cancellable(
+            &mut help_command(mode),
+            Duration::from_secs(5),
+            cap,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    #[ignore = "set AIOLM_TEST_PYTHON to a Python 3 executable and run with --ignored"]
+    fn real_python_server_help_uses_utf8_and_preserves_interpreter_isolation() {
+        let python = std::env::var_os("AIOLM_TEST_PYTHON")
+            .expect("AIOLM_TEST_PYTHON names the Python 3 executable to run");
+        // ASCII source also runs in the deliberately non-UTF-8 controls.
+        let script = "import json,sys;print('STATE='+json.dumps([sys.flags.isolated,sys.flags.ignore_environment,sys.flags.utf8_mode,sys.stdout.encoding,sys.stderr.encoding]));print('--model caf\\u00e9');print('warning na\\u00efve',file=sys.stderr)";
+        let command = |kind| {
+            let mut command = crate::procutil::std_command(&python);
+            command
+                .env_clear()
+                .envs(engine_environment())
+                .env("LC_ALL", "C")
+                .env("PYTHONUTF8", "0")
+                .env("PYTHONCOERCECLOCALE", "0")
+                .env("PYTHONIOENCODING", "latin-1")
+                .args(interpreter_flags(kind));
+            command
+        };
+        let capture = |command: &mut std::process::Command| {
+            crate::procutil::capture_help_cancellable(command, Duration::from_secs(10), 4096, None)
+                .unwrap()
+        };
+        let legacy = || {
+            let mut command = command(InstallationKind::External);
+            command.args(["-c", script]);
+            let output = capture(&mut command);
+            assert!(output.status.as_ref().unwrap().success());
+            assert!(std::str::from_utf8(&output.stdout.bytes).is_err());
+            assert!(std::str::from_utf8(&output.stderr.bytes).is_err());
+            let mut record = ProbeRecord::default();
+            record_server_options(&mut record, output).unwrap();
+            assert!(record.server_flags.is_empty());
+            assert!(record.errors[0].contains("was not valid UTF-8"));
+        };
+        legacy();
+        for kind in [InstallationKind::Managed, InstallationKind::External] {
+            let mut command = command(kind);
+            configure_server_help_output(&mut command);
+            command.args(["-c", script]);
+            let output = capture(&mut command);
+            assert!(output.status.as_ref().unwrap().success());
+            let stdout = std::str::from_utf8(&output.stdout.bytes).unwrap();
+            let stderr = std::str::from_utf8(&output.stderr.bytes).unwrap();
+            assert!(stdout.contains("--model café"));
+            assert!(stderr.contains("warning naïve"));
+            let state: serde_json::Value = serde_json::from_str(
+                stdout
+                    .lines()
+                    .find_map(|line| line.strip_prefix("STATE="))
+                    .unwrap(),
+            )
+            .unwrap();
+            let isolated = i32::from(kind == InstallationKind::Managed);
+            assert_eq!(
+                state,
+                serde_json::json!([isolated, isolated, 1, "utf-8", "utf-8"])
+            );
+            let mut record = ProbeRecord::default();
+            record_server_options(&mut record, output).unwrap();
+            assert_eq!(record.server_flags, ["--model"]);
+            assert!(record.errors.is_empty());
+        }
+        // Configuring captured help does not alter a later normal child.
+        legacy();
+    }
+
+    #[test]
+    fn server_option_probe_child() {
+        let Ok(mode) = std::env::var(HELP_CHILD) else {
+            return;
+        };
+        match mode.as_str() {
+            "success" => {
+                println!("usage: synthetic --model MODEL --host HOST --model MODEL");
+                eprintln!("synthetic initialization warning; --stderr-only is not an option");
+            }
+            "failure" => {
+                println!("--unverified-option VALUE");
+                eprintln!("RuntimeError: Failed to infer device type");
+                std::process::exit(9);
+            }
+            "private-failure" => {
+                eprintln!("{}", "한".repeat(1600));
+                eprintln!("\u{1b}[31mAuthorization: Bearer synthetic-auth-value\u{1b}[0m");
+                eprintln!("HOME=synthetic-environment-value");
+                eprintln!("https://synthetic-user:synthetic-value@example.invalid");
+                eprintln!("to\0ken=synthetic-control-value");
+                eprintln!("RuntimeError: Failed to infer device type");
+                std::process::exit(9);
+            }
+            "stdout-overflow" | "stderr-overflow" => {
+                println!("--incomplete-option VALUE");
+                if mode == "stdout-overflow" {
+                    std::io::stdout().write_all(&vec![b'x'; 65536]).unwrap();
+                } else {
+                    std::io::stderr().write_all(&vec![b'y'; 65536]).unwrap();
+                }
+            }
+            "stdout-encoding" | "stderr-encoding" => {
+                println!("--incomplete-option VALUE");
+                if mode == "stdout-encoding" {
+                    std::io::stdout().write_all(&[0xff]).unwrap();
+                } else {
+                    std::io::stderr().write_all(&[0xff]).unwrap();
+                }
+            }
+            "fork" => {
+                // The descendant holds both captured pipes open for a minute.
+                // A prompt return from capture must therefore reclaim it too.
+                let mut child = help_command("wait")
+                    .stdout(std::process::Stdio::inherit())
+                    .stderr(std::process::Stdio::inherit())
+                    .spawn()
+                    .unwrap();
+                println!("--partial-option VALUE");
+                eprintln!("synthetic initialization pending");
+                std::io::stdout().flush().unwrap();
+                std::io::stderr().flush().unwrap();
+                fs::write(std::env::var("AIOLM_HELP_READY_FILE").unwrap(), b"ready").unwrap();
+                child.wait().unwrap();
+            }
+            "wait" => std::thread::sleep(Duration::from_secs(60)),
+            _ => panic!("unknown synthetic help mode"),
+        }
+    }
+
+    #[test]
+    fn failed_server_help_keeps_the_real_child_diagnostic_without_accepting_flags() {
+        let mut record = ProbeRecord::default();
+        record_server_options(&mut record, capture_help("failure", 4096)).unwrap();
+        assert!(record.server_flags.is_empty());
+        assert_eq!(record.errors.len(), 1);
+        assert!(record.errors[0].contains("RuntimeError: Failed to infer device type"));
+        assert!(record.errors[0].contains("stderr:"));
+        assert!(record.errors[0].contains('9'));
+    }
+
+    #[test]
+    fn complete_server_help_keeps_stdout_flags_and_allows_stderr_warnings() {
+        let mut record = ProbeRecord::default();
+        record_server_options(&mut record, capture_help("success", 4096)).unwrap();
+        assert_eq!(record.server_flags, ["--host", "--model"]);
+        assert!(record.errors.is_empty());
+    }
+
+    #[test]
+    fn failed_server_help_diagnostic_is_bounded_cleaned_and_conservatively_redacted() {
+        let mut record = ProbeRecord::default();
+        record_server_options(&mut record, capture_help("private-failure", 16384)).unwrap();
+        let error = &record.errors[0];
+        assert!(error.contains("RuntimeError: Failed to infer device type"));
+        assert!(error.contains("[REDACTED]"));
+        assert!(error.chars().count() <= HELP_DIAGNOSTIC_CHARS + 150);
+        for private in [
+            "synthetic-auth-value",
+            "synthetic-environment-value",
+            "synthetic-user",
+            "synthetic-value",
+            "synthetic-control-value",
+            "\u{1b}",
+            "\0",
+        ] {
+            assert!(!error.contains(private), "{private}");
+        }
+    }
+
+    #[test]
+    fn truncated_server_help_drains_both_streams_and_never_establishes_options() {
+        for (mode, stream) in [("stdout-overflow", "stdout"), ("stderr-overflow", "stderr")] {
+            let output = capture_help(mode, 256);
+            assert!(output.status.as_ref().unwrap().success());
+            assert!(output.stdout.bytes.len() <= 256);
+            assert!(output.stderr.bytes.len() <= 256);
+            assert!(output.stdout.truncated || output.stderr.truncated);
+            let mut record = ProbeRecord::default();
+            record_server_options(&mut record, output).unwrap();
+            assert!(record.server_flags.is_empty());
+            assert!(record.errors[0].contains(&format!("{stream} was truncated")));
+        }
+    }
+
+    #[test]
+    fn invalid_encoding_or_read_failure_in_either_help_stream_rejects_options() {
+        for (mode, stream) in [("stdout-encoding", "stdout"), ("stderr-encoding", "stderr")] {
+            let mut record = ProbeRecord::default();
+            record_server_options(&mut record, capture_help(mode, 4096)).unwrap();
+            assert!(record.server_flags.is_empty());
+            assert!(record.errors[0].contains(&format!("{stream} was not valid UTF-8")));
+        }
+        // An OS pipe read error cannot be induced portably. Inject that state
+        // into a real otherwise successful capture to cover the same boundary.
+        for stdout in [true, false] {
+            let mut output = capture_help("success", 4096);
+            let stream = if stdout {
+                &mut output.stdout
+            } else {
+                &mut output.stderr
+            };
+            stream.read_error = Some("synthetic pipe read failure".into());
+            let mut record = ProbeRecord::default();
+            record_server_options(&mut record, output).unwrap();
+            assert!(record.server_flags.is_empty());
+            assert!(record.errors[0].contains("could not be read completely"));
+        }
+    }
+
+    #[test]
+    fn server_help_timeout_and_cancellation_reclaim_inherited_pipes_and_reject_flags() {
+        for cancellation in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("aiolm-python-help-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            let ready = root.join("ready");
+            let mut command = help_command("fork");
+            command.env("AIOLM_HELP_READY_FILE", &ready);
+            let cancel = Arc::new(AtomicBool::new(false));
+            let child_cancel = cancel.clone();
+            let before = std::time::Instant::now();
+            let capture = std::thread::spawn(move || {
+                crate::procutil::capture_help_cancellable(
+                    &mut command,
+                    if cancellation {
+                        Duration::from_secs(5)
+                    } else {
+                        Duration::from_millis(500)
+                    },
+                    4096,
+                    Some(&child_cancel),
+                )
+                .unwrap()
+            });
+            if cancellation {
+                let deadline = before + Duration::from_secs(4);
+                while !ready.exists() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                cancel.store(true, Ordering::Release);
+            }
+            let output = capture.join().unwrap();
+            assert!(before.elapsed() < Duration::from_secs(5));
+            assert!(
+                ready.exists(),
+                "the actual help child must run before interruption"
+            );
+            let kind = output.status.as_ref().unwrap_err().kind();
+            assert_eq!(
+                kind,
+                if cancellation {
+                    std::io::ErrorKind::Interrupted
+                } else {
+                    std::io::ErrorKind::TimedOut
+                }
+            );
+            let mut record = ProbeRecord::default();
+            let error = record_server_options(&mut record, output).unwrap_err();
+            assert!(error.contains(if cancellation {
+                "cancelled"
+            } else {
+                "timed out"
+            }));
+            assert!(error.contains("synthetic initialization pending"));
+            assert!(record.server_flags.is_empty());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn already_cancelled_server_help_never_starts_a_child() {
+        let mut command = crate::procutil::std_command("synthetic-absent-interpreter");
+        let output = crate::procutil::capture_help_cancellable(
+            &mut command,
+            Duration::from_secs(1),
+            4096,
+            Some(&AtomicBool::new(true)),
+        )
+        .unwrap();
+        let mut record = ProbeRecord::default();
+        assert!(record_server_options(&mut record, output)
+            .unwrap_err()
+            .contains("cancelled"));
+        assert!(record.server_flags.is_empty());
+    }
 
     #[test]
     fn managed_installs_require_a_healthy_platform_and_server_option_probe() {
