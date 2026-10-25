@@ -303,8 +303,12 @@ fn parse_option_spec(spec: &str, group: &str, start_line: u32) -> Option<Pending
         if alias.is_empty() {
             return None;
         }
-        // Attached `=VALUE` keeps the argv boundary unambiguous.
-        if let Some((flag, value)) = alias.split_once('=') {
+        // Only '=' attached to the flag selects the equals spelling. A
+        // separate metavar such as KEY=VALUE stays one separate argv value.
+        if let Some((flag, value)) = alias
+            .split_once('=')
+            .filter(|(flag, _)| !flag.chars().any(char::is_whitespace))
+        {
             let flag = flag.trim();
             if !valid_flag(flag) || value.trim().is_empty() {
                 return None;
@@ -1329,6 +1333,49 @@ mod tests {
         assert_eq!(threads.runtime_default.certainty, Certainty::Unknown);
         assert_eq!(threads.choices.certainty, Certainty::Unknown);
         assert!(!schema.raw_help.is_empty());
+    }
+
+    #[test]
+    fn equals_in_separate_metavars_never_hides_the_option_or_changes_its_spelling() {
+        let schema = parse(
+            "Options:\n  --header KEY=VALUE                  header value\n  -D KEY=VALUE, --define KEY=VALUE    definition\n  --attached=KEY=VALUE               attached value\n  --mode {fast=1,slow=2}              explicit choices\n",
+        );
+        assert_eq!(schema.options.len(), 4);
+        for key in ["header", "define", "attached", "mode"] {
+            let option = schema
+                .options
+                .iter()
+                .find(|option| option.key == key)
+                .unwrap();
+            assert_eq!(
+                option.arity.supported(),
+                Some(&Arity {
+                    min: 1,
+                    max: Some(1)
+                })
+            );
+            let style = if key == "attached" {
+                ValueStyle::Equals
+            } else {
+                ValueStyle::Separate
+            };
+            assert!(option
+                .spellings
+                .iter()
+                .all(|spelling| spelling.style == style));
+        }
+        let mode = schema
+            .options
+            .iter()
+            .find(|option| option.key == "mode")
+            .unwrap();
+        assert_eq!(
+            mode.choices.supported(),
+            Some(&vec![
+                serde_json::json!("fast=1"),
+                serde_json::json!("slow=2")
+            ])
+        );
     }
 
     #[test]

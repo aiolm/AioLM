@@ -21,6 +21,10 @@ use std::{
 
 pub const VERSION: u32 = 1;
 const LIMIT: u64 = 262_144;
+/// Declared files hashed at registration and before every use. A system GPU
+/// runtime's library folder alone can hold well over 100 aliases; the 256 KiB
+/// manifest and record budgets above still bound the total.
+const MAX_ARTIFACTS: usize = 256;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -377,7 +381,7 @@ fn record_bytes(registered: &Registration) -> Result<Vec<u8>, String> {
     let bytes = serde_json::to_vec_pretty(registered).map_err(|e| e.to_string())?;
     if bytes.len() as u64 > LIMIT {
         return Err(format!(
-            "the runtime registration record would be {} KiB; registrations are limited to {} KiB. Shorten the manifest's options or option metadata",
+            "the runtime registration record would be {} KiB; registrations are limited to {} KiB. Shorten the manifest's artifact paths, options or option metadata",
             bytes.len().div_ceil(1024),
             LIMIT / 1024
         ));
@@ -506,7 +510,7 @@ pub fn validate_manifest(m: &RuntimeManifest) -> Result<(), String> {
             LIMIT / 1024
         ));
     }
-    if m.artifacts.len() > 64
+    if m.artifacts.len() > MAX_ARTIFACTS
         || m.artifacts
             .iter()
             .any(|path| !valid_text(path, 32768) || !Path::new(path).is_absolute())
@@ -2184,6 +2188,57 @@ mod tests {
         let probe = root.join("probe");
         let server = root.join("server");
         serde_json::from_value(serde_json::json!({"schema_version":1,"adapter_version":1,"engine_id":"custom.example","runtime_id":"build-1","display_name":"Example engine","protocol":"openai-v1","platforms":[{"os":"linux","arch":"x86_64"}],"probe":{"program":probe,"args":["{model}","{options_json}"]},"launch":{"program":server,"args":["--model","{model}","--port","{port}","--alias","{model_alias}"],"env":{"ENGINE_KEY":"{api_key}"}},"model_formats":["unknown"],"health_path":"/health","options":[{"key":"workers","flag":"--workers","target":"launch","kind":{"type":"integer","min":1,"max":8}},{"key":"temperature","target":"request","kind":{"type":"number","min":0,"max":2}}]})).unwrap()
+    }
+    #[test]
+    fn manifest_artifacts_allow_256_paths_within_both_serialized_budgets() {
+        // A pinned Strata build on a system ROCm declares 189 library paths
+        // (every alias of its library folder plus the loader-resolved nested
+        // dependencies), past the earlier 64-path cap.
+        let root = std::env::temp_dir()
+            .join("aiolm-synthetic-adapter")
+            .join("lib");
+        let paths = |count: usize, width: usize| -> Vec<String> {
+            (0..count)
+                .map(|i| {
+                    root.join(format!("{}{i:03}.so", "l".repeat(width)))
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        };
+        let record = |manifest: RuntimeManifest| Registration {
+            artifacts_sha256: manifest
+                .artifacts
+                .iter()
+                .map(|path| (path.clone(), "c".repeat(64)))
+                .collect(),
+            manifest,
+            executable_sha256: "a".repeat(64),
+            probe_sha256: "b".repeat(64),
+            probe: None,
+            model_fingerprint: String::new(),
+            launch_fingerprint: String::new(),
+            error: None,
+        };
+        let mut manifest = example();
+        manifest.artifacts = paths(256, 16);
+        validate_manifest(&manifest).unwrap();
+        record_bytes(&record(manifest.clone())).unwrap();
+        manifest.artifacts = paths(257, 16);
+        assert!(validate_manifest(&manifest)
+            .unwrap_err()
+            .contains("bounded absolute paths"));
+        // The count never widens the manifest's serialized 256 KiB ...
+        manifest.artifacts = paths(256, 1100);
+        assert!(validate_manifest(&manifest)
+            .unwrap_err()
+            .contains("limited to 256 KiB"));
+        // ... or the stored record, which repeats every path beside its hash.
+        manifest.artifacts = paths(256, 700);
+        validate_manifest(&manifest).unwrap();
+        assert!(record_bytes(&record(manifest))
+            .unwrap_err()
+            .contains("limited to 256 KiB"));
     }
     #[test]
     fn manifest_rejects_unsupported_versions_bindings_and_managed_overrides() {

@@ -80,6 +80,19 @@ class StrataFixture(unittest.TestCase):
 
         return run
 
+    def test_setup_checks_the_final_artifacts_including_bridge_and_config(self):
+        libraries = self.root / "lib"
+        libraries.mkdir()
+        self._write_config(self.engine, lib_dirs=[str(libraries)])
+        args = self._args()
+        args.python, args.name = sys.executable, None
+        for number in range(248):
+            (libraries / f"libsynthetic{number:03}.so").write_bytes(b"synthetic library")
+        self.assertEqual(len(setup.prepare(args)["artifacts"]), adapter.ARTIFACT_LIMIT)
+        (libraries / "libextra.so").write_bytes(b"one more library")
+        with self.assertRaisesRegex(ValueError, r"artifact count \(257 files, at most 256\)"):
+            setup.prepare(args)
+
     def test_setup_output_and_probe_use_exact_boundaries(self):
         python = str(Path(sys.executable).absolute())
         args = self._args()

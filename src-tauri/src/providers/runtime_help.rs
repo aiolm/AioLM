@@ -22,7 +22,9 @@ use std::{
 /// positional row's spec at its column gap, so a description is no longer
 /// counted as value names, and reads lowercase rows at a positional section's
 /// own indent (argparse's default), now that user positionals can launch.
-pub const PARSER_VERSION: u32 = 3;
+/// Version 4 distinguishes `--flag=VALUE` from a separate `KEY=VALUE` metavar.
+/// Version 5 fingerprints every declared artifact alias and its resolved target.
+pub const PARSER_VERSION: u32 = 5;
 pub const MAX_STREAM_BYTES: usize = 1024 * 1024;
 const CACHE_ENTRIES: usize = 16;
 
@@ -176,20 +178,29 @@ impl HelpCommand {
         .transpose()?;
         let executable_sha256 = sha256(&program, cancel)?;
         let mut artifacts_sha256 = BTreeMap::new();
+        let mut artifact_paths = BTreeMap::new();
         for artifact in &self.artifacts {
             if !artifact.is_absolute() {
                 return Err("help artifacts need absolute paths".into());
             }
             let path = artifact.canonicalize().map_err(|e| e.to_string())?;
-            if artifacts_sha256
-                .insert(path.clone(), sha256(&path, cancel)?)
+            if artifact_paths
+                .insert(artifact.clone(), path.clone())
                 .is_some()
             {
                 return Err("duplicate help artifact".into());
             }
+            // Library SONAME aliases may name one file. Preserve every alias
+            // and target in the identity while hashing each resolved file once.
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                artifacts_sha256.entry(path.clone())
+            {
+                entry.insert(sha256(&path, cancel)?);
+            }
         }
         let identity = serde_json::json!({
             "program":program,"sha256":executable_sha256,"artifacts":artifacts_sha256,
+            "artifact_paths":artifact_paths,
             "working_directory":working_directory,"args":self.args,"environment":self.environment,
             "runtime_version":self.runtime_version,"scope":self.scope,"encoding":self.encoding,
             "output_limit":self.output_limit,"timeout_ms":self.timeout_ms,"parser":PARSER_VERSION,
@@ -599,8 +610,8 @@ mod tests {
     }
     impl Drop for Artifact {
         fn drop(&mut self) {
-            for name in ["synthetic-artifact.txt", "ready.txt"] {
-                let _ = fs::remove_file(self.root.join(name));
+            for entry in fs::read_dir(&self.root).into_iter().flatten().flatten() {
+                let _ = fs::remove_file(entry.path());
             }
             let _ = fs::remove_dir(&self.root);
         }
@@ -747,6 +758,45 @@ mod tests {
             original.identity(&cancel).unwrap().fingerprint
         );
         assert!(!serde_json::to_string(&first).unwrap().contains("LC_ALL"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_artifact_aliases_are_accepted_but_repeated_paths_are_rejected() {
+        let artifact = Artifact::new();
+        let alias = artifact.root.join("libsynthetic.so.0");
+        std::os::unix::fs::symlink(&artifact.path, &alias).unwrap();
+        let mut request = command("normal");
+        request.artifacts = vec![artifact.path.clone(), alias.clone()];
+        let identity = request.identity(&AtomicBool::new(false)).unwrap();
+        assert_eq!(identity.artifacts_sha256.len(), 1);
+        request.artifacts.push(alias);
+        assert_eq!(
+            request.identity(&AtomicBool::new(false)).unwrap_err(),
+            "duplicate help artifact"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapping_artifact_alias_targets_invalidates_help_even_with_the_same_files() {
+        let artifact = Artifact::new();
+        let other = artifact.root.join("other-library.so");
+        fs::write(&other, b"build two").unwrap();
+        let first = artifact.root.join("libfirst.so");
+        let second = artifact.root.join("libsecond.so");
+        std::os::unix::fs::symlink(&artifact.path, &first).unwrap();
+        std::os::unix::fs::symlink(&other, &second).unwrap();
+        let mut request = command("normal");
+        request.artifacts = vec![first.clone(), second.clone()];
+        let before = request.identity(&AtomicBool::new(false)).unwrap();
+        fs::remove_file(&first).unwrap();
+        fs::remove_file(&second).unwrap();
+        std::os::unix::fs::symlink(&other, &first).unwrap();
+        std::os::unix::fs::symlink(&artifact.path, &second).unwrap();
+        let after = request.identity(&AtomicBool::new(false)).unwrap();
+        assert_eq!(before.artifacts_sha256, after.artifacts_sha256);
+        assert_ne!(before.fingerprint, after.fingerprint);
     }
 
     #[test]

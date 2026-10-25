@@ -34,7 +34,10 @@ def prepare(args):
         metadata["options"].append({"flag": flag, "kind": "integer", "arity": {"min": 1, "max": 1},
                                     "unit": unit, "restart_required": True})
     artifacts = list(dict.fromkeys(common["artifacts"] + [str(script), str(config_path)]))
-    return {
+    if len(artifacts) > adapter.ARTIFACT_LIMIT:
+        raise ValueError(f"Strata adapter source exceeds the artifact count ({len(artifacts)} files, at most "
+                         f"{adapter.ARTIFACT_LIMIT}); provide an audited custom manifest")
+    draft = {
         "engine_id": args.engine_id, "runtime_id": args.runtime_id,
         "display_name": args.name or "Strata", "program": str(executable), "prefix": [],
         "working_directory": str(root), "environment": {}, "artifacts": artifacts,
@@ -51,6 +54,9 @@ def prepare(args):
         "launch_resources": {"version": 1, "directory_env": bridge.DIRECTORY_ENV},
         "options_separator": "--",
     }
+    if len(json.dumps(draft).encode()) > adapter.LIMIT:
+        raise ValueError("Strata adapter draft exceeds the 256 KiB registration budget; provide an audited custom manifest")
+    return draft
 
 
 def main():

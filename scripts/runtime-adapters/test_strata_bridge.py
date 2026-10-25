@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +15,57 @@ import strata_setup as setup
 
 
 class BridgeTests(unittest.TestCase):
+    def test_webview_cors_is_explicit_and_keeps_upstream_origin_validation(self):
+        def original(value, key, wildcard):
+            values = value if isinstance(value, list) else [value]
+            if any(not isinstance(item, str) or not item.startswith(("https://", "http://"))
+                   and not (wildcard and item == "*") for item in values):
+                raise SystemExit("upstream rejected origin")
+            return values
+
+        server = SimpleNamespace(origins_of=original)
+
+        def main():
+            self.assertEqual(server.origins_of(["https://allowed.example", bridge.WEBVIEW_ORIGIN],
+                                              "cors_origins", True),
+                             ["https://allowed.example", bridge.WEBVIEW_ORIGIN])
+            self.assertEqual(server.origins_of([bridge.WEBVIEW_ORIGIN], "cors_origins", True),
+                             [bridge.WEBVIEW_ORIGIN])
+            self.assertEqual(server.origins_of(["https://allowed.example"], "trusted_origins", False),
+                             ["https://allowed.example"])
+            for bad in ([bridge.WEBVIEW_ORIGIN, "tauri://other"],
+                        [bridge.WEBVIEW_ORIGIN, "tauri://localhost.evil"],
+                        [bridge.WEBVIEW_ORIGIN, 123]):
+                with self.assertRaisesRegex(SystemExit, "upstream rejected"):
+                    server.origins_of(bad, "cors_origins", True)
+            with self.assertRaisesRegex(SystemExit, "upstream rejected"):
+                server.origins_of([bridge.WEBVIEW_ORIGIN], "trusted_origins", False)
+            return 7
+
+        server.main = main
+        with patch.object(bridge.importlib, "import_module", return_value=server) as load:
+            self.assertEqual(bridge.run_server({"cors_origins": [bridge.WEBVIEW_ORIGIN]}), 7)
+        load.assert_called_once_with("serve.server")
+        self.assertIs(server.origins_of, original)
+
+    def test_webview_cors_does_not_change_unrequested_launches_and_restores_on_failure(self):
+        for config in ({}, {"cors_origins": ["https://allowed.example"]}):
+            with patch.object(bridge.runpy, "run_module") as run, \
+                    patch.object(bridge.importlib, "import_module") as load:
+                self.assertEqual(bridge.run_server(config), 0)
+                run.assert_called_once_with("serve.server", run_name="__main__", alter_sys=True)
+                load.assert_not_called()
+        original = lambda *args: []
+        def failed():
+            raise SystemExit(9)
+
+        server = SimpleNamespace(origins_of=original, main=failed)
+        with patch.object(bridge.importlib, "import_module", return_value=server), \
+                self.assertRaises(SystemExit) as raised:
+            bridge.run_server({"cors_origins": bridge.WEBVIEW_ORIGIN})
+        self.assertEqual(raised.exception.code, 9)
+        self.assertIs(server.origins_of, original)
+
     def test_native_options_preserve_base_and_original_config(self):
         base = {"args": ["--spec", "4", "--kv", "int8"], "env": {"GPU": "0"}, "log": "old.log"}
         original = json.dumps(base, sort_keys=True)

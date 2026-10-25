@@ -7,6 +7,7 @@ Help is syntax evidence; create_adapter.py remains the independent probe.
 """
 import argparse
 import copy
+import importlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ import create_adapter as adapter
 REVISION = "296b59d2f73c8f04a805df29c2fa97655adace78"
 ENGINE_ENV = "STRATA_ADAPTER_ENGINE_ARGV"
 DIRECTORY_ENV = "STRATA_ADAPTER_LAUNCH_DIRECTORY"
+WEBVIEW_ORIGIN = "tauri://localhost"
 RESERVED = {
     "--pack": "The selected deployment owns its pack and tokenizer",
     "--native": "The selected deployment owns its model weights",
@@ -88,8 +90,8 @@ def forward_help(executable, root, config):
     # The pinned native build prints --help on stderr only, while AioLM
     # parses a non-empty stdout alone; one pipe for both native streams keeps
     # the binding rows and the native rows in that single document.
-    with subprocess.Popen([str(executable), "--help"], cwd=config.get("cwd") or root,
-                          env=adapter.strata_engine_env(config), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    with subprocess.Popen([str(executable), "--help"], cwd=root / (config.get("cwd") or root),
+                          env=adapter.strata_engine_env(config, root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0) as process:
         errors = []
         def pump(source, destination):
@@ -112,6 +114,34 @@ def forward_help(executable, root, config):
         if errors:
             raise ValueError("native help output could not be forwarded") from errors[0]
         return code
+
+
+def run_server(config):
+    origins = config.get("cors_origins")
+    items = origins if isinstance(origins, list) else [origins]
+    if not any(isinstance(value, str) and value.strip().rstrip("/") == WEBVIEW_ORIGIN for value in items):
+        runpy.run_module("serve.server", run_name="__main__", alter_sys=True)
+        return 0
+    # The reviewed server only accepts http(s) in its explicit CORS list.
+    # Linux WebKit uses this app origin. Admit it only when the deployment
+    # names it; keep upstream validation and policy for every other origin.
+    server = importlib.import_module("serve.server")
+    original = server.origins_of
+
+    def origins_of(value, key, wildcard):
+        values = value if isinstance(value, list) else [value]
+        native = [item for item in values
+                  if isinstance(item, str) and item.strip().rstrip("/") == WEBVIEW_ORIGIN]
+        if key != "cors_origins" or not native:
+            return original(value, key, wildcard)
+        remaining = [item for item in values if item not in native]
+        return original(remaining, key, wildcard) + [WEBVIEW_ORIGIN]
+
+    server.origins_of = origins_of
+    try:
+        return server.main()
+    finally:
+        server.origins_of = original
 
 
 def main(argv=None):
@@ -162,8 +192,7 @@ def main(argv=None):
     sys.path.insert(0, str(root))
     sys.argv = ["serve.server", "--engine", "strata", "--config", str(destination),
                 "--host", args.aiolm_host, "--port", str(args.aiolm_port)]
-    runpy.run_module("serve.server", run_name="__main__", alter_sys=True)
-    return 0
+    return run_server(effective)
 
 
 if __name__ == "__main__":

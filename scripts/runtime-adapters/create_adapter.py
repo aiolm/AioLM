@@ -22,6 +22,8 @@ import time
 
 
 LIMIT = 262144
+# The registry's bound on declared artifacts (providers/registry.rs MAX_ARTIFACTS).
+ARTIFACT_LIMIT = 256
 _CAPTURE_LIMIT = 65536
 _CAPTURE_TIMEOUT = 15
 _CAPTURE_CHUNK = 65536
@@ -139,7 +141,8 @@ def _capture_prefix(streams):
     return stdout + stderr[:_CAPTURE_LIMIT - len(stdout)]
 
 
-def capture(args, cwd=None, env=None):
+def _capture_run(args, cwd=None, env=None):
+    """Bounded run of `args` (no shell): (exit status, stream error or None, retained output)."""
     process = None
     streams = []
     selector = None
@@ -213,12 +216,17 @@ def capture(args, cwd=None, env=None):
             output=_capture_prefix(streams),
             stderr=streams[1].text(),
         )
+    failure = next((stream.error for stream in streams if stream.error is not None), None)
+    return returncode, failure, _capture_prefix(streams)
+
+
+def capture(args, cwd=None, env=None):
+    returncode, failure, text = _capture_run(args, cwd, env)
     if returncode != 0:
         raise ValueError("runtime version/help probe failed; inspect the selected installation")
-    failure = next((stream.error for stream in streams if stream.error is not None), None)
     if failure is not None:
         raise failure
-    return _capture_prefix(streams)
+    return text
 
 
 def file_path(value):
@@ -350,17 +358,107 @@ def _verify_strata_config(snapshot):
         file_path(candidate)
 
 
-def strata_engine_env(config):
+def strata_engine_env(config, root=None):
     # Match the deployment server's library search path when inspecting the
     # native executable; probing must not depend on a globally installed SDK.
     env = dict(os.environ)
     for key, value in (config.get("env") or {}).items():
         env[str(key)] = str(value)
-    directories = [path for path in config.get("lib_dirs") or [] if Path(path).is_dir()]
+    root = Path(root or Path.cwd())
+    directories = [path for path in config.get("lib_dirs") or [] if (root / path).is_dir()]
     if directories:
         variable = "PATH" if os.name == "nt" else "LD_LIBRARY_PATH"
         env[variable] = os.pathsep.join(directories + ([env[variable]] if env.get(variable) else []))
     return env
+
+
+_LOADER_RESOLVED = re.compile(r"^\s*(\S+) => (.+) \(0x[0-9a-fA-F]+\)$")
+_LOADER_DIRECT = re.compile(r"^\s*(/.*) \(0x[0-9a-fA-F]+\)$")
+_LOADER_NOT_FOUND = re.compile(r"^\s*(\S+) => not found$")
+_LOADER_ERROR = re.compile(r"error while loading shared libraries: ([^:]+):")
+
+
+def elf_interpreter(path):
+    """The program interpreter (PT_INTERP) of a dynamically linked 64-bit ELF, or None for any other file
+    (a script, a synthetic fixture, a Windows PE) and for a static executable."""
+    with path.open("rb") as stream:
+        header = stream.read(64)
+        if header[:4] != b"\x7fELF":
+            return None
+        if len(header) != 64:
+            raise ValueError("the native engine's ELF header is truncated")
+        if header[4] != 2 or header[5] != 1:
+            raise ValueError("the native engine is not a 64-bit little-endian ELF executable")
+        offset, = struct.unpack_from("<Q", header, 0x20)
+        size, count = struct.unpack_from("<HH", header, 0x36)
+        file_size = os.fstat(stream.fileno()).st_size
+        if size < 56 or count > 4096 or offset + count * size > file_size:
+            raise ValueError("the native engine has invalid ELF program headers")
+        for index in range(count):
+            stream.seek(offset + index * size)
+            row = stream.read(56)
+            if len(row) != 56:
+                raise ValueError("the native engine's ELF program headers are truncated")
+            if struct.unpack_from("<I", row)[0] != 3:   # PT_INTERP
+                continue
+            start, length = struct.unpack_from("<Q", row, 8)[0], struct.unpack_from("<Q", row, 32)[0]
+            if not 1 < length <= 4096 or start + length > file_size:
+                raise ValueError("the native engine names an invalid ELF interpreter")
+            stream.seek(start)
+            raw_name = stream.read(length)
+            if not raw_name.endswith(b"\0"):
+                raise ValueError("the native engine's ELF interpreter is not terminated")
+            name = os.fsdecode(raw_name.split(b"\0", 1)[0])
+            if not os.path.isabs(name) or not Path(name).is_file():
+                raise ValueError("the native engine's ELF interpreter is missing")
+            return Path(name)
+    return None
+
+
+def loader_resolved_libraries(executable, roots, env, cwd=None):
+    """Shared libraries the selected engine's own loader resolves (transitively) inside the deployment's library
+    roots, e.g. a system ROCm's lib/rocm_sysdeps/lib and lib/llvm/lib, which a listing of the roots' top level
+    misses. Linux ELF only: the loader's `--list` mode maps the libraries without running the engine, with the
+    engine's own environment and no shell. An unresolved library fails here, not at the first start."""
+    if os.name == "nt" or platform.system() != "Linux":
+        return []
+    interpreter = elf_interpreter(executable)
+    if interpreter is None:
+        return []
+    returncode, failure, text = _capture_run([str(interpreter), "--list", str(executable)], cwd=cwd, env=env)
+    lines = text.splitlines()
+    missing = [match[1] for match in map(_LOADER_NOT_FOUND.match, lines) if match]
+    missing += [match[1] for match in map(_LOADER_ERROR.search, lines) if match]
+    if failure is not None and not missing:
+        if isinstance(failure, UnicodeError):
+            raise ValueError("the native engine's library listing could not be decoded; check the output "
+                             "encoding and library path encoding") from failure
+        raise ValueError("the native engine's library listing could not be read; retry the inspection") from failure
+    if missing or returncode != 0:
+        detail = f" ({', '.join(dict.fromkeys(missing))})" if missing else ""
+        raise ValueError(f"the native engine's shared libraries do not resolve{detail}; add the folder that holds "
+                         "them to the deployment's \"lib_dirs\"")
+    if len(text) >= _CAPTURE_LIMIT:
+        raise ValueError("the native engine's library listing exceeds the inspection bound; provide an audited "
+                         "custom manifest")
+    bases = [Path(root).resolve() for root in roots]
+    bases += [Path(root).absolute() for root in roots if ".." not in Path(root).parts]
+    found = []
+    for line in lines:
+        match = _LOADER_RESOLVED.match(line)
+        direct = _LOADER_DIRECT.match(line) if match is None else None
+        if match is None and direct is None:
+            continue
+        library = Path(cwd or Path.cwd()) / Path(match[2] if match else direct[1])
+        # Keep the loader's path for hashing: a symlink followed by '..' can
+        # name a different file from its lexically normalized spelling.
+        resolved = library.resolve()
+        lexical = Path(os.path.abspath(library))
+        if library.is_file() and any(resolved.is_relative_to(base)
+                                     or ".." not in library.parts and lexical.is_relative_to(base)
+                                     for base in bases):
+            found.append(str(library))
+    return found
 
 
 def probe(args):
@@ -393,8 +491,8 @@ def probe(args):
         registered_executable = registered.executable
         if executable.resolve() != registered_executable.resolve():
             raise ValueError("selected deployment uses another Strata engine build; register it separately")
-        engine_version = capture([str(executable), "--version"], config.get("cwd") or root,
-                                 env=strata_engine_env(config)).strip()
+        engine_version = capture([str(executable), "--version"], root / (config.get("cwd") or root),
+                                 env=strata_engine_env(config, root)).strip()
         version = f"Strata {revision} / {engine_version}"
         # Deployment options and build metadata do not prove a live GPU device.
         accelerator = "unverified"
@@ -470,13 +568,22 @@ def _build_manifest_with_snapshot(args):
             files.append(tokenizer_module)
         # Hash the native libraries loaded beside the executable or from its
         # configured search directories, just as for a dynamic llama.cpp build.
-        for directory in dict.fromkeys([str(executable.parent), *installed.get("lib_dirs", [])]):
+        directories = [root / directory for directory in installed.get("lib_dirs", [])]
+        for directory in dict.fromkeys([executable.parent, *directories]):
             if Path(directory).is_dir():
                 files.extend(sorted(path for path in Path(directory).iterdir()
                                     if path.is_file() and SHARED_LIBRARY.search(path.name)))
+        # Every alias above stays declared. The libraries the loader resolves
+        # through them can sit in nested folders of the same roots, which the
+        # top-level listing does not reach; declare those too.
+        native_cwd = root / (installed.get("cwd") or root)
+        roots = [native_cwd / directory for directory in installed.get("lib_dirs", [])
+                 if (root / directory).is_dir()]
+        files.extend(loader_resolved_libraries(executable, roots, strata_engine_env(installed, root), cwd=native_cwd))
         artifacts = list(dict.fromkeys(str(file_path(path)) for path in files))
-        if len(artifacts) > 64:
-            raise ValueError("Strata adapter source exceeds the artifact count; provide an audited custom manifest")
+        if len(artifacts) > ARTIFACT_LIMIT:
+            raise ValueError(f"Strata adapter source exceeds the artifact count ({len(artifacts)} files, at most "
+                             f"{ARTIFACT_LIMIT}); provide an audited custom manifest")
         common.update(platforms=[{"os":"windows" if platform.system() == "Windows" else "linux", "arch":"x86_64"}], model_formats=["unknown"], artifacts=artifacts)
         probe_args += ["--root",str(root),"--config",str(config),"--revision",args.revision]
         common["launch"] = {"program":str(python),"working_directory":str(root),"env":{"STRATA_API_KEY":"{api_key}"},"args":["-m","serve.server","--engine","strata","--config","{model}","--host","{host}","--port","{port}"]}
@@ -484,6 +591,9 @@ def _build_manifest_with_snapshot(args):
         selected = file_path(args.model)
         common["models"] = [{"path":str(selected),"name":selected.name}]
     common["probe"] = {"program":str(python),"args":probe_args, **({"working_directory":str(root)} if args.kind == "strata" else {})}
+    if args.kind == "strata" and len(json.dumps(common).encode()) > LIMIT:
+        raise ValueError("Strata adapter manifest exceeds the 256 KiB registration budget; provide an audited custom "
+                         "manifest")
     return common, strata_snapshot
 
 
@@ -493,9 +603,12 @@ def build_manifest(args):
 
 def create(args):
     common = build_manifest(args)
+    encoded = json.dumps(common, indent=2) + "\n"
+    if args.kind == "strata" and len(encoded.encode()) > LIMIT:
+        raise ValueError("Strata adapter manifest exceeds the 256 KiB registration budget; provide an audited custom manifest")
     output = Path(args.output).absolute()
     with output.open("x", encoding="utf-8") as stream:
-        json.dump(common,stream,indent=2); stream.write("\n")
+        stream.write(encoded)
     print(str(output))
 
 
