@@ -446,6 +446,16 @@ mod tests {
         }
     }
 
+    #[cfg(any(unix, windows))]
+    fn unlink_directory(link: &Path) {
+        // A Unix symlink is a file entry while a Windows junction is a
+        // directory entry; either removal leaves the link target intact.
+        #[cfg(unix)]
+        fs::remove_file(link).unwrap();
+        #[cfg(windows)]
+        fs::remove_dir(link).unwrap();
+    }
+
     fn zip_file(path: &Path) {
         let mut archive = zip::ZipWriter::new(fs::File::create(path).unwrap());
         archive
@@ -484,7 +494,7 @@ mod tests {
                 } else {
                     extract(&path, &dest, &cancel)
                 };
-                fs::remove_dir(&dest).unwrap();
+                unlink_directory(&dest);
                 assert_eq!(
                     fs::read(outside.join("existing.txt")).unwrap(),
                     b"preserved"
@@ -518,7 +528,7 @@ mod tests {
         let dest = alias.join("private staging");
         let cancel = Arc::new(AtomicBool::new(false));
         let result = extract_release(&path, &dest, &cancel);
-        fs::remove_dir(&alias).unwrap();
+        unlink_directory(&alias);
         result.unwrap();
         assert_eq!(
             fs::read(selected.join("private staging").join("llama-server")).unwrap(),

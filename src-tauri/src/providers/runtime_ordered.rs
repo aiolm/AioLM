@@ -1716,7 +1716,7 @@ mod tests {
             &schema,
             &scope,
             Some(&entry),
-            "python -I other.py --label serve serve api",
+            "python.exe -I other.py --label serve serve api",
             super::super::options::CommandSyntax::Posix,
         )
         .unwrap_err();

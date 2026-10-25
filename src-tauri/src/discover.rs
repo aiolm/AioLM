@@ -1674,6 +1674,16 @@ mod tests {
     }
 
     #[cfg(any(unix, windows))]
+    fn unlink_installed_directory(link: &Path) {
+        // A Unix symlink is a file entry while a Windows junction is a
+        // directory entry; either removal leaves the link target intact.
+        #[cfg(unix)]
+        fs::remove_file(link).expect("remove fixture directory link");
+        #[cfg(windows)]
+        fs::remove_dir(link).expect("remove fixture junction");
+    }
+
+    #[cfg(any(unix, windows))]
     #[test]
     fn installed_lookup_excludes_a_repository_link_outside_the_selected_library() {
         let fixture =
@@ -1697,7 +1707,7 @@ mod tests {
             "owner/model",
             &["plain.gguf".into(), "linked folder/other.gguf".into()],
         );
-        fs::remove_dir(&link).unwrap();
+        unlink_installed_directory(&link);
         assert_eq!(fs::read(outside.join("other.gguf")).unwrap(), b"outside");
         fs::remove_dir_all(&fixture).unwrap();
         let installed = result.unwrap();
@@ -1726,8 +1736,8 @@ mod tests {
             "owner/model",
             &[relative.into()],
         );
-        fs::remove_dir(&root_link).unwrap();
-        fs::remove_dir(&cache_link).unwrap();
+        unlink_installed_directory(&root_link);
+        unlink_installed_directory(&cache_link);
         assert_eq!(
             fs::read(cache.join("big-00001-of-00002.gguf")).unwrap(),
             b"one"
@@ -1764,7 +1774,7 @@ mod tests {
             &["model.gguf".into()],
         );
         let recreated = models.exists();
-        fs::remove_dir(&link).unwrap();
+        unlink_installed_directory(&link);
         fs::remove_dir(&fixture).unwrap();
         assert!(result.unwrap().is_empty());
         assert!(!recreated);
